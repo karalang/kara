@@ -304,12 +304,34 @@ impl<'ctx> super::Codegen<'ctx> {
             let alloca = self.create_entry_alloca(closure_fn, &param_name, *ty);
             self.builder.build_store(alloca, param_val).unwrap();
             self.variables.insert(
-                param_name,
+                param_name.clone(),
                 VarSlot {
                     ptr: alloca,
                     ty: *ty,
                 },
             );
+            // Register the param's Kāra struct/enum name under
+            // `var_type_names` so `compile_field_access` inside the body
+            // can resolve `param.field` reads. Without this, a closure
+            // body like `|s: Score| s.v` silently lowers `s.v` to the
+            // `i64 0` placeholder (`field_index_for` returns None →
+            // generic field-access fall-through). The inline thunk in
+            // vec_method::emit_sort_by_key_inline_thunk works around it
+            // with its own var_type_names insertion at the param-bind
+            // step; precompiled-closure callees (sort_by_key with a
+            // closure-typed local) had no equivalent and silently produced
+            // a no-op comparator. Pull the type name from the param's
+            // declared type expr (single-segment Path catches the common
+            // shapes: `Score`, `Item`, etc.; tuple / generic / etc. fall
+            // through and the body's field access just uses the existing
+            // body-path lookups).
+            if let Some(te) = cp.ty.as_ref() {
+                if let TypeKind::Path(p) = &te.kind {
+                    if let Some(seg) = p.segments.last() {
+                        self.var_type_names.insert(param_name, seg.clone());
+                    }
+                }
+            }
         }
 
         // 7c. Compile body and build return.

@@ -24313,37 +24313,149 @@ fn main() {
     }
 
     #[test]
-    fn test_e2e_vec_sort_by_key_named_fn_callee_rejected() {
-        // V1 scope: only inline closures are supported. A named function
-        // (or closure-typed local) needs a bridge thunk with an indirect
-        // call through the closure's fat pointer — not yet wired up. Pin
-        // the loud-error path so the scope boundary doesn't silently
-        // regress to a wrong-output compile.
-        let src = r#"
+    fn test_e2e_vec_sort_by_key_named_fn_callee() {
+        // Named-function callee (`v.sort_by_key(key)`) routes through
+        // `emit_sort_by_key_named_thunk`: direct-ABI call, no env_ptr.
+        // Replaces the prior loud-rejection test now that the dispatch
+        // is wired through the bridge thunk.
+        let out = run_program(
+            r#"
 fn key(x: i64) -> i64 { x }
 fn main() {
     let mut v: Vec[i64] = Vec.new();
-    v.push(3); v.push(1);
+    v.push(30); v.push(10); v.push(20);
     v.sort_by_key(key);
-    println(v.len());
+    for x in v.iter() { println(x); }
 }
-"#;
-        let mut parsed = karac::parse(src);
-        assert!(
-            parsed.errors.is_empty(),
-            "parse errors: {:?}",
-            parsed.errors
+"#,
         );
-        let resolved = karac::resolve(&parsed.program);
-        let typed = karac::typecheck(&parsed.program, &resolved);
-        karac::lower(&mut parsed.program, &typed);
-        let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("expected codegen to reject non-inline sort_by_key callee");
-        assert!(
-            err.contains("sort_by_key") && err.contains("inline closure"),
-            "expected non-inline-callee rejection; got: {}",
-            err
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["10", "20", "30"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_key_closure_typed_local() {
+        // Closure-typed local callee (`let k = |x| x; v.sort_by_key(k);`)
+        // routes through `emit_sort_by_key_closure_thunk`: indirect call
+        // through the spilled fat pointer's `{fn_ptr, env_ptr}`.
+        let out = run_program(
+            r#"
+fn main() {
+    let k = |x: i64| x;
+    let mut v: Vec[i64] = Vec.new();
+    v.push(30); v.push(10); v.push(20);
+    v.sort_by_key(k);
+    for x in v.iter() { println(x); }
+}
+"#,
         );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["10", "20", "30"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_key_closure_typed_local_struct_field_body() {
+        // Closure-typed local with a struct element and a field-access
+        // body (`|s: Score| s.v`). Pins the fix to compile_closure's
+        // param binding step that registers the param's Kāra type name
+        // in var_type_names — without it, `s.v` inside the precompiled
+        // closure body silently lowered to `i64 0` (field_index_for
+        // returned None), turning sort_by_key into a no-op. Surfaced via
+        // the 2026-05-29 kata-15 non-inline-callee probe.
+        let out = run_program(
+            r#"
+struct Score { v: i64 }
+fn main() {
+    let k = |s: Score| s.v;
+    let mut v: Vec[Score] = Vec.new();
+    v.push(Score { v: 30 });
+    v.push(Score { v: 10 });
+    v.push(Score { v: 20 });
+    v.sort_by_key(k);
+    for s in v.iter() { println(s.v); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["10", "20", "30"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_key_named_fn_struct_field_body() {
+        // Named-fn key with a struct element, body returning a field.
+        // Companion to the closure-typed-local variant above — exercises
+        // the direct-ABI named-fn thunk path with a non-trivial body.
+        let out = run_program(
+            r#"
+struct Item { v: i64, tag: i64 }
+fn key(s: Item) -> i64 { s.v }
+fn main() {
+    let mut v: Vec[Item] = Vec.new();
+    v.push(Item { v: 30, tag: 1 });
+    v.push(Item { v: 10, tag: 2 });
+    v.push(Item { v: 20, tag: 3 });
+    v.sort_by_key(key);
+    for s in v.iter() { println(s.v); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["10", "20", "30"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_closure_typed_local() {
+        // sort_by counterpart of the sort_by_key closure-typed-local test.
+        // Routes through `emit_sort_by_thunk` (existing helper) via the
+        // new Identifier-dispatch in the `"sort_by"` arm. Replaces the
+        // broken `pending_closure_fn_type.take()` protocol that errored
+        // "closure missing fn_type" for any non-inline callee.
+        let out = run_program(
+            r#"
+fn main() {
+    let cmp = |a: i64, b: i64| a.cmp(b);
+    let mut v: Vec[i64] = Vec.new();
+    v.push(30); v.push(10); v.push(20);
+    v.sort_by(cmp);
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["10", "20", "30"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_named_fn_callee() {
+        // sort_by with a named-fn comparator returning Ordering — routes
+        // through `emit_sort_by_named_thunk` (new helper). Extracts the
+        // Ordering tag and returns `tag - 1` for the runtime's signed
+        // comparator contract.
+        let out = run_program(
+            r#"
+fn mycmp(a: i64, b: i64) -> Ordering { a.cmp(b) }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(30); v.push(10); v.push(20);
+    v.sort_by(mycmp);
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["10", "20", "30"]);
+        }
     }
 
     #[test]

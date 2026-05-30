@@ -1674,34 +1674,52 @@ impl<'ctx> super::Codegen<'ctx> {
                     ));
                 }
 
-                // Two thunk shapes:
+                // Three thunk shapes, dispatched by AST kind (mirror of
+                // `sort_by_key` above):
                 //   (a) inline closure expression — fuse the closure body
                 //       into the bridge thunk, so each comparison is a
                 //       single direct function call from the runtime helper
                 //       (LLVM can then inline it freely);
-                //   (b) named callee / closure-typed value — fall back to
-                //       compile_expr → fat pointer → indirect-call thunk.
-                let (thunk, ctx_alloca): (FunctionValue<'ctx>, PointerValue<'ctx>) =
-                    if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
+                //   (b) closure-typed local Identifier — spill fat pointer,
+                //       thunk does an indirect call through {fn_ptr,env_ptr};
+                //   (c) named function Identifier — direct ABI, no env.
+                let (thunk, ctx_alloca): (FunctionValue<'ctx>, PointerValue<'ctx>) = match &args[0]
+                    .value
+                    .kind
+                {
+                    ExprKind::Closure { params, body, .. } => {
                         self.emit_sort_by_inline_thunk(params, body, elem_ty)?
-                    } else {
-                        self.pending_closure_param_hints = Some(vec![elem_ty, elem_ty]);
-                        let closure_val = self.compile_expr(&args[0].value)?;
-                        self.pending_closure_param_hints = None;
-                        let closure_fn_type = self
-                            .pending_closure_fn_type
-                            .take()
-                            .ok_or_else(|| "Vec.sort_by: closure missing fn_type".to_string())?;
-                        let outer_fn = self.current_fn.unwrap();
-                        let fat_ty = self.closure_value_type();
-                        let cls_alloca =
-                            self.create_entry_alloca(outer_fn, "sort_by.cls", fat_ty.into());
-                        self.builder.build_store(cls_alloca, closure_val).unwrap();
-                        (
-                            self.emit_sort_by_thunk(elem_ty, closure_fn_type),
-                            cls_alloca,
-                        )
-                    };
+                    }
+                    ExprKind::Identifier(name) => {
+                        if let Some(&closure_fn_type) = self.closure_fn_types.get(name) {
+                            let closure_val = self.compile_expr(&args[0].value)?;
+                            let outer_fn = self.current_fn.unwrap();
+                            let fat_ty = self.closure_value_type();
+                            let cls_alloca =
+                                self.create_entry_alloca(outer_fn, "sort_by.cls", fat_ty.into());
+                            self.builder.build_store(cls_alloca, closure_val).unwrap();
+                            (
+                                self.emit_sort_by_thunk(elem_ty, closure_fn_type),
+                                cls_alloca,
+                            )
+                        } else if let Some(named_fn) = self.module.get_function(name) {
+                            let null_ctx = ptr_ty.const_null();
+                            (self.emit_sort_by_named_thunk(elem_ty, named_fn), null_ctx)
+                        } else {
+                            return Err(format!(
+                                "Vec.sort_by: identifier '{}' is neither a closure-typed \
+                                 local nor a known function",
+                                name
+                            ));
+                        }
+                    }
+                    _ => {
+                        return Err("Vec.sort_by in codegen accepts an inline closure, a \
+                             closure-typed local identifier, or a named function identifier; \
+                             other callee shapes are not yet wired through the bridge thunk"
+                            .to_string());
+                    }
+                };
 
                 let data_ptr_ptr = self
                     .builder
@@ -1905,44 +1923,81 @@ impl<'ctx> super::Codegen<'ctx> {
                         args.len()
                     ));
                 }
-                // V1: only inline-closure callees. A named function or
-                // closure-typed local would need a bridge thunk with an
-                // indirect call through the closure's fat pointer (mirror
-                // of `emit_sort_by_thunk` for sort_by) — not yet wired up.
-                let (params, body) = match &args[0].value.kind {
-                    ExprKind::Closure { params, body, .. } => (params, body.as_ref()),
+                // Three callee shapes, dispatched by AST kind:
+                //   (a) inline closure → fuse body into the bridge thunk
+                //       (per-key-type dispatch: int, string, struct, float,
+                //       user-Ord, all via emit_sort_by_key_inline_thunk);
+                //   (b) closure-typed local Identifier → spill fat pointer,
+                //       thunk does an indirect call through {fn_ptr,env_ptr}
+                //       (integer key only — non-inline path can't recover
+                //       body span info for non-integer key dispatch);
+                //   (c) named function Identifier → direct ABI, thunk calls
+                //       the fn straight on each element (integer key only,
+                //       same reason).
+                let (thunk, ctx_alloca) = match &args[0].value.kind {
+                    ExprKind::Closure { params, body, .. } => {
+                        // Look up the Vec element's Kāra type name so the
+                        // inline thunk can register `var_type_names` for
+                        // the closure param. Without that, a body like
+                        // `|s| s.field` can't recover the struct shape and
+                        // the field load is silently elided. Pulls from
+                        // `var_elem_type_exprs`; canonical first segment is
+                        // the struct name for path-typed struct elements;
+                        // tuple / generic / etc. fall back to `None`.
+                        let elem_type_name: Option<String> = self
+                            .var_elem_type_exprs
+                            .get(var_name)
+                            .and_then(|te| match &te.kind {
+                                TypeKind::Path(p) => p.segments.last().cloned(),
+                                _ => None,
+                            });
+                        self.emit_sort_by_key_inline_thunk(
+                            params,
+                            body.as_ref(),
+                            elem_ty,
+                            elem_type_name.as_deref(),
+                        )?
+                    }
+                    ExprKind::Identifier(name) => {
+                        if let Some(&closure_fn_type) = self.closure_fn_types.get(name) {
+                            // Closure-typed local: compile to fat pointer,
+                            // spill into an alloca, thunk reads it back.
+                            let closure_val = self.compile_expr(&args[0].value)?;
+                            let outer_fn = self.current_fn.unwrap();
+                            let fat_ty = self.closure_value_type();
+                            let cls_alloca = self.create_entry_alloca(
+                                outer_fn,
+                                "sort_by_key.cls",
+                                fat_ty.into(),
+                            );
+                            self.builder.build_store(cls_alloca, closure_val).unwrap();
+                            (
+                                self.emit_sort_by_key_closure_thunk(elem_ty, closure_fn_type)?,
+                                cls_alloca,
+                            )
+                        } else if let Some(named_fn) = self.module.get_function(name) {
+                            // Named fn: direct ABI, no env. Pass a null ctx
+                            // (the thunk ignores it).
+                            let null_ctx = ptr_ty.const_null();
+                            (
+                                self.emit_sort_by_key_named_thunk(elem_ty, named_fn)?,
+                                null_ctx,
+                            )
+                        } else {
+                            return Err(format!(
+                                "Vec.sort_by_key: identifier '{}' is neither a closure-typed \
+                                 local nor a known function",
+                                name
+                            ));
+                        }
+                    }
                     _ => {
-                        return Err(
-                            "Vec.sort_by_key in codegen only supports an inline closure \
-                             argument today (a named function or closure-typed local \
-                             is not yet wired through the bridge thunk)"
-                                .to_string(),
-                        );
+                        return Err("Vec.sort_by_key in codegen accepts an inline closure, a \
+                             closure-typed local identifier, or a named function identifier; \
+                             other callee shapes are not yet wired through the bridge thunk"
+                            .to_string());
                     }
                 };
-                // Look up the Vec element's Kāra type name so the thunk can
-                // register `var_type_names` for the closure param. Without
-                // that, `compile_field_access` on a body like `|s| s.field`
-                // can't recover the struct shape and the field load is
-                // silently elided. Pulls from `var_elem_type_exprs` (the
-                // canonical record of a Vec binding's element type expr) —
-                // the canonical first segment is the struct name when the
-                // element is a path-typed struct; for tuple / generic / etc.
-                // shapes we just pass `None` and the thunk falls back to
-                // the existing param-only binding.
-                let elem_type_name: Option<String> = self
-                    .var_elem_type_exprs
-                    .get(var_name)
-                    .and_then(|te| match &te.kind {
-                        TypeKind::Path(p) => p.segments.last().cloned(),
-                        _ => None,
-                    });
-                let (thunk, ctx_alloca) = self.emit_sort_by_key_inline_thunk(
-                    params,
-                    body,
-                    elem_ty,
-                    elem_type_name.as_deref(),
-                )?;
 
                 let data_ptr_ptr = self
                     .builder
@@ -3029,6 +3084,290 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
 
+        thunk_fn
+    }
+
+    /// `Vec.sort_by_key` non-inline thunk for a **closure-typed local** key
+    /// (`let k = |x| ...; v.sort_by_key(k)`). Mirror of `emit_sort_by_thunk`
+    /// for the sort_by_key shape — ctx holds the closure's spilled fat
+    /// pointer `{fn_ptr, env_ptr}`; the thunk extracts both, calls the
+    /// closure indirectly *twice* (once per element) to get key_a / key_b,
+    /// then returns the signed integer compare as `-1 / 0 / +1`. Only
+    /// integer key types are supported on the non-inline path today —
+    /// non-integer keys error loudly directing the user to the inline
+    /// closure form (the per-key-type dispatch in the inline thunk needs
+    /// the body Expr's span for `string_typed_exprs` etc., which the
+    /// non-inline path doesn't have at the call site).
+    pub(super) fn emit_sort_by_key_closure_thunk(
+        &mut self,
+        elem_ty: BasicTypeEnum<'ctx>,
+        closure_fn_type: FunctionType<'ctx>,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        let key_ty = closure_fn_type
+            .get_return_type()
+            .ok_or_else(|| "Vec.sort_by_key: closure has no return type".to_string())?;
+        if !key_ty.is_int_type() {
+            return Err(
+                "Vec.sort_by_key in codegen supports only integer key types for non-inline \
+                 closure callees today; rewrite as an inline closure `|x| ...` for String, \
+                 struct, float, or user-Ord keys"
+                    .to_string(),
+            );
+        }
+
+        let id = self.closure_counter;
+        self.closure_counter += 1;
+        let name = format!("__sort_by_key_closure_thunk_{}", id);
+        let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let thunk_fn = self
+            .module
+            .add_function(&name, thunk_ty, Some(Linkage::Internal));
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(thunk_fn);
+
+        let entry = self.context.append_basic_block(thunk_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        let ctx = thunk_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let a_ptr = thunk_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let b_ptr = thunk_fn.get_nth_param(2).unwrap().into_pointer_value();
+
+        let fat_ty = self.closure_value_type();
+        let fat = self
+            .builder
+            .build_load(fat_ty, ctx, "fat")
+            .unwrap()
+            .into_struct_value();
+        let cls_fn = self
+            .builder
+            .build_extract_value(fat, 0, "cls.fn")
+            .unwrap()
+            .into_pointer_value();
+        let cls_env = self
+            .builder
+            .build_extract_value(fat, 1, "cls.env")
+            .unwrap()
+            .into_pointer_value();
+
+        let a_val = self.builder.build_load(elem_ty, a_ptr, "a").unwrap();
+        let b_val = self.builder.build_load(elem_ty, b_ptr, "b").unwrap();
+
+        let call_a = self
+            .builder
+            .build_indirect_call(
+                closure_fn_type,
+                cls_fn,
+                &[
+                    BasicMetadataValueEnum::from(cls_env),
+                    BasicMetadataValueEnum::from(a_val),
+                ],
+                "key.a",
+            )
+            .unwrap();
+        let key_a = call_a.try_as_basic_value().unwrap_basic().into_int_value();
+        let call_b = self
+            .builder
+            .build_indirect_call(
+                closure_fn_type,
+                cls_fn,
+                &[
+                    BasicMetadataValueEnum::from(cls_env),
+                    BasicMetadataValueEnum::from(b_val),
+                ],
+                "key.b",
+            )
+            .unwrap();
+        let key_b = call_b.try_as_basic_value().unwrap_basic().into_int_value();
+
+        let lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, key_a, key_b, "key.lt")
+            .unwrap();
+        let gt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, key_a, key_b, "key.gt")
+            .unwrap();
+        let zero = i64_t.const_zero();
+        let neg_one = i64_t.const_int((-1i64) as u64, true);
+        let pos_one = i64_t.const_int(1, false);
+        let gt_sel = self
+            .builder
+            .build_select(gt, pos_one, zero, "key.gt.sel")
+            .unwrap()
+            .into_int_value();
+        let res = self
+            .builder
+            .build_select(lt, neg_one, gt_sel, "key.cmp.sel")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_return(Some(&res)).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Ok(thunk_fn)
+    }
+
+    /// `Vec.sort_by_key` non-inline thunk for a **named-function** key
+    /// (`fn key(x) -> K { ... } ... v.sort_by_key(key)`). The named fn
+    /// has the direct ABI (no `env_ptr` first param), so the thunk just
+    /// calls it twice on the loaded elements with no closure machinery
+    /// and ignores its own ctx pointer. Same integer-only key constraint
+    /// as the closure-typed-local thunk above for the same reason.
+    pub(super) fn emit_sort_by_key_named_thunk(
+        &mut self,
+        elem_ty: BasicTypeEnum<'ctx>,
+        named_fn: FunctionValue<'ctx>,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        let key_ty = named_fn
+            .get_type()
+            .get_return_type()
+            .ok_or_else(|| "Vec.sort_by_key: named key fn has no return type".to_string())?;
+        if !key_ty.is_int_type() {
+            return Err(
+                "Vec.sort_by_key in codegen supports only integer key types for non-inline \
+                 named-function callees today; rewrite as an inline closure `|x| named_fn(x)` \
+                 for String, struct, float, or user-Ord keys"
+                    .to_string(),
+            );
+        }
+
+        let id = self.closure_counter;
+        self.closure_counter += 1;
+        let name = format!("__sort_by_key_named_thunk_{}", id);
+        let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let thunk_fn = self
+            .module
+            .add_function(&name, thunk_ty, Some(Linkage::Internal));
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(thunk_fn);
+
+        let entry = self.context.append_basic_block(thunk_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        // ctx (param 0) is unused for the named-fn path — direct ABI has no env.
+        let a_ptr = thunk_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let b_ptr = thunk_fn.get_nth_param(2).unwrap().into_pointer_value();
+
+        let a_val = self.builder.build_load(elem_ty, a_ptr, "a").unwrap();
+        let b_val = self.builder.build_load(elem_ty, b_ptr, "b").unwrap();
+
+        let call_a = self
+            .builder
+            .build_call(named_fn, &[BasicMetadataValueEnum::from(a_val)], "key.a")
+            .unwrap();
+        let key_a = call_a.try_as_basic_value().unwrap_basic().into_int_value();
+        let call_b = self
+            .builder
+            .build_call(named_fn, &[BasicMetadataValueEnum::from(b_val)], "key.b")
+            .unwrap();
+        let key_b = call_b.try_as_basic_value().unwrap_basic().into_int_value();
+
+        let lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, key_a, key_b, "key.lt")
+            .unwrap();
+        let gt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, key_a, key_b, "key.gt")
+            .unwrap();
+        let zero = i64_t.const_zero();
+        let neg_one = i64_t.const_int((-1i64) as u64, true);
+        let pos_one = i64_t.const_int(1, false);
+        let gt_sel = self
+            .builder
+            .build_select(gt, pos_one, zero, "key.gt.sel")
+            .unwrap()
+            .into_int_value();
+        let res = self
+            .builder
+            .build_select(lt, neg_one, gt_sel, "key.cmp.sel")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_return(Some(&res)).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Ok(thunk_fn)
+    }
+
+    /// `Vec.sort_by` non-inline thunk for a **named-function** comparator
+    /// (`fn cmp(a, b) -> Ordering ... v.sort_by(cmp)`). Direct ABI (no
+    /// env_ptr); ctx is unused. The thunk calls the named fn directly with
+    /// (a, b), extracts the Ordering tag (via the layout seeded in
+    /// `seed_builtin_enum_layouts`), and returns `tag - 1` — same shape
+    /// as `emit_sort_by_thunk`'s indirect path for closure-typed locals.
+    pub(super) fn emit_sort_by_named_thunk(
+        &mut self,
+        elem_ty: BasicTypeEnum<'ctx>,
+        named_fn: FunctionValue<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        let id = self.closure_counter;
+        self.closure_counter += 1;
+        let name = format!("__sort_by_named_thunk_{}", id);
+        let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let thunk_fn = self
+            .module
+            .add_function(&name, thunk_ty, Some(Linkage::Internal));
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(thunk_fn);
+
+        let entry = self.context.append_basic_block(thunk_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        // ctx (param 0) unused — direct ABI.
+        let a_ptr = thunk_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let b_ptr = thunk_fn.get_nth_param(2).unwrap().into_pointer_value();
+
+        let a_val = self.builder.build_load(elem_ty, a_ptr, "a").unwrap();
+        let b_val = self.builder.build_load(elem_ty, b_ptr, "b").unwrap();
+
+        let call = self
+            .builder
+            .build_call(
+                named_fn,
+                &[
+                    BasicMetadataValueEnum::from(a_val),
+                    BasicMetadataValueEnum::from(b_val),
+                ],
+                "ord",
+            )
+            .unwrap();
+        let ord_val = call.try_as_basic_value().unwrap_basic();
+        let tag = if ord_val.is_struct_value() {
+            self.builder
+                .build_extract_value(ord_val.into_struct_value(), 0, "tag")
+                .unwrap()
+                .into_int_value()
+        } else {
+            ord_val.into_int_value()
+        };
+        let one = i64_t.const_int(1, false);
+        let result = self.builder.build_int_sub(tag, one, "result").unwrap();
+        self.builder.build_return(Some(&result)).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
         thunk_fn
     }
 }
