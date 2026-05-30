@@ -158,7 +158,44 @@ pub enum Type {
         tait_alias: Option<String>,
     },
 
+    /// A refinement type `type Name = Base where <pred>` — a base type
+    /// carrying a distinct *nominal* identity plus a value predicate
+    /// (design.md § Refinement Types; phase-9-verification step 1).
+    ///
+    /// The predicate itself is **not** embedded here — it lives in
+    /// `TypeEnv.refinement_predicates` keyed by `name`, so `Type` never
+    /// holds an `Expr` and stays cheap to `Clone` / `PartialEq`. The
+    /// `base` is embedded inline (rather than looked up) so the pure
+    /// `types_compatible` / `strip_refinement` helpers can normalize a
+    /// refinement to its base without a `&TypeChecker` / env handle.
+    ///
+    /// Equality is **nominal**: two refinements are equal iff their
+    /// `name` *and* `base` match (the derived `PartialEq`). Distinct
+    /// refinements over the same base (`Positive` vs `NonZero`, both
+    /// `i64`) are unequal and must widen to the shared base to compare —
+    /// see `types_compatible` and design.md § LUB rule 4.
+    Refinement {
+        name: String,
+        base: Box<Type>,
+    },
+
     Error,
+}
+
+/// Normalize a refinement type to its underlying base, leaving every
+/// other `Type` untouched. Pure (no `&TypeChecker`) so it can be called
+/// from `types_compatible`, `unify_types`, the binary-op synthesis arm,
+/// and the ~80 other `Type` match sites that treat a refinement
+/// transparently. A single unwrap is sufficient — `Type::Refinement`'s
+/// `base` is never itself a refinement (the env-build lowering wraps a
+/// fully-resolved base exactly once), but the loop costs nothing and
+/// keeps the helper correct if that invariant ever loosens.
+pub(super) fn strip_refinement(ty: &Type) -> &Type {
+    let mut cur = ty;
+    while let Type::Refinement { base, .. } = cur {
+        cur = base;
+    }
+    cur
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -452,6 +489,9 @@ pub(super) fn type_is_fully_concrete(ty: &Type) -> bool {
         // treat as non-concrete to keep them out of the specialized lane.
         Type::Existential { .. } => false,
         Type::Named { args, .. } => args.iter().all(type_is_fully_concrete),
+        // A refinement is concrete iff its base is — a generic refinement
+        // (`NonEmpty[T]`) carries the type param inside `base`.
+        Type::Refinement { base, .. } => type_is_fully_concrete(base),
         Type::Tuple(types) => types.iter().all(type_is_fully_concrete),
         Type::Array { element, .. } => type_is_fully_concrete(element),
         Type::Slice { element, .. } => type_is_fully_concrete(element),
@@ -597,6 +637,9 @@ pub fn type_display(ty: &Type) -> String {
                 format!("impl {}[{}]", trait_name, inner.join(", "))
             }
         }
+        // Bespoke: print the refinement's nominal name (`Positive`), not
+        // the base (`i64`), so diagnostics name the type the user wrote.
+        Type::Refinement { name, .. } => name.clone(),
         Type::Error => "<error>".to_string(),
     }
 }
@@ -1202,6 +1245,17 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
                     .all(|(a, b)| types_compatible(a, b))
                 && types_compatible(a_r, b_r)
         }
+        // Refinement types — strip to the base and recurse. Identical
+        // refinements (same name + base) already short-circuited via the
+        // `a == b` check at the top; this arm covers refined↔base and
+        // refined↔(different refinement of same base). Step 1 keeps both
+        // directions transparent so the new nominal identity does not
+        // regress the previously alias-transparent behavior. Step 2
+        // (phase-9 line 26) tightens the base→refined direction: a bare
+        // base value will require explicit `try_from` / `as` narrowing,
+        // with only refined→base widening surviving here.
+        (Type::Refinement { .. }, _) => types_compatible(strip_refinement(a), b),
+        (_, Type::Refinement { .. }) => types_compatible(a, strip_refinement(b)),
         (Type::Shared(a_name), Type::Shared(b_name)) => a_name == b_name,
         (Type::Rc(a_inner), Type::Rc(b_inner)) => types_compatible(a_inner, b_inner),
         (Type::Arc(a_inner), Type::Arc(b_inner)) => types_compatible(a_inner, b_inner),
@@ -1216,3 +1270,64 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
 }
 
 // ── Local Type Scope ────────────────────────────────────────────
+
+#[cfg(test)]
+mod refinement_tests {
+    use super::*;
+
+    fn refinement(name: &str, base: Type) -> Type {
+        Type::Refinement {
+            name: name.to_string(),
+            base: Box::new(base),
+        }
+    }
+
+    #[test]
+    fn strip_refinement_unwraps_to_base() {
+        let pos = refinement("Positive", Type::Int(IntSize::I64));
+        assert_eq!(strip_refinement(&pos), &Type::Int(IntSize::I64));
+        // Non-refinement types pass through untouched.
+        assert_eq!(strip_refinement(&Type::Bool), &Type::Bool);
+        // Nested refinement (defensive — base is normally non-refined) is
+        // peeled all the way to the leaf base.
+        let nested = refinement("Outer", refinement("Inner", Type::Str));
+        assert_eq!(strip_refinement(&nested), &Type::Str);
+    }
+
+    #[test]
+    fn type_display_uses_nominal_name() {
+        let pos = refinement("Positive", Type::Int(IntSize::I64));
+        // Bespoke arm: the refinement name, not the base `i64`.
+        assert_eq!(type_display(&pos), "Positive");
+    }
+
+    #[test]
+    fn refined_and_base_are_compatible_both_directions() {
+        let pos = refinement("Positive", Type::Int(IntSize::I64));
+        let base = Type::Int(IntSize::I64);
+        // Step 1 keeps the refinement transparent in both directions.
+        assert!(types_compatible(&pos, &base));
+        assert!(types_compatible(&base, &pos));
+    }
+
+    #[test]
+    fn distinct_refinements_over_same_base_are_compatible_via_base() {
+        // Two different refinements of the same base widen to that base
+        // (design.md § LUB rule 4) — so they compare compatible here.
+        let positive = refinement("Positive", Type::Int(IntSize::I64));
+        let nonzero = refinement("NonZero", Type::Int(IntSize::I64));
+        assert!(types_compatible(&positive, &nonzero));
+    }
+
+    #[test]
+    fn identical_refinements_are_equal() {
+        // Nominal equality: same name + base ⇒ equal via derived PartialEq,
+        // short-circuiting the `a == b` fast path in `types_compatible`.
+        let a = refinement("Positive", Type::Int(IntSize::I64));
+        let b = refinement("Positive", Type::Int(IntSize::I64));
+        assert_eq!(a, b);
+        // Different name ⇒ not structurally equal (must widen to compare).
+        let c = refinement("NonZero", Type::Int(IntSize::I64));
+        assert_ne!(a, c);
+    }
+}

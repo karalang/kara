@@ -14,7 +14,8 @@ use crate::ast::*;
 use std::collections::{HashMap, HashSet};
 
 use super::env::{
-    EnumInfo, FunctionSig, ImplAssocTypeEntry, ImplInfo, StructInfo, TraitInfo, UnionInfo,
+    EnumInfo, FunctionSig, ImplAssocTypeEntry, ImplInfo, RefinementPred, StructInfo, TraitInfo,
+    UnionInfo,
 };
 use super::types::{
     type_display, type_is_fully_concrete, FloatSize, IntSize, Type, UIntSize, VariantTypeInfo,
@@ -1780,6 +1781,33 @@ impl<'a> super::TypeChecker<'a> {
                 *tait_alias = Some(t.name.clone());
             }
         }
+        // Refinement type (`type Name = Base where <pred>`). Previously the
+        // predicate was dropped on the floor and the alias lowered to its
+        // transparent base, so `Positive` was indistinguishable from `i64`.
+        // Step 1 (phase-9 line 25): validate the predicate against the
+        // allowed constraint language and, on success, wrap the base in a
+        // `Type::Refinement` so the nominal identity survives inference. The
+        // predicate is stashed in `refinement_predicates` (not embedded in
+        // the `Type`) for the later elision / `try_from` / `as` steps.
+        if let Some(pred) = &t.refinement {
+            match validate_refinement_predicate(pred) {
+                Ok(()) => {
+                    self.env
+                        .refinement_predicates
+                        .insert(t.name.clone(), RefinementPred { expr: pred.clone() });
+                    ty = Type::Refinement {
+                        name: t.name.clone(),
+                        base: Box::new(ty),
+                    };
+                }
+                Err((msg, span)) => {
+                    // Leave `ty` as the transparent base — building a nominal
+                    // identity on an invalid predicate would only cascade
+                    // confusing downstream errors.
+                    self.type_error(msg, span, TypeErrorKind::InvalidRefinementPredicate);
+                }
+            }
+        }
         self.env.type_aliases.insert(t.name.clone(), ty);
     }
 
@@ -1830,4 +1858,157 @@ impl<'a> super::TypeChecker<'a> {
             },
         );
     }
+}
+
+/// Validate a refinement `where` predicate against the allowed constraint
+/// language (design.md § Refinement Types > "Refinement constraint
+/// language"). Returns `Err((message, span))` at the first disallowed
+/// construct; `Ok(())` when the whole expression is a pure predicate over
+/// `self`, its fields, zero-arg `self` methods, constant leaves, and
+/// arithmetic / bitwise / comparison / boolean operators.
+///
+/// Step 1 validates *structure* only. It rejects method calls with
+/// arguments, free-function calls, and any control-flow / block / closure
+/// shape, but it does **not** yet verify that a zero-arg `self.method()`
+/// is effect-free or that field / method receivers are rooted at `self` —
+/// those are the effect-checker's and a later step's concern. Const-ness
+/// of bare identifier / path leaves is likewise deferred.
+fn validate_refinement_predicate(expr: &Expr) -> Result<(), (String, crate::token::Span)> {
+    const PREFIX: &str = "error[E_INVALID_REFINEMENT_PREDICATE]:";
+    match &expr.kind {
+        // `self` and constant leaves.
+        ExprKind::SelfValue
+        | ExprKind::Integer(..)
+        | ExprKind::Float(..)
+        | ExprKind::Bool(_)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::StringLit(_)
+        // A bare identifier is treated as a module-level constant
+        // reference (`MAX`). Whether the name actually resolves to a
+        // `const` is left to ordinary name resolution; the grammar only
+        // requires that it *shape* like a constant leaf here.
+        | ExprKind::Identifier(_) => Ok(()),
+        // A qualified constant path (`module.MAX`). Generic arguments on
+        // the path are never a constant leaf — reject them.
+        ExprKind::Path { generic_args, .. } => {
+            if generic_args.is_some() {
+                Err((
+                    format!(
+                        "{PREFIX} generic arguments are not allowed in a refinement \
+                         predicate — reference a plain constant"
+                    ),
+                    expr.span.clone(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        // Arithmetic / bitwise / comparison / boolean operators. Range
+        // operators (`..`, `..=`) are not predicates and fall through to
+        // the rejection arm below.
+        ExprKind::Binary { op, left, right } => {
+            if refinement_binop_allowed(op) {
+                validate_refinement_predicate(left)?;
+                validate_refinement_predicate(right)
+            } else {
+                Err((
+                    format!(
+                        "{PREFIX} operator `{}` is not allowed in a refinement \
+                         predicate",
+                        super::const_eval::binop_glyph(op)
+                    ),
+                    expr.span.clone(),
+                ))
+            }
+        }
+        // `not e`, `-e`, `~e`. Dereference (`*e`) is not a pure predicate.
+        ExprKind::Unary { op, operand } => match op {
+            UnaryOp::Not | UnaryOp::Neg | UnaryOp::BitNot => {
+                validate_refinement_predicate(operand)
+            }
+            UnaryOp::Deref => Err((
+                format!("{PREFIX} dereference (`*`) is not allowed in a refinement predicate"),
+                expr.span.clone(),
+            )),
+        },
+        // `self.field` — and nested field chains rooted at an allowed
+        // sub-expression (`self.lo`, `self.inner.x`).
+        ExprKind::FieldAccess { object, .. } => validate_refinement_predicate(object),
+        // Zero-argument method call on an allowed receiver (`self.len()`,
+        // `self.is_empty()`). Arguments and turbofish are disallowed per
+        // design.md ("Method calls with arguments ... is disallowed").
+        ExprKind::MethodCall {
+            object,
+            method,
+            turbofish,
+            args,
+            ..
+        } => {
+            if !args.is_empty() {
+                Err((
+                    format!(
+                        "{PREFIX} method call `{method}(...)` with arguments is not \
+                         allowed in a refinement predicate — only zero-argument \
+                         methods on `self` (e.g. `self.len()`) are permitted"
+                    ),
+                    expr.span.clone(),
+                ))
+            } else if turbofish.is_some() {
+                Err((
+                    format!(
+                        "{PREFIX} generic arguments on method `{method}` are not \
+                         allowed in a refinement predicate"
+                    ),
+                    expr.span.clone(),
+                ))
+            } else {
+                validate_refinement_predicate(object)
+            }
+        }
+        // Free-function call (`hash(self)`) — disallowed.
+        ExprKind::Call { .. } => Err((
+            format!(
+                "{PREFIX} function calls are not allowed in a refinement predicate — \
+                 only zero-argument methods on `self` are permitted"
+            ),
+            expr.span.clone(),
+        )),
+        _ => Err((
+            format!(
+                "{PREFIX} this expression is not allowed in a refinement predicate — \
+                 predicates must be pure expressions over `self`, its fields, \
+                 zero-argument `self` methods, constants, and arithmetic / \
+                 comparison / boolean operators"
+            ),
+            expr.span.clone(),
+        )),
+    }
+}
+
+/// Operators permitted inside a refinement predicate: arithmetic, bitwise,
+/// comparison, and the `and` / `or` boolean combinators. Range operators
+/// are excluded — a range is not a boolean predicate.
+fn refinement_binop_allowed(op: &BinOp) -> bool {
+    matches!(
+        op,
+        BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Mod
+            | BinOp::Eq
+            | BinOp::NotEq
+            | BinOp::Lt
+            | BinOp::LtEq
+            | BinOp::Gt
+            | BinOp::GtEq
+            | BinOp::And
+            | BinOp::Or
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::BitXor
+            | BinOp::Shl
+            | BinOp::Shr
+    )
 }

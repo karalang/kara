@@ -20068,3 +20068,69 @@ fn local_binding_shadowing_captured_outer_skips_check() {
          }",
     );
 }
+
+// ── Refinement types (phase-9 line 25, step 1) ──────────────────
+//
+// Step 1 lands the `Type::Refinement` representation, predicate
+// grammar validation, and env storage. These tests pin the
+// declaration-site behavior: valid predicates are accepted (and the
+// alias survives typecheck), invalid ones emit
+// `E_INVALID_REFINEMENT_PREDICATE`. Construction (`try_from` / `as`),
+// elision, and use-site widening land in later steps.
+
+fn refinement_predicate_rejected(source: &str) {
+    let errors = typecheck_errors(source);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("E_INVALID_REFINEMENT_PREDICATE")),
+        "expected E_INVALID_REFINEMENT_PREDICATE for `{}`, got: {}",
+        source,
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn refinement_valid_predicates_accepted() {
+    // Comparisons, `and`/`or` combinators, arithmetic, bitwise, and a
+    // zero-arg `self` method — every shape in the allowed grammar.
+    typecheck_ok(
+        "type NonZero = i32 where self != 0;
+         type ValidPort = u16 where self >= 1 and self <= 65535;
+         type Even = i64 where self % 2 == 0;
+         type Masked = i64 where (self & 1) == 0;
+         type NonEmpty = String where self.len() > 0;
+         type Banded = i64 where self > 0 and self < 100 or self == 0;",
+    );
+}
+
+#[test]
+fn refinement_method_call_with_args_rejected() {
+    // Zero-arg `self` methods are permitted; a method call *with*
+    // arguments is not (design.md: "Method calls with arguments ... is
+    // disallowed").
+    refinement_predicate_rejected("type Bad = i64 where self.clamp(0) > 0;");
+}
+
+#[test]
+fn refinement_free_function_call_rejected() {
+    // Calls to anything other than a zero-arg `self` method are rejected.
+    refinement_predicate_rejected("type Bad = i64 where is_valid(self);");
+}
+
+#[test]
+fn refinement_range_operator_rejected() {
+    // A range is not a boolean predicate — the `..` operator is outside
+    // the allowed operator set.
+    refinement_predicate_rejected("type Bad = i64 where self .. 10;");
+}
+
+#[test]
+fn refinement_deref_rejected() {
+    // Dereference is not a pure predicate construct.
+    refinement_predicate_rejected("type Bad = i64 where *self == 0;");
+}

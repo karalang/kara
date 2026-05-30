@@ -222,6 +222,12 @@ fn walk(
         Type::Ref(inner) | Type::MutRef(inner) | Type::Weak(inner) => {
             walk(inner, struct_info, enum_info, path, root)?;
         }
+        // A refinement is structurally its base — walk through to catch an
+        // unsafe leaf reachable via the refined type's base (e.g. a
+        // refinement over `Rc[T]`).
+        Type::Refinement { base, .. } => {
+            walk(base, struct_info, enum_info, path, root)?;
+        }
         Type::Named { name, args } => {
             // Walk type args first — `Vec[Rc[T]]` catches Rc here.
             for (i, arg) in args.iter().enumerate() {

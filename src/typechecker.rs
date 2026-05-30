@@ -570,6 +570,16 @@ pub enum TypeErrorKind {
     /// pointer) per the closed structural list in `src/cross_task_safe.rs`.
     /// Code `E_NOT_CROSS_TASK`.
     CrossTaskUnsafeCapture,
+    /// A refinement type's `where` predicate uses a construct outside the
+    /// allowed constraint language (design.md § Refinement Types >
+    /// "Refinement constraint language"): a method call with arguments, a
+    /// free-function call, a control-flow / block / closure expression, or
+    /// any other shape that is not a pure expression over `self`, its
+    /// fields, zero-arg `self` methods, constants, and arithmetic /
+    /// comparison / boolean operators. Emitted at the `type Name = Base
+    /// where <pred>` declaration site by `env_add_type_alias`.
+    /// `E_INVALID_REFINEMENT_PREDICATE` (phase-9 line 25, step 1).
+    InvalidRefinementPredicate,
 }
 
 /// Map a `TypeErrorKind` to its broad-category `DiagnosticClass`
@@ -644,6 +654,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ModuleBindingHeapType
         | TypeErrorKind::ReassignToImmutableModuleBinding
         | TypeErrorKind::ScopeLocalEscape
+        | TypeErrorKind::InvalidRefinementPredicate
         | TypeErrorKind::CrossTaskUnsafeCapture => None,
     }
 }

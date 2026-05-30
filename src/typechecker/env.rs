@@ -206,6 +206,24 @@ pub struct UnionInfo {
     pub defining_stdlib_origin: bool,
 }
 
+/// A validated refinement predicate (the `<pred>` in
+/// `type Name = Base where <pred>`). Stored in
+/// [`TypeEnv::refinement_predicates`] keyed by the refinement's name so
+/// the `Type::Refinement` variant stays free of any embedded `Expr` (and
+/// thus cheap to `Clone` / `PartialEq`). The captured expression has
+/// already passed the allowed-grammar validation in `env_add_type_alias`
+/// (numeric / bitwise arithmetic, comparisons, `and`/`or`/`not`
+/// combinators, `self`, `self.field`, zero-arg `self.method()` calls, and
+/// constant leaves — design.md § Refinement Types > "Refinement
+/// constraint language"). The compile-time elision pass (phase-9 line 30)
+/// and `try_from` / `as` construction (step 3) evaluate this predicate;
+/// step 1 only validates and stores it.
+#[derive(Debug, Clone)]
+pub struct RefinementPred {
+    /// The `where`-clause expression, rooted at `self`.
+    pub expr: Expr,
+}
+
 pub struct TypeEnv {
     pub structs: HashMap<String, StructInfo>,
     pub enums: HashMap<String, EnumInfo>,
@@ -224,6 +242,12 @@ pub struct TypeEnv {
     pub functions: HashMap<String, FunctionSig>,
     pub constants: HashMap<String, Type>,
     pub type_aliases: HashMap<String, Type>,
+    /// Validated refinement predicates, keyed by the refinement type's
+    /// name. Populated by `env_add_type_alias` when a `type Name = Base
+    /// where <pred>` alias passes grammar validation; the matching
+    /// `type_aliases` entry holds the `Type::Refinement { name, base }`
+    /// that carries the nominal identity. See [`RefinementPred`].
+    pub refinement_predicates: HashMap<String, RefinementPred>,
     pub traits: HashMap<String, TraitInfo>,
     /// Names of declared trait aliases (`trait NAME = bound1 + ...;`).
     /// Recognized at parse + resolver time; the typechecker emits
@@ -306,6 +330,7 @@ impl TypeEnv {
             functions: HashMap::new(),
             constants: HashMap::new(),
             type_aliases: HashMap::new(),
+            refinement_predicates: HashMap::new(),
             traits: HashMap::new(),
             trait_aliases: HashSet::new(),
             marker_traits: HashSet::new(),

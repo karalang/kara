@@ -18,6 +18,9 @@ impl<'a> super::TypeChecker<'a> {
     /// Named types (structs/enums) require `#[derive(Eq)]` or `#[derive(PartialEq)]`.
     pub(super) fn type_supports_partial_eq(&self, ty: &Type) -> bool {
         match ty {
+            // Refinement types are structurally transparent — derive
+            // support follows the base type.
+            Type::Refinement { base, .. } => self.type_supports_partial_eq(base),
             Type::Int(_)
             | Type::UInt(_)
             | Type::Float(_)
@@ -80,6 +83,7 @@ impl<'a> super::TypeChecker<'a> {
     /// Named types require `#[derive(Eq)]`.
     pub(super) fn type_supports_eq(&self, ty: &Type) -> bool {
         match ty {
+            Type::Refinement { base, .. } => self.type_supports_eq(base),
             Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char | Type::Str | Type::Unit => true,
             // f32/f64 follow IEEE 754: NaN != NaN, so they don't implement Eq
             Type::Float(_) => false,
@@ -128,6 +132,7 @@ impl<'a> super::TypeChecker<'a> {
     /// break the hash/eq contract. Named types require `#[derive(Hash)]`.
     pub(super) fn type_supports_hash(&self, ty: &Type) -> bool {
         match ty {
+            Type::Refinement { base, .. } => self.type_supports_hash(base),
             Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char | Type::Str | Type::Unit => true,
             Type::Float(_) => false,
             Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_hash(e)),
@@ -189,6 +194,7 @@ impl<'a> super::TypeChecker<'a> {
     /// Check whether a type supports total `Ord`. Floats do not (see Eq).
     pub(super) fn type_supports_ord(&self, ty: &Type) -> bool {
         match ty {
+            Type::Refinement { base, .. } => self.type_supports_ord(base),
             Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char | Type::Str | Type::Unit => true,
             Type::Float(_) => false,
             Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_ord(e)),
@@ -236,6 +242,7 @@ impl<'a> super::TypeChecker<'a> {
     /// Named user types require `#[derive(Display)]`.
     pub(super) fn type_supports_display(&self, ty: &Type) -> bool {
         match ty {
+            Type::Refinement { base, .. } => self.type_supports_display(base),
             Type::Int(_)
             | Type::UInt(_)
             | Type::Float(_)
@@ -299,6 +306,7 @@ impl<'a> super::TypeChecker<'a> {
     /// Check whether a type supports `PartialOrd` (admits NaN for floats).
     pub(super) fn type_supports_partial_ord(&self, ty: &Type) -> bool {
         match ty {
+            Type::Refinement { base, .. } => self.type_supports_partial_ord(base),
             Type::Int(_)
             | Type::UInt(_)
             | Type::Float(_)
@@ -376,6 +384,7 @@ impl<'a> super::TypeChecker<'a> {
     /// `type_supports_display`.
     pub(super) fn type_supports_clone(&self, ty: &Type) -> bool {
         match ty {
+            Type::Refinement { base, .. } => self.type_supports_clone(base),
             Type::Int(_)
             | Type::UInt(_)
             | Type::Float(_)
@@ -450,6 +459,7 @@ impl<'a> super::TypeChecker<'a> {
     /// Display for slice 7/8 bound-discharge purposes).
     pub(super) fn type_supports_debug(&self, ty: &Type) -> bool {
         match ty {
+            Type::Refinement { base, .. } => self.type_supports_debug(base),
             Type::Int(_)
             | Type::UInt(_)
             | Type::Float(_)

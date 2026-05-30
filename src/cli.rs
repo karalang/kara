@@ -2573,6 +2573,10 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // Reuses the same numeric slot as the warning
                 // (`W0255`) by convention with `Deprecated`.
                 crate::typechecker::TypeErrorKind::UnstableApi => "E0255",
+                // Phase 9 line 25 step 1 — a refinement type's `where`
+                // predicate uses a construct outside the allowed
+                // constraint language (design.md § Refinement Types).
+                crate::typechecker::TypeErrorKind::InvalidRefinementPredicate => "E0256",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
