@@ -3122,14 +3122,20 @@ impl<'ctx> super::Codegen<'ctx> {
             self.seeded_enum_names.insert("TlsError".to_string());
         }
 
-        // Result[T, E]: { i64 tag, i64 w0, i64 w1, i64 w2, i64 w3 }
-        // — Err(tag=0) | Ok(tag=1), payload occupies w0..w3.
+        // Result[T, E]: { i64 tag, i64 w0, i64 w1, i64 w2, i64 w3, i64 w4 }
+        // — Err(tag=0) | Ok(tag=1), payload occupies w0..w4.
         //
         // Phase-8 line 435 slice 2 widening (2026-05-21): bumped from the
         // legacy `{i64, i64}` (single payload word) to four payload words
         // so `Result[Json, JsonError]` — the return type of
         // `Json.parse(s)` — can carry the four-word `Json` enum value
-        // verbatim in the Ok arm. Backwards-compatible by construction:
+        // verbatim in the Ok arm.
+        //
+        // Phase-8 line 39 widening (2026-05-30): bumped four → five
+        // payload words so the client `Response` can grow a hidden
+        // `headers: i64` handle field (status + body{ptr,len,cap} +
+        // headers = 5 words) for `Response.header(name)`. Backwards-
+        // compatible by construction:
         //   - Construction (`try_compile_enum_variant`) extracts the
         //     value's natural LLVM-field count via `coerce_to_payload_words`
         //     and writes only those many words; trailing slots stay undef.
@@ -3141,17 +3147,20 @@ impl<'ctx> super::Codegen<'ctx> {
         //   - Par-block surfaces (`par_blocks::compile_par_block`) read
         //     the Result struct type from the slot-layout descriptor, not
         //     a hardcoded shape.
-        // The Err arm of `Result[Json, JsonError]` truncates `JsonError`
-        // (5 words: u32 line + u32 column + String (ptr,len,cap)) to four
-        // — `cap` is lost, so the message String's scope-exit free becomes
-        // a no-op (acceptable v1 behavior; the message bytes leak but
-        // remain valid until process exit, and the kata's `/echo` arm
-        // never reads them anyway). A future Result-payload-width sweep
-        // can widen further once we have a need for it.
+        //   - The HTTP client packing sites (`compile_client_http_method`
+        //     / `compile_request_builder_send`) guard every payload store
+        //     with `if total_fields > N` and zero-fill the tail, so they
+        //     absorbed the extra word and now pack the headers handle at w4.
+        // The Err arm of `Result[Json, JsonError]` packs `JsonError`
+        // (5 words: u32 line + u32 column + String (ptr,len,cap)) at
+        // w0..w3 and zero-fills w4 (`cap`) — the message String's
+        // scope-exit free stays a no-op (the historical v1 behavior; the
+        // message bytes leak but remain valid until process exit). See
+        // `json.rs`'s Err-arm packing for the explicit `cap = 0` store.
         let result_enum_type = self
             .context
-            .struct_type(&[i64_t, i64_t, i64_t, i64_t, i64_t], false);
-        let result_payload_words = 4usize;
+            .struct_type(&[i64_t, i64_t, i64_t, i64_t, i64_t, i64_t], false);
+        let result_payload_words = 5usize;
         if !self.enum_layouts.contains_key("Result") {
             let mut tags = HashMap::new();
             tags.insert("Err".to_string(), 0u64);
@@ -3221,12 +3230,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 .insert("Client".to_string(), Vec::new());
         }
         if !self.struct_types.contains_key("Response") {
-            // `Response { status: i64, body: String }`.
-            let resp_ty = self.context.struct_type(&[i64_t.into(), str_ty], false);
+            // `Response { status: i64, body: String, headers: i64 }`.
+            // The stdlib `struct Response` declares only `{ status, body }`
+            // (its methods are all `#[compiler_builtin]`, so the type is
+            // never constructed from a literal on the client path); codegen
+            // seeds a third hidden `headers: i64` field (phase-8 line 39)
+            // carrying the `HTTP_RESPONSE_HEADERS` side-table handle the
+            // client FFI mints. `Response.header(name)` reads it via
+            // `compile_response_header`; `status` / `body` / `text` /
+            // `bytes` still GEP fields 0 / 1, unaffected by the new tail
+            // field. The 5-word layout (i64 + {ptr,i64,i64} + i64) fills
+            // the widened Result payload exactly (w0..w4).
+            let resp_ty = self
+                .context
+                .struct_type(&[i64_t.into(), str_ty, i64_t.into()], false);
             self.struct_types.insert("Response".to_string(), resp_ty);
             self.struct_field_names.insert(
                 "Response".to_string(),
-                vec!["status".to_string(), "body".to_string()],
+                vec![
+                    "status".to_string(),
+                    "body".to_string(),
+                    "headers".to_string(),
+                ],
             );
         }
         if !self.struct_types.contains_key("HttpError") {

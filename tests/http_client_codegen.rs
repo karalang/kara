@@ -253,4 +253,44 @@ fn main() with sends(Network) receives(Network) {
             "expected >= 2 karac_string_clone calls (text + bytes); saw {clone_calls}\n{ir}"
         );
     }
+
+    /// Phase-8 line 39 — `Response.header(name)` lowers through
+    /// `compile_response_header`: it GEPs the hidden `headers: i64`
+    /// handle off the destructured Response and calls
+    /// `karac_runtime_http_response_header`. Pins that the extern is
+    /// declared unconditionally and that the dispatch arm in
+    /// `compile_method_call` recognises the `header`-with-one-arg shape
+    /// on a Response receiver (a regression — e.g. the arm not matching,
+    /// or the seeded Response losing its third field — would surface as
+    /// `codegen failed` from `ir_for`, or a missing call here).
+    #[test]
+    fn test_ir_response_header_dispatches_to_runtime_lookup() {
+        let ir = ir_for(
+            r#"
+fn main() with sends(Network) receives(Network) {
+    let c = Client.new();
+    let url = "http://127.0.0.1:65535/";
+    match c.get(url) {
+        Ok(resp) => {
+            match resp.header("x-custom") {
+                Some(v) => println(v),
+                None => println("none"),
+            }
+        }
+        Err(e) => {
+            println(e.message());
+        }
+    }
+}
+"#,
+        );
+        assert!(
+            ir.contains("declare ") && ir.contains("karac_runtime_http_response_header"),
+            "expected declaration of karac_runtime_http_response_header in IR"
+        );
+        assert!(
+            ir.contains("call ptr @karac_runtime_http_response_header("),
+            "expected a call to karac_runtime_http_response_header; IR was:\n{ir}"
+        );
+    }
 }

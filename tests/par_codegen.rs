@@ -646,13 +646,15 @@ fn main() {
 "#,
         );
         // (a) Parent allocates the Result-slot array. Result lowers to
-        // `{ i64, i64, i64, i64, i64 }` (tag + 4 payload words, widened
-        // 2026-05-21 to accommodate `Result[Json, JsonError]` from
-        // `Json.parse`); two branches → `[2 x { i64, i64, i64, i64, i64 }]`.
+        // `{ i64, i64, i64, i64, i64, i64 }` (tag + 5 payload words —
+        // widened 2026-05-21 to four for `Result[Json, JsonError]` from
+        // `Json.parse`, then to five 2026-05-30 for the client
+        // `Response`'s hidden `headers` handle, phase-8 line 39); two
+        // branches → `[2 x { i64, i64, i64, i64, i64, i64 }]`.
         assert!(
-            ir.contains("%__par_result_slots = alloca [2 x { i64, i64, i64, i64, i64 }]"),
+            ir.contains("%__par_result_slots = alloca [2 x { i64, i64, i64, i64, i64, i64 }]"),
             "expected parent-side __par_result_slots alloca \
-             [2 x {{ i64, i64, i64, i64, i64 }}]; IR:\n{ir}"
+             [2 x {{ i64, i64, i64, i64, i64, i64 }}]; IR:\n{ir}"
         );
 
         // (b) Each branch fn emits a slot-store. The slot pointer is

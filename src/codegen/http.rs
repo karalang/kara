@@ -238,15 +238,28 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         // Phase-8 line 14 — response-header round-trip. If the user's
-        // `Response` struct carries a third field (the convention
-        // is `headers: Vec[(String, String)]`), iterate it and emit
+        // `Response` struct carries a third field with the
+        // `headers: Vec[(String, String)]` shape, iterate it and emit
         // one `karac_runtime_http_response_set_header` call per pair.
         // 2-field Response (`{ status, body }`) — the existing
         // backward-compatible shape — skips the loop entirely. No
         // field-NAME introspection is required at v1: the convention
-        // is positional (field 2) and the codegen check is purely
-        // structural.
-        if resp_struct.get_type().count_fields() >= 3 {
+        // is positional (field 2).
+        //
+        // The structural check additionally requires field 2 to be a
+        // struct aggregate (the `Vec` `{ptr, i64, i64}` shape). This
+        // distinguishes the server-handler headers-Vec from the
+        // client-side seeded `Response { status, body, headers: i64 }`
+        // (phase-8 line 39), whose field 2 is a plain i64 side-table
+        // handle — a handler that returned that shape would otherwise
+        // have its handle misread as a Vec base pointer and iterate
+        // garbage.
+        let field2_is_headers_vec = resp_struct.get_type().count_fields() >= 3
+            && matches!(
+                resp_struct.get_type().get_field_type_at_index(2),
+                Some(inkwell::types::BasicTypeEnum::StructType(_))
+            );
+        if field2_is_headers_vec {
             let str_ty = self.vec_struct_type();
             let tuple_ty = self
                 .context
@@ -565,12 +578,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(var_name)
             .copied()
             .ok_or_else(|| format!("Request var '{var_name}' not bound"))?;
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let i64_ty = self.context.i64_type();
 
-        // Compile the name arg first — outside any of the new BBs — so the
-        // String aggregate's construction happens at the call site rather
-        // than inside one of the option-merge branches.
+        // Compile the name arg first — outside any of the option-merge
+        // BBs — so the String aggregate's construction happens at the
+        // call site rather than inside one of the merge branches.
         let name_val = self.compile_expr(name_arg)?;
         let name_struct = name_val.into_struct_value();
         let name_data = self
@@ -608,16 +619,45 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_basic()
             .into_pointer_value();
 
+        self.build_option_string_from_borrowed_cstr(cstr_ptr, "req.hdr")
+    }
+
+    /// Build an `Option[String]` from a borrowed runtime `*const c_char`
+    /// (null → `None`; non-null → `Some(owned copy)`). Shared by
+    /// `Request.header(name)` and `Response.header(name)` (phase-8 line
+    /// 39): both call a runtime header-lookup extern that returns
+    /// null-on-miss / a runtime-owned null-terminated pointer on hit,
+    /// then need the same null-check + strlen / malloc / memcpy
+    /// String-build — including the `len == 0` → null-buffer empty path,
+    /// so an explicitly-empty header value (e.g. `X-Trace-Id:`)
+    /// materializes `Some("")` whose data ptr is null (matching how
+    /// other empty Kāra Strings are represented in codegen) — plus the
+    /// `build_option_some_via_phis` merge that hands the three String
+    /// payload words across from the found branch. `prefix` labels the
+    /// emitted values / basic blocks per call site.
+    fn build_option_string_from_borrowed_cstr(
+        &mut self,
+        cstr_ptr: PointerValue<'ctx>,
+        prefix: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
         let fn_val = self
             .current_fn
-            .ok_or_else(|| "Request.header called outside fn".to_string())?;
-        let found_bb = self.context.append_basic_block(fn_val, "req.hdr.found");
-        let notfound_bb = self.context.append_basic_block(fn_val, "req.hdr.notfound");
-        let merge_bb = self.context.append_basic_block(fn_val, "req.hdr.merge");
+            .ok_or_else(|| format!("{prefix} header build called outside fn"))?;
+        let found_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.found"));
+        let notfound_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.notfound"));
+        let merge_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.merge"));
 
         let is_null = self
             .builder
-            .build_is_null(cstr_ptr, "req.hdr.is_null")
+            .build_is_null(cstr_ptr, &format!("{prefix}.is_null"))
             .unwrap();
         self.builder
             .build_conditional_branch(is_null, notfound_bb, found_bb)
@@ -625,11 +665,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Found path: strlen + malloc + memcpy into a fresh String
         // aggregate, then split into three payload words for the PHI
-        // merge. Mirrors the tail of `compile_request_string_method` —
-        // including the `len == 0` empty-path branch — so an explicitly-
-        // empty header value (e.g. `X-Trace-Id:`) materializes a
-        // `Some("")` whose data ptr is null (matching how other empty
-        // Kāra Strings are represented elsewhere in codegen).
+        // merge.
         self.builder.position_at_end(found_bb);
         let strlen_fn = self
             .module
@@ -637,14 +673,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .expect("strlen declared in Codegen::new");
         let val_len_raw = self
             .builder
-            .build_call(strlen_fn, &[cstr_ptr.into()], "req.hdr.val.len")
+            .build_call(strlen_fn, &[cstr_ptr.into()], &format!("{prefix}.val.len"))
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
             .into_int_value();
         let val_len_i64 = self
             .builder
-            .build_int_z_extend_or_bit_cast(val_len_raw, i64_ty, "req.hdr.val.len.i64")
+            .build_int_z_extend_or_bit_cast(val_len_raw, i64_ty, &format!("{prefix}.val.len.i64"))
             .unwrap();
 
         let zero = i64_ty.const_zero();
@@ -654,13 +690,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 inkwell::IntPredicate::EQ,
                 val_len_i64,
                 zero,
-                "req.hdr.val.is_empty",
+                &format!("{prefix}.val.is_empty"),
             )
             .unwrap();
-        let alloc_bb = self.context.append_basic_block(fn_val, "req.hdr.val.alloc");
-        let empty_bb = self.context.append_basic_block(fn_val, "req.hdr.val.empty");
-        let found_end_bb = self.context.append_basic_block(fn_val, "req.hdr.found.end");
-        let buf_slot = self.create_entry_alloca(fn_val, "req.hdr.val.buf", ptr_ty.into());
+        let alloc_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.val.alloc"));
+        let empty_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.val.empty"));
+        let found_end_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.found.end"));
+        let buf_slot =
+            self.create_entry_alloca(fn_val, &format!("{prefix}.val.buf"), ptr_ty.into());
 
         self.builder
             .build_conditional_branch(is_empty, empty_bb, alloc_bb)
@@ -682,7 +725,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_call(
                 self.malloc_fn,
                 &[val_len_i64.into()],
-                "req.hdr.val.buf.alloc",
+                &format!("{prefix}.val.buf.alloc"),
             )
             .unwrap()
             .try_as_basic_value()
@@ -701,14 +744,19 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(found_end_bb);
         let data = self
             .builder
-            .build_load(ptr_ty, buf_slot, "req.hdr.val.data")
+            .build_load(ptr_ty, buf_slot, &format!("{prefix}.val.data"))
             .unwrap()
             .into_pointer_value();
         let str_ty = self.vec_struct_type();
         let mut str_val: BasicValueEnum<'ctx> = str_ty.get_undef().into();
         str_val = self
             .builder
-            .build_insert_value(str_val.into_struct_value(), data, 0, "req.hdr.str.data.ins")
+            .build_insert_value(
+                str_val.into_struct_value(),
+                data,
+                0,
+                &format!("{prefix}.str.data.ins"),
+            )
             .unwrap()
             .into_struct_value()
             .into();
@@ -718,7 +766,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 str_val.into_struct_value(),
                 val_len_i64,
                 1,
-                "req.hdr.str.len.ins",
+                &format!("{prefix}.str.len.ins"),
             )
             .unwrap()
             .into_struct_value()
@@ -729,7 +777,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 str_val.into_struct_value(),
                 val_len_i64,
                 2,
-                "req.hdr.str.cap.ins",
+                &format!("{prefix}.str.cap.ins"),
             )
             .unwrap()
             .into_struct_value()
@@ -748,7 +796,7 @@ impl<'ctx> super::Codegen<'ctx> {
             &some_payload_words,
             some_end_bb,
             notfound_bb,
-            "req.hdr.opt",
+            &format!("{prefix}.opt"),
         );
         Ok(agg)
     }
@@ -1321,6 +1369,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let body_len_slot = self.create_entry_alloca(fn_val, "client.out.body_len", i64_ty.into());
         let err_ptr_slot = self.create_entry_alloca(fn_val, "client.out.err_ptr", ptr_ty.into());
         let err_len_slot = self.create_entry_alloca(fn_val, "client.out.err_len", i64_ty.into());
+        // Phase-8 line 39 — sixth out-param: the response-headers
+        // side-table handle the runtime mints on the Ok path (0 on Err).
+        let headers_handle_slot =
+            self.create_entry_alloca(fn_val, "client.out.headers_handle", i64_ty.into());
 
         // Call the runtime extern.
         let extern_name = if method == "get" {
@@ -1344,6 +1396,7 @@ impl<'ctx> super::Codegen<'ctx> {
             body_len_slot.into(),
             err_ptr_slot.into(),
             err_len_slot.into(),
+            headers_handle_slot.into(),
         ]);
         self.builder
             .build_call(extern_fn, &call_args, &format!("client.{method}.call"))
@@ -1373,6 +1426,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let err_len_val = self
             .builder
             .build_load(i64_ty, err_len_slot, "client.err_len")
+            .unwrap()
+            .into_int_value();
+        let headers_handle_val = self
+            .builder
+            .build_load(i64_ty, headers_handle_slot, "client.headers_handle")
             .unwrap()
             .into_int_value();
 
@@ -1455,7 +1513,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             self.builder.build_store(p, body_len_val).unwrap();
         }
-        for w in 5..total_fields {
+        if total_fields > 5 {
+            // Phase-8 line 39 — w4 = Response.headers handle (the
+            // `HTTP_RESPONSE_HEADERS` side-table key the runtime minted).
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 5, "ok.w4.headers")
+                .unwrap();
+            self.builder.build_store(p, headers_handle_val).unwrap();
+        }
+        for w in 6..total_fields {
             let p = self
                 .builder
                 .build_struct_gep(result_ty, result_slot, w as u32, &format!("ok.w{w}"))
@@ -1578,6 +1645,85 @@ impl<'ctx> super::Codegen<'ctx> {
                 "compile_response_accessor called with unsupported method '{other}'"
             )),
         }
+    }
+
+    /// Phase-8 line 39 — `resp.header(name) -> Option[String]`. Loads
+    /// the hidden `headers: i64` handle from the Response (field 2 — the
+    /// `HTTP_RESPONSE_HEADERS` side-table key the client FFI minted on
+    /// the Ok path; `0` for any path that produced no headers), calls
+    /// `karac_runtime_http_response_header(handle, name_data, name_len)`,
+    /// and wraps the borrowed result in `Option[String]` via the shared
+    /// `build_option_string_from_borrowed_cstr` helper: `Some(value)` on
+    /// a case-insensitive hit (RFC 7230 §3.2), `None` on a miss / handle
+    /// `0`. The Response-side mirror of `compile_request_header` — the
+    /// only structural difference is the receiver (an i64 handle GEP'd
+    /// from the Response struct vs an opaque request pointer).
+    pub(super) fn compile_response_header(
+        &mut self,
+        var_name: &str,
+        name_arg: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("Response var '{var_name}' not bound"))?;
+        let resp_ty = self
+            .struct_types
+            .get("Response")
+            .copied()
+            .expect("Response struct type seeded by seed_builtin_struct_types");
+        let i64_ty = self.context.i64_type();
+
+        // Compile the name arg first — outside the option-merge BBs.
+        let name_val = self.compile_expr(name_arg)?;
+        let name_struct = name_val.into_struct_value();
+        let name_data = self
+            .builder
+            .build_extract_value(name_struct, 0, "resp.hdr.name.data")
+            .unwrap()
+            .into_pointer_value();
+        let name_len = self
+            .builder
+            .build_extract_value(name_struct, 1, "resp.hdr.name.len")
+            .unwrap()
+            .into_int_value();
+
+        // Load the headers handle from Response field 2.
+        let handle_ptr = self
+            .builder
+            .build_struct_gep(
+                resp_ty,
+                slot.ptr,
+                2,
+                &format!("{var_name}.resp.hdr.handle.ptr"),
+            )
+            .map_err(|e| format!("Response headers-handle gep failed: {e:?}"))?;
+        let handle = self
+            .builder
+            .build_load(i64_ty, handle_ptr, &format!("{var_name}.resp.hdr.handle"))
+            .unwrap()
+            .into_int_value();
+
+        // Call the runtime extern; null return = header not present
+        // (or unknown handle).
+        let extern_fn = self
+            .module
+            .get_function("karac_runtime_http_response_header")
+            .expect("karac_runtime_http_response_header declared in Codegen::new");
+        let cstr_ptr = self
+            .builder
+            .build_call(
+                extern_fn,
+                &[handle.into(), name_data.into(), name_len.into()],
+                "resp.hdr.cstr",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        self.build_option_string_from_borrowed_cstr(cstr_ptr, "resp.hdr")
     }
 
     /// Phase-8 line 17 slice 3 — `e.message() -> String` on
@@ -1911,6 +2057,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let body_len_slot = self.create_entry_alloca(fn_val, "rb.send.body_len", i64_ty.into());
         let err_ptr_slot = self.create_entry_alloca(fn_val, "rb.send.err_ptr", ptr_ty.into());
         let err_len_slot = self.create_entry_alloca(fn_val, "rb.send.err_len", i64_ty.into());
+        // Phase-8 line 39 — sixth out-param: the response-headers handle.
+        let headers_handle_slot =
+            self.create_entry_alloca(fn_val, "rb.send.headers_handle", i64_ty.into());
 
         let send_fn = self
             .module
@@ -1926,6 +2075,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     body_len_slot.into(),
                     err_ptr_slot.into(),
                     err_len_slot.into(),
+                    headers_handle_slot.into(),
                 ],
                 "rb.send.call",
             )
@@ -1956,6 +2106,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let err_len_val = self
             .builder
             .build_load(i64_ty, err_len_slot, "rb.send.err_len.v")
+            .unwrap()
+            .into_int_value();
+        let headers_handle_val = self
+            .builder
+            .build_load(i64_ty, headers_handle_slot, "rb.send.headers_handle.v")
             .unwrap()
             .into_int_value();
 
@@ -2031,7 +2186,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             self.builder.build_store(p, body_len_val).unwrap();
         }
-        for w in 5..total_fields {
+        if total_fields > 5 {
+            // Phase-8 line 39 — w4 = Response.headers handle.
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 5, "rb.ok.w4.headers")
+                .unwrap();
+            self.builder.build_store(p, headers_handle_val).unwrap();
+        }
+        for w in 6..total_fields {
             let p = self
                 .builder
                 .build_struct_gep(result_ty, result_slot, w as u32, &format!("rb.ok.w{w}"))

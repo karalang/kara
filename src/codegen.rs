@@ -1755,6 +1755,7 @@ impl<'ctx> Codegen<'ctx> {
                 ptr_type.into(), // out_body_len: *mut i64
                 ptr_type.into(), // out_err_ptr: *mut *mut u8
                 ptr_type.into(), // out_err_len: *mut i64
+                ptr_type.into(), // out_headers_handle: *mut i64 (phase-8 line 39)
             ],
             false,
         );
@@ -1776,12 +1777,29 @@ impl<'ctx> Codegen<'ctx> {
                 ptr_type.into(), // out_body_len
                 ptr_type.into(), // out_err_ptr
                 ptr_type.into(), // out_err_len
+                ptr_type.into(), // out_headers_handle: *mut i64 (phase-8 line 39)
             ],
             false,
         );
         let _karac_runtime_http_client_post_fn = module.add_function(
             "karac_runtime_http_client_post",
             http_client_post_type,
+            Some(Linkage::External),
+        );
+        // Phase-8 line 39 — `karac_runtime_http_response_header(i64 handle,
+        //   *const u8 name, usize name_len) -> *const c_char`. Looks up a
+        // response header (case-insensitive, RFC 7230 §3.2) in the
+        // runtime's `HTTP_RESPONSE_HEADERS` side-table keyed by the handle
+        // the client FFI minted into `Response`'s hidden `headers` field.
+        // Returns null on miss / unknown handle; on hit returns a
+        // runtime-owned null-terminated pointer that `compile_response_header`
+        // copies into a fresh Kāra String wrapped in `Option[String]`.
+        // Response-side mirror of `karac_runtime_http_request_header`.
+        let response_header_type =
+            ptr_type.fn_type(&[i64_type.into(), ptr_type.into(), i64_type.into()], false);
+        let _karac_runtime_http_response_header_fn = module.add_function(
+            "karac_runtime_http_response_header",
+            response_header_type,
             Some(Linkage::External),
         );
         // Phase-8 line 24 — chained-builder request descriptor FFI.
@@ -1860,6 +1878,7 @@ impl<'ctx> Codegen<'ctx> {
                 ptr_type.into(), // out_body_len
                 ptr_type.into(), // out_err_ptr
                 ptr_type.into(), // out_err_len
+                ptr_type.into(), // out_headers_handle: *mut i64 (phase-8 line 39)
             ],
             false,
         );

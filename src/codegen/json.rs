@@ -1866,13 +1866,20 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         // Build Result.Err(JsonError { line, column, message }) by
-        // packing into the widened {i64*5} struct. Word layout:
+        // packing into the widened {i64*6} struct. Word layout:
         //   w0 = line (zext from u32)
         //   w1 = column (zext from u32)
         //   w2 = message data ptr (as i64)
         //   w3 = message len
-        //   (cap is truncated — see Result widening comment in
-        //   declarations.rs).
+        //   w4 = message cap = 0 (explicit — see below)
+        // `JsonError` is a 5-word binding (line, col, msg.{data,len,cap}),
+        // so after the phase-8 line-39 Result widening the `Err(e)`
+        // destructure reads w4 as the message String's `cap`. We pin it to
+        // 0 so the scope-exit free stays a no-op (the historical behavior;
+        // the message bytes leak but stay valid until process exit) rather
+        // than reading an undef stack word and freeing a garbage-cap
+        // buffer. Wiring real `cap` here would fix the leak but is out of
+        // scope for line 39.
         let mut err_agg = result_ty.get_undef();
         err_agg = self
             .builder
@@ -1884,6 +1891,7 @@ impl<'ctx> super::Codegen<'ctx> {
             (2u32, col_i64),
             (3u32, msg_ptr_word),
             (4u32, msg_len_word),
+            (5u32, i64_ty.const_zero()),
         ] {
             err_agg = self
                 .builder

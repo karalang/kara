@@ -3292,6 +3292,112 @@ fn read_response_body_bytes(resp: ureq::Response) -> Vec<u8> {
     buf
 }
 
+// ── Client response headers side-table (phase-8 line 39) ──────────────
+//
+// `Response.header(name)` needs the response's headers, but the
+// Kāra-side `Response` is a fixed-width value packed into the
+// `Result[Response, HttpError]` payload — there's no room to carry a
+// `Vec` of header pairs inline. Instead, each successful client fetch
+// stashes the response headers in this side-table keyed by a fresh
+// positive handle, and the handle rides in the client FFI's
+// `out_headers_handle` out-param into `Response`'s hidden `headers: i64`
+// field. `Response.header(name)` reads the handle back and looks the
+// header up via `karac_runtime_http_response_header`.
+//
+// Values are stored as `CString` so the accessor can hand back a
+// stable, null-terminated `*const c_char` (the heap buffer a `CString`
+// owns is fixed across `HashMap` rehashes, and entries are never
+// removed). Entries leak until process exit — the same bounded v1
+// trade-off as the `HTTP_BUILDERS` abandoned-handle leak, and resolved
+// the same way once `impl Drop for Response` is wired through codegen.
+
+/// One captured response's headers: `(name, value)` pairs, value stored
+/// as a `CString` so `karac_runtime_http_response_header` can return a
+/// stable null-terminated pointer. Named to keep the
+/// `HTTP_RESPONSE_HEADERS` static's type within clippy's
+/// `type_complexity` threshold.
+type CapturedResponseHeaders = Vec<(String, std::ffi::CString)>;
+
+static HTTP_RESPONSE_HEADERS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<i64, CapturedResponseHeaders>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+static HTTP_RESPONSE_HEADERS_NEXT_ID: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(1);
+
+/// Capture every header on a live `ureq::Response` into the
+/// `HTTP_RESPONSE_HEADERS` side-table and return a fresh positive
+/// handle keying the stored entry (or `0` if the lock is poisoned).
+/// Must be called BEFORE `read_response_body_bytes` consumes the
+/// response — `ureq::Response::header` / `::headers_names` borrow the
+/// response, while `into_reader()` moves it. Header values containing an
+/// interior NUL (illegal per RFC 7230, but defended against) are
+/// skipped. The handle is written into the client FFI's
+/// `out_headers_handle` out-param on the Ok path; the Err path leaves it
+/// `0` so `Response.header(...)` on a (non-existent) error Response
+/// would resolve every lookup to `None`.
+fn capture_response_headers(resp: &ureq::Response) -> i64 {
+    let mut pairs: Vec<(String, std::ffi::CString)> = Vec::new();
+    for name in resp.headers_names() {
+        if let Some(val) = resp.header(&name) {
+            if let Ok(cval) = std::ffi::CString::new(val) {
+                pairs.push((name, cval));
+            }
+        }
+    }
+    let handle = HTTP_RESPONSE_HEADERS_NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if let Ok(mut map) = HTTP_RESPONSE_HEADERS.lock() {
+        map.insert(handle, pairs);
+        handle
+    } else {
+        0
+    }
+}
+
+/// Look up a response header by name (case-insensitive per RFC 7230 §
+/// 3.2) in the `HTTP_RESPONSE_HEADERS` entry keyed by `handle`. Returns
+/// null when the handle is unknown (an Err response carries handle `0`,
+/// which is never inserted) or the header is absent; on hit returns a
+/// runtime-owned, null-terminated UTF-8 pointer valid until process
+/// exit (entries are never removed, and the `CString` heap buffer is
+/// stable across map rehashes). `Response.header(name)` copies the bytes
+/// into a fresh Kāra `String` per call, so the resulting
+/// `Option[String]` owns its buffer. Response-side mirror of
+/// `karac_runtime_http_request_header`.
+///
+/// # Safety
+///
+/// `name_ptr` must point at `name_len` initialized UTF-8 bytes (or be
+/// null with `name_len == 0`).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_response_header(
+    handle: i64,
+    name_ptr: *const u8,
+    name_len: usize,
+) -> *const std::os::raw::c_char {
+    let name_bytes: &[u8] = if name_ptr.is_null() || name_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(name_ptr, name_len)
+    };
+    let name_str = match std::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null(),
+    };
+    let Ok(map) = HTTP_RESPONSE_HEADERS.lock() else {
+        return std::ptr::null();
+    };
+    let Some(pairs) = map.get(&handle) else {
+        return std::ptr::null();
+    };
+    for (k, v) in pairs {
+        if k.eq_ignore_ascii_case(name_str) {
+            return v.as_ptr();
+        }
+    }
+    std::ptr::null()
+}
+
 /// Synchronously fetch `url` via HTTP GET and populate the success or
 /// error out-params. The two out-paths are mutually exclusive — only
 /// one of `(body_ptr, body_len)` / `(err_ptr, err_len)` carries a real
@@ -3317,12 +3423,14 @@ pub unsafe extern "C" fn karac_runtime_http_client_get(
     out_body_len: *mut i64,
     out_err_ptr: *mut *mut u8,
     out_err_len: *mut i64,
+    out_headers_handle: *mut i64,
 ) {
     *out_status = 0;
     *out_body_ptr = std::ptr::null_mut();
     *out_body_len = 0;
     *out_err_ptr = std::ptr::null_mut();
     *out_err_len = 0;
+    *out_headers_handle = 0;
 
     let url_bytes: &[u8] = if url_ptr.is_null() || url_len == 0 {
         &[]
@@ -3340,6 +3448,7 @@ pub unsafe extern "C" fn karac_runtime_http_client_get(
     match ureq::get(url).call() {
         Ok(resp) => {
             *out_status = resp.status() as i64;
+            *out_headers_handle = capture_response_headers(&resp);
             let body = read_response_body_bytes(resp);
             write_owned_bytes_into_out_params(&body, out_body_ptr, out_body_len);
         }
@@ -3372,12 +3481,14 @@ pub unsafe extern "C" fn karac_runtime_http_client_post(
     out_body_len: *mut i64,
     out_err_ptr: *mut *mut u8,
     out_err_len: *mut i64,
+    out_headers_handle: *mut i64,
 ) {
     *out_status = 0;
     *out_body_ptr = std::ptr::null_mut();
     *out_body_len = 0;
     *out_err_ptr = std::ptr::null_mut();
     *out_err_len = 0;
+    *out_headers_handle = 0;
 
     let url_bytes: &[u8] = if url_ptr.is_null() || url_len == 0 {
         &[]
@@ -3400,6 +3511,7 @@ pub unsafe extern "C" fn karac_runtime_http_client_post(
     match ureq::post(url).send_bytes(body_bytes) {
         Ok(resp) => {
             *out_status = resp.status() as i64;
+            *out_headers_handle = capture_response_headers(&resp);
             let body = read_response_body_bytes(resp);
             write_owned_bytes_into_out_params(&body, out_body_ptr, out_body_len);
         }
@@ -3482,12 +3594,14 @@ pub unsafe extern "C" fn karac_runtime_http_client_send(
     out_body_len: *mut i64,
     out_err_ptr: *mut *mut u8,
     out_err_len: *mut i64,
+    out_headers_handle: *mut i64,
 ) {
     *out_status = 0;
     *out_body_ptr = std::ptr::null_mut();
     *out_body_len = 0;
     *out_err_ptr = std::ptr::null_mut();
     *out_err_len = 0;
+    *out_headers_handle = 0;
 
     let method_bytes: &[u8] = if method_ptr.is_null() || method_len == 0 {
         b"GET"
@@ -3545,6 +3659,7 @@ pub unsafe extern "C" fn karac_runtime_http_client_send(
     match result {
         Ok(resp) => {
             *out_status = resp.status() as i64;
+            *out_headers_handle = capture_response_headers(&resp);
             let body = read_response_body_bytes(resp);
             write_owned_bytes_into_out_params(&body, out_body_ptr, out_body_len);
         }
@@ -3723,12 +3838,14 @@ pub unsafe extern "C" fn karac_runtime_http_builder_send(
     out_body_len: *mut i64,
     out_err_ptr: *mut *mut u8,
     out_err_len: *mut i64,
+    out_headers_handle: *mut i64,
 ) {
     *out_status = 0;
     *out_body_ptr = std::ptr::null_mut();
     *out_body_len = 0;
     *out_err_ptr = std::ptr::null_mut();
     *out_err_len = 0;
+    *out_headers_handle = 0;
 
     let state = if let Ok(mut map) = HTTP_BUILDERS.lock() {
         map.remove(&handle)
@@ -3761,6 +3878,7 @@ pub unsafe extern "C" fn karac_runtime_http_builder_send(
     match result {
         Ok(resp) => {
             *out_status = resp.status() as i64;
+            *out_headers_handle = capture_response_headers(&resp);
             let body = read_response_body_bytes(resp);
             write_owned_bytes_into_out_params(&body, out_body_ptr, out_body_len);
         }
@@ -6007,6 +6125,7 @@ mod tests {
         let mut body_len: i64 = -1;
         let mut err_ptr: *mut u8 = std::ptr::null_mut();
         let mut err_len: i64 = -1;
+        let mut headers_handle: i64 = -1;
         unsafe {
             super::karac_runtime_http_client_get(
                 url.as_ptr(),
@@ -6016,6 +6135,7 @@ mod tests {
                 &mut body_len,
                 &mut err_ptr,
                 &mut err_len,
+                &mut headers_handle,
             );
         }
         assert_eq!(status, 200);
@@ -6046,6 +6166,7 @@ mod tests {
         let mut body_len: i64 = -1;
         let mut err_ptr: *mut u8 = std::ptr::null_mut();
         let mut err_len: i64 = -1;
+        let mut headers_handle: i64 = -1;
         unsafe {
             super::karac_runtime_http_client_get(
                 url.as_ptr(),
@@ -6055,6 +6176,7 @@ mod tests {
                 &mut body_len,
                 &mut err_ptr,
                 &mut err_len,
+                &mut headers_handle,
             );
         }
         assert_eq!(status, 200);
@@ -6065,6 +6187,68 @@ mod tests {
         assert!(err_ptr.is_null());
         let body = unsafe { take_owned_buffer(body_ptr, body_len) };
         assert_eq!(body, vec![0xFFu8, 0xFE, 0x00, 0x41]);
+    }
+
+    /// Phase-8 line 39 — `Response.header(name)` capture + lookup. The
+    /// origin returns a custom response header; the GET FFI stashes the
+    /// response headers in the side-table and reports the keying handle
+    /// through `out_headers_handle`. `karac_runtime_http_response_header`
+    /// resolves it case-insensitively (RFC 7230 §3.2), returns null for
+    /// an absent name, and returns null for the Err-path sentinel
+    /// handle `0`.
+    #[test]
+    fn test_http_client_get_captures_response_headers_for_lookup() {
+        let canned = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-Custom: custom-value\r\nConnection: close\r\n\r\nok";
+        let port = spawn_oneshot_origin(canned);
+        let url = format!("http://127.0.0.1:{port}/");
+
+        let mut status: i64 = -1;
+        let mut body_ptr: *mut u8 = std::ptr::null_mut();
+        let mut body_len: i64 = -1;
+        let mut err_ptr: *mut u8 = std::ptr::null_mut();
+        let mut err_len: i64 = -1;
+        let mut headers_handle: i64 = -1;
+        unsafe {
+            super::karac_runtime_http_client_get(
+                url.as_ptr(),
+                url.len(),
+                &mut status,
+                &mut body_ptr,
+                &mut body_len,
+                &mut err_ptr,
+                &mut err_len,
+                &mut headers_handle,
+            );
+        }
+        assert_eq!(status, 200);
+        assert!(headers_handle > 0, "Ok response must mint a headers handle");
+        let _ = unsafe { take_owned_buffer(body_ptr, body_len) };
+
+        // Case-insensitive hit: query with different case than the wire.
+        let name = b"x-CUSTOM";
+        let val_ptr = unsafe {
+            super::karac_runtime_http_response_header(headers_handle, name.as_ptr(), name.len())
+        };
+        assert!(!val_ptr.is_null(), "present header must resolve");
+        let val = unsafe { std::ffi::CStr::from_ptr(val_ptr) }
+            .to_str()
+            .unwrap();
+        assert_eq!(val, "custom-value");
+
+        // Absent header → null.
+        let absent = b"x-missing";
+        let miss_ptr = unsafe {
+            super::karac_runtime_http_response_header(headers_handle, absent.as_ptr(), absent.len())
+        };
+        assert!(miss_ptr.is_null(), "absent header must resolve to null");
+
+        // Unknown handle (the Err-path sentinel `0`) → null.
+        let zero_ptr =
+            unsafe { super::karac_runtime_http_response_header(0, name.as_ptr(), name.len()) };
+        assert!(
+            zero_ptr.is_null(),
+            "handle 0 (error sentinel) must resolve to null"
+        );
     }
 
     /// Transport-failure path — connect to a port nothing's listening
@@ -6087,6 +6271,7 @@ mod tests {
         let mut body_len: i64 = -1;
         let mut err_ptr: *mut u8 = std::ptr::null_mut();
         let mut err_len: i64 = -1;
+        let mut headers_handle: i64 = -1;
         unsafe {
             super::karac_runtime_http_client_get(
                 url.as_ptr(),
@@ -6096,6 +6281,7 @@ mod tests {
                 &mut body_len,
                 &mut err_ptr,
                 &mut err_len,
+                &mut headers_handle,
             );
         }
         assert_eq!(status, 0);
@@ -6121,6 +6307,7 @@ mod tests {
         let mut body_len: i64 = -1;
         let mut err_ptr: *mut u8 = std::ptr::null_mut();
         let mut err_len: i64 = -1;
+        let mut headers_handle: i64 = -1;
         unsafe {
             super::karac_runtime_http_client_post(
                 url.as_ptr(),
@@ -6132,6 +6319,7 @@ mod tests {
                 &mut body_len,
                 &mut err_ptr,
                 &mut err_len,
+                &mut headers_handle,
             );
         }
         assert_eq!(status, 201);
@@ -6253,6 +6441,7 @@ mod tests {
         let mut body_len: i64 = -1;
         let mut err_ptr: *mut u8 = std::ptr::null_mut();
         let mut err_len: i64 = -1;
+        let mut headers_handle: i64 = -1;
         unsafe {
             super::karac_runtime_http_client_send(
                 method.as_ptr(),
@@ -6269,6 +6458,7 @@ mod tests {
                 &mut body_len,
                 &mut err_ptr,
                 &mut err_len,
+                &mut headers_handle,
             );
         }
         assert_eq!(status, 200);
@@ -6314,6 +6504,7 @@ mod tests {
         let mut body_len: i64 = -1;
         let mut err_ptr: *mut u8 = std::ptr::null_mut();
         let mut err_len: i64 = -1;
+        let mut headers_handle: i64 = -1;
         unsafe {
             super::karac_runtime_http_client_send(
                 method.as_ptr(),
@@ -6330,6 +6521,7 @@ mod tests {
                 &mut body_len,
                 &mut err_ptr,
                 &mut err_len,
+                &mut headers_handle,
             );
         }
         assert_eq!(status, 201);
@@ -6400,6 +6592,7 @@ mod tests {
         let mut body_len: i64 = -1;
         let mut err_ptr: *mut u8 = std::ptr::null_mut();
         let mut err_len: i64 = -1;
+        let mut headers_handle: i64 = -1;
         unsafe {
             super::karac_runtime_http_builder_send(
                 handle,
@@ -6408,6 +6601,7 @@ mod tests {
                 &mut body_len,
                 &mut err_ptr,
                 &mut err_len,
+                &mut headers_handle,
             );
         }
         assert_eq!(status, 200);
@@ -6438,6 +6632,7 @@ mod tests {
         let mut body_len2: i64 = -1;
         let mut err_ptr2: *mut u8 = std::ptr::null_mut();
         let mut err_len2: i64 = -1;
+        let mut headers_handle2: i64 = -1;
         unsafe {
             super::karac_runtime_http_builder_send(
                 handle,
@@ -6446,6 +6641,7 @@ mod tests {
                 &mut body_len2,
                 &mut err_ptr2,
                 &mut err_len2,
+                &mut headers_handle2,
             );
         }
         assert_eq!(status2, 0);
@@ -6484,6 +6680,7 @@ mod tests {
         let mut body_len: i64 = -1;
         let mut err_ptr: *mut u8 = std::ptr::null_mut();
         let mut err_len: i64 = -1;
+        let mut headers_handle: i64 = -1;
         unsafe {
             super::karac_runtime_http_client_send(
                 method.as_ptr(),
@@ -6500,6 +6697,7 @@ mod tests {
                 &mut body_len,
                 &mut err_ptr,
                 &mut err_len,
+                &mut headers_handle,
             );
         }
         assert_eq!(status, 0, "timeout should yield status = 0");

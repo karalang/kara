@@ -950,6 +950,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     let name = name.clone();
                     return self.compile_response_accessor(&name, method);
                 }
+                // Phase-8 line 39 — `Response.header(name)` →
+                // `Option[String]`. Distinct from the no-arg accessors
+                // above: it takes the header name and routes through
+                // `compile_response_header`, which reads the hidden
+                // `headers` handle off the Response and calls the runtime
+                // `HTTP_RESPONSE_HEADERS` side-table lookup
+                // (case-insensitive, RFC 7230 §3.2).
+                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Response")
+                    && method == "header"
+                    && args.len() == 1
+                {
+                    let name = name.clone();
+                    return self.compile_response_header(&name, &args[0].value);
+                }
                 if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "HttpError")
                     && method == "message"
                     && args.is_empty()
