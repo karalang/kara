@@ -68,7 +68,7 @@ pub fn run_test_via_jit(
     test_fn_name: &str,
     fixtures: &[(String, Expr)],
     source_filename: &str,
-    _timeout: Duration,
+    timeout: Duration,
 ) -> JitTestResult {
     let runner_path = match locate_karac_jit_runner() {
         Some(p) => p,
@@ -125,24 +125,82 @@ pub fn run_test_via_jit(
         };
     }
 
+    let mut cmd = std::process::Command::new(&runner_path);
+    cmd.arg(&ir_path);
+
     let started = std::time::Instant::now();
-    let output = match std::process::Command::new(&runner_path).arg(&ir_path).output() {
-        Ok(o) => o,
-        Err(e) => {
-            let _ = std::fs::remove_file(&ir_path);
-            return JitTestResult::SpawnFailed {
-                message: format!("could not spawn {}: {e}", runner_path.display()),
-            };
-        }
-    };
+    let sub_result = run_subprocess_with_timeout(cmd, timeout);
     let duration_ms = started.elapsed().as_millis();
     let _ = std::fs::remove_file(&ir_path);
 
-    let exit_code = output.status.code().unwrap_or(-1);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let outcome = map_exit_to_outcome(exit_code, &stderr);
+    match sub_result {
+        SubprocessResult::Completed(output) => {
+            let exit_code = output.status.code().unwrap_or(-1);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let outcome = map_exit_to_outcome(exit_code, &stderr);
+            JitTestResult::Completed { outcome, duration_ms }
+        }
+        SubprocessResult::TimedOut => JitTestResult::TimedOut { duration_ms },
+        SubprocessResult::SpawnFailed(message) => JitTestResult::SpawnFailed { message },
+    }
+}
 
-    JitTestResult::Completed { outcome, duration_ms }
+/// Internal subprocess-result shape — `run_subprocess_with_timeout`
+/// returns one of these; `run_test_via_jit` maps each variant to the
+/// equivalent `JitTestResult`.
+enum SubprocessResult {
+    Completed(std::process::Output),
+    TimedOut,
+    SpawnFailed(String),
+}
+
+/// Spawn a subprocess and wait for it with a hard timeout. Mirrors the
+/// `tests/common/mod.rs::output_with_hang_watchdog` shape but returns a
+/// structured result instead of panicking on timeout — the runner's
+/// `test_timeout` JSONL event captures the user-visible signal.
+///
+/// stdin is piped from /dev/null; stdout/stderr are captured. On
+/// timeout the watchdog kills the child via `kill -9` so the parent's
+/// `wait_with_output` returns immediately. The kill is observable as
+/// a non-zero status on the returned `Output` when `Completed` fires
+/// — but the `killed` flag is what disambiguates from a regular
+/// non-zero exit, so we return `TimedOut` specifically.
+fn run_subprocess_with_timeout(mut cmd: std::process::Command, timeout: Duration) -> SubprocessResult {
+    use std::process::Stdio;
+    use std::sync::mpsc;
+
+    let child = match cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return SubprocessResult::SpawnFailed(format!("could not spawn child: {e}")),
+    };
+    let pid = child.id();
+
+    let (tx, rx) = mpsc::channel::<()>();
+    let watchdog = std::thread::spawn(move || {
+        if rx.recv_timeout(timeout).is_err() {
+            let _ = std::process::Command::new("kill")
+                .args(["-9", &pid.to_string()])
+                .status();
+            true
+        } else {
+            false
+        }
+    });
+
+    let output = child.wait_with_output();
+    let _ = tx.send(());
+    let killed = watchdog.join().unwrap_or(false);
+
+    match output {
+        Ok(_) if killed => SubprocessResult::TimedOut,
+        Ok(o) => SubprocessResult::Completed(o),
+        Err(e) => SubprocessResult::SpawnFailed(format!("wait_with_output failed: {e}")),
+    }
 }
 
 /// Clone a `Program` by copying its items vector. Other fields use

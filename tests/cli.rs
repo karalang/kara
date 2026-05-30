@@ -1791,6 +1791,48 @@ fn test_test_jit_bare_assert_false_emits_null_left_right() {
     );
 }
 
+#[cfg(feature = "lljit_prototype")]
+#[test]
+fn test_test_jit_timeout_kills_hanging_test() {
+    // A `loop {}` body would normally hang the runner indefinitely.
+    // Under JIT mode the per-test timeout (default 30 s; set to 1 s
+    // here via `KARAC_TEST_TIMEOUT_SECS`) fires `kill -9` on the
+    // subprocess and produces a `test_timeout` JSONL event instead
+    // of a hang. Mirrors the interpreter-path's deadline-poll
+    // semantics, but enforced externally rather than at every
+    // statement boundary.
+    let tmp = scratch_project("test-jit-timeout");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("src/main_test.kara"),
+        "test \"hangs\" { loop {} }\n",
+    );
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env("KARAC_TEST_JIT", "1")
+        .env("KARAC_TEST_TIMEOUT_SECS", "1")
+        .arg("test")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit on timeout; stdout:\n{stdout}"
+    );
+    let lines = jsonl_lines(&stdout);
+    let timeout_line = lines
+        .iter()
+        .find(|l| event_kind(l) == Some("test_timeout"))
+        .unwrap_or_else(|| panic!("expected a test_timeout event in:\n{lines:?}"));
+    assert!(timeout_line.contains("\"test\":\"hangs\""));
+    assert!(timeout_line.contains("\"timeout_s\":1"));
+    let summary = lines.last().unwrap();
+    assert!(summary.contains("\"failed\":1"));
+}
+
 #[test]
 fn test_test_filter_narrows_to_substring_match() {
     let tmp = scratch_project("test-filter");
