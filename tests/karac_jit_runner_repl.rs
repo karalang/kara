@@ -14,9 +14,10 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-/// Lower a kara source string to LLVM IR, ready for the runner.
-/// Mirrors the per-test compile pipeline in `cmd_test`'s JIT branch
-/// — parse → resolve → typecheck → lower → codegen-to-IR.
+/// Lower a kara source string to LLVM IR for slice-B.A single-cell
+/// tests. Uses the one-shot codegen entry that emits the literal
+/// `main` symbol — appropriate for tests that send exactly one cell
+/// to the runner.
 fn lower_kara_to_ir(src: &str) -> String {
     let mut parsed = karac::parse(src);
     assert!(
@@ -29,6 +30,31 @@ fn lower_kara_to_ir(src: &str) -> String {
     karac::lower(&mut parsed.program, &typed);
     karac::codegen::compile_to_ir_with_options(&parsed.program, None, None, None, None)
         .expect("compile_to_ir")
+}
+
+/// Slice c-repl.B.4 codegen entry — used by multi-cell tests so each
+/// cell's `fn main()` registers under `cell_main_<id>` rather than
+/// the literal `main`. Without this, cell 2's install would fail
+/// with a duplicate-symbol error against cell 1's still-installed
+/// `main` (B.4 removed the tracker shadowing that the slice-B.A
+/// protocol leaned on; cells now coexist via unique entry names).
+fn lower_kara_to_ir_for_cell(src: &str, cell_id: u64) -> String {
+    let mut parsed = karac::parse(src);
+    assert!(
+        parsed.errors.is_empty(),
+        "parse errors: {:?}",
+        parsed.errors
+    );
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    karac::lower(&mut parsed.program, &typed);
+    let main_symbol = format!("cell_main_{cell_id}");
+    karac::codegen::compile_to_ir_for_repl_cell(
+        &parsed.program,
+        &std::collections::HashSet::new(),
+        &main_symbol,
+    )
+    .expect("compile_to_ir_for_repl_cell")
 }
 
 struct ReplRunner {
@@ -145,12 +171,13 @@ fn repl_runner_handles_multiple_cells() {
     // visibility.
     let mut runner = ReplRunner::spawn();
 
-    let ir1 = lower_kara_to_ir(
+    let ir1 = lower_kara_to_ir_for_cell(
         r#"
 fn main() {
     println(1);
 }
 "#,
+        1,
     );
     runner.send_cell(1, &ir1);
     let (id, exit, stdout, _) = runner.read_result();
@@ -158,12 +185,13 @@ fn main() {
     assert_eq!(exit, 0);
     assert_eq!(String::from_utf8_lossy(&stdout).trim(), "1");
 
-    let ir2 = lower_kara_to_ir(
+    let ir2 = lower_kara_to_ir_for_cell(
         r#"
 fn main() {
     println(2);
 }
 "#,
+        2,
     );
     runner.send_cell(2, &ir2);
     let (id, exit, stdout, _) = runner.read_result();

@@ -118,6 +118,37 @@ pub fn compile_to_ir_with_options(
     )
 }
 
+/// Slice c-repl.B.4: REPL-cell codegen entry for the JIT path.
+///
+/// `declare_only_fns`: names of free functions whose bodies are
+///   already installed in the JIT's JITDylib by a prior cell.
+///   Codegen emits `declare i64 @<name>(...)` for these (signature
+///   only, no body), so the JIT linker resolves calls to them
+///   against the previously-installed definition. Functions absent
+///   from this set lower with their full body, as usual.
+///
+/// `main_symbol`: the LLVM symbol the AST's `fn main()` should be
+///   registered under. The REPL JIT path passes
+///   `cell_main_<cell_id>` so each cell's main coexists in the
+///   JITDylib without colliding. The i32-return + special return-
+///   zero arm still fires (the AST-side check on `func.name == "main"`
+///   is unchanged); only the LLVM symbol changes.
+///
+/// Returns the textual LLVM IR for the new cell. The caller frames
+/// it onto the runner's stdin via the slice-B.A protocol.
+pub fn compile_to_ir_for_repl_cell(
+    program: &Program,
+    declare_only_fns: &std::collections::HashSet<String>,
+    main_symbol: &str,
+) -> Result<String, String> {
+    let context = Context::create();
+    let mut cg = Codegen::new(&context, "karac_repl_cell");
+    cg.declare_only_fns = declare_only_fns.clone();
+    cg.main_symbol_override = Some(main_symbol.to_string());
+    cg.compile_program(program)?;
+    Ok(cg.module.print_to_string().to_string())
+}
+
 /// Variant of [`compile_to_ir_with_options`] that accepts the
 /// phase-7 line-5 `--enable-hot-swap` flag. When `true`, the codegen
 /// emits PLT-style indirection through `@karac_hotswap_table` for every
@@ -1264,6 +1295,24 @@ pub(super) struct Codegen<'ctx> {
     /// default; the artifact-format reservation is per `deferred.md
     /// § Continuous PGO with Shared-Object Hot-Swap`.
     pub(crate) hot_swap_enabled: bool,
+    /// Slice c-repl.B.4: free-fn names whose bodies should NOT be
+    /// emitted in this module — only the LLVM `declare` (signature
+    /// without body) is emitted, so the JIT resolves calls to these
+    /// names against a previously-installed module in the same
+    /// JITDylib. Used by `karac repl`'s cross-cell amortization
+    /// pipeline so cell N+1 doesn't re-emit cell N's items. Empty
+    /// in every other codegen entry point.
+    pub(crate) declare_only_fns: std::collections::HashSet<String>,
+    /// Slice c-repl.B.4: when `Some(name)`, the AST function whose
+    /// `func.name == "main"` is registered in LLVM under `name`
+    /// instead of the literal `main` symbol. The i32-return
+    /// special-case still fires (so the runner's transmute to
+    /// `unsafe extern "C" fn() -> i32` stays sound); only the
+    /// emitted symbol changes. Used by the REPL JIT path so cell N's
+    /// main and cell N+1's main don't collide in the same JITDylib.
+    /// `None` everywhere else preserves the standalone-binary
+    /// `int main(void)` shape.
+    pub(crate) main_symbol_override: Option<String>,
     /// Per-pub-fn slot index in `@karac_hotswap_table`, populated as
     /// pub function declarations are emitted. The slot list is also
     /// kept ordered in `hot_swap_fns` so the module-init ctor can
@@ -2905,6 +2954,8 @@ impl<'ctx> Codegen<'ctx> {
             karac_test_record_failure_fn,
             target_data: None,
             hot_swap_enabled: false,
+            declare_only_fns: std::collections::HashSet::new(),
+            main_symbol_override: None,
             hot_swap_slots: HashMap::new(),
             hot_swap_fns: Vec::new(),
         }
@@ -3384,9 +3435,18 @@ impl<'ctx> Codegen<'ctx> {
         self.emit_user_drop_wrappers(program);
 
         // Second pass: compile concrete functions (generic ones are compiled lazily).
+        // Slice c-repl.B.4: when `declare_only_fns` contains the fn's name,
+        // skip body emission. The first-pass `declare_function` already
+        // registered an LLVM `declare i64 @<name>(...)` for the signature;
+        // leaving it body-less lets the JIT linker resolve the symbol
+        // against an earlier-installed module in the same JITDylib. Used
+        // by the REPL JIT path so cell N+1 doesn't re-emit cell N's items.
         for item in &program.items {
             if let Item::Function(f) = item {
                 if f.generic_params.is_none() {
+                    if self.declare_only_fns.contains(&f.name) {
+                        continue;
+                    }
                     self.compile_function(f)?;
                 }
             }
@@ -3422,9 +3482,27 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
-        self.emit_jit_template_section();
+        // Slice c-repl.B.4: when this codegen pass is producing a
+        // REPL cell module (signaled by `main_symbol_override`),
+        // suppress the Debugger-Contract globals
+        // (`karac_jit_template_manifest`, `KARAC_SPAWN_SITES*`).
+        // Every karac-emitted module declares the same names, and
+        // the REPL JIT keeps prior cells' modules alive in the
+        // JITDylib so cell N+1's globals would trip duplicate-
+        // symbol install errors. The first cell's globals stay
+        // visible to the runtime's introspection reads (the runner
+        // captures their addresses on the first install via
+        // `karac_runtime_init_jit_spawn_sites`); subsequent cells'
+        // par-block introspection sees the first cell's table,
+        // which is a known limitation until per-cell JITDylib
+        // isolation lands.
+        if self.main_symbol_override.is_none() {
+            self.emit_jit_template_section();
+        }
         self.emit_llvm_used();
-        self.emit_spawn_sites_metadata();
+        if self.main_symbol_override.is_none() {
+            self.emit_spawn_sites_metadata();
+        }
         self.finalize_hot_swap_table();
 
         self.module

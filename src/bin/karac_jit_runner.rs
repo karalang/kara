@@ -156,20 +156,23 @@ fn repl_main() -> ExitCode {
         let _ = stdout_lock.flush();
     }
 
-    // Track the most recently installed cell's tracker. Per W2's
-    // shadowing finding: every karac-emitted module exports the same
-    // `main` symbol (plus the Debugger-Contract `KARAC_SPAWN_SITES*`
-    // globals) — installing a second module trips
-    // "Duplicate definition of symbol 'main'" unless the prior
-    // tracker's `.remove()` is called first. The cell-shadowing
-    // pattern from the W2 stress test handles this: each cell holds
-    // its own tracker; the prior one is removed right before the
-    // next install. Cross-cell symbol visibility for additive cells
-    // (cell 2 references cell 1's `fn foo`) is a follow-on slice —
-    // it requires codegen to emit prior items as `declare` rather
-    // than `define`, plus a registry of which symbols are already
-    // live in the JITDylib.
-    let mut prior_tracker: Option<karac::codegen::ResourceTracker<'_>> = None;
+    // Slice c-repl.B.4: every installed cell's tracker is held for
+    // the session lifetime. Cell N's items stay live so cell N+1
+    // can `declare`-only reference them and the JIT linker resolves
+    // to cell N's definitions. The REPL codegen entry renames
+    // `main` per cell (`cell_main_<id>`) so no symbol collisions.
+    // Pre-B.4 (slice-B.A) the runner removed each prior tracker
+    // before installing the next to clear cell N's `main` — that
+    // forced cell N+1 to re-emit every item the parser saw, defeating
+    // cross-cell amortization. The new model keeps items alive AND
+    // avoids the shadowing requirement.
+    //
+    // The unbounded vec is the v1 simplification: `:reset` /
+    // session shutdown clears everything. Pruning the vec when an
+    // item is shadowed (cell N+1 redefines cell N's `fn foo`) is a
+    // follow-on; today the parser rejects same-scope redeclaration
+    // at typecheck before reaching the runner.
+    let mut cell_trackers: Vec<karac::codegen::ResourceTracker<'_>> = Vec::new();
 
     let stdin = std::io::stdin();
     let mut stdin_lock = stdin.lock();
@@ -226,18 +229,25 @@ fn repl_main() -> ExitCode {
             }
         };
 
-        // Remove the prior cell's module before installing the new
-        // one — see the comment at `prior_tracker`'s declaration for
-        // the shadowing rationale.
-        if let Some(t) = prior_tracker.take() {
-            if let Err(e) = t.remove() {
-                write_cell_setup_error(id, &format!("prior tracker remove: {e}"));
-                continue;
-            }
+        // Slice c-repl.B.4: keep every prior cell's tracker alive.
+        // The REPL JIT codegen path now names each cell's `main` as
+        // `cell_main_<id>` (passed through the AST-side
+        // `main_symbol_override`), so multiple cells' main fns
+        // coexist in the JITDylib without collision. Items emitted
+        // by prior cells stay live so cell N+1's `declare`-only
+        // re-references resolve against them, cutting per-cell
+        // codegen + jitlink cost.
+        //
+        // A protocol caller that doesn't use the REPL convention
+        // (existing slice-B.A tests with literal `fn main()`) still
+        // works because their cells' main symbols collide — the
+        // first cell's main wins the JITDylib's first-defined-wins
+        // resolution. For multi-cell sessions the protocol caller
+        // should use the codegen entry that renames main.
+        let (outcome, new_tracker) = run_one_cell(&engine, id, &ir);
+        if let Some(t) = new_tracker {
+            cell_trackers.push(t);
         }
-
-        let (outcome, new_tracker) = run_one_cell(&engine, &ir);
-        prior_tracker = new_tracker;
         write_cell_outcome(id, &outcome);
     }
 }
@@ -255,6 +265,7 @@ struct CellOutcome {
 
 fn run_one_cell<'a>(
     engine: &'a LLJITEngine,
+    id: u64,
     ir: &str,
 ) -> (CellOutcome, Option<karac::codegen::ResourceTracker<'a>>) {
     let tracker = match engine.add_ir_module_with_tracker(ir) {
@@ -271,14 +282,23 @@ fn run_one_cell<'a>(
         }
     };
     publish_spawn_sites(engine);
-    let addr = match engine.lookup_address("main") {
+    // Slice c-repl.B.4: try the per-cell `cell_main_<id>` symbol
+    // first (the REPL JIT path's amortization-friendly entry shape,
+    // where multiple cells coexist in one JITDylib), then fall back
+    // to the bare "main" name (slice-B.A behavior, still used by the
+    // protocol's existing tests that emit `fn main()` directly).
+    let preferred = format!("cell_main_{id}");
+    let addr = match engine.lookup_address(&preferred).or_else(|_| engine.lookup_address("main")) {
         Ok(a) => a,
         Err(e) => {
             return (
                 CellOutcome {
                     exit: 2,
                     stdout: Vec::new(),
-                    stderr: format!("karac_jit_runner: lookup main: {e}\n").into_bytes(),
+                    stderr: format!(
+                        "karac_jit_runner: lookup ({preferred} or main): {e}\n"
+                    )
+                    .into_bytes(),
                 },
                 Some(tracker),
             );

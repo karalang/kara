@@ -535,9 +535,21 @@ pub struct Session {
     /// Slice c-repl.B.B: monotonic cell id for the JIT subprocess
     /// protocol framing. The runner echoes the id back on `result`
     /// lines so framing-integrity drift surfaces as a `RunnerDied`
-    /// classification at the client.
+    /// classification at the client. Each cell's synthesized
+    /// `fn main()` is registered in LLVM under `cell_main_<id>`
+    /// (slice c-repl.B.4) so multiple cells coexist in the runner's
+    /// JITDylib without symbol collisions.
     #[cfg(feature = "lljit_prototype")]
     jit_next_cell_id: u64,
+    /// Slice c-repl.B.4: names of free functions already installed
+    /// in the JIT runner's JITDylib by a prior successful cell. The
+    /// next cell's codegen emits these as `declare`-only (no body)
+    /// so the JIT linker resolves calls to them against the prior
+    /// definition — cutting per-cell codegen + jitlink cost. Cleared
+    /// when the runner subprocess dies (a fresh runner has an empty
+    /// JITDylib) or on `:reset` (which also wipes `items_source`).
+    #[cfg(feature = "lljit_prototype")]
+    jit_installed_fns: std::collections::HashSet<String>,
 }
 
 /// Per-cell structured effect snapshot used by the line 773 cross-cell
@@ -621,6 +633,8 @@ impl Session {
             jit_enabled: std::env::var("KARAC_REPL_JIT").as_deref() == Ok("1"),
             #[cfg(feature = "lljit_prototype")]
             jit_next_cell_id: 0,
+            #[cfg(feature = "lljit_prototype")]
+            jit_installed_fns: std::collections::HashSet::new(),
         }
     }
 
@@ -1883,7 +1897,20 @@ impl Session {
     ) -> WrapperOutcome {
         use jit_runner_client::{CellResult, ReplRunnerClient};
 
-        let ir = match crate::codegen::compile_to_ir_with_options(program, None, None, None, None) {
+        self.jit_next_cell_id += 1;
+        let cell_id = self.jit_next_cell_id;
+        let main_symbol = format!("cell_main_{cell_id}");
+
+        // Slice c-repl.B.4: prior cells' fn bodies live in the
+        // runner's JITDylib. Emit them as `declare`-only in this
+        // cell's IR so codegen + jitlink skip the body for them;
+        // the JIT linker resolves call sites against the
+        // already-installed definitions.
+        let ir = match crate::codegen::compile_to_ir_for_repl_cell(
+            program,
+            &self.jit_installed_fns,
+            &main_symbol,
+        ) {
             Ok(s) => s,
             Err(e) => {
                 return WrapperOutcome::errors(vec![format!("JIT codegen failed: {e}")], notes);
@@ -1906,8 +1933,6 @@ impl Session {
             .as_mut()
             .expect("jit_client just initialized");
 
-        self.jit_next_cell_id += 1;
-        let cell_id = self.jit_next_cell_id;
         let result = client.run_cell(cell_id, &ir);
 
         match result {
@@ -1923,6 +1948,40 @@ impl Session {
                     for line in stderr_str.lines() {
                         if !line.is_empty() {
                             errors.push(line.to_string());
+                        }
+                    }
+                } else {
+                    // Slice c-repl.B.4: cell ran clean — every fn the
+                    // codegen path emitted with a body (i.e., every
+                    // program fn NOT already in jit_installed_fns) is
+                    // now live in the runner's JITDylib. Add their
+                    // names so the next cell emits them as
+                    // declare-only. Done only on `exit == 0` — a
+                    // failed cell may have aborted mid-init and we
+                    // don't want a half-installed symbol to shadow
+                    // a future cell's correct definition.
+                    //
+                    // EXCLUDES `main`: each cell's synthesized
+                    // `fn main` is registered in LLVM under
+                    // `cell_main_<id>` via `main_symbol_override`, so
+                    // the AST name "main" maps to a different LLVM
+                    // symbol every cell. If we added "main" to the
+                    // installed set, cell N+1's codegen would see
+                    // its OWN `fn main()` matched against declare-
+                    // only and skip the body emission — installing
+                    // a body-less `cell_main_<N+1>` that crashes on
+                    // call.
+                    for item in &program.items {
+                        if let crate::ast::Item::Function(f) = item {
+                            if f.generic_params.is_some() {
+                                continue;
+                            }
+                            if f.name == "main" {
+                                continue;
+                            }
+                            if !self.jit_installed_fns.contains(&f.name) {
+                                self.jit_installed_fns.insert(f.name.clone());
+                            }
                         }
                     }
                 }
@@ -1943,6 +2002,11 @@ impl Session {
             } => {
                 // Drop the dead client; the next cell re-spawns.
                 self.jit_client = None;
+                // Slice c-repl.B.4: the fresh runner will spawn with
+                // an empty JITDylib, so every fn must be re-emitted
+                // with its body on the next cell. Clear the installed
+                // set to reflect that.
+                self.jit_installed_fns.clear();
                 let exit_code = wait_status.and_then(|s| s.code());
                 let mut errors = vec![format!(
                     "JIT runner subprocess died mid-cell (exit code {:?}); \

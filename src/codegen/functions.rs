@@ -60,7 +60,16 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<FunctionValue<'ctx>, String> {
         if func.name == "main" {
             let main_type = self.context.i32_type().fn_type(&[], false);
-            return Ok(self.module.add_function("main", main_type, None));
+            // Slice c-repl.B.4: under the REPL JIT path the entry
+            // symbol is renamed per cell (`cell_main_<id>`) so
+            // multiple cells' main fns can coexist in the same
+            // JITDylib. The i32 return + special-case return-zero
+            // arm still fires (the check at the body-emission site
+            // pivots on `func.name`, which stays `"main"` in the
+            // AST) — only the LLVM symbol changes. AOT builds and
+            // one-shot JIT keep the literal "main".
+            let symbol = self.main_symbol_override.as_deref().unwrap_or("main");
+            return Ok(self.module.add_function(symbol, main_type, None));
         }
 
         let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = func
@@ -158,10 +167,21 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn compile_function(&mut self, func: &Function) -> Result<(), String> {
+        // Slice c-repl.B.4: `func.name == "main"` may have been
+        // registered under a different LLVM symbol via
+        // `main_symbol_override` (e.g. `cell_main_<id>` for REPL
+        // cells). Use the same override here so the body-emission
+        // pass finds the LLVM function the declaration pass minted.
+        // Every other fn name passes through unchanged.
+        let llvm_name = if func.name == "main" {
+            self.main_symbol_override.as_deref().unwrap_or("main")
+        } else {
+            func.name.as_str()
+        };
         let fn_val = self
             .module
-            .get_function(&func.name)
-            .ok_or_else(|| format!("Function '{}' not declared", func.name))?;
+            .get_function(llvm_name)
+            .ok_or_else(|| format!("Function '{}' not declared", llvm_name))?;
 
         self.current_fn = Some(fn_val);
         self.current_fn_name = func.name.clone();
