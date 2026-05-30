@@ -24742,6 +24742,203 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_sort_by_mono_tuple_primary_key() {
+        // Slice 6.4 — Vec[(i64, i64)].sort_by(|a, b| a.0.cmp(b.0)) — sort
+        // intervals (records) by their FIRST tuple field. The canonical
+        // sort-records-by-primary-key shape (kata 56 Merge Intervals idiom).
+        // Pins that emit_sort_by_mono with elem_ty=struct{i64,i64} loads/
+        // stores the 16-byte payload correctly and the closure body's
+        // `.0` field access lowers through the existing tuple-extract path.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    v.push((3, 100));
+    v.push((1, 200));
+    v.push((2, 300));
+    v.sort_by(|a, b| a.0.cmp(b.0));
+    for t in v.iter() {
+        println(t.0);
+        println(t.1);
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // Sorted by first field: (1,200), (2,300), (3,100).
+            assert_eq!(lines, vec!["1", "200", "2", "300", "3", "100"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_mono_tuple_secondary_field_preserved() {
+        // Slice 6.4 — pins that the SECOND tuple field (which the
+        // comparator ignores) survives the sort intact. If the mono fn's
+        // load/store of the struct value were truncating to the first
+        // field, the secondary values would scramble.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    v.push((5, 999));
+    v.push((1, 111));
+    v.push((3, 333));
+    v.push((4, 444));
+    v.push((2, 222));
+    v.sort_by(|a, b| a.0.cmp(b.0));
+    for t in v.iter() { println(t.1); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // Sorted by first field 1..5 — secondaries appear in 111..999 order.
+            assert_eq!(lines, vec!["111", "222", "333", "444", "999"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_mono_tuple_computed_comparator() {
+        // Slice 6.4 — comparator does arithmetic on tuple fields, then
+        // `.cmp()`. Kata 1665 (Minimum Initial Energy) uses this exact
+        // shape: `(b.1 - b.0).cmp(a.1 - a.0)` for descending sort by
+        // `min - actual`. Pins that the closure body computes through
+        // both `.0` and `.1` accesses on each param and the final cmp
+        // result steers the sort.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    v.push((2, 10));   // diff = 8
+    v.push((5, 6));    // diff = 1
+    v.push((1, 20));   // diff = 19
+    v.push((3, 8));    // diff = 5
+    // Sort by (b.1 - b.0) descending: largest gap first.
+    v.sort_by(|a, b| (b.1 - b.0).cmp(a.1 - a.0));
+    for t in v.iter() {
+        println(t.0);
+        println(t.1);
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // Gaps 19, 8, 5, 1 — descending: (1,20), (2,10), (3,8), (5,6).
+            assert_eq!(lines, vec!["1", "20", "2", "10", "3", "8", "5", "6"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_mono_tuple_three_fields() {
+        // Slice 6.4 — wider tuple `(i64, i64, i64)` (24-byte payload).
+        // Pins that the struct-of-int fields gate predicate accepts
+        // arbitrary-arity integer tuples, not just pairs.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[(i64, i64, i64)] = Vec.new();
+    v.push((3, 99, 999));
+    v.push((1, 11, 111));
+    v.push((2, 22, 222));
+    v.sort_by(|a, b| a.0.cmp(b.0));
+    for t in v.iter() {
+        println(t.0);
+        println(t.1);
+        println(t.2);
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(
+                lines,
+                vec!["1", "11", "111", "2", "22", "222", "3", "99", "999"]
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_mono_large_n_uses_runtime_path() {
+        // Slice 6.4 — call-site dispatch threshold: insertion sort is
+        // O(N²) and beats the runtime callback only up to ~N=32–64;
+        // above that, the call site emits a runtime length check that
+        // routes large N to `karac_vec_sort_by`. Kata 1665's N=50000
+        // workload surfaced this 2026-05-29: a strawman mono-only
+        // dispatch regressed kata 1665 from 3.2 ms (pre-Slice-6.4) to
+        // 1.1 s. Pins correctness across the threshold by sorting
+        // 100 elements (> 64, so the runtime path is taken).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i: i64 = 0i64;
+    while i < 100i64 {
+        let x: i64 = (i * 1103515245i64 + 12345i64) % 1000i64;
+        v.push(x);
+        i = i + 1i64;
+    }
+    v.sort_by(|a, b| a.cmp(b));
+    println(v[0i64]);
+    println(v[50i64]);
+    println(v[99i64]);
+    let mut sorted: i64 = 1i64;
+    let mut j: i64 = 1i64;
+    while j < 100i64 {
+        if v[j - 1i64] > v[j] {
+            sorted = 0i64;
+        }
+        j = j + 1i64;
+    }
+    println(sorted);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines.len(), 4);
+            assert_eq!(lines[3], "1", "vec is not sorted: {:?}", lines);
+            let first: i64 = lines[0].parse().unwrap();
+            let mid: i64 = lines[1].parse().unwrap();
+            let last: i64 = lines[2].parse().unwrap();
+            assert!(first <= mid, "first ({}) > mid ({})", first, mid);
+            assert!(mid <= last, "mid ({}) > last ({})", mid, last);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_mono_named_struct_int_field() {
+        // Slice 6.4 — `struct S { v: i64 }` rides the mono path when its
+        // fields are all integers. The caller plumbs the elem Kāra type
+        // name through, the mono emitter registers var_type_names for
+        // closure params, and the body's `.v` named-field access
+        // resolves through the existing struct-field-extract path.
+        // Without the var_type_names registration this output would be
+        // `[30, 10, 20]` (sort no-op'd, input order preserved); with it,
+        // the sort works (surfaced 2026-05-29 by an earlier failing
+        // version of this test).
+        let out = run_program(
+            r#"
+struct Score { v: i64 }
+fn main() {
+    let mut v: Vec[Score] = Vec.new();
+    v.push(Score { v: 30 });
+    v.push(Score { v: 10 });
+    v.push(Score { v: 20 });
+    v.sort_by(|a, b| a.v.cmp(b.v));
+    for s in v.iter() { println(s.v); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["10", "20", "30"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_sort_by_key_tuple_lexicographic() {
         // Integer-tuple keys (`(i64, i64)`) sort lexicographically — first
         // field is primary, second tie-breaks. Pins the StructValue arm of

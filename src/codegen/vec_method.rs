@@ -1689,7 +1689,36 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.should_use_mono_vec_sort_by_for(elem_ty)
                         && self.collect_closure_free_vars(params, body).is_empty()
                     {
-                        let mono_fn = self.emit_sort_by_mono_i64(params, body)?;
+                        // For named-struct elements, pull the Kāra type
+                        // name so the mono emitter can register
+                        // var_type_names for closure params and the
+                        // body's named-field access resolves. Tuples
+                        // (TypeKind::Tuple) and other shapes pass None;
+                        // the .0/.1 numeric-index path doesn't need it.
+                        let elem_type_name: Option<String> = self
+                            .var_elem_type_exprs
+                            .get(var_name)
+                            .and_then(|te| match &te.kind {
+                                TypeKind::Path(p) => p.segments.last().cloned(),
+                                _ => None,
+                            });
+                        // Emit BOTH the mono fast path AND the runtime
+                        // fallback path. Insertion sort is O(N²), which
+                        // beats the runtime callback's per-compare
+                        // indirect-call cost up to ~N=32–64 but loses
+                        // hard above that (surfaced 2026-05-29 by kata
+                        // 1665's N=50000 workload regressing from 3.2 ms
+                        // to 1.1 s under a strawman mono-only dispatch).
+                        // Runtime length check picks the right path per
+                        // call.
+                        let mono_fn = self.emit_sort_by_mono(
+                            params,
+                            body,
+                            elem_ty,
+                            elem_type_name.as_deref(),
+                        )?;
+                        let (thunk_fn, ctx_alloca) =
+                            self.emit_sort_by_inline_thunk(params, body, elem_ty)?;
                         let data_ptr_ptr = self
                             .builder
                             .build_struct_gep(vec_ty, data_ptr, 0, "vec.data.ptr")
@@ -1708,6 +1737,35 @@ impl<'ctx> super::Codegen<'ctx> {
                             .build_load(i64_t, len_ptr, "len")
                             .unwrap()
                             .into_int_value();
+                        let elem_size = elem_ty.size_of().unwrap();
+
+                        // Threshold: 64 (power of 2; insertion sort
+                        // competitive against the runtime callback's
+                        // ~10 ns/compare overhead up to roughly this N).
+                        // Above 64 the asymptotic O(N²) of insertion sort
+                        // wins by tens of milliseconds even on small
+                        // workloads.
+                        let outer_fn = self.current_fn.unwrap();
+                        let mono_call_bb =
+                            self.context.append_basic_block(outer_fn, "sort_by.mono");
+                        let runtime_call_bb =
+                            self.context.append_basic_block(outer_fn, "sort_by.runtime");
+                        let join_bb = self.context.append_basic_block(outer_fn, "sort_by.join");
+                        let threshold = i64_t.const_int(64, false);
+                        let use_runtime = self
+                            .builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::SGT,
+                                len,
+                                threshold,
+                                "sort_by.use_runtime",
+                            )
+                            .unwrap();
+                        self.builder
+                            .build_conditional_branch(use_runtime, runtime_call_bb, mono_call_bb)
+                            .unwrap();
+
+                        self.builder.position_at_end(mono_call_bb);
                         self.builder
                             .build_call(
                                 mono_fn,
@@ -1718,6 +1776,47 @@ impl<'ctx> super::Codegen<'ctx> {
                                 "",
                             )
                             .unwrap();
+                        self.builder.build_unconditional_branch(join_bb).unwrap();
+
+                        self.builder.position_at_end(runtime_call_bb);
+                        let runtime_fn = self
+                            .module
+                            .get_function("karac_vec_sort_by")
+                            .unwrap_or_else(|| {
+                                let void_t = self.context.void_type();
+                                let fn_ty = void_t.fn_type(
+                                    &[
+                                        ptr_ty.into(),
+                                        i64_t.into(),
+                                        i64_t.into(),
+                                        ptr_ty.into(),
+                                        ptr_ty.into(),
+                                    ],
+                                    false,
+                                );
+                                self.module.add_function(
+                                    "karac_vec_sort_by",
+                                    fn_ty,
+                                    Some(Linkage::External),
+                                )
+                            });
+                        let thunk_ptr = thunk_fn.as_global_value().as_pointer_value();
+                        self.builder
+                            .build_call(
+                                runtime_fn,
+                                &[
+                                    BasicMetadataValueEnum::from(data),
+                                    BasicMetadataValueEnum::from(len),
+                                    BasicMetadataValueEnum::from(elem_size),
+                                    BasicMetadataValueEnum::from(thunk_ptr),
+                                    BasicMetadataValueEnum::from(ctx_alloca),
+                                ],
+                                "",
+                            )
+                            .unwrap();
+                        self.builder.build_unconditional_branch(join_bb).unwrap();
+
+                        self.builder.position_at_end(join_bb);
                         return Ok(self.context.i64_type().const_int(0, false).into());
                     }
                 }
@@ -3040,33 +3139,71 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok((thunk_fn, env_alloca))
     }
 
-    /// Slice 6.1 gate: monomorphized `Vec[T].sort_by` is enabled for
-    /// `T = i64` only in v1. Other elem types fall through to the existing
-    /// `karac_vec_sort_by` callback path. Future slices add i32 / u64 /
-    /// String / tuple / struct element types when a workload pulls. Cross-
-    /// ref: `docs/implementation_checklist/phase-7-codegen.md` Slice 6
-    /// (Vec[T]) trigger entry.
+    /// Gate predicate for the monomorphized `Vec[T].sort_by` fast path.
+    /// Slice 6.1 shipped `T = i64`; Slice 6.4 widens to LLVM struct types
+    /// whose fields are all integers — covers integer tuples like
+    /// `(i64, i64)` (kata 56's natural-pull trigger), `(i64, i64, i64)`
+    /// (kata 1665's secondary witness), and integer-field user structs
+    /// (`struct Score { v: i64 }`). The mono emitter treats the elem as
+    /// an opaque-sized blob for the sort's load / store / copy machinery,
+    /// and the closure body's `.0` / `.1` / `.field_name` accesses route
+    /// through `compile_expr`'s existing tuple-index / named-field
+    /// extract paths. For named structs the caller passes an
+    /// `elem_type_name` so the emitter can register `var_type_names`
+    /// for the closure params (mirrors `emit_sort_by_key_inline_thunk`'s
+    /// var_type_names fix at commit `079f5d7f`).
+    ///
+    /// Non-integer fields (Float / Pointer / String 3-word struct) fall
+    /// through because their compare lowering isn't yet wired into the
+    /// mono path's `tag - 1` Ordering contract — those are sibling Slice
+    /// 6.2+ entries (see `docs/implementation_checklist/phase-7-codegen.md`
+    /// Slice 6 trigger entry). Cross-ref: kata 56's
+    /// `merge_intervals.kara` + kata 1665's `greedy.kara` are the corpus
+    /// witnesses for tuple-elem; kata 15 / 16 are the i64 witnesses.
     pub(super) fn should_use_mono_vec_sort_by_for(&self, elem_ty: BasicTypeEnum<'ctx>) -> bool {
-        matches!(elem_ty, BasicTypeEnum::IntType(t) if t == self.context.i64_type())
+        match elem_ty {
+            BasicTypeEnum::IntType(t) => t == self.context.i64_type(),
+            BasicTypeEnum::StructType(s) => {
+                let n = s.count_fields();
+                if n == 0 {
+                    return false;
+                }
+                (0..n).all(|i| {
+                    s.get_field_type_at_index(i)
+                        .is_some_and(|f| f.is_int_type())
+                })
+            }
+            _ => false,
+        }
     }
 
-    /// Slice 6.1: emit a per-call-site monomorphized sort function for
-    /// `Vec[i64].sort_by(inline_closure)`. Signature:
-    /// `void __vec_i64_sort_by_mono_<id>(data: *mut i64, len: i64)`
+    /// Per-call-site monomorphized sort function for
+    /// `Vec[T].sort_by(inline_closure)`. Signature:
+    /// `void __vec_<elem_mangle>_sort_by_mono_<id>(data: *mut T, len: i64)`
     /// (Internal linkage). The function body is an insertion sort with the
     /// user's comparator inlined at the inner compare — no `karac_vec_sort_by`
     /// callback, LLVM has direct visibility into both the sort algorithm and
     /// the comparator, so the compare-and-shift loop optimises end-to-end
     /// (branchless compares, hoisted loads, fused arithmetic).
     ///
+    /// **Element type parameterisation.** `elem_ty` flows through every
+    /// load/store/GEP that touches the data buffer or the closure-param
+    /// slots — Slice 6.1 hardcoded `i64`; Slice 6.4 parameterised over
+    /// any shape `should_use_mono_vec_sort_by_for` accepts (i64 plus
+    /// LLVM struct types whose fields are all integers, i.e. integer
+    /// tuples and `#[derive(Ord)]` integer-field structs). For struct
+    /// elems the loads/stores treat the value as opaque-sized
+    /// `BasicValueEnum`; the closure body's `.0` / `.field_name` access
+    /// goes through `compile_expr`'s existing tuple-/struct-extract path
+    /// when the per-call-site comparator references it.
+    ///
     /// **Algorithm choice — insertion sort.** Simple (~30 lines of IR
     /// builder), validated by the kata-16 README's inline-insertion-sort
     /// A/B experiment that closed 76% of the gap to Rust (96.8 → 70.6 ms at
-    /// N=16). O(N²) is fine for the current corpus (kata 15 / 16 both run
-    /// N=16, ~120 compares per sort). A future slice can swap in a PDQ
-    /// small-sort network or call out to a typed `karac_vec_sort_i64_*`
-    /// runtime helper when a larger-N workload pulls — the gate predicate
-    /// above is the chokepoint.
+    /// N=16). O(N²) is fine for the current corpus (kata 15 / 16 / 56 / 1665
+    /// all run N ≤ 50). A future slice can swap in a PDQ small-sort network
+    /// or call out to a typed `karac_vec_sort_<T>_*` runtime helper when a
+    /// larger-N workload pulls — the gate predicate above is the chokepoint.
     ///
     /// **Captures unsupported in this slice.** The caller's free-vars check
     /// gates entry on `collect_closure_free_vars` returning empty. Closures
@@ -3083,10 +3220,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// shift `data[jj]` rightward — i.e. the closure controls the sort
     /// ORDER, not just the value extraction.
     #[allow(clippy::too_many_lines)]
-    pub(super) fn emit_sort_by_mono_i64(
+    pub(super) fn emit_sort_by_mono(
         &mut self,
         params: &[ClosureParam],
         body: &Expr,
+        elem_ty: BasicTypeEnum<'ctx>,
+        elem_type_name: Option<&str>,
     ) -> Result<FunctionValue<'ctx>, String> {
         let i64_t = self.context.i64_type();
         let void_t = self.context.void_type();
@@ -3095,10 +3234,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // 1. Declare per-call-site mono fn. Internal linkage — each call
         //    site emits a fresh copy (closure body varies per call site, so
         //    LinkOnceODR would risk silent body-mismatch across TUs sharing
-        //    a counter id).
+        //    a counter id). The elem-type token in the name keeps mono
+        //    symbols across different sort_by call sites textually distinct
+        //    when their counter ids overlap across TUs.
         let id = self.closure_counter;
         self.closure_counter += 1;
-        let name = format!("__vec_i64_sort_by_mono_{}", id);
+        let elem_mangle = self.llvm_type_to_mangle_str(elem_ty);
+        let name = format!("__vec_{}_sort_by_mono_{}", elem_mangle, id);
         let fn_ty = void_t.fn_type(&[ptr_ty.into(), i64_t.into()], false);
         let sort_fn = self
             .module
@@ -3144,7 +3286,9 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(entry);
         let ii_alloca = self.create_entry_alloca(sort_fn, "ii", i64_t.into());
         let jj_alloca = self.create_entry_alloca(sort_fn, "jj", i64_t.into());
-        let key_alloca = self.create_entry_alloca(sort_fn, "key", i64_t.into());
+        // `key` holds an elem-typed value (i64 in Slice 6.1, tuple/struct
+        // in Slice 6.4+) — same stride as the data buffer.
+        let key_alloca = self.create_entry_alloca(sort_fn, "key", elem_ty);
         let one = i64_t.const_int(1, false);
         let zero = i64_t.const_zero();
         self.builder.build_store(ii_alloca, one).unwrap();
@@ -3172,16 +3316,17 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(i64_t, ii_alloca, "ii.load2")
             .unwrap()
             .into_int_value();
+        // GEP stride is `elem_ty` — for `(i64, i64)` that's 16 bytes per
+        // step, so `data[ii]` lands at the right offset for the elem layout.
         let key_addr = unsafe {
             self.builder
-                .build_in_bounds_gep(i64_t, data, &[ii_v2], "key.addr")
+                .build_in_bounds_gep(elem_ty, data, &[ii_v2], "key.addr")
                 .unwrap()
         };
         let key_v = self
             .builder
-            .build_load(i64_t, key_addr, "key.load")
-            .unwrap()
-            .into_int_value();
+            .build_load(elem_ty, key_addr, "key.load")
+            .unwrap();
         self.builder.build_store(key_alloca, key_v).unwrap();
         let jj_init = self.builder.build_int_sub(ii_v2, one, "jj.init").unwrap();
         self.builder.build_store(jj_alloca, jj_init).unwrap();
@@ -3213,18 +3358,26 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
         let dj_addr = unsafe {
             self.builder
-                .build_in_bounds_gep(i64_t, data, &[jj_v2], "dj.addr")
+                .build_in_bounds_gep(elem_ty, data, &[jj_v2], "dj.addr")
                 .unwrap()
         };
-        let dj_v = self.builder.build_load(i64_t, dj_addr, "dj.load").unwrap();
+        let dj_v = self
+            .builder
+            .build_load(elem_ty, dj_addr, "dj.load")
+            .unwrap();
         let key_v2 = self
             .builder
-            .build_load(i64_t, key_alloca, "key.load2")
+            .build_load(elem_ty, key_alloca, "key.load2")
             .unwrap();
 
         // Bind closure params. param[0] = data[jj] (the "left" side, swept
         // back through the sorted prefix); param[1] = key (the "right" side,
-        // the freshly-chosen unsorted element being inserted).
+        // the freshly-chosen unsorted element being inserted). When the
+        // elem is a named struct, also register `var_type_names` so the
+        // closure body's `.field_name` lookups resolve through the named-
+        // field path (mirrors `emit_sort_by_key_inline_thunk`'s fix at
+        // commit `079f5d7f`; for anonymous tuples elem_type_name is None
+        // and `.0`/`.1` indexing doesn't need the map).
         let param_vals = [dj_v, key_v2];
         for (i, cp) in params.iter().enumerate().take(2) {
             let val = param_vals[i];
@@ -3236,7 +3389,10 @@ impl<'ctx> super::Codegen<'ctx> {
             let alloca = self.create_entry_alloca(sort_fn, &param_name, ty);
             self.builder.build_store(alloca, val).unwrap();
             self.variables
-                .insert(param_name, VarSlot { ptr: alloca, ty });
+                .insert(param_name.clone(), VarSlot { ptr: alloca, ty });
+            if let Some(name) = elem_type_name {
+                self.var_type_names.insert(param_name, name.to_string());
+            }
         }
 
         // Compile closure body; extract Ordering tag if struct-typed;
@@ -3268,17 +3424,17 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
         let dj_addr2 = unsafe {
             self.builder
-                .build_in_bounds_gep(i64_t, data, &[jj_v3], "dj.addr2")
+                .build_in_bounds_gep(elem_ty, data, &[jj_v3], "dj.addr2")
                 .unwrap()
         };
         let dj_v2 = self
             .builder
-            .build_load(i64_t, dj_addr2, "dj.load2")
+            .build_load(elem_ty, dj_addr2, "dj.load2")
             .unwrap();
         let jj_p1 = self.builder.build_int_add(jj_v3, one, "jj.p1").unwrap();
         let dst_addr = unsafe {
             self.builder
-                .build_in_bounds_gep(i64_t, data, &[jj_p1], "dst.addr")
+                .build_in_bounds_gep(elem_ty, data, &[jj_p1], "dst.addr")
                 .unwrap()
         };
         self.builder.build_store(dst_addr, dj_v2).unwrap();
@@ -3295,12 +3451,12 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
         let key_v3 = self
             .builder
-            .build_load(i64_t, key_alloca, "key.load3")
+            .build_load(elem_ty, key_alloca, "key.load3")
             .unwrap();
         let dst2_idx = self.builder.build_int_add(jj_v4, one, "dst2.idx").unwrap();
         let dst2_addr = unsafe {
             self.builder
-                .build_in_bounds_gep(i64_t, data, &[dst2_idx], "dst2.addr")
+                .build_in_bounds_gep(elem_ty, data, &[dst2_idx], "dst2.addr")
                 .unwrap()
         };
         self.builder.build_store(dst2_addr, key_v3).unwrap();
