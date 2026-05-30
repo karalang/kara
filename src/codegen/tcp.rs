@@ -269,19 +269,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .expect("call karac_runtime_tcp_bind");
         let fd = fd_call.try_as_basic_value().unwrap_basic().into_int_value();
 
-        // Pack into TcpListener { fd: i32 } struct value. Constructed
-        // via insert_value on an undef so the result is an SSA struct
-        // value (matching how other stdlib types — `Pool { handle_id }`
-        // — return from compiler-builtin lowerings).
-        let listener_ty = self
-            .context
-            .struct_type(&[self.context.i32_type().into()], false);
-        let undef = listener_ty.get_undef();
-        let listener_val = self
-            .builder
-            .build_insert_value(undef, fd, 0, "tcp.listener.val")
-            .expect("insert fd into TcpListener struct value");
-        Ok(listener_val.into_struct_value().into())
+        // Pack into `Result[TcpListener, TcpError]` (phase-8 line 64 audit):
+        // `Ok(TcpListener { fd })` on `fd >= 0`, else `Err(TcpError.Other(-1))`.
+        self.build_fd_construct_result(fd, "TcpError", "Other", "tcp.bind")
     }
 
     /// Lower `TcpListener.accept(ref self) -> TcpStream` to: park on
@@ -323,19 +313,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_basic()
             .into_int_value();
 
-        // Wrap the connection fd in a fresh `TcpStream { fd }` struct
-        // value — same single-i32-field layout as TcpListener; built
-        // via insert_value on undef so the result is an SSA struct
-        // value (matching how `lower_tcp_listener_bind` returns).
-        let stream_ty = self
-            .context
-            .struct_type(&[self.context.i32_type().into()], false);
-        let undef = stream_ty.get_undef();
-        let stream_val = self
-            .builder
-            .build_insert_value(undef, conn_fd, 0, "tcp.stream.val")
-            .expect("insert fd into TcpStream struct value");
-        Ok(stream_val.into_struct_value().into())
+        // Pack into `Result[TcpStream, TcpError]` (phase-8 line 64 audit):
+        // `Ok(TcpStream { fd })` on `fd >= 0`, else `Err(TcpError.Other(-1))`.
+        self.build_fd_construct_result(conn_fd, "TcpError", "Other", "tcp.accept")
     }
 
     /// Lower `TcpStream.read(ref self, buf: mut Slice[u8]) -> i64` to:
@@ -815,6 +795,143 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(phi.as_basic_value())
     }
 
+    /// Wrap a freshly-constructed network fd in a `Result[T, E]` where
+    /// `T` is a single-`i32`-field struct (`TcpListener` / `TcpStream` /
+    /// `TlsStream` / `WebSocket`) — the construction-method counterpart to
+    /// `wrap_tcp_io_result` (phase-8 line 64 audit: bind / accept / connect
+    /// return `Result`, not an `fd: -1` sentinel). On `fd >= 0` returns
+    /// `Ok` with the fd zero-extended into payload word 0 (the seeded
+    /// single-`i32` struct's reconstruction truncates it back at the
+    /// destructure); on `fd < 0` returns `Err(<err_enum>.<err_variant>(-1))`
+    /// — a 2-word enum `{tag, i32}` packed into Result payload words 0/1.
+    /// The `-1` errno is the v1 information content (the bind / accept /
+    /// connect FFIs return a bare `-1`, not `-errno`); enriching the FFIs to
+    /// surface the real errno is a follow-on. `T`'s identity comes from the
+    /// call's typechecker-resolved Result type, so this helper need not know
+    /// which single-fd struct it is wrapping.
+    pub(super) fn build_fd_construct_result(
+        &mut self,
+        fd: inkwell::values::IntValue<'ctx>,
+        err_enum_name: &str,
+        err_variant_name: &str,
+        label_prefix: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ctx = self.context;
+        let i64_ty = ctx.i64_type();
+
+        let result_layout = self
+            .enum_layouts
+            .get("Result")
+            .expect("Result layout seeded by seed_builtin_enum_layouts");
+        let result_ty = result_layout.llvm_type;
+        let ok_tag = *result_layout.tags.get("Ok").expect("Result.Ok tag seeded");
+        let err_tag = *result_layout
+            .tags
+            .get("Err")
+            .expect("Result.Err tag seeded");
+
+        let err_layout = self.enum_layouts.get(err_enum_name).unwrap_or_else(|| {
+            panic!("{err_enum_name} layout seeded by seed_builtin_enum_layouts")
+        });
+        let err_variant_tag = *err_layout
+            .tags
+            .get(err_variant_name)
+            .unwrap_or_else(|| panic!("{err_enum_name}.{err_variant_name} tag seeded"));
+
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "network construct Result wrapping outside fn".to_string())?;
+        let ok_bb = ctx.append_basic_block(fn_val, &format!("{label_prefix}.ok"));
+        let err_bb = ctx.append_basic_block(fn_val, &format!("{label_prefix}.err"));
+        let cont_bb = ctx.append_basic_block(fn_val, &format!("{label_prefix}.cont"));
+
+        let is_success = self
+            .builder
+            .build_int_compare(
+                IntPredicate::SGE,
+                fd,
+                fd.get_type().const_zero(),
+                &format!("{label_prefix}.is_ok"),
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_success, ok_bb, err_bb)
+            .unwrap();
+
+        // ── Ok arm: Result.Ok(T) — tag at field 0; the single i32 fd
+        //    zero-extended into payload word 0 (field 1). The seeded
+        //    single-`i32` struct reconstruction truncates back to i32.
+        self.builder.position_at_end(ok_bb);
+        let fd_word = self
+            .builder
+            .build_int_z_extend(fd, i64_ty, &format!("{label_prefix}.ok.fd_word"))
+            .unwrap();
+        let mut ok_agg = result_ty.get_undef();
+        ok_agg = self
+            .builder
+            .build_insert_value(
+                ok_agg,
+                i64_ty.const_int(ok_tag, false),
+                0,
+                &format!("{label_prefix}.ok.tag"),
+            )
+            .unwrap()
+            .into_struct_value();
+        ok_agg = self
+            .builder
+            .build_insert_value(ok_agg, fd_word, 1, &format!("{label_prefix}.ok.fd"))
+            .unwrap()
+            .into_struct_value();
+        let ok_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // ── Err arm: Result.Err(<err_enum>.<err_variant>(-1)). The 2-word
+        //    enum {tag, i32-payload} occupies Result payload words 0 and 1
+        //    (fields 1 and 2).
+        self.builder.position_at_end(err_bb);
+        let neg_one = i64_ty.const_int((-1i64) as u64, false);
+        let mut err_agg = result_ty.get_undef();
+        err_agg = self
+            .builder
+            .build_insert_value(
+                err_agg,
+                i64_ty.const_int(err_tag, false),
+                0,
+                &format!("{label_prefix}.err.tag"),
+            )
+            .unwrap()
+            .into_struct_value();
+        err_agg = self
+            .builder
+            .build_insert_value(
+                err_agg,
+                i64_ty.const_int(err_variant_tag, false),
+                1,
+                &format!("{label_prefix}.err.variant_tag"),
+            )
+            .unwrap()
+            .into_struct_value();
+        err_agg = self
+            .builder
+            .build_insert_value(err_agg, neg_one, 2, &format!("{label_prefix}.err.payload"))
+            .unwrap()
+            .into_struct_value();
+        let err_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // ── Continuation: phi between Ok and Err arms.
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(result_ty, &format!("{label_prefix}.result"))
+            .unwrap();
+        phi.add_incoming(&[
+            (&ok_agg.as_basic_value_enum(), ok_end_bb),
+            (&err_agg.as_basic_value_enum(), err_end_bb),
+        ]);
+        Ok(phi.as_basic_value())
+    }
+
     /// Extract the single `i32 fd` field from a `TcpListener` /
     /// `TcpStream` struct receiver. Handles both struct-value (owned /
     /// move) and pointer (ref self) receiver shapes.
@@ -891,19 +1008,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_basic()
             .into_int_value();
 
-        // Pack conn_fd into a fresh `WebSocket { fd }` struct value.
-        // Same shape as `lower_tcp_listener_accept`'s TcpStream pack
-        // — single i32 field, no truncation needed since the FFI
-        // returns i32 directly.
-        let ws_ty = self
-            .context
-            .struct_type(&[self.context.i32_type().into()], false);
-        let undef = ws_ty.get_undef();
-        let ws_val = self
-            .builder
-            .build_insert_value(undef, conn_fd, 0, "ws.accept.val")
-            .expect("insert conn_fd into WebSocket struct value");
-        Ok(ws_val.into_struct_value().into())
+        // Pack into `Result[WebSocket, TcpError]` (phase-8 line 64 audit):
+        // `Ok(WebSocket { fd })` on `fd >= 0`, else `Err(TcpError.Other(-1))`.
+        self.build_fd_construct_result(conn_fd, "TcpError", "Other", "ws.accept")
     }
 
     /// Lower `WebSocket.from_fd(fd: i32) -> WebSocket` — pack the i32

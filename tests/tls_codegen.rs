@@ -94,7 +94,7 @@ fn main() {
     let addr: String = "127.0.0.1:8443";
     let name: String = "localhost";
     let roots: String = "fake-pem";
-    let stream: TlsStream = TlsStream.connect(addr, name, roots);
+    let stream: TlsStream = TlsStream.connect(addr, name, roots).unwrap();
 }
 "#,
         );
@@ -168,7 +168,7 @@ fn main() {
     let addr: String = "127.0.0.1:0";
     let cert: String = "fake-cert";
     let key: String = "fake-key";
-    let listener: TlsListener = TlsListener.bind_tls(addr, cert, key);
+    let listener: TlsListener = TlsListener.bind_tls(addr, cert, key).unwrap();
 }
 "#,
         );
@@ -193,8 +193,8 @@ fn main() {
         let ir = ir_for(
             r#"
 fn main() {
-    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k");
-    let stream: TlsStream = listener.accept();
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k").unwrap();
+    let stream: TlsStream = listener.accept().unwrap();
 }
 "#,
         );
@@ -285,7 +285,7 @@ fn main() {}
         let ir = ir_for(
             r#"
 fn main() {
-    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k");
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k").unwrap();
 }
 "#,
         );
@@ -322,8 +322,8 @@ fn main() {
         let ir = ir_for(
             r#"
 fn main() {
-    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k");
-    let stream: TlsStream = listener.accept();
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k").unwrap();
+    let stream: TlsStream = listener.accept().unwrap();
 }
 "#,
         );
@@ -381,8 +381,8 @@ fn main() {}
         let ir = ir_for(
             r#"
 fn main() {
-    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k");
-    let ws: WebSocket = WebSocket.accept_tls(listener);
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k").unwrap();
+    let ws: WebSocket = WebSocket.accept_tls(listener).unwrap();
 }
 "#,
         );
@@ -401,25 +401,27 @@ fn main() {
     }
 
     #[test]
-    fn test_ir_websocket_accept_tls_returns_websocket_struct_shape() {
-        // The lowering packs the conn fd into a `WebSocket { i32 }`
-        // struct value via insert_value — same shape as the plain-
-        // TCP `WebSocket.accept(listener)` lowering — so subsequent
-        // `recv_text` / `send_text` / Drop dispatch lands on the
-        // same WebSocket value-model branch.
+    fn test_ir_websocket_accept_tls_wraps_conn_fd_in_result() {
+        // Phase-8 line 64 audit: `accept_tls` returns
+        // `Result[WebSocket, TcpError]` (not an `fd: -1` sentinel). The
+        // lowering branches on the conn fd and, on `Ok`, packs the fd into
+        // payload word 0 of the Result aggregate; the `Ok(ws)` destructure
+        // reconstructs the `WebSocket { i32 }` so subsequent `recv_text` /
+        // `send_text` / Drop dispatch lands on the WebSocket value-model.
         let ir = ir_for(
             r#"
 fn main() {
-    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k");
-    let ws: WebSocket = WebSocket.accept_tls(listener);
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k").unwrap();
+    let ws: WebSocket = WebSocket.accept_tls(listener).unwrap();
 }
 "#,
         );
         let main_body = function_body(&ir, "main").expect("main body");
-        // `insertvalue` packing the i32 fd into the WebSocket struct.
+        // The construction-result helper emits the `ws.accept_tls.ok` /
+        // `.err` / `.result` Result-packing blocks.
         assert!(
-            main_body.contains("insertvalue") && main_body.contains("ws.accept_tls.val"),
-            "accept_tls should insertvalue the conn_fd into the WebSocket struct; \
+            main_body.contains("ws.accept_tls.ok") && main_body.contains("ws.accept_tls.result"),
+            "accept_tls should pack the conn_fd into a Result aggregate; \
              body was:\n{}",
             main_body
         );
@@ -437,8 +439,8 @@ fn main() {
         let ir = ir_for(
             r#"
 fn main() {
-    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k");
-    let ws: WebSocket = WebSocket.accept_tls(listener);
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k").unwrap();
+    let ws: WebSocket = WebSocket.accept_tls(listener).unwrap();
     let mut buf: Array[u8, 64] = [0u8; 64];
     let _ = ws.recv_text(mut buf);
 }

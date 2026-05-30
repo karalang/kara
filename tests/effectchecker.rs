@@ -5084,42 +5084,42 @@ fn tcp_tls_ws_network_effects_propagate_to_callers() {
     // `MethodCall` resolution added for `std.http` reaches them once seeded.
     let src = r#"
         fn tcp_accept_caller() -> i64 {
-            let l = TcpListener.bind("127.0.0.1:0");
-            let s = l.accept();
+            let l = TcpListener.bind("127.0.0.1:0").unwrap();
+            let s = l.accept().unwrap();
             0
         }
         fn tcp_io_caller() -> i64 {
-            let l = TcpListener.bind("127.0.0.1:0");
-            let s = l.accept();
+            let l = TcpListener.bind("127.0.0.1:0").unwrap();
+            let s = l.accept().unwrap();
             let mut buf: Array[u8, 16] = [0u8; 16];
             let r = s.read(mut buf);
             let w = s.write(buf.as_slice());
             0
         }
         fn tls_accept_caller() -> i64 {
-            let l = TlsListener.bind_tls("127.0.0.1:0", "cert", "key");
-            let s = l.accept();
+            let l = TlsListener.bind_tls("127.0.0.1:0", "cert", "key").unwrap();
+            let s = l.accept().unwrap();
             0
         }
         fn tls_connect_caller() -> i64 {
-            let s = TlsStream.connect("127.0.0.1:8443", "localhost", "roots");
+            let s = TlsStream.connect("127.0.0.1:8443", "localhost", "roots").unwrap();
             0
         }
         fn tls_io_caller() -> i64 {
-            let s = TlsStream.connect("127.0.0.1:8443", "localhost", "roots");
+            let s = TlsStream.connect("127.0.0.1:8443", "localhost", "roots").unwrap();
             let mut buf: Array[u8, 16] = [0u8; 16];
             let r = s.read(mut buf);
             let w = s.write(buf.as_slice());
             0
         }
         fn ws_accept_caller() -> i64 {
-            let l = TcpListener.bind("127.0.0.1:0");
-            let ws = WebSocket.accept(l);
+            let l = TcpListener.bind("127.0.0.1:0").unwrap();
+            let ws = WebSocket.accept(l).unwrap();
             0
         }
         fn ws_io_caller() -> i64 {
-            let l = TcpListener.bind("127.0.0.1:0");
-            let ws = WebSocket.accept(l);
+            let l = TcpListener.bind("127.0.0.1:0").unwrap();
+            let ws = WebSocket.accept(l).unwrap();
             let mut buf: Array[u8, 16] = [0u8; 16];
             let r = ws.recv_text(mut buf);
             let w = ws.send_text(buf.as_slice());

@@ -933,11 +933,41 @@ impl<'a> super::TypeChecker<'a> {
         // types, etc.) — the parser sets `MethodCall.span == receiver.span`,
         // so we use `method_callee_types` rather than `expr_types` (which
         // would race with the return-type insertion at the same key).
-        if let Some(type_name) = method_callee_type_name(&obj_ty) {
-            self.method_callee_types.insert(
-                SpanKey::from_span(span),
-                format!("{}.{}", type_name, method),
-            );
+        //
+        // Chained-call span collision: because `MethodCall.span ==
+        // receiver.span`, in `recv.inner().outer()` the inner and outer
+        // calls share one span key, and a later (outer) insert clobbers the
+        // inner one. The unwrap-family accessors (`unwrap` / `expect` /
+        // `is_*`) are the common outer link — and they are pure built-ins,
+        // dispatched by name for effects (`__builtin_unwrap`) and keyed
+        // separately for codegen (`method_unwrap_inner_types`), so they
+        // never need a `method_callee_types` entry. Skipping them here keeps
+        // the inner call's precise key intact, so an effectful inner call
+        // (e.g. `listener.accept().unwrap()`) still resolves to
+        // `TcpListener.accept` for effect propagation. Skipping a pure outer
+        // can never lose an effectful callee, so this is sound for every
+        // consumer (effects / cancel-narrowing / must-use / raii / unsafe).
+        // Only the BUILTIN Option/Result unwrap-family is skipped — gated on
+        // the receiver type being `Option` / `Result`, exactly as the
+        // builtin handler below (line ~962) is. A user method that happens to
+        // be named `unwrap` / `is_ok` / … on some other receiver (e.g.
+        // `impl Inner { fn unwrap(self) -> i64 }`) is a real call that MUST
+        // record its `Type.method` key — the use-classifier reads it to see
+        // the owned-`self` receiver mode and tag the projection root as
+        // Consume (`use_classifier::tests::owned_self_on_field_consumes_root`).
+        let callee_type_name = method_callee_type_name(&obj_ty);
+        let is_builtin_unwrap_family =
+            matches!(
+                method,
+                "unwrap" | "expect" | "is_some" | "is_none" | "is_ok" | "is_err"
+            ) && matches!(callee_type_name.as_deref(), Some("Option") | Some("Result"));
+        if !is_builtin_unwrap_family {
+            if let Some(type_name) = callee_type_name {
+                self.method_callee_types.insert(
+                    SpanKey::from_span(span),
+                    format!("{}.{}", type_name, method),
+                );
+            }
         }
 
         // Option/Result unwrap-family side-table: record the inner `T` /

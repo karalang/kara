@@ -719,6 +719,23 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             return Ok(agg.into());
         }
+        // A single-field STRUCT binding (e.g. `Ok(listener)` where
+        // `listener: TcpListener { fd: i32 }`) must still reconstitute the
+        // struct aggregate, not bind the raw payload word — otherwise the
+        // binding slot is sized as `i64` (the word) while `var_type_names`
+        // says it's the struct, and the next `.method()` dispatch extracts a
+        // struct field from an `i64` and trips module verification. Multi-
+        // field structs (e.g. `Response`) already take the struct-building
+        // path below because they span >1 word; a struct with one primitive
+        // field is the gap. Route any struct-typed binding through that path
+        // regardless of word count.
+        let binding_is_struct = {
+            let key = (sub_pat.span.offset, sub_pat.span.length);
+            self.pattern_binding_types
+                .get(&key)
+                .map(|n| self.struct_types.contains_key(n.as_str()))
+                .unwrap_or(false)
+        };
         // Single-word: keep legacy single-i64 binding shape. The
         // PatternKind::Binding arm handles single-field struct
         // reconstitution downstream via `pattern_binding_types`.
@@ -730,7 +747,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // path. The slice may legitimately carry more words than the
         // binding consumes — trailing words are undef.
         let want_words = self.pattern_payload_word_count(sub_pat);
-        if want_words <= 1 || field_words.len() <= 1 {
+        if (want_words <= 1 || field_words.len() <= 1) && !binding_is_struct {
             let w = field_words
                 .first()
                 .copied()

@@ -151,20 +151,20 @@ mod tcp_listener_tests {
 
         // Real stdlib surface — no inline `extern` block. The
         // `TcpListener` / `TcpStream` types come from baked
-        // `runtime/stdlib/tcp.kara`. `bind` returns a `TcpListener
-        // { fd: i32 }` struct value; `accept` returns a `TcpStream
-        // { fd: i32 }` struct via the codegen-emitted park-and-accept
-        // sequence (slice 9 changed accept's return type from `i32`
-        // to `TcpStream`). The binding name `_stream` keeps the
-        // accept call's effect (the park-and-syscall round-trip)
-        // observable to the test harness through the binary's exit
-        // status — we don't need to inspect the stream further at
-        // this layer (the read/write surface lives in the slice-9
-        // `tests/tcp_stream.rs` E2E).
+        // `runtime/stdlib/tcp.kara`. `bind` returns
+        // `Result[TcpListener, TcpError]` and `accept` returns
+        // `Result[TcpStream, TcpError]` (phase-8 line 64 audit —
+        // construction methods return `Result`, not an `fd: -1`
+        // sentinel); `.unwrap()` extracts the success value. The
+        // binding name `_stream` keeps the accept call's effect (the
+        // park-and-syscall round-trip) observable to the test harness
+        // through the binary's exit status — we don't need to inspect
+        // the stream further at this layer (the read/write surface
+        // lives in the slice-9 `tests/tcp_stream.rs` E2E).
         let src = r#"
             fn main() {
-                let listener = TcpListener.bind("127.0.0.1:0");
-                let _stream = listener.accept();
+                let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+                let _stream = listener.accept().unwrap();
                 println(0);
             }
         "#;
@@ -255,6 +255,76 @@ mod tcp_listener_tests {
             exit_status.success(),
             "binary exited non-success {exit_status:?} — \
              TcpListener.accept returned but main() failed downstream"
+        );
+    }
+
+    /// Phase-8 line 64 audit — `TcpListener.bind` returns
+    /// `Result[TcpListener, TcpError]`. This locks the user-visible
+    /// contract: the `Ok` arm reconstructs a real `TcpListener` (and its
+    /// `Drop` closes the fd), and a bind failure surfaces as `Err` rather
+    /// than a silent `fd: -1` sentinel. Exercised through `match` (the
+    /// destructure path — distinct from `.unwrap()` in the round-trip test
+    /// above, and the path `examples/ws_idle_holder` uses), with no socket
+    /// round-trip needed. Pins both the single-field-struct Result-Ok
+    /// destructure (`Result.Ok(listener)` rebuilding `{ i32 }` rather than
+    /// binding the raw payload word) and the Err arm.
+    #[test]
+    fn bind_returns_result_ok_and_err() {
+        let _guard = TCP_TEST_LOCK.lock().unwrap();
+        let rt = match runtime_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: runtime static lib unavailable");
+                return;
+            }
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let src = r#"
+            fn main() {
+                match TcpListener.bind("127.0.0.1:0") {
+                    Result.Ok(listener) => { println(1); }
+                    Result.Err(_) => { println(99); }
+                }
+                match TcpListener.bind("not a valid address at all") {
+                    Result.Ok(_) => { println(98); }
+                    Result.Err(_) => { println(2); }
+                }
+            }
+        "#;
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_tcp_result_{pid}_{nanos}"));
+
+        if let Err(e) = compile_and_link(src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let out = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .output()
+            .expect("failed to run tcp result binary");
+        let _ = std::fs::remove_file(&exe_path);
+
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // `1` = Ok arm of the successful bind (listener reconstructed +
+        // dropped clean); `2` = Err arm of the failing bind.
+        assert!(
+            stdout.contains('1') && stdout.contains('2'),
+            "expected Ok(1) then Err(2) from bind Result match; \
+             stdout was {stdout:?}, stderr {:?}, status {:?}",
+            String::from_utf8_lossy(&out.stderr),
+            out.status
+        );
+        assert!(
+            out.status.success(),
+            "binary exited non-success — Result destructure / drop path broke; \
+             stderr {:?}",
+            String::from_utf8_lossy(&out.stderr)
         );
     }
 }

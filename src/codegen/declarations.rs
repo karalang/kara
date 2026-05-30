@@ -3308,6 +3308,63 @@ impl<'ctx> super::Codegen<'ctx> {
             self.struct_field_type_names
                 .insert("RequestBuilder".to_string(), vec![Some("i64".to_string())]);
         }
+        // Network construction-method result structs (phase-8 line 64 audit:
+        // `bind` / `accept` / `connect` return `Result[T, E]`, so the `Ok(x)`
+        // destructure must reconstruct these single-`i32`-field structs from
+        // the Result payload word — `pattern_payload_word_count` /
+        // `reconstruct_payload_value` read `struct_types` to size + rebuild the
+        // aggregate, and baked stdlib structs skip `declare_structs`).
+        //
+        // NB: unlike `Response` / `HttpError` above, these types carry a user
+        // `impl Drop` (close-on-drop, hand-rolled in codegen as
+        // `karac_drop_<T>`), so deliberately ONLY `struct_types` +
+        // `struct_field_names` are seeded — NOT `struct_field_type_names`,
+        // which would drive `emit_struct_drop_synthesis` to register a SECOND
+        // (synthesized) drop and double-close the fd. The destructure paths
+        // need only the LLVM shape; the existing user-Drop chain handles
+        // scope-exit close, keyed off the binding's resolved type.
+        {
+            let i32_t = self.context.i32_type();
+            for name in ["TcpListener", "TcpStream", "TlsStream", "WebSocket"] {
+                if !self.struct_types.contains_key(name) {
+                    let ty = self.context.struct_type(&[i32_t.into()], false);
+                    self.struct_types.insert(name.to_string(), ty);
+                    self.struct_field_names
+                        .insert(name.to_string(), vec!["fd".to_string()]);
+                    // Field type names so the `Ok(x)` *pattern* destructure
+                    // (`reconstruct_payload_value` / the match-arm binding's
+                    // slot sizing) resolves the binding to the struct shape
+                    // rather than the i64 payload-word default. Safe alongside
+                    // the user `impl Drop`: the field is `i32` (primitive), so
+                    // `emit_struct_drop_synthesis` returns `None` (no
+                    // heap-bearing field) and the user-Drop wrapper's fd-close
+                    // is the sole drop action — no synthesized drop is
+                    // registered to shadow it.
+                    self.struct_field_type_names
+                        .insert(name.to_string(), vec![Some("i32".to_string())]);
+                }
+            }
+            // `TlsListener { fd: i32, config: *mut TlsConfig }` — two fields
+            // (the second a pointer), so it reconstructs from two payload
+            // words. Same primitive/pointer fields (no String/Vec/handle), so
+            // the synth-drop stays `None` and the user `impl Drop` (frees
+            // config + closes fd) remains the only drop action.
+            if !self.struct_types.contains_key("TlsListener") {
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let ty = self
+                    .context
+                    .struct_type(&[i32_t.into(), ptr_ty.into()], false);
+                self.struct_types.insert("TlsListener".to_string(), ty);
+                self.struct_field_names.insert(
+                    "TlsListener".to_string(),
+                    vec!["fd".to_string(), "config".to_string()],
+                );
+                self.struct_field_type_names.insert(
+                    "TlsListener".to_string(),
+                    vec![Some("i32".to_string()), Some("*mut TlsConfig".to_string())],
+                );
+            }
+        }
     }
 
     /// DP slice helper — classify a payload field's TypeExpr into an

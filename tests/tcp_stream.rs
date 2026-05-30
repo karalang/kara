@@ -167,8 +167,8 @@ mod tcp_stream_tests {
         // syscall.
         let src = r#"
             fn main() {
-                let listener = TcpListener.bind("127.0.0.1:0");
-                let stream = listener.accept();
+                let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+                let stream = listener.accept().unwrap();
                 let msg: String = "hello from kara\n";
                 let _n = stream.write(msg.bytes());
             }
@@ -374,8 +374,8 @@ mod tcp_stream_tests {
 
         let src = r#"
             fn main() {
-                let listener = TcpListener.bind("127.0.0.1:0");
-                let stream = listener.accept();
+                let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+                let stream = listener.accept().unwrap();
                 let mut buf: Array[u8, 64] = [0u8; 64];
                 match stream.read(mut buf) {
                     Ok(n) => println(n),
@@ -553,8 +553,8 @@ mod tcp_stream_tests {
         let mut src = String::from(
             r#"
             fn main() {
-                let listener = TcpListener.bind("127.0.0.1:0");
-                let stream = listener.accept();
+                let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+                let stream = listener.accept().unwrap();
                 let msg: String = ""#,
         );
         for _ in 0..pattern_repeat {

@@ -54,6 +54,27 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned();
         self.emit_branch_cancel_check("mcall", callee_key.as_deref());
 
+        // Chained-call span collision guard. The parser sets
+        // `MethodCall.span == receiver.span`, so in `recv.inner().outer()`
+        // the inner and outer calls share one `method_callee_types` key, and
+        // it resolves to the *inner* call's `Type.method` (the effect-checker
+        // relies on that — see the unwrap-family skip in
+        // `typechecker/expr_method_call.rs`). For DISPATCH below we must not
+        // let the inner key drive the outer call: e.g. compiling the `unwrap`
+        // of `listener.accept().unwrap()` sees `key == "TcpListener.accept"`
+        // and would re-lower `accept` on its own result (a double-lowering +
+        // type mismatch). Require the key's method segment to match THIS
+        // call's `method` before using it to pick a builtin / state-machine
+        // lowering; the conservative cancel-check above keeps the raw key.
+        let dispatch_key = callee_key
+            .as_ref()
+            .filter(|k| {
+                k.rsplit_once('.')
+                    .map(|(_, m)| m == method)
+                    .unwrap_or(false)
+            })
+            .cloned();
+
         // Phase 6 line 17 — stdlib `TcpListener` / `TcpStream`
         // compiler-builtin dispatch. Routes through the lowerings in
         // `src/codegen/tcp.rs`, each of which composes a
@@ -64,7 +85,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (the baked stdlib's bodies are stubs — without these arms,
         // the generic dispatch would emit a call into a non-existent
         // symbol).
-        if let Some(ref key) = callee_key {
+        if let Some(ref key) = dispatch_key {
             if key == "TcpListener.accept" {
                 let self_val = self.compile_expr(object)?;
                 return self.lower_tcp_listener_accept(self_val);
@@ -265,7 +286,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // method those shortcuts would emit an inappropriate direct
         // call. Receiver compilation routes through the standard
         // `compile_expr` path, matching slice 8f's arg-store handling.
-        if let Some(ref key) = callee_key {
+        if let Some(ref key) = dispatch_key {
             if let Some(ctor_fn) = self.state_machine_state_constructors.get(key).copied() {
                 let poll_fn = self
                     .state_machine_poll_fns

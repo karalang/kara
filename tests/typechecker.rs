@@ -19595,9 +19595,9 @@ fn task_group_canonical_accept_loop_shape_compiles() {
         "fn handle_client(c: TcpStream) -> i64 { 0 }
          fn make_zero() -> i64 { 0 }
          fn main() {
-             let listener: TcpListener = TcpListener.bind(\"127.0.0.1:0\");
+             let listener: TcpListener = TcpListener.bind(\"127.0.0.1:0\").unwrap();
              let mut tg: TaskGroup = TaskGroup.new();
-             let conn: TcpStream = listener.accept();
+             let conn: TcpStream = listener.accept().unwrap();
              tg.spawn(make_zero);
          }",
     );

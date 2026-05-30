@@ -111,25 +111,29 @@ struct TcpStream {
 
 impl TcpListener {
     // Bind to `addr` (e.g. `"127.0.0.1:0"`) and return a
-    // `TcpListener` wrapping the bound fd. Returns a `TcpListener
-    // { fd: -1 }` on bind failure — v1 minimum-viable error shape;
-    // callers can check `listener.fd >= 0` to detect failure. The
-    // structured-error path (`Result[TcpListener, IoError]`) lands
-    // in a follow-on slice once a real consumer needs it.
+    // `Result[TcpListener, TcpError]`: `Ok(listener)` wrapping the
+    // bound fd on success, or `Err(TcpError.Other(-1))` on bind
+    // failure (phase-8 line 64 audit: construction methods return
+    // `Result`, matching the rest of the network surface and the
+    // `read`/`write` I/O methods — no `fd: -1` sentinel). The carried
+    // errno is `-1` at v1 (the runtime `karac_runtime_tcp_bind` FFI
+    // returns a bare `-1` on failure, not `-errno`); a follow-on can
+    // enrich the FFI to surface the real errno.
     //
     // **BOUND_PORT convention.** When the requested address ends
     // in `:0`, the runtime prints `BOUND_PORT=<port>\n` to stdout
     // before returning so smoke tests can read back the assigned
     // ephemeral port.
     #[compiler_builtin]
-    fn bind(addr: String) -> TcpListener {
-        TcpListener { fd: -1 }
+    fn bind(addr: String) -> Result[TcpListener, TcpError] {
+        Result.Err(TcpError.Other(-1))
     }
 
     // Wait for the listener to become readable, then accept the
-    // next pending connection and return a `TcpStream` wrapping
-    // its raw fd. Returns a `TcpStream { fd: -1 }` on accept
-    // failure.
+    // next pending connection and return `Ok(stream)` wrapping its
+    // raw fd, or `Err(TcpError.Other(-1))` on accept failure
+    // (phase-8 line 64 audit — `Result`, not a `TcpStream { fd: -1 }`
+    // sentinel).
     //
     // **Parking convention.** The codegen lowering emits a
     // `karac_park_on_fd(self.fd, 0u8)` invocation BEFORE the raw
@@ -140,8 +144,8 @@ impl TcpListener {
     // `emit_state_machine_invocation_for_park_on_fd` codegen
     // helper to thread their yield points through the same primitive.
     #[compiler_builtin]
-    fn accept(ref self) -> TcpStream with sends(Network) receives(Network) {
-        TcpStream { fd: -1 }
+    fn accept(ref self) -> Result[TcpStream, TcpError] with sends(Network) receives(Network) {
+        Result.Err(TcpError.Other(-1))
     }
 }
 

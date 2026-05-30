@@ -96,10 +96,10 @@ impl WebSocket {
     // Upgrade / Connection / Version header checks); no
     // subprotocol / extension negotiation; no handshake-timeout.
     #[compiler_builtin]
-    fn accept(listener: TcpListener) -> WebSocket
+    fn accept(listener: TcpListener) -> Result[WebSocket, TcpError]
         with sends(Network) receives(Network)
     {
-        WebSocket { fd: -1 }
+        Result.Err(TcpError.Other(-1))
     }
 
     // Phase 6 line 236 slice 3 — WebSocket-over-TLS entry point.
@@ -128,16 +128,17 @@ impl WebSocket {
     // because the runtime FFIs check the TLS session registry to
     // dispatch encryption.
     //
-    // Returns `WebSocket { fd: -1 }` on any failure (accept,
-    // handshake, HTTP upgrade). For v1 the failure modes collapse
-    // into the -1 sentinel — a richer `Result[WebSocket, TlsError]`
-    // shape lands additively when a real consumer needs the
-    // structured-error path.
+    // Returns `Result[WebSocket, TcpError]` (phase-8 line 64 audit:
+    // construction methods return `Result`, not an `fd: -1` sentinel):
+    // `Ok(ws)` on success, `Err(TcpError.Other(-1))` on any failure
+    // (accept, handshake, HTTP upgrade). For v1 the failure modes
+    // collapse into the single `-1`-payload Err; a richer error split is
+    // additive when a real consumer needs it.
     #[compiler_builtin]
-    fn accept_tls(listener: TlsListener) -> WebSocket
+    fn accept_tls(listener: TlsListener) -> Result[WebSocket, TcpError]
         with sends(Network) receives(Network)
     {
-        WebSocket { fd: -1 }
+        Result.Err(TcpError.Other(-1))
     }
 
     // Park on read-readiness of `self.fd`, then read one RFC 6455

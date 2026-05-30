@@ -94,10 +94,18 @@ fn main() {
     let cert_pem: String = "-----BEGIN CERTIFICATE-----\nMIIDJTCCAg2gAwIBAgIUQOf5oAPYR25vaDHir+RzYUvNJBcwDQYJKoZIhvcNAQEL\nBQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDUyODAyMzA1N1oXDTM2MDUy\nODAyMzA1N1owFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF\nAAOCAQ8AMIIBCgKCAQEA3Rl880yaXgbA4GkBhV/hMmTQeA9uFcuYeB3jV2TWMrYD\noQWc8S3wB45xZ74A29sT+sZpJcPnjOuao8OLpU4JSnoidAS4S5080BbESrxG8Ee5\niffCcbwet+tzS+GFbvm4jAswTD/L9Z333OIxjxE6sgSPi3scECNdq3lugIEAWINE\nmmiOxX9JXy7Bq2OEmubhhA7RAmR0EgYsVXbCxZMSu7XhCYvLQhXtpyL6Y39CPIFz\nwfosDYl9/1I2YVDtpt151brppuLIVbmdnJwalb4RrZjc+FD/FVn2YiQ3sor+7FL2\nnQ6pufzwwpaV2Qn0zjhXXnESyxl8UmAK9ZXKuAMGsQIDAQABo28wbTAdBgNVHQ4E\nFgQUG/7G6tRhc+bu0vPOCGxlRlL3F+4wHwYDVR0jBBgwFoAUG/7G6tRhc+bu0vPO\nCGxlRlL3F+4wDwYDVR0TAQH/BAUwAwEB/zAaBgNVHREEEzARgglsb2NhbGhvc3SH\nBH8AAAEwDQYJKoZIhvcNAQELBQADggEBAJrXCRKxpWQlyODUwOPzPs/OI6CG7H2b\n/rz1E7zrovPJndxqqtkSfjKk9xWF5zZj+gAwB9c/5HgdFTj8yw+DyqqSmd73SGMW\n+z0QVfQ+yUoDxAafr6nymX/KyjmHIF6qrJuPKGWLQEqWNmEQEUMj+YOEbsrGu/jA\n4UrGq7C2riM4kJy1pYnUak1CpkIea2PJ3/92VGN3D9fnXz19uve4hKxi4Tn36Pxr\npEZzXaNLK0WDuPAlRSyuAh/ZZodYYXkI2xYj/SoDJBBZ46E7gcH1550c7Oe5uEV4\nt+59FVL1vxM53WBT9uZ+vqmkXQjFFKcYdb4Tf99yVN1NNDCPH+6H+yY=\n-----END CERTIFICATE-----\n";
     let key_pem: String = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDdGXzzTJpeBsDg\naQGFX+EyZNB4D24Vy5h4HeNXZNYytgOhBZzxLfAHjnFnvgDb2xP6xmklw+eM65qj\nw4ulTglKeiJ0BLhLnTzQFsRKvEbwR7mJ98JxvB6363NL4YVu+biMCzBMP8v1nffc\n4jGPETqyBI+LexwQI12reW6AgQBYg0SaaI7Ff0lfLsGrY4Sa5uGEDtECZHQSBixV\ndsLFkxK7teEJi8tCFe2nIvpjf0I8gXPB+iwNiX3/UjZhUO2m3XnVuumm4shVuZ2c\nnBqVvhGtmNz4UP8VWfZiJDeyiv7sUvadDqm5/PDClpXZCfTOOFdecRLLGXxSYAr1\nlcq4AwaxAgMBAAECggEAMGno3OOst6MV7+2+WgStLJo7tdZ3HgmnWMH+qn/XkWIe\nuE8g1wTeluD/fx5xVLMLlHGGy7Cyjr52bZ6fgPJuAWNuEOaJrnD/RHd/wveoNuwV\nuhrI9puhRFentvlqfOrsmKnIiSG9GQren/zdqjy1FA8AmaO6+OOtmqMr6bKVr0ui\n7Ko16ahrdFg2GKEbbrEIpUsV5ORAU7VX/7ycj+CwVHz/CgXGP7/4T+vF3iFdMAqu\nMVFeZGW4irNL+UGH7g4YFUygpY00eK7eN2jOqTkoxqIiaitNKbNJHuqR8h/OcT+4\n2XS/mL6os3m4KXATJ3nKESf46Wb+IqlnTZ87768vkwKBgQDzxxIcJjHqCU+cP7Qs\nhkVhQBamD5RvudwLkPRfqN1VVt8lAtXOd8NMg41tRCb8Mus3ram7y1qthng5yvFd\nR4PwyXikJtZuwJjcqOnII3SzU0ENFSNfiDJ1CXr/eXgJkY82lxc5yQ+kCzTJbv+J\nhHE8NhilPGogElfzZQcAzRlnwwKBgQDoL1cmqCT92VV958m1ixC0N07154JHeUDH\nqzYlfLcpyj+OeUbjvmlItB+8mBEZTHWFw4dcgYJ4zaAz5YZ6BL6ZrQMc9SfZNuC/\nssC+Y+lXOJD3ucLJsjvanA3BG5lv8aCB14neWznABp/t/A71HwAnnoLLa4adfCYP\n9vr0gEJkewKBgBhrd6f0N4nPNvda9kyDgs20ItCtvNvYTW+nLKOsgcd7tUy61Poi\nyyCOCQvKCPG4lBF2xwr12vaJAuAfMUB72n6zX+9pqI9dobJxBUI0MwuHqnuKA4od\nVZidw4F2BI1I1ITOa9gxCO0Q5k/LW7PF3aX/cUaUH7lovQC3vRTadtILAoGBAJm3\nHb+d+j+FLzBX0Ba8pqZpJ4Ftb7bZ86U9GG/hDXJBT6qHaANHAHT9qzU0h71z/So9\ntNPtee94UuOIxWrq0TT0cect9t+7kTfYo/poMwdnj7Ix7V+S/EVSo1iBaSfPlC/h\n/oiTZLxYpnDsOwrVJ0kTjAwYd9qzYo+XN7W/ZDUZAoGAMIFSVd953NSWD51K2I6a\nhKbJ8rr5KosOcFpYtfBqfZkBQoqiWiS6GlQ03A7neG3CcW89/QroJpdLLhsMpyiH\njZFSlVsx6wYVBa5GqmwREps56x2VP7q+tvqRom8EOIYHruBWZDlPE2L2v5ETGw1Q\n9NdVobq1K7NkX9L9a+gc9qA=\n-----END PRIVATE KEY-----\n";
 
-    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", cert_pem, key_pem);
+    // `bind_tls` / `accept_tls` return `Result` (phase-8 line 64 audit).
+    // A server that can't bind its port should fail-fast — `.unwrap()`.
+    // A single failed accept (bad TLS handshake, transient error) must not
+    // kill the accept loop, so it's matched and skipped.
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", cert_pem, key_pem).unwrap();
     let mut tg: TaskGroup = TaskGroup.new();
     loop {
-        let ws: WebSocket = WebSocket.accept_tls(listener);
-        tg.spawn(|| handle_connection(ws));
+        match WebSocket.accept_tls(listener) {
+            Result.Ok(ws) => {
+                tg.spawn(|| handle_connection(ws));
+            }
+            Result.Err(_) => {}
+        }
     }
 }

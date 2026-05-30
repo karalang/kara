@@ -169,8 +169,8 @@ fn main() {
         let ir = ir_for(
             r#"
 fn main() {
-    let listener = TcpListener.bind("127.0.0.1:0");
-    let ws = WebSocket.accept(listener);
+    let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+    let ws = WebSocket.accept(listener).unwrap();
     println(ws.fd);
 }
 "#,
@@ -374,8 +374,8 @@ fn main() {
             r#"
 fn handle(s: TcpStream) {}
 fn main() {
-    let listener = TcpListener.bind("127.0.0.1:0");
-    let s = listener.accept();
+    let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+    let s = listener.accept().unwrap();
     handle(s);
 }
 "#,
@@ -393,7 +393,7 @@ fn main() {
             r#"
 fn handle(l: TcpListener) {}
 fn main() {
-    let listener = TcpListener.bind("127.0.0.1:0");
+    let listener = TcpListener.bind("127.0.0.1:0").unwrap();
     handle(listener);
 }
 "#,

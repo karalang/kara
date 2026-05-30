@@ -141,11 +141,16 @@ impl TlsListener {
     // returning so smoke tests can read back the assigned ephemeral
     // port.
     //
-    // Stub body never executes — codegen replaces via
+    // Returns `Result[TlsListener, TlsError]` (phase-8 line 64 audit:
+    // construction methods return `Result`, not an `fd: -1` sentinel):
+    // `Ok(listener)` on success, `Err(TlsError.Protocol(-1))` on PEM-parse
+    // / bind failure (the failure path also frees the freshly-built rustls
+    // config so it does not leak — the old sentinel relied on `Drop` for
+    // that). Stub body never executes — codegen replaces via
     // `lower_tls_listener_bind_tls` (see `src/codegen/tls.rs`).
     #[compiler_builtin]
-    fn bind_tls(addr: String, cert_pem: String, key_pem: String) -> TlsListener {
-        TlsListener { fd: -1, config: 0 as *mut TlsConfig }
+    fn bind_tls(addr: String, cert_pem: String, key_pem: String) -> Result[TlsListener, TlsError] {
+        Result.Err(TlsError.Protocol(-1))
     }
 
     // Wait for the listener to become readable, then accept the next
@@ -168,8 +173,8 @@ impl TlsListener {
     // 100K-conn target will need a re-park-between-rounds variant if
     // measurement shows handshake throughput dominates.
     #[compiler_builtin]
-    fn accept(ref self) -> TlsStream with sends(Network) receives(Network) {
-        TlsStream { fd: -1 }
+    fn accept(ref self) -> Result[TlsStream, TlsError] with sends(Network) receives(Network) {
+        Result.Err(TlsError.Protocol(-1))
     }
 }
 
@@ -196,10 +201,10 @@ impl TlsStream {
     // body never executes — codegen replaces via
     // `lower_tls_stream_connect`.
     #[compiler_builtin]
-    fn connect(addr: String, server_name: String, roots_pem: String) -> TlsStream
+    fn connect(addr: String, server_name: String, roots_pem: String) -> Result[TlsStream, TlsError]
         with sends(Network) receives(Network)
     {
-        TlsStream { fd: -1 }
+        Result.Err(TlsError.Protocol(-1))
     }
 
     // Park on read-readiness of `self.fd`, then pump rustls's inbound

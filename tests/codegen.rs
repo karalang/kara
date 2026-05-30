@@ -4062,7 +4062,7 @@ fn main() {
         let ir = ir_for(
             r#"
 fn main() {
-    let l = TcpListener.bind("127.0.0.1:0");
+    let l = TcpListener.bind("127.0.0.1:0").unwrap();
     println(l.fd);
 }
 "#,
@@ -4087,8 +4087,8 @@ fn main() {
         let ir = ir_for(
             r#"
 fn main() {
-    let l = TcpListener.bind("127.0.0.1:0");
-    let s = l.accept();
+    let l = TcpListener.bind("127.0.0.1:0").unwrap();
+    let s = l.accept().unwrap();
     println(s.fd);
 }
 "#,
@@ -4113,7 +4113,7 @@ fn main() {
         let ir = ir_for(
             r#"
 fn main() {
-    let l = TcpListener.bind("127.0.0.1:0");
+    let l = TcpListener.bind("127.0.0.1:0").unwrap();
     println(l.fd);
 }
 "#,
@@ -4184,7 +4184,7 @@ fn main() {
         let ir = ir_for(
             r#"
 fn main() {
-    let l1 = TcpListener.bind("127.0.0.1:0");
+    let l1 = TcpListener.bind("127.0.0.1:0").unwrap();
     let l2 = l1;
     println(l2.fd);
 }

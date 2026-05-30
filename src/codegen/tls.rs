@@ -101,17 +101,155 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_basic()
             .into_int_value();
 
-        let listener_ty = self.tls_listener_llvm_type();
-        let undef = listener_ty.get_undef();
-        let after_fd = self
+        // Pack into `Result[TlsListener, TlsError]` (phase-8 line 64 audit).
+        // `TlsListener` is the one 2-field construction struct
+        // (`{ fd: i32, config: *mut TlsConfig }`), so the Ok payload spans
+        // two words (w0 = fd, w1 = ptrtoint(config)) and the Err path frees
+        // the freshly-built rustls config before returning — the old
+        // `TlsListener { fd: -1, config }` sentinel relied on `Drop` to free
+        // it, which a discarded `Err` no longer provides.
+        self.build_tls_listener_construct_result(fd, config_ptr)
+    }
+
+    /// `Result[TlsListener, TlsError]` packer for `bind_tls` — the 2-field
+    /// (`fd`, `config`) construction counterpart of `build_fd_construct_result`.
+    /// On `fd >= 0`: `Ok(TlsListener { fd, config })` with the fd in payload
+    /// word 0 and `ptrtoint(config)` in word 1 (the seeded 2-field
+    /// `TlsListener` reconstruction reads both). On `fd < 0`: free the config
+    /// via `karac_runtime_tls_config_free` (null-safe per the FFI contract,
+    /// covering the cert/key-parse failure where config is null) and return
+    /// `Err(TlsError.Protocol(-1))`.
+    fn build_tls_listener_construct_result(
+        &mut self,
+        fd: inkwell::values::IntValue<'ctx>,
+        config_ptr: inkwell::values::PointerValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ctx = self.context;
+        let i64_ty = ctx.i64_type();
+
+        let result_layout = self
+            .enum_layouts
+            .get("Result")
+            .expect("Result layout seeded by seed_builtin_enum_layouts");
+        let result_ty = result_layout.llvm_type;
+        let ok_tag = *result_layout.tags.get("Ok").expect("Result.Ok tag seeded");
+        let err_tag = *result_layout
+            .tags
+            .get("Err")
+            .expect("Result.Err tag seeded");
+        let tls_err_layout = self
+            .enum_layouts
+            .get("TlsError")
+            .expect("TlsError layout seeded by seed_builtin_enum_layouts");
+        let protocol_tag = *tls_err_layout
+            .tags
+            .get("Protocol")
+            .expect("TlsError.Protocol tag seeded");
+
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "tls bind Result wrapping outside fn".to_string())?;
+        let ok_bb = ctx.append_basic_block(fn_val, "tls.bind.ok");
+        let err_bb = ctx.append_basic_block(fn_val, "tls.bind.err");
+        let cont_bb = ctx.append_basic_block(fn_val, "tls.bind.cont");
+
+        let is_success = self
             .builder
-            .build_insert_value(undef, fd, 0, "tls.listener.with_fd")
-            .expect("insert fd into TlsListener struct value");
-        let listener_val = self
+            .build_int_compare(
+                IntPredicate::SGE,
+                fd,
+                fd.get_type().const_zero(),
+                "tls.bind.is_ok",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_success, ok_bb, err_bb)
+            .unwrap();
+
+        // ── Ok: Ok(TlsListener { fd, config }) — fd word 0, config word 1.
+        self.builder.position_at_end(ok_bb);
+        let fd_word = self
             .builder
-            .build_insert_value(after_fd, config_ptr, 1, "tls.listener.val")
-            .expect("insert config_ptr into TlsListener struct value");
-        Ok(listener_val.into_struct_value().into())
+            .build_int_z_extend(fd, i64_ty, "tls.bind.ok.fd_word")
+            .unwrap();
+        let config_word = self
+            .builder
+            .build_ptr_to_int(config_ptr, i64_ty, "tls.bind.ok.config_word")
+            .unwrap();
+        let mut ok_agg = result_ty.get_undef();
+        ok_agg = self
+            .builder
+            .build_insert_value(
+                ok_agg,
+                i64_ty.const_int(ok_tag, false),
+                0,
+                "tls.bind.ok.tag",
+            )
+            .unwrap()
+            .into_struct_value();
+        ok_agg = self
+            .builder
+            .build_insert_value(ok_agg, fd_word, 1, "tls.bind.ok.fd")
+            .unwrap()
+            .into_struct_value();
+        ok_agg = self
+            .builder
+            .build_insert_value(ok_agg, config_word, 2, "tls.bind.ok.config")
+            .unwrap()
+            .into_struct_value();
+        let ok_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // ── Err: free the config (null-safe), then Err(TlsError.Protocol(-1)).
+        self.builder.position_at_end(err_bb);
+        let free_fn = self
+            .module
+            .get_function("karac_runtime_tls_config_free")
+            .expect("karac_runtime_tls_config_free declared in Codegen::new");
+        self.builder
+            .build_call(free_fn, &[config_ptr.into()], "tls.bind.err.config_free")
+            .expect("call karac_runtime_tls_config_free");
+        let neg_one = i64_ty.const_int((-1i64) as u64, false);
+        let mut err_agg = result_ty.get_undef();
+        err_agg = self
+            .builder
+            .build_insert_value(
+                err_agg,
+                i64_ty.const_int(err_tag, false),
+                0,
+                "tls.bind.err.tag",
+            )
+            .unwrap()
+            .into_struct_value();
+        err_agg = self
+            .builder
+            .build_insert_value(
+                err_agg,
+                i64_ty.const_int(protocol_tag, false),
+                1,
+                "tls.bind.err.variant_tag",
+            )
+            .unwrap()
+            .into_struct_value();
+        err_agg = self
+            .builder
+            .build_insert_value(err_agg, neg_one, 2, "tls.bind.err.payload")
+            .unwrap()
+            .into_struct_value();
+        let err_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // ── Continuation phi.
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(result_ty, "tls.bind.result")
+            .unwrap();
+        phi.add_incoming(&[
+            (&ok_agg.as_basic_value_enum(), ok_end_bb),
+            (&err_agg.as_basic_value_enum(), err_end_bb),
+        ]);
+        Ok(phi.as_basic_value())
     }
 
     /// Phase-8 line 22 — lower `TlsStream.connect(addr: String,
@@ -168,16 +306,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_basic()
             .into_int_value();
 
-        // Same `TlsStream { fd: i32 }` shape `accept` produces.
-        let stream_ty = self
-            .context
-            .struct_type(&[self.context.i32_type().into()], false);
-        let undef = stream_ty.get_undef();
-        let stream_val = self
-            .builder
-            .build_insert_value(undef, fd, 0, "tls.connect.stream.val")
-            .expect("insert fd into TlsStream struct value");
-        Ok(stream_val.into_struct_value().into())
+        // Pack into `Result[TlsStream, TlsError]` (phase-8 line 64 audit):
+        // `Ok(TlsStream { fd })` on a successful handshake, else
+        // `Err(TlsError.Protocol(-1))` — same shape `accept` produces.
+        self.build_fd_construct_result(fd, "TlsError", "Protocol", "tls.connect")
     }
 
     /// Phase 6 line 236 slice 3 — `WebSocket.accept_tls(listener:
@@ -220,15 +352,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_basic()
             .into_int_value();
 
-        let ws_ty = self
-            .context
-            .struct_type(&[self.context.i32_type().into()], false);
-        let undef = ws_ty.get_undef();
-        let ws_val = self
-            .builder
-            .build_insert_value(undef, conn_fd, 0, "ws.accept_tls.val")
-            .expect("insert conn_fd into WebSocket struct value");
-        Ok(ws_val.into_struct_value().into())
+        // Pack into `Result[WebSocket, TcpError]` (phase-8 line 64 audit):
+        // `Ok(WebSocket { fd })` on `fd >= 0`, else `Err(TcpError.Other(-1))`
+        // — WebSocket's error type is `TcpError` (its I/O methods use it),
+        // so the WS-over-TLS accept mirrors the plain-TCP `WebSocket.accept`.
+        self.build_fd_construct_result(conn_fd, "TcpError", "Other", "ws.accept_tls")
     }
 
     /// Lower `TlsListener.accept(ref self) -> TlsStream`: park on
@@ -263,18 +391,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_basic()
             .into_int_value();
 
-        // Pack into TlsStream { fd: i32 } — single-i32 layout matches
-        // TcpStream so the `types_lowering.rs` baked-stdlib arm can
-        // group them under the same `{ i32 }` shape.
-        let stream_ty = self
-            .context
-            .struct_type(&[self.context.i32_type().into()], false);
-        let undef = stream_ty.get_undef();
-        let stream_val = self
-            .builder
-            .build_insert_value(undef, conn_fd, 0, "tls.stream.val")
-            .expect("insert fd into TlsStream struct value");
-        Ok(stream_val.into_struct_value().into())
+        // Pack into `Result[TlsStream, TlsError]` (phase-8 line 64 audit):
+        // `Ok(TlsStream { fd })` on `fd >= 0`, else `Err(TlsError.Protocol(-1))`
+        // — `Protocol` matches the `-1`-classification the TLS I/O wrapper
+        // (`wrap_tls_io_result`) already uses.
+        self.build_fd_construct_result(conn_fd, "TlsError", "Protocol", "tls.accept")
     }
 
     /// Lower `TlsStream.read(ref self, buf: mut Slice[u8])` —
