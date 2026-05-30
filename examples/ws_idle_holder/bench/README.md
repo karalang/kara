@@ -88,6 +88,61 @@ implicit `127.0.0.1` source. Echoed back in the JSON `config.source_ips`.
 TLS verification is disabled (the demo's cert is the self-signed
 loopback test fixture). This harness must only ever target loopback.
 
+### `--concurrency` — sweep, don't single-point
+
+`--concurrency` caps in-flight handshakes during the initial ramp. The
+choice is not neutral: at equilibrium, mean connect latency follows
+`(concurrency / KARAC_WS_ACCEPT_THREADS) × T_handshake`, so the headline
+number changes a lot depending on what you pick.
+
+Pre-M3 our published 1 M run used `--concurrency 512` against the
+default 32 handshake workers on r8g.4xlarge, which produced
+`mean=466ms, p99=1856ms` — geometrically correct
+(`(512/32)×29ms = 464ms`), but a misleading single-point read on what
+the server is actually capable of. The honest representation is the
+curve, not a number.
+
+EC2 re-verification at `--concurrency 64` on the same r8g.4xlarge
+collapsed the latency to `mean=81.7ms, p99=256ms` for the same 1 M
+connections (`docs/investigations/demo1_m3_curve_c64.json`),
+confirming the queue-depth diagnosis: 8× concurrency reduction →
+5.7× mean drop and 7.2× p99 drop, matching the `(C/W)×T` prediction
+to within 0.05% (predicted 81.7 ms, observed 81.74 ms).
+
+**Convention for headline reporting:** sweep `--concurrency` across at
+least `{64, 128, 256, 512, 1024}` and report both the elbow (where
+throughput plateaus) and the high end (where the queue tail dominates).
+A shell loop is sufficient — the harness emits one JSON object per run,
+keyed by `config.concurrency`:
+
+```sh
+for C in 64 128 256 512 1024; do
+  ./target/release/ws-idle-holder-bench --server-bin ./ws_idle_holder \
+    -n 100000 --concurrency "$C" --hold-secs 5 \
+    --connect-timeout-ms 30000 --churn-rounds 0 > "run_c${C}.json"
+done
+```
+
+A single-point "1M @ concurrency 512" is fine as a stress-test
+capacity check (does the server hold the load?) but not as the
+latency headline.
+
+### `KARAC_WS_STATS` — server-side queue depth instrumentation
+
+Setting `KARAC_WS_STATS=1` in the server's env (the bench's
+`--server-bin` inherits the env) enables a once-per-second reporter
+that dumps the handshake-pool state to `stderr`:
+
+```
+[karac_ws_stats] submit_total=N done_total=N failed_total=N
+                 in_flight=N work_q=N done_q=N workers=N
+                 submit_per_s=N done_per_s=N mean_handshake_ms=X
+```
+
+`mean_handshake_ms` is the per-call server-CPU time inside
+`ws_handshake_conn_tls` (TLS + WS upgrade); combine with `workers`
+and the ramp-phase concurrency to predict `(C/W)×T` mean.
+
 ## Output (stdout = JSON only; logs → stderr)
 
 ```json

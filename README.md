@@ -89,7 +89,7 @@ What v1 ships with, what the numbers look like, and what the toolchain gives you
 
 - Target: **1M+ idle connections per process.**
 - Blocking-style I/O syntax; effect-driven scheduling moves blocking work off the par-runtime threads.
-- _TBD: link to the kata and reproduction script once the headline number is measured end-to-end._
+- **Demo 1 verified on r8g.4xlarge (Linux, 16 vCPU):** 1 000 000 idle WebSocket-over-TLS connections, 0 failures, **~7.8 KB/conn** server-side RSS (so ~7.8 GB for 1 M). Connect-phase latency at `--concurrency 64`: **mean 81.7 ms, p50 41 ms, p99 256 ms**. Source: [`examples/ws_idle_holder`](examples/ws_idle_holder); reproduction harness in [`examples/ws_idle_holder/bench`](examples/ws_idle_holder/bench); raw verification JSON at [`docs/investigations/demo1_m3_curve_c64.json`](docs/investigations/demo1_m3_curve_c64.json). The bench README documents why the headline is a `--concurrency` sweep rather than a single oversubscribed point.
 
 ### Standard Library at v1
 

@@ -33,7 +33,7 @@ use mio::{Events, Interest, Poll, Token};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
 use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -2306,6 +2306,81 @@ struct WsHandshakePool {
     cv_work: Condvar,
     done: Mutex<VecDeque<i32>>,
     cv_done: Condvar,
+    /// Some(...) iff `KARAC_WS_STATS` is set at pool init. Reporter
+    /// thread dumps a line/second so the queue-depth-vs-throughput
+    /// hypothesis behind the connect-tail at 1 M can be empirically
+    /// verified without instrumenting the bench.
+    stats: Option<Arc<HandshakeStats>>,
+}
+
+/// Snapshot-able handshake-pool counters used by the once-per-second
+/// reporter thread. All counters are `Relaxed` — we only need
+/// monotonic visibility, not cross-thread ordering.
+struct HandshakeStats {
+    submitted: AtomicU64,
+    completed: AtomicU64,
+    failed: AtomicU64,
+    handshake_nanos_sum: AtomicU64,
+    workers: u32,
+}
+
+impl HandshakeStats {
+    fn new_if_enabled(workers: usize) -> Option<Arc<Self>> {
+        if std::env::var_os("KARAC_WS_STATS").is_some() {
+            Some(Arc::new(Self {
+                submitted: AtomicU64::new(0),
+                completed: AtomicU64::new(0),
+                failed: AtomicU64::new(0),
+                handshake_nanos_sum: AtomicU64::new(0),
+                workers: workers as u32,
+            }))
+        } else {
+            None
+        }
+    }
+}
+
+/// Reporter loop: every second, dump pool counters + current queue
+/// depths to stderr. The format is grep-friendly (`[karac_ws_stats]`
+/// prefix, space-separated `k=v` pairs) so a bench run can be
+/// post-processed cheaply.
+fn ws_stats_reporter(stats: Arc<HandshakeStats>, pool: Arc<WsHandshakePool>) {
+    let mut last_submitted = 0u64;
+    let mut last_completed = 0u64;
+    let mut last_nanos = 0u64;
+    loop {
+        thread::sleep(Duration::from_secs(1));
+        let s = stats.submitted.load(Ordering::Relaxed);
+        let c = stats.completed.load(Ordering::Relaxed);
+        let f = stats.failed.load(Ordering::Relaxed);
+        let ns = stats.handshake_nanos_sum.load(Ordering::Relaxed);
+        let work_depth = pool
+            .work
+            .lock()
+            .map(|q| q.len())
+            .unwrap_or_else(|p| p.into_inner().len());
+        let done_depth = pool
+            .done
+            .lock()
+            .map(|q| q.len())
+            .unwrap_or_else(|p| p.into_inner().len());
+        let delta_s = s.saturating_sub(last_submitted);
+        let delta_c = c.saturating_sub(last_completed);
+        let delta_ns = ns.saturating_sub(last_nanos);
+        let in_flight = s.saturating_sub(c);
+        let mean_ms = if delta_c > 0 {
+            (delta_ns as f64 / delta_c as f64) / 1_000_000.0
+        } else {
+            0.0
+        };
+        eprintln!(
+            "[karac_ws_stats] submit_total={} done_total={} failed_total={} in_flight={} work_q={} done_q={} workers={} submit_per_s={} done_per_s={} mean_handshake_ms={:.2}",
+            s, c, f, in_flight, work_depth, done_depth, stats.workers, delta_s, delta_c, mean_ms
+        );
+        last_submitted = s;
+        last_completed = c;
+        last_nanos = ns;
+    }
 }
 
 /// Per-listener-fd handshake pools, created lazily on first
@@ -2315,13 +2390,29 @@ static WS_HANDSHAKE_POOLS: OnceLock<Mutex<HashMap<i32, Arc<WsHandshakePool>>>> =
 /// Handshake worker count per listener. Handshakes block in socket reads
 /// waiting on the peer, so this is oversubscribed relative to core count
 /// to overlap many in-flight handshakes. Override with
-/// `KARAC_WS_ACCEPT_THREADS`; default 32, floored at 1.
+/// `KARAC_WS_ACCEPT_THREADS`; default `max(32, 2 × num_cpus)`, floored
+/// at 1. The `2×` oversubscription handles the real-network case where
+/// rustls handshakes block on peer reads; the `max(32, …)` floor keeps
+/// the M1/M2-era default behaviour on small dev boxes.
+///
+/// Surfaced at M3 1M (2026-05-30) in the connect-tail-latency
+/// investigation: r8g.4xlarge's 16 vCPU got 32 workers, so the queue
+/// math was `(concurrency 512 / workers 32) × T_handshake 29ms = 464ms`
+/// mean (matched observed 466ms). On a 32+ vCPU box, the old hardcoded
+/// 32 would have been undersized; scaling with CPUs keeps the worker
+/// pool sized to the actual handshake-CPU throughput available.
 fn ws_handshake_thread_count() -> usize {
-    std::env::var("KARAC_WS_ACCEPT_THREADS")
+    if let Some(n) = std::env::var("KARAC_WS_ACCEPT_THREADS")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .filter(|&n| n >= 1)
-        .unwrap_or(32)
+    {
+        return n;
+    }
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(16);
+    (cpus * 2).max(32)
 }
 
 /// Worker loop: pop a raw accepted fd, run the handshake + upgrade, push
@@ -2340,9 +2431,19 @@ fn ws_handshake_worker(config_addr: usize, pool: Arc<WsHandshakePool>) {
         // SAFETY: `config_addr` is the KaracTlsConfig pointer captured at
         // pool start; in the v1 accept-loop shape the TlsListener (and its
         // config) outlive the process, so the pointer stays valid.
+        let t0 = pool.stats.as_ref().map(|_| Instant::now());
         let ready = unsafe {
             ws_handshake_conn_tls(conn_fd, config_addr as *mut crate::tls::KaracTlsConfig)
         };
+        if let (Some(stats), Some(t0)) = (pool.stats.as_ref(), t0) {
+            stats
+                .handshake_nanos_sum
+                .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            stats.completed.fetch_add(1, Ordering::Relaxed);
+            if ready < 0 {
+                stats.failed.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         if ready < 0 {
             // Handshake/upgrade failed; `ws_handshake_conn_tls` already
             // closed the fd. Nothing to hand back.
@@ -2381,20 +2482,31 @@ fn ws_handshake_pool_for(
         let _ = l.into_raw_fd();
     }
 
+    let workers = ws_handshake_thread_count();
+    let stats = HandshakeStats::new_if_enabled(workers);
     let pool = Arc::new(WsHandshakePool {
         work: Mutex::new(VecDeque::new()),
         cv_work: Condvar::new(),
         done: Mutex::new(VecDeque::new()),
         cv_done: Condvar::new(),
+        stats: stats.clone(),
     });
     let config_addr = config as usize;
-    for _ in 0..ws_handshake_thread_count() {
+    for _ in 0..workers {
         let pool_for_thread = Arc::clone(&pool);
         thread::Builder::new()
             .name("karac-ws-handshake".to_string())
             .stack_size(512 * 1024)
             .spawn(move || ws_handshake_worker(config_addr, pool_for_thread))
             .expect("karac_runtime: failed to spawn ws handshake worker thread");
+    }
+    if let Some(stats) = stats {
+        let pool_for_stats = Arc::clone(&pool);
+        thread::Builder::new()
+            .name("karac-ws-stats".to_string())
+            .stack_size(64 * 1024)
+            .spawn(move || ws_stats_reporter(stats, pool_for_stats))
+            .expect("karac_runtime: failed to spawn ws stats reporter thread");
     }
     map.insert(listener_fd, Arc::clone(&pool));
     pool
@@ -2468,6 +2580,11 @@ pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
             }
             let _ = listener.into_raw_fd();
             if submitted > 0 {
+                if let Some(stats) = pool.stats.as_ref() {
+                    stats
+                        .submitted
+                        .fetch_add(submitted as u64, Ordering::Relaxed);
+                }
                 pool.cv_work.notify_all();
             }
         }
