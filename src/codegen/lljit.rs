@@ -19,14 +19,16 @@ use llvm_sys::error::{LLVMDisposeErrorMessage, LLVMErrorRef, LLVMGetErrorMessage
 use llvm_sys::ir_reader::LLVMParseIRInContext;
 use llvm_sys::orc2::lljit::{
     LLVMOrcCreateLLJIT, LLVMOrcCreateLLJITBuilder, LLVMOrcDisposeLLJIT,
-    LLVMOrcLLJITAddLLVMIRModule, LLVMOrcLLJITGetGlobalPrefix, LLVMOrcLLJITGetMainJITDylib,
-    LLVMOrcLLJITLookup, LLVMOrcLLJITRef,
+    LLVMOrcLLJITAddLLVMIRModule, LLVMOrcLLJITAddLLVMIRModuleWithRT, LLVMOrcLLJITGetGlobalPrefix,
+    LLVMOrcLLJITGetMainJITDylib, LLVMOrcLLJITLookup, LLVMOrcLLJITRef,
 };
+use llvm_sys::orc2::LLVMOrcThreadSafeModuleRef;
 use llvm_sys::orc2::{
     LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess, LLVMOrcCreateNewThreadSafeContext,
     LLVMOrcCreateNewThreadSafeModule, LLVMOrcDefinitionGeneratorRef,
     LLVMOrcDisposeThreadSafeContext, LLVMOrcExecutorAddress, LLVMOrcJITDylibAddGenerator,
-    LLVMOrcThreadSafeContextGetContext, LLVMOrcThreadSafeContextRef,
+    LLVMOrcJITDylibCreateResourceTracker, LLVMOrcReleaseResourceTracker, LLVMOrcResourceTrackerRef,
+    LLVMOrcResourceTrackerRemove, LLVMOrcThreadSafeContextGetContext, LLVMOrcThreadSafeContextRef,
 };
 use llvm_sys::prelude::{LLVMContextRef, LLVMModuleRef};
 
@@ -95,7 +97,56 @@ impl LLJITEngine {
     /// thread-safe context, wrap it in a `ThreadSafeModule`, and add it
     /// to the main JITDylib. The text is copied by `LLVMParseIRInContext`,
     /// so the caller's `&str` is free to drop afterwards.
+    ///
+    /// Multiple calls are allowed — each module's symbols become visible
+    /// in the main JITDylib alongside any previously added. Symbol name
+    /// collisions surface as `Lookup` errors per LLVM's symbol-resolution
+    /// rules (duplicate definition).
     pub fn add_ir_module(&self, ir: &str) -> Result<(), String> {
+        let tsm = self.parse_ir_into_tsm(ir)?;
+        unsafe {
+            let main_jd = LLVMOrcLLJITGetMainJITDylib(self.jit);
+            let err = LLVMOrcLLJITAddLLVMIRModule(self.jit, main_jd, tsm);
+            if !err.is_null() {
+                return Err(consume_error(err));
+            }
+            Ok(())
+        }
+    }
+
+    /// Add an IR module under a fresh `ResourceTracker`. The returned
+    /// tracker lets the caller bulk-remove just this module's symbols
+    /// later, without touching the rest of the JITDylib. This is the
+    /// load-bearing mechanism for `karac repl` cell shadowing — a
+    /// re-declared name removes the prior cell's tracker, then a new
+    /// cell with the same name installs under a fresh tracker.
+    ///
+    /// The tracker borrows `&self` so it cannot outlive the engine.
+    /// Holding the tracker is safe across multiple JIT lookups; calling
+    /// `.remove()` invalidates any function pointers obtained from
+    /// symbols defined by this module — that's caller responsibility.
+    pub fn add_ir_module_with_tracker(&self, ir: &str) -> Result<ResourceTracker<'_>, String> {
+        let tsm = self.parse_ir_into_tsm(ir)?;
+        unsafe {
+            let main_jd = LLVMOrcLLJITGetMainJITDylib(self.jit);
+            let rt = LLVMOrcJITDylibCreateResourceTracker(main_jd);
+            let err = LLVMOrcLLJITAddLLVMIRModuleWithRT(self.jit, rt, tsm);
+            if !err.is_null() {
+                LLVMOrcReleaseResourceTracker(rt);
+                return Err(consume_error(err));
+            }
+            Ok(ResourceTracker {
+                raw: rt,
+                _engine: std::marker::PhantomData,
+            })
+        }
+    }
+
+    /// Shared IR-text → `ThreadSafeModule` step used by both
+    /// `add_ir_module` and `add_ir_module_with_tracker`. The TSM is the
+    /// boundary: once handed to `LLVMOrcLLJIT*Add*`, ownership transfers
+    /// to the JIT and the caller must not dispose the underlying Module.
+    fn parse_ir_into_tsm(&self, ir: &str) -> Result<LLVMOrcThreadSafeModuleRef, String> {
         // LLVM's IR parser needs a nul-terminated buffer when
         // `RequiresNullTerminator = 1`; passing a fresh CString is the
         // simplest way to satisfy it without juggling the contract.
@@ -133,13 +184,7 @@ impl LLJITEngine {
 
             // ThreadSafeModule takes ownership of the module — DO NOT
             // dispose the LLVMModuleRef separately.
-            let tsm = LLVMOrcCreateNewThreadSafeModule(module, self.ts_ctx);
-            let main_jd = LLVMOrcLLJITGetMainJITDylib(self.jit);
-            let err = LLVMOrcLLJITAddLLVMIRModule(self.jit, main_jd, tsm);
-            if !err.is_null() {
-                return Err(consume_error(err));
-            }
-            Ok(())
+            Ok(LLVMOrcCreateNewThreadSafeModule(module, self.ts_ctx))
         }
     }
 
@@ -156,6 +201,51 @@ impl LLJITEngine {
             }
             Ok(addr)
         }
+    }
+}
+
+/// Module-scoped handle for removing a module's resources from the JIT.
+///
+/// Obtained via [`LLJITEngine::add_ir_module_with_tracker`]. Borrows the
+/// engine so it cannot outlive the engine that owns it.
+///
+/// Two lifecycle terminators:
+/// - `.remove()` — tear down the module's resources NOW. Function pointers
+///   previously obtained from this module's symbols are invalidated.
+///   Idempotent at the C-API level but no-op on the Rust side after the
+///   first call; subsequent `remove()` returns Ok.
+/// - `drop` — releases the C++ refcount on the tracker. Does **not**
+///   implicitly remove resources; if the caller wants module unloading
+///   they must call `.remove()` explicitly. Dropping without remove leaves
+///   the module materialized for the engine's full lifetime.
+///
+/// This split mirrors LLVM's `LLVMOrcResourceTrackerRemove` vs
+/// `LLVMOrcReleaseResourceTracker` separation — remove tears down,
+/// release ref-counts.
+pub struct ResourceTracker<'engine> {
+    raw: LLVMOrcResourceTrackerRef,
+    _engine: std::marker::PhantomData<&'engine LLJITEngine>,
+}
+
+impl ResourceTracker<'_> {
+    /// Tear down the module's resources. Function pointers from this
+    /// module's symbols are invalidated after this returns.
+    pub fn remove(&self) -> Result<(), String> {
+        unsafe {
+            let err = LLVMOrcResourceTrackerRemove(self.raw);
+            if !err.is_null() {
+                return Err(consume_error(err));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ResourceTracker<'_> {
+    fn drop(&mut self) {
+        // Release the refcount; does NOT remove resources. If the
+        // caller wanted removal, they called `.remove()` already.
+        unsafe { LLVMOrcReleaseResourceTracker(self.raw) };
     }
 }
 

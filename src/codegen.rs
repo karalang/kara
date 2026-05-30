@@ -45,6 +45,8 @@ mod http;
 mod json;
 #[cfg(all(feature = "llvm", feature = "lljit_prototype"))]
 mod lljit;
+#[cfg(all(feature = "llvm", feature = "lljit_prototype"))]
+pub use lljit::{LLJITEngine, ResourceTracker};
 mod maps;
 mod method_call;
 mod module_bindings;
