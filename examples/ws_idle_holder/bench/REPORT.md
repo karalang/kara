@@ -27,19 +27,27 @@ alongside; this file is **what we measured and what it means**, not
 > absolute is the credibility flex (we can hit big numbers on one box).
 > Both matter, ratio first._
 
-| Stack | per-conn bytes (idle) | ratio vs Kāra | scale tested | status | section |
-|---|---|---|---|---|---|
-| **Kāra** | **7.8 KB** | 1.00× (baseline) | 1M landed; 2M in flight | landed @ 1M | [§Kāra](#kāra) |
-| Rust (rustls + tokio) | 27.8 KB | 3.55× | 1M landed; 2M pending | landed @ 1M | [§Rust](#rust-rustls--tokio) |
-| Phoenix Channels (Elixir) | _TBD_ | _TBD_ | _pending — wip task #67_ | pending | [§Phoenix](#phoenix-channels-elixir) |
-| Java / Netty | _TBD_ | _TBD_ | _pending — wip task #68_ | pending | [§Java/Netty](#java--netty) |
-| Go (gorilla/websocket) | _TBD_ | _TBD_ | _pending — wip task #69_ | pending | [§Go](#go-gorillawebsocket) |
-| .NET / ASP.NET Core (Linux) | _TBD_ | _TBD_ | _pending — wip task #71_ | pending | [§.NET Linux](#net--aspnet-core-linux) |
-| .NET / ASP.NET Core (Windows) | _TBD_ | _TBD_ | _pending — wip task #72_ | pending | [§.NET Windows](#net--aspnet-core-windows) |
-| Node.js (ws) | _TBD_ | _TBD_ | _pending — wip task #73_ | pending | [§Node](#nodejs-ws) |
-| SignalR _(stretch)_ | _TBD_ | _TBD_ | _pending — wip task #74_ | stretch | [§SignalR](#signalr-stretch) |
-| socket.io _(stretch)_ | _TBD_ | _TBD_ | _pending — wip task #75_ | stretch | [§socket.io](#socketio-stretch) |
-| Python asyncio websockets _(stretch)_ | _TBD_ | _TBD_ | _pending — wip task #76_ | stretch | [§Python](#python-asyncio-websockets-stretch) |
+| Stack | role | per-conn bytes (idle) | ratio vs Kāra | scale tested | status | section |
+|---|---|---|---|---|---|---|
+| **Kāra** | self | **7.8 KB** | 1.00× (baseline) | 1M landed; 2M in flight | landed @ 1M | [§Kāra](#kāra) |
+| Rust (rustls + tokio) | credibility | 27.8 KB | 3.55× | 1M landed; 2M pending | landed @ 1M | [§Rust](#rust-rustls--tokio) |
+| Phoenix Channels (Elixir) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #67) | pending | [§Phoenix](#phoenix-channels-elixir) |
+| Java / Netty | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #68) | pending | [§Java/Netty](#java--netty) |
+| Go (gorilla/websocket) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #69) | pending | [§Go](#go-gorillawebsocket) |
+| .NET / ASP.NET Core (Linux) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #71) | pending | [§.NET Linux](#net--aspnet-core-linux) |
+| .NET / ASP.NET Core (Windows) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #72) | pending | [§.NET Windows](#net--aspnet-core-windows) |
+| Node.js (ws) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #73) | pending | [§Node](#nodejs-ws) |
+| SignalR _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #74) | stretch | [§SignalR](#signalr-stretch) |
+| socket.io _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #75) | stretch | [§socket.io](#socketio-stretch) |
+| Python asyncio websockets _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #76) | stretch | [§Python](#python-asyncio-websockets-stretch) |
+
+> **About the `role` column and asymmetric scale:** comparators serve
+> different argumentative roles (credibility vs commercial vs stretch)
+> and are sized accordingly. Per-conn-bytes is linear (empirically
+> validated for Kāra at 1.86M: 7,862 B vs 7,846 B at 1M = 0.2%
+> drift), so the density ratio is scale-invariant — 250K against
+> 250K gives the same headline as 1M against 1M. Full rationale in
+> [§Scale per comparator](#scale-per-comparator).
 
 ### Commercial reframe — _populated as each row lands_
 
@@ -151,6 +159,49 @@ sized box for its real-world deployment shape:
 within a measurement session. Box is terminated after the run's
 JSON is captured and the per-conn-bytes number is reproduced once
 on a re-spawn (cheap insurance against measurement-noise tails).
+
+### Scale per comparator
+
+Comparators are sized to their **argumentative role**, not uniformly.
+Three roles, three scale targets:
+
+| role | who | headline scale | linearity sub-curve | why |
+|---|---|---|---|---|
+| **self** | Kāra | 1M + 2M | implicit (multi-scale ladder from M1 → M3) | Kāra's own ceiling story; per-conn-bytes linearity is what unblocks the scale-invariance argument for everyone else |
+| **credibility** | Rust (rustls + tokio) | 1M + 2M | implicit (tracks Kāra) | "Kāra is at least as serious as the modern serious choice" — needs symmetric ceiling probes for the comparison to read as principled, not cherry-picked. Empirical head-to-head at the ceiling beats extrapolated. |
+| **commercial** | Phoenix, Java/Netty, Go, .NET (Linux + Windows), Node | **250K** | 50K | This is the **real-world per-box deployment scale** for production WebSocket fleets — most prod fleets run 50K–250K per box and scale horizontally, not 1M per box. Matches the M2 milestone (#167 in phase-6) and the published per-node densities for Discord/Slack/Pinterest. Per-conn-bytes ratio is scale-invariant (see below), so 250K against 250K produces the same headline ratio as 1M against 1M would, at ~5× less rig effort and ~40% less wall-clock per comparator. |
+| **stretch** | SignalR, socket.io, Python | **100K** | 50K | Stretch rows are completeness, not headline. 100K is high enough that first-conn overhead is negligible (>10K is the floor for per-conn-bytes to be meaningful per the [per-conn-bytes definition](#per-conn-bytes-definition)) and low enough that the setup-to-runtime ratio stays favorable. |
+
+**Scale-invariance argument (load-bearing for the 250K choice):**
+Per-conn-bytes is dominated by per-connection state (TLS session
+buffer, WebSocket framing buffers, socket-buffer reservation, task
+stack). Once N is large enough that fixed first-connection overhead
+(TLS context, RNG state, per-thread accept stacks, framework-level
+caches) is amortized below the noise floor, the per-conn delta is
+linear in N. This was empirically confirmed for Kāra: at 1M the
+measurement is 7,846 B/conn; at 1.86M (mid-ramp during the 2M run)
+the measurement is 7,862 B/conn — a drift of 0.2%, well within
+measurement noise. Other stacks may have different curves at low
+N (BEAM heap pre-allocation, JVM heap warm-up, V8 inline-cache
+warm-up) — that's exactly what the 50K linearity sub-curve detects.
+
+**Linearity-escalation gate.** If a comparator's per-conn-bytes
+drifts > 5% between 50K and the headline scale (250K or 100K),
+that stack's per-conn-bytes is non-linear in the measured range
+and we add a third scale (typically 1M) to localise the curve
+before publishing a ratio. **Phoenix is the most likely candidate**
+for triggering this — BEAM allocates a per-process heap that's
+sized to the process count, and the warm-up curve isn't a constant
+fraction. Without the gate, the scale reduction risks publishing
+a ratio that doesn't actually generalize to production scale.
+
+**Caveat carried into reframes.** Per the [commercial-reframe
+lens](#commercial-reframe-lens) discipline guards, any reframe that
+quotes a ratio inherits the scale at which that ratio was measured.
+A "$1M → $282K" reframe derived from a 250K-vs-250K comparator
+measurement is honest as long as the linearity check passed; it
+becomes dishonest only if the linearity check failed and we
+publish it anyway.
 
 ### Tuning floor
 
@@ -329,6 +380,12 @@ number with the deviation rather than retuning to remove it._
 - **Hardware:** `r8g.4xlarge`; fresh box.
 - **TLS:** OpenSSL via Erlang `:ssl`; matched cipher suite + cert
   fixture.
+- **Scale:** 250K headline + 50K linearity sub-curve (per
+  [§Scale per comparator](#scale-per-comparator)). **Phoenix is the
+  most likely candidate to trigger the linearity-escalation gate**
+  — BEAM heap pre-allocation has a non-constant warm-up shape. If
+  50K vs 250K per-conn-bytes drift > 5%, we add a 1M Phoenix run
+  before publishing the ratio.
 
 **Expected range (from public data):** 5–10 KB/conn. Phoenix is
 the density-king comparator and the most rhetorically dangerous —
@@ -339,12 +396,20 @@ surface**, not "Kāra wins on density alone."
 
 **Sub-rows to fill:**
 
+**Headline measurements @ 250K:**
+
 | metric | Phoenix (Presence on) | Raw Channels | notes |
 |---|---|---|---|
 | established | TBD | TBD | |
 | per-conn bytes | TBD | TBD | |
 | connect mean | TBD | TBD | |
 | framework overhead | (Phoenix − raw) | — | |
+
+**Linearity check @ 50K:**
+
+| metric | Phoenix (Presence on) @ 50K | drift vs 250K | gate |
+|---|---|---|---|
+| per-conn bytes | TBD | TBD | < 5% → publish; ≥ 5% → escalate to 1M |
 
 **Caveats to document on landing:**
 
@@ -372,6 +437,9 @@ surface**, not "Kāra wins on density alone."
     WebSocket keepalive timing).
 - **Hardware:** `r8g.4xlarge`; fresh box.
 - **TLS:** Java JSSE via `SSLEngine`; matched cipher + cert.
+- **Scale:** 250K headline + 50K linearity sub-curve (per
+  [§Scale per comparator](#scale-per-comparator)). JVM heap warm-up
+  is a known non-linearity source; linearity check is load-bearing.
 
 **Expected range (from public data):** 20–40 KB/conn. The largest
 **commercial TAM** comparator — every enterprise has JVM fleets
@@ -380,6 +448,8 @@ cost story when it lands.
 
 **Sub-rows to fill:**
 
+**Headline measurements @ 250K:**
+
 | metric | Netty + G1GC | Netty + ZGC | notes |
 |---|---|---|---|
 | established | TBD | TBD | |
@@ -387,6 +457,12 @@ cost story when it lands.
 | heap (resident) | TBD | TBD | sub-component of total RSS |
 | direct buffers | TBD | TBD | Netty pooled direct mem; sub-component |
 | connect mean | TBD | TBD | |
+
+**Linearity check @ 50K:**
+
+| metric | Netty + G1GC @ 50K | drift vs 250K | gate |
+|---|---|---|---|
+| per-conn bytes | TBD | TBD | < 5% → publish; ≥ 5% → escalate to 1M |
 
 **Caveats to document on landing:**
 
@@ -406,6 +482,8 @@ cost story when it lands.
   `net/http` server, `crypto/tls` for TLS.
 - **Hardware:** `r8g.4xlarge`; fresh box.
 - **TLS:** Go `crypto/tls`; matched cipher + cert.
+- **Scale:** 250K headline + 50K linearity sub-curve (per
+  [§Scale per comparator](#scale-per-comparator)).
 
 **Expected range (from public data):** 20–30 KB/conn. The modern
 default for new infra; smaller commercial delta than Java but
@@ -414,12 +492,20 @@ counterargument we need to address).
 
 **Sub-rows to fill:**
 
+**Headline measurements @ 250K:**
+
 | metric | Go + gorilla | notes |
 |---|---|---|
 | established | TBD | |
 | per-conn bytes | TBD | RSS = Go process RSS, includes goroutine stacks |
 | goroutine stack overhead | TBD | sub-component; 2 goroutines per conn typical |
 | connect mean | TBD | |
+
+**Linearity check @ 50K:**
+
+| metric | Go + gorilla @ 50K | drift vs 250K | gate |
+|---|---|---|---|
+| per-conn bytes | TBD | TBD | < 5% → publish; ≥ 5% → escalate to 1M |
 
 **Caveats to document on landing:**
 
@@ -437,6 +523,8 @@ counterargument we need to address).
   (the Linux .NET default).
 - **Hardware:** `r8g.4xlarge`; fresh box.
 - **TLS:** OpenSSL via .NET; matched cipher + cert.
+- **Scale:** 250K headline + 50K linearity sub-curve (per
+  [§Scale per comparator](#scale-per-comparator)).
 
 **Expected range (from public data):** 15–30 KB/conn on Linux.
 
@@ -457,11 +545,15 @@ counterargument we need to address).
   Kestrel WebSocket middleware; SChannel for TLS (the Windows
   Server prod-default).
 - **Hardware:** `m7i.4xlarge` (16 vCPU Intel x86, 64 GB RAM,
-  Windows Server 2022). Sized to the 1M target — 2M is not on the
-  roadmap for Windows; the Linux .NET row covers the 2M scale
-  question if needed.
+  Windows Server 2022). 64 GB is well above the 250K headline
+  target; original 1M sizing rationale carried over but unused at
+  the reduced scale.
 - **TLS:** SChannel; matched cipher + cert (within SChannel's
   configurable surface).
+- **Scale:** 250K headline + 50K linearity sub-curve (per
+  [§Scale per comparator](#scale-per-comparator)). Windows ramp
+  rate may differ from Linux; document if a separate
+  linearity-escalation triggers.
 
 **Expected delta vs Linux .NET:** SChannel and OpenSSL have
 genuinely different per-conn TLS-state shapes. The Linux/Windows
@@ -472,7 +564,7 @@ whose .NET fleet is Windows-Server-default.
 **Caveats:**
 
 - Windows ephemeral port range, TIME_WAIT recycle, and TCP control
-  block table size all need tuning to hit 1M; document the
+  block table size need tuning even at 250K; document the
   PowerShell tuning script alongside the run.
 - RSS measurement on Windows is `Get-Process` Working Set; this is
   the closest analog to Linux `VmRSS` but not identical (Windows
@@ -488,6 +580,11 @@ whose .NET fleet is Windows-Server-default.
 - **Stack target:** Node.js 22 LTS, `ws` library (most-deployed
   Node WebSocket), `tls` module for TLS.
 - **Hardware:** `r8g.4xlarge`; fresh box.
+- **Scale:** 250K headline + 50K linearity sub-curve (per
+  [§Scale per comparator](#scale-per-comparator)). Node's per-box
+  ceiling is around 250K–500K in published deployments; 250K is
+  the right scale for the headline both for cross-comparator
+  consistency and as a deployment-realistic number.
 
 **Expected range (from public data):** 30–50 KB/conn. Predictable
 outcome; smaller commercial impact than Java/Phoenix. Included for
@@ -502,6 +599,9 @@ scale but rarely the choice for density-critical fleets.
 - **Stack target:** ASP.NET Core SignalR on top of .NET 9 (Linux);
   exposes the framework-overhead delta over raw Kestrel WebSocket
   middleware.
+- **Scale:** 100K headline + 50K linearity sub-curve (per
+  [§Scale per comparator](#scale-per-comparator) — stretch rows
+  run at smaller scale than commercial).
 
 ### socket.io _(stretch)_
 
@@ -510,6 +610,8 @@ scale but rarely the choice for density-critical fleets.
 - **Status:** pending, stretch.
 - **Stack target:** Node.js + `socket.io` server; exposes the
   framework-overhead delta over raw `ws`.
+- **Scale:** 100K headline + 50K linearity sub-curve (per
+  [§Scale per comparator](#scale-per-comparator)).
 
 ### Python asyncio websockets _(stretch)_
 
@@ -520,6 +622,8 @@ scale but rarely the choice for density-critical fleets.
   Included for completeness; Python is not in the production WS
   density landscape for any serious deployment but the row exists
   so we can answer the inevitable "what about Python?" question.
+- **Scale:** 100K headline + 50K linearity sub-curve (per
+  [§Scale per comparator](#scale-per-comparator)).
 
 ---
 
@@ -631,19 +735,24 @@ Standing rules:
 
 ## Status / measurement matrix
 
-| comparator | idle-hold 1M | idle-hold 2M | active-traffic | reproduction script | raw JSON |
-|---|---|---|---|---|---|
-| Kāra | landed | in flight (#61) | pending (#66) | `scripts/run_1m.sh` | `docs/investigations/demo1_m1_verification.md` |
-| Rust | landed | pending (#63) | pending (#66) | `scripts/run_1m.sh` | same |
-| Phoenix Channels | pending (#67) | pending | pending | TBD | TBD |
-| Java / Netty | pending (#68) | pending | pending | TBD | TBD |
-| Go | pending (#69) | pending | pending | TBD | TBD |
-| .NET (Linux) | pending (#71) | pending | pending | TBD | TBD |
-| .NET (Windows) | pending (#72) | n/a | pending | TBD | TBD |
-| Node.js | pending (#73) | pending | pending | TBD | TBD |
-| SignalR _(stretch)_ | pending (#74) | n/a | pending | TBD | TBD |
-| socket.io _(stretch)_ | pending (#75) | n/a | pending | TBD | TBD |
-| Python _(stretch)_ | pending (#76) | n/a | pending | TBD | TBD |
+Columns reflect the [scale-per-comparator](#scale-per-comparator)
+split: `1M / 2M` cells apply only to Kāra (self) and Rust
+(credibility); commercial and stretch rows use `50K linearity` and
+their role's headline scale (`250K` or `100K`).
+
+| comparator | role | linearity (50K) | headline | 2M | active-traffic | reproduction script | raw JSON |
+|---|---|---|---|---|---|---|---|
+| Kāra | self | n/a (multi-scale ladder) | 1M landed | in flight (#61) | pending (#66) | `scripts/run_1m.sh` | `docs/investigations/demo1_m1_verification.md` |
+| Rust | credibility | n/a (tracks Kāra) | 1M landed | pending (#63) | pending (#66) | `scripts/run_1m.sh` | same |
+| Phoenix Channels | commercial | pending (#67) | 250K pending (#67) | n/a unless gate escalates | pending | TBD | TBD |
+| Java / Netty | commercial | pending (#68) | 250K pending (#68) | n/a unless gate escalates | pending | TBD | TBD |
+| Go | commercial | pending (#69) | 250K pending (#69) | n/a unless gate escalates | pending | TBD | TBD |
+| .NET (Linux) | commercial | pending (#71) | 250K pending (#71) | n/a unless gate escalates | pending | TBD | TBD |
+| .NET (Windows) | commercial | pending (#72) | 250K pending (#72) | n/a | pending | TBD | TBD |
+| Node.js | commercial | pending (#73) | 250K pending (#73) | n/a unless gate escalates | pending | TBD | TBD |
+| SignalR _(stretch)_ | stretch | pending (#74) | 100K pending (#74) | n/a | pending | TBD | TBD |
+| socket.io _(stretch)_ | stretch | pending (#75) | 100K pending (#75) | n/a | pending | TBD | TBD |
+| Python _(stretch)_ | stretch | pending (#76) | 100K pending (#76) | n/a | pending | TBD | TBD |
 
 > Task numbers reference `wip-bench-day.md` (uncommitted; lives in
 > repo root). When that file is deleted on ship, the equivalent
@@ -658,3 +767,15 @@ Standing rules:
   over from `docs/investigations/demo1_m1_verification.md`. All
   other comparators stubbed with `TBD` placeholders. Headline
   ratio: 3.55× Kāra vs Rust @ 1M (landed).
+- **2026-05-30 (revision):** scale-per-comparator split formalized.
+  Added `role` column to TL;DR (self / credibility / commercial /
+  stretch). Added [§Scale per comparator](#scale-per-comparator)
+  methodology subsection with linearity-escalation gate (>5% drift
+  between 50K and headline → escalate to 1M). Commercial comparator
+  per-section headers updated with scale field and per-comparator
+  linearity-check sub-tables (Phoenix, Java/Netty, Go). Status
+  matrix restructured: `linearity (50K)` + `headline (250K or 100K)`
+  columns replace the old `1M / 2M` columns for non-Kāra/Rust rows.
+  Headline ratio unchanged (3.55× is scale-invariant, validated by
+  Kāra's 1M = 7,846 B vs 1.86M = 7,862 B = 0.2% drift). Effort
+  reduction ~40% across Phase 3 + ~50% Phase 4 in wip-bench-day.
