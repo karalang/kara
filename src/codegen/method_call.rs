@@ -888,6 +888,41 @@ impl<'ctx> super::Codegen<'ctx> {
                     };
                     return self.compile_request_pairs(&name, kind);
                 }
+                // Phase-8 line 17 — `Client.get(url)` / `Client.post(url,
+                // body)` codegen dispatch. Receiver `c` is `ref self`,
+                // an empty `Client { }` struct; the runtime extern does
+                // the real synchronous-HTTP work via `ureq`. Returns
+                // `Result[Response, HttpError]` packed into the seeded
+                // 5-word Result enum (`tag, w0=status, w1..w3=body /
+                // err.message`).
+                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Client")
+                    && (method == "get" || method == "post")
+                {
+                    return self.compile_client_http_method(method, args);
+                }
+                // Phase-8 line 17 slice 3 — `Response.status() / .body()`
+                // and `HttpError.message()`. Stdlib stubs are
+                // `#[compiler_builtin]` so the bodies are never compiled;
+                // these arms emit direct field extractions on the
+                // receiver's struct value. `status` is i64 — passthrough.
+                // `body` / `message` are owned-String returns and route
+                // through `karac_string_clone` so the caller's String
+                // doesn't alias the receiver's field (a subsequent
+                // `Drop` of either would double-free otherwise).
+                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Response")
+                    && (method == "status" || method == "body")
+                    && args.is_empty()
+                {
+                    let name = name.clone();
+                    return self.compile_response_accessor(&name, method);
+                }
+                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "HttpError")
+                    && method == "message"
+                    && args.is_empty()
+                {
+                    let name = name.clone();
+                    return self.compile_http_error_message(&name);
+                }
                 // `std.json` codegen-side wiring (phase-8 line 435):
                 // `j.stringify()` on a Kāra-side `Json` enum value.
                 // Loads the receiver's four enum words, dispatches

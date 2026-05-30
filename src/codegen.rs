@@ -1649,6 +1649,52 @@ impl<'ctx> Codegen<'ctx> {
             response_set_header_type,
             Some(Linkage::External),
         );
+        // Phase-8 line 17 slice 2 — `karac_runtime_http_client_get(
+        //   url_ptr, url_len, *mut i64 status, *mut *mut u8 body_ptr,
+        //   *mut i64 body_len, *mut *mut u8 err_ptr, *mut i64 err_len)
+        //   -> void`. Backs compiled-mode `Client.get(url)`. Out-params
+        // resolve to Result[Response, HttpError] via status > 0 vs
+        // status == 0 discrimination; ownership of body_ptr / err_ptr
+        // transfers to the caller (libc::malloc'd, freed via the Kāra
+        // String's Drop → C `free(data)`).
+        let http_client_get_type = context.void_type().fn_type(
+            &[
+                ptr_type.into(), // url_ptr
+                i64_type.into(), // url_len
+                ptr_type.into(), // out_status: *mut i64
+                ptr_type.into(), // out_body_ptr: *mut *mut u8
+                ptr_type.into(), // out_body_len: *mut i64
+                ptr_type.into(), // out_err_ptr: *mut *mut u8
+                ptr_type.into(), // out_err_len: *mut i64
+            ],
+            false,
+        );
+        let _karac_runtime_http_client_get_fn = module.add_function(
+            "karac_runtime_http_client_get",
+            http_client_get_type,
+            Some(Linkage::External),
+        );
+        // POST variant — same out-param shape with two additional
+        // input params for the request body (`body_ptr`, `body_len`).
+        let http_client_post_type = context.void_type().fn_type(
+            &[
+                ptr_type.into(), // url_ptr
+                i64_type.into(), // url_len
+                ptr_type.into(), // body_ptr
+                i64_type.into(), // body_len
+                ptr_type.into(), // out_status
+                ptr_type.into(), // out_body_ptr
+                ptr_type.into(), // out_body_len
+                ptr_type.into(), // out_err_ptr
+                ptr_type.into(), // out_err_len
+            ],
+            false,
+        );
+        let _karac_runtime_http_client_post_fn = module.add_function(
+            "karac_runtime_http_client_post",
+            http_client_post_type,
+            Some(Linkage::External),
+        );
         let strlen_type = i64_type.fn_type(&[ptr_type.into()], false);
         if module.get_function("strlen").is_none() {
             module.add_function("strlen", strlen_type, Some(Linkage::External));
@@ -2773,6 +2819,13 @@ impl<'ctx> Codegen<'ctx> {
         // heap struct, rather than collapsing the field to the default
         // `i64` and losing the payload word.
         self.seed_builtin_enum_layouts();
+        // Seed baked stdlib struct types (`Client`, `Response`,
+        // `HttpError`) so pattern_payload_word_count + field-access
+        // GEPs find the right LLVM shape. Same rationale as the enum
+        // seeding above. Must run before declare_structs so a user
+        // program with `struct Response { ... }` (unlikely but legal)
+        // can override the seeded shape.
+        self.seed_builtin_struct_types();
         self.declare_structs(program);
         // Phase 5 line 569 slice 4: lower `#[repr(C)] union Foo { ... }`
         // declarations to LLVM storage types so `size_of[Foo]` /

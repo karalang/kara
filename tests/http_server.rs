@@ -1803,4 +1803,113 @@ mod http_server_tests {
             .map_err(|e| format!("bad status code '{status_str}': {e}"))?;
         Ok((status, resp_body))
     }
+
+    /// Phase-8 line 17 slice 4 — `Client.get(url)` E2E smoke test.
+    ///
+    /// Compose: (1) a Rust-side one-shot HTTP/1.1 origin in a background
+    /// thread that returns `200 OK` with `hello-from-origin\n` as the
+    /// body; (2) a karac-compiled client binary that calls
+    /// `Client.new().get(url)` against the origin's port and prints
+    /// `resp.body()`; (3) assert the client binary's stdout contains
+    /// the expected body string.
+    ///
+    /// What this pins: the full client codegen path — runtime FFI
+    /// (`karac_runtime_http_client_get`), codegen Client.get dispatch
+    /// (`compile_client_http_method`), Result-payload packing into
+    /// `{tag, status, body.data, body.len, body.cap}`, pattern
+    /// destructure of `Ok(resp)` rebuilding the Response struct value,
+    /// `Response.body()` deep-clone through `karac_string_clone`, and
+    /// finally `println` on the cloned String. A regression in any of
+    /// these surfaces fails the test.
+    #[test]
+    fn test_client_get_end_to_end_against_rust_origin() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!(
+                "skip: libkarac_runtime.a not built \
+                 (run `cargo build -p karac-runtime --release`)"
+            );
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        // (1) Spawn the Rust-side one-shot origin.
+        let canned =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 18\r\nConnection: close\r\n\r\nhello-from-origin\n";
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral origin port");
+        let port = listener.local_addr().expect("local_addr").port();
+        let origin_thread = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                // Read until the request headers complete (CRLFCRLF) —
+                // good enough for a GET with no body.
+                let mut buf = [0u8; 4096];
+                let mut total = 0usize;
+                while total < buf.len() {
+                    let n = match stream.read(&mut buf[total..]) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => return,
+                    };
+                    total += n;
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let _ = stream.write_all(canned);
+                let _ = stream.flush();
+            }
+        });
+
+        // (2) Compile + run the karac client binary.
+        let url = format!("http://127.0.0.1:{port}/test");
+        let src = format!(
+            r#"
+fn main() with sends(Network) receives(Network) {{
+    let url: String = "{url}";
+    let c = Client.new();
+    match c.get(url) {{
+        Ok(resp) => {{
+            println(resp.body());
+        }}
+        Err(e) => {{
+            println("ERR");
+            println(e.message());
+        }}
+    }}
+}}
+"#
+        );
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_http_client_e2e_{pid}_{nanos}"));
+        if let Err(e) = compile_and_link(&src, &exe_path) {
+            let _ = origin_thread.join();
+            panic!("compile/link failed: {e}");
+        }
+
+        let output = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("run client binary");
+        let _ = origin_thread.join();
+        let _ = std::fs::remove_file(&exe_path);
+
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(
+            output.status.success(),
+            "client binary exited non-zero; stdout={stdout:?} stderr={stderr:?}"
+        );
+        assert!(
+            stdout.contains("hello-from-origin"),
+            "client binary stdout should contain origin body; stdout={stdout:?} stderr={stderr:?}"
+        );
+    }
 }

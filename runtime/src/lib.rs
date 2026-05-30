@@ -2929,6 +2929,175 @@ pub unsafe extern "C" fn karac_runtime_parse_i64(data: *const u8, len: usize, ou
     }
 }
 
+// ── std.http client codegen path (phase-8 line 17 slice 1) ────────────
+//
+// `karac_runtime_http_client_get` / `_post` back compiled-mode
+// `Client.get(url)` / `Client.post(url, body)` dispatch. Synchronous
+// `ureq`-backed HTTP/1.1; rustls + `ring` provider via ureq's `tls`
+// feature. Out-params convey either success (status > 0, body buffer)
+// or transport error (status = 0, error-message buffer). Both buffers
+// are libc::malloc-allocated so the Kāra-side `String` `{ data, len,
+// cap }` value's `Drop` can free them via plain `free(data)` —
+// matching the cap = len convention.
+//
+// Caller-side codegen treats the status discriminant: `status > 0`
+// builds `Result.Ok(Response { status, body })` with body packed into
+// the next three Result-payload words; `status == 0` builds
+// `Result.Err(HttpError { message })` with the error message packed
+// into the same three slots.
+
+extern "C" {
+    /// libc `malloc`. Backs the body / error-message buffers handed
+    /// back to Kāra-side `String { data, len, cap }` values where
+    /// `cap = len` and the Kāra String's `Drop` calls plain
+    /// `free(data)`. Used by the http-client FFI below.
+    fn malloc(size: usize) -> *mut u8;
+}
+
+/// Copy `bytes` into a fresh libc::malloc-allocated buffer and write
+/// the pointer + length to the supplied out-params. Returns silently
+/// (zero-byte buffer) when `bytes` is empty — the Kāra-side String
+/// `{ data: null, len: 0, cap: 0 }` is the empty-string representation
+/// and is sound to `free(null)` on Drop (POSIX guarantees `free(null)`
+/// is a no-op).
+unsafe fn write_owned_bytes_into_out_params(
+    bytes: &[u8],
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) {
+    if bytes.is_empty() {
+        *out_ptr = std::ptr::null_mut();
+        *out_len = 0;
+        return;
+    }
+    let buf = malloc(bytes.len());
+    if buf.is_null() {
+        *out_ptr = std::ptr::null_mut();
+        *out_len = 0;
+        return;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+    *out_ptr = buf;
+    *out_len = bytes.len() as i64;
+}
+
+/// Synchronously fetch `url` via HTTP GET and populate the success or
+/// error out-params. The two out-paths are mutually exclusive — only
+/// one of `(body_ptr, body_len)` / `(err_ptr, err_len)` carries a real
+/// buffer; the other is `(null, 0)`. The success/error discriminant is
+/// `*out_status`: `> 0` means HTTP transaction completed (the server
+/// returned a status code); `0` means transport error (DNS, connect,
+/// TLS, timeout — `err_ptr` carries `ureq::Error`'s display message).
+/// Both buffers are libc::malloc-allocated; ownership transfers to
+/// the caller.
+///
+/// # Safety
+///
+/// `url_ptr` must point at `url_len` initialized UTF-8 bytes (or be
+/// null with `url_len == 0`). `out_status`, `out_body_ptr`,
+/// `out_body_len`, `out_err_ptr`, `out_err_len` must each point at
+/// writable storage of the indicated type.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_client_get(
+    url_ptr: *const u8,
+    url_len: usize,
+    out_status: *mut i64,
+    out_body_ptr: *mut *mut u8,
+    out_body_len: *mut i64,
+    out_err_ptr: *mut *mut u8,
+    out_err_len: *mut i64,
+) {
+    *out_status = 0;
+    *out_body_ptr = std::ptr::null_mut();
+    *out_body_len = 0;
+    *out_err_ptr = std::ptr::null_mut();
+    *out_err_len = 0;
+
+    let url_bytes: &[u8] = if url_ptr.is_null() || url_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(url_ptr, url_len)
+    };
+    let url = match std::str::from_utf8(url_bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
+            return;
+        }
+    };
+
+    match ureq::get(url).call() {
+        Ok(resp) => {
+            *out_status = resp.status() as i64;
+            let body = resp.into_string().unwrap_or_default();
+            write_owned_bytes_into_out_params(body.as_bytes(), out_body_ptr, out_body_len);
+        }
+        Err(e) => {
+            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
+        }
+    }
+}
+
+/// Synchronously POST `body_ptr`/`body_len` to `url_ptr`/`url_len` and
+/// populate the success or error out-params. Same discriminant + buffer
+/// ownership convention as `karac_runtime_http_client_get`. The body is
+/// sent verbatim as the request entity (no Content-Type defaulting at
+/// this layer — that lives in the chained-builder follow-on); `ureq`
+/// applies `Content-Length` automatically.
+///
+/// # Safety
+///
+/// Same caller obligations as `karac_runtime_http_client_get`, plus
+/// `body_ptr` must point at `body_len` initialized bytes (or be null
+/// with `body_len == 0`, which sends an empty entity).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_client_post(
+    url_ptr: *const u8,
+    url_len: usize,
+    body_ptr: *const u8,
+    body_len: usize,
+    out_status: *mut i64,
+    out_body_ptr: *mut *mut u8,
+    out_body_len: *mut i64,
+    out_err_ptr: *mut *mut u8,
+    out_err_len: *mut i64,
+) {
+    *out_status = 0;
+    *out_body_ptr = std::ptr::null_mut();
+    *out_body_len = 0;
+    *out_err_ptr = std::ptr::null_mut();
+    *out_err_len = 0;
+
+    let url_bytes: &[u8] = if url_ptr.is_null() || url_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(url_ptr, url_len)
+    };
+    let url = match std::str::from_utf8(url_bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
+            return;
+        }
+    };
+    let body_bytes: &[u8] = if body_ptr.is_null() || body_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(body_ptr, body_len)
+    };
+
+    match ureq::post(url).send_bytes(body_bytes) {
+        Ok(resp) => {
+            *out_status = resp.status() as i64;
+            let body = resp.into_string().unwrap_or_default();
+            write_owned_bytes_into_out_params(body.as_bytes(), out_body_ptr, out_body_len);
+        }
+        Err(e) => {
+            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
+        }
+    }
+}
+
 /// Synchronously serve HTTP/1.1 traffic on `addr_cstr` until a fatal
 /// error breaks the accept loop. The Kāra-side handler is invoked
 /// through `tokio::task::block_in_place` per request so it can do
@@ -5065,5 +5234,197 @@ mod tests {
             assert_eq!(super::resolve_pool_workers(), auto);
             assert!(super::resolve_pool_workers() >= 2);
         });
+    }
+
+    // ── std.http client FFI tests (phase-8 line 17 slice 1) ────────────
+    //
+    // Stand up a 1-shot HTTP/1.1 origin in a background thread, serve
+    // one canned response, then drive the client FFI against it. The
+    // origin reads-until-blank-line-pair to demarcate end-of-request
+    // headers (good enough for the GET path) or until Content-Length
+    // bytes have been consumed (good enough for the POST path); no real
+    // parser. Each test allocates a fresh ephemeral port so the tests
+    // can run in parallel without colliding.
+    //
+    // libc::free for the malloc'd out-buffers comes via the local
+    // `extern "C" { fn free(...); }` decl below so test cleanup
+    // matches the production caller-side ownership contract.
+
+    extern "C" {
+        fn free(ptr: *mut std::os::raw::c_void);
+    }
+
+    /// Bind an ephemeral-port server that accepts exactly one connection,
+    /// reads the request, and writes `canned_response` back. Returns the
+    /// bound port. Spawns a detached thread; the thread terminates after
+    /// the single response is written. POST requests are recognized via
+    /// the `Content-Length` header so the origin reads the full entity
+    /// before responding.
+    fn spawn_oneshot_origin(canned_response: &'static [u8]) -> u16 {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 8192];
+                let mut headers_end = None;
+                let mut total = 0usize;
+                while headers_end.is_none() && total < buf.len() {
+                    let n = match stream.read(&mut buf[total..]) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => return,
+                    };
+                    total += n;
+                    if let Some(pos) = buf[..total].windows(4).position(|w| w == b"\r\n\r\n") {
+                        headers_end = Some(pos + 4);
+                    }
+                }
+                if let Some(end) = headers_end {
+                    let headers = &buf[..end];
+                    let header_text = std::str::from_utf8(headers).unwrap_or("");
+                    let mut content_length = 0usize;
+                    for line in header_text.split("\r\n") {
+                        let lower = line.to_ascii_lowercase();
+                        if let Some(rest) = lower.strip_prefix("content-length:") {
+                            content_length = rest.trim().parse().unwrap_or(0);
+                            break;
+                        }
+                    }
+                    let already_have = total.saturating_sub(end);
+                    let mut remaining = content_length.saturating_sub(already_have);
+                    while remaining > 0 {
+                        let cap = remaining.min(buf.len());
+                        match stream.read(&mut buf[..cap]) {
+                            Ok(0) => break,
+                            Ok(n) => remaining -= n,
+                            Err(_) => return,
+                        }
+                    }
+                }
+                let _ = stream.write_all(canned_response);
+                let _ = stream.flush();
+            }
+        });
+        port
+    }
+
+    /// Helper to read an out-param byte buffer (malloc'd by the runtime)
+    /// into an owned Vec for assertions, then libc::free it to match the
+    /// production caller-side ownership contract.
+    unsafe fn take_owned_buffer(ptr: *mut u8, len: i64) -> Vec<u8> {
+        if ptr.is_null() || len <= 0 {
+            return Vec::new();
+        }
+        let slice = std::slice::from_raw_parts(ptr, len as usize);
+        let v = slice.to_vec();
+        free(ptr as *mut std::os::raw::c_void);
+        v
+    }
+
+    /// GET happy path — origin returns 200 OK with `hello` body; FFI
+    /// reports status = 200, body buffer carries `hello`, no error.
+    #[test]
+    fn test_http_client_get_success_populates_status_and_body() {
+        let canned = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
+        let port = spawn_oneshot_origin(canned);
+        let url = format!("http://127.0.0.1:{port}/");
+
+        let mut status: i64 = -1;
+        let mut body_ptr: *mut u8 = std::ptr::null_mut();
+        let mut body_len: i64 = -1;
+        let mut err_ptr: *mut u8 = std::ptr::null_mut();
+        let mut err_len: i64 = -1;
+        unsafe {
+            super::karac_runtime_http_client_get(
+                url.as_ptr(),
+                url.len(),
+                &mut status,
+                &mut body_ptr,
+                &mut body_len,
+                &mut err_ptr,
+                &mut err_len,
+            );
+        }
+        assert_eq!(status, 200);
+        assert_eq!(body_len, 5);
+        assert!(err_ptr.is_null());
+        assert_eq!(err_len, 0);
+        let body = unsafe { take_owned_buffer(body_ptr, body_len) };
+        assert_eq!(body, b"hello");
+    }
+
+    /// Transport-failure path — connect to a port nothing's listening
+    /// on. FFI reports status = 0 (the discriminant the caller-side
+    /// codegen uses to build `Result.Err`), no body buffer, and an
+    /// error-message buffer carrying ureq's display text.
+    #[test]
+    fn test_http_client_get_transport_error_populates_err() {
+        // Bind a port and immediately drop the listener; the OS keeps
+        // the port unbound long enough for the connect attempt below to
+        // fail with `ECONNREFUSED` (the exact wording varies — we only
+        // assert the message is non-empty).
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let url = format!("http://127.0.0.1:{port}/");
+
+        let mut status: i64 = -1;
+        let mut body_ptr: *mut u8 = std::ptr::null_mut();
+        let mut body_len: i64 = -1;
+        let mut err_ptr: *mut u8 = std::ptr::null_mut();
+        let mut err_len: i64 = -1;
+        unsafe {
+            super::karac_runtime_http_client_get(
+                url.as_ptr(),
+                url.len(),
+                &mut status,
+                &mut body_ptr,
+                &mut body_len,
+                &mut err_ptr,
+                &mut err_len,
+            );
+        }
+        assert_eq!(status, 0);
+        assert!(body_ptr.is_null());
+        assert_eq!(body_len, 0);
+        assert!(err_len > 0);
+        let err = unsafe { take_owned_buffer(err_ptr, err_len) };
+        assert!(!err.is_empty());
+    }
+
+    /// POST round-trip — entity body is forwarded to the origin, which
+    /// echoes a fixed response. Pins the body-send code path.
+    #[test]
+    fn test_http_client_post_sends_body_and_returns_response() {
+        let canned =
+            b"HTTP/1.1 201 Created\r\nContent-Length: 7\r\nConnection: close\r\n\r\ncreated";
+        let port = spawn_oneshot_origin(canned);
+        let url = format!("http://127.0.0.1:{port}/items");
+        let body = b"name=widget";
+
+        let mut status: i64 = -1;
+        let mut body_ptr: *mut u8 = std::ptr::null_mut();
+        let mut body_len: i64 = -1;
+        let mut err_ptr: *mut u8 = std::ptr::null_mut();
+        let mut err_len: i64 = -1;
+        unsafe {
+            super::karac_runtime_http_client_post(
+                url.as_ptr(),
+                url.len(),
+                body.as_ptr(),
+                body.len(),
+                &mut status,
+                &mut body_ptr,
+                &mut body_len,
+                &mut err_ptr,
+                &mut err_len,
+            );
+        }
+        assert_eq!(status, 201);
+        assert_eq!(body_len, 7);
+        assert!(err_ptr.is_null());
+        let resp_body = unsafe { take_owned_buffer(body_ptr, body_len) };
+        assert_eq!(resp_body, b"created");
     }
 }

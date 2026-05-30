@@ -16,7 +16,7 @@
 use crate::ast::*;
 
 use inkwell::module::Linkage;
-use inkwell::values::{BasicValueEnum, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
 
 /// Which `Request` full-map accessor `compile_request_pairs` should
@@ -1229,5 +1229,401 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_struct_value();
         Ok(agg.into())
+    }
+
+    /// Phase-8 line 17 slice 2 — lower `Client.get(url)` / `Client.post(
+    /// url, body)` to `karac_runtime_http_client_{get,post}` and pack
+    /// the out-params into the seeded 5-word `Result[Response,
+    /// HttpError]` aggregate.
+    ///
+    /// The runtime FFI returns five out-params: `status` (HTTP status
+    /// 1xx–5xx on success, `0` flags a transport error); `body_ptr` /
+    /// `body_len` (malloc'd body bytes on success — caller owns,
+    /// freed via String Drop); `err_ptr` / `err_len` (malloc'd
+    /// error-message bytes on transport error). `cap = len` for both
+    /// String buffers.
+    ///
+    /// Packing into `Result[Response, HttpError]` (5-word `{tag, w0,
+    /// w1, w2, w3}`):
+    ///
+    /// - Ok arm (status > 0): tag=Ok, w0=status, w1=body.data,
+    ///   w2=body.len, w3=body.cap.
+    /// - Err arm (status == 0): tag=Err, w0=msg.data, w1=msg.len,
+    ///   w2=msg.cap, w3=0.
+    ///
+    /// Caller is the std.http client method-call dispatch arm in
+    /// `compile_method_call`. Receiver is `ref self` on an empty
+    /// `Client { }` struct — codegen ignores it.
+    pub(super) fn compile_client_http_method(
+        &mut self,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let expected_args = if method == "post" { 2 } else { 1 };
+        if args.len() != expected_args {
+            return Err(format!(
+                "Client.{method} expects {expected_args} argument(s), got {}",
+                args.len()
+            ));
+        }
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| format!("Client.{method} called outside fn"))?;
+        let ctx = self.context;
+        let i64_ty = ctx.i64_type();
+        let ptr_ty = ctx.ptr_type(AddressSpace::default());
+
+        // Receiver is `ref self` on an empty `Client { }` struct —
+        // zero-sized, no self param threaded into the FFI. Skip
+        // compiling it entirely.
+
+        // Arg 0: URL String — extract data/len from the `{data, len,
+        // cap}` aggregate. Same shape as `compile_request_string_method`'s
+        // input handling. The runtime borrows the pointer + length; no
+        // copy needed at this layer.
+        let url_val = self.compile_expr(&args[0].value)?;
+        let url_sv = url_val.into_struct_value();
+        let url_data = self
+            .builder
+            .build_extract_value(url_sv, 0, "client.url.data")
+            .unwrap()
+            .into_pointer_value();
+        let url_len = self
+            .builder
+            .build_extract_value(url_sv, 1, "client.url.len")
+            .unwrap()
+            .into_int_value();
+
+        // Arg 1 (post only): body String.
+        let body_args: Option<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>)> =
+            if method == "post" {
+                let body_val = self.compile_expr(&args[1].value)?;
+                let body_sv = body_val.into_struct_value();
+                let body_data = self
+                    .builder
+                    .build_extract_value(body_sv, 0, "client.body.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let body_len = self
+                    .builder
+                    .build_extract_value(body_sv, 1, "client.body.len")
+                    .unwrap()
+                    .into_int_value();
+                Some((body_data, body_len))
+            } else {
+                None
+            };
+
+        // Allocate the five out-param slots. `i64` for status / body_len
+        // / err_len; pointer-typed for the two `*mut *mut u8` slots.
+        let status_slot = self.create_entry_alloca(fn_val, "client.out.status", i64_ty.into());
+        let body_ptr_slot = self.create_entry_alloca(fn_val, "client.out.body_ptr", ptr_ty.into());
+        let body_len_slot = self.create_entry_alloca(fn_val, "client.out.body_len", i64_ty.into());
+        let err_ptr_slot = self.create_entry_alloca(fn_val, "client.out.err_ptr", ptr_ty.into());
+        let err_len_slot = self.create_entry_alloca(fn_val, "client.out.err_len", i64_ty.into());
+
+        // Call the runtime extern.
+        let extern_name = if method == "get" {
+            "karac_runtime_http_client_get"
+        } else {
+            "karac_runtime_http_client_post"
+        };
+        let extern_fn = self
+            .module
+            .get_function(extern_name)
+            .unwrap_or_else(|| panic!("{extern_name} declared in Codegen::new"));
+        let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
+            vec![url_data.into(), url_len.into()];
+        if let Some((body_data, body_len)) = body_args {
+            call_args.push(body_data.into());
+            call_args.push(body_len.into());
+        }
+        call_args.extend_from_slice(&[
+            status_slot.into(),
+            body_ptr_slot.into(),
+            body_len_slot.into(),
+            err_ptr_slot.into(),
+            err_len_slot.into(),
+        ]);
+        self.builder
+            .build_call(extern_fn, &call_args, &format!("client.{method}.call"))
+            .unwrap();
+
+        // Load the five out-param values.
+        let status_val = self
+            .builder
+            .build_load(i64_ty, status_slot, "client.status")
+            .unwrap()
+            .into_int_value();
+        let body_ptr_val = self
+            .builder
+            .build_load(ptr_ty, body_ptr_slot, "client.body_ptr")
+            .unwrap()
+            .into_pointer_value();
+        let body_len_val = self
+            .builder
+            .build_load(i64_ty, body_len_slot, "client.body_len")
+            .unwrap()
+            .into_int_value();
+        let err_ptr_val = self
+            .builder
+            .build_load(ptr_ty, err_ptr_slot, "client.err_ptr")
+            .unwrap()
+            .into_pointer_value();
+        let err_len_val = self
+            .builder
+            .build_load(i64_ty, err_len_slot, "client.err_len")
+            .unwrap()
+            .into_int_value();
+
+        // Build the Result[Response, HttpError] aggregate.
+        let result_layout = self
+            .enum_layouts
+            .get("Result")
+            .expect("Result layout registered before Client.{get,post} dispatch");
+        let result_ty = result_layout.llvm_type;
+        let result_slot = self.create_entry_alloca(fn_val, "client.result", result_ty.into());
+        let total_fields = result_ty.count_fields() as u64;
+
+        // Use the seeded variant tags. `enum_tag_for_variant` prefers
+        // the user-declared Result over the seeded one, so this picks
+        // up the canonical 0=Ok / 1=Err tags from the baked stdlib.
+        let ok_tag = self
+            .enum_tag_for_variant("Ok")
+            .expect("Ok variant tag registered before Client.{get,post} dispatch");
+        let err_tag = self
+            .enum_tag_for_variant("Err")
+            .expect("Err variant tag registered before Client.{get,post} dispatch");
+
+        // Branch: status > 0 → Ok arm; status == 0 → Err arm.
+        let zero_i64 = i64_ty.const_zero();
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::SGT,
+                status_val,
+                zero_i64,
+                "client.is_ok",
+            )
+            .unwrap();
+        let ok_bb = ctx.append_basic_block(fn_val, "client.ok");
+        let err_bb = ctx.append_basic_block(fn_val, "client.err");
+        let cont_bb = ctx.append_basic_block(fn_val, "client.cont");
+        self.builder
+            .build_conditional_branch(is_ok, ok_bb, err_bb)
+            .unwrap();
+
+        // Ok arm: pack Response { status, body } into w0..w3.
+        self.builder.position_at_end(ok_bb);
+        let tag_ptr_ok = self
+            .builder
+            .build_struct_gep(result_ty, result_slot, 0, "ok.tag")
+            .unwrap();
+        self.builder
+            .build_store(tag_ptr_ok, i64_ty.const_int(ok_tag, false))
+            .unwrap();
+        let body_ptr_int = self
+            .builder
+            .build_ptr_to_int(body_ptr_val, i64_ty, "ok.body_ptr.i64")
+            .unwrap();
+        if total_fields > 1 {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 1, "ok.w0.status")
+                .unwrap();
+            self.builder.build_store(p, status_val).unwrap();
+        }
+        if total_fields > 2 {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 2, "ok.w1.body.data")
+                .unwrap();
+            self.builder.build_store(p, body_ptr_int).unwrap();
+        }
+        if total_fields > 3 {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 3, "ok.w2.body.len")
+                .unwrap();
+            self.builder.build_store(p, body_len_val).unwrap();
+        }
+        if total_fields > 4 {
+            // cap = len (the runtime malloc'd exactly len bytes).
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 4, "ok.w3.body.cap")
+                .unwrap();
+            self.builder.build_store(p, body_len_val).unwrap();
+        }
+        for w in 5..total_fields {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, w as u32, &format!("ok.w{w}"))
+                .unwrap();
+            self.builder.build_store(p, zero_i64).unwrap();
+        }
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // Err arm: pack HttpError { message: String } into w0..w2
+        // (struct GEP indices 1, 2, 3). The pattern destructure for
+        // `Err(e)` slices the first `pattern_payload_word_count(e)`
+        // words from the payload area — for `e: HttpError` that's 3
+        // (matching the `{String}` shape `{ptr, i64, i64}`). Packing
+        // at w0..w2 means the slice picks up `data, len, cap` in
+        // declaration order. w3 stays zeroed so the reconstruction
+        // doesn't read stale stack bits when the seeded Result layout
+        // ever widens.
+        self.builder.position_at_end(err_bb);
+        let tag_ptr_err = self
+            .builder
+            .build_struct_gep(result_ty, result_slot, 0, "err.tag")
+            .unwrap();
+        self.builder
+            .build_store(tag_ptr_err, i64_ty.const_int(err_tag, false))
+            .unwrap();
+        let err_ptr_int = self
+            .builder
+            .build_ptr_to_int(err_ptr_val, i64_ty, "err.msg.ptr.i64")
+            .unwrap();
+        if total_fields > 1 {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 1, "err.w0.msg.data")
+                .unwrap();
+            self.builder.build_store(p, err_ptr_int).unwrap();
+        }
+        if total_fields > 2 {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 2, "err.w1.msg.len")
+                .unwrap();
+            self.builder.build_store(p, err_len_val).unwrap();
+        }
+        if total_fields > 3 {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 3, "err.w2.msg.cap")
+                .unwrap();
+            self.builder.build_store(p, err_len_val).unwrap();
+        }
+        for w in 4..total_fields {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, w as u32, &format!("err.w{w}"))
+                .unwrap();
+            self.builder.build_store(p, zero_i64).unwrap();
+        }
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // Cont: load + return the result aggregate.
+        self.builder.position_at_end(cont_bb);
+        let result = self
+            .builder
+            .build_load(result_ty, result_slot, &format!("client.{method}.result"))
+            .unwrap();
+        Ok(result)
+    }
+
+    /// Phase-8 line 17 slice 3 — `resp.status() -> i64` /
+    /// `resp.body() -> String`. The stdlib stubs are `#[compiler_builtin]`
+    /// so the bodies are never compiled into the user binary; this helper
+    /// lowers the method call to a direct field read on the receiver's
+    /// struct value (Response = `{ i64 status, String body }`).
+    ///
+    /// `status` is a primitive `i64` — copy-by-value, no ownership
+    /// concerns. `body` is an owned `String`; the field carries a
+    /// `{data, len, cap}` aggregate the receiver's drop will free, so
+    /// we route through `karac_string_clone` to hand the caller a
+    /// fresh buffer they own outright.
+    pub(super) fn compile_response_accessor(
+        &mut self,
+        var_name: &str,
+        method: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("Response var '{var_name}' not bound"))?;
+        // `Response { status: i64, body: String }` — seeded into
+        // `struct_types` by `seed_builtin_struct_types`. Layout =
+        // `{ i64, { ptr, i64, i64 } }`.
+        let resp_ty = self
+            .struct_types
+            .get("Response")
+            .copied()
+            .expect("Response struct type seeded by seed_builtin_struct_types");
+        match method {
+            "status" => {
+                let field_ptr = self
+                    .builder
+                    .build_struct_gep(resp_ty, slot.ptr, 0, "resp.status.ptr")
+                    .map_err(|e| format!("resp.status gep failed: {e:?}"))?;
+                let val = self
+                    .builder
+                    .build_load(self.context.i64_type(), field_ptr, "resp.status")
+                    .unwrap();
+                Ok(val)
+            }
+            "body" => self.clone_string_field(slot.ptr, resp_ty, 1, "resp.body"),
+            other => Err(format!(
+                "compile_response_accessor called with unsupported method '{other}'"
+            )),
+        }
+    }
+
+    /// Phase-8 line 17 slice 3 — `e.message() -> String` on
+    /// `HttpError { message: String }`. Same `karac_string_clone`-based
+    /// ownership transfer as `Response.body()`. Layout seeded into
+    /// `struct_types` by `seed_builtin_struct_types`.
+    pub(super) fn compile_http_error_message(
+        &mut self,
+        var_name: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("HttpError var '{var_name}' not bound"))?;
+        let err_ty = self
+            .struct_types
+            .get("HttpError")
+            .copied()
+            .expect("HttpError struct type seeded by seed_builtin_struct_types");
+        self.clone_string_field(slot.ptr, err_ty, 0, "httperror.message")
+    }
+
+    /// Deep-clone the `String` field at `field_idx` on the struct stored
+    /// at `slot_ptr`. Mirrors the contract `Response.body()` /
+    /// `HttpError.message()` need: receiver owns the field's buffer; the
+    /// caller takes ownership of a fresh copy via `karac_string_clone`.
+    fn clone_string_field(
+        &mut self,
+        slot_ptr: PointerValue<'ctx>,
+        struct_ty: inkwell::types::StructType<'ctx>,
+        field_idx: u32,
+        label: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| format!("{label} called outside fn"))?;
+        let str_ty = self.vec_struct_type();
+        let src_ptr = self
+            .builder
+            .build_struct_gep(struct_ty, slot_ptr, field_idx, &format!("{label}.src.ptr"))
+            .map_err(|e| format!("{label} gep failed: {e:?}"))?;
+        let dst_slot = self.create_entry_alloca(fn_val, &format!("{label}.dst"), str_ty.into());
+        self.builder
+            .build_call(
+                self.karac_string_clone_fn,
+                &[src_ptr.into(), dst_slot.into()],
+                &format!("{label}.clone"),
+            )
+            .unwrap();
+        let cloned = self
+            .builder
+            .build_load(str_ty, dst_slot, &format!("{label}.val"))
+            .unwrap();
+        Ok(cloned)
     }
 }

@@ -3186,6 +3186,58 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Seed struct types for baked stdlib types that codegen needs at
+    /// payload-reconstitution and field-access sites. Baked stdlib
+    /// items reach the typechecker via `STDLIB_PROGRAMS` but do NOT
+    /// reach codegen's `declare_structs` pass (codegen reads only the
+    /// user's `program.items`). Mirrors `seed_builtin_enum_layouts`
+    /// for the matching enum case.
+    ///
+    /// Without seeding, `pattern_payload_word_count` for `Err(e)`
+    /// where `e: HttpError` falls back to the i64-default (1 word)
+    /// instead of computing the 3-word `{ ptr, i64, i64 }` shape; the
+    /// pattern destructure then binds `e` as a single i64 and any
+    /// downstream `e.message()` GEP reads garbage. Same hazard for
+    /// `Ok(resp)` with `resp: Response`.
+    ///
+    /// Phase-8 line 17 slice 4 — seeds `Client`, `Response`, and
+    /// `HttpError` from `runtime/stdlib/http.kara`.
+    pub(super) fn seed_builtin_struct_types(&mut self) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        // String LLVM shape — pinned to the codegen's `vec_struct_type`
+        // convention `{ ptr, i64, i64 }` so the seeded Response.body /
+        // HttpError.message fields drop the same way every other Kāra
+        // String does.
+        let str_ty: BasicTypeEnum<'ctx> = self
+            .context
+            .struct_type(&[ptr_ty.into(), i64_t.into(), i64_t.into()], false)
+            .into();
+        if !self.struct_types.contains_key("Client") {
+            // `Client { }` — empty struct, zero fields.
+            let client_ty = self.context.struct_type(&[], false);
+            self.struct_types.insert("Client".to_string(), client_ty);
+            self.struct_field_names
+                .insert("Client".to_string(), Vec::new());
+        }
+        if !self.struct_types.contains_key("Response") {
+            // `Response { status: i64, body: String }`.
+            let resp_ty = self.context.struct_type(&[i64_t.into(), str_ty], false);
+            self.struct_types.insert("Response".to_string(), resp_ty);
+            self.struct_field_names.insert(
+                "Response".to_string(),
+                vec!["status".to_string(), "body".to_string()],
+            );
+        }
+        if !self.struct_types.contains_key("HttpError") {
+            // `HttpError { message: String }`.
+            let err_ty = self.context.struct_type(&[str_ty], false);
+            self.struct_types.insert("HttpError".to_string(), err_ty);
+            self.struct_field_names
+                .insert("HttpError".to_string(), vec!["message".to_string()]);
+        }
+    }
+
     /// DP slice helper — classify a payload field's TypeExpr into an
     /// `EnumDropKind`. Mirrors `payload_word_count_for_type_expr`'s shape
     /// detection: only top-level `String` / `Vec[T]` get the

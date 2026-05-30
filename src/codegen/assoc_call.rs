@@ -365,6 +365,26 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Phase-8 line 17 slice 2 — `Client.new()` returns an empty
+        // `Client { }` struct value. The struct's storage is zero-sized
+        // (no fields), but codegen needs to hand back a `StructValue` of
+        // the registered Client struct type so the let-binding RHS
+        // recognizer ast-hint path populates `var_type_names[c] =
+        // "Client"`. Without this, the call falls through to the i64-0
+        // default at the end of `compile_assoc_call` and the receiver
+        // shape is lost — `c.get(url)` then can't reach the std.http
+        // client dispatch arm.
+        if type_name == "Client" && method == "new" && _args.is_empty() {
+            // `Client { }` is an empty struct — zero fields, zero size.
+            // Layout seeded into `struct_types` by
+            // `seed_builtin_struct_types`.
+            let client_ty = self
+                .struct_types
+                .get("Client")
+                .copied()
+                .expect("Client struct type seeded by seed_builtin_struct_types");
+            return Ok(client_ty.get_undef().into());
+        }
         // Slice B (2026-05-09): `Server.serve_static(addr, body)` —
         // hyper-backed minimal smoke entry. Dispatches to
         // `karac_runtime_serve_http_static`. Both args are Kāra
