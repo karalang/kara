@@ -293,4 +293,41 @@ fn main() with sends(Network) receives(Network) {
             "expected a call to karac_runtime_http_response_header; IR was:\n{ir}"
         );
     }
+
+    /// Phase-8 line 39 follow-up — `Response.headers()` lowers through
+    /// `compile_response_pairs`: it reads the hidden headers handle and
+    /// drives the runtime `_response_headers_count` (loop bound) +
+    /// `_response_header_key_at` / `_val_at` iteration accessors. Pins the
+    /// dispatch arm + the iteration calls (a regression — the arm not
+    /// matching `headers`, or the seeded Response losing its handle field
+    /// — surfaces as `codegen failed` from `ir_for`, or a missing call).
+    #[test]
+    fn test_ir_response_headers_iterates_via_runtime_accessors() {
+        let ir = ir_for(
+            r#"
+fn main() with sends(Network) receives(Network) {
+    let c = Client.new();
+    let url = "http://127.0.0.1:65535/";
+    match c.get(url) {
+        Ok(resp) => {
+            let hs: Vec[(String, String)] = resp.headers();
+            println(hs.len());
+        }
+        Err(e) => {
+            println(e.message());
+        }
+    }
+}
+"#,
+        );
+        assert!(
+            ir.contains("call i64 @karac_runtime_http_response_headers_count("),
+            "expected a call to karac_runtime_http_response_headers_count; IR was:\n{ir}"
+        );
+        assert!(
+            ir.contains("@karac_runtime_http_response_header_key_at(")
+                && ir.contains("@karac_runtime_http_response_header_val_at("),
+            "expected key_at + val_at iteration calls; IR was:\n{ir}"
+        );
+    }
 }

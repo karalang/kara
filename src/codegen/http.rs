@@ -1084,11 +1084,6 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(var_name)
             .copied()
             .ok_or_else(|| format!("Request var '{var_name}' not bound"))?;
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let i64_ty = self.context.i64_type();
-        let fn_val = self
-            .current_fn
-            .ok_or_else(|| "Request.headers/query called outside fn".to_string())?;
 
         let req_ptr = self
             .builder
@@ -1109,9 +1104,95 @@ impl<'ctx> super::Codegen<'ctx> {
             .get_function(val_name)
             .unwrap_or_else(|| panic!("{val_name} declared in Codegen::new"));
 
+        self.build_string_pairs_vec(req_ptr.into(), count_fn, key_fn, val_fn, "req.pairs")
+    }
+
+    /// Phase-8 line 39 follow-up — lower `resp.headers()` for a
+    /// `Response`-typed local into a `Vec[(String, String)]` of every
+    /// captured response header in order. Loads the hidden `headers: i64`
+    /// side-table handle from the Response (field 2 — the same handle
+    /// `Response.header(name)` uses) and drives the shared counted loop
+    /// over the `karac_runtime_http_response_headers_count` /
+    /// `_header_key_at` / `_header_val_at` accessors. Response-side mirror
+    /// of `compile_request_pairs`; the only structural difference is the
+    /// receiver (an i64 handle vs a request pointer).
+    pub(super) fn compile_response_pairs(
+        &mut self,
+        var_name: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("Response var '{var_name}' not bound"))?;
+        let resp_ty = self
+            .struct_types
+            .get("Response")
+            .copied()
+            .expect("Response struct type seeded by seed_builtin_struct_types");
+        let i64_ty = self.context.i64_type();
+
+        let handle_ptr = self
+            .builder
+            .build_struct_gep(
+                resp_ty,
+                slot.ptr,
+                2,
+                &format!("{var_name}.resp.pairs.handle.ptr"),
+            )
+            .map_err(|e| format!("Response headers-handle gep failed: {e:?}"))?;
+        let handle = self
+            .builder
+            .build_load(i64_ty, handle_ptr, &format!("{var_name}.resp.pairs.handle"))
+            .unwrap()
+            .into_int_value();
+
+        let count_fn = self
+            .module
+            .get_function("karac_runtime_http_response_headers_count")
+            .expect("karac_runtime_http_response_headers_count declared in Codegen::new");
+        let key_fn = self
+            .module
+            .get_function("karac_runtime_http_response_header_key_at")
+            .expect("karac_runtime_http_response_header_key_at declared in Codegen::new");
+        let val_fn = self
+            .module
+            .get_function("karac_runtime_http_response_header_val_at")
+            .expect("karac_runtime_http_response_header_val_at declared in Codegen::new");
+
+        self.build_string_pairs_vec(handle.into(), count_fn, key_fn, val_fn, "resp.pairs")
+    }
+
+    /// Shared counted-loop body for the `(String, String)`-pair surfaces
+    /// — `Request.headers()` / `Request.query()` (receiver = a `*const
+    /// KaracHttpRequest` pointer) and `Response.headers()` (receiver = an
+    /// i64 side-table handle). Given `recv_arg` and the matching
+    /// `count(recv)` / `key_at(recv, i)` / `val_at(recv, i)` externs,
+    /// calls `count` for the loop bound, mallocs `n *
+    /// sizeof((String,String))`, then a counted loop copies each borrowed
+    /// key/val cstring into a fresh owned String
+    /// (`build_owned_string_from_cstr`) and stores the tuple. `n == 0`
+    /// short-circuits to the canonical empty-Vec `{ null, 0, 0 }`. The
+    /// resulting Vec owns its element Strings, so it outlives the
+    /// borrowed runtime storage. `prefix` labels the emitted values /
+    /// blocks per call site.
+    fn build_string_pairs_vec(
+        &mut self,
+        recv_arg: inkwell::values::BasicMetadataValueEnum<'ctx>,
+        count_fn: inkwell::values::FunctionValue<'ctx>,
+        key_fn: inkwell::values::FunctionValue<'ctx>,
+        val_fn: inkwell::values::FunctionValue<'ctx>,
+        prefix: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| format!("{prefix} called outside fn"))?;
+
         let n = self
             .builder
-            .build_call(count_fn, &[req_ptr.into()], "req.pairs.n")
+            .build_call(count_fn, &[recv_arg], &format!("{prefix}.n"))
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1129,12 +1210,23 @@ impl<'ctx> super::Codegen<'ctx> {
         let zero = i64_ty.const_zero();
         let is_zero = self
             .builder
-            .build_int_compare(inkwell::IntPredicate::EQ, n, zero, "req.pairs.is_empty")
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                n,
+                zero,
+                &format!("{prefix}.is_empty"),
+            )
             .unwrap();
-        let empty_bb = self.context.append_basic_block(fn_val, "req.pairs.empty");
-        let build_bb = self.context.append_basic_block(fn_val, "req.pairs.build");
-        let done_bb = self.context.append_basic_block(fn_val, "req.pairs.done");
-        let buf_slot = self.create_entry_alloca(fn_val, "req.pairs.buf", ptr_ty.into());
+        let empty_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.empty"));
+        let build_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.build"));
+        let done_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.done"));
+        let buf_slot = self.create_entry_alloca(fn_val, &format!("{prefix}.buf"), ptr_ty.into());
 
         self.builder
             .build_conditional_branch(is_zero, empty_bb, build_bb)
@@ -1152,35 +1244,50 @@ impl<'ctx> super::Codegen<'ctx> {
         let elem_size = elem_ty.size_of().unwrap();
         let alloc_bytes = self
             .builder
-            .build_int_mul(n, elem_size, "req.pairs.alloc_bytes")
+            .build_int_mul(n, elem_size, &format!("{prefix}.alloc_bytes"))
             .unwrap();
         let buf = self
             .builder
-            .build_call(self.malloc_fn, &[alloc_bytes.into()], "req.pairs.buf.alloc")
+            .build_call(
+                self.malloc_fn,
+                &[alloc_bytes.into()],
+                &format!("{prefix}.buf.alloc"),
+            )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value();
         self.builder.build_store(buf_slot, buf).unwrap();
 
-        let i_alloca = self.create_entry_alloca(fn_val, "req.pairs.i", i64_ty.into());
+        let i_alloca = self.create_entry_alloca(fn_val, &format!("{prefix}.i"), i64_ty.into());
         self.builder
             .build_store(i_alloca, i64_ty.const_zero())
             .unwrap();
-        let cond_bb = self.context.append_basic_block(fn_val, "req.pairs.cond");
-        let body_bb = self.context.append_basic_block(fn_val, "req.pairs.body");
-        let exit_bb = self.context.append_basic_block(fn_val, "req.pairs.exit");
+        let cond_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.cond"));
+        let body_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.body"));
+        let exit_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.exit"));
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
         self.builder.position_at_end(cond_bb);
         let i_cur = self
             .builder
-            .build_load(i64_ty, i_alloca, "req.pairs.i.cur")
+            .build_load(i64_ty, i_alloca, &format!("{prefix}.i.cur"))
             .unwrap()
             .into_int_value();
         let lt = self
             .builder
-            .build_int_compare(inkwell::IntPredicate::ULT, i_cur, n, "req.pairs.lt")
+            .build_int_compare(
+                inkwell::IntPredicate::ULT,
+                i_cur,
+                n,
+                &format!("{prefix}.lt"),
+            )
             .unwrap();
         self.builder
             .build_conditional_branch(lt, body_bb, exit_bb)
@@ -1191,37 +1298,47 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_call(
                 key_fn,
-                &[req_ptr.into(), i_cur.into()],
-                "req.pairs.key.cstr",
+                &[recv_arg, i_cur.into()],
+                &format!("{prefix}.key.cstr"),
             )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value();
-        let key_str = self.build_owned_string_from_cstr(key_cstr, "req.pairs.key")?;
+        let key_str = self.build_owned_string_from_cstr(key_cstr, &format!("{prefix}.key"))?;
         let val_cstr = self
             .builder
             .build_call(
                 val_fn,
-                &[req_ptr.into(), i_cur.into()],
-                "req.pairs.val.cstr",
+                &[recv_arg, i_cur.into()],
+                &format!("{prefix}.val.cstr"),
             )
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value();
-        let val_str = self.build_owned_string_from_cstr(val_cstr, "req.pairs.val")?;
+        let val_str = self.build_owned_string_from_cstr(val_cstr, &format!("{prefix}.val"))?;
 
         let mut tuple_val: BasicValueEnum<'ctx> = elem_ty.get_undef().into();
         tuple_val = self
             .builder
-            .build_insert_value(tuple_val.into_struct_value(), key_str, 0, "req.pairs.tup.k")
+            .build_insert_value(
+                tuple_val.into_struct_value(),
+                key_str,
+                0,
+                &format!("{prefix}.tup.k"),
+            )
             .unwrap()
             .into_struct_value()
             .into();
         tuple_val = self
             .builder
-            .build_insert_value(tuple_val.into_struct_value(), val_str, 1, "req.pairs.tup.v")
+            .build_insert_value(
+                tuple_val.into_struct_value(),
+                val_str,
+                1,
+                &format!("{prefix}.tup.v"),
+            )
             .unwrap()
             .into_struct_value()
             .into();
@@ -1230,12 +1347,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // here, but reloading keeps the GEP base local to the loop body).
         let buf_cur = self
             .builder
-            .build_load(ptr_ty, buf_slot, "req.pairs.buf.cur")
+            .build_load(ptr_ty, buf_slot, &format!("{prefix}.buf.cur"))
             .unwrap()
             .into_pointer_value();
         let elem_ptr = unsafe {
             self.builder
-                .build_gep(elem_ty, buf_cur, &[i_cur], "req.pairs.elem.ptr")
+                .build_gep(elem_ty, buf_cur, &[i_cur], &format!("{prefix}.elem.ptr"))
                 .unwrap()
         };
         self.builder.build_store(elem_ptr, tuple_val).unwrap();
@@ -1243,7 +1360,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let one = i64_ty.const_int(1, false);
         let i_next = self
             .builder
-            .build_int_add(i_cur, one, "req.pairs.i.next")
+            .build_int_add(i_cur, one, &format!("{prefix}.i.next"))
             .unwrap();
         self.builder.build_store(i_alloca, i_next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
@@ -1257,23 +1374,23 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(done_bb);
         let data = self
             .builder
-            .build_load(ptr_ty, buf_slot, "req.pairs.data")
+            .build_load(ptr_ty, buf_slot, &format!("{prefix}.data"))
             .unwrap()
             .into_pointer_value();
         let mut agg = vec_ty.get_undef();
         agg = self
             .builder
-            .build_insert_value(agg, data, 0, "req.pairs.vec.data")
+            .build_insert_value(agg, data, 0, &format!("{prefix}.vec.data"))
             .unwrap()
             .into_struct_value();
         agg = self
             .builder
-            .build_insert_value(agg, n, 1, "req.pairs.vec.len")
+            .build_insert_value(agg, n, 1, &format!("{prefix}.vec.len"))
             .unwrap()
             .into_struct_value();
         agg = self
             .builder
-            .build_insert_value(agg, n, 2, "req.pairs.vec.cap")
+            .build_insert_value(agg, n, 2, &format!("{prefix}.vec.cap"))
             .unwrap()
             .into_struct_value();
         Ok(agg.into())

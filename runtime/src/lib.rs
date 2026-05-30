@@ -3394,12 +3394,13 @@ fn read_response_body_bytes(resp: ureq::Response) -> Vec<u8> {
 // trade-off as the `HTTP_BUILDERS` abandoned-handle leak, and resolved
 // the same way once `impl Drop for Response` is wired through codegen.
 
-/// One captured response's headers: `(name, value)` pairs, value stored
-/// as a `CString` so `karac_runtime_http_response_header` can return a
-/// stable null-terminated pointer. Named to keep the
-/// `HTTP_RESPONSE_HEADERS` static's type within clippy's
-/// `type_complexity` threshold.
-type CapturedResponseHeaders = Vec<(String, std::ffi::CString)>;
+/// One captured response's headers: `(name, value)` pairs, BOTH stored
+/// as `CString` so `karac_runtime_http_response_header` (value) and the
+/// `karac_runtime_http_response_header_{key,val}_at` iteration accessors
+/// (phase-8 line 39 follow-up) can each return a stable null-terminated
+/// pointer. Named to keep the `HTTP_RESPONSE_HEADERS` static's type
+/// within clippy's `type_complexity` threshold.
+type CapturedResponseHeaders = Vec<(std::ffi::CString, std::ffi::CString)>;
 
 static HTTP_RESPONSE_HEADERS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<i64, CapturedResponseHeaders>>,
@@ -3420,11 +3421,13 @@ static HTTP_RESPONSE_HEADERS_NEXT_ID: std::sync::atomic::AtomicI64 =
 /// `0` so `Response.header(...)` on a (non-existent) error Response
 /// would resolve every lookup to `None`.
 fn capture_response_headers(resp: &ureq::Response) -> i64 {
-    let mut pairs: Vec<(String, std::ffi::CString)> = Vec::new();
+    let mut pairs: CapturedResponseHeaders = Vec::new();
     for name in resp.headers_names() {
         if let Some(val) = resp.header(&name) {
-            if let Ok(cval) = std::ffi::CString::new(val) {
-                pairs.push((name, cval));
+            if let (Ok(cname), Ok(cval)) =
+                (std::ffi::CString::new(name), std::ffi::CString::new(val))
+            {
+                pairs.push((cname, cval));
             }
         }
     }
@@ -3474,8 +3477,59 @@ pub unsafe extern "C" fn karac_runtime_http_response_header(
         return std::ptr::null();
     };
     for (k, v) in pairs {
-        if k.eq_ignore_ascii_case(name_str) {
+        if k.to_bytes().eq_ignore_ascii_case(name_str.as_bytes()) {
             return v.as_ptr();
+        }
+    }
+    std::ptr::null()
+}
+
+/// Number of headers captured for `handle` — the loop bound for
+/// `Response.headers()` (phase-8 line 39 follow-up). `0` for an unknown
+/// handle (e.g. the Err-path sentinel `0`).
+#[no_mangle]
+pub extern "C" fn karac_runtime_http_response_headers_count(handle: i64) -> i64 {
+    if let Ok(map) = HTTP_RESPONSE_HEADERS.lock() {
+        if let Some(pairs) = map.get(&handle) {
+            return pairs.len() as i64;
+        }
+    }
+    0
+}
+
+/// The captured header name (`_key_at`) / value (`_val_at`) at `idx` for
+/// `handle`, as a runtime-owned null-terminated pointer valid until
+/// process exit (entries are never removed; the `CString` heap buffers
+/// are stable across map rehashes), or null when the handle is unknown
+/// or `idx` is out of range. Backs `Response.headers()`'s counted-loop
+/// copy — each borrowed cstring is copied into a fresh owned Kāra String
+/// per call, so the resulting `Vec[(String, String)]` outlives the
+/// table. Names are returned in the order ureq surfaced them.
+#[no_mangle]
+pub extern "C" fn karac_runtime_http_response_header_key_at(
+    handle: i64,
+    idx: i64,
+) -> *const std::os::raw::c_char {
+    response_header_field_at(handle, idx, true)
+}
+
+#[no_mangle]
+pub extern "C" fn karac_runtime_http_response_header_val_at(
+    handle: i64,
+    idx: i64,
+) -> *const std::os::raw::c_char {
+    response_header_field_at(handle, idx, false)
+}
+
+fn response_header_field_at(handle: i64, idx: i64, want_key: bool) -> *const std::os::raw::c_char {
+    if idx < 0 {
+        return std::ptr::null();
+    }
+    if let Ok(map) = HTTP_RESPONSE_HEADERS.lock() {
+        if let Some(pairs) = map.get(&handle) {
+            if let Some((k, v)) = pairs.get(idx as usize) {
+                return if want_key { k.as_ptr() } else { v.as_ptr() };
+            }
         }
     }
     std::ptr::null()
@@ -6332,6 +6386,74 @@ mod tests {
             zero_ptr.is_null(),
             "handle 0 (error sentinel) must resolve to null"
         );
+    }
+
+    /// Phase-8 line 39 follow-up — `Response.headers()` iteration
+    /// accessors. After a GET, `_headers_count` reports the captured
+    /// header count and `_header_key_at` / `_val_at` walk the `(name,
+    /// value)` pairs in order. Pins that the custom header round-trips
+    /// through the indexed surface and that an out-of-range index / the
+    /// Err-sentinel handle `0` resolve to null.
+    #[test]
+    fn test_http_client_get_response_headers_iteration() {
+        let canned = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-Custom: custom-value\r\nConnection: close\r\n\r\nok";
+        let port = spawn_oneshot_origin(canned);
+        let url = format!("http://127.0.0.1:{port}/");
+
+        let mut status: i64 = -1;
+        let mut body_ptr: *mut u8 = std::ptr::null_mut();
+        let mut body_len: i64 = -1;
+        let mut err_ptr: *mut u8 = std::ptr::null_mut();
+        let mut err_len: i64 = -1;
+        let mut headers_handle: i64 = -1;
+        unsafe {
+            super::karac_runtime_http_client_get(
+                url.as_ptr(),
+                url.len(),
+                &mut status,
+                &mut body_ptr,
+                &mut body_len,
+                &mut err_ptr,
+                &mut err_len,
+                &mut headers_handle,
+            );
+        }
+        assert_eq!(status, 200);
+        assert!(headers_handle > 0);
+        let _ = unsafe { take_owned_buffer(body_ptr, body_len) };
+
+        let count = super::karac_runtime_http_response_headers_count(headers_handle);
+        assert!(
+            count >= 1,
+            "expected at least the custom header; got {count}"
+        );
+
+        // Walk the pairs and confirm the custom header is present.
+        let mut found = false;
+        for i in 0..count {
+            let k_ptr = super::karac_runtime_http_response_header_key_at(headers_handle, i);
+            let v_ptr = super::karac_runtime_http_response_header_val_at(headers_handle, i);
+            assert!(
+                !k_ptr.is_null() && !v_ptr.is_null(),
+                "in-range pair non-null"
+            );
+            let k = unsafe { std::ffi::CStr::from_ptr(k_ptr) }.to_str().unwrap();
+            let v = unsafe { std::ffi::CStr::from_ptr(v_ptr) }.to_str().unwrap();
+            if k.eq_ignore_ascii_case("x-custom") {
+                assert_eq!(v, "custom-value");
+                found = true;
+            }
+        }
+        assert!(found, "x-custom should appear in the iterated headers");
+
+        // Out-of-range index → null.
+        assert!(
+            super::karac_runtime_http_response_header_key_at(headers_handle, count).is_null(),
+            "out-of-range key index must be null"
+        );
+        // Unknown handle → count 0, null fields.
+        assert_eq!(super::karac_runtime_http_response_headers_count(0), 0);
+        assert!(super::karac_runtime_http_response_header_val_at(0, 0).is_null());
     }
 
     /// Transport-failure path — connect to a port nothing's listening

@@ -964,6 +964,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     let name = name.clone();
                     return self.compile_response_header(&name, &args[0].value);
                 }
+                // Phase-8 line 39 follow-up — `Response.headers()` →
+                // `Vec[(String, String)]` (full-map iteration over the
+                // captured response headers, mirror of `Request.headers()`).
+                // Routes through `compile_response_pairs`, which reads the
+                // hidden headers handle and drives the runtime count +
+                // key_at/val_at iteration accessors.
+                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Response")
+                    && method == "headers"
+                    && args.is_empty()
+                {
+                    let name = name.clone();
+                    return self.compile_response_pairs(&name);
+                }
                 if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "HttpError")
                     && method == "message"
                     && args.is_empty()

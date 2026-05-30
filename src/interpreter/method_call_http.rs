@@ -198,6 +198,38 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
             }
+            // `headers()` — full-map iteration, `Vec[(String, String)]`
+            // (phase-8 line 39 follow-up). Best-effort interpreter parity:
+            // builds the Vec from the Response's `headers` Map field (the
+            // same field `header(name)` inspects), or an empty Vec when
+            // absent — the interpreter does no real HTTP, so what this pins
+            // is the shape (a Vec of (String, String) tuples) and that the
+            // method dispatches. Real iteration is codegen-only via the
+            // `karac_runtime_http_response_header_{key,val}_at` accessors.
+            "headers" => {
+                if let Value::Struct {
+                    ref name,
+                    ref fields,
+                } = obj
+                {
+                    if name == "Response" {
+                        let mut pairs: Vec<Value> = Vec::new();
+                        if let Some(Value::Map(ref map_pairs)) = fields.get("headers") {
+                            for (k, v) in map_pairs {
+                                if let (Value::String(k_str), Value::String(v_str)) = (k, v) {
+                                    pairs.push(Value::Tuple(vec![
+                                        Value::String(k_str.clone()),
+                                        Value::String(v_str.clone()),
+                                    ]));
+                                }
+                            }
+                        }
+                        return Some(Value::Array(std::sync::Arc::new(std::sync::RwLock::new(
+                            pairs,
+                        ))));
+                    }
+                }
+            }
             "message" => {
                 if let Value::Struct {
                     ref name,

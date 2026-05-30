@@ -156,6 +156,15 @@ impl Response {
 
     #[compiler_builtin]
     fn header(ref self, name: String) -> Option[String] { None }
+
+    // Return every response header as `(name, value)` pairs in the order
+    // the server sent them (phase-8 line 39 follow-up). A Vec (not a Map)
+    // so repeated header names (e.g. multiple `Set-Cookie`) are all
+    // preserved. Each String is freshly allocated per call — the Vec owns
+    // its element Strings and outlives the runtime-side header table.
+    // Mirror of `Request.headers()`.
+    #[compiler_builtin]
+    fn headers(ref self) -> Vec[(String, String)] { Vec.new() }
 }
 
 impl HttpError {

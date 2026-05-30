@@ -1433,7 +1433,7 @@ mod tests {
         assert_inherent_impl_compiler_builtin(
             "http.kara",
             "Response",
-            &["status", "body", "text", "bytes", "header"],
+            &["status", "body", "text", "bytes", "header", "headers"],
         );
         assert_inherent_impl_compiler_builtin("http.kara", "HttpError", &["message"]);
         // Slice B (2026-05-09): server surface. `serve` is the Slice B

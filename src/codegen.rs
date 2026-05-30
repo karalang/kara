@@ -1809,6 +1809,26 @@ impl<'ctx> Codegen<'ctx> {
             response_header_type,
             Some(Linkage::External),
         );
+        // Phase-8 line 39 follow-up — `Response.headers()` full-map
+        // iteration accessors over the same side-table handle:
+        //   `_response_headers_count(i64 handle) -> i64` (loop bound)
+        //   `_response_header_{key,val}_at(i64 handle, i64 idx)
+        //    -> *const c_char` (null on unknown handle / OOR; runtime-owned
+        //    on hit). `compile_response_pairs` drives a counted loop over
+        //    these, copying each borrowed cstring into a fresh owned String.
+        let response_headers_count_type = i64_type.fn_type(&[i64_type.into()], false);
+        let _karac_runtime_http_response_headers_count_fn = module.add_function(
+            "karac_runtime_http_response_headers_count",
+            response_headers_count_type,
+            Some(Linkage::External),
+        );
+        let response_header_at_type = ptr_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        for name in [
+            "karac_runtime_http_response_header_key_at",
+            "karac_runtime_http_response_header_val_at",
+        ] {
+            module.add_function(name, response_header_at_type, Some(Linkage::External));
+        }
         // Phase-8 line 24 — chained-builder request descriptor FFI.
         // `_builder_new(method_ptr, method_len, url_ptr, url_len) ->
         // i64`. Returns an opaque positive handle indexing the

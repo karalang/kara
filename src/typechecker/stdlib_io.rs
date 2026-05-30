@@ -309,10 +309,25 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![Type::Str],
                 }
             }
+            // `headers()` — full-map iteration, `Vec[(String, String)]`
+            // (phase-8 line 39 follow-up; mirror of `Request.headers()`).
+            "headers" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "Response.headers() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![Type::Tuple(vec![Type::Str, Type::Str])],
+                }
+            }
             _ => self.handle_unknown_method(
                 "Response",
                 method,
-                &["body", "bytes", "header", "status", "text"],
+                &["body", "bytes", "header", "headers", "status", "text"],
                 args,
                 span,
             ),

@@ -2128,6 +2128,112 @@ fn main() with sends(Network) receives(Network) {{
         );
     }
 
+    /// Phase-8 line 39 follow-up — `Response.headers()` full-map
+    /// iteration E2E. The Rust origin returns two custom headers; the
+    /// karac binary iterates `resp.headers()` with `for (k, v) in ...`
+    /// and prints each `k=v`. Proves the iteration path: the side-table
+    /// handle (in the destructured Response's hidden field) drives the
+    /// runtime count + key_at/val_at accessors, each borrowed cstring is
+    /// copied into a fresh owned String, and the resulting
+    /// `Vec[(String, String)]` (and its element Strings) drops cleanly on
+    /// the widened-Result layout. Asserts both custom pairs round-trip
+    /// (key compared case-insensitively via stdout lowercasing, since
+    /// header-name case is the HTTP layer's to normalize).
+    #[test]
+    fn test_client_get_headers_iteration_end_to_end() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!(
+                "skip: libkarac_runtime.a not built \
+                 (run `cargo build -p karac-runtime --release`)"
+            );
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let canned: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-Custom: custom-value\r\nX-Trace-Id: trace-42\r\nConnection: close\r\n\r\nok";
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral origin port");
+        let port = listener.local_addr().expect("local_addr").port();
+        let origin_thread = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let mut total = 0usize;
+                while total < buf.len() {
+                    let n = match stream.read(&mut buf[total..]) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => return,
+                    };
+                    total += n;
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let _ = stream.write_all(canned);
+                let _ = stream.flush();
+            }
+        });
+
+        let url = format!("http://127.0.0.1:{port}/hdrs");
+        let src = format!(
+            r#"
+fn main() with sends(Network) receives(Network) {{
+    let url: String = "{url}";
+    let c = Client.new();
+    match c.get(url) {{
+        Ok(resp) => {{
+            let hs: Vec[(String, String)] = resp.headers();
+            for (k, v) in hs {{
+                println(k + "=" + v);
+            }}
+        }}
+        Err(e) => {{
+            println("ERR");
+            println(e.message());
+        }}
+    }}
+}}
+"#
+        );
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_http_hdrs_e2e_{pid}_{nanos}"));
+        if let Err(e) = compile_and_link(&src, &exe_path) {
+            let _ = origin_thread.join();
+            panic!("compile/link failed: {e}");
+        }
+
+        let output = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("run client binary");
+        let _ = origin_thread.join();
+        let _ = std::fs::remove_file(&exe_path);
+
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(
+            output.status.success(),
+            "client binary exited non-zero; stdout={stdout:?} stderr={stderr:?}"
+        );
+        let lower = stdout.to_lowercase();
+        assert!(
+            lower.contains("x-custom=custom-value"),
+            "resp.headers() should iterate the X-Custom pair; stdout={stdout:?} stderr={stderr:?}"
+        );
+        assert!(
+            lower.contains("x-trace-id=trace-42"),
+            "resp.headers() should iterate the X-Trace-Id pair; stdout={stdout:?} stderr={stderr:?}"
+        );
+    }
+
     /// Phase-8 line 24 — chained-builder E2E smoke test.
     ///
     /// Same shape as `test_client_get_end_to_end_against_rust_origin`,
