@@ -39,6 +39,42 @@ mod map;
 pub mod scheduler;
 pub mod tls;
 
+// LLJIT integration (phase-7 L560 W3, 2026-05-29): when this crate is
+// consumed as an rlib (test-binary `[dev-dependencies]` path under
+// `karac`'s `lljit_prototype` feature), rustc's rlib emission may DCE
+// the `#[no_mangle] pub extern "C" fn karac_*` symbols even though
+// they're attribute-tagged, because nothing else in the binary takes
+// their addresses. This helper threads each symbol's address through
+// `black_box` so the linker preserves the surrounding objects, making
+// every `#[no_mangle]` export resolvable via `dlsym(RTLD_DEFAULT, ...)`
+// — which is what the LLJIT process-symbol-search generator uses at
+// JIT-link time. Production `staticlib` consumers (the AOT path via
+// `link_executable`) never call this — they extract symbols by name
+// from the archive directly.
+//
+// Grow this list when codegen starts emitting declares for new runtime
+// symbols not yet covered. Failure mode is loud: a karac test prints
+// "Symbols not found: [_karac_<name>]" at lookup time.
+#[doc(hidden)]
+pub fn __preserve_no_mangle_symbols() -> usize {
+    use std::hint::black_box;
+    let mut acc: usize = 0;
+    // Map runtime (the legacy type-erased path; mono'd map symbols
+    // emitted into the user module call back into these).
+    acc = acc.wrapping_add(black_box(map::karac_map_new as *const () as usize));
+    acc = acc.wrapping_add(black_box(map::karac_map_free as *const () as usize));
+    acc = acc.wrapping_add(black_box(map::karac_map_insert_old as *const () as usize));
+    acc = acc.wrapping_add(black_box(map::karac_map_get as *const () as usize));
+    acc = acc.wrapping_add(black_box(map::karac_map_len as *const () as usize));
+    acc = acc.wrapping_add(black_box(map::karac_map_remove_old as *const () as usize));
+    acc = acc.wrapping_add(black_box(map::karac_map_contains as *const () as usize));
+    acc = acc.wrapping_add(black_box(map::karac_map_clear as *const () as usize));
+    acc = acc.wrapping_add(black_box(map::karac_map_iter_new as *const () as usize));
+    acc = acc.wrapping_add(black_box(map::karac_map_iter_next as *const () as usize));
+    acc = acc.wrapping_add(black_box(map::karac_map_iter_free as *const () as usize));
+    acc
+}
+
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::ffi::c_void;

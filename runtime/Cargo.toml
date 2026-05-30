@@ -6,7 +6,15 @@ publish = false
 
 [lib]
 name = "karac_runtime"
-crate-type = ["staticlib"]
+# `staticlib` is the production artifact — `link_executable` in `karac`
+# links the resulting `libkarac_runtime.a` into every compiled Kāra
+# binary. `rlib` is added solely so the `karac` compiler crate can
+# pull this crate in as a `[dev-dependencies]` under the
+# `lljit_prototype` feature, putting the runtime's `karac_*` symbols
+# in the test binary's symbol table so the LLJIT process-symbol-search
+# generator (per W1) can resolve them at JIT-link time. Production
+# AOT builds are unaffected — they still consume only the `.a`.
+crate-type = ["staticlib", "rlib"]
 
 [features]
 # Test-only FFI surface for `tests/park_and_wake.rs`. Adds

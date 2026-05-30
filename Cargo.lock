@@ -805,6 +805,8 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "inkwell",
+ "karac-runtime",
+ "libc",
  "llvm-sys",
  "pulldown-cmark",
  "regex",

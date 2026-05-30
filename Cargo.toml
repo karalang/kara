@@ -75,6 +75,22 @@ ureq = "2"
 rustyline = "18.0.0"
 
 [dev-dependencies]
+# Phase-7 L560 W3: link `karac-runtime` into the test binary so the
+# LLJIT process-symbol-search generator (per W1) can resolve runtime
+# `karac_*` symbols at JIT-link time. Required for `tests/lljit_e2e.rs`
+# to round-trip Kāra programs that use the runtime (par-blocks,
+# error-return traces, etc.). Production builds (the AOT path via
+# `link_executable`) are unaffected — they consume the runtime as
+# a static archive, not an rlib.
+karac-runtime = { path = "runtime" }
+# Phase-7 L560 W3.1: pipe + dup2 + fork-safe fd dance for capturing
+# stdout written by JIT'd Kāra code in `tests/lljit_e2e.rs`. The
+# JIT executes in-process, so we redirect fd 1 around the call.
+# Transitively present via llvm-sys; promoted to a direct dev-dep
+# so the test code can name `libc::dup2` etc. without going through
+# `llvm_sys::__libc` (which isn't re-exported).
+libc = "0.2"
+
 # Phase-8 std.http HTTPS test client (`tests/http_server.rs` E2E for
 # `Server.serve_tls`). Synchronous rustls — same version + `ring`
 # provider the `runtime` crate uses — drives a single GET through the
