@@ -12,7 +12,16 @@ members = ["runtime", "playground", "kernel"]
 # opens N idle wss:// connections + measures connect latency / per-conn
 # memory / churn). Same rationale: its tokio-rustls dep tree resolves
 # independently and it isn't part of the workspace `cargo test`.
-exclude = ["examples/parallax/bench/rust", "examples/ws_idle_holder/bench"]
+#
+# Demo 1 (M3 follow-on, 2026-05-30) — `examples/ws_idle_holder/rust/` is
+# the Rust reference impl ("comparator") for the ws-idle-holder workload,
+# benched via `examples/ws_idle_holder/bench/` for direct apples-to-apples
+# comparison vs. the Kāra demo at `examples/ws_idle_holder/src/main.kara`.
+exclude = [
+    "examples/parallax/bench/rust",
+    "examples/ws_idle_holder/bench",
+    "examples/ws_idle_holder/rust",
+]
 
 [package]
 name = "karac"

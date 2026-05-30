@@ -1,0 +1,48 @@
+# Empty `[workspace]` table for the same self-rooting reason the bench
+# harness uses — see `../bench/Cargo.toml` for the rationale. This crate
+# is also listed in the workspace root `Cargo.toml`'s `exclude` list.
+[workspace]
+
+[package]
+name = "ws-idle-holder-rust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Rust reference impl ("comparator") for the `ws_idle_holder` flagship
+# demo, mirroring `../src/main.kara`. Same end-to-end shape: bind a TLS
+# listener on 127.0.0.1:0, print `BOUND_PORT=<n>` on stdout (the bench
+# harness reads it back), accept WS-over-TLS connections in a loop,
+# hold each idle until the peer closes. Used by the bench harness via
+# `--server-bin` so the resulting numbers are directly comparable to
+# the Kāra impl on the same harness.
+#
+# Standalone — NOT part of the karac-rust workspace; mirrors the
+# parallax `bench/rust` precedent and the `bench/` crate next door.
+
+[dependencies]
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "net",
+    "io-util",
+    "macros",
+    "time",
+] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2"
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", default-features = false }
+socket2 = "0.5"
+
+[profile.release]
+# Same release posture as the Kāra-built demo: full LTO, strip symbols,
+# single codegen unit. Keeps the comparator-vs-Kāra numbers honest —
+# the Kāra binary is built with the runtime crate's release profile
+# (which sets `panic = "abort"` + LTO via the workspace root); the
+# Rust comparator should not look worse only because it's built with a
+# laxer release profile.
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
