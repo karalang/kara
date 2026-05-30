@@ -10032,6 +10032,39 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_in_indexed_vec_string_chars() {
+        // `for c in vec[idx].chars()` over a `Vec[String]`. Before the
+        // 2026-05-29 control_flow_for.rs fix, the `.chars()` peel-off
+        // recursed via `compile_for(…, object, body)` and the recursed
+        // call's dispatcher had no Index arm, so the body never ran —
+        // the for-loop produced zero iterations with no error. kata-17
+        // (Letter Combinations of a Phone Number) surfaced this on
+        // `for letter in groups[idx].chars()` where groups: Vec[String]
+        // holds the 8-row phone keypad. The fix handles the receiver
+        // directly at the peel-off site rather than recursing into the
+        // shape-keyed dispatcher.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut groups: Vec[String] = Vec.new();
+    groups.push("abc");
+    groups.push("def");
+    let idx: i64 = 1_i64;
+    let mut sum: i64 = 0_i64;
+    for c in groups[idx].chars() {
+        sum = sum + (c as i64);
+    }
+    println(sum);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // 'd' + 'e' + 'f' = 100 + 101 + 102 = 303
+            assert_eq!(out.trim(), "303");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_in_string_chars_into_map_char_key() {
         // The LeetCode #3 idiom — char keys feeding a `Map[char, i64]`.
         // Inserts decoded chars from one pass and looks them up via

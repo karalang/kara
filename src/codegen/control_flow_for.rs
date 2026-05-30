@@ -83,14 +83,54 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 return self.compile_for(label, pattern, object, body);
             }
-            // `for c in s.chars()` — peel `.chars()` off and recurse on
-            // the bare String receiver. The Identifier arm below dispatches
-            // through `string_vars` to `compile_for_string_chars`. Same
-            // shape as the `.iter()` / `.into_iter()` peel-off above —
-            // codegen iterators are dispatch points, not runtime values
-            // (design.md § Iterator Adaptors v1 surface).
+            // `for c in <receiver>.chars()` — codegen iterators are
+            // dispatch points, not runtime values (design.md § Iterator
+            // Adaptors v1 surface), so peel `.chars()` off and drive the
+            // per-Unicode-scalar-value loop on the receiver's String
+            // value. By the time we get here the typechecker has proven
+            // the receiver is a String, so we don't need to enumerate
+            // receiver shapes — the bare-String dispatch handles both
+            // the var-alloca path (Identifier) and the value path
+            // (everything else: Index, MethodCall, Call, FieldAccess,
+            // StringLit, …) uniformly.
+            //
+            // Pre-2026-05-29: this arm recursed via `compile_for(…,
+            // object, body)`, which only matched the Identifier /
+            // StringLit / FieldAccess arms in the dispatcher below.
+            // Any other receiver — `groups[idx].chars()` from a
+            // `Vec[String]`, `get_str().chars()` from a fn-return,
+            // `s.clone().chars()` from a method — fell through the
+            // dispatcher's silent `_ =>` arm and the body never ran.
+            // kata-17 (Letter Combinations of a Phone Number) surfaced
+            // the indexed-Vec[String] case: `for letter in
+            // groups[idx].chars()` produced 0 combinations instead of
+            // 3 or 4 per digit, with no error.
             if args.is_empty() && method == "chars" {
-                return self.compile_for(label, pattern, object, body);
+                // Variable receiver: preserve the alloca-based dispatch
+                // (extracts ptr/len from the var's struct slot, lets
+                // any per-var tracking state stay in scope).
+                if let ExprKind::Identifier(name) = &object.kind {
+                    if self.string_vars.contains(name.as_str()) {
+                        return self.compile_for_string_chars(label, pattern, name, body);
+                    }
+                }
+                // Value receiver: compile the expression to a
+                // `{ptr, len, cap}` String struct, extract data + len,
+                // and drive the per-char loop — same shape as the
+                // StringLit arm in the dispatcher below.
+                let val = self.compile_expr(object)?;
+                let sv = val.into_struct_value();
+                let data = self
+                    .builder
+                    .build_extract_value(sv, 0, "for.s.recv.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_extract_value(sv, 1, "for.s.recv.len")
+                    .unwrap()
+                    .into_int_value();
+                return self.compile_for_string_chars_inner(label, pattern, data, len, body);
             }
             // `for j in (start..end).step_by(n)` — the only chained
             // iterator-adaptor codegen surface supported in v1.
