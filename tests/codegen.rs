@@ -25539,6 +25539,50 @@ fn main() {
         );
     }
 
+    #[test]
+    fn test_binop_rejects_heterogeneous_types_with_structured_error() {
+        // Bug surfaced during c.4 bench: `assert_eq(m.get("a"), 1)`
+        // where the LHS is `Option[i64]` (a 4-i64 struct) and the RHS
+        // is `i64` panicked codegen at `compile_binop_typed`'s
+        // `into_int_value()` — the struct branch above only fires when
+        // both operands are structs, the float branch covers mixed
+        // float, and the int path assumed both sides were ints.
+        // Post-fix: a structured Err with the operand type and a hint
+        // pointing at the typechecker gap. User-facing message must
+        // mention `Eq` (the op) and `non-comparable type` so the
+        // diagnostic is searchable.
+        let src = r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a", 1);
+    assert_eq(m.get("a"), 1);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, None, None)
+            .expect_err("expected codegen to reject Option[i64] == i64");
+        assert!(
+            err.contains("Binary op Eq"),
+            "expected mention of Eq op; got: {err}"
+        );
+        assert!(
+            err.contains("non-comparable type"),
+            "expected mention of non-comparable type; got: {err}"
+        );
+        assert!(
+            err.contains("typechecker gap"),
+            "expected hint pointing at typechecker; got: {err}"
+        );
+    }
+
     // ── Slice c.1 — assert / assert_eq / assert_ne codegen lowering ──
     //
     // Pre-c.1 the codegen path silently dropped these prelude calls

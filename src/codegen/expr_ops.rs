@@ -1467,6 +1467,34 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_float_binop(op, lf, rf);
         }
 
+        // Heterogeneous-shape guard. The struct path above only fires
+        // when BOTH operands are struct values; the float path covers
+        // the mixed-float case. Everything else must arrive as an
+        // i1/i64-shaped IntValue. Pre-guard, a struct on one side and
+        // an int on the other tripped `into_int_value()`'s panic
+        // ("Found StructValue ... but expected the IntValue variant")
+        // — e.g. `assert_eq(opt_int, 1)` where the typechecker doesn't
+        // yet enforce `assert_eq[T]`'s same-type rule and `Option[i64]`
+        // flowed through to here. Return a typed-mismatch error so the
+        // surrounding caller (`compile_assert_eq`, `compile_assign`,
+        // user `==` lowering) emits a structured diagnostic instead of
+        // crashing codegen.
+        if !lhs.is_int_value() {
+            return Err(format!(
+                "Binary op {op:?}: left operand has non-comparable type {:?} \
+                 (likely a typechecker gap — `assert_eq` and `==` should reject \
+                 mismatched operand types before reaching codegen)",
+                lhs.get_type()
+            ));
+        }
+        if !rhs.is_int_value() {
+            return Err(format!(
+                "Binary op {op:?}: right operand has non-comparable type {:?} \
+                 (likely a typechecker gap — `assert_eq` and `==` should reject \
+                 mismatched operand types before reaching codegen)",
+                rhs.get_type()
+            ));
+        }
         let lv = lhs.into_int_value();
         let rv = rhs.into_int_value();
         let result = match op {
