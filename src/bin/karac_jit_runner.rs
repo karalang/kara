@@ -408,11 +408,7 @@ fn tempfile_for_redirect(prefix: &str) -> std::io::Result<RedirectTempfile> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!(
-        "{prefix}_{}_{}",
-        std::process::id(),
-        id
-    ));
+    let path = std::env::temp_dir().join(format!("{prefix}_{}_{}", std::process::id(), id));
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)

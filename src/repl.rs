@@ -1883,13 +1883,12 @@ impl Session {
     ) -> WrapperOutcome {
         use jit_runner_client::{CellResult, ReplRunnerClient};
 
-        let ir =
-            match crate::codegen::compile_to_ir_with_options(program, None, None, None, None) {
-                Ok(s) => s,
-                Err(e) => {
-                    return WrapperOutcome::errors(vec![format!("JIT codegen failed: {e}")], notes);
-                }
-            };
+        let ir = match crate::codegen::compile_to_ir_with_options(program, None, None, None, None) {
+            Ok(s) => s,
+            Err(e) => {
+                return WrapperOutcome::errors(vec![format!("JIT codegen failed: {e}")], notes);
+            }
+        };
 
         if self.jit_client.is_none() {
             match ReplRunnerClient::spawn() {
@@ -1902,7 +1901,10 @@ impl Session {
                 }
             }
         }
-        let client = self.jit_client.as_mut().expect("jit_client just initialized");
+        let client = self
+            .jit_client
+            .as_mut()
+            .expect("jit_client just initialized");
 
         self.jit_next_cell_id += 1;
         let cell_id = self.jit_next_cell_id;

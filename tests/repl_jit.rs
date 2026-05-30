@@ -33,7 +33,10 @@ fn enable_jit(session: &mut Session) {
     // Safe because: same value every test, set before any spawn.
     unsafe { std::env::set_var("KARAC_JIT_RUNNER", path) };
     session.set_jit_enabled_for_tests(true);
-    assert!(session.jit_enabled(), "set_jit_enabled_for_tests didn't stick");
+    assert!(
+        session.jit_enabled(),
+        "set_jit_enabled_for_tests didn't stick"
+    );
 }
 
 #[test]
