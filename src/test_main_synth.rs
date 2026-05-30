@@ -67,11 +67,7 @@ pub struct ProviderFixture {
 /// which matches the interpreter's push-in-source-order /
 /// pop-in-reverse contract — `R1`'s frame survives until `R2`'s pop
 /// fires.
-pub fn append_test_main(
-    program: &mut Program,
-    test_fn_name: &str,
-    fixtures: &[ProviderFixture],
-) {
+pub fn append_test_main(program: &mut Program, test_fn_name: &str, fixtures: &[ProviderFixture]) {
     program.items.retain(|item| !is_main_function(item));
 
     // The codegen `with_provider` lowering at `src/codegen/provider.rs`

@@ -98,7 +98,11 @@ fn test_pass() {
         "test_pass",
     );
     if let Some((exit, stdout, stderr)) = r {
-        assert_eq!(exit, 0, "expected exit 0; stdout={:?} stderr={:?}", stdout, stderr);
+        assert_eq!(
+            exit, 0,
+            "expected exit 0; stdout={:?} stderr={:?}",
+            stdout, stderr
+        );
         assert!(
             !stderr.contains("KARAC_TEST_FAILURE"),
             "stderr should not contain failure marker; got {:?}",
@@ -216,7 +220,11 @@ fn test_resolves_provider() {
     }];
     let r = build_and_run_test_fn_with_fixtures(src, "test_resolves_provider", &fixtures);
     if let Some((exit, stdout, stderr)) = r {
-        assert_eq!(exit, 0, "expected exit 0; stdout={:?} stderr={:?}", stdout, stderr);
+        assert_eq!(
+            exit, 0,
+            "expected exit 0; stdout={:?} stderr={:?}",
+            stdout, stderr
+        );
         assert!(
             !stderr.contains("KARAC_TEST_FAILURE"),
             "stderr should not contain failure marker; got {:?}",
@@ -272,7 +280,11 @@ fn test_uses_both() {
     ];
     let r = build_and_run_test_fn_with_fixtures(src, "test_uses_both", &fixtures);
     if let Some((exit, stdout, stderr)) = r {
-        assert_eq!(exit, 0, "expected exit 0; stdout={:?} stderr={:?}", stdout, stderr);
+        assert_eq!(
+            exit, 0,
+            "expected exit 0; stdout={:?} stderr={:?}",
+            stdout, stderr
+        );
     }
 }
 
