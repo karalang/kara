@@ -120,14 +120,26 @@ jobs:
               # ca-certificates reachable to talk to crates.io.
               cargo test --no-run -p karac-runtime --lib --release
 
-              # Strip the OS CA bundle BEFORE the test runs. From here
-              # the only trust anchors available to TLS are whatever the
-              # runtime embeds in its rustls config.
-              apk del ca-certificates
-              if [ -e /etc/ssl/certs/ca-certificates.crt ]; then
-                echo "::error::ca-certificates removal left bundle in place; test premise broken"
-                exit 1
-              fi
+              # Strip the OS CA trust store BEFORE the test runs. Alpine
+              # splits trust material across two packages: `ca-certificates`
+              # (just the update-ca-certificates tooling) and
+              # `ca-certificates-bundle` (which actually owns
+              # /etc/ssl/certs/ca-certificates.crt and /etc/ssl/cert.pem).
+              # Removing only `ca-certificates` leaves the bundle in place,
+              # so remove both — then `rm -f` the bundle files directly as a
+              # backstop, since a reverse-dep can pin `ca-certificates-bundle`
+              # and block its removal. `|| true` keeps a refused apk del from
+              # aborting under `sh -e`. From here the only trust anchors
+              # available to TLS are whatever the runtime embeds in its
+              # rustls config.
+              apk del ca-certificates ca-certificates-bundle || true
+              rm -f /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem
+              for f in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem; do
+                if [ -e "$f" ]; then
+                  echo "::error::OS CA trust store still present at $f; test premise broken"
+                  exit 1
+                fi
+              done
 
               # Locate the just-built test binary and run only the
               # ignored HTTPS smoke test.
