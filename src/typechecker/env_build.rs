@@ -1854,6 +1854,15 @@ impl<'a> super::TypeChecker<'a> {
     fn env_add_distinct_type(&mut self, d: &crate::ast::DistinctTypeDef) {
         let derived = extract_derived_traits(&d.attributes);
         self.env.distinct_types.insert(d.name.clone(), derived);
+        // Record the lowered base type so the `Name(value)` constructor,
+        // `.raw()`, and the no-deref method rule can recover it (the distinct
+        // type itself flows as a nominal `Type::Named { name }`). v1 handles
+        // non-generic distinct types; a base referencing the decl's own
+        // generic params lowers with them in scope but the constructor /
+        // `.raw()` surface treats the head name non-generically.
+        let generics = Self::generic_param_names(&d.generic_params);
+        let base = self.lower_type_expr(&d.base_type, &generics);
+        self.env.distinct_bases.insert(d.name.clone(), base);
     }
 
     fn env_add_opaque_foreign_type(&mut self, o: &crate::ast::OpaqueTypeDecl) {

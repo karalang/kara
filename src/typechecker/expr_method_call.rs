@@ -1587,6 +1587,33 @@ impl<'a> super::TypeChecker<'a> {
         // nominal name so the generic search finds the refinement's own
         // impl (phase-9 step 2, §1C).
         let receiver_for_lookup: Type = receiver_for_method_lookup(&obj_ty);
+        // Distinct-type `.raw()` unwrap + no-deref rule (design.md § Distinct
+        // Types). A distinct type flows as a nominal `Type::Named { name }`;
+        // its built-in `.raw()` returns the underlying base value (recovered
+        // from `env.distinct_bases`). Every *other* method resolves only
+        // through inherent impls on the distinct type itself — distinct types
+        // do not deref to their base (method-resolution rule 5), so a base
+        // method like `i64.abs()` is not callable on a `UserId`. Non-`raw`
+        // methods fall through to the generic impl search below; if none
+        // matches, the bottom-of-function `NoMethodFound` fires (distinct
+        // names are folded into `is_user_defined` there).
+        if let Type::Named { name, .. } = &receiver_for_lookup {
+            if let Some(base) = self.env.distinct_bases.get(name).cloned() {
+                if method == "raw" {
+                    if !args.is_empty() {
+                        self.type_error(
+                            format!("'.raw()' takes no arguments, found {}", args.len()),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                        for arg in args {
+                            self.infer_expr(&arg.value);
+                        }
+                    }
+                    return base;
+                }
+            }
+        }
         // Opaque foreign types have no methods by definition — impl blocks
         // on them are rejected at `E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS`,
         // so the generic "method not found" diagnostic that would otherwise
@@ -1801,7 +1828,12 @@ impl<'a> super::TypeChecker<'a> {
                 // dispatch above but may not match every name) so they keep
                 // the historical silent fall-through.
                 let is_user_defined = (self.env.structs.contains_key(&type_name)
-                    || self.env.enums.contains_key(&type_name))
+                    || self.env.enums.contains_key(&type_name)
+                    // Distinct types have an exhaustively-known method surface
+                    // (inherent impls only — no base deref), so an unresolved
+                    // method on one is a real `NoMethodFound`, not the
+                    // historical silent prelude fall-through.
+                    || self.env.distinct_bases.contains_key(&type_name))
                     && !crate::prelude::PRELUDE_TYPES.contains(&type_name.as_str());
                 // Args-specialization tightening: even on prelude types, fire
                 // NoMethodFound when the method exists on a *different*

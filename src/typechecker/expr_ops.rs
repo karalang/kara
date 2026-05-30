@@ -246,6 +246,24 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        // Distinct-type constructor: `UserId(value)` wraps a base value.
+        // The name resolves to a one-argument constructor function
+        // `fn(Base) -> UserId`, mirroring a tuple-variant constructor, so the
+        // ordinary call-dispatch path checks the argument against the base
+        // type and types the result as the (nominal) distinct type. The base
+        // is recovered from `env.distinct_bases`. design.md § Distinct Types —
+        // "Wrap: `UserId(42)` — constructor syntax".
+        if let Some(base) = self.env.distinct_bases.get(name).cloned() {
+            self.check_deprecated_use_at(span, name);
+            self.check_unstable_use_at(span, name);
+            return Type::Function {
+                params: vec![base],
+                return_type: Box::new(Type::Named {
+                    name: name.to_string(),
+                    args: Vec::new(),
+                }),
+            };
+        }
         // Fallback — likely a name the resolver already handled
         // Return Error silently (resolver already reported it)
         let _ = span;

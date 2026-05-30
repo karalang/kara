@@ -4330,6 +4330,154 @@ fn test_derive_arithmetic_non_numeric_base_rejected() {
     );
 }
 
+// ── Distinct types — constructor, `.raw()`, no-deref ───────────────
+//
+// design.md § Distinct Types (Newtypes): `Name(value)` wraps a base
+// value into the nominal distinct type, `.raw()` unwraps to the base, and
+// distinct types do NOT deref to their base (a base method is not callable
+// on the distinct type). The distinct type stays nominally distinct from
+// both its base and sibling distinct types over the same base.
+
+#[test]
+fn test_distinct_constructor_types_as_distinct() {
+    // `UserId(42)` has type `UserId`, and `.raw()` returns the base `i64`.
+    typecheck_ok(
+        "distinct type UserId = i64;
+         fn f() -> i64 { let a: UserId = UserId(42); a.raw() }",
+    );
+}
+
+#[test]
+fn test_distinct_constructor_result_is_nominal() {
+    // `UserId(42): UserId`, so binding it to a sibling distinct type
+    // `PostId` (same base) is a compile error — the two are distinct.
+    let errors = typecheck_errors(
+        "distinct type UserId = i64;
+         distinct type PostId = i64;
+         fn f() -> i64 { let a: PostId = UserId(42); 0 }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected UserId != PostId mismatch, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_distinct_constructor_arg_must_be_base() {
+    // The constructor argument is checked against the base type — a
+    // `String` does not wrap into an `i64`-based distinct type.
+    let errors = typecheck_errors(
+        "distinct type UserId = i64;
+         fn f() -> i64 { let a: UserId = UserId(\"hi\"); 0 }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected base-arg mismatch (String vs i64), got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_distinct_raw_returns_base_type() {
+    // `.raw()` returns the base `i64`; using it where `bool` is expected is
+    // a mismatch (confirms `.raw()` is typed as the base, not `Error`).
+    let errors = typecheck_errors(
+        "distinct type UserId = i64;
+         fn f() -> bool { let a: UserId = UserId(42); a.raw() }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected `.raw()` to be typed i64 (mismatch vs bool), got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_distinct_does_not_deref_base_method() {
+    // Distinct types do not inherit base methods: `i64.abs()` is not
+    // callable on a `UserId` (method-resolution rule 5).
+    let errors = typecheck_errors(
+        "distinct type UserId = i64;
+         fn f(u: UserId) -> i64 { u.abs() }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NoMethodFound),
+        "expected NoMethodFound for base method on distinct type, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_distinct_bogus_method_is_no_method_found() {
+    // A genuinely-absent method on a distinct type surfaces NoMethodFound
+    // rather than the historical silent `Type::Error` fall-through.
+    let errors = typecheck_errors(
+        "distinct type UserId = i64;
+         fn f(u: UserId) -> i64 { u.totally_bogus() }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NoMethodFound),
+        "expected NoMethodFound for a bogus method, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_distinct_inherent_impl_method_resolves() {
+    // Inherent impls on a distinct type DO resolve (the no-deref rule only
+    // blocks *base* methods, not the distinct type's own).
+    typecheck_ok(
+        "distinct type UserId = i64;
+         impl UserId { fn doubled(self) -> i64 { 0 } }
+         fn f(u: UserId) -> i64 { u.doubled() }",
+    );
+}
+
+#[test]
+fn test_distinct_raw_rejects_arguments() {
+    // `.raw()` takes no arguments.
+    let errors = typecheck_errors(
+        "distinct type UserId = i64;
+         fn f(u: UserId) -> i64 { u.raw(1) }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs),
+        "expected WrongNumberOfArgs for `.raw(1)`, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
 // ── defer / errdefer ───────────────────────────────────────────
 
 #[test]

@@ -231,6 +231,16 @@ pub struct TypeEnv {
     pub unions: HashMap<String, UnionInfo>,
     /// Derived traits for each `distinct type` declaration.
     pub distinct_types: HashMap<String, HashSet<String>>,
+    /// Underlying base `Type` for each `distinct type Name = Base [where …]`
+    /// declaration, keyed by the distinct type's name. A distinct type flows
+    /// through inference as a nominal `Type::Named { name }` (no implicit
+    /// widening to the base — unlike `Type::Refinement`), so the base is not
+    /// recoverable structurally; this side-table is the source of truth for
+    /// the three places that need it: the `Name(value)` constructor (arg must
+    /// be the base), `.raw()` (returns the base), and the no-deref method
+    /// rule (a distinct type does not inherit its base's methods). Populated
+    /// by `env_add_distinct_type`. See design.md § Distinct Types (Newtypes).
+    pub distinct_bases: HashMap<String, Type>,
     /// Names of opaque foreign types declared inside `unsafe extern "ABI" { ... }`
     /// blocks (`type Foo;`). Consulted by `lower_type_expr_inner` for
     /// `E_OPAQUE_TYPE_REQUIRES_INDIRECTION`, by `infer_field_access` for
@@ -326,6 +336,7 @@ impl TypeEnv {
             enums: HashMap::new(),
             unions: HashMap::new(),
             distinct_types: HashMap::new(),
+            distinct_bases: HashMap::new(),
             opaque_foreign_types: HashSet::new(),
             functions: HashMap::new(),
             constants: HashMap::new(),
