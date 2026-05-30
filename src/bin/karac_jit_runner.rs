@@ -288,17 +288,18 @@ fn run_one_cell<'a>(
     // to the bare "main" name (slice-B.A behavior, still used by the
     // protocol's existing tests that emit `fn main()` directly).
     let preferred = format!("cell_main_{id}");
-    let addr = match engine.lookup_address(&preferred).or_else(|_| engine.lookup_address("main")) {
+    let addr = match engine
+        .lookup_address(&preferred)
+        .or_else(|_| engine.lookup_address("main"))
+    {
         Ok(a) => a,
         Err(e) => {
             return (
                 CellOutcome {
                     exit: 2,
                     stdout: Vec::new(),
-                    stderr: format!(
-                        "karac_jit_runner: lookup ({preferred} or main): {e}\n"
-                    )
-                    .into_bytes(),
+                    stderr: format!("karac_jit_runner: lookup ({preferred} or main): {e}\n")
+                        .into_bytes(),
                 },
                 Some(tracker),
             );
