@@ -220,3 +220,91 @@ fn repl_jit_snapshot_covers_f64_bool_char() {
         stdout,
     );
 }
+
+#[test]
+fn repl_jit_banner_advertises_jit_mode() {
+    // Slice c-repl.B.B — drive the actual `karac repl` binary with
+    // `KARAC_REPL_JIT=1`. Verifies the banner picked up the JIT tag
+    // so users have a visible signal that the env flag took effect.
+    // rustyline drops to a non-TTY fallback when stdin is piped and
+    // exits cleanly on EOF — we don't try to send cells through this
+    // path (those go through the in-process Session tests above),
+    // we only assert the banner string.
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let karac = env!("CARGO_BIN_EXE_karac");
+    let runner = env!("CARGO_BIN_EXE_karac_jit_runner");
+
+    let mut child = Command::new(karac)
+        .arg("repl")
+        .env("KARAC_REPL_JIT", "1")
+        .env("KARAC_JIT_RUNNER", runner)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn karac repl");
+    // Close stdin so rustyline sees EOF and the loop exits.
+    {
+        let stdin = child.stdin.as_mut().expect("child stdin");
+        let _ = stdin.write_all(b"");
+    }
+    drop(child.stdin.take());
+    let out = child.wait_with_output().expect("wait karac repl");
+    assert!(out.status.success(), "karac repl exit: {:?}", out.status);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("JIT"),
+        "JIT banner tag missing under KARAC_REPL_JIT=1; stdout: {:?}",
+        stdout,
+    );
+    assert!(
+        stdout.contains("Kāra REPL"),
+        "banner heading missing; stdout: {:?}",
+        stdout,
+    );
+}
+
+#[test]
+fn repl_jit_reset_clears_snapshot_state() {
+    // Slice c-repl.B.B — `:reset` under JIT mode must clear
+    // `jit_snapshotted_lets` (the in-process map of names → primitive
+    // kinds) AND drop the runner client (whose JITDylib holds the
+    // matching snapshot globals). Without that clear, a post-reset
+    // `let x = …` whose name collides with a pre-reset binding takes
+    // the snapshot-replay path against a stale-or-missing global.
+    //
+    // Scenario:
+    //   cell 1: `let x = 7;` — captures 7 into the runner's
+    //     @__karac_repl_snapshot_x global; records ("x", I64) in
+    //     `jit_snapshotted_lets`.
+    //   `:reset` — clears persistent_lets, MUST also clear the JIT
+    //     state and drop the client. Next cell respawns a fresh
+    //     runner with an empty JITDylib.
+    //   cell 2: `let x = 99; println(x);` — must print 99. Without
+    //     the fix, codegen sees "x" still in `jit_snapshotted_lets`,
+    //     emits a load of @__karac_repl_snapshot_x (now unmapped on
+    //     the new runner), and either fails to link or returns
+    //     garbage instead of the fresh `99`.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("let x = 7;");
+    assert!(r.errors.is_empty(), "cell 1: {:?}", r.errors);
+
+    s.reset_persistent_lets();
+
+    let r = s.evaluate_cell_captured("let x = 99; println(x);");
+    assert!(
+        r.errors.is_empty(),
+        "cell after :reset should run cleanly; got errors: {:?}",
+        r.errors,
+    );
+    assert_eq!(
+        r.stdout.trim(),
+        "99",
+        "post-reset `let x = 99` must NOT take the snapshot-replay path; \
+         stdout: {:?}",
+        r.stdout,
+    );
+}

@@ -83,17 +83,51 @@ pub fn run() {
     run_with_options(ReplOptions::default());
 }
 
+/// Slice c-repl.B.B: produce the `(JIT)` banner tag when JIT mode is
+/// on, `None` otherwise. Reads the session's `jit_enabled` snapshot
+/// taken at construction so the banner can't disagree with the
+/// dispatch path the session will actually take.
+#[cfg(feature = "lljit_prototype")]
+fn jit_banner_tag(session: &Session) -> Option<String> {
+    if session.jit_enabled() {
+        Some("JIT".to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(not(feature = "lljit_prototype"))]
+fn jit_banner_tag(_session: &Session) -> Option<String> {
+    None
+}
+
 /// Surface for the binary entry point: launch the REPL with caller-supplied
 /// options. Used by `karac repl` flag wiring (`--auto-clone`).
 pub fn run_with_options(opts: ReplOptions) {
-    let banner = if opts.auto_clone {
-        "Kāra REPL  (auto-clone on; type :help for commands, :quit to exit)"
+    let mut session = Session::with_options(opts);
+    // Slice c-repl.B.B: surface JIT mode in the banner so users know
+    // KARAC_REPL_JIT=1 actually took effect — silent activation is a
+    // worse failure mode than a missing flag because the cells run
+    // either way and the divergence only shows up on side-effect
+    // semantics.
+    let jit_tag = jit_banner_tag(&session);
+    let mut tags: Vec<&str> = Vec::new();
+    if opts.auto_clone {
+        tags.push("auto-clone on");
+    }
+    if let Some(tag) = jit_tag.as_deref() {
+        tags.push(tag);
+    }
+    let banner = if tags.is_empty() {
+        "Kāra REPL  (type :help for commands, :quit to exit)".to_string()
     } else {
-        "Kāra REPL  (type :help for commands, :quit to exit)"
+        format!(
+            "Kāra REPL  ({}; type :help for commands, :quit to exit)",
+            tags.join("; ")
+        )
     };
     println!("{banner}");
 
-    let mut session = Session::with_options(opts);
     let mut editor = match DefaultEditor::new() {
         Ok(e) => e,
         Err(e) => {
@@ -547,7 +581,9 @@ pub struct Session {
     /// so the JIT linker resolves calls to them against the prior
     /// definition — cutting per-cell codegen + jitlink cost. Cleared
     /// when the runner subprocess dies (a fresh runner has an empty
-    /// JITDylib) or on `:reset` (which also wipes `items_source`).
+    /// JITDylib) and on `:reset` (which drops the runner so the
+    /// snapshot globals don't outlive the persistent-let slate that
+    /// gave them meaning).
     #[cfg(feature = "lljit_prototype")]
     jit_installed_fns: std::collections::HashSet<String>,
     /// Slice c-repl.B.5.1: top-level `let <name> = <expr>` bindings
@@ -2505,6 +2541,21 @@ impl Session {
         self.persistent_let_provider_scope.clear();
         self.let_snapshots.clear();
         self.pruned_provider_lets.clear();
+        // Slice c-repl.B.B: under JIT mode the persistent-let bindings
+        // live as snapshot globals inside the runner's JITDylib, and
+        // their cached primitive kinds live in `jit_snapshotted_lets`.
+        // Clearing only the source-replay slate leaves the runner with
+        // stale globals — the next cell whose binding name collides
+        // with a prior one would take the replay path and load the
+        // dead value. Drop the whole runner so the next cell respawns
+        // with a fresh, empty JITDylib; `jit_installed_fns` clears in
+        // step so fn bodies re-emit instead of going declare-only.
+        #[cfg(feature = "lljit_prototype")]
+        {
+            self.jit_installed_fns.clear();
+            self.jit_snapshotted_lets.clear();
+            self.jit_client = None;
+        }
     }
 
     /// Type a single expression by wrapping it as `let __t = <expr>;` inside
