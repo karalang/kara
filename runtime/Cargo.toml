@@ -103,6 +103,19 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["loggin
 # binaries get the same client behavior without dragging ureq into the
 # generated binaries' direct dep set.
 ureq = { version = "2", default-features = false, features = ["tls"] }
+# Phase-8 line 48 (public-CA trust default): all 4 ureq client fetch
+# sites (`_client_get` / `_post` / `_client_send` / `_builder_send`)
+# route through a shared `ureq::Agent` whose rustls ClientConfig
+# explicitly trusts `webpki_roots::TLS_SERVER_ROOTS` (Mozilla bundle).
+# ureq's `tls` feature already pulls webpki-roots transitively, but
+# pinning it as a direct dep + an explicit `with_root_certificates`
+# call makes the v1 commitment load-bearing in our code: a future ureq
+# default flip (e.g. to `rustls-native-certs`) cannot silently move us
+# off the bundled-Mozilla-roots posture, and `Client.get("https://...")`
+# keeps working on stripped images (Alpine / scratch / distroless)
+# without a system CA bundle. Version pinned to match ureq 2.12.1's
+# transitive choice — see Cargo.lock.
+webpki-roots = "0.26"
 
 [dev-dependencies]
 # Hermetic test-cert generation for `src/tls.rs`'s unit tests. Slice 4

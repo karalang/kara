@@ -3375,6 +3375,37 @@ fn read_response_body_bytes(resp: ureq::Response) -> Vec<u8> {
     buf
 }
 
+// ── Shared ureq agent with explicit webpki-roots (phase-8 line 48) ────
+//
+// All 4 ureq client fetch sites (`_client_get` / `_post` / `_client_send`
+// / `_builder_send`) route through this single `ureq::Agent` whose
+// rustls `ClientConfig` explicitly trusts `webpki_roots::TLS_SERVER_ROOTS`
+// (the bundled Mozilla Root program) — same `ring` provider + safe
+// default protocol versions as `runtime/src/tls.rs::build_client_config`,
+// the direct-TLS client-side path. ureq's `tls` feature already brings
+// webpki-roots in transitively today, but pinning the choice in our own
+// config builder defends against a future ureq default flip to
+// `rustls-native-certs` and lets `Client.get("https://...")` work on
+// stripped images (Alpine / scratch / distroless) without a system CA
+// bundle reachable to the process.
+fn http_client_agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        let root_store = rustls::RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+        };
+        let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+        let tls_config = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .expect("rustls safe default protocol versions are always supported by ring")
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+        ureq::AgentBuilder::new()
+            .tls_config(std::sync::Arc::new(tls_config))
+            .build()
+    })
+}
+
 // ── Client response headers side-table (phase-8 line 39) ──────────────
 //
 // `Response.header(name)` needs the response's headers, but the
@@ -3604,7 +3635,7 @@ pub unsafe extern "C" fn karac_runtime_http_client_get(
         }
     };
 
-    match ureq::get(url).call() {
+    match http_client_agent().get(url).call() {
         Ok(resp) => {
             *out_status = resp.status() as i64;
             *out_headers_handle = capture_response_headers(&resp);
@@ -3667,7 +3698,7 @@ pub unsafe extern "C" fn karac_runtime_http_client_post(
         std::slice::from_raw_parts(body_ptr, body_len)
     };
 
-    match ureq::post(url).send_bytes(body_bytes) {
+    match http_client_agent().post(url).send_bytes(body_bytes) {
         Ok(resp) => {
             *out_status = resp.status() as i64;
             *out_headers_handle = capture_response_headers(&resp);
@@ -3787,7 +3818,7 @@ pub unsafe extern "C" fn karac_runtime_http_client_send(
         }
     };
 
-    let mut req = ureq::request(method, url);
+    let mut req = http_client_agent().request(method, url);
     if headers_count > 0 && !headers_ptr.is_null() {
         let pairs = std::slice::from_raw_parts(headers_ptr, headers_count);
         for pair in pairs {
@@ -4037,7 +4068,7 @@ pub unsafe extern "C" fn karac_runtime_http_builder_send(
         }
     };
 
-    let mut req = ureq::request(&state.method, &state.url);
+    let mut req = http_client_agent().request(&state.method, &state.url);
     for (k, v) in &state.headers {
         req = req.set(k, v);
     }
@@ -6286,6 +6317,86 @@ mod tests {
         let v = slice.to_vec();
         free(ptr as *mut std::os::raw::c_void);
         v
+    }
+
+    /// Phase-8 line 48 — real HTTPS round-trip against a public
+    /// CA-signed host (`https://example.com/`), gated `#[ignore]` so
+    /// stock `cargo test` stays hermetic. The CI job
+    /// `stripped-image-https` invokes this with `--include-ignored`
+    /// inside an Alpine container whose `ca-certificates` package has
+    /// been removed AFTER build — proving the runtime's embedded
+    /// `webpki-roots` (not any system CA bundle) is what validated the
+    /// peer cert. A non-200 response is acceptable (example.com may
+    /// redirect or change body); a `status == 0` is a hard fail because
+    /// it means the TLS handshake or cert verification did not complete.
+    #[test]
+    #[ignore = "network HTTPS round-trip; runs in the stripped-image-https CI job via --include-ignored"]
+    fn test_https_round_trip_against_public_origin() {
+        let url = "https://example.com/";
+        let mut status: i64 = -1;
+        let mut body_ptr: *mut u8 = std::ptr::null_mut();
+        let mut body_len: i64 = -1;
+        let mut err_ptr: *mut u8 = std::ptr::null_mut();
+        let mut err_len: i64 = -1;
+        let mut headers_handle: i64 = -1;
+        unsafe {
+            super::karac_runtime_http_client_get(
+                url.as_ptr(),
+                url.len(),
+                &mut status,
+                &mut body_ptr,
+                &mut body_len,
+                &mut err_ptr,
+                &mut err_len,
+                &mut headers_handle,
+            );
+        }
+        if status == 0 {
+            let msg = if err_ptr.is_null() {
+                String::new()
+            } else {
+                String::from_utf8_lossy(&unsafe { take_owned_buffer(err_ptr, err_len) })
+                    .into_owned()
+            };
+            panic!(
+                "HTTPS round-trip failed: status=0, err={msg:?}; \
+                 expected any HTTP status (cert verification via embedded webpki-roots must succeed)"
+            );
+        }
+        assert!(
+            (200..400).contains(&status),
+            "expected 2xx/3xx from example.com, got status {status}"
+        );
+        if !body_ptr.is_null() {
+            unsafe {
+                take_owned_buffer(body_ptr, body_len);
+            }
+        }
+    }
+
+    /// Phase-8 line 48 — pin the shared `ureq::Agent`'s explicit
+    /// webpki-roots config. ureq's `tls` feature transitively brings
+    /// webpki-roots in today, but we build our own `ClientConfig` (per
+    /// `http_client_agent`) so a future ureq default flip to
+    /// `rustls-native-certs` can't silently move us off the bundled
+    /// Mozilla Root program. Asserts: (1) the Mozilla root bundle is
+    /// non-empty (proves the `webpki-roots` dep is reachable, not a
+    /// dead crate), and (2) `http_client_agent()` returns the same
+    /// `&'static` agent across calls (proves the `OnceLock` cache is
+    /// what's serving every HTTPS request — single shared TLS config,
+    /// not a fresh build per fetch).
+    #[test]
+    fn test_http_client_agent_uses_explicit_webpki_roots_and_is_shared() {
+        assert!(
+            !webpki_roots::TLS_SERVER_ROOTS.is_empty(),
+            "webpki-roots Mozilla bundle must be reachable; an empty bundle would mean every HTTPS request rejects every cert"
+        );
+        let a = super::http_client_agent();
+        let b = super::http_client_agent();
+        assert!(
+            std::ptr::eq(a, b),
+            "http_client_agent must return the OnceLock-cached agent; a fresh build per call would mean per-request TLS handshake state setup"
+        );
     }
 
     /// GET happy path — origin returns 200 OK with `hello` body; FFI

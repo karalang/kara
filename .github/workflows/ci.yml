@@ -87,3 +87,56 @@ jobs:
 
       - name: Cross-compile
         run: cross build --target ${{ matrix.target }}
+
+  # Phase-8 line 48 (public-CA trust default). Proves the runtime's
+  # `Client.get("https://...")` validates a real CA-signed peer cert
+  # using the embedded `webpki-roots` bundle — without relying on a
+  # system CA store. Builds the runtime's test binary inside
+  # `rust:alpine` (with `ca-certificates` present so cargo can fetch
+  # crates.io), then removes `ca-certificates` BEFORE running the test
+  # so the OS CA store can't be the thing that's working. The test
+  # (`tests::test_https_round_trip_against_public_origin`) hits
+  # `https://example.com/` and asserts a successful TLS handshake +
+  # any non-zero HTTP status.
+  stripped-image-https:
+    name: HTTPS without system CA (stripped Alpine)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run HTTPS round-trip in rust:alpine with ca-certificates removed
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            rust:alpine sh -eu -c '
+              # Build deps the runtime needs (musl-dev for libc headers,
+              # gcc as the C linker). rust:alpine ships ca-certificates
+              # baked in — needed to fetch crates from crates.io.
+              apk add --no-cache musl-dev gcc
+
+              # Compile (no run) — cargo fetch + build still need
+              # ca-certificates reachable to talk to crates.io.
+              cargo test --no-run -p karac-runtime --lib --release
+
+              # Strip the OS CA bundle BEFORE the test runs. From here
+              # the only trust anchors available to TLS are whatever the
+              # runtime embeds in its rustls config.
+              apk del ca-certificates
+              if [ -e /etc/ssl/certs/ca-certificates.crt ]; then
+                echo "::error::ca-certificates removal left bundle in place; test premise broken"
+                exit 1
+              fi
+
+              # Locate the just-built test binary and run only the
+              # ignored HTTPS smoke test.
+              BIN=$(find target/release/deps -maxdepth 1 -type f -name "karac_runtime-*" ! -name "*.d" -perm -111 | head -1)
+              if [ -z "$BIN" ]; then
+                echo "::error::karac-runtime test binary not found under target/release/deps"
+                exit 1
+              fi
+              "$BIN" --exact \
+                tests::test_https_round_trip_against_public_origin \
+                --include-ignored --nocapture
+            '
