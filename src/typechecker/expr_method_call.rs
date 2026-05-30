@@ -963,6 +963,13 @@ impl<'a> super::TypeChecker<'a> {
             ) && matches!(callee_type_name.as_deref(), Some("Option") | Some("Result"));
         if !is_builtin_unwrap_family {
             if let Some(type_name) = callee_type_name {
+                // Phase-8 line 96 — instance-method use-site stability lint.
+                // Fires for every named-receiver method call (the hardcoded
+                // HTTP / TCP / TLS / WS arms below included, since they share
+                // this central resolution point). The skipped case is only the
+                // builtin Option/Result unwrap-family, which is never
+                // `#[unstable]` / `#[deprecated]`.
+                self.check_method_stability(&type_name, method, span);
                 self.method_callee_types.insert(
                     SpanKey::from_span(span),
                     format!("{}.{}", type_name, method),

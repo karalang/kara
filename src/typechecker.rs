@@ -1929,14 +1929,37 @@ impl<'a> TypeChecker<'a> {
                     .map(|s| s.id)
             });
         let Some(sym_id) = sym_id else { return };
-        let Some(dep) = self.resolve_result.symbol_table.deprecation_for(sym_id) else {
+        // Clone the payload's fields out so the immutable borrow of the
+        // symbol table ends before `type_lint_warning` takes `&mut self`.
+        let Some((note, since)) = self
+            .resolve_result
+            .symbol_table
+            .deprecation_for(sym_id)
+            .map(|dep| (dep.note.clone(), dep.since.clone()))
+        else {
             return;
         };
+        self.emit_deprecated_warning(span, display_name, note.as_deref(), since.as_deref());
+    }
+
+    /// Emit the `deprecated` lint warning for `display_name` at `span`.
+    /// Shared by the name-based [`Self::check_deprecated_use_at`] and the
+    /// method-aware [`Self::check_method_stability`] — both resolve the
+    /// `#[deprecated]` payload from different tables (the symbol-table
+    /// sidecar vs. the baked-stdlib side-table) but build and route the
+    /// diagnostic identically.
+    fn emit_deprecated_warning(
+        &mut self,
+        span: &Span,
+        display_name: &str,
+        note: Option<&str>,
+        since: Option<&str>,
+    ) {
         let mut message = format!("warning[deprecated]: use of deprecated item `{display_name}`");
-        if let Some(ref note) = dep.note {
+        if let Some(note) = note {
             message.push_str(&format!(": {note}"));
         }
-        if let Some(ref since) = dep.since {
+        if let Some(since) = since {
             message.push_str(&format!(" (since {since})"));
         }
         message.push_str(" — suppress with `#[allow(deprecated)]` on the enclosing item");
@@ -1977,14 +2000,29 @@ impl<'a> TypeChecker<'a> {
                     .map(|s| s.id)
             });
         let Some(sym_id) = sym_id else { return };
-        let Some(payload) = self.resolve_result.symbol_table.unstable_for(sym_id) else {
+        // Clone the note out so the symbol-table borrow ends before
+        // `type_lint_warning` takes `&mut self`.
+        let Some(note) = self
+            .resolve_result
+            .symbol_table
+            .unstable_for(sym_id)
+            .map(|payload| payload.note.clone())
+        else {
             return;
         };
+        self.emit_unstable_warning(span, display_name, note.as_deref());
+    }
+
+    /// Emit the `unstable_api` lint warning for `display_name` at `span`.
+    /// Shared by the name-based [`Self::check_unstable_use_at`] and the
+    /// method-aware [`Self::check_method_stability`] (see
+    /// [`Self::emit_deprecated_warning`] for the same factoring rationale).
+    fn emit_unstable_warning(&mut self, span: &Span, display_name: &str, note: Option<&str>) {
         let mut message = format!(
             "warning[unstable_api]: use of `#[unstable]` item `{display_name}` — the API \
              surface may change before v1 lock",
         );
-        if let Some(ref note) = payload.note {
+        if let Some(note) = note {
             message.push_str(&format!(": {note}"));
         }
         message.push_str(
@@ -1997,6 +2035,95 @@ impl<'a> TypeChecker<'a> {
             TypeErrorKind::UnstableApi,
             "unstable_api",
         );
+    }
+
+    /// Phase-8 line 96 — method / associated-function use-site stability
+    /// lint. The name-based [`Self::check_unstable_use_at`] /
+    /// [`Self::check_deprecated_use_at`] fire only at free-fn-name,
+    /// constant, struct-literal, and type-position sites; method and
+    /// associated-function calls resolve through the typechecker (not the
+    /// resolver's `resolutions` map), so an `#[unstable]` / `#[deprecated]`
+    /// tag on a method went unenforced. This closes that gap.
+    ///
+    /// `type_name` / `method_name` are the typechecker-resolved callee — the
+    /// receiver's nominal type for an instance call (`infer_method_call`) or
+    /// the path's leading segment for an associated call (`resolve_path_type`,
+    /// e.g. `Server.serve_static(...)`). Two payload sources are consulted:
+    ///
+    /// 1. **User-authored impl methods** carry their stability attributes in
+    ///    the resolver's symbol-table sidecar (`record_unstable_if_present` /
+    ///    `record_deprecation_if_present` in `collect_impl`); resolved via
+    ///    [`crate::resolver::SymbolTable::lookup_method`].
+    /// 2. **Baked-stdlib methods** bypass `collect_impl`, so their attributes
+    ///    live in [`crate::prelude::STDLIB_METHOD_STABILITY`] instead.
+    ///
+    /// The user-method sidecar wins when both carry an entry for the same key
+    /// (a user impl shadowing a baked type is the authored intent), but in
+    /// practice the two key spaces don't overlap.
+    pub(super) fn check_method_stability(
+        &mut self,
+        type_name: &str,
+        method_name: &str,
+        span: &Span,
+    ) {
+        let display_name = format!("{type_name}.{method_name}");
+
+        // (1) User-authored impl method — symbol-table sidecar.
+        if let Some(sym_id) = self
+            .resolve_result
+            .symbol_table
+            .lookup_method(type_name, method_name)
+            .map(|s| s.id)
+        {
+            let unstable_note = self
+                .resolve_result
+                .symbol_table
+                .unstable_for(sym_id)
+                .map(|p| p.note.clone());
+            let deprecation = self
+                .resolve_result
+                .symbol_table
+                .deprecation_for(sym_id)
+                .map(|d| (d.note.clone(), d.since.clone()));
+            if let Some(note) = unstable_note {
+                self.emit_unstable_warning(span, &display_name, note.as_deref());
+            }
+            if let Some((note, since)) = deprecation {
+                self.emit_deprecated_warning(
+                    span,
+                    &display_name,
+                    note.as_deref(),
+                    since.as_deref(),
+                );
+            }
+            // A user-authored method was found, so it is the one being called
+            // (user types shadow baked-stdlib names in resolution). Return
+            // unconditionally — even when untagged — so a user type that
+            // happens to collide with a tagged baked-stdlib `Type.method`
+            // never inherits the stdlib tag from the fallback below.
+            return;
+        }
+
+        // (2) Baked-stdlib method — prelude side-table.
+        if let Some((unstable, deprecation)) =
+            crate::prelude::STDLIB_METHOD_STABILITY.get(&display_name)
+        {
+            let unstable_note = unstable.as_ref().map(|p| p.note.clone());
+            let deprecation = deprecation
+                .as_ref()
+                .map(|d| (d.note.clone(), d.since.clone()));
+            if let Some(note) = unstable_note {
+                self.emit_unstable_warning(span, &display_name, note.as_deref());
+            }
+            if let Some((note, since)) = deprecation {
+                self.emit_deprecated_warning(
+                    span,
+                    &display_name,
+                    note.as_deref(),
+                    since.as_deref(),
+                );
+            }
+        }
     }
 
     /// Validate an `as` cast (`from as to`) and emit a focused diagnostic

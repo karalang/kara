@@ -295,6 +295,12 @@ impl<'a> super::TypeChecker<'a> {
             for imp in &self.env.impls.clone() {
                 if imp.target_type == *type_name && imp.target_args.is_empty() {
                     if let Some(sig) = imp.methods.get(member) {
+                        // Phase-8 line 96 — associated-function use-site
+                        // stability lint (`Server.serve_static(...)` and any
+                        // other `Type.method(...)` assoc call). This path
+                        // never touches `method_callee_types`, so the check
+                        // keys directly off the resolved `(type_name, member)`.
+                        self.check_method_stability(type_name, member, span);
                         return Type::Function {
                             params: sig.params.clone(),
                             return_type: Box::new(sig.return_type.clone()),

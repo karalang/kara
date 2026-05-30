@@ -32,9 +32,11 @@
 //! [`Item`]: crate::ast::Item
 
 use crate::ast::{
-    Block, Function, GenericParam, GenericParams, Item, Program, StructDef, TraitDef, Visibility,
+    Block, Deprecation, Function, GenericParam, GenericParams, Item, Program, StructDef, TraitDef,
+    TypeKind, Unstable, Visibility,
 };
 use crate::token::Span;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// Canonical path of the synthetic prelude module: `std.prelude`. Stored as
@@ -640,6 +642,59 @@ pub static STDLIB_PROGRAMS: LazyLock<Vec<(&'static str, Program)>> = LazyLock::n
     }
     out
 });
+
+/// A baked-stdlib method's stability annotations: the `#[unstable]` payload
+/// and the `#[deprecated]` payload, either or both of which may be present.
+/// Value type of [`STDLIB_METHOD_STABILITY`].
+pub type StabilityPayload = (Option<Unstable>, Option<Deprecation>);
+
+/// Baked-stdlib method-level `#[unstable]` / `#[deprecated]` payloads,
+/// keyed by `"TargetType.method"` (e.g. `"Server.serve_static"`).
+///
+/// **Why a separate table.** Baked stdlib impls live in [`STDLIB_PROGRAMS`]
+/// and are walked by the typechecker directly (`register_baked_stdlib` →
+/// `env_add_impl`); they never reach the resolver's `collect_impl` pass, so
+/// their method-level stability attributes never land in the symbol table's
+/// `unstables` / `deprecations` sidecars the way *user-authored* impl methods
+/// do (`record_unstable_if_present` / `record_deprecation_if_present`). And
+/// `ImplInfo.methods` (`env.impls`) stores only `FunctionSig`, which drops
+/// the attributes. This table is the baked-stdlib mirror of those sidecars:
+/// the method-aware use-site lint (`TypeChecker::check_method_stability`)
+/// consults the symbol-table sidecar for user methods and *this* table for
+/// baked-stdlib methods. Built once, lazily, from the parsed stdlib AST so
+/// any future `#[unstable]` / `#[deprecated]` stdlib method tag is picked up
+/// with no further wiring.
+pub static STDLIB_METHOD_STABILITY: LazyLock<HashMap<String, StabilityPayload>> =
+    LazyLock::new(|| {
+        let mut out: HashMap<String, StabilityPayload> = HashMap::new();
+        for (_, program) in STDLIB_PROGRAMS.iter() {
+            for item in &program.items {
+                let Item::ImplBlock(imp) = item else { continue };
+                // Inherent + trait impls both contribute; the key is the target
+                // type's nominal name (last path segment, so `impl[T] Vec[T]`
+                // keys under `Vec`). Generic args don't participate in the key.
+                let TypeKind::Path(path) = &imp.target_type.kind else {
+                    continue;
+                };
+                let Some(type_name) = path.segments.last() else {
+                    continue;
+                };
+                for impl_item in &imp.items {
+                    let crate::ast::ImplItem::Method(method) = impl_item else {
+                        continue;
+                    };
+                    if method.unstable.is_none() && method.deprecation.is_none() {
+                        continue;
+                    }
+                    out.insert(
+                        format!("{type_name}.{}", method.name),
+                        (method.unstable.clone(), method.deprecation.clone()),
+                    );
+                }
+            }
+        }
+        out
+    });
 
 /// Compiler builtins / I/O functions visible without import. Implementations
 /// stay compiler-side (`!` return type, source-location capture, release

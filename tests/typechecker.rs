@@ -17198,6 +17198,171 @@ fn unstable_api_source_deny_beats_manifest_opt_in() {
     );
 }
 
+// ── `#[unstable]` / `#[deprecated]` at method / assoc-fn call sites ──
+// (phase-8 line 96) — the name-based checks above fire only at
+// free-fn-name / constant / struct-literal / type-position sites.
+// `check_method_stability` closes the gap for `recv.method()` (instance)
+// and `Type.method()` (associated) calls, consulting the symbol-table
+// sidecar for user-authored impl methods and `STDLIB_METHOD_STABILITY`
+// for baked-stdlib methods (e.g. the `#[unstable]` `Server.serve_static`
+// freeze-list tag).
+
+#[test]
+fn unstable_api_baked_stdlib_method_call_emits_warning() {
+    // `Server.serve_static` carries `#[unstable]` in
+    // `runtime/stdlib/http.kara` (phase-8 line 64 freeze list). The
+    // associated-call site must surface the warning + the stdlib note.
+    let result = typecheck_ok(
+        "fn main() {\n\
+         \x20   let r = Server.serve_static(\"127.0.0.1:0\", \"ok\");\n\
+         \x20   match r { Result.Ok(_) => {} Result.Err(_) => {} }\n\
+         }",
+    );
+    let warn = result
+        .warnings
+        .iter()
+        .find(|w| w.lint_name.as_deref() == Some("unstable_api"))
+        .expect("expected an `unstable_api` warning at the serve_static call site");
+    assert!(warn.message.contains("Server.serve_static"));
+    assert!(warn.message.contains("serve(handler)"));
+    assert!(warn.message.contains("#[allow(unstable_api)]"));
+}
+
+#[test]
+fn unstable_api_baked_stdlib_method_allow_suppresses() {
+    let result = typecheck_ok(
+        "#[allow(unstable_api)]\n\
+         fn main() {\n\
+         \x20   let r = Server.serve_static(\"127.0.0.1:0\", \"ok\");\n\
+         \x20   match r { Result.Ok(_) => {} Result.Err(_) => {} }\n\
+         }",
+    );
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|w| w.lint_name.as_deref() == Some("unstable_api")),
+        "#[allow(unstable_api)] on the caller should suppress the serve_static warning",
+    );
+}
+
+#[test]
+fn unstable_api_baked_stdlib_method_deny_promotes_to_error() {
+    let parsed = parse(
+        "#[deny(unstable_api)]\n\
+         fn main() {\n\
+         \x20   let r = Server.serve_static(\"127.0.0.1:0\", \"ok\");\n\
+         \x20   match r { Result.Ok(_) => {} Result.Err(_) => {} }\n\
+         }",
+    );
+    assert!(parsed.errors.is_empty());
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty());
+    let result = typecheck(&parsed.program, &resolved);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.lint_name.as_deref() == Some("unstable_api")),
+        "#[deny(unstable_api)] must promote the serve_static use to an error",
+    );
+}
+
+#[test]
+fn stable_baked_stdlib_method_call_no_warning() {
+    // `Server.serve` is stable v1 (no tag) — calling it must not fire.
+    let result = typecheck_ok(
+        "fn handle(req: Request) -> Response { Response { status: 200, body: \"ok\" } }\n\
+         fn main() {\n\
+         \x20   let r = Server.serve(\"127.0.0.1:0\", handle);\n\
+         \x20   match r { Result.Ok(_) => {} Result.Err(_) => {} }\n\
+         }",
+    );
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|w| w.lint_name.as_deref() == Some("unstable_api")),
+        "a stable stdlib method must not emit an unstable_api warning",
+    );
+}
+
+#[test]
+fn unstable_api_user_instance_method_call_emits_warning() {
+    // The general (non-stdlib) case: a user `#[unstable]` impl method
+    // resolves through the symbol-table sidecar.
+    let result = typecheck_ok(
+        "struct Widget { x: i64 }\n\
+         impl Widget {\n\
+         \x20   #[unstable = \"experimental knob\"]\n\
+         \x20   fn tweak(ref self) -> i64 { self.x }\n\
+         }\n\
+         fn use_it() -> i64 { let w = Widget { x: 1 }; w.tweak() }",
+    );
+    let warn = result
+        .warnings
+        .iter()
+        .find(|w| w.lint_name.as_deref() == Some("unstable_api"))
+        .expect("expected an `unstable_api` warning at the user instance-method call site");
+    assert!(warn.message.contains("Widget.tweak"));
+    assert!(warn.message.contains("experimental knob"));
+}
+
+#[test]
+fn unstable_api_user_assoc_fn_call_emits_warning() {
+    // The user-authored associated-function path (`Type.method()`).
+    let result = typecheck_ok(
+        "struct Widget { x: i64 }\n\
+         impl Widget {\n\
+         \x20   #[unstable]\n\
+         \x20   fn make() -> Widget { Widget { x: 0 } }\n\
+         }\n\
+         fn use_it() -> i64 { let w = Widget.make(); w.x }",
+    );
+    let warn = result
+        .warnings
+        .iter()
+        .find(|w| w.lint_name.as_deref() == Some("unstable_api"))
+        .expect("expected an `unstable_api` warning at the user assoc-fn call site");
+    assert!(warn.message.contains("Widget.make"));
+}
+
+#[test]
+fn deprecated_user_instance_method_call_emits_warning() {
+    // `#[deprecated]` shares the same method-aware path as `#[unstable]`.
+    let result = typecheck_ok(
+        "struct Widget { x: i64 }\n\
+         impl Widget {\n\
+         \x20   #[deprecated = \"use tweak2\"]\n\
+         \x20   fn tweak(ref self) -> i64 { self.x }\n\
+         }\n\
+         fn use_it() -> i64 { let w = Widget { x: 1 }; w.tweak() }",
+    );
+    let warn = result
+        .warnings
+        .iter()
+        .find(|w| w.lint_name.as_deref() == Some("deprecated"))
+        .expect("expected a `deprecated` warning at the user instance-method call site");
+    assert!(warn.message.contains("Widget.tweak"));
+    assert!(warn.message.contains("use tweak2"));
+}
+
+#[test]
+fn stable_user_method_call_no_warning() {
+    let result = typecheck_ok(
+        "struct Widget { x: i64 }\n\
+         impl Widget { fn get(ref self) -> i64 { self.x } }\n\
+         fn use_it() -> i64 { let w = Widget { x: 1 }; w.get() }",
+    );
+    assert!(
+        !result.warnings.iter().any(|w| matches!(
+            w.lint_name.as_deref(),
+            Some("unstable_api") | Some("deprecated")
+        )),
+        "a stable user method must not emit a stability warning",
+    );
+}
+
 // ── Slice 6 of item 36: #[diagnostic::on_unimplemented] substitution ──
 
 #[test]
