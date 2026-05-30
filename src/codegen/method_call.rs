@@ -75,6 +75,16 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .cloned();
 
+        // Distinct-type `.raw()` unwrap (design.md § Distinct Types). A
+        // distinct type is a zero-cost wrapper — its compiled value already
+        // IS the base value (layout-identical), so `.raw()` returns the
+        // compiled receiver unchanged. `.raw()` is reserved to distinct types
+        // by the typechecker, so a zero-arg `.raw()` reaching codegen is
+        // always this unwrap.
+        if method == "raw" && args.is_empty() {
+            return self.compile_expr(object);
+        }
+
         // Phase 6 line 17 — stdlib `TcpListener` / `TcpStream`
         // compiler-builtin dispatch. Routes through the lowerings in
         // `src/codegen/tcp.rs`, each of which composes a

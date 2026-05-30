@@ -49,6 +49,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(base) = self.refinement_bases.get(name) {
                     return self.llvm_type_for_type_expr(&base.clone());
                 }
+                // Distinct type (`distinct type UserId = i64`): layout-
+                // identical to its base, so lower to the base's layout (the
+                // distinct name itself has no struct/enum def and would hit
+                // the `i64` fall-through in `llvm_type_for_name`).
+                if let Some(base) = self.distinct_bases.get(name) {
+                    return self.llvm_type_for_type_expr(&base.clone());
+                }
                 if name == "Array" {
                     if let Some(arr_ty) = self.llvm_array_type(&path.generic_args) {
                         return arr_ty;
@@ -859,6 +866,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // a refinement is referenced by bare name (e.g. a recorded
         // `var_type_names` entry or a struct-field type name).
         if let Some(base) = self.refinement_bases.get(name) {
+            return self.llvm_type_for_type_expr(&base.clone());
+        }
+        // Distinct type → base layout. The name-level path is hit when a
+        // distinct type is referenced by bare name (a recorded
+        // `var_type_names` entry or a struct-field type name).
+        if let Some(base) = self.distinct_bases.get(name) {
             return self.llvm_type_for_type_expr(&base.clone());
         }
         match name {

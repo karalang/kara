@@ -285,6 +285,16 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(enum_val);
         }
 
+        // Distinct-type constructor: `UserId(value)` is a zero-cost wrap —
+        // the compiled value IS the base value (layout-identical, no runtime
+        // tag), so the constructor just compiles its single argument.
+        // design.md § Distinct Types (Newtypes).
+        if self.distinct_bases.contains_key(&name) {
+            if let Some(arg) = args.first() {
+                return self.compile_expr(&arg.value);
+            }
+        }
+
         // Check if this is a call to a generic function (monomorphize on demand)
         if self.generic_fns.contains_key(&name) {
             return self.compile_generic_call(

@@ -502,6 +502,15 @@ pub(super) struct Codegen<'ctx> {
     /// layout-identical to its base (no runtime tag), so this is a pure
     /// alias resolution.
     pub(crate) refinement_bases: HashMap<String, crate::ast::TypeExpr>,
+    /// Distinct-type name → its base `TypeExpr` (`distinct type UserId = i64`
+    /// → the `i64` type expression). A distinct type is layout-identical to
+    /// its base (zero-cost wrapper, no runtime tag), so codegen lowers it to
+    /// the base's LLVM layout — consulted ONLY at the pure-layout sites
+    /// (`llvm_type_for_type_expr`, `llvm_type_for_name`), NOT in
+    /// `refinement_base_name`: unlike a refinement, a distinct type keeps its
+    /// own name for value-level method dispatch (no base-method deref).
+    /// Populated from `Item::DistinctType`. design.md § Distinct Types.
+    pub(crate) distinct_bases: HashMap<String, crate::ast::TypeExpr>,
     /// Refinement name → its predicate `Expr` (`type Even = i64 where
     /// self % 2 == 0` → the `self % 2 == 0` expression). Populated from
     /// `Item::TypeAlias.refinement`, parallel to `refinement_bases`. Drives
@@ -2988,6 +2997,7 @@ impl<'ctx> Codegen<'ctx> {
             variables: HashMap::new(),
             var_type_names: HashMap::new(),
             refinement_bases: HashMap::new(),
+            distinct_bases: HashMap::new(),
             refinement_predicates: HashMap::new(),
             atomic_var_inner_is_bool: HashSet::new(),
             current_fn: None,
@@ -3463,6 +3473,19 @@ impl<'ctx> Codegen<'ctx> {
                     self.refinement_predicates
                         .insert(t.name.clone(), pred.clone());
                 }
+            }
+        }
+
+        // Distinct types (`distinct type UserId = i64`): record each one's
+        // base `TypeExpr` so type lowering resolves the distinct type to its
+        // base's layout (zero-cost wrapper, no runtime tag). Unlike a
+        // refinement, this base is consulted only for layout — a distinct
+        // type keeps its own name for value-level dispatch. design.md
+        // § Distinct Types (Newtypes).
+        for item in &program.items {
+            if let Item::DistinctType(d) = item {
+                self.distinct_bases
+                    .insert(d.name.clone(), d.base_type.clone());
             }
         }
 

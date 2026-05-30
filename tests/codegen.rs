@@ -26261,4 +26261,63 @@ fn main() {
             assert_eq!(out.trim(), "-1");
         }
     }
+
+    // ── Distinct types — constructor + .raw() (zero-cost) ──────────
+
+    #[test]
+    fn test_e2e_distinct_constructor_and_raw() {
+        // `UserId(42)` wraps a base value (zero-cost) and `.raw()` unwraps
+        // it — at codegen the wrapper is invisible (i64 base layout).
+        let out = run_program(
+            r#"
+distinct type UserId = i64;
+fn main() {
+    let u = UserId(42);
+    let r: i64 = u.raw();
+    println(r);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
+    #[test]
+    fn test_e2e_distinct_float_base_layout() {
+        // A non-`i64` base lowers to the correct layout: a distinct type
+        // over `f64` round-trips `3.5` losslessly (would print garbage if it
+        // hit the `i64` fall-through default).
+        let out = run_program(
+            r#"
+distinct type Meters = f64;
+fn main() {
+    let m = Meters(3.5);
+    println(m.raw());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3.5");
+        }
+    }
+
+    #[test]
+    fn test_e2e_distinct_roundtrips_through_function() {
+        // A distinct value passes through a function call typed in the
+        // distinct type and unwraps back to its base on the far side.
+        let out = run_program(
+            r#"
+distinct type UserId = i64;
+fn identity(id: UserId) -> UserId { id }
+fn main() {
+    let u = identity(UserId(7));
+    println(u.raw());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7");
+        }
+    }
 }
