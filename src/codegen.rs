@@ -63,6 +63,7 @@ mod synth_display;
 mod synth_drop;
 mod task_group;
 mod tcp;
+mod test_assert;
 mod tls;
 mod types_lowering;
 mod vec_method;
@@ -1240,6 +1241,12 @@ pub(super) struct Codegen<'ctx> {
     /// so a recovered earlier propagation doesn't leak frames into a later
     /// failure.
     pub(crate) karac_error_trace_clear_fn: FunctionValue<'ctx>,
+    /// `void karac_test_record_failure(ptr file, i64 file_len, i32 line, i32 col,
+    /// ptr msg, i64 msg_len, ptr left, i64 left_len, ptr right, i64 right_len)`.
+    /// Lowered `assert` / `assert_eq` / `assert_ne` failure path calls this then
+    /// `exit(1)`. The runtime writes a `KARAC_TEST_FAILURE {...JSON...}` line to
+    /// stderr; `cmd_test` (Slice c.3) parses the line into a `TestOutcome`.
+    pub(crate) karac_test_record_failure_fn: FunctionValue<'ctx>,
     /// Lazily-initialized `TargetData` consumed by the layout-introspection
     /// intrinsics (`align_of[T]()`, `offset_of[T](field)`). Constructed
     /// via `create_target_machine().get_target_data()` on first use; the
@@ -2684,6 +2691,35 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // ── Test-runner outcome bridge (Slice c.1) ─────────────────
+        // void karac_test_record_failure(
+        //     ptr file_ptr, i64 file_len,
+        //     i32 line, i32 col,
+        //     ptr msg_ptr,  i64 msg_len,
+        //     ptr left_ptr,  i64 left_len,
+        //     ptr right_ptr, i64 right_len,
+        // )
+        let test_record_failure_ty = context.void_type().fn_type(
+            &[
+                ptr_md,
+                i64_ty,
+                BasicMetadataTypeEnum::from(i32_ty),
+                BasicMetadataTypeEnum::from(i32_ty),
+                ptr_md,
+                i64_ty,
+                ptr_md,
+                i64_ty,
+                ptr_md,
+                i64_ty,
+            ],
+            false,
+        );
+        let karac_test_record_failure_fn = module.add_function(
+            "karac_test_record_failure",
+            test_record_failure_ty,
+            Some(Linkage::External),
+        );
+
         Codegen {
             context,
             module,
@@ -2823,6 +2859,7 @@ impl<'ctx> Codegen<'ctx> {
             display_fn_cache: HashMap::new(),
             karac_error_trace_push_fn,
             karac_error_trace_clear_fn,
+            karac_test_record_failure_fn,
             target_data: None,
             hot_swap_enabled: false,
             hot_swap_slots: HashMap::new(),

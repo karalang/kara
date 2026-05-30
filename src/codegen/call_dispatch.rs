@@ -222,6 +222,24 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_print(&name, args);
         }
 
+        // Slice c.1 — prelude `assert` / `assert_eq` / `assert_ne` lowering.
+        // The interpreter dispatches these by name in
+        // `src/interpreter/eval_call.rs`; before c.1 the codegen path
+        // silently dropped them (the unknown-callee return-const-0
+        // fallback below), which meant AOT-compiled programs ignored
+        // failing asserts. We lower to a typed comparison plus a call
+        // into `karac_test_record_failure` + `exit(1)` on failure. See
+        // `src/codegen/test_assert.rs`.
+        if name == "assert" {
+            return self.compile_assert(args, call_span);
+        }
+        if name == "assert_eq" {
+            return self.compile_assert_eq(args, call_span, false);
+        }
+        if name == "assert_ne" {
+            return self.compile_assert_eq(args, call_span, true);
+        }
+
         // Phase 6 line 218 slice 4: free `spawn(closure) -> TaskHandle[T]`
         // dispatch. Intercepted before the generic-fn path so the slice-1
         // stub body (`TaskHandle { task_id: 0 }`) never lowers. The

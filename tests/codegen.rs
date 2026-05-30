@@ -25419,4 +25419,234 @@ fn main() {
             err
         );
     }
+
+    // ── Slice c.1 — assert / assert_eq / assert_ne codegen lowering ──
+    //
+    // Pre-c.1 the codegen path silently dropped these prelude calls
+    // (unknown-callee fallback returning const-0), so any kara program
+    // calling `assert_eq` from `karac build` ran past the assertion as
+    // if it had succeeded. c.1 lowers each to `karac_test_record_failure`
+    // (stderr JSONL) + `exit(1)` on failure; pass paths flow through
+    // unchanged. Tests assert both halves: success runs the trailing
+    // code, failure emits the marker and short-circuits.
+
+    #[test]
+    fn test_assert_true_continues() {
+        let out = run_program(
+            r#"
+fn main() {
+    assert(true)
+    println(7)
+}
+"#,
+        );
+        if let Some(s) = out {
+            assert_eq!(s.trim(), "7");
+        }
+    }
+
+    #[test]
+    fn test_assert_false_emits_failure_and_short_circuits() {
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    assert(false)
+    println(99)
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stderr.contains("KARAC_TEST_FAILURE "),
+                "expected failure marker; got stderr={:?}",
+                c.stderr
+            );
+            assert!(
+                c.stderr.contains("\"message\":\"assertion failed\""),
+                "expected bare 'assertion failed' message; got stderr={:?}",
+                c.stderr
+            );
+            assert!(
+                c.stderr.contains("\"left\":null") && c.stderr.contains("\"right\":null"),
+                "bare assert(cond) should emit null left/right; got stderr={:?}",
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("99"),
+                "code after failing assert must not run; stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_assert_eq_int_pass() {
+        let out = run_program(
+            r#"
+fn main() {
+    assert_eq(1 + 1, 2)
+    println(42)
+}
+"#,
+        );
+        if let Some(s) = out {
+            assert_eq!(s.trim(), "42");
+        }
+    }
+
+    #[test]
+    fn test_assert_eq_int_fail_formats_operands() {
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    assert_eq(1, 2)
+    println(99)
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stderr.contains("KARAC_TEST_FAILURE "),
+                "expected failure marker; got stderr={:?}",
+                c.stderr
+            );
+            assert!(
+                c.stderr
+                    .contains("\"message\":\"assertion failed: left != right\""),
+                "expected assert_eq message; got stderr={:?}",
+                c.stderr
+            );
+            assert!(
+                c.stderr.contains("\"left\":\"1\"") && c.stderr.contains("\"right\":\"2\""),
+                "expected formatted left=1, right=2; got stderr={:?}",
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("99"),
+                "stdout should not include trailing println; got {:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_assert_ne_pass() {
+        let out = run_program(
+            r#"
+fn main() {
+    assert_ne(1, 2)
+    println(42)
+}
+"#,
+        );
+        if let Some(s) = out {
+            assert_eq!(s.trim(), "42");
+        }
+    }
+
+    #[test]
+    fn test_assert_ne_fail_formats_operands() {
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    assert_ne(7, 7)
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stderr
+                    .contains("\"message\":\"assertion failed: left == right\""),
+                "expected assert_ne message; got stderr={:?}",
+                c.stderr
+            );
+            assert!(
+                c.stderr.contains("\"left\":\"7\"") && c.stderr.contains("\"right\":\"7\""),
+                "expected formatted left=7, right=7; got stderr={:?}",
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_assert_eq_bool_fail() {
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    assert_eq(true, false)
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stderr.contains("\"left\":\"true\"") && c.stderr.contains("\"right\":\"false\""),
+                "expected formatted true/false; got stderr={:?}",
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_assert_eq_string_pass() {
+        let out = run_program(
+            r#"
+fn main() {
+    assert_eq("hello", "hello")
+    println(1)
+}
+"#,
+        );
+        if let Some(s) = out {
+            assert_eq!(s.trim(), "1");
+        }
+    }
+
+    #[test]
+    fn test_assert_eq_string_fail_formats_strings() {
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    assert_eq("hello", "world")
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stderr.contains("\"left\":\"hello\"") && c.stderr.contains("\"right\":\"world\""),
+                "expected formatted string operands; got stderr={:?}",
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_assert_record_failure_carries_call_site_line_col() {
+        // Filename threaded through codegen lands in the JSON `file` field.
+        let captured = run_program_capturing_with_filename(
+            r#"
+fn main() {
+    assert_eq(1, 2)
+}
+"#,
+            "demo.kara",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stderr.contains("\"file\":\"demo.kara\""),
+                "expected file=\"demo.kara\"; got stderr={:?}",
+                c.stderr
+            );
+            // The `assert_eq` call sits on line 3, column 5 of the source above.
+            assert!(
+                c.stderr.contains("\"line\":3"),
+                "expected line=3; got stderr={:?}",
+                c.stderr
+            );
+            assert!(
+                c.stderr.contains("\"column\":5"),
+                "expected column=5; got stderr={:?}",
+                c.stderr
+            );
+        }
+    }
 }

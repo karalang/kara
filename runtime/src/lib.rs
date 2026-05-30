@@ -98,12 +98,13 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_vec_sort_by,
         karac_vec_reverse,
     );
-    // par-block + reduce, error-return trace.
+    // par-block + reduce, error-return trace, test-runner outcome bridge.
     keep!(
         karac_par_run,
         karac_par_reduce,
         karac_error_trace_push,
         karac_error_trace_clear,
+        karac_test_record_failure,
     );
     // Emulated-TLS dispatch (LLJIT path; see `runtime/src/emutls.rs`).
     // LLVM-emitted `#[thread_local]` lowering under LLJIT calls
@@ -1894,6 +1895,88 @@ pub extern "C" fn karac_error_trace_clear() {
     if let Ok(mut state) = ERROR_TRACE.lock() {
         state.frames.clear();
         state.truncated = false;
+    }
+}
+
+/// Emit a structured `KARAC_TEST_FAILURE` JSONL line to stderr. Called by
+/// codegen-lowered `assert` / `assert_eq` / `assert_ne` on the failure path.
+/// Caller is responsible for terminating the process — this function only
+/// writes the line and returns, so codegen pairs every call with a following
+/// `exit(1)`.
+///
+/// Slice (c).1 — feeds the per-test outcome bridge in `karac test` JIT mode.
+/// The `cmd_test` runner scans the subprocess's stderr for the
+/// `KARAC_TEST_FAILURE ` prefix and parses the trailing JSON into a
+/// `TestOutcome { passed: false, message, span, left, right }`.
+///
+/// `left_ptr` / `right_ptr` are null (with `left_len` / `right_len` = 0) for
+/// plain `assert(cond)` failures, and non-null UTF-8 byte slices for the
+/// formatted operands of `assert_eq` / `assert_ne` mismatches.
+///
+/// # Safety
+///
+/// Each `(ptr, len)` pair must either be `(null, 0)` or point to `len`
+/// initialized, readable bytes. Codegen always satisfies this — the slices
+/// come from either the program's read-only string table or fresh f-string
+/// builds whose lifetime exceeds this call.
+#[no_mangle]
+pub unsafe extern "C" fn karac_test_record_failure(
+    file_ptr: *const u8,
+    file_len: usize,
+    line: u32,
+    col: u32,
+    msg_ptr: *const u8,
+    msg_len: usize,
+    left_ptr: *const u8,
+    left_len: usize,
+    right_ptr: *const u8,
+    right_len: usize,
+) {
+    let file = read_utf8_slice(file_ptr, file_len);
+    let msg = read_utf8_slice(msg_ptr, msg_len);
+    let left = read_optional_utf8_slice(left_ptr, left_len);
+    let right = read_optional_utf8_slice(right_ptr, right_len);
+
+    let mut out = String::from("KARAC_TEST_FAILURE {\"file\":");
+    write_json_string(&mut out, &file);
+    out.push_str(",\"line\":");
+    push_u32(&mut out, line);
+    out.push_str(",\"column\":");
+    push_u32(&mut out, col);
+    out.push_str(",\"message\":");
+    write_json_string(&mut out, &msg);
+    match left {
+        Some(s) => {
+            out.push_str(",\"left\":");
+            write_json_string(&mut out, &s);
+        }
+        None => out.push_str(",\"left\":null"),
+    }
+    match right {
+        Some(s) => {
+            out.push_str(",\"right\":");
+            write_json_string(&mut out, &s);
+        }
+        None => out.push_str(",\"right\":null"),
+    }
+    out.push('}');
+    eprintln!("{out}");
+}
+
+fn read_utf8_slice(ptr: *const u8, len: usize) -> String {
+    if ptr.is_null() || len == 0 {
+        return String::new();
+    }
+    // SAFETY: caller's contract — see `karac_test_record_failure`.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn read_optional_utf8_slice(ptr: *const u8, len: usize) -> Option<String> {
+    if ptr.is_null() {
+        None
+    } else {
+        Some(read_utf8_slice(ptr, len))
     }
 }
 
