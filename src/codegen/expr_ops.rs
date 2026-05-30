@@ -1115,6 +1115,81 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(old_skip_bb);
     }
 
+    /// Refcount-balance the capture of an `Option[shared T]` value into a
+    /// freshly-constructed `shared struct` literal field (`ListNode { val:
+    /// 0, next: head }` over a non-fresh `head`). The new heap object's
+    /// field becomes an independent reference to that chain and must inc the
+    /// inner pointer. A fresh field value (`Some(node)` over a just-built
+    /// node, a call's move-out) already owns its ref and must not — the
+    /// caller gates on `!rhs_yields_fresh_ref`. Tag/null-guarded.
+    ///
+    /// This is the `Option[shared T]` analogue of `suppress_source_vec_cleanup_for_arg`'s
+    /// shared-struct transfer-inc, which only fires for a bare `shared
+    /// struct` field value (its `var_type_names`/`shared_types` lookup
+    /// misses an `Option[shared]` binding like a param `head`). Without it,
+    /// `let dummy = ListNode { next: head };` over an `Option[shared]`
+    /// `head` leaves the field uncounted, so returning `dummy.next` hands
+    /// the caller an under-counted chain → over-dec / double-free (kata #19
+    /// `remove_nth_from_end`, masked at O2).
+    pub(super) fn emit_rc_inc_for_captured_option(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        inner_heap_type: StructType<'ctx>,
+    ) {
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let sv = val.into_struct_value();
+        let tag = self
+            .builder
+            .build_extract_value(sv, 0, "capt.opt.tag")
+            .unwrap()
+            .into_int_value();
+        let w0 = self
+            .builder
+            .build_extract_value(sv, 1, "capt.opt.w0")
+            .unwrap()
+            .into_int_value();
+        let some_tag = self
+            .enum_layouts
+            .get("Option")
+            .and_then(|l| l.tags.get("Some").copied())
+            .unwrap_or(1);
+        let is_some = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                i64_t.const_int(some_tag, false),
+                "capt.opt.is_some",
+            )
+            .unwrap();
+        let do_bb = self.context.append_basic_block(fn_val, "capt.opt.inc.do");
+        let skip_bb = self.context.append_basic_block(fn_val, "capt.opt.inc.skip");
+        self.builder
+            .build_conditional_branch(is_some, do_bb, skip_bb)
+            .unwrap();
+        self.builder.position_at_end(do_bb);
+        let inner = self
+            .builder
+            .build_int_to_ptr(w0, ptr_ty, "capt.opt.inner")
+            .unwrap();
+        let is_null = self
+            .builder
+            .build_is_null(inner, "capt.opt.is_null")
+            .unwrap();
+        let real_bb = self.context.append_basic_block(fn_val, "capt.opt.inc.real");
+        self.builder
+            .build_conditional_branch(is_null, skip_bb, real_bb)
+            .unwrap();
+        self.builder.position_at_end(real_bb);
+        self.emit_rc_inc(inner_heap_type, inner);
+        self.builder.build_unconditional_branch(skip_bb).unwrap();
+        self.builder.position_at_end(skip_bb);
+    }
+
     pub(super) fn compile_tuple_index(
         &mut self,
         object: &Expr,

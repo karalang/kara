@@ -1530,7 +1530,26 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // both drop fns free the same buffers (the
                                 // double-free that hung the move-out E2E).
                                 // No-op for non-Identifier (fresh-value) RHS.
-                                self.suppress_source_vec_cleanup_for_arg(value);
+                                //
+                                // COPY site (`let g = f;`). Skip the shared
+                                // transfer-inc IFF this binding already took a
+                                // receive-inc — i.e. `shared_info` is Some (a
+                                // bare `shared struct`, inc'd at the
+                                // `shared_info` block above). Emitting the
+                                // transfer-inc too would double-count → whole-
+                                // chain leak (tail-cursor builder, kata #19).
+                                // When `shared_info` is None — an
+                                // `Option[shared T]` binding (`let mut fast =
+                                // head;`), which gets NO receive-inc there —
+                                // the transfer-inc is the binding's SOLE inc
+                                // and must fire, else the chain is under-
+                                // counted → over-dec / double-free. The
+                                // Vec/String + non-shared-StructDrop handle
+                                // zeroing runs regardless.
+                                self.suppress_source_vec_cleanup_for_arg_ex(
+                                    value,
+                                    shared_info.is_none(),
+                                );
                             }
                         }
                         if let Some(slot) = self.variables.get(var_name.as_str()) {

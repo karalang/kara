@@ -3129,6 +3129,85 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_shared_list_build_remove_repeat() {
+        // Regression for the `shared struct` RC inc/dec discipline bugs
+        // (2026-05-30): (1) the tail-cursor list builder (`let mut tail =
+        // head; … tail.next = Some(node); tail = node;`) double-inc'd the
+        // head (let-copy receive-inc + move-suppression transfer-inc) → the
+        // whole chain leaked (RSS ∝ iterations); (2) `remove_nth_from_end`
+        // returning `dummy.next` (which aliases the `head` param) failed to
+        // transfer a ref to the caller's binding because the `Option[shared]`
+        // struct-field capture (`ListNode { val: 0, next: head }`) and the
+        // `Option[shared]` Identifier-tail return weren't inc-counted → the
+        // caller's binding shared the source's single ref and the second
+        // scope-exit dec drove it negative (double-free; crash on the 2nd
+        // call, masked at O2).
+        //
+        // The loop builds a fresh 8-node list and removes a rotating
+        // position every iteration — exercising build + in-place splice +
+        // drop K times. Pre-fix this leaked unboundedly and/or SIGBUS'd on
+        // the 2nd iteration; the deterministic sink confirms correctness
+        // across repeated calls. Sink: head value of each result summed.
+        // Removing position n (1..=8) of [1..8] keeps the head (value 1)
+        // except when n == 8 (head removed → new head value 2). Over K=64
+        // iters, n == 8 on 1/8 → 8 of them: 56*1 + 8*2 = 72.
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 { return None; }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+fn remove_nth_from_end(head: Option[ListNode], n: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut fast = head;
+    let mut i = 0i64;
+    while i < n {
+        if let Some(node) = fast { fast = node.next; }
+        i = i + 1i64;
+    }
+    let mut slow = dummy;
+    loop {
+        match fast {
+            Some(node) => { fast = node.next; if let Some(s) = slow.next { slow = s; } }
+            None => break,
+        }
+    }
+    if let Some(target) = slow.next { slow.next = target.next; }
+    dummy.next
+}
+fn head_val(list: Option[ListNode]) -> i64 {
+    match list { Some(node) => node.val, None => 0i64 }
+}
+fn main() {
+    let data: Array[i64, 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 64i64 {
+        let list = from_array(data);
+        let n: i64 = (k % 8i64) + 1i64;
+        let out = remove_nth_from_end(list, n);
+        sum = sum + head_val(out);
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "72");
+        }
+    }
+
+    #[test]
     fn test_e2e_bug8_call_chain_field_assoc_call() {
         // Sibling shape: associated-function call (`Node.make()`)
         // returning a shared struct, then bare `.val` access. The

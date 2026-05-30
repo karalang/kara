@@ -929,6 +929,23 @@ impl<'ctx> super::Codegen<'ctx> {
             // scope.
             if let ExprKind::Identifier(name) = &expr.kind {
                 self.suppress_user_drop_for_var(name);
+                // Option[shared T] Identifier tail return: transfer +1 to
+                // the caller so its binding holds an independent ref. The
+                // bare-`shared struct` Identifier case is handled by
+                // `suppress_source_vec_cleanup_for_arg` above (its shared
+                // arm inc's); the `var.field` case by
+                // `suppress_tail_field_option_dec` below. The Option-wrapped
+                // Identifier had NO equivalent — so `fn f(h: Option[Node])
+                // -> Option[Node] { h }` (or any return of an
+                // `Option[shared]` binding that aliases a param / another
+                // binding) returned without transferring a ref: the source's
+                // scope-exit `RcDecOption` consumes the only ref and the
+                // caller's binding shares it, so two bindings drive one ref
+                // to a double-dec (-1 → double-free). Masked at O2 (the
+                // redundant inc/dec cancel); surfaces once the let-copy
+                // leak's cushioning inc is removed. `share_option_shared_ref_for_arg`
+                // no-ops for non-`Option[shared]` bindings.
+                self.share_option_shared_ref_for_arg(expr);
             }
             // Extra: when the tail is `var.field` and `var` is a
             // shared struct whose field is `Option[shared T]`, the
@@ -1049,6 +1066,27 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn suppress_source_vec_cleanup_for_arg(&self, arg_expr: &Expr) {
+        self.suppress_source_vec_cleanup_for_arg_ex(arg_expr, true);
+    }
+
+    /// `apply_shared_transfer`: whether to emit the shared-struct/enum
+    /// transfer-inc (the "consumer holds an independent ref, source's
+    /// queued rc_dec balances" mechanism). True for genuine MOVE/consume
+    /// sites (return tail, by-value call arg, collection insert, struct/
+    /// tuple-field capture) where the consumer has no receive-inc of its
+    /// own. FALSE for shared `let t = src;` COPY sites: the let-binding's
+    /// own receive-inc (the `shared_info` `emit_refcount_inc` in
+    /// `compile_stmt`) already grants `t` an independent ref, so adding the
+    /// transfer-inc here would DOUBLE-count — the chain's head then never
+    /// reaches rc 0 on its single scope-exit dec and the whole list leaks
+    /// (the tail-cursor builder `let mut tail = head; … tail = node;`,
+    /// LeetCode #19 bench). Vec/String cap-zeroing and non-shared StructDrop
+    /// handle-zeroing run regardless (those ARE needed at let-copy sites).
+    pub(super) fn suppress_source_vec_cleanup_for_arg_ex(
+        &self,
+        arg_expr: &Expr,
+        apply_shared_transfer: bool,
+    ) {
         let var_name = match &arg_expr.kind {
             ExprKind::Identifier(n) => n.as_str(),
             _ => return,
@@ -1103,9 +1141,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`Vec[SharedStruct]`, plain `fn f() -> SharedT { let n = …; n }`).
         if let Some(type_name) = self.var_type_names.get(var_name).cloned() {
             if let Some(info) = self.shared_types.get(type_name.as_str()).cloned() {
-                if let Ok(loaded) = self.builder.build_load(ptr_ty, slot.ptr, "move.rc.load") {
-                    let p = loaded.into_pointer_value();
-                    self.emit_refcount_inc(var_name, info.heap_type, p);
+                if apply_shared_transfer {
+                    if let Ok(loaded) = self.builder.build_load(ptr_ty, slot.ptr, "move.rc.load") {
+                        let p = loaded.into_pointer_value();
+                        self.emit_refcount_inc(var_name, info.heap_type, p);
+                    }
                 }
                 return;
             }

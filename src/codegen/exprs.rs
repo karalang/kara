@@ -979,14 +979,36 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap();
                     // Niche-opt: the field slot is a single `ptr`, not the
                     // 4-i64 Option enum. Extract w0 from the freshly-
-                    // computed Option value and store as ptr. No RC
-                    // bookkeeping here — the caller has already discharged
-                    // it (the inner ref is owned by `val` per the same
-                    // discipline the conventional store assumes).
-                    if self.niche_field_inner_heap_type(name, idx).is_some() {
+                    // computed Option value and store as ptr.
+                    let niche_inner = self.niche_field_inner_heap_type(name, idx);
+                    // Resolve the field's inner shared heap type if this is
+                    // an `Option[shared T]` field (niche-opt or conventional).
+                    let opt_inner_heap = niche_inner.or_else(|| {
+                        self.struct_field_type_exprs
+                            .get(name)
+                            .and_then(|tes| tes.get(idx))
+                            .cloned()
+                            .and_then(|te| self.option_inner_shared_type_for_type_expr(&te))
+                            .map(|(_, info)| info.heap_type)
+                    });
+                    if niche_inner.is_some() {
                         self.niche_store_option_field(field_ptr, val);
                     } else {
                         self.builder.build_store(field_ptr, val).unwrap();
+                    }
+                    // Capture-inc for a non-fresh `Option[shared T]` field
+                    // value: the new struct holds an independent ref to that
+                    // chain. `suppress_source_vec_cleanup_for_arg` below only
+                    // transfer-inc's a bare `shared struct` field value (its
+                    // shared_types lookup misses an `Option[shared]` binding
+                    // like a param), so without this an `Option[shared]`
+                    // capture is uncounted → over-dec on return (kata #19).
+                    // Fresh values (`Some(node)`, call move-out) already own
+                    // their ref — skip via `rhs_yields_fresh_ref`.
+                    if let Some(inner_heap) = opt_inner_heap {
+                        if !crate::codegen::stmts::rhs_yields_fresh_ref(&field_init.value) {
+                            self.emit_rc_inc_for_captured_option(val, inner_heap);
+                        }
                     }
                     // Move-aware suppression for `Foo { ..., body: body }`
                     // when the field expr is an Identifier naming a

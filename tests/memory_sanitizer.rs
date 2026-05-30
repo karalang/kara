@@ -2699,4 +2699,64 @@ fn main() {
             "soa_drop_empty_collection",
         );
     }
+
+    #[test]
+    fn asan_shared_list_build_remove_repeat() {
+        // Regression for the `shared struct` RC over-dec (2026-05-30): a
+        // tail-cursor-built list, removed via `remove_nth_from_end`
+        // (returns `dummy.next`, which aliases the `head` param), repeated
+        // in a loop. Pre-fix the caller's binding shared the source's single
+        // ref and the second scope-exit dec drove the refcount negative — a
+        // double-free ASAN flags (and the build leaked). Must run clean.
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 { return None; }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+fn remove_nth_from_end(head: Option[ListNode], n: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut fast = head;
+    let mut i = 0i64;
+    while i < n { if let Some(node) = fast { fast = node.next; } i = i + 1i64; }
+    let mut slow = dummy;
+    loop {
+        match fast {
+            Some(node) => { fast = node.next; if let Some(s) = slow.next { slow = s; } }
+            None => break,
+        }
+    }
+    if let Some(target) = slow.next { slow.next = target.next; }
+    dummy.next
+}
+fn head_val(list: Option[ListNode]) -> i64 {
+    match list { Some(node) => node.val, None => 0i64 }
+}
+fn main() {
+    let data: Array[i64, 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 64i64 {
+        let list = from_array(data);
+        let n: i64 = (k % 8i64) + 1i64;
+        let out = remove_nth_from_end(list, n);
+        sum = sum + head_val(out);
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#,
+            &["72"],
+            "shared_list_build_remove_repeat",
+        );
+    }
 }
