@@ -45,7 +45,10 @@ use crate::token::Span;
 pub enum JitTestResult {
     /// The subprocess executed to completion; `outcome` is mapped from
     /// the exit code + stderr `KARAC_TEST_FAILURE` marker.
-    Completed { outcome: TestOutcome, duration_ms: u128 },
+    Completed {
+        outcome: TestOutcome,
+        duration_ms: u128,
+    },
     /// The subprocess timed out (the c.4 watchdog will populate this;
     /// for c.3's initial form the variant exists but is never produced).
     TimedOut { duration_ms: u128 },
@@ -114,11 +117,8 @@ pub fn run_test_via_jit(
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let ir_path: PathBuf = std::env::temp_dir().join(format!(
-        "karac_test_jit_{}_{}.ll",
-        std::process::id(),
-        id
-    ));
+    let ir_path: PathBuf =
+        std::env::temp_dir().join(format!("karac_test_jit_{}_{}.ll", std::process::id(), id));
     if let Err(e) = std::fs::write(&ir_path, ir) {
         return JitTestResult::SpawnFailed {
             message: format!("could not write IR tempfile {}: {e}", ir_path.display()),
@@ -138,7 +138,10 @@ pub fn run_test_via_jit(
             let exit_code = output.status.code().unwrap_or(-1);
             let stderr = String::from_utf8_lossy(&output.stderr);
             let outcome = map_exit_to_outcome(exit_code, &stderr);
-            JitTestResult::Completed { outcome, duration_ms }
+            JitTestResult::Completed {
+                outcome,
+                duration_ms,
+            }
         }
         SubprocessResult::TimedOut => JitTestResult::TimedOut { duration_ms },
         SubprocessResult::SpawnFailed(message) => JitTestResult::SpawnFailed { message },
@@ -165,7 +168,10 @@ enum SubprocessResult {
 /// a non-zero status on the returned `Output` when `Completed` fires
 /// — but the `killed` flag is what disambiguates from a regular
 /// non-zero exit, so we return `TimedOut` specifically.
-fn run_subprocess_with_timeout(mut cmd: std::process::Command, timeout: Duration) -> SubprocessResult {
+fn run_subprocess_with_timeout(
+    mut cmd: std::process::Command,
+    timeout: Duration,
+) -> SubprocessResult {
     use std::process::Stdio;
     use std::sync::mpsc;
 
@@ -429,6 +435,9 @@ mod tests {
     fn map_nonzero_no_marker_is_generic_fail() {
         let o = map_exit_to_outcome(2, "");
         assert!(!o.passed);
-        assert_eq!(o.message.as_deref().unwrap(), "test subprocess exited with code 2");
+        assert_eq!(
+            o.message.as_deref().unwrap(),
+            "test subprocess exited with code 2"
+        );
     }
 }
