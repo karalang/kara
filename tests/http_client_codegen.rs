@@ -375,4 +375,41 @@ fn main() with sends(Network) receives(Network) {
             "main should invoke the Response drop fn at the Ok-arm scope exit; body was:\n{main_body}"
         );
     }
+
+    /// Phase-8 line 39 follow-up — `HttpError` (from `Err(e)`) now gets a
+    /// synthesized scope-exit Drop that frees its runtime-malloc'd
+    /// `message` String, fixing the latent leak (the seeded `HttpError`
+    /// previously had no Drop, same as `Response.body` before its fix).
+    /// Pins (a) the drop fn is synthesized and frees the message buffer,
+    /// and (b) `main` invokes it at the `Err(e)` arm's scope exit.
+    #[test]
+    fn test_ir_http_error_drop_frees_message() {
+        let ir = ir_for(
+            r#"
+fn main() with sends(Network) receives(Network) {
+    let c = Client.new();
+    let url = "http://127.0.0.1:65535/";
+    match c.get(url) {
+        Ok(resp) => {
+            println(resp.status());
+        }
+        Err(e) => {
+            println(e.message());
+        }
+    }
+}
+"#,
+        );
+        let drop_body =
+            function_body(&ir, "__karac_drop_struct_HttpError").expect("HttpError drop fn defined");
+        assert!(
+            drop_body.contains("@free("),
+            "HttpError drop fn must free the message String buffer; body was:\n{drop_body}"
+        );
+        let main_body = function_body(&ir, "main").expect("main body");
+        assert!(
+            main_body.contains("call void @__karac_drop_struct_HttpError("),
+            "main should invoke the HttpError drop fn at the Err-arm scope exit; body was:\n{main_body}"
+        );
+    }
 }

@@ -3278,6 +3278,17 @@ impl<'ctx> super::Codegen<'ctx> {
             self.struct_types.insert("HttpError".to_string(), err_ty);
             self.struct_field_names
                 .insert("HttpError".to_string(), vec!["message".to_string()]);
+            // Per-field type names so the drop synthesis frees the
+            // `message` String at scope exit (phase-8 line 39 follow-up).
+            // Without this the baked `HttpError` (which skips
+            // `declare_structs`) gets no synthesized drop and its
+            // runtime-malloc'd error message leaks until process exit —
+            // the same latent leak the `Response.body` fix closed. Plain
+            // String field, so move-safety is the existing Vec/String
+            // cap-zeroing in `suppress_source_vec_cleanup_for_arg`; no
+            // handle field, so no `HttpHandleFree`.
+            self.struct_field_type_names
+                .insert("HttpError".to_string(), vec![Some("String".to_string())]);
         }
         if !self.struct_types.contains_key("RequestBuilder") {
             // Phase-8 line 24 — `RequestBuilder { handle: i64 }`.
