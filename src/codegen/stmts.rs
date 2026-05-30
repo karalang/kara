@@ -2350,6 +2350,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 .insert(name.clone(), self.context.i8_type().into());
             self.string_vars.insert(name.clone());
         }
+        // Slice c-repl.B.5.3: Vec replay registers the binding under
+        // `vec_elem_types[name]` with the actual element LLVM type so
+        // downstream method dispatch (`xs.len()`, `xs.push(…)`,
+        // `xs[i]`) routes through the Vec surface unchanged. Distinct
+        // from the String arm above: NO `string_vars` insert (Vec is
+        // not a String), and the elem type is per-variant rather than
+        // the hardcoded i8 String layout. NO `track_vec_var` — the
+        // buffer is owned by the snapshot global, not this slot's
+        // alloca; scope-exit cleanup must skip the free.
+        if let super::SnapshotPrimKind::Vec(elem) = kind {
+            let elem_ty = self.vec_elem_llvm_type(elem);
+            self.vec_elem_types.insert(name.clone(), elem_ty);
+        }
         Ok(true)
     }
 
@@ -2395,7 +2408,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // all of which drop the runner and reclaim its heap). No
         // suppression needed for primitive kinds — their globals
         // hold values, not pointers.
-        if matches!(kind, super::SnapshotPrimKind::String) {
+        if matches!(
+            kind,
+            super::SnapshotPrimKind::String | super::SnapshotPrimKind::Vec(_)
+        ) {
             self.zero_vec_alloca_cap(slot.ptr);
         }
     }
@@ -2415,7 +2431,22 @@ impl<'ctx> super::Codegen<'ctx> {
             super::SnapshotPrimKind::F64 => self.context.f64_type().into(),
             super::SnapshotPrimKind::Bool => self.context.i8_type().into(),
             super::SnapshotPrimKind::Char => self.context.i32_type().into(),
-            super::SnapshotPrimKind::String => self.vec_struct_type().into(),
+            super::SnapshotPrimKind::String | super::SnapshotPrimKind::Vec(_) => {
+                self.vec_struct_type().into()
+            }
+        }
+    }
+
+    /// Slice c-repl.B.5.3: LLVM type for a Vec elem variant. The replay
+    /// path uses this to register `vec_elem_types[name]` with the right
+    /// per-element width so downstream method/index dispatch finds the
+    /// binding through the existing Vec surface.
+    fn vec_elem_llvm_type(&self, elem: super::VecElemKind) -> BasicTypeEnum<'ctx> {
+        match elem {
+            super::VecElemKind::I64 => self.context.i64_type().into(),
+            super::VecElemKind::F64 => self.context.f64_type().into(),
+            super::VecElemKind::Bool => self.context.bool_type().into(),
+            super::VecElemKind::Char => self.context.i32_type().into(),
         }
     }
 
@@ -2431,7 +2462,8 @@ impl<'ctx> super::Codegen<'ctx> {
             super::SnapshotPrimKind::I64
             | super::SnapshotPrimKind::F64
             | super::SnapshotPrimKind::Char
-            | super::SnapshotPrimKind::String => Ok(loaded),
+            | super::SnapshotPrimKind::String
+            | super::SnapshotPrimKind::Vec(_) => Ok(loaded),
             super::SnapshotPrimKind::Bool => {
                 let i8_val = loaded.into_int_value();
                 let zero = self.context.i8_type().const_zero();
@@ -2456,7 +2488,8 @@ impl<'ctx> super::Codegen<'ctx> {
             super::SnapshotPrimKind::I64
             | super::SnapshotPrimKind::F64
             | super::SnapshotPrimKind::Char
-            | super::SnapshotPrimKind::String => Ok(loaded),
+            | super::SnapshotPrimKind::String
+            | super::SnapshotPrimKind::Vec(_) => Ok(loaded),
             super::SnapshotPrimKind::Bool => {
                 let i1 = loaded.into_int_value();
                 let i8_ty = self.context.i8_type();
@@ -2519,12 +2552,13 @@ impl<'ctx> super::Codegen<'ctx> {
             super::SnapshotPrimKind::Char => {
                 g.set_initializer(&self.context.i32_type().const_zero());
             }
-            super::SnapshotPrimKind::String => {
-                // Slice c-repl.B.5.2: zero-initialize the (ptr, len, cap)
-                // triple. cap = 0 is the sentinel that `FreeVecBuffer`
-                // checks before freeing, so an uncaptured global (no
-                // cell has executed the capture path yet) won't free
-                // anything if accidentally treated as a String slot.
+            super::SnapshotPrimKind::String | super::SnapshotPrimKind::Vec(_) => {
+                // Slice c-repl.B.5.2/B.5.3: zero-initialize the
+                // (ptr, len, cap) triple. cap = 0 is the sentinel that
+                // `FreeVecBuffer` checks before freeing, so an
+                // uncaptured global (no cell has executed the capture
+                // path yet) won't free anything if accidentally
+                // treated as a String/Vec slot.
                 g.set_initializer(&self.vec_struct_type().const_zero());
             }
         }

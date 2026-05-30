@@ -2212,7 +2212,24 @@ impl Session {
                 // re-evaluation semantics. Primitive kinds keep the
                 // B.5.1 behavior — mut primitives don't have the
                 // same alias hazard.
-                if *is_mut && matches!(kind, crate::codegen::SnapshotPrimKind::String) {
+                // Slice c-repl.B.5.3 extends the mut filter to Vec.
+                // Same alias-hazard reasoning as the String case: a
+                // same-cell `xs.push(…)` after capture would read
+                // cap=0 (the suppression sentinel), realloc into a
+                // fresh buffer, leave the snapshot global pointing at
+                // the pre-push buffer, and cell N+1's replay would
+                // load the pre-push triple and diverge from the
+                // interpreter's post-mutation snapshot. Pass-through
+                // (no capture, no cap-zero) preserves correct (if
+                // slower) semantics. Primitive kinds keep the B.5.1
+                // unfiltered behavior — they have no alias hazard.
+                if *is_mut
+                    && matches!(
+                        kind,
+                        crate::codegen::SnapshotPrimKind::String
+                            | crate::codegen::SnapshotPrimKind::Vec(_)
+                    )
+                {
                     continue;
                 }
                 capture.insert(name.clone(), kind);

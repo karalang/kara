@@ -148,6 +148,43 @@ pub enum SnapshotPrimKind {
     /// same-cell `push_str` after capture would otherwise leave the
     /// global pointing at a freed buffer.
     String,
+    /// Slice c-repl.B.5.3: Kāra `Vec[T]` for primitive `T`. Storage
+    /// layout matches String (`{ ptr, len, cap }` — the same
+    /// `vec_struct_type()` shape every Kāra Vec uses); the variant
+    /// carries the element kind so the replay path can re-register
+    /// `vec_elem_types[name]` with the right LLVM type for downstream
+    /// method/index dispatch. Capture transfers buffer ownership to
+    /// the global by zeroing the let slot's cap (suppressing
+    /// `FreeVecBuffer`), same shape as String. Mut Vec bindings fall
+    /// through to pass-through — same-cell `xs.push(…)` after
+    /// capture would realloc and diverge from the snapshot global.
+    /// Aggregate-element Vecs (`Vec[String]`, `Vec[<user struct>]`)
+    /// are out of scope for v1: the shallow `{ ptr, len, cap }`
+    /// transfer leaves the inner heap pointers shared between the
+    /// global and the source cell's element drops; the design needs
+    /// per-element retain/release or a deeper deferral story.
+    Vec(VecElemKind),
+}
+
+/// Slice c-repl.B.5.3: Vec element kinds eligible for the v1 snapshot
+/// port. Limited to primitives that round-trip cleanly through one
+/// `{ ptr, len, cap }` triple — i.e., the element drop is a no-op so
+/// the global can take buffer ownership without leaving dangling
+/// per-element references. `Vec[String]` and `Vec[<user struct>]`
+/// need per-element ref/drop accounting and are deferred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VecElemKind {
+    /// `Vec[i64]`.
+    I64,
+    /// `Vec[f64]`.
+    F64,
+    /// `Vec[bool]` — elements stored as i1 in the buffer (Kāra's
+    /// codegen lowers Vec[bool] elements to i8 in the heap buffer for
+    /// portable storage; the snapshot global doesn't see the buffer's
+    /// internal layout, only the triple).
+    Bool,
+    /// `Vec[char]` — elements stored as i32 (Unicode scalar value).
+    Char,
 }
 
 /// Slice c-repl.B.4: REPL-cell codegen entry for the JIT path.

@@ -991,7 +991,7 @@ pub(super) fn parse_let_binding_names(let_src: &str) -> std::collections::HashSe
 pub(super) fn snapshot_kind_for_type(
     ty: &crate::typechecker::Type,
 ) -> Option<crate::codegen::SnapshotPrimKind> {
-    use crate::codegen::SnapshotPrimKind;
+    use crate::codegen::{SnapshotPrimKind, VecElemKind};
     use crate::typechecker::{FloatSize, IntSize, Type};
     match ty {
         Type::Int(IntSize::I64) => Some(SnapshotPrimKind::I64),
@@ -999,6 +999,20 @@ pub(super) fn snapshot_kind_for_type(
         Type::Bool => Some(SnapshotPrimKind::Bool),
         Type::Char => Some(SnapshotPrimKind::Char),
         Type::Str => Some(SnapshotPrimKind::String),
+        // Slice c-repl.B.5.3: Vec[T] for primitive T. Limited to the
+        // same primitive set the scalar bindings already accept —
+        // that's exactly the "elem drop is a no-op" set (no inner
+        // heap pointers), which is what makes the shallow
+        // `(ptr, len, cap)` ownership transfer safe. Vec[String] /
+        // Vec[<user struct>] would need per-element drop accounting
+        // and stay in pass-through for v1.
+        Type::Named { name, args } if name == "Vec" && args.len() == 1 => match &args[0] {
+            Type::Int(IntSize::I64) => Some(SnapshotPrimKind::Vec(VecElemKind::I64)),
+            Type::Float(FloatSize::F64) => Some(SnapshotPrimKind::Vec(VecElemKind::F64)),
+            Type::Bool => Some(SnapshotPrimKind::Vec(VecElemKind::Bool)),
+            Type::Char => Some(SnapshotPrimKind::Vec(VecElemKind::Char)),
+            _ => None,
+        },
         _ => None,
     }
 }

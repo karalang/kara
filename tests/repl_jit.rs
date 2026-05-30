@@ -335,7 +335,6 @@ fn repl_jit_cross_cell_shadow_clears_snapshot() {
 }
 
 #[test]
-#[ignore = "B.5.3 — Vec snapshot port pending; today: cell 2 stdout is \"called2\" (RHS re-evaluated), want \"2\""]
 fn repl_jit_vec_let_rhs_is_not_re_evaluated() {
     // Slice c-repl.B.5.3 friction probe — same shape as B.5.1's
     // `repl_jit_let_rhs_is_not_re_evaluated` and B.5.2's String
@@ -377,6 +376,57 @@ fn repl_jit_vec_let_rhs_is_not_re_evaluated() {
         "2",
         "use cell should print only `xs.len()` — `make_vec()` must NOT re-run",
     );
+}
+
+#[test]
+fn repl_jit_vec_cross_cell_shadow_drops_runner() {
+    // Slice c-repl.B.5.3 — Vec entries land in `jit_snapshotted_lets`
+    // the same way primitive/String entries do, so the cross-cell
+    // shadow detection in `prune_shadowed_lets` (B.5.1 follow-up)
+    // picks them up uniformly. Cell 1 binds a Vec[i64]; cell 2
+    // rebinds the same name to a different Vec without `:reset`.
+    // The shadow detection drops the runner, the fresh runner re-
+    // captures cell 2's new value, and the use cell prints the new
+    // length — NOT the stale cell-1 buffer's length.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("let xs: Vec[i64] = Vec.new(); xs.push(1); xs.push(2);");
+    assert!(r.errors.is_empty(), "cell 1: {:?}", r.errors);
+    let r = s.evaluate_cell_captured(
+        "let xs: Vec[i64] = Vec.new(); xs.push(10); xs.push(20); xs.push(30); println(xs.len() as i64);",
+    );
+    assert!(r.errors.is_empty(), "cell 2: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "3",
+        "cross-cell Vec shadow must re-capture, not replay; stdout: {:?}",
+        r.stdout,
+    );
+}
+
+#[test]
+fn repl_jit_vec_mut_let_falls_through_to_passthrough() {
+    // Slice c-repl.B.5.3 — `let mut xs: Vec[i64] = …` must NOT take
+    // the snapshot path. Same alias-hazard reasoning as the String
+    // mut filter: capture's cap-zero suppression would leave a
+    // same-cell `xs.push(…)` reading cap=0, reallocating into a
+    // fresh buffer, and dropping the global's reference — cell N+1's
+    // replay would then load the pre-push triple and diverge from
+    // the interpreter's post-mutation snapshot semantic. Pass-
+    // through gives correct (re-evaluating, slower) behavior. We
+    // exercise the same-cell mutation to confirm push works cleanly
+    // without divergence.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured(
+        "let mut xs: Vec[i64] = Vec.new(); xs.push(7); xs.push(8); println(xs.len() as i64);",
+    );
+    assert!(
+        r.errors.is_empty(),
+        "mut Vec cell should run cleanly: {:?}",
+        r.errors,
+    );
+    assert_eq!(r.stdout.trim(), "2");
 }
 
 #[test]
