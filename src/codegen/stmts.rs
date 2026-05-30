@@ -1372,7 +1372,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     if let Some(&elem_ty) = self.vec_elem_types.get(var_name.as_str()) {
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
-                            self.track_vec_var(slot.ptr, Some(elem_ty));
+                            // Defensive guard against stale `vec_elem_types`
+                            // entries for non-Vec slots — specifically, Array
+                            // bindings (`let a = [1, 2, 3]` → `alloca [N x T]`).
+                            // The let-binding paths above and the pattern-binding
+                            // sites can both leave `vec_elem_types[name]`
+                            // populated for an array-typed slot via stale
+                            // typechecker classification; without this guard,
+                            // `track_vec_var` queues a `FreeVecBuffer` whose
+                            // scope-exit GEP treats the slot as `{ptr, i64, i64}`,
+                            // reads element-2-of-the-array as "cap", finds it
+                            // non-zero, GEPs out element-0 as a "data pointer",
+                            // and `free()`s a non-heap value. AOT happens to
+                            // print the right output BEFORE the bad free (so
+                            // `Command::output()` captures stdout and the test
+                            // passes); LLJIT runs in-process so the abort kills
+                            // the test process — that's how this surfaced in
+                            // W3.3 routing of `test_e2e_array_for_loop`. Skip
+                            // the registration when the slot's LLVM type is
+                            // anything but the Vec / String aggregate.
+                            if !matches!(slot.ty, BasicTypeEnum::ArrayType(_)) {
+                                self.track_vec_var(slot.ptr, Some(elem_ty));
+                            }
                         }
                         // Move-aware suppression for `let outer = inner;`
                         // when `inner` is a tracked Vec / String. Both

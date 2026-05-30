@@ -59,50 +59,165 @@ pub mod tls;
 pub fn __preserve_no_mangle_symbols() -> usize {
     use std::hint::black_box;
     let mut acc: usize = 0;
-    // Map runtime (the legacy type-erased path; mono'd map symbols
-    // emitted into the user module call back into these).
-    acc = acc.wrapping_add(black_box(map::karac_map_new as *const () as usize));
-    acc = acc.wrapping_add(black_box(map::karac_map_free as *const () as usize));
-    acc = acc.wrapping_add(black_box(map::karac_map_insert_old as *const () as usize));
-    acc = acc.wrapping_add(black_box(map::karac_map_get as *const () as usize));
-    acc = acc.wrapping_add(black_box(map::karac_map_len as *const () as usize));
-    acc = acc.wrapping_add(black_box(map::karac_map_remove_old as *const () as usize));
-    acc = acc.wrapping_add(black_box(map::karac_map_contains as *const () as usize));
-    acc = acc.wrapping_add(black_box(map::karac_map_clear as *const () as usize));
-    acc = acc.wrapping_add(black_box(map::karac_map_iter_new as *const () as usize));
-    acc = acc.wrapping_add(black_box(map::karac_map_iter_next as *const () as usize));
-    acc = acc.wrapping_add(black_box(map::karac_map_iter_free as *const () as usize));
-    // par-block + reduce (this lib.rs module — already in scope).
-    acc = acc.wrapping_add(black_box(karac_par_run as *const () as usize));
-    acc = acc.wrapping_add(black_box(karac_par_reduce as *const () as usize));
-    // Error-return trace (`?` propagation).
-    acc = acc.wrapping_add(black_box(karac_error_trace_push as *const () as usize));
-    acc = acc.wrapping_add(black_box(karac_error_trace_clear as *const () as usize));
-    // Debugger Contract — these are reachable from any module that
-    // declares the KARAC_SPAWN_SITES globals (i.e. all karac modules).
-    acc = acc.wrapping_add(black_box(
-        karac_runtime_get_current_frame as *const () as usize,
-    ));
-    acc = acc.wrapping_add(black_box(
-        karac_runtime_for_each_active_frame as *const () as usize,
-    ));
-    acc = acc.wrapping_add(black_box(
-        karac_runtime_has_debug_metadata as *const () as usize,
-    ));
-    acc = acc.wrapping_add(black_box(
-        karac_runtime_list_par_blocks_into as *const () as usize,
-    ));
-    // Providers (Feature 2 § Provider-Rooted Resources). Reachable
-    // from `with_provider {}` codegen.
-    acc = acc.wrapping_add(black_box(karac_provider_push as *const () as usize));
-    acc = acc.wrapping_add(black_box(karac_provider_pop as *const () as usize));
-    acc = acc.wrapping_add(black_box(karac_provider_lookup as *const () as usize));
-    acc = acc.wrapping_add(black_box(
-        karac_provider_set_stack_head as *const () as usize,
-    ));
-    acc = acc.wrapping_add(black_box(
-        karac_provider_get_stack_head as *const () as usize,
-    ));
+    // The `black_box(fn as *const () as usize)` pattern forces the
+    // compiler to take each function's address at runtime, which the
+    // linker then preserves in the test binary's symbol table. Macro
+    // is purely line-noise reduction.
+    macro_rules! keep {
+        ($($f:path),* $(,)?) => {
+            $( acc = acc.wrapping_add(black_box($f as *const () as usize)); )*
+        };
+    }
+    // Map runtime (`runtime/src/map.rs`).
+    keep!(
+        map::karac_map_new,
+        map::karac_map_free,
+        map::karac_map_free_with_drop_vec,
+        map::karac_map_insert,
+        map::karac_map_insert_old,
+        map::karac_map_get,
+        map::karac_map_remove,
+        map::karac_map_remove_old,
+        map::karac_map_contains,
+        map::karac_map_len,
+        map::karac_map_clear,
+        map::karac_map_iter_new,
+        map::karac_map_iter_next,
+        map::karac_map_iter_free,
+        map::karac_map_entry,
+        map::karac_map_lookup_slot,
+    );
+    // String + comparison runtime (`runtime/src/clone.rs` + this file).
+    keep!(
+        clone::karac_string_clone,
+        clone::karac_string_decode_char,
+        clone::karac_string_encode_char,
+        karac_string_cmp,
+        karac_float_cmp,
+        karac_vec_sort_by,
+        karac_vec_reverse,
+    );
+    // par-block + reduce, error-return trace.
+    keep!(
+        karac_par_run,
+        karac_par_reduce,
+        karac_error_trace_push,
+        karac_error_trace_clear,
+    );
+    // Debugger Contract.
+    keep!(
+        karac_runtime_get_current_frame,
+        karac_runtime_for_each_active_frame,
+        karac_runtime_has_debug_metadata,
+        karac_runtime_list_par_blocks_into,
+    );
+    // Providers (Feature 2 § Provider-Rooted Resources).
+    keep!(
+        karac_provider_push,
+        karac_provider_pop,
+        karac_provider_lookup,
+        karac_provider_set_stack_head,
+        karac_provider_get_stack_head,
+    );
+    // File runtime (`runtime/src/file.rs`).
+    keep!(
+        file::karac_runtime_file_open,
+        file::karac_runtime_file_create,
+        file::karac_runtime_file_append,
+        file::karac_runtime_file_read_to_string,
+        file::karac_runtime_file_read,
+        file::karac_runtime_file_write,
+        file::karac_runtime_file_flush,
+        file::karac_runtime_file_close,
+        file::karac_runtime_file_seek,
+    );
+    // JSON runtime (this file's `runtime_json_*` block).
+    keep!(
+        karac_runtime_json_parse,
+        karac_runtime_json_stringify,
+        karac_runtime_json_free_value,
+        karac_runtime_json_free_string,
+        karac_runtime_json_make_null,
+        karac_runtime_json_make_bool,
+        karac_runtime_json_make_number,
+        karac_runtime_json_make_string,
+        karac_runtime_json_alloc_items_buf,
+        karac_runtime_json_alloc_keys_buf,
+        karac_runtime_json_alloc_key,
+        karac_runtime_json_make_array,
+        karac_runtime_json_make_object,
+    );
+    // HTTP server (request/response) runtime.
+    keep!(
+        karac_runtime_http_response_set_body,
+        karac_runtime_http_response_set_header,
+        karac_runtime_http_response_set_status,
+        karac_runtime_http_request_path,
+        karac_runtime_http_request_method,
+        karac_runtime_http_request_body_ptr,
+        karac_runtime_http_request_body_len,
+        karac_runtime_http_request_header,
+        karac_runtime_http_request_headers_count,
+        karac_runtime_http_request_header_key_at,
+        karac_runtime_http_request_header_val_at,
+        karac_runtime_http_request_query_count,
+        karac_runtime_http_request_query_key_at,
+        karac_runtime_http_request_query_val_at,
+        karac_runtime_parse_i64,
+        karac_runtime_http_client_get,
+        karac_runtime_http_client_post,
+        karac_runtime_serve_http,
+        karac_runtime_serve_https,
+        karac_runtime_serve_http_static,
+    );
+    // Scheduler + event loop + TCP + WS (pub modules).
+    keep!(
+        scheduler::karac_runtime_spawn,
+        scheduler::karac_runtime_task_join,
+        scheduler::karac_runtime_task_handle_free,
+        scheduler::karac_runtime_task_state,
+        scheduler::karac_runtime_taskgroup_new,
+        scheduler::karac_runtime_taskgroup_register,
+        scheduler::karac_runtime_taskgroup_join_and_free,
+        event_loop::karac_runtime_scheduler_start_dispatcher,
+        event_loop::karac_runtime_scheduler_shutdown_dispatcher,
+        event_loop::karac_runtime_scheduler_stats_snapshot,
+        event_loop::karac_runtime_park_slot_new,
+        event_loop::karac_runtime_park_slot_wait,
+        event_loop::karac_runtime_park_slot_signal,
+        event_loop::karac_runtime_park_slot_free,
+        event_loop::karac_runtime_event_loop_register_fd,
+        event_loop::karac_runtime_event_loop_deregister_fd,
+        event_loop::karac_runtime_event_loop_poll,
+        event_loop::karac_runtime_event_loop_wake,
+        event_loop::karac_runtime_event_loop_start_background_thread,
+        event_loop::karac_runtime_event_loop_take_wakeups,
+        event_loop::karac_runtime_event_loop_shutdown_background_thread,
+        event_loop::karac_runtime_tcp_bind,
+        event_loop::karac_runtime_tcp_accept,
+        event_loop::karac_runtime_tcp_read,
+        event_loop::karac_runtime_tcp_write,
+        event_loop::karac_runtime_tcp_close,
+        event_loop::karac_runtime_ws_send_text,
+        event_loop::karac_runtime_ws_send_binary,
+        event_loop::karac_runtime_ws_send_text_masked,
+        event_loop::karac_runtime_ws_send_binary_masked,
+        event_loop::karac_runtime_ws_recv_text,
+        event_loop::karac_runtime_ws_recv_binary,
+        event_loop::karac_runtime_ws_accept,
+        event_loop::karac_runtime_ws_accept_tls,
+    );
+    // TLS (pub module).
+    keep!(
+        tls::karac_runtime_tls_config_new,
+        tls::karac_runtime_tls_config_free,
+        tls::karac_runtime_tls_listener_bind,
+        tls::karac_runtime_tls_accept,
+        tls::karac_runtime_tls_client_connect,
+        tls::karac_runtime_tls_read,
+        tls::karac_runtime_tls_write,
+        tls::karac_runtime_tls_close,
+    );
     acc
 }
 
