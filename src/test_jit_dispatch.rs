@@ -1,0 +1,376 @@
+//! `karac test` JIT dispatch — slice c.3.
+//!
+//! Wires the existing `cmd_test` per-test loop to a JIT-subprocess
+//! execution path when `KARAC_TEST_JIT=1` is set and the binary was
+//! built with the `lljit_prototype` feature. Each test runs as its own
+//! `karac_jit_runner` subprocess; outcomes are mapped from the
+//! subprocess's exit code + stderr (parsed for the `KARAC_TEST_FAILURE`
+//! JSONL marker emitted by slice c.1's `karac_test_record_failure`
+//! runtime fn).
+//!
+//! Per-test compile pipeline:
+//!   parse-already-done
+//!     → clone the module's items
+//!     → `test_main_synth::append_test_main(...)` with the per-test
+//!       fixtures
+//!     → re-resolve + re-typecheck + re-lower (the synthesized `let
+//!       __karac_test_provider_N = ctor;` bindings need typecheck to
+//!       populate `var_type_names` for codegen's
+//!       `infer_provider_type_name`; without this the
+//!       `with_provider[R](...)` lowering rejects the call)
+//!     → `compile_to_ir_with_options` → IR string
+//!     → write to a tempfile
+//!     → spawn `karac_jit_runner` with the IR path
+//!     → capture stdout / stderr / exit code
+//!     → parse stderr for `KARAC_TEST_FAILURE` JSONL → `TestOutcome`
+//!
+//! Pre-c.3 the slice-c.4 hang-watchdog stays out of scope; this module
+//! uses `Command::output` directly. A hung test runs to completion or
+//! kills the karac process; the watchdog wrap goes on in c.4 alongside
+//! the per-test deadline plumbing.
+
+#![cfg(feature = "lljit_prototype")]
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+use crate::ast::{Expr, Program};
+use crate::interpreter::{RuntimeError, TestOutcome};
+use crate::test_main_synth::{append_test_main, ProviderFixture};
+use crate::token::Span;
+
+/// Outcome of a single JIT-dispatched test run.
+#[derive(Debug)]
+pub enum JitTestResult {
+    /// The subprocess executed to completion; `outcome` is mapped from
+    /// the exit code + stderr `KARAC_TEST_FAILURE` marker.
+    Completed { outcome: TestOutcome, duration_ms: u128 },
+    /// The subprocess timed out (the c.4 watchdog will populate this;
+    /// for c.3's initial form the variant exists but is never produced).
+    TimedOut { duration_ms: u128 },
+    /// Setup-side failure — codegen rejected the per-test program, the
+    /// IR tempfile could not be written, or `karac_jit_runner` could
+    /// not be located. Surfaces as a `test_fail` event with the
+    /// returned message.
+    SpawnFailed { message: String },
+}
+
+/// Run one test via the JIT subprocess path.
+///
+/// `module_program` is the per-module `Program` built by the runner
+/// (matches what's passed to `Interpreter::new` in the interpreter path).
+/// `fixtures` mirrors the runner's `t.with_providers` after
+/// `extract_with_providers` has parsed the `#[with_provider(R, ctor)]`
+/// attribute payloads.
+pub fn run_test_via_jit(
+    module_program: &Program,
+    test_fn_name: &str,
+    fixtures: &[(String, Expr)],
+    source_filename: &str,
+    _timeout: Duration,
+) -> JitTestResult {
+    let runner_path = match locate_karac_jit_runner() {
+        Some(p) => p,
+        None => {
+            return JitTestResult::SpawnFailed {
+                message: "karac_jit_runner binary not found alongside karac executable — \
+                          rebuild karac with `--features lljit_prototype` so cargo emits \
+                          the runner alongside the main binary"
+                    .to_string(),
+            };
+        }
+    };
+
+    let fixtures_vec: Vec<ProviderFixture> = fixtures
+        .iter()
+        .map(|(rp, ctor)| ProviderFixture {
+            resource_path: rp.clone(),
+            constructor: ctor.clone(),
+        })
+        .collect();
+
+    let mut per_test_program = clone_program_items(module_program);
+    append_test_main(&mut per_test_program, test_fn_name, &fixtures_vec);
+
+    let resolved = crate::resolver::Resolver::new(&per_test_program).resolve();
+    let typed = crate::typechecker::TypeChecker::new(&per_test_program, &resolved).check();
+    crate::lowering::lower_program(&mut per_test_program, &typed);
+
+    let ir = match crate::codegen::compile_to_ir_with_options(
+        &per_test_program,
+        None,
+        None,
+        Some(source_filename),
+        None,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            return JitTestResult::SpawnFailed {
+                message: format!("codegen failed for test '{test_fn_name}': {e}"),
+            };
+        }
+    };
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let ir_path: PathBuf = std::env::temp_dir().join(format!(
+        "karac_test_jit_{}_{}.ll",
+        std::process::id(),
+        id
+    ));
+    if let Err(e) = std::fs::write(&ir_path, ir) {
+        return JitTestResult::SpawnFailed {
+            message: format!("could not write IR tempfile {}: {e}", ir_path.display()),
+        };
+    }
+
+    let started = std::time::Instant::now();
+    let output = match std::process::Command::new(&runner_path).arg(&ir_path).output() {
+        Ok(o) => o,
+        Err(e) => {
+            let _ = std::fs::remove_file(&ir_path);
+            return JitTestResult::SpawnFailed {
+                message: format!("could not spawn {}: {e}", runner_path.display()),
+            };
+        }
+    };
+    let duration_ms = started.elapsed().as_millis();
+    let _ = std::fs::remove_file(&ir_path);
+
+    let exit_code = output.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let outcome = map_exit_to_outcome(exit_code, &stderr);
+
+    JitTestResult::Completed { outcome, duration_ms }
+}
+
+/// Clone a `Program` by copying its items vector. Other fields use
+/// `Default` — every late-phase consumer of `Program` reads only
+/// `items` (see `cli.rs`'s per-module program build at the same spot).
+fn clone_program_items(p: &Program) -> Program {
+    Program {
+        items: p.items.clone(),
+        ..Program::default()
+    }
+}
+
+/// Look for `karac_jit_runner` in the same directory as the current
+/// `karac` executable. Cargo writes both binaries next to each other
+/// (target/release/karac, target/release/karac_jit_runner); installed
+/// `karac` users get them paired through the same install step (the
+/// `reference_karac_install_path` memory pins how this is done).
+fn locate_karac_jit_runner() -> Option<PathBuf> {
+    let karac_exe = std::env::current_exe().ok()?;
+    let dir = karac_exe.parent()?;
+    let candidate = dir.join("karac_jit_runner");
+    if candidate.exists() {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+/// Map exit code + stderr to a `TestOutcome`. Exit 0 → pass. Any
+/// non-zero exit with a `KARAC_TEST_FAILURE ` line on stderr → parse
+/// the JSON payload into the outcome fields. Non-zero exit without a
+/// marker → a synthetic outcome with a generic message (the subprocess
+/// died for some other reason — a runtime panic the assert lowering
+/// didn't emit a marker for, or a setup-side abort).
+fn map_exit_to_outcome(exit_code: i32, stderr: &str) -> TestOutcome {
+    if exit_code == 0 {
+        return TestOutcome {
+            passed: true,
+            message: None,
+            span: None,
+            left: None,
+            right: None,
+        };
+    }
+    if let Some(parsed) = parse_failure_marker(stderr) {
+        return TestOutcome {
+            passed: false,
+            message: Some(parsed.message),
+            span: Some(parsed.span),
+            left: parsed.left,
+            right: parsed.right,
+        };
+    }
+    TestOutcome {
+        passed: false,
+        message: Some(format!("test subprocess exited with code {exit_code}")),
+        span: None,
+        left: None,
+        right: None,
+    }
+}
+
+#[derive(Debug)]
+struct ParsedFailure {
+    message: String,
+    span: Span,
+    left: Option<String>,
+    right: Option<String>,
+}
+
+/// Scan `stderr` for a `KARAC_TEST_FAILURE {...JSON...}` line and parse
+/// the trailing JSON. Tolerant of multiple markers (record-and-continue
+/// semantics aren't on by default in c.1, but if a future codegen
+/// emits two markers, the first one wins — matches the interpreter's
+/// `runtime_errors.first()` semantics).
+fn parse_failure_marker(stderr: &str) -> Option<ParsedFailure> {
+    const PREFIX: &str = "KARAC_TEST_FAILURE ";
+    let payload = stderr.lines().find_map(|line| line.strip_prefix(PREFIX))?;
+    parse_failure_payload(payload)
+}
+
+/// Parse the JSON payload `{"file":"...","line":N,"column":N,"message":"...","left":...,"right":...}`.
+/// Hand-rolled rather than `serde_json` to avoid a karac dep on
+/// serde just for this — the runtime's `write_json_string` produces
+/// the only writer, so the field set + ordering is fixed.
+fn parse_failure_payload(payload: &str) -> Option<ParsedFailure> {
+    // `file` field is intentionally not read here — the test runner
+    // already knows the file path from `module.test_file` and threads
+    // it into the `test_fail` event from there. We still require it to
+    // be present in the marker (round-trip integrity check) but discard
+    // the value.
+    let _file = extract_json_string(payload, "\"file\"")?;
+    let line = extract_json_number(payload, "\"line\"")? as usize;
+    let column = extract_json_number(payload, "\"column\"")? as usize;
+    let message = extract_json_string(payload, "\"message\"")?;
+    let left = extract_json_string_or_null(payload, "\"left\"");
+    let right = extract_json_string_or_null(payload, "\"right\"");
+    Some(ParsedFailure {
+        message,
+        span: Span {
+            line,
+            column,
+            offset: 0,
+            length: 0,
+        },
+        left,
+        right,
+    })
+}
+
+/// Find `key:"<value>"` and return the unescaped value. Mirrors the
+/// runtime's `write_json_string` escapes (the only producer): `\"`,
+/// `\\`, `\n`, `\r`, `\t`, `\u00XX`.
+fn extract_json_string(payload: &str, key: &str) -> Option<String> {
+    let key_pos = payload.find(key)?;
+    let after_key = &payload[key_pos + key.len()..];
+    let colon = after_key.find(':')?;
+    let after_colon = after_key[colon + 1..].trim_start();
+    if !after_colon.starts_with('"') {
+        return None;
+    }
+    let mut out = String::new();
+    let mut chars = after_colon[1..].chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => {
+                let esc = chars.next()?;
+                match esc {
+                    '"' => out.push('"'),
+                    '\\' => out.push('\\'),
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    'u' => {
+                        let hex: String = chars.by_ref().take(4).collect();
+                        let code = u32::from_str_radix(&hex, 16).ok()?;
+                        out.push(char::from_u32(code)?);
+                    }
+                    _ => return None,
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    None
+}
+
+/// Variant of `extract_json_string` that accepts a literal `null` as a
+/// valid value. Used for the `left` / `right` slots on the failure
+/// marker — bare `assert(cond)` failures emit them as null.
+fn extract_json_string_or_null(payload: &str, key: &str) -> Option<String> {
+    let key_pos = payload.find(key)?;
+    let after_key = &payload[key_pos + key.len()..];
+    let colon = after_key.find(':')?;
+    let after_colon = after_key[colon + 1..].trim_start();
+    if after_colon.starts_with("null") {
+        return None;
+    }
+    extract_json_string(payload, key)
+}
+
+fn extract_json_number(payload: &str, key: &str) -> Option<u64> {
+    let key_pos = payload.find(key)?;
+    let after_key = &payload[key_pos + key.len()..];
+    let colon = after_key.find(':')?;
+    let after_colon = after_key[colon + 1..].trim_start();
+    let end = after_colon
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(after_colon.len());
+    after_colon[..end].parse::<u64>().ok()
+}
+
+/// Stand-in to silence the unused-import lint when this module compiles
+/// against a build that doesn't currently reference `RuntimeError` from
+/// outside. Kept around so future expansion (mapping runtime panics
+/// into structured outcomes) has the import already wired.
+#[allow(dead_code)]
+fn _force_runtime_error_import() -> Option<RuntimeError> {
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_basic_failure_marker() {
+        let stderr = "KARAC_TEST_FAILURE {\"file\":\"x.kara\",\"line\":3,\"column\":5,\"message\":\"assertion failed: left != right\",\"left\":\"1\",\"right\":\"2\"}\n";
+        let p = parse_failure_marker(stderr).expect("expected to parse marker");
+        assert_eq!(p.message, "assertion failed: left != right");
+        assert_eq!(p.span.line, 3);
+        assert_eq!(p.span.column, 5);
+        assert_eq!(p.left.as_deref(), Some("1"));
+        assert_eq!(p.right.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn parses_null_left_right() {
+        let stderr = "KARAC_TEST_FAILURE {\"file\":\"x.kara\",\"line\":2,\"column\":5,\"message\":\"assertion failed\",\"left\":null,\"right\":null}\n";
+        let p = parse_failure_marker(stderr).expect("expected to parse marker");
+        assert!(p.left.is_none());
+        assert!(p.right.is_none());
+    }
+
+    #[test]
+    fn unescapes_json_strings() {
+        let stderr = "KARAC_TEST_FAILURE {\"file\":\"x\\nz\",\"line\":1,\"column\":1,\"message\":\"with \\\"quotes\\\"\",\"left\":null,\"right\":null}\n";
+        let p = parse_failure_marker(stderr).expect("expected to parse marker");
+        assert_eq!(p.message, "with \"quotes\"");
+    }
+
+    #[test]
+    fn no_marker_yields_none() {
+        let stderr = "some unrelated stderr noise\n";
+        assert!(parse_failure_marker(stderr).is_none());
+    }
+
+    #[test]
+    fn map_exit_zero_is_pass() {
+        let o = map_exit_to_outcome(0, "");
+        assert!(o.passed);
+    }
+
+    #[test]
+    fn map_nonzero_no_marker_is_generic_fail() {
+        let o = map_exit_to_outcome(2, "");
+        assert!(!o.passed);
+        assert_eq!(o.message.as_deref().unwrap(), "test subprocess exited with code 2");
+    }
+}

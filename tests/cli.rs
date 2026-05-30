@@ -1658,6 +1658,139 @@ fn test_test_failure_emits_left_right_and_location() {
     assert!(summary.contains("\"failed\":1"));
 }
 
+// ── Slice c.3 — `karac test` JIT subprocess dispatch ──
+//
+// With `KARAC_TEST_JIT=1` set (and `--features lljit_prototype` built),
+// `cmd_test` shells each test out to `karac_jit_runner` instead of
+// invoking the tree-walk interpreter. These tests pin that the
+// surface event JSONL (test_pass / test_fail / summary, including
+// the structured `left` / `right` / `location` fields on failures)
+// stays byte-identical to the interpreter-path equivalents above —
+// the JIT cutover is supposed to be invisible to consumers.
+
+#[cfg(feature = "lljit_prototype")]
+#[test]
+fn test_test_jit_all_passing() {
+    let tmp = scratch_project("test-jit-all-pass");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "fn main() {}\nfn add(a: i64, b: i64) -> i64 { a + b }\n",
+    );
+    write(
+        &tmp.join("src/main_test.kara"),
+        "test \"add\" { assert_eq(add(1, 2), 3); }\ntest \"zero\" { assert_eq(add(0, 0), 0); }\n",
+    );
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env("KARAC_TEST_JIT", "1")
+        .arg("test")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "expected exit 0; stdout:\n{stdout}");
+    let lines = jsonl_lines(&stdout);
+    assert_eq!(event_kind(lines[0]), Some("run_start"));
+    assert!(lines[0].contains("\"total_tests\":2"));
+    let pass_count = lines
+        .iter()
+        .filter(|l| event_kind(l) == Some("test_pass"))
+        .count();
+    assert_eq!(pass_count, 2, "expected 2 test_pass events; got: {lines:?}");
+    let summary = lines.last().unwrap();
+    assert!(summary.contains("\"passed\":2"));
+    assert!(summary.contains("\"failed\":0"));
+}
+
+#[cfg(feature = "lljit_prototype")]
+#[test]
+fn test_test_jit_failure_emits_left_right_and_location() {
+    let tmp = scratch_project("test-jit-failure-detail");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "fn main() {}\nfn add(a: i64, b: i64) -> i64 { a + b }\n",
+    );
+    // Same kara source as the interpreter-path test above; the JIT
+    // outcome should emit the same fields (left=4, right=5, location
+    // pointing at the assert_eq call site).
+    write(
+        &tmp.join("src/main_test.kara"),
+        "test \"failing\" { assert_eq(add(2, 2), 5); }\n",
+    );
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env("KARAC_TEST_JIT", "1")
+        .arg("test")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit; stdout:\n{stdout}"
+    );
+    let lines = jsonl_lines(&stdout);
+    let fail_line = lines
+        .iter()
+        .find(|l| event_kind(l) == Some("test_fail"))
+        .unwrap_or_else(|| panic!("expected a test_fail event in:\n{lines:?}"));
+    assert!(fail_line.contains("\"test\":\"failing\""));
+    assert!(fail_line.contains("\"left\":\"4\""));
+    assert!(fail_line.contains("\"right\":\"5\""));
+    assert!(fail_line.contains("\"location\":{\"file\":"));
+    assert!(fail_line.contains("main_test.kara"));
+    let summary = lines.last().unwrap();
+    assert!(summary.contains("\"failed\":1"));
+}
+
+#[cfg(feature = "lljit_prototype")]
+#[test]
+fn test_test_jit_bare_assert_false_emits_null_left_right() {
+    // `assert(false)` failures (no left/right operands) must still
+    // surface a test_fail event with a message and no operand fields.
+    // Mirrors the interpreter-path behavior — c.1's runtime fn emits
+    // `"left":null,"right":null` and the parser maps that to
+    // `TestOutcome { left: None, right: None }`, which the runner's
+    // emitter then omits from the JSON output.
+    let tmp = scratch_project("test-jit-bare-assert");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("src/main_test.kara"),
+        "test \"bare\" { assert(false); }\n",
+    );
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env("KARAC_TEST_JIT", "1")
+        .arg("test")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success(), "expected non-zero exit");
+    let lines = jsonl_lines(&stdout);
+    let fail_line = lines
+        .iter()
+        .find(|l| event_kind(l) == Some("test_fail"))
+        .unwrap_or_else(|| panic!("expected a test_fail event in:\n{lines:?}"));
+    assert!(fail_line.contains("\"message\":\"assertion failed\""));
+    // No left / right fields on bare assert(cond) — the emitter
+    // suppresses them when None.
+    assert!(
+        !fail_line.contains("\"left\":"),
+        "bare assert should not emit left field; got: {fail_line}"
+    );
+    assert!(
+        !fail_line.contains("\"right\":"),
+        "bare assert should not emit right field; got: {fail_line}"
+    );
+}
+
 #[test]
 fn test_test_filter_narrows_to_substring_match() {
     let tmp = scratch_project("test-filter");

@@ -75,6 +75,7 @@ pub mod resolver;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod scaffold;
 pub mod span_visitor;
+pub mod test_jit_dispatch;
 pub mod test_main_synth;
 pub mod token;
 pub mod typechecker;

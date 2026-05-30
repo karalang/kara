@@ -7942,6 +7942,105 @@ fn cmd_test(filter: Option<String>, all: bool) {
             .map(|p| p.display().to_string())
             .unwrap_or_default();
 
+        // Slice c.3 — JIT subprocess dispatch when `KARAC_TEST_JIT=1`.
+        // Bypasses the per-test `Interpreter` and instead synthesizes
+        // a main calling `t.fn_name` (via `test_main_synth`), compiles
+        // to IR, spawns `karac_jit_runner`, and parses stderr for the
+        // `KARAC_TEST_FAILURE` JSONL marker emitted by c.1's runtime
+        // bridge. Same JSONL event emitters fire below — only the
+        // outcome source changes. Constructor-failure distinction is
+        // not preserved under JIT (a panicking fixture surfaces as a
+        // regular test_fail); restoring it is a c.3 follow-up that
+        // wraps the synthesized main in `errdefer`-style cleanup.
+        #[cfg(feature = "lljit_prototype")]
+        if std::env::var("KARAC_TEST_JIT").as_deref() == Ok("1") {
+            let timeout = std::env::var("KARAC_TEST_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .map(std::time::Duration::from_secs)
+                .unwrap_or_else(|| std::time::Duration::from_secs(30));
+            let fixtures: Vec<(String, crate::ast::Expr)> = t
+                .with_providers
+                .iter()
+                .map(|fx| (fx.resource_path.clone(), fx.constructor.clone()))
+                .collect();
+            let active_providers: Vec<String> = t
+                .with_providers
+                .iter()
+                .map(|fx| fx.resource_path.clone())
+                .collect();
+            let result = crate::test_jit_dispatch::run_test_via_jit(
+                program_ref,
+                &t.fn_name,
+                &fixtures,
+                &test_file_path,
+                timeout,
+            );
+            match result {
+                crate::test_jit_dispatch::JitTestResult::Completed {
+                    outcome,
+                    duration_ms,
+                } => {
+                    if outcome.passed {
+                        passed += 1;
+                        emit_test_event(
+                            "test_pass",
+                            &format!(
+                                "\"test\":{},\"duration_ms\":{}",
+                                json_string(&t.qualified),
+                                duration_ms
+                            ),
+                        );
+                    } else {
+                        failed += 1;
+                        emit_test_event(
+                            "test_fail",
+                            &test_fail_fields_with_providers(
+                                t,
+                                &outcome,
+                                &test_file_path,
+                                duration_ms,
+                                &active_providers,
+                            ),
+                        );
+                    }
+                }
+                crate::test_jit_dispatch::JitTestResult::TimedOut { duration_ms } => {
+                    failed += 1;
+                    emit_test_event(
+                        "test_timeout",
+                        &format!(
+                            "\"test\":{},\"timeout_s\":{},\"elapsed_ms\":{}",
+                            json_string(&t.qualified),
+                            timeout.as_secs(),
+                            duration_ms
+                        ),
+                    );
+                }
+                crate::test_jit_dispatch::JitTestResult::SpawnFailed { message } => {
+                    failed += 1;
+                    let outcome = crate::interpreter::TestOutcome {
+                        passed: false,
+                        message: Some(message),
+                        span: None,
+                        left: None,
+                        right: None,
+                    };
+                    emit_test_event(
+                        "test_fail",
+                        &test_fail_fields_with_providers(
+                            t,
+                            &outcome,
+                            &test_file_path,
+                            0,
+                            &active_providers,
+                        ),
+                    );
+                }
+            }
+            continue;
+        }
+
         let mut interp = Interpreter::new(program_ref, typed_ref);
         interp.set_source_filename(&test_file_path);
         interp.register_for_tests();
