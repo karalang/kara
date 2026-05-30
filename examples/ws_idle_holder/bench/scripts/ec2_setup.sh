@@ -53,12 +53,23 @@ fi
 # 7.62 GB server RSS; without trimming the per-socket buffer floors,
 # 1M idle conns drag in ~4 KiB receive + ~4 KiB send buffer each by
 # default, inflating server-side memory unnecessarily.
+#
+# `fs.file-max=8000000`: the system-wide ceiling on open file
+# descriptors across ALL processes. The default on Ubuntu 24.04 arm64
+# is 3,000,000, which is enough for a 1M-conn run (~2M fds for
+# bench-client + server, plus ambient) but NOT for 2M conns (~4M fds).
+# The 2026-05-30 Kāra 2M run hit `VFS: file-max limit 3000000
+# reached` mid-ramp on the first attempt and stalled. Raising to 8M
+# = 2× headroom over the 2M-conn ceiling. nofile (per-process,
+# below) is necessary but not sufficient: file-max gates the kernel's
+# global file-table allocation independently of any per-process cap.
 echo "[ec2_setup] applying sysctl bumps..."
 $SUDO sysctl -w net.core.somaxconn=65535
 $SUDO sysctl -w net.ipv4.tcp_max_syn_backlog=65535
 $SUDO sysctl -w net.ipv4.ip_local_port_range="15000 65535"
 $SUDO sysctl -w net.ipv4.tcp_rmem="4096 87380 6291456"
 $SUDO sysctl -w net.ipv4.tcp_wmem="4096 65536 4194304"
+$SUDO sysctl -w fs.file-max=8000000
 
 # ── Loopback aliases ─────────────────────────────────────────────────
 #
@@ -97,6 +108,7 @@ echo "[ec2_setup] current state:"
 echo "  somaxconn          = $(sysctl -n net.core.somaxconn)"
 echo "  tcp_max_syn_backlog= $(sysctl -n net.ipv4.tcp_max_syn_backlog)"
 echo "  ip_local_port_range= $(sysctl -n net.ipv4.ip_local_port_range)"
+echo "  fs.file-max        = $(sysctl -n fs.file-max)"
 echo "  loopback alias cnt = $(ip addr show lo | grep -c 'inet 127\.0\.0\.')"
 echo "  ulimit -n (current)= $(ulimit -n)"
 echo
