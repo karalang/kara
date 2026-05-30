@@ -61,6 +61,18 @@ bytes = "1"
 # explicit and the API surface is self-contained.
 mio = { version = "1", features = ["os-poll", "os-ext", "net"] }
 
+# Phase 6 line 209 follow-on (M3 1M listen-backlog fix, 2026-05-29):
+# `std::net::TcpListener::bind` passes an opaque small backlog (Rust std
+# hardcodes 1024 on Unix; Linux caps further at `somaxconn`). At 1M idle
+# the std default saturates well before all conns are held → SYN-cookie
+# fallback + ~17% churn-timeout rate. `socket2` lets us pass an explicit
+# `listen(backlog)`; we pass a large value (65535) and let the kernel
+# cap at the system-tuned ceiling (`/proc/sys/net/core/somaxconn` on
+# Linux, `kern.ipc.somaxconn` on BSD/macOS), which matches what large
+# servers (nginx, envoy) use by convention. Already in the lockfile as
+# a transitive dep via mio; promoting to a direct dep to use Socket API.
+socket2 = "0.5"
+
 # Phase 6 line 236 slice 1 (TLS / HTTPS server-side stdlib): rustls backs
 # `runtime/src/tls.rs` — pure-Rust TLS implementation, no openssl link
 # dependency. `default-features = false` strips out `aws_lc_rs` (heavy

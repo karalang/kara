@@ -932,6 +932,16 @@ pub extern "C" fn karac_runtime_test_bind_and_print_port() -> i32 {
 // established v1 convention from `Server.serve_static`. Smoke tests
 // read the port back from stdout.
 
+/// Default `listen(2)` backlog for `karac_runtime_tcp_bind`. The kernel
+/// silently caps this at the system tunable (`somaxconn`), so passing a
+/// large literal lets the OS pick the real ceiling without the runtime
+/// needing to read it. 65535 matches what nginx / envoy use by default.
+/// Surfaced at M3 1M (2026-05-29) — see phase-6-runtime.md line 209
+/// follow-on for the diagnosis (SYN-cookie fallback at ~93K conns, 17%
+/// churn-timeout rate) and `docs/investigations/demo1_m3_verification.json`
+/// for the validation gate.
+const KARAC_RUNTIME_TCP_LISTEN_BACKLOG: i32 = 65535;
+
 /// Bind a TCP listener on `addr` (e.g. `"127.0.0.1:0"` for ephemeral-
 /// port binding). On success, print `BOUND_PORT=<port>` to stdout if
 /// the bound port was ephemeral (caller asked for `:0`), then return
@@ -955,25 +965,50 @@ pub extern "C" fn karac_runtime_test_bind_and_print_port() -> i32 {
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i64) -> i32 {
+    use socket2::{Domain, Socket, Type};
     use std::os::unix::io::IntoRawFd;
     if addr_ptr.is_null() || addr_len <= 0 {
         return -1;
     }
     let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
-    let addr = match std::str::from_utf8(bytes) {
+    let addr_str = match std::str::from_utf8(bytes) {
         Ok(s) => s,
         Err(_) => return -1,
     };
-    let listener = match std::net::TcpListener::bind(addr) {
-        Ok(l) => l,
+    // Parse the addr as a literal SocketAddr (host:port with host an IP
+    // literal). The kara stdlib never passes hostnames to this FFI — the
+    // demos use `127.0.0.1:0` / `0.0.0.0:<port>` shape — so a strict
+    // parse here is fine and avoids dragging DNS resolution into the
+    // listen-bind path.
+    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
         Err(_) => return -1,
     };
+    let domain = if socket_addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = match Socket::new(domain, Type::STREAM, None) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    // SO_REUSEADDR mirrors what std::net::TcpListener::bind sets
+    // implicitly on Unix; preserve that for parity with prior behavior.
+    let _ = socket.set_reuse_address(true);
+    if socket.bind(&socket_addr.into()).is_err() {
+        return -1;
+    }
+    if socket.listen(KARAC_RUNTIME_TCP_LISTEN_BACKLOG).is_err() {
+        return -1;
+    }
+    let listener: std::net::TcpListener = socket.into();
     // Only print BOUND_PORT for ephemeral-port binds; a fixed-port
     // bind doesn't need the readback since the caller already knows
-    // the port. Treat `addr` ending in `:0` (or `:00...`) as the
+    // the port. Treat `addr_str` ending in `:0` (or `:00...`) as the
     // ephemeral marker — the cheapest correct check is to look at
     // the bound port relative to the requested port.
-    if addr.rsplit(':').next() == Some("0") {
+    if addr_str.rsplit(':').next() == Some("0") {
         if let Ok(local) = listener.local_addr() {
             println!("BOUND_PORT={}", local.port());
             use std::io::Write;

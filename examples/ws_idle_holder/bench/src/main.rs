@@ -60,6 +60,15 @@ struct Args {
     concurrency: usize,
     churn_rounds: usize,
     churn_fraction: f64,
+    /// Hard cap on reconnects per churn round. 0 = no cap (use the raw
+    /// `churn_fraction * N` value). The default 10_000 protects the
+    /// 10 % `churn_fraction` default from producing 100 K-burst rounds
+    /// at 1 M scale (which overstressed the server's listen backlog
+    /// pre-fix and is closer to a synthetic stress event than a
+    /// realistic idle-hold churn pattern). At small N the cap doesn't
+    /// bind — 50 K × 0.1 = 5 K is well under 10 K — so the cliff-
+    /// detection signal is preserved.
+    churn_batch_cap: usize,
     hold_secs: u64,
     connect_timeout_ms: u64,
     server_name: String,
@@ -83,6 +92,7 @@ impl Default for Args {
             concurrency: 256,
             churn_rounds: 3,
             churn_fraction: 0.1,
+            churn_batch_cap: 10_000,
             hold_secs: 1,
             connect_timeout_ms: 10_000,
             server_name: "localhost".to_string(),
@@ -112,6 +122,9 @@ OPTIONS:
   --concurrency <N>         in-flight handshakes cap      (default 256)
   --churn-rounds <N>        close+reopen rounds; 0=off    (default 3)
   --churn-fraction <f>      fraction churned per round    (default 0.1)
+  --churn-batch-cap <N>     max reconnects per round; 0=no cap (default 10000).
+                            Caps `churn_fraction * N` so the 10% default
+                            doesn't overstress the server at high N.
   --hold-secs <N>           settle time before final RSS  (default 1)
   --connect-timeout-ms <N>  per-connection deadline       (default 10000)
   --server-name <name>      TLS SNI name                  (default localhost)
@@ -137,6 +150,7 @@ fn parse_args() -> Result<Args, BoxErr> {
             "--concurrency" => a.concurrency = next()?.parse()?,
             "--churn-rounds" => a.churn_rounds = next()?.parse()?,
             "--churn-fraction" => a.churn_fraction = next()?.parse()?,
+            "--churn-batch-cap" => a.churn_batch_cap = next()?.parse()?,
             "--hold-secs" => a.hold_secs = next()?.parse()?,
             "--connect-timeout-ms" => a.connect_timeout_ms = next()?.parse()?,
             "--server-name" => a.server_name = next()?,
@@ -584,7 +598,18 @@ async fn main() -> Result<(), BoxErr> {
 
     // Churn: close+reopen a fraction each round; watch the reconnect tail.
     let churn = if args.churn_rounds > 0 && established > 0 {
-        let batch = ((established as f64 * args.churn_fraction).round() as usize).max(1);
+        let batch_from_fraction =
+            ((established as f64 * args.churn_fraction).round() as usize).max(1);
+        // Cap reconnects per round at `churn_batch_cap` so the 10 %
+        // default doesn't produce 100 K-burst rounds at 1 M scale (which
+        // overstressed the listen backlog pre-fix and is closer to a
+        // synthetic stress event than a realistic idle-hold churn pattern).
+        // 0 = no cap; preserves the raw fraction behavior.
+        let batch = if args.churn_batch_cap > 0 {
+            batch_from_fraction.min(args.churn_batch_cap)
+        } else {
+            batch_from_fraction
+        };
         eprintln!(
             "[bench] churn: {} rounds x {} conns (close+reopen)...",
             args.churn_rounds, batch
