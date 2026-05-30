@@ -370,6 +370,18 @@ impl<'a> Interpreter<'a> {
         })
     }
 
+    /// Whether `name` is a `distinct type` declaration. Distinct types are
+    /// zero-cost: the `Name(value)` constructor wraps to the base value
+    /// unchanged and `.raw()` unwraps it, so the runtime carries no wrapper —
+    /// this lookup only gates the constructor-call interception in
+    /// `eval_call`. design.md § Distinct Types (Newtypes).
+    pub(crate) fn is_distinct_type(&self, name: &str) -> bool {
+        self.program
+            .items
+            .iter()
+            .any(|item| matches!(item, Item::DistinctType(d) if d.name == name))
+    }
+
     /// The base type's name for a refinement (`type Email = String where …`
     /// → `"String"`), used to cast a refined value to its base
     /// representation before the predicate check. `None` for non-refinements.

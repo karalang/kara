@@ -654,6 +654,14 @@ impl<'a> super::Interpreter<'a> {
                         data: EnumData::Tuple(arg_vals),
                     };
                 }
+                // Distinct-type constructor: `UserId(value)` is a zero-cost
+                // wrap — the runtime value IS the base value. The typechecker
+                // has already checked the argument against the base type
+                // (and, for the combined `distinct type T = B where P` form,
+                // the predicate); the interpreter just returns it unchanged.
+                if self.is_distinct_type(name) {
+                    return arg_vals.into_iter().next().unwrap_or(Value::Unit);
+                }
             }
         }
 

@@ -167,6 +167,16 @@ impl<'a> super::Interpreter<'a> {
 
         let obj = self.eval_expr_inner(object);
 
+        // Distinct-type `.raw()` unwrap (design.md § Distinct Types). A
+        // distinct type is zero-cost — its runtime value already *is* the
+        // base value — so `.raw()` returns the receiver unchanged. `.raw()`
+        // is reserved to distinct types by the typechecker (the only
+        // built-in method they carry), so a zero-arg `.raw()` reaching the
+        // interpreter is always this unwrap.
+        if method == "raw" && args.is_empty() {
+            return obj;
+        }
+
         // Slice 3 — mut-Slice mutation methods that route their writes
         // back to the original storage. These dispatch BEFORE the
         // Slice→Array normalization below; the normalization is for

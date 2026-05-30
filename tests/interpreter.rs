@@ -4964,6 +4964,50 @@ fn test_derive_arithmetic_all_ops() {
     assert_eq!(output, "13\n7\n30\n3\n1\n");
 }
 
+// ── Distinct types — constructor + .raw() (zero-cost) ──────────────
+
+#[test]
+fn test_distinct_constructor_and_raw_roundtrip() {
+    // `UserId(42)` wraps a base value (zero-cost) and `.raw()` unwraps it.
+    let output = run_no_errors(
+        "distinct type UserId = i64;\n\
+         fn main() {\n\
+             let u = UserId(42);\n\
+             let raw: i64 = u.raw();\n\
+             println(raw);\n\
+         }",
+    );
+    assert_eq!(output, "42\n");
+}
+
+#[test]
+fn test_distinct_constructor_float_base() {
+    // The wrap is value-preserving for non-integer bases too.
+    let output = run_no_errors(
+        "distinct type Meters = f64;\n\
+         fn main() {\n\
+             let m = Meters(3.5);\n\
+             println(m.raw());\n\
+         }",
+    );
+    assert_eq!(output, "3.5\n");
+}
+
+#[test]
+fn test_distinct_constructor_passed_through_function() {
+    // A distinct value round-trips through a function call and back out
+    // via `.raw()` — the wrapper is purely a type-level distinction.
+    let output = run_no_errors(
+        "distinct type UserId = i64;\n\
+         fn identity(id: UserId) -> UserId { id }\n\
+         fn main() {\n\
+             let u = identity(UserId(7));\n\
+             println(u.raw());\n\
+         }",
+    );
+    assert_eq!(output, "7\n");
+}
+
 // ── Map[K, V] interpreter tests ────────────────────────────────────────────
 
 #[test]
