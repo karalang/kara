@@ -1512,9 +1512,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         // FreeVecBuffer suppression is a broader
                         // concern tracked separately in
                         // phase-7-codegen.md.
-                        if has_user_drop {
-                            if let ExprKind::Identifier(source_name) = &value.kind {
+                        if let ExprKind::Identifier(source_name) = &value.kind {
+                            if has_user_drop {
                                 self.suppress_user_drop_for_var(source_name);
+                            } else {
+                                // StructDrop move-suppression: `let g = f;`
+                                // where `f` is a tracked non-shared struct
+                                // (e.g. an HTTP `Response` from `Ok(resp)`,
+                                // now StructDrop-tracked per phase-8 line 39)
+                                // copies the aggregate into `g`'s slot — both
+                                // slots alias the same heap buffers + i64
+                                // side-table handle. Zero the source's
+                                // heap-field state (Vec/String caps + the
+                                // HTTP handle) so the source's StructDrop
+                                // no-ops; `g`'s freshly-registered StructDrop
+                                // below becomes the sole owner. Without this,
+                                // both drop fns free the same buffers (the
+                                // double-free that hung the move-out E2E).
+                                // No-op for non-Identifier (fresh-value) RHS.
+                                self.suppress_source_vec_cleanup_for_arg(value);
                             }
                         }
                         if let Some(slot) = self.variables.get(var_name.as_str()) {

@@ -247,6 +247,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.track_vec_var(alloca, Some(elem_ty));
                     }
                 }
+                // Phase-8 line 39 follow-up — register scope-exit Drop for a
+                // pattern-bound `Response` (frees its `body` String + the
+                // `headers` side-table handle). The eager-client path binds
+                // `Response` via `Ok(resp)` destructure (a pattern binding),
+                // which doesn't flow through the let-binding `track_struct_var`
+                // site in `stmts.rs`, so wire it here. `track_struct_var`
+                // no-ops when the type has no synthesized drop fn, and
+                // move-suppression across every exit path comes from
+                // `suppress_source_vec_cleanup_for_arg` (which zeros the
+                // body cap + the headers handle on move). Targeted to the
+                // seeded HTTP struct by name so unrelated struct destructures
+                // keep their current (untracked) behavior.
+                if matches!(
+                    self.var_type_names.get(name.as_str()).map(|s| s.as_str()),
+                    Some("Response")
+                ) {
+                    self.track_struct_var("Response", alloca);
+                }
                 // Slice 3a (ref-scrutinee leaf binding ABI parity):
                 // when the typechecker tagged this binding with a borrow
                 // mode (i.e., the enclosing match scrutinee is `ref T` /

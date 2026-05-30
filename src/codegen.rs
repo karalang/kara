@@ -1829,6 +1829,18 @@ impl<'ctx> Codegen<'ctx> {
         ] {
             module.add_function(name, response_header_at_type, Some(Linkage::External));
         }
+        // Phase-8 line 39 follow-up — `karac_runtime_http_response_headers_free(
+        //   i64 handle) -> void`. Releases the side-table entry; called by
+        // the synthesized `Response` Drop at scope exit (see
+        // `emit_struct_drop_synthesis`'s `HttpHandleFree` field arm).
+        // Idempotent: handle 0 / unknown is a no-op, so a move-suppressed
+        // (zeroed) handle or a double-drop is harmless.
+        let response_headers_free_type = context.void_type().fn_type(&[i64_type.into()], false);
+        let _karac_runtime_http_response_headers_free_fn = module.add_function(
+            "karac_runtime_http_response_headers_free",
+            response_headers_free_type,
+            Some(Linkage::External),
+        );
         // Phase-8 line 24 — chained-builder request descriptor FFI.
         // `_builder_new(method_ptr, method_len, url_ptr, url_len) ->
         // i64`. Returns an opaque positive handle indexing the
@@ -1890,6 +1902,17 @@ impl<'ctx> Codegen<'ctx> {
         module.add_function(
             "karac_runtime_http_builder_set_timeout",
             http_builder_set_timeout_type,
+            Some(Linkage::External),
+        );
+        // Phase-8 line 39 follow-up — `karac_runtime_http_builder_free(
+        //   i64 handle) -> void`. Releases the `HTTP_BUILDERS` entry;
+        // called by the synthesized `RequestBuilder` Drop at scope exit so
+        // an abandoned (never-sent) builder doesn't leak. Idempotent on
+        // 0 / unknown / already-sent.
+        let http_builder_free_type = context.void_type().fn_type(&[i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_http_builder_free",
+            http_builder_free_type,
             Some(Linkage::External),
         );
         // `_builder_send(handle, *mut i64 status, *mut *mut u8 body_ptr,

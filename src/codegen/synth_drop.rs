@@ -278,8 +278,12 @@ impl<'ctx> super::Codegen<'ctx> {
             None,
             VecOrString,
             MapOrSet,
+            /// Phase-8 line 39 follow-up — an i64 field that's an opaque
+            /// handle into a runtime side-table; free it via the named
+            /// extern (guarded on `handle != 0`) at scope exit.
+            HttpHandleFree(&'static str),
         }
-        let kinds: Vec<FieldDrop> = field_kinds
+        let mut kinds: Vec<FieldDrop> = field_kinds
             .iter()
             .map(|opt_name| match opt_name.as_deref() {
                 Some("Vec") | Some("VecDeque") | Some("String") => FieldDrop::VecOrString,
@@ -289,6 +293,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => FieldDrop::None,
             })
             .collect();
+        // Phase-8 line 39 follow-up — the seeded HTTP handle-structs carry
+        // an i64 side-table key (`Response.headers` / `RequestBuilder.handle`)
+        // that leaks until process exit without an explicit free. Override
+        // the classifier for the exact (struct, field) the client path
+        // seeds, GUARDED on the LLVM field actually being i64 — so a
+        // user-defined struct that shares the name (e.g. a server-side
+        // `Response { status, body, headers: Vec[(String, String)] }`
+        // whose field 2 is a Vec aggregate, not an i64) is never misread
+        // as a handle and double-freed. (For such a user struct, field 2
+        // stays classified `VecOrString` by its type name above.)
+        let http_handle: Option<(usize, &'static str)> = match struct_name {
+            "Response" => Some((2, "karac_runtime_http_response_headers_free")),
+            "RequestBuilder" => Some((0, "karac_runtime_http_builder_free")),
+            _ => None,
+        };
+        if let Some((idx, extern_name)) = http_handle {
+            let is_i64_field = matches!(
+                st.get_field_type_at_index(idx as u32),
+                Some(inkwell::types::BasicTypeEnum::IntType(t)) if t.get_bit_width() == 64
+            );
+            if idx < kinds.len() && is_i64_field {
+                kinds[idx] = FieldDrop::HttpHandleFree(extern_name);
+            }
+        }
         if kinds.iter().all(|k| *k == FieldDrop::None) {
             return None;
         }
@@ -468,6 +496,60 @@ impl<'ctx> super::Codegen<'ctx> {
                             "",
                         )
                         .unwrap();
+                }
+                FieldDrop::HttpHandleFree(extern_name) => {
+                    // Phase-8 line 39 follow-up — load the i64 side-table
+                    // handle; free the entry only when non-zero. A zeroed
+                    // handle means the value was move-suppressed (the
+                    // consumer owns it now) or is the Err-path sentinel —
+                    // mirrors the `cap > 0` guard the VecOrString arm uses.
+                    // The runtime free is itself a no-op on 0 / unknown, so
+                    // the guard is an optimization, not a correctness
+                    // requirement (a missed move-suppression degrades to a
+                    // harmless idempotent double-remove, never a corruption).
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            st,
+                            p_arg,
+                            field_idx as u32,
+                            &format!("drop.field{field_idx}.handle.p"),
+                        )
+                        .unwrap();
+                    let handle = self
+                        .builder
+                        .build_load(i64_t, field_ptr, &format!("drop.field{field_idx}.handle"))
+                        .unwrap()
+                        .into_int_value();
+                    let zero = i64_t.const_int(0, false);
+                    let is_live = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            handle,
+                            zero,
+                            &format!("drop.field{field_idx}.handle.live"),
+                        )
+                        .unwrap();
+                    let free_bb = self
+                        .context
+                        .append_basic_block(drop_fn, &format!("drop.field{field_idx}.handle.free"));
+                    let skip_bb = self
+                        .context
+                        .append_basic_block(drop_fn, &format!("drop.field{field_idx}.handle.skip"));
+                    self.builder
+                        .build_conditional_branch(is_live, free_bb, skip_bb)
+                        .unwrap();
+                    self.builder.position_at_end(free_bb);
+                    let free_fn = self
+                        .module
+                        .get_function(extern_name)
+                        .unwrap_or_else(|| panic!("{extern_name} declared in Codegen::new"));
+                    self.builder
+                        .build_call(free_fn, &[handle.into()], "")
+                        .unwrap();
+                    self.builder.build_unconditional_branch(skip_bb).unwrap();
+                    self.builder.position_at_end(skip_bb);
                 }
             }
         }

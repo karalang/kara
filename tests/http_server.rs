@@ -2234,6 +2234,121 @@ fn main() with sends(Network) receives(Network) {{
         );
     }
 
+    /// Phase-8 line 39 follow-up — move-aware Drop. THE double-free /
+    /// premature-free regression test: inside the `Ok(resp)` arm the
+    /// `Response` is MOVED via `let resp2 = resp;`, then `resp2.header(...)`
+    /// is queried. Both bindings' slots alias the same `body` buffer +
+    /// headers side-table handle. Without source move-suppression, BOTH
+    /// `resp` and `resp2`'s synthesized Drop free the same buffer (a
+    /// double-free that spins macOS `mfm_free` → the test process hangs)
+    /// and free the same handle. With the suppression (zeroing the
+    /// moved-from `resp`'s body cap + handle so its Drop no-ops), only
+    /// `resp2` frees, and the header still resolves on `resp2`. Pins both
+    /// no-hang (single free) and no-premature-free (header still found).
+    #[test]
+    fn test_client_get_header_survives_move_out_of_match() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!(
+                "skip: libkarac_runtime.a not built \
+                 (run `cargo build -p karac-runtime --release`)"
+            );
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let canned: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-Custom: custom-value\r\nConnection: close\r\n\r\nok";
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral origin port");
+        let port = listener.local_addr().expect("local_addr").port();
+        let origin_thread = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let mut total = 0usize;
+                while total < buf.len() {
+                    let n = match stream.read(&mut buf[total..]) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => return,
+                    };
+                    total += n;
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let _ = stream.write_all(canned);
+                let _ = stream.flush();
+            }
+        });
+
+        let url = format!("http://127.0.0.1:{port}/mv");
+        // `resp` is moved via `let resp2 = resp;` inside the Ok arm, then
+        // queried on `resp2`. (A `return`-in-the-Err-arm move-out-of-match
+        // shape can't be used: Kāra doesn't type `return` as diverging, so
+        // the arms' types wouldn't unify.)
+        let src = format!(
+            r#"
+fn main() with sends(Network) receives(Network) {{
+    let url: String = "{url}";
+    let c = Client.new();
+    match c.get(url) {{
+        Ok(resp) => {{
+            let resp2 = resp;
+            match resp2.header("x-custom") {{
+                Some(v) => println(v),
+                None => println("MISSING-AFTER-MOVE"),
+            }}
+        }}
+        Err(e) => {{
+            println("ERR");
+            println(e.message());
+        }}
+    }}
+}}
+"#
+        );
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_http_mvhdr_e2e_{pid}_{nanos}"));
+        if let Err(e) = compile_and_link(&src, &exe_path) {
+            // Do NOT join the origin thread here — on a compile failure no
+            // client ever connects, so the origin's blocking `accept()`
+            // would deadlock `join()`. Fail fast instead (the lingering
+            // accept thread is reaped at process exit).
+            panic!("compile/link failed: {e}");
+        }
+
+        let output = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("run client binary");
+        let _ = origin_thread.join();
+        let _ = std::fs::remove_file(&exe_path);
+
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(
+            output.status.success(),
+            "client binary exited non-zero; stdout={stdout:?} stderr={stderr:?}"
+        );
+        assert!(
+            stdout.lines().any(|l| l.trim() == "custom-value"),
+            "header must still resolve after the Response is moved out of its match arm \
+             (no premature free); stdout={stdout:?} stderr={stderr:?}"
+        );
+        assert!(
+            !stdout.contains("MISSING-AFTER-MOVE"),
+            "premature free regression: header lookup returned None after move; \
+             stdout={stdout:?} stderr={stderr:?}"
+        );
+    }
+
     /// Phase-8 line 24 — chained-builder E2E smoke test.
     ///
     /// Same shape as `test_client_get_end_to_end_against_rust_origin`,

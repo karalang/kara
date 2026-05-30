@@ -1151,6 +1151,32 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // Phase-8 line 39 follow-up — also zero the i64 side-table
+                // handle field of a moved HTTP `Response` / `RequestBuilder`
+                // so its synthesized Drop (guarded on `handle != 0`)
+                // no-ops; the consumer now owns the live handle. This is
+                // what makes the side-table-handle free move-safe across
+                // EVERY move site — this helper is the single suppression
+                // point invoked at `let g = f`, match-arm tail, `return f`,
+                // by-value arg, and struct/tuple field construction. The
+                // body String's `cap` is already zeroed by the loop above;
+                // this zeroes the handle the same way. (Idempotent runtime
+                // remove is the backstop if any move path is ever missed.)
+                let handle_field = match type_name.as_str() {
+                    "Response" => Some(2u32),
+                    "RequestBuilder" => Some(0u32),
+                    _ => None,
+                };
+                if let Some(fidx) = handle_field {
+                    if let Ok(field_ptr) =
+                        self.builder
+                            .build_struct_gep(st, slot.ptr, fidx, "move.handle.p")
+                    {
+                        let _ = self
+                            .builder
+                            .build_store(field_ptr, i64_t.const_int(0, false));
+                    }
+                }
             }
         }
     }

@@ -330,4 +330,49 @@ fn main() with sends(Network) receives(Network) {
             "expected key_at + val_at iteration calls; IR was:\n{ir}"
         );
     }
+
+    /// Phase-8 line 39 follow-up — a pattern-bound `Response` (from
+    /// `Ok(resp)`) now registers a synthesized scope-exit Drop that frees
+    /// BOTH its `body` String buffer (libc `free`) AND its `headers`
+    /// side-table handle (`karac_runtime_http_response_headers_free`),
+    /// fixing the two latent leaks. Pins (a) the drop fn is synthesized
+    /// and calls the headers-free, and (b) `main` invokes the drop fn at
+    /// the `Ok(resp)` arm's scope exit (the `StructDrop` cleanup action).
+    #[test]
+    fn test_ir_response_drop_frees_headers_handle() {
+        let ir = ir_for(
+            r#"
+fn main() with sends(Network) receives(Network) {
+    let c = Client.new();
+    let url = "http://127.0.0.1:65535/";
+    match c.get(url) {
+        Ok(resp) => {
+            println(resp.status());
+        }
+        Err(e) => {
+            println(e.message());
+        }
+    }
+}
+"#,
+        );
+        let drop_body =
+            function_body(&ir, "__karac_drop_struct_Response").expect("Response drop fn defined");
+        assert!(
+            drop_body.contains("call void @karac_runtime_http_response_headers_free("),
+            "Response drop fn must free the headers side-table handle; body was:\n{drop_body}"
+        );
+        // The body String is also freed (the latent body leak). The
+        // synthesized drop guards `cap > 0` then calls libc `free`.
+        assert!(
+            drop_body.contains("@free("),
+            "Response drop fn must free the body String buffer; body was:\n{drop_body}"
+        );
+        // The Ok(resp) arm invokes the drop fn at scope exit.
+        let main_body = function_body(&ir, "main").expect("main body");
+        assert!(
+            main_body.contains("call void @__karac_drop_struct_Response("),
+            "main should invoke the Response drop fn at the Ok-arm scope exit; body was:\n{main_body}"
+        );
+    }
 }

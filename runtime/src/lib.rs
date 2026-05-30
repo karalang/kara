@@ -3535,6 +3535,28 @@ fn response_header_field_at(handle: i64, idx: i64, want_key: bool) -> *const std
     std::ptr::null()
 }
 
+/// Release the `HTTP_RESPONSE_HEADERS` side-table entry keyed by
+/// `handle` (phase-8 line 39 follow-up). Called from the synthesized
+/// `Response` Drop at scope exit so response-header captures don't leak
+/// until process exit. Idempotent and total: `handle == 0` (the
+/// Err-path sentinel / a move-suppressed Response) and any unknown
+/// handle are no-ops, so a double-free (e.g. a value-copied Response
+/// whose move-suppression was missed) is harmless. After this returns,
+/// any pointer previously handed out by `karac_runtime_http_response_header`
+/// / `_header_{key,val}_at` for this handle is dangling — the
+/// codegen-side accessors copy the bytes into owned Kāra Strings before
+/// the Response drops, so a correctly-ordered program never observes
+/// that.
+#[no_mangle]
+pub extern "C" fn karac_runtime_http_response_headers_free(handle: i64) {
+    if handle == 0 {
+        return;
+    }
+    if let Ok(mut map) = HTTP_RESPONSE_HEADERS.lock() {
+        map.remove(&handle);
+    }
+}
+
 /// Synchronously fetch `url` via HTTP GET and populate the success or
 /// error out-params. The two out-paths are mutually exclusive — only
 /// one of `(body_ptr, body_len)` / `(err_ptr, err_len)` carries a real
@@ -3953,6 +3975,23 @@ pub unsafe extern "C" fn karac_runtime_http_builder_set_timeout(handle: i64, ms:
         if let Some(state) = map.get_mut(&handle) {
             state.timeout_ms = ms;
         }
+    }
+}
+
+/// Release the `HTTP_BUILDERS` entry keyed by `handle` (phase-8 line 39
+/// follow-up). Called from the synthesized `RequestBuilder` Drop at
+/// scope exit so an abandoned (never-`send()`-ed) builder doesn't leak
+/// its runtime entry — `send()` already removes the entry on its own
+/// paths, so for a sent builder this is a no-op. Idempotent and total:
+/// `handle == 0` (a move-suppressed / alloc-failed builder) and any
+/// unknown handle are no-ops, so a double-free is harmless.
+#[no_mangle]
+pub extern "C" fn karac_runtime_http_builder_free(handle: i64) {
+    if handle == 0 {
+        return;
+    }
+    if let Ok(mut map) = HTTP_BUILDERS.lock() {
+        map.remove(&handle);
     }
 }
 
@@ -6454,6 +6493,69 @@ mod tests {
         // Unknown handle → count 0, null fields.
         assert_eq!(super::karac_runtime_http_response_headers_count(0), 0);
         assert!(super::karac_runtime_http_response_header_val_at(0, 0).is_null());
+    }
+
+    /// Phase-8 line 39 follow-up — `karac_runtime_http_response_headers_free`
+    /// releases the side-table entry (what the synthesized `Response` Drop
+    /// calls at scope exit), and is idempotent/total: 0, unknown, and
+    /// double-free are no-ops.
+    #[test]
+    fn test_http_response_headers_free_removes_entry() {
+        let handle = 990_001_i64;
+        {
+            let mut map = super::HTTP_RESPONSE_HEADERS.lock().unwrap();
+            map.insert(
+                handle,
+                vec![(
+                    std::ffi::CString::new("x-test").unwrap(),
+                    std::ffi::CString::new("v").unwrap(),
+                )],
+            );
+        }
+        assert!(super::HTTP_RESPONSE_HEADERS
+            .lock()
+            .unwrap()
+            .contains_key(&handle));
+        super::karac_runtime_http_response_headers_free(handle);
+        assert!(
+            !super::HTTP_RESPONSE_HEADERS
+                .lock()
+                .unwrap()
+                .contains_key(&handle),
+            "free must remove the entry"
+        );
+        // Idempotent / total — none of these panic or corrupt.
+        super::karac_runtime_http_response_headers_free(handle); // double-free
+        super::karac_runtime_http_response_headers_free(0); // Err-path sentinel
+        super::karac_runtime_http_response_headers_free(123_456_789); // unknown
+    }
+
+    /// Phase-8 line 39 follow-up — `karac_runtime_http_builder_free`
+    /// releases an abandoned (never-sent) `HTTP_BUILDERS` entry, mirroring
+    /// the response-headers free. Idempotent on 0 / unknown / already-sent.
+    #[test]
+    fn test_http_builder_free_removes_entry() {
+        let method = b"GET";
+        let url = b"http://127.0.0.1:1/";
+        let handle = unsafe {
+            super::karac_runtime_http_builder_new(
+                method.as_ptr(),
+                method.len(),
+                url.as_ptr(),
+                url.len(),
+            )
+        };
+        assert!(handle > 0, "builder_new should mint a positive handle");
+        assert!(super::HTTP_BUILDERS.lock().unwrap().contains_key(&handle));
+        super::karac_runtime_http_builder_free(handle);
+        assert!(
+            !super::HTTP_BUILDERS.lock().unwrap().contains_key(&handle),
+            "builder_free must remove the entry"
+        );
+        // Idempotent / total.
+        super::karac_runtime_http_builder_free(handle);
+        super::karac_runtime_http_builder_free(0);
+        super::karac_runtime_http_builder_free(987_654_321);
     }
 
     /// Transport-failure path — connect to a port nothing's listening

@@ -3253,6 +3253,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     "headers".to_string(),
                 ],
             );
+            // Per-field type names so the drop synthesis
+            // (`emit_struct_drop_synthesis`) and move-suppression
+            // (`suppress_source_vec_cleanup_for_arg`) can see the fields —
+            // baked stdlib structs skip `declare_structs`, which is the
+            // only other populator. Drives the `body` String's scope-exit
+            // free and the `headers` handle's `HttpHandleFree` (phase-8
+            // line 39 follow-up). Field 2 being `i64` is what the synth
+            // guards on before treating it as the side-table handle, so a
+            // user-defined 3-field server `Response { status, body, headers:
+            // Vec[...] }` (field 2 a Vec, not i64) is unaffected.
+            self.struct_field_type_names.insert(
+                "Response".to_string(),
+                vec![
+                    Some("i64".to_string()),
+                    Some("String".to_string()),
+                    Some("i64".to_string()),
+                ],
+            );
         }
         if !self.struct_types.contains_key("HttpError") {
             // `HttpError { message: String }`.
@@ -3271,6 +3289,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 .insert("RequestBuilder".to_string(), rb_ty);
             self.struct_field_names
                 .insert("RequestBuilder".to_string(), vec!["handle".to_string()]);
+            // Field-0 `i64` handle; the drop synthesis treats it as the
+            // `HTTP_BUILDERS` side-table key and frees it via
+            // `HttpHandleFree` at scope exit (phase-8 line 39 follow-up),
+            // so an abandoned (never-`send()`-ed) let-bound builder no
+            // longer leaks its runtime entry.
+            self.struct_field_type_names
+                .insert("RequestBuilder".to_string(), vec![Some("i64".to_string())]);
         }
     }
 
