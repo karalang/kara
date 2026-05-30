@@ -3547,6 +3547,7 @@ fn test_query_monomorphization_help_and_kind_routing() {
 /// types → one generic, three instances. Budget tests dial thresholds
 /// around the count of 3. All three literal forms (`i64`, `bool`, `char`)
 /// are Copy, so the warn/default variants link cleanly.
+#[cfg(feature = "llvm")]
 const MONO_BUDGET_FIXTURE: &str = r#"
 fn identity[T](x: T) -> T { x }
 fn main() {
@@ -3559,6 +3560,7 @@ fn main() {
 /// Fresh temp `.kara` path keyed by pid + tag + nanos so parallel runs
 /// (and the per-test built executable, named after the file stem) don't
 /// collide.
+#[cfg(feature = "llvm")]
 fn mono_budget_scratch(tag: &str, source: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
         "karac-monobudget-{}-{}-{}.kara",
@@ -3577,6 +3579,7 @@ fn mono_budget_scratch(tag: &str, source: &str) -> std::path::PathBuf {
 /// into CWD. Remove it so the warn/default builds don't pollute the tree
 /// (mirrors test_build_bare_file_hot_swap_accepted). No-op when the build
 /// exited before codegen (the error-threshold variants).
+#[cfg(feature = "llvm")]
 fn remove_built_exe(src: &std::path::Path) {
     if let Some(stem) = src.file_stem().and_then(|s| s.to_str()) {
         let exe = if cfg!(windows) {
