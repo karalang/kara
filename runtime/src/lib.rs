@@ -117,6 +117,10 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_for_each_active_frame,
         karac_runtime_has_debug_metadata,
         karac_runtime_list_par_blocks_into,
+        // W3.5: JIT helper publishes the JIT-module's SPAWN_SITES
+        // addresses so debug-metadata reads see the right values
+        // instead of the helper bin's stand-in zeros.
+        karac_runtime_init_jit_spawn_sites,
     );
     // Providers (Feature 2 § Provider-Rooted Resources).
     keep!(
@@ -1181,6 +1185,77 @@ pub unsafe extern "C" fn karac_runtime_for_each_active_frame(
 // allocation surface for inline-IR construction (hard-stop trigger 4) is
 // not directly exposed at the relevant abstraction level.
 
+// ── JIT spawn-sites address override (W3.5, 2026-05-30) ─────────────
+//
+// Under AOT, codegen emits `KARAC_SPAWN_SITES*` globals into the user
+// binary, the runtime's externs below resolve to those at link time,
+// and reads of `KARAC_SPAWN_SITES_ENABLED` / etc. return the values
+// the running program intends.
+//
+// Under JIT subprocess (`karac_jit_runner`), the runtime's externs
+// resolve to the helper bin's stand-ins (necessarily `ENABLED = 0`,
+// `LEN = 0`) because they're bound at link time of the helper bin —
+// before any JIT module is loaded. The JIT module's emitted globals
+// live inside the JITDylib's symbol table; reads in the helper bin's
+// Rust code can't see them.
+//
+// Fix: the JIT helper, after adding the IR module to the engine,
+// looks up the three symbols' addresses via `LLJITEngine::lookup_address`
+// and calls `karac_runtime_init_jit_spawn_sites` to publish them.
+// The runtime's two read sites (`karac_runtime_has_debug_metadata`,
+// `karac_runtime_list_par_blocks_into`) check this override first
+// and fall back to the externs when it's unset — so AOT pays nothing
+// at the cost of one branch + load per call.
+//
+// Send/Sync wrapper is required because raw pointers aren't Send by
+// default; the pointers we store are owned by the JIT engine (lives
+// at least as long as the helper bin, which is the only process that
+// ever sets these), so the unsafe Send/Sync impl is sound.
+struct SpawnSitesAddrPtrs {
+    enabled: *const u8,
+    len: *const u32,
+    base: *const KaracSpawnSiteEntry,
+}
+
+unsafe impl Send for SpawnSitesAddrPtrs {}
+unsafe impl Sync for SpawnSitesAddrPtrs {}
+
+static SPAWN_SITES_OVERRIDE: std::sync::OnceLock<SpawnSitesAddrPtrs> = std::sync::OnceLock::new();
+
+/// Publish the JIT-resolved addresses of `KARAC_SPAWN_SITES_ENABLED`,
+/// `KARAC_SPAWN_SITES_LEN`, and the `KARAC_SPAWN_SITES` array base
+/// into the runtime so subsequent introspection reads see the
+/// JIT-module values instead of the helper bin's stand-ins.
+///
+/// Called exactly once by the JIT helper between `add_ir_module` and
+/// the JIT'd `main`. Idempotent at the OnceLock layer — subsequent
+/// calls are no-ops (the first set wins). AOT callers never invoke
+/// this; their reads fall through to the externs.
+///
+/// # Safety
+/// Each non-null pointer must point to a live storage cell of the
+/// correct type for the lifetime of the calling process. Passing null
+/// for a slot means "keep falling back to the extern" for that field.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_init_jit_spawn_sites(
+    enabled: *const u8,
+    len: *const u32,
+    base: *const u8,
+) {
+    let _ = SPAWN_SITES_OVERRIDE.set(SpawnSitesAddrPtrs {
+        enabled,
+        len,
+        // The base is a `[N x SpawnSiteEntry]` array global per slice
+        // 3's codegen; reinterpret the opaque `*const u8` as a typed
+        // pointer for the indexing arithmetic in
+        // `karac_runtime_list_par_blocks_into`. The setter's `*const u8`
+        // signature is a caller-side convenience — JIT helpers can
+        // hand us an `LLVMOrcExecutorAddress`-as-u64 cast to pointer
+        // without pulling in `KaracSpawnSiteEntry`'s layout.
+        base: base as *const KaracSpawnSiteEntry,
+    });
+}
+
 // Strong-linkage extern declarations of slice 3's globals. Gated on
 // `#[cfg(not(test))]` so the runtime crate's own unit tests can provide
 // stand-in definitions (see the `#[cfg(test)]` block at the bottom of
@@ -1303,6 +1378,17 @@ struct KaracParBlockInfo {
 /// is unconditionally safe under strong linkage.
 #[no_mangle]
 pub extern "C" fn karac_runtime_has_debug_metadata() -> bool {
+    // JIT override path (W3.5): if a JIT helper published its
+    // module's `KARAC_SPAWN_SITES_ENABLED` address before calling
+    // `main`, read from that — otherwise fall through to the extern.
+    if let Some(over) = SPAWN_SITES_OVERRIDE.get() {
+        if !over.enabled.is_null() {
+            // SAFETY: `enabled` points to a live `u8` storage cell
+            // for the lifetime of the calling process (the JIT
+            // helper guarantees this — see `karac_runtime_init_jit_spawn_sites`).
+            return unsafe { *over.enabled } != 0;
+        }
+    }
     // SAFETY: KARAC_SPAWN_SITES_ENABLED is always emitted by codegen
     // (slice 3, `c6d8b44`) — even the gate-off form ships the symbol
     // with value 0. Strong linkage resolves the address at link time;
@@ -1410,9 +1496,27 @@ pub unsafe extern "C" fn karac_runtime_list_par_blocks_into(out: *mut KaracVec) 
     // (`SpawnSiteEntryStandIn`, a `#[repr(transparent)]` wrapper around
     // `KaracSpawnSiteEntry`) and the production extern type both lower
     // to a raw byte address.
-    let sites_len = KARAC_SPAWN_SITES_LEN as usize;
-    let sites_base: *const KaracSpawnSiteEntry =
-        &KARAC_SPAWN_SITES as *const _ as *const () as *const KaracSpawnSiteEntry;
+    //
+    // W3.5: prefer the JIT-published override addresses when set;
+    // otherwise fall through to the extern (AOT path).
+    let (sites_len, sites_base): (usize, *const KaracSpawnSiteEntry) =
+        if let Some(over) = SPAWN_SITES_OVERRIDE.get() {
+            if !over.len.is_null() && !over.base.is_null() {
+                // SAFETY: pointers are live for the calling process's
+                // lifetime per the JIT helper's contract.
+                (unsafe { *over.len } as usize, over.base)
+            } else {
+                (
+                    KARAC_SPAWN_SITES_LEN as usize,
+                    &KARAC_SPAWN_SITES as *const _ as *const () as *const KaracSpawnSiteEntry,
+                )
+            }
+        } else {
+            (
+                KARAC_SPAWN_SITES_LEN as usize,
+                &KARAC_SPAWN_SITES as *const _ as *const () as *const KaracSpawnSiteEntry,
+            )
+        };
 
     let elem_size = std::mem::size_of::<KaracParBlockInfo>();
     let layout = std::alloc::Layout::from_size_align(elem_size * count, 8)

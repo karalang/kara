@@ -97,6 +97,39 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
 
+    // W3.5: publish the JIT module's `KARAC_SPAWN_SITES*` addresses
+    // into the runtime so introspection reads
+    // (`karac_runtime_has_debug_metadata`,
+    // `karac_runtime_list_par_blocks_into`) see the JIT module's
+    // values instead of the helper bin's stand-in zeros. Best-effort:
+    // if any of the three symbols isn't found (an unusual codegen
+    // path that omits one), pass null and the runtime falls through
+    // to the helper bin's stand-in for that field.
+    let enabled_p = engine
+        .lookup_address("KARAC_SPAWN_SITES_ENABLED")
+        .ok()
+        .map(|a| a as *const u8)
+        .unwrap_or(std::ptr::null());
+    let len_p = engine
+        .lookup_address("KARAC_SPAWN_SITES_LEN")
+        .ok()
+        .map(|a| a as *const u32)
+        .unwrap_or(std::ptr::null());
+    let base_p = engine
+        .lookup_address("KARAC_SPAWN_SITES")
+        .ok()
+        .map(|a| a as *const u8)
+        .unwrap_or(std::ptr::null());
+    // SAFETY: the three pointers come from `LLVMOrcLLJITLookup` and
+    // address symbols inside the JITDylib, which is live for the rest
+    // of this process — the LLJIT engine is dropped only at process
+    // exit. The init call publishes them into a `OnceLock`; the
+    // runtime reads them lazily from introspection calls, all of which
+    // happen before drop.
+    unsafe {
+        karac_runtime::karac_runtime_init_jit_spawn_sites(enabled_p, len_p, base_p);
+    }
+
     let addr = match engine.lookup_address("main") {
         Ok(a) => a,
         Err(e) => {
