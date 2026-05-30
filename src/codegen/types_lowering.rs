@@ -506,6 +506,34 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// If `name` is a refinement type (`type Email = String where …`),
+    /// resolve it to the *name* of its base type, peeling nested
+    /// refinements; otherwise return `name` unchanged. Codegen records a
+    /// binding's type name in `var_type_names` for value-level dispatch
+    /// (method calls, `println`, arg coercion); a refinement carries no
+    /// runtime identity, so those sites must see the base name to dispatch
+    /// correctly (phase-9 step 5a). A no-op for every non-refinement name.
+    pub(super) fn refinement_base_name(&self, name: &str) -> String {
+        let mut cur = name.to_string();
+        while let Some(base) = self.refinement_bases.get(&cur) {
+            let next = Self::mangled_type_name(base);
+            if next == cur {
+                break;
+            }
+            cur = next;
+        }
+        cur
+    }
+
+    /// Record a binding's type name in `var_type_names`, normalizing a
+    /// refinement to its base name first (see `refinement_base_name`). All
+    /// `var_type_names` writes route through here so a refinement-typed
+    /// binding dispatches as its base everywhere downstream.
+    pub(super) fn record_var_type_name(&mut self, var: String, ty_name: String) {
+        let normalized = self.refinement_base_name(&ty_name);
+        self.var_type_names.insert(var, normalized);
+    }
+
     /// Extract (K, V) LLVM types from a `Map[K, V]` type expression.
     pub(super) fn extract_map_kv_types(
         &self,
@@ -668,7 +696,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     || self.shared_types.contains_key(seg.as_str())
                     || self.enum_layouts.contains_key(seg.as_str())
                 {
-                    self.var_type_names.insert(var_name.to_string(), seg);
+                    self.record_var_type_name(var_name.to_string(), seg);
                 }
             }
         }

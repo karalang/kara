@@ -69,7 +69,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 ty: ptr_ty.into(),
                             },
                         );
-                        self.var_type_names.insert(name.clone(), type_name);
+                        self.record_var_type_name(name.clone(), type_name);
                         return Ok(());
                     }
                     // Phase 8 `File` handle slice F4: same int→ptr
@@ -106,7 +106,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 ty: ptr_ty.into(),
                             },
                         );
-                        self.var_type_names.insert(name.clone(), type_name);
+                        self.record_var_type_name(name.clone(), type_name);
                         // F4b — register the File-typed binding for
                         // scope-exit close. The drain emits
                         // `karac_runtime_file_close(load(file_alloca))`
@@ -151,7 +151,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                         ty: st.into(),
                                     },
                                 );
-                                self.var_type_names.insert(name.clone(), type_name);
+                                self.record_var_type_name(name.clone(), type_name);
                                 return Ok(());
                             }
                         }
@@ -212,7 +212,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.vec_elem_types.insert(name.clone(), u8_ty);
                         bound_vec_elem = Some(u8_ty);
                     }
-                    self.var_type_names.insert(name.clone(), type_name);
+                    self.record_var_type_name(name.clone(), type_name);
                 }
                 // Register scope-exit cleanup for the heap-owning binding.
                 // The cleanup fires at end-of-match-arm via the per-arm

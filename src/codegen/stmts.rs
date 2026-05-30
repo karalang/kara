@@ -794,6 +794,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     if !detected {
                         let key = (pattern.span.offset, pattern.span.length);
                         if let Some(surface) = self.pattern_binding_types.get(&key).cloned() {
+                            // A refinement binding (`let n = "x" as Name` where
+                            // `type Name = String where …`) dispatches as its
+                            // base: normalize so the String/Vec branches below
+                            // register `string_vars` / `vec_elem_types` and
+                            // method dispatch sees the base (phase-9 step 5a).
+                            let surface = self.refinement_base_name(&surface);
                             if surface == "Vec" || surface == "VecDeque" {
                                 if let Some(elem_te) =
                                     self.pattern_binding_inner_types.get(&key).cloned()
@@ -829,7 +835,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // field-access / method-call dispatch. Without
                             // this, the field load on a let-bound shared
                             // handle falls through to the i64-zero default.
-                            self.var_type_names.insert(var_name.clone(), surface);
+                            self.record_var_type_name(var_name.clone(), surface);
                         }
                     }
                     // Infer String from RHS: let s = "hello", let s = String::new(),
@@ -1306,7 +1312,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             None
                         };
                         if let Some(name) = ast_hint {
-                            self.var_type_names.insert(var_name.clone(), name);
+                            self.record_var_type_name(var_name.clone(), name);
                         } else if !self.var_type_names.contains_key(var_name.as_str()) {
                             // LLVM-struct-identity reverse-lookup fallback.
                             // Only fires when `pattern_binding_types`
@@ -1333,12 +1339,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.struct_types.iter().find(|(_, ty)| **ty == st)
                             {
                                 let name = name.clone();
-                                self.var_type_names.insert(var_name.clone(), name);
+                                self.record_var_type_name(var_name.clone(), name);
                             } else if let Some((name, _)) =
                                 self.union_types.iter().find(|(_, ty)| **ty == st)
                             {
                                 let name = name.clone();
-                                self.var_type_names.insert(var_name.clone(), name);
+                                self.record_var_type_name(var_name.clone(), name);
                             }
                         }
                     }

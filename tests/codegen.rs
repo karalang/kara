@@ -26095,12 +26095,10 @@ fn main() {
     }
 
     #[test]
-    #[ignore = "blocked on phase-9 step 5: codegen value-dispatch (method calls, \
-                println) does not yet recognize a refinement receiver as its base, \
-                so `n.len()` on a refinement-over-String binding falls through"]
     fn test_e2e_refinement_string_base_method_deref() {
-        // Once step-5 codegen value-dispatch strips refinements, `n.len()`
-        // (base-deref, step 2) reads 5 from the String value.
+        // Codegen value-dispatch (phase-9 step 5a) strips the refinement to
+        // its base, so `n.len()` (base-deref, step 2) reads 5 from the
+        // String value bound through an `as Name` cast.
         let out = run_program(
             r#"
 type Name = String where self.len() > 0;
@@ -26112,6 +26110,45 @@ fn main() {
         );
         if let Some(out) = out {
             assert_eq!(out.trim(), "5");
+        }
+    }
+
+    #[test]
+    fn test_e2e_refinement_string_value_prints_as_base() {
+        // `println(n)` on a refinement-over-String binding dispatches the
+        // String display path (value-dispatch, step 5a) — not the i64
+        // fall-through that would print a pointer-sized integer.
+        let out = run_program(
+            r#"
+type Name = String where self.len() > 0;
+fn main() {
+    let n = "hello" as Name;
+    println(n);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "hello");
+        }
+    }
+
+    #[test]
+    fn test_e2e_refinement_i64_value_dispatch_unaffected() {
+        // Refinements over i64 already work end-to-end (base layout
+        // coincides with codegen's i64 default); the value-dispatch
+        // normalization must not regress them.
+        let out = run_program(
+            r#"
+type Even = i64 where self % 2 == 0;
+fn main() {
+    let e = 4 as Even;
+    let f = e + 2;
+    println(f);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "6");
         }
     }
 }

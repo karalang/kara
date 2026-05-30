@@ -3391,7 +3391,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.variables
                 .insert(param_name.clone(), VarSlot { ptr: alloca, ty });
             if let Some(name) = elem_type_name {
-                self.var_type_names.insert(param_name, name.to_string());
+                self.record_var_type_name(param_name, name.to_string());
             }
         }
 

@@ -16,8 +16,8 @@ use std::collections::HashMap;
 
 use super::inference::{resolve_type_vars, substitute_type_params};
 use super::types::{
-    type_display, ConstArg, ConstVarId, FloatSize, IntSize, ScrutineeMode, SubstValue, Type,
-    TypeVarId, UIntSize, VariantTypeInfo,
+    strip_refinement, type_display, ConstArg, ConstVarId, FloatSize, IntSize, ScrutineeMode,
+    SubstValue, Type, TypeVarId, UIntSize, VariantTypeInfo,
 };
 use super::TypeErrorKind;
 
@@ -397,7 +397,11 @@ impl<'a> super::TypeChecker<'a> {
                 // `Type::Shared(name)` registers under its bare struct
                 // name so codegen's `shared_type_for_expr` lookup finds
                 // the heap layout for `node.field` access after a
-                // `Some(node)` pattern binding.
+                // `Some(node)` pattern binding. A refinement records its
+                // *base*'s surface name (codegen dispatches a refined value
+                // as its base, phase-9 step 5a) — `local_scope` above keeps
+                // the real refinement type for type-checking.
+                let expected = strip_refinement(expected);
                 if let Type::Named {
                     name: type_name, ..
                 } = expected
@@ -957,6 +961,12 @@ impl<'a> super::TypeChecker<'a> {
                 // flat tuple payload into per-element word ranges.
                 // Other primitives and references stay unrecorded — their
                 // 1-word default matches their actual layout.
+                //
+                // A refinement (`type Email = String where …`) records its
+                // *base*'s surface name — codegen dispatches a refined value
+                // as its base (phase-9 step 5a); `local_scope` above keeps
+                // the real refinement type for type-checking.
+                let ty = strip_refinement(ty);
                 if let Type::Named {
                     name: type_name, ..
                 } = ty

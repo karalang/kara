@@ -128,7 +128,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let TypeKind::Path(path) = &elem_te.kind {
             if let Some(seg) = path.segments.first() {
                 if self.struct_types.contains_key(seg.as_str()) {
-                    self.var_type_names.insert(synth.clone(), seg.clone());
+                    self.record_var_type_name(synth.clone(), seg.clone());
                 }
             }
         }
@@ -423,7 +423,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.struct_types.contains_key(seg.as_str())
                     || self.shared_types.contains_key(seg.as_str())
                 {
-                    self.var_type_names.insert(synth.clone(), seg.clone());
+                    self.record_var_type_name(synth.clone(), seg.clone());
                 }
             }
         }
@@ -754,7 +754,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let TypeKind::Path(path) = &val_te.kind {
             if let Some(seg) = path.segments.first() {
                 if self.struct_types.contains_key(seg.as_str()) {
-                    self.var_type_names.insert(synth.clone(), seg.clone());
+                    self.record_var_type_name(synth.clone(), seg.clone());
                 }
             }
         }

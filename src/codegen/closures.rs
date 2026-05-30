@@ -328,7 +328,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(te) = cp.ty.as_ref() {
                 if let TypeKind::Path(p) = &te.kind {
                     if let Some(seg) = p.segments.last() {
-                        self.var_type_names.insert(param_name, seg.clone());
+                        self.record_var_type_name(param_name, seg.clone());
                     }
                 }
             }
