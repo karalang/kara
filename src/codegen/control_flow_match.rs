@@ -165,6 +165,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
 
+            // Value-move destructure: when the scrutinee is an owned
+            // enum binding and the arm's pattern is `Variant(...args)`
+            // binding heap-bearing payload fields (Vec / String), the
+            // destructure has moved ownership into the new bindings —
+            // the per-arm cleanup will free those buffers when the
+            // bindings drop. The source enum's `__karac_drop_<E>` call
+            // (queued by `track_enum_var` at the binding's let-site
+            // and fires at the *outer* scope's drain) would read the
+            // source's still-populated payload words and re-free the
+            // same buffers → double-free. Zero the source's `cap`
+            // word(s) for each consumed heap-bearing field so the
+            // drop-switch's `cap > 0` guard skips. Mirrors the Vec /
+            // String / shared-struct suppression in
+            // `suppress_source_vec_cleanup_for_arg`. Ref-scrutinee
+            // matches don't need this — the source isn't owned by the
+            // match, no double-free risk.
+            if scrut_ref_ptr.is_none() {
+                self.suppress_destructured_enum_payload_cleanup(scrutinee, &arm.pattern);
+            }
+
             let arm_val = self.compile_expr(&arm.body)?;
             let arm_body_end = self.builder.get_insert_block().unwrap();
             if arm_body_end.get_terminator().is_none() {
@@ -943,5 +963,136 @@ impl<'ctx> super::Codegen<'ctx> {
             cursor = end;
         }
         Ok(agg.into())
+    }
+
+    /// After a `match scrut { Variant(b1, b2, …) => … }` arm has bound
+    /// the variant payload fields, suppress the source enum's
+    /// scope-exit cleanup for any payload field whose binding now
+    /// owns a heap buffer. Concretely: for each pattern position
+    /// whose `EnumDropKind` is `VecOrString` and whose sub-pattern is
+    /// a value-consuming `Binding`, zero the cap word in the source
+    /// enum's alloca. The `__karac_drop_<E>` runtime walk reads
+    /// `cap > 0` per heap-bearing field and skips the `free` when
+    /// the guard is false — same shape `CleanupAction::FreeVecBuffer`
+    /// uses for plain Vec / String bindings at the let-site.
+    ///
+    /// No-op when: scrutinee isn't a simple identifier (we can't
+    /// locate the source alloca), the binding's type isn't a
+    /// non-shared enum with a known layout, or the arm's pattern
+    /// isn't `TupleVariant`. The arm-body's compiled cleanup walk
+    /// (`drain_top_frame_with_emit`) freeing the new binding stays
+    /// load-bearing — this fn only neutralizes the *source's* drop.
+    pub(super) fn suppress_destructured_enum_payload_cleanup(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        let scrut_name = match &scrutinee.kind {
+            ExprKind::Identifier(n) => n,
+            _ => return,
+        };
+        let slot = match self.variables.get(scrut_name) {
+            Some(s) => *s,
+            None => return,
+        };
+        let enum_name = match self.var_type_names.get(scrut_name) {
+            Some(n) => n.clone(),
+            None => return,
+        };
+        let layout = match self.enum_layouts.get(&enum_name) {
+            Some(l) => l.clone(),
+            None => return,
+        };
+        if layout.is_shared {
+            return;
+        }
+        let (path, sub_patterns) = match &pattern.kind {
+            PatternKind::TupleVariant { path, patterns } => (path, patterns),
+            _ => return,
+        };
+        let variant_name = match path.last() {
+            Some(n) => n.as_str(),
+            None => return,
+        };
+        let drop_kinds = match layout.field_drop_kinds.get(variant_name) {
+            Some(k) => k,
+            None => return,
+        };
+        let offsets = match layout.field_word_offsets.get(variant_name) {
+            Some(o) => o,
+            None => return,
+        };
+        let i64_t = self.context.i64_type();
+        let zero = i64_t.const_int(0, false);
+        for ((sub_pat, kind), (start_word, num_words)) in sub_patterns
+            .iter()
+            .zip(drop_kinds.iter())
+            .zip(offsets.iter())
+        {
+            // Suppression only fires when the sub-pattern *consumes*
+            // the payload field — i.e. binds it to a name (directly or
+            // via a nested destructure). A `Wildcard` or literal
+            // pattern doesn't claim ownership, so the source's drop
+            // *should* fire to free the payload; suppressing those
+            // would leak. Nested `Tuple` patterns inside a payload
+            // (e.g. `V((xs, s, n))`) consume the field when any inner
+            // binding claims part of it — the inner cleanup will free
+            // the whole composite, so the outer source's drop must
+            // still be skipped.
+            if !pattern_consumes_field(sub_pat) || *kind != super::state::EnumDropKind::VecOrString
+            {
+                continue;
+            }
+            // Cap word for a 3-word Vec/String payload (data, len, cap)
+            // is at LLVM struct index `1 (tag) + start_word + num_words - 1`
+            // = `start_word + num_words`. The DP1 lock pins `num_words == 3`
+            // for `VecOrString`, but we compute from `num_words` rather
+            // than hard-coding 3 so the helper stays correct if the
+            // layout ever grows additional words.
+            let cap_index = (start_word + num_words) as u32;
+            if let Ok(cap_ptr) = self.builder.build_struct_gep(
+                layout.llvm_type,
+                slot.ptr,
+                cap_index,
+                "match.dest.cap.suppress.p",
+            ) {
+                let _ = self.builder.build_store(cap_ptr, zero);
+            }
+        }
+    }
+}
+
+/// Whether a payload-position sub-pattern *consumes* ownership of its
+/// field — used by `suppress_destructured_enum_payload_cleanup` to
+/// decide whether to neutralize the source enum's drop for that
+/// field. Consumption flow:
+///
+/// - `Binding` / `AtBinding` — yes, the name now owns the value.
+/// - `Tuple` / `TupleVariant` / `Struct` — yes if any inner pattern
+///   consumes; the destructure binds parts of the composite, the
+///   composite's cleanup (recorded by `track_vec_var` / similar on
+///   the new bindings) frees the heap content.
+/// - `Or` — yes (conservative); each alternative is its own arm with
+///   its own consumption pattern.
+/// - `Wildcard`, `Literal`, `RangePattern`, `Slice` — no; the field
+///   wasn't claimed by the destructure, so the source's drop must
+///   still free its heap content.
+fn pattern_consumes_field(p: &crate::ast::Pattern) -> bool {
+    match &p.kind {
+        PatternKind::Wildcard
+        | PatternKind::Literal(_)
+        | PatternKind::RangePattern { .. }
+        | PatternKind::Slice { .. } => false,
+        PatternKind::Binding(_) => true,
+        PatternKind::AtBinding { pattern, .. } => pattern_consumes_field(pattern),
+        PatternKind::Tuple(pats) => pats.iter().any(pattern_consumes_field),
+        PatternKind::TupleVariant { patterns, .. } => patterns.iter().any(pattern_consumes_field),
+        PatternKind::Struct { fields, .. } => fields.iter().any(|f| {
+            f.pattern
+                .as_ref()
+                .map(pattern_consumes_field)
+                .unwrap_or(true) // shorthand `Field` means a binding by field name
+        }),
+        PatternKind::Or(pats) => pats.iter().any(pattern_consumes_field),
     }
 }
