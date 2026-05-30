@@ -5962,6 +5962,16 @@ fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
 
     match kind {
         QueryKind::Effects => {
+            // typecheck + lower BEFORE effectcheck so the effect-inference
+            // walker can resolve instance-method callees to their precise
+            // `Type.method` key. `Pipeline::effectcheck` sources its
+            // `method_callee_types` table from `self.typed`, falling back to
+            // an empty map when typecheck didn't run — without this the query
+            // under-reports any effect that propagates through an instance
+            // method (`c.get(...)` shows no `Network`). Mirrors what `build` /
+            // `test` see (they always typecheck first). Phase-8 line 101.
+            pipeline.typecheck();
+            pipeline.lower();
             pipeline.effectcheck();
             query_effects(&pipeline, function);
         }
@@ -5972,6 +5982,12 @@ fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
             query_ownership(&pipeline, function);
         }
         QueryKind::Concurrency => {
+            // Same instance-method-effect-resolution requirement as the
+            // Effects arm above — concurrency analysis consumes the
+            // effect-check result, so its inputs must come from the
+            // typechecked pipeline too (phase-8 line 101).
+            pipeline.typecheck();
+            pipeline.lower();
             pipeline.effectcheck();
             pipeline.concurrencycheck();
             query_concurrency(&pipeline, function);

@@ -764,6 +764,47 @@ fn test_query_effects_pure_function() {
 }
 
 #[test]
+fn test_query_effects_resolves_instance_method_network_effect() {
+    // Phase-8 line 101 regression. Before the fix, the Effects query arm
+    // ran `effectcheck()` without `typecheck()`, so `method_callee_types`
+    // was empty and an effect reaching a caller *through an instance method*
+    // (`c.get(...)`) was invisible — `inferred_effects` came back `[]` even
+    // though `build` / `test` correctly propagate `sends`/`receives(Network)`.
+    // The query now typechecks first, so the network pair surfaces here too.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-effects-instance-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("svc.kara");
+    let src = "fn fetch() {\n\
+               \x20   let c = Client.new();\n\
+               \x20   let r = c.get(\"http://example.com\");\n\
+               \x20   match r { Result.Ok(_) => {} Result.Err(_) => {} }\n\
+               }\n";
+    std::fs::write(&path, src).unwrap();
+
+    let target = format!("{}.fetch", path.to_str().unwrap());
+    let out = karac_bin()
+        .args(["query", "effects", &target])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("\"function\":\"fetch\""));
+    assert!(
+        stdout.contains("\"resource\":\"Network\""),
+        "instance-method network effect should surface under `query effects`; got: {stdout}",
+    );
+    assert!(stdout.contains("\"verb\":\"sends\""));
+    assert!(stdout.contains("\"verb\":\"receives\""));
+}
+
+#[test]
 fn test_query_ownership() {
     let out = karac_bin()
         .args(["query", "ownership", "tests/snapshots/type_error.kara.add"])
