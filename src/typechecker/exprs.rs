@@ -1964,21 +1964,23 @@ impl<'a> super::TypeChecker<'a> {
                     if else_ty == Type::Never {
                         return then_ty;
                     }
-                    if !self.types_compatible_with_projections(&then_ty, &else_ty)
-                        && then_ty != Type::Error
-                        && else_ty != Type::Error
-                    {
-                        self.type_error(
-                            format!(
-                                "if/else branches have incompatible types: '{}' and '{}'",
-                                type_display(&then_ty),
-                                type_display(&else_ty)
-                            ),
-                            expr.span.clone(),
-                            TypeErrorKind::BranchTypeMismatch,
-                        );
+                    match self.join_branch_types(&then_ty, &else_ty) {
+                        Some(joined) => joined,
+                        None => {
+                            if then_ty != Type::Error && else_ty != Type::Error {
+                                self.type_error(
+                                    format!(
+                                        "if/else branches have incompatible types: '{}' and '{}'",
+                                        type_display(&then_ty),
+                                        type_display(&else_ty)
+                                    ),
+                                    expr.span.clone(),
+                                    TypeErrorKind::BranchTypeMismatch,
+                                );
+                            }
+                            then_ty
+                        }
                     }
-                    then_ty
                 } else {
                     Type::Unit
                 }
@@ -2013,21 +2015,23 @@ impl<'a> super::TypeChecker<'a> {
                     if else_ty == Type::Never {
                         return then_ty;
                     }
-                    if !self.types_compatible_with_projections(&then_ty, &else_ty)
-                        && then_ty != Type::Error
-                        && else_ty != Type::Error
-                    {
-                        self.type_error(
-                            format!(
-                                "if let/else branches have incompatible types: '{}' and '{}'",
-                                type_display(&then_ty),
-                                type_display(&else_ty)
-                            ),
-                            expr.span.clone(),
-                            TypeErrorKind::BranchTypeMismatch,
-                        );
+                    match self.join_branch_types(&then_ty, &else_ty) {
+                        Some(joined) => joined,
+                        None => {
+                            if then_ty != Type::Error && else_ty != Type::Error {
+                                self.type_error(
+                                    format!(
+                                        "if let/else branches have incompatible types: '{}' and '{}'",
+                                        type_display(&then_ty),
+                                        type_display(&else_ty)
+                                    ),
+                                    expr.span.clone(),
+                                    TypeErrorKind::BranchTypeMismatch,
+                                );
+                            }
+                            then_ty
+                        }
                     }
-                    then_ty
                 } else {
                     Type::Unit
                 }

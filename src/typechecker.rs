@@ -57,7 +57,7 @@ pub use types::{
 use types::{contains_type_param, receiver_for_method_lookup};
 use types::{
     integer_width_bits, is_integer, is_numeric, is_subtype, projection_unresolvable_with,
-    types_compatible,
+    strip_refinement, types_compatible,
 };
 
 // ── Attribute Helpers ───────────────────────────────────────────
@@ -2424,6 +2424,40 @@ impl<'a> TypeChecker<'a> {
             return true;
         }
         types_compatible(&a_resolved, &b_resolved)
+    }
+
+    /// Least-upper-bound of two branch-arm types for `if`/`if let`/`match`
+    /// joining. Returns `Some(joined)` when the arms are compatible, `None`
+    /// when they are not (the caller emits the `BranchTypeMismatch`).
+    ///
+    /// The refinement rule (design.md § Refinement Types > LUB rule 4): a
+    /// refinement and its base — or two refinements over the same base —
+    /// join to the **base**, never to one arm's refined type. Keeping the
+    /// refined arm would be unsound: only that arm guarantees the predicate,
+    /// so the merged value (which may come from the other arm) carries only
+    /// the base type. For non-refinement arms this preserves the previous
+    /// behavior exactly — one-directional `types_compatible_with_projections`
+    /// acceptance, returning the first arm (`a`) as the join.
+    pub(super) fn join_branch_types(&self, a: &Type, b: &Type) -> Option<Type> {
+        if a == b {
+            return Some(a.clone());
+        }
+        if matches!(a, Type::Refinement { .. }) || matches!(b, Type::Refinement { .. }) {
+            let a_base = strip_refinement(a);
+            let b_base = strip_refinement(b);
+            if a_base == b_base
+                || self.types_compatible_with_projections(a_base, b_base)
+                || self.types_compatible_with_projections(b_base, a_base)
+            {
+                return Some(a_base.clone());
+            }
+            return None;
+        }
+        if self.types_compatible_with_projections(a, b) {
+            Some(a.clone())
+        } else {
+            None
+        }
     }
 
     /// Subtyping counterpart to `types_compatible_with_projections`.

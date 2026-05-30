@@ -210,29 +210,40 @@ impl<'a> super::TypeChecker<'a> {
         // Check exhaustiveness for enum types
         self.check_exhaustiveness(&scrut_ty, arms, span.clone());
 
-        // Check all arm types are compatible
-        let result_ty = arm_types
+        // Fold the (non-Never, non-Error) arm types into their least-upper-
+        // bound. Refinement arms widen to their shared base (design.md
+        // § Refinement Types > LUB rule 4) via `join_branch_types`; for
+        // non-refinement arms the fold returns the first arm unchanged, so a
+        // homogeneous match keeps its previous result type. On the first
+        // incompatible arm, emit a single `BranchTypeMismatch` and stop
+        // widening (the running `result_ty` is the recovery type).
+        let mut result_ty = arm_types
             .iter()
             .find(|t| **t != Type::Never)
             .cloned()
             .unwrap_or(Type::Never);
+        let mut reported = false;
 
         for arm_ty in &arm_types {
-            if *arm_ty != Type::Never
-                && *arm_ty != Type::Error
-                && result_ty != Type::Error
-                && !self.types_compatible_with_projections(&result_ty, arm_ty)
-            {
-                self.type_error(
-                    format!(
-                        "match arms have incompatible types: '{}' and '{}'",
-                        type_display(&result_ty),
-                        type_display(arm_ty)
-                    ),
-                    span.clone(),
-                    TypeErrorKind::BranchTypeMismatch,
-                );
-                break;
+            if *arm_ty == Type::Never || *arm_ty == Type::Error || result_ty == Type::Error {
+                continue;
+            }
+            match self.join_branch_types(&result_ty, arm_ty) {
+                Some(joined) => result_ty = joined,
+                None => {
+                    if !reported {
+                        self.type_error(
+                            format!(
+                                "match arms have incompatible types: '{}' and '{}'",
+                                type_display(&result_ty),
+                                type_display(arm_ty)
+                            ),
+                            span.clone(),
+                            TypeErrorKind::BranchTypeMismatch,
+                        );
+                        reported = true;
+                    }
+                }
             }
         }
 

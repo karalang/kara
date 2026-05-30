@@ -20445,3 +20445,93 @@ fn refinement_elision_wrong_base_keeps_generic_mismatch() {
             .join(" | ")
     );
 }
+
+// ── Refinement types — LUB-to-base widening for branch arms ─────────
+//
+// design.md § Refinement Types > LUB rule 4: a refinement and its base,
+// or two refinements over the same base, join to the base in `if`/`if
+// let`/`match` arm position — they no longer collapse to a mismatch, and
+// the merged type is the base (not the refined arm, which would be
+// unsound). Reachable since the elision pass admits refined values into
+// branch position (`let a: Positive = 5`).
+
+#[test]
+fn refinement_lub_if_else_refined_and_base_widen() {
+    // `then` is `Positive`, `else` is `i64`; the `if` joins to the base
+    // `i64`, which the binding then carries.
+    typecheck_ok(
+        "type Positive = i64 where self > 0;
+         fn pick(c: bool) -> i64 {
+             let r = if c { let a: Positive = 5; a } else { 0 };
+             r
+         }",
+    );
+}
+
+#[test]
+fn refinement_lub_match_refined_and_base_widen() {
+    // Same widening through `match` arms: the refined arm and the base arm
+    // join to the base.
+    typecheck_ok(
+        "type Positive = i64 where self > 0;
+         fn pick(n: i64) -> i64 {
+             let r = match n {
+                 0 => { let a: Positive = 5; a }
+                 _ => n
+             };
+             r
+         }",
+    );
+}
+
+#[test]
+fn refinement_lub_distinct_refinements_same_base_widen() {
+    // Two *different* refinements over the same base `i64` join to `i64`
+    // (the compiler does not prove predicate subsumption — it widens).
+    typecheck_ok(
+        "type Positive = i64 where self > 0;
+         type Even = i64 where self % 2 == 0;
+         fn pick(c: bool) -> i64 {
+             if c { let a: Positive = 5; a } else { let b: Even = 4; b }
+         }",
+    );
+}
+
+#[test]
+fn refinement_lub_incompatible_bases_still_error() {
+    // Refinements over *different* bases (`i64` vs `String`) are genuinely
+    // incompatible arms — the join fails and the branch mismatch fires.
+    let errors = typecheck_errors(
+        "type Positive = i64 where self > 0;
+         type NonEmpty = String where self.len() > 0;
+         fn pick(c: bool) -> i64 {
+             let _r = if c { let a: Positive = 5; a }
+                      else { let s: String = \"x\"; s as NonEmpty };
+             0
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::BranchTypeMismatch),
+        "expected a BranchTypeMismatch for the i64-base vs String-base arms, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn refinement_lub_homogeneous_refinement_arms_keep_refinement() {
+    // Both arms are the *same* refinement: the identity fast path keeps
+    // `Positive`, which still widens to the `i64` return. (Regression guard
+    // that the fold does not over-widen identical refined arms.)
+    typecheck_ok(
+        "type Positive = i64 where self > 0;
+         fn pick(c: bool) -> i64 {
+             if c { let a: Positive = 5; a } else { let b: Positive = 7; b }
+         }",
+    );
+}
