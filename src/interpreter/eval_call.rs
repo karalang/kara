@@ -61,6 +61,19 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Refinement construction: `Name.try_from(x)` runs the predicate at
+        // runtime (phase-9 step 5b). Parses as `Call(Path([Name, try_from]))`
+        // because an uppercase head segment roots a Path in `parse_primary`.
+        // Returns `Ok(x)` / `Err(msg)`; `None` (not a refinement) falls
+        // through to normal path-call dispatch below.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 && segments[1] == "try_from" {
+                if let Some(v) = self.eval_refinement_try_from(&segments[0], args) {
+                    return v;
+                }
+            }
+        }
+
         // Built-in path-qualified functions (e.g. process.exit, Ordering.Relaxed, F64.from)
         if let ExprKind::Path { segments, .. } = &callee.kind {
             let path_str = segments.join(".");

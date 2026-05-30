@@ -10916,3 +10916,103 @@ fn main() {
 "#);
     assert_eq!(output.trim(), "7");
 }
+
+// ── Refinement types: runtime predicate enforcement (phase-9 step 5b) ──
+
+#[test]
+fn test_interp_refinement_try_from_ok() {
+    // `Even.try_from(4)` evaluates the predicate `self % 2 == 0` against 4,
+    // which holds, so the construction returns `Ok(4)`.
+    let output = run_no_errors(
+        r#"
+type Even = i64 where self % 2 == 0;
+fn main() {
+    match Even.try_from(4) {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}
+"#,
+    );
+    assert_eq!(output.trim(), "4");
+}
+
+#[test]
+fn test_interp_refinement_try_from_err() {
+    // 3 fails `self % 2 == 0`, so `try_from` returns `Err(<message>)` — the
+    // recoverable construction surface. No runtime fault is raised.
+    let output = run_no_errors(
+        r#"
+type Even = i64 where self % 2 == 0;
+fn main() {
+    match Even.try_from(3) {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}
+"#,
+    );
+    assert!(
+        output.contains("refinement `Even`"),
+        "expected an Err message naming the refinement, got: {output:?}"
+    );
+}
+
+#[test]
+fn test_interp_refinement_as_cast_ok() {
+    // `4 as Even` passes the predicate; the (layout-identical) base value
+    // flows through and prints, with no runtime fault.
+    let output = run_no_errors(
+        r#"
+type Even = i64 where self % 2 == 0;
+fn main() {
+    let e = 4 as Even;
+    println(e);
+}
+"#,
+    );
+    assert_eq!(output.trim(), "4");
+}
+
+#[test]
+fn test_interp_refinement_as_cast_violation_faults() {
+    // `3 as Even` is the asserting construction form: a false predicate is a
+    // contract violation, surfaced as a runtime fault (not a recoverable Err).
+    let errors = runtime_errors(
+        r#"
+type Even = i64 where self % 2 == 0;
+fn main() {
+    let e = 3 as Even;
+    println(e);
+}
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("contract violated") && e.message.contains("Even")),
+        "expected a contract-violation fault naming `Even`, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_interp_refinement_string_try_from_uses_method_predicate() {
+    // A refinement over String with a zero-arg method predicate
+    // (`self.len() > 0`): `try_from("")` fails, `try_from("hi")` succeeds.
+    let output = run_no_errors(
+        r#"
+type NonEmpty = String where self.len() > 0;
+fn main() {
+    match NonEmpty.try_from("") {
+        Ok(s) => println(s),
+        Err(_) => println("rejected-empty"),
+    }
+    match NonEmpty.try_from("hi") {
+        Ok(s) => println(s),
+        Err(_) => println("rejected"),
+    }
+}
+"#,
+    );
+    assert_eq!(output.trim(), "rejected-empty\nhi");
+}

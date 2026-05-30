@@ -6,12 +6,57 @@
 use crate::ast::*;
 use crate::token::Span;
 
+use super::eval_expr::cast_value;
 use super::exec::ControlFlow;
 use super::helpers::{kara_json_to_serde_json, value_compare};
 use super::pascal_to_snake;
 use super::value::{try_write_or_panic, EnumData, Value};
 
 impl<'a> super::Interpreter<'a> {
+    /// Run a refinement type's `try_from` at runtime if `type_name` names a
+    /// refinement (phase-9 step 5b): evaluate the predicate against the
+    /// argument and return `Some(Ok(v))` / `Some(Err(msg))`. Returns `None`
+    /// when `type_name` is not a refinement, so callers fall through to
+    /// normal associated-function dispatch. The synthetic `try_from` impl
+    /// the typechecker registers carries no AST body — this is where the
+    /// predicate actually runs on the interpreter path. `Name.try_from(x)`
+    /// is the *recoverable* construction surface (`x as Name` is the
+    /// asserting form that faults on violation).
+    pub(crate) fn eval_refinement_try_from(
+        &mut self,
+        type_name: &str,
+        args: &[CallArg],
+    ) -> Option<Value> {
+        let pred = self.refinement_predicate(type_name)?;
+        let arg_val = match args.first() {
+            Some(arg) => self.eval_expr_inner(&arg.value),
+            None => Value::Unit,
+        };
+        if self.check_cf() {
+            return Some(Value::Unit);
+        }
+        let base = self
+            .refinement_base_name(type_name)
+            .unwrap_or_else(|| type_name.to_string());
+        let casted = cast_value(arg_val, &base);
+        Some(
+            match self.eval_refinement_predicate(&pred, casted.clone()) {
+                Some(true) => Value::EnumVariant {
+                    enum_name: "Result".to_string(),
+                    variant: "Ok".to_string(),
+                    data: EnumData::Tuple(vec![casted]),
+                },
+                _ => Value::EnumVariant {
+                    enum_name: "Result".to_string(),
+                    variant: "Err".to_string(),
+                    data: EnumData::Tuple(vec![Value::String(format!(
+                        "value does not satisfy refinement `{type_name}`"
+                    ))]),
+                },
+            },
+        )
+    }
+
     pub(crate) fn eval_method_call(
         &mut self,
         object: &Expr,
@@ -27,6 +72,15 @@ impl<'a> super::Interpreter<'a> {
         //       the same dispatch used for the lowered `Call(Path)` form.
         if let ExprKind::Identifier(type_name) = &object.kind {
             let target = type_name.as_str();
+            // `Name.try_from(x)` on a refinement type runs the predicate at
+            // runtime (phase-9 step 5b). It usually parses as a path call
+            // (`Call(Path([Name, try_from]))`, handled in `eval_call`); this
+            // covers the method-on-type-identifier shape defensively.
+            if method == "try_from" {
+                if let Some(v) = self.eval_refinement_try_from(target, args) {
+                    return v;
+                }
+            }
             let is_primitive = matches!(
                 target,
                 "i8" | "i16"

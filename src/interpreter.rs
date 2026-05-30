@@ -359,6 +359,45 @@ impl<'a> Interpreter<'a> {
         Value::Unit
     }
 
+    /// Look up the refinement predicate for a named refinement type, if any
+    /// (phase-9 step 5b). Predicates live on `Item::TypeAlias.refinement` in
+    /// the AST; the interpreter evaluates them at construction sites
+    /// (`Name.try_from(x)`, `x as Name`) to enforce the invariant at runtime.
+    pub(crate) fn refinement_predicate(&self, name: &str) -> Option<Expr> {
+        self.program.items.iter().find_map(|item| match item {
+            Item::TypeAlias(t) if t.name == name => t.refinement.clone(),
+            _ => None,
+        })
+    }
+
+    /// The base type's name for a refinement (`type Email = String where …`
+    /// → `"String"`), used to cast a refined value to its base
+    /// representation before the predicate check. `None` for non-refinements.
+    pub(crate) fn refinement_base_name(&self, name: &str) -> Option<String> {
+        self.program.items.iter().find_map(|item| match item {
+            Item::TypeAlias(t) if t.name == name && t.refinement.is_some() => match &t.ty.kind {
+                TypeKind::Path(p) => p.segments.last().cloned(),
+                _ => None,
+            },
+            _ => None,
+        })
+    }
+
+    /// Evaluate a refinement predicate against a candidate value, with `self`
+    /// bound to the value in a fresh scope (phase-9 step 5b). Returns the
+    /// predicate's boolean result, or `None` if evaluation didn't yield a
+    /// bool (a malformed predicate the typechecker should have rejected).
+    pub(crate) fn eval_refinement_predicate(&mut self, pred: &Expr, value: Value) -> Option<bool> {
+        self.env.push_scope();
+        self.env.define("self".to_string(), value);
+        let result = self.eval_expr_inner(pred);
+        self.env.pop_scope();
+        match result {
+            Value::Bool(b) => Some(b),
+            _ => None,
+        }
+    }
+
     /// Like [`record_runtime_error`] but also captures the left/right values
     /// that drove the failure. Used by the `assert_eq` / `assert_ne` builtins
     /// so the test runner can surface them in structured fail events.

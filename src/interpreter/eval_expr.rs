@@ -674,6 +674,29 @@ impl<'a> super::Interpreter<'a> {
                     crate::ast::TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
                     _ => String::new(),
                 };
+                // `x as Refined` enforces the refinement predicate at runtime
+                // (phase-9 step 5b): the value is cast to the refinement's
+                // base representation, then the predicate is checked with
+                // `self` bound to it. A false predicate is a contract
+                // violation — abort with a `contract`-style fault. On success
+                // the (layout-identical) base value flows through unchanged.
+                if let Some(pred) = self.refinement_predicate(&target_name) {
+                    let base = self
+                        .refinement_base_name(&target_name)
+                        .unwrap_or_else(|| target_name.clone());
+                    let casted = cast_value(val, &base);
+                    match self.eval_refinement_predicate(&pred, casted.clone()) {
+                        Some(true) => return casted,
+                        _ => {
+                            return self.record_runtime_error(
+                                format!(
+                                    "contract violated: value does not satisfy refinement `{target_name}`"
+                                ),
+                                &expr.span,
+                            )
+                        }
+                    }
+                }
                 cast_value(val, &target_name)
             }
 
@@ -936,7 +959,7 @@ impl<'a> super::Interpreter<'a> {
 /// value through — the typechecker has already rejected genuine
 /// mis-casts; this guard just prevents an interpreter panic when the
 /// AST shape carries something the runtime doesn't recognize.
-fn cast_value(val: Value, target: &str) -> Value {
+pub(super) fn cast_value(val: Value, target: &str) -> Value {
     let int_from = |i: i64| -> Value {
         match target {
             "i8" => Value::Int(i as i8 as i64),
