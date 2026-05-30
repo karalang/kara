@@ -335,6 +335,101 @@ fn repl_jit_cross_cell_shadow_clears_snapshot() {
 }
 
 #[test]
+#[ignore = "B.5.3 — Vec snapshot port pending; today: cell 2 stdout is \"called2\" (RHS re-evaluated), want \"2\""]
+fn repl_jit_vec_let_rhs_is_not_re_evaluated() {
+    // Slice c-repl.B.5.3 friction probe — same shape as B.5.1's
+    // `repl_jit_let_rhs_is_not_re_evaluated` and B.5.2's String
+    // counterpart, but for a `Vec[i64]`-bound let. Cell 1 binds
+    // `let xs = make_vec();` where `make_vec()` prints "called" and
+    // returns a freshly-allocated Vec; cell 2 references `xs`. The
+    // interpreter caches the bound value (its `let_snapshots` map
+    // holds the Vec), so cell 2 must NOT re-run `make_vec()`. Today
+    // the JIT path lacks Vec/Map snapshot support, so the synthetic
+    // source re-emits the let into cell 2's main and `make_vec()`
+    // fires again — "called" prints twice across the two cells.
+    //
+    // Surfaced 2026-05-30: friction confirmed empirically. Expected
+    // to pass once B.5.3 lands (Vec snapshot port). Removing the
+    // `#[ignore]` is the single trigger that flips this from
+    // friction-pin to regression-test.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured(
+        "fn make_vec() -> Vec[i64] { \
+            println(\"called\"); \
+            let v: Vec[i64] = Vec.new(); \
+            v.push(1); v.push(2); \
+            v \
+         }",
+    );
+    assert!(r.errors.is_empty(), "fn def: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let xs: Vec[i64] = make_vec();");
+    assert!(r.errors.is_empty(), "let cell: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "called",
+        "let cell should print the side effect once",
+    );
+    let r = s.evaluate_cell_captured("println(xs.len() as i64);");
+    assert!(r.errors.is_empty(), "use cell: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "2",
+        "use cell should print only `xs.len()` — `make_vec()` must NOT re-run",
+    );
+}
+
+#[test]
+#[ignore = "B.5.3 — Map snapshot port pending; today: cell 2 stdout is \"called-1\" (RHS re-evaluated; the -1 is a separate suspected cross-cell-fn-returning-Map bug, see B.5.3 tracker entry), want \"100\""]
+fn repl_jit_map_let_rhs_is_not_re_evaluated() {
+    // Slice c-repl.B.5.3 friction probe (Map variant). Same pattern
+    // as the Vec probe above; the interpreter caches the bound Map
+    // value across cells, the JIT path re-evaluates the RHS until
+    // B.5.3 lands.
+    //
+    // Surfaced 2026-05-30: cell 2 today prints "called-1" rather
+    // than the expected "called100" — i.e. `make_map()` re-fires
+    // (confirming the B.5.3 gap) AND the re-evaluated `mp` somehow
+    // loses its inserted entry (cell 2's `mp.get(1)` returns None,
+    // hitting the `-1` arm). Standalone non-REPL JIT of the same
+    // `make_map()` pattern prints 100 correctly, so the
+    // entry-loss is a REPL-cell-mode-only divergence — likely tied
+    // to the cross-cell declare-only path for `make_map` interacting
+    // with Map's heap-backed storage somehow. Once B.5.3 lands,
+    // cell 2 won't re-call `make_map()` (it'll load the captured
+    // Map handle from the snapshot global), so the entry-loss bug
+    // becomes moot for this assertion — but the bug itself is
+    // tracked under B.5.3 because it's a pre-existing hazard for
+    // any future REPL workload that does mutate a Map across cells.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured(
+        "fn make_map() -> Map[i64, i64] { \
+            println(\"called\"); \
+            let m: Map[i64, i64] = Map.new(); \
+            m.insert(1, 100); \
+            m \
+         }",
+    );
+    assert!(r.errors.is_empty(), "fn def: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let mp: Map[i64, i64] = make_map();");
+    assert!(r.errors.is_empty(), "let cell: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "called",
+        "let cell should print the side effect once",
+    );
+    let r =
+        s.evaluate_cell_captured("match mp.get(1) { Some(v) => println(v), None => println(-1), }");
+    assert!(r.errors.is_empty(), "use cell: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "100",
+        "use cell should print only the looked-up value — `make_map()` must NOT re-run",
+    );
+}
+
+#[test]
 fn repl_jit_banner_advertises_jit_mode() {
     // Slice c-repl.B.B — drive the actual `karac repl` binary with
     // `KARAC_REPL_JIT=1`. Verifies the banner picked up the JIT tag
