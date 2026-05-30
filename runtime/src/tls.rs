@@ -902,6 +902,138 @@ mod tests {
         unsafe { karac_runtime_tls_config_free(cfg) };
     }
 
+    /// Regression for the macOS-only `karac_runtime_ws_accept_tls`
+    /// failure (2026-05-30, phase-6-runtime.md line 231): on BSD-derived
+    /// kernels accepted sockets inherit `O_NONBLOCK` from the listener,
+    /// and the handshake-pool initializer flips the listener
+    /// non-blocking so the FFI's accept-drain loop returns `WouldBlock`
+    /// on an empty backlog. Without the reset the synchronous handshake
+    /// worker's first `TlsConnIo::read` returned `WouldBlock` before
+    /// the peer's request landed, so every connection failed at the
+    /// WS-upgrade step (server-side stats: `fail_ws_upgrade = N`, mean
+    /// ~0.5 ms — far too fast to be a real failure). Linux did not hit
+    /// this because Linux's `accept(2)` returns blocking sockets
+    /// regardless of the listener's flags.
+    ///
+    /// What this test pins: a full client TLS handshake + RFC 6455 WS
+    /// upgrade against `karac_runtime_ws_accept_tls` returns a
+    /// non-negative fd. With the `sock.set_nonblocking(false)` line
+    /// removed from the accept-drain loop, this test deadlocks on
+    /// macOS (worker reads `WouldBlock`, returns -1, client times out
+    /// reading the 101 response).
+    #[test]
+    #[cfg(unix)]
+    fn ws_accept_tls_succeeds_with_nonblocking_listener() {
+        use std::io::{Read, Write};
+        use std::os::unix::io::IntoRawFd;
+
+        let (cert_pem, key_pem) = gen_test_cert();
+        let cfg = unsafe {
+            karac_runtime_tls_config_new(
+                cert_pem.as_ptr(),
+                cert_pem.len() as i64,
+                key_pem.as_ptr(),
+                key_pem.len() as i64,
+            )
+        };
+        assert!(!cfg.is_null());
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let cfg_addr = cfg as usize;
+        let listener_fd = listener.into_raw_fd();
+
+        // Server thread: invoke the FFI under test. With the fix in
+        // place this returns a positive fd; without it, the handshake
+        // worker fails and the FFI's loop never produces a completed
+        // fd, so we bound the wait by joining with a deadline.
+        let server = thread::spawn(move || unsafe {
+            crate::event_loop::karac_runtime_ws_accept_tls(listener_fd, cfg_addr as *mut _)
+        });
+
+        // Give the worker pool a moment to spin up + flip the listener
+        // non-blocking before we open the client.
+        thread::sleep(Duration::from_millis(50));
+
+        // Client side: rustls handshake + RFC 6455 upgrade request.
+        let client_cfg = build_test_client_config(&cert_pem);
+        let server_name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+        let mut client = rustls::ClientConnection::new(client_cfg, server_name).unwrap();
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        client.complete_io(&mut sock).unwrap();
+
+        let req = b"GET / HTTP/1.1\r\n\
+                    Host: localhost\r\n\
+                    Upgrade: websocket\r\n\
+                    Connection: Upgrade\r\n\
+                    Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                    Sec-WebSocket-Version: 13\r\n\
+                    \r\n";
+        client.writer().write_all(req).unwrap();
+        while client.wants_write() {
+            client.write_tls(&mut sock).unwrap();
+        }
+
+        // Read the 101 response. Bounded by a wall-clock deadline; on
+        // the pre-fix macOS path the server never sends a response.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut buf = Vec::with_capacity(512);
+        let mut tmp = [0u8; 256];
+        sock.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        loop {
+            if std::time::Instant::now() >= deadline {
+                panic!(
+                    "ws_accept_tls did not send 101 within 5s — accepted socket likely \
+                     left in non-blocking mode (macOS O_NONBLOCK inheritance regression). \
+                     Buffered so far: {:?}",
+                    String::from_utf8_lossy(&buf)
+                );
+            }
+            if client.wants_read() {
+                if client.read_tls(&mut sock).is_err() {
+                    panic!("client read_tls failed; buffered: {buf:?}");
+                }
+                client.process_new_packets().unwrap();
+            }
+            match client.reader().read(&mut tmp) {
+                Ok(0) => {
+                    if !client.wants_read() {
+                        break;
+                    }
+                }
+                Ok(n) => {
+                    buf.extend_from_slice(&tmp[..n]);
+                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(e) => panic!("client read failed: {e}; buffered: {buf:?}"),
+            }
+        }
+
+        let status_line = std::str::from_utf8(&buf)
+            .unwrap_or("")
+            .lines()
+            .next()
+            .unwrap_or("");
+        assert!(
+            status_line.contains("101"),
+            "expected 101 Switching Protocols, got: {status_line:?}; full response: {:?}",
+            String::from_utf8_lossy(&buf)
+        );
+
+        let server_fd = server.join().expect("server thread");
+        assert!(
+            server_fd >= 0,
+            "karac_runtime_ws_accept_tls returned {server_fd} (expected non-negative fd)"
+        );
+
+        // Cleanup: close the upgraded connection fd.
+        karac_runtime_tls_close(server_fd);
+        unsafe { karac_runtime_tls_config_free(cfg) };
+    }
+
     /// Phase-8 line 22 — same round trip as `round_trip_echo`, but the
     /// CLIENT side now goes through `karac_runtime_tls_client_connect`
     /// and the shared `karac_runtime_tls_read` / `_write` / `_close`

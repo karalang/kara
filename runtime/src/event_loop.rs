@@ -2231,7 +2231,10 @@ impl<'a> std::io::Write for TlsConnIo<'a> {
 /// `conn_fd` must be a freshly-accepted, owned TCP connection fd; `config`
 /// must be a valid `*mut KaracTlsConfig` for the call's duration.
 #[cfg(unix)]
-unsafe fn ws_handshake_conn_tls(conn_fd: i32, config: *mut crate::tls::KaracTlsConfig) -> i32 {
+unsafe fn ws_handshake_conn_tls(
+    conn_fd: i32,
+    config: *mut crate::tls::KaracTlsConfig,
+) -> Result<i32, (HandshakeStep, String)> {
     use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 
     // Take ownership of the accepted connection fd.
@@ -2241,13 +2244,13 @@ unsafe fn ws_handshake_conn_tls(conn_fd: i32, config: *mut crate::tls::KaracTlsC
     let config_arc = crate::tls::clone_config_arc(config);
     let mut conn = match rustls::ServerConnection::new(config_arc) {
         Ok(c) => c,
-        Err(_) => return -1, // sock drops here, closing the fd.
+        Err(e) => return Err((HandshakeStep::TlsConfig, format!("{e}"))),
     };
 
     // Drive the TLS handshake to completion against the blocking
     // socket. complete_io loops until handshaking is done.
-    if conn.complete_io(&mut sock).is_err() {
-        return -1; // sock drops here.
+    if let Err(e) = conn.complete_io(&mut sock) {
+        return Err((HandshakeStep::TlsHandshake, format!("{e}")));
     }
 
     // Register the session keyed by the fd BEFORE the HTTP upgrade
@@ -2263,7 +2266,7 @@ unsafe fn ws_handshake_conn_tls(conn_fd: i32, config: *mut crate::tls::KaracTlsC
     // the rustls session against the existing socket. Look up the
     // session we just inserted so the wrapper holds a borrowed
     // ServerConnection.
-    let upgrade_ok = {
+    let upgrade_outcome = {
         let session = match crate::tls::lookup_session(fd) {
             Some(s) => s,
             None => {
@@ -2271,7 +2274,10 @@ unsafe fn ws_handshake_conn_tls(conn_fd: i32, config: *mut crate::tls::KaracTlsC
                 // happen, but failure-mode the connection clean.
                 let _ = sock.into_raw_fd();
                 let _ = crate::tls::karac_runtime_tls_close(fd);
-                return -1;
+                return Err((
+                    HandshakeStep::SessionLookup,
+                    format!("session lookup miss for fd {fd} immediately after register"),
+                ));
             }
         };
         let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
@@ -2282,19 +2288,19 @@ unsafe fn ws_handshake_conn_tls(conn_fd: i32, config: *mut crate::tls::KaracTlsC
         ws_drive_upgrade_handshake(&mut transport)
     };
 
-    if !upgrade_ok {
+    if let Err(reason) = upgrade_outcome {
         // HTTP upgrade failed (malformed request, missing key
         // header, etc.). Pull the session out of the registry and
         // close the fd.
         let _ = sock.into_raw_fd();
         let _ = crate::tls::karac_runtime_tls_close(fd);
-        return -1;
+        return Err((HandshakeStep::WsUpgrade, reason));
     }
 
     // Success — relinquish the TcpStream's destructor so the fd
     // stays open. The kara `WebSocket` value the caller constructs
     // owns close-on-drop now.
-    sock.into_raw_fd()
+    Ok(sock.into_raw_fd())
 }
 
 /// Per-listener pool that offloads the (slow, I/O-bound) TLS handshake +
@@ -2315,14 +2321,34 @@ struct WsHandshakePool {
 
 /// Snapshot-able handshake-pool counters used by the once-per-second
 /// reporter thread. All counters are `Relaxed` — we only need
-/// monotonic visibility, not cross-thread ordering.
+/// monotonic visibility, not cross-thread ordering. The per-step
+/// `*_failed` counters localise *where* a connection died (TLS handshake
+/// vs WS-upgrade vs session-lookup); `first_errors` captures the literal
+/// rustls / parse error text for the first few failures so the cause is
+/// inspectable from the stats stream alone — added 2026-05-30 as step
+/// (a) of the macOS bench-client TLS+WS-upgrade diagnosis plan.
 struct HandshakeStats {
     submitted: AtomicU64,
     completed: AtomicU64,
     failed: AtomicU64,
+    tls_config_failed: AtomicU64,
+    tls_handshake_failed: AtomicU64,
+    session_lookup_failed: AtomicU64,
+    ws_upgrade_failed: AtomicU64,
     handshake_nanos_sum: AtomicU64,
     workers: u32,
+    /// Up to `FIRST_ERRORS_CAP` literal failure messages. The reporter
+    /// drains and prints these once per tick so the first cohort of
+    /// errors is always seen in the stats stream.
+    first_errors: Mutex<Vec<String>>,
 }
+
+/// Cap on the number of literal failure messages buffered in
+/// `HandshakeStats::first_errors`. Bench-rate limited — a hot loop of
+/// errors mustn't grow the buffer unboundedly. 32 covers diagnosing a
+/// failure mode that fires every connection (we only need a few) while
+/// keeping the worker-side allocation bounded.
+const FIRST_ERRORS_CAP: usize = 32;
 
 impl HandshakeStats {
     fn new_if_enabled(workers: usize) -> Option<Arc<Self>> {
@@ -2331,13 +2357,49 @@ impl HandshakeStats {
                 submitted: AtomicU64::new(0),
                 completed: AtomicU64::new(0),
                 failed: AtomicU64::new(0),
+                tls_config_failed: AtomicU64::new(0),
+                tls_handshake_failed: AtomicU64::new(0),
+                session_lookup_failed: AtomicU64::new(0),
+                ws_upgrade_failed: AtomicU64::new(0),
                 handshake_nanos_sum: AtomicU64::new(0),
                 workers: workers as u32,
+                first_errors: Mutex::new(Vec::with_capacity(FIRST_ERRORS_CAP)),
             }))
         } else {
             None
         }
     }
+
+    /// Push a failure message into `first_errors` (no-op once full).
+    /// Called from the worker thread on every failed handshake; cheap
+    /// to call when the buffer is already capped because the early
+    /// length check sidesteps the lock contention.
+    fn record_error(&self, step: HandshakeStep, msg: String) {
+        // Saturating-fast path: avoid even taking the lock once the
+        // buffer is full (the common case after the first cohort).
+        if let Ok(g) = self.first_errors.lock() {
+            if g.len() >= FIRST_ERRORS_CAP {
+                return;
+            }
+            drop(g);
+        }
+        let line = format!("{step:?}: {msg}");
+        let mut g = self.first_errors.lock().unwrap_or_else(|p| p.into_inner());
+        if g.len() < FIRST_ERRORS_CAP {
+            g.push(line);
+        }
+    }
+}
+
+/// Which step of `ws_handshake_conn_tls` a failure occurred at. Used
+/// only for the `KARAC_WS_STATS` instrumentation — the FFI's `i32`
+/// return shape is unchanged.
+#[derive(Debug, Clone, Copy)]
+enum HandshakeStep {
+    TlsConfig,
+    TlsHandshake,
+    SessionLookup,
+    WsUpgrade,
 }
 
 /// Reporter loop: every second, dump pool counters + current queue
@@ -2353,6 +2415,10 @@ fn ws_stats_reporter(stats: Arc<HandshakeStats>, pool: Arc<WsHandshakePool>) {
         let s = stats.submitted.load(Ordering::Relaxed);
         let c = stats.completed.load(Ordering::Relaxed);
         let f = stats.failed.load(Ordering::Relaxed);
+        let f_tls_cfg = stats.tls_config_failed.load(Ordering::Relaxed);
+        let f_tls_hs = stats.tls_handshake_failed.load(Ordering::Relaxed);
+        let f_lookup = stats.session_lookup_failed.load(Ordering::Relaxed);
+        let f_ws_up = stats.ws_upgrade_failed.load(Ordering::Relaxed);
         let ns = stats.handshake_nanos_sum.load(Ordering::Relaxed);
         let work_depth = pool
             .work
@@ -2374,9 +2440,19 @@ fn ws_stats_reporter(stats: Arc<HandshakeStats>, pool: Arc<WsHandshakePool>) {
             0.0
         };
         eprintln!(
-            "[karac_ws_stats] submit_total={} done_total={} failed_total={} in_flight={} work_q={} done_q={} workers={} submit_per_s={} done_per_s={} mean_handshake_ms={:.2}",
-            s, c, f, in_flight, work_depth, done_depth, stats.workers, delta_s, delta_c, mean_ms
+            "[karac_ws_stats] submit_total={} done_total={} failed_total={} fail_tls_config={} fail_tls_handshake={} fail_session_lookup={} fail_ws_upgrade={} in_flight={} work_q={} done_q={} workers={} submit_per_s={} done_per_s={} mean_handshake_ms={:.2}",
+            s, c, f, f_tls_cfg, f_tls_hs, f_lookup, f_ws_up, in_flight, work_depth, done_depth, stats.workers, delta_s, delta_c, mean_ms
         );
+        // Drain captured first-error messages so they show up at most
+        // once each. The buffer is capped at FIRST_ERRORS_CAP so this is
+        // bounded work per tick.
+        let drained: Vec<String> = {
+            let mut g = stats.first_errors.lock().unwrap_or_else(|p| p.into_inner());
+            std::mem::take(&mut *g)
+        };
+        for line in drained {
+            eprintln!("[karac_ws_stats:err] {line}");
+        }
         last_submitted = s;
         last_completed = c;
         last_nanos = ns;
@@ -2432,7 +2508,7 @@ fn ws_handshake_worker(config_addr: usize, pool: Arc<WsHandshakePool>) {
         // pool start; in the v1 accept-loop shape the TlsListener (and its
         // config) outlive the process, so the pointer stays valid.
         let t0 = pool.stats.as_ref().map(|_| Instant::now());
-        let ready = unsafe {
+        let outcome = unsafe {
             ws_handshake_conn_tls(conn_fd, config_addr as *mut crate::tls::KaracTlsConfig)
         };
         if let (Some(stats), Some(t0)) = (pool.stats.as_ref(), t0) {
@@ -2440,15 +2516,29 @@ fn ws_handshake_worker(config_addr: usize, pool: Arc<WsHandshakePool>) {
                 .handshake_nanos_sum
                 .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
             stats.completed.fetch_add(1, Ordering::Relaxed);
-            if ready < 0 {
+            if let Err((step, _)) = &outcome {
                 stats.failed.fetch_add(1, Ordering::Relaxed);
+                match step {
+                    HandshakeStep::TlsConfig => &stats.tls_config_failed,
+                    HandshakeStep::TlsHandshake => &stats.tls_handshake_failed,
+                    HandshakeStep::SessionLookup => &stats.session_lookup_failed,
+                    HandshakeStep::WsUpgrade => &stats.ws_upgrade_failed,
+                }
+                .fetch_add(1, Ordering::Relaxed);
             }
         }
-        if ready < 0 {
-            // Handshake/upgrade failed; `ws_handshake_conn_tls` already
-            // closed the fd. Nothing to hand back.
-            continue;
-        }
+        let ready = match outcome {
+            Ok(fd) => fd,
+            Err((step, msg)) => {
+                // Handshake/upgrade failed; `ws_handshake_conn_tls` already
+                // closed the fd. Capture the literal error text into the
+                // stats buffer so the reporter can dump it.
+                if let Some(stats) = pool.stats.as_ref() {
+                    stats.record_error(step, msg);
+                }
+                continue;
+            }
+        };
         let mut d = pool.done.lock().unwrap_or_else(|p| p.into_inner());
         d.push_back(ready);
         drop(d);
@@ -2572,6 +2662,25 @@ pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
             let mut submitted = 0usize;
             // Drain the backlog: accept until WouldBlock (or a real error).
             while let Ok((sock, _addr)) = listener.accept() {
+                // Force the accepted connection into blocking mode. On
+                // Linux, `accept(2)` always returns a blocking socket
+                // regardless of the listener's flags. On macOS / BSD,
+                // accepted sockets *inherit* `O_NONBLOCK` from the
+                // listener, and `ws_handshake_pool_for` flipped this
+                // listener non-blocking so the accept-drain loop above
+                // returns `WouldBlock` instead of stalling. Without
+                // this reset, the handshake worker's first
+                // `TlsConnIo::read` returns `WouldBlock` before the
+                // peer's request lands, `ws_read_http_request` reads it
+                // as a hard IO error, and every connection fails at the
+                // WS-upgrade step with no TLS-layer signal. Diagnosed
+                // 2026-05-30 (M3 macOS-at-1M leg): server-side
+                // `fail_ws_upgrade=N`, mean handshake ~0.5ms — fast
+                // enough to be the first-read failure. The blocking
+                // mode is then load-bearing in the handshake worker's
+                // synchronous `complete_io` and HTTP read. Regression
+                // test: `tls::tests::ws_accept_tls_succeeds_with_nonblocking_listener`.
+                let _ = sock.set_nonblocking(false);
                 let raw = sock.into_raw_fd();
                 let mut q = pool.work.lock().unwrap_or_else(|p| p.into_inner());
                 q.push_back(raw);
@@ -2606,18 +2715,22 @@ pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
 }
 
 /// Drive the RFC 6455 server-side HTTP upgrade exchange over the
-/// supplied `Read + Write` transport. Returns `true` on a complete
-/// 101 handshake, `false` on any failure (IO error, malformed
-/// request, missing Sec-WebSocket-Key).
+/// supplied `Read + Write` transport. Returns `Ok(())` on a complete
+/// 101 handshake; `Err(reason)` on any failure (IO error, malformed
+/// request, missing Sec-WebSocket-Key). The error string is fed into
+/// `HandshakeStats::first_errors` by the caller so the failure mode
+/// is inspectable from `KARAC_WS_STATS=1`.
 ///
 /// Shared with [`karac_runtime_ws_accept_tls`]; the plain-TCP
 /// equivalent lives inline in [`karac_runtime_ws_accept`] above
 /// and predates the generic-transport refactor.
 #[cfg(unix)]
-fn ws_drive_upgrade_handshake<S: std::io::Read + std::io::Write>(stream: &mut S) -> bool {
+fn ws_drive_upgrade_handshake<S: std::io::Read + std::io::Write>(
+    stream: &mut S,
+) -> Result<(), String> {
     let request = match ws_read_http_request(stream) {
         Some(b) => b,
-        None => return false,
+        None => return Err("ws_read_http_request: IO error or EOF before complete request".into()),
     };
     let key = match extract_sec_websocket_key(&request) {
         Some(k) => k,
@@ -2625,7 +2738,13 @@ fn ws_drive_upgrade_handshake<S: std::io::Read + std::io::Write>(stream: &mut S)
             let resp =
                 b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
             let _ = stream.write_all(resp);
-            return false;
+            let preview = String::from_utf8_lossy(&request[..request.len().min(256)])
+                .replace('\r', "\\r")
+                .replace('\n', "\\n");
+            return Err(format!(
+                "Sec-WebSocket-Key header not found in {}B request; preview={preview:?}",
+                request.len()
+            ));
         }
     };
     let mut digest_input: Vec<u8> = Vec::with_capacity(key.len() + WS_HANDSHAKE_GUID.len());
@@ -2642,16 +2761,16 @@ fn ws_drive_upgrade_handshake<S: std::io::Read + std::io::Write>(stream: &mut S)
          \r\n",
         accept
     );
-    if stream.write_all(response.as_bytes()).is_err() {
-        return false;
+    if let Err(e) = stream.write_all(response.as_bytes()) {
+        return Err(format!("write_all(response): {e}"));
     }
     // Flush for TLS — the rustls writer buffers ciphertext until
     // explicit flush drains it through write_tls. For plain TCP
     // this is a no-op.
-    if stream.flush().is_err() {
-        return false;
+    if let Err(e) = stream.flush() {
+        return Err(format!("flush: {e}"));
     }
-    true
+    Ok(())
 }
 
 // ── Scheduler dispatcher (Phase 6 line 17 slice 4) ────────────────────────
