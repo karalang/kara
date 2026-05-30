@@ -7212,3 +7212,38 @@ fn test_pub_fn_with_filesystem_effects_declared_accepts_file_methods() {
          }",
     );
 }
+
+// ── Refinement types (phase-9 step 3) ───────────────────────────
+//
+// `x as Refined` is a runtime predicate assertion that panics on
+// failure, so it propagates the `panics` effect via the synthetic
+// `__builtin_refinement_assert` callee. A plain numeric cast does not.
+
+#[test]
+fn refinement_as_cast_infers_panics() {
+    let result = effectcheck_ok(
+        "type Even = i64 where self % 2 == 0;
+         fn assert_even(x: i64) -> Even { x as Even }",
+    );
+    let inferred = result.inferred_effects.get("assert_even").unwrap();
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Panics),
+        "`x as Even` should infer the `panics` effect"
+    );
+}
+
+#[test]
+fn plain_numeric_cast_does_not_infer_panics() {
+    let result = effectcheck_ok("fn widen(x: i32) -> i64 { x as i64 }");
+    let inferred = result.inferred_effects.get("widen").unwrap();
+    assert!(
+        !inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Panics),
+        "a plain numeric `as` cast must not infer `panics`"
+    );
+}

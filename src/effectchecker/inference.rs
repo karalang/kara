@@ -456,6 +456,19 @@ impl<'a> super::EffectChecker<'a> {
         self.function_bodies.contains_key(name) || self.method_bodies.contains_key(name)
     }
 
+    /// True iff `ty` is a path naming a refinement type alias — i.e. an
+    /// `x as ty` cast is a refinement assertion that propagates `panics`.
+    /// Borrow / pointer / generic wrappers around a refinement are not
+    /// themselves assertion targets, so only a bare path is checked.
+    fn cast_target_is_refinement(&self, ty: &crate::ast::TypeExpr) -> bool {
+        if let crate::ast::TypeKind::Path(path) = &ty.kind {
+            if let Some(name) = path.segments.last() {
+                return self.refinement_type_names.contains(name);
+            }
+        }
+        false
+    }
+
     pub(crate) fn collect_calls_in_expr(
         &self,
         expr: &Expr,
@@ -772,7 +785,16 @@ impl<'a> super::EffectChecker<'a> {
                     self.collect_calls_in_expr(s, calls, bounds);
                 }
             }
-            ExprKind::Cast { expr: inner, .. } => {
+            ExprKind::Cast { expr: inner, ty } => {
+                // `x as Refined` is a refinement assertion — a runtime
+                // predicate check that panics on failure (design.md §
+                // Refinement Types, "`as` disambiguation rule"). Attribute
+                // the synthetic `__builtin_refinement_assert` callee so the
+                // `panics` effect propagates to the enclosing function.
+                // Numeric / pointer / other casts carry no effect.
+                if self.cast_target_is_refinement(ty) {
+                    calls.push(("__builtin_refinement_assert".to_string(), expr.span.clone()));
+                }
                 self.collect_calls_in_expr(inner, calls, bounds);
             }
             ExprKind::Range { start, end, .. } => {

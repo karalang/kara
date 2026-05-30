@@ -20211,3 +20211,50 @@ fn refinement_string_base_method_resolves() {
          fn measure(n: Name) { let _ = n.len(); }",
     );
 }
+
+// ── Refinement types (phase-9 line 27, step 3 — construction) ────
+//
+// `Name.try_from(base) -> Result[Name, String]` (synthetic TryFrom impl)
+// and the `x as Refined` asserting cast. The runtime predicate check
+// itself (interpreter / codegen) is a follow-on; these pin the
+// typecheck surface.
+
+#[test]
+fn refinement_try_from_returns_result_of_refinement() {
+    // The synthetic `impl TryFrom[i64] for Even` makes `Even.try_from(n)`
+    // resolve to `Result[Even, String]`.
+    typecheck_ok(
+        "type Even = i64 where self % 2 == 0;
+         fn make(n: i64) -> Result[Even, String] { Even.try_from(n) }",
+    );
+}
+
+#[test]
+fn refinement_as_cast_from_base_accepted() {
+    // `x as Even` where `x: i64` (the base) is the asserting narrowing.
+    typecheck_ok(
+        "type Even = i64 where self % 2 == 0;
+         fn assert_even(x: i64) -> Even { x as Even }",
+    );
+}
+
+#[test]
+fn refinement_as_cast_from_non_base_rejected() {
+    // `x as Even` where `x: i32` ≠ the base `i64` is a compile error —
+    // convert to the base first.
+    let errors = typecheck_errors(
+        "type Even = i64 where self % 2 == 0;
+         fn bad(x: i32) -> Even { x as Even }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("E_REFINEMENT_CAST_SOURCE_MISMATCH")),
+        "expected E_REFINEMENT_CAST_SOURCE_MISMATCH, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}

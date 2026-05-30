@@ -386,6 +386,12 @@ pub struct EffectChecker<'a> {
     /// `__modbind_write.<NAME>` synthetic call entries at every
     /// read/write site (design.md §1322 + §1330).
     pub(crate) modbind_let_mut: HashMap<String, ModBindingInfo>,
+    /// Names of refinement type aliases (`type Name = Base where <pred>`).
+    /// Derived directly from the AST. Consulted by the `Cast` arm of
+    /// `collect_calls_in_expr`: an `x as Refined` cast is a runtime
+    /// predicate assertion that propagates `panics`, attributed to the
+    /// synthetic `__builtin_refinement_assert` callee (phase-9 step 3).
+    pub(crate) refinement_type_names: HashSet<String>,
     pub(crate) errors: Vec<EffectError>,
 }
 
@@ -423,6 +429,14 @@ impl<'a> EffectChecker<'a> {
             call_type_subs: HashMap::new(),
             call_effect_subs: HashMap::new(),
             modbind_let_mut: HashMap::new(),
+            refinement_type_names: program
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::TypeAlias(t) if t.refinement.is_some() => Some(t.name.clone()),
+                    _ => None,
+                })
+                .collect(),
             errors: Vec::new(),
         }
     }
@@ -485,6 +499,9 @@ impl<'a> EffectChecker<'a> {
             "__builtin_unwrap",
             "__builtin_expect",
             "__builtin_div_rem",
+            // `x as Refined` runtime predicate assertion — panics when the
+            // value fails the refinement predicate (phase-9 step 3).
+            "__builtin_refinement_assert",
             "process.exit",
         ] {
             let mut set = EffectSet::new();

@@ -2023,6 +2023,38 @@ impl<'a> TypeChecker<'a> {
             return;
         }
 
+        // `x as Refined` — refinement assertion (design.md § Refinement
+        // Types, "`as` disambiguation rule"). A runtime predicate check is
+        // emitted; it propagates `panics` (wired in the effectchecker's
+        // `Cast` arm). The source must have *exactly* the refinement's base
+        // type — implicit numeric widening to the base is not folded in, so
+        // `i64 as (Special = i32 …)` is rejected and the programmer writes
+        // the two steps explicitly (`(x as i32) as Special`). An identical
+        // refined source (`p as Positive` where `p: Positive`) is a no-op
+        // assertion and accepted.
+        if let Type::Refinement { name, base } = to_ty {
+            if from_ty == to_ty || from_ty == base.as_ref() {
+                return;
+            }
+            self.type_error(
+                format!(
+                    "error[E_REFINEMENT_CAST_SOURCE_MISMATCH]: cannot assert `{}` \
+                     as refinement `{}` — the source must have exactly `{}`'s base \
+                     type `{}`. Convert to the base first, then assert: \
+                     `(x as {}) as {}`",
+                    type_display(from_ty),
+                    name,
+                    name,
+                    type_display(base),
+                    type_display(base),
+                    name,
+                ),
+                span.clone(),
+                TypeErrorKind::InvalidCast,
+            );
+            return;
+        }
+
         // Numeric → numeric: always accepted (existing rule).
         if is_numeric(from_ty) && is_numeric(to_ty) {
             return;

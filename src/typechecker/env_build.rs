@@ -1800,10 +1800,45 @@ impl<'a> super::TypeChecker<'a> {
                     self.env
                         .refinement_predicates
                         .insert(t.name.clone(), RefinementPred { expr: pred.clone() });
-                    ty = Type::Refinement {
+                    let base_ty = ty.clone();
+                    let refined = Type::Refinement {
                         name: t.name.clone(),
-                        base: Box::new(ty),
+                        base: Box::new(base_ty.clone()),
                     };
+                    // Synthetic `impl TryFrom[base] for Name` — the
+                    // construction path for refined values (design.md §
+                    // Refinement Types: "Refinement types use TryFrom").
+                    // `Name.try_from(base) -> Result[Name, String]`; the
+                    // `Err` arm carries the predicate-failure message at
+                    // runtime. Registered directly (not via `env_add_impl`)
+                    // because it has no AST body — the runtime predicate
+                    // check is emitted by codegen / the interpreter, not
+                    // from a user-written method, so the coherence-checked
+                    // user-impl registration path does not apply.
+                    let mut methods = HashMap::new();
+                    methods.insert(
+                        "try_from".to_string(),
+                        FunctionSig {
+                            generic_params: Vec::new(),
+                            param_names: vec![Some("value".to_string())],
+                            params: vec![base_ty],
+                            return_type: Type::Named {
+                                name: "Result".to_string(),
+                                args: vec![refined.clone(), Type::Str],
+                            },
+                            where_clause: None,
+                        },
+                    );
+                    self.env.add_impl(ImplInfo {
+                        target_type: t.name.clone(),
+                        do_not_recommend: false,
+                        target_args: Vec::new(),
+                        trait_name: Some("TryFrom".to_string()),
+                        methods,
+                        generic_params: None,
+                        where_clause: None,
+                    });
+                    ty = refined;
                 }
                 Err((msg, span)) => {
                     // Leave `ty` as the transparent base — building a nominal
