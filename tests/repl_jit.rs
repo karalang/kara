@@ -222,6 +222,29 @@ fn repl_jit_snapshot_covers_f64_bool_char() {
 }
 
 #[test]
+fn repl_jit_cross_cell_shadow_clears_snapshot() {
+    // Hypothesis: B.5.1's snapshot survives a cross-cell shadow even
+    // though prune_shadowed_lets explicitly clears `let_snapshots` for
+    // the interpreter path. Mechanism: `jit_snapshotted_lets` is NOT
+    // touched by the prune, so cell 2's `let x = 99` is classified as
+    // REPLAY by `compute_snapshot_sets_for_cell` and the codegen path
+    // loads from `@__karac_repl_snapshot_x` (still 7) instead of
+    // evaluating the new RHS.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("let x = 7;");
+    assert!(r.errors.is_empty(), "cell 1: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let x = 99; println(x);");
+    assert!(r.errors.is_empty(), "cell 2: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "99",
+        "cross-cell shadow must re-capture, not replay; stdout: {:?}",
+        r.stdout,
+    );
+}
+
+#[test]
 fn repl_jit_banner_advertises_jit_mode() {
     // Slice c-repl.B.B — drive the actual `karac repl` binary with
     // `KARAC_REPL_JIT=1`. Verifies the banner picked up the JIT tag

@@ -2504,6 +2504,28 @@ impl Session {
         for name in &new_names {
             self.let_snapshots.remove(name);
         }
+        // Slice c-repl.B.5.1 follow-up: under JIT mode the snapshot
+        // value lives in the runner's JITDylib as
+        // `@__karac_repl_snapshot_<name>`. Cross-cell shadow without
+        // a JIT-side clear would route the new cell through the
+        // REPLAY classification (name still in `jit_snapshotted_lets`)
+        // → codegen emits a load from the stale global → wrong value.
+        // Per-cell global isolation (the B.4 W2 finding's documented
+        // path) would let us drop just the one global; until then,
+        // the cleanest correct fix is to drop the whole runner on
+        // shadow — next cell starts with an empty JITDylib so the
+        // new RHS evaluates fresh. Trade-off: cached fn definitions
+        // also re-emit, but shadows are explicit user actions and
+        // not the steady-state pattern.
+        #[cfg(feature = "lljit_prototype")]
+        if new_names
+            .iter()
+            .any(|n| self.jit_snapshotted_lets.contains_key(n))
+        {
+            self.jit_installed_fns.clear();
+            self.jit_snapshotted_lets.clear();
+            self.jit_client = None;
+        }
         // Walk persistent_lets, persistent_let_origin, and
         // persistent_let_provider_scope in lockstep so the parallel
         // metadata stays aligned with the slices.
