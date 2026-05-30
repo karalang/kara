@@ -25540,6 +25540,79 @@ fn main() {
     }
 
     #[test]
+    fn test_void_fn_tail_call_without_semicolon_emits_ret_void() {
+        // Pre-fix: `fn helper() { println(1) }` (no trailing `;`)
+        // tripped LLVM module verification with "Found return instr
+        // that returns non-void in Function of void return type! ret
+        // i64 0 void". `compile_print` returns an i64-0 unit
+        // placeholder; the parser treats the no-`;` call as the
+        // block's `final_expr`, so `compile_block` hands it back as
+        // `Some(val)`; `compile_function` then emitted
+        // `build_return(Some(i64-0))` against a void LLVM signature.
+        // Post-fix: the LLVM fn's return type is checked; void
+        // signatures emit `build_return(None)` regardless of any
+        // placeholder value compile_block surfaced.
+        let out = run_program(
+            r#"
+fn helper() {
+    println(7)
+}
+
+fn main() {
+    helper();
+}
+"#,
+        );
+        if let Some(s) = out {
+            assert_eq!(s.trim(), "7");
+        }
+    }
+
+    #[test]
+    fn test_void_main_tail_call_without_semicolon() {
+        // Same bug shape exercised at `main`'s tail. `main` returns
+        // i32 (via the dedicated main arm in compile_function), but
+        // the body's final-expr handling is uniform — pre-fix this
+        // emitted `ret i32` against a value from `compile_block`'s
+        // `Some(val)`. With the main arm overriding to const-i32-0,
+        // this specific shape always worked; pin it as a regression
+        // test against future drift.
+        let out = run_program(
+            r#"
+fn main() {
+    println(11)
+}
+"#,
+        );
+        if let Some(s) = out {
+            assert_eq!(s.trim(), "11");
+        }
+    }
+
+    #[test]
+    fn test_non_void_tail_return_still_returns_value() {
+        // Counter-test: the void-discard guard must NOT fire on
+        // functions that genuinely return a value via tail expression.
+        // Pre- and post-fix this should work identically; here we
+        // pin it so future tightening doesn't accidentally also drop
+        // returns from non-void fns.
+        let out = run_program(
+            r#"
+fn double(n: i64) -> i64 {
+    n * 2
+}
+
+fn main() {
+    println(double(21));
+}
+"#,
+        );
+        if let Some(s) = out {
+            assert_eq!(s.trim(), "42");
+        }
+    }
+
+    #[test]
     fn test_binop_rejects_heterogeneous_types_with_structured_error() {
         // Bug surfaced during c.4 bench: `assert_eq(m.get("a"), 1)`
         // where the LHS is `Option[i64]` (a 4-i64 struct) and the RHS

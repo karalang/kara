@@ -509,7 +509,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 let zero = self.context.i32_type().const_int(0, false);
                 self.builder.build_return(Some(&zero)).unwrap();
             } else if let Some(val) = result {
-                self.builder.build_return(Some(&val)).unwrap();
+                // Void-return functions whose body's final expression
+                // happens to produce an SSA value (e.g. `fn f() {
+                // println(1) }` — `compile_print` returns i64-0 as a
+                // unit placeholder, but the parser treats the no-`;`
+                // call as the block's `final_expr`, so `compile_block`
+                // hands it back as `Some(val)`). Emitting `ret i64 0`
+                // against a `void` LLVM signature fails module
+                // verification with "Found return instr that returns
+                // non-void in Function of void return type". Detect the
+                // mismatch here and discard the value — the function's
+                // observable behavior is unchanged (it returns unit; the
+                // i64-0 was a codegen-internal placeholder, never user-
+                // visible). The mismatch shows up because several
+                // codegen paths (`compile_print`, `compile_assert_eq`,
+                // unknown-callee fallback) use the i64-0 placeholder
+                // uniformly regardless of the callee's actual return
+                // type; threading exact unit-vs-i64 distinction through
+                // each emitter is bigger scope than this fix needs.
+                let fn_returns_void = self
+                    .current_fn
+                    .and_then(|f| f.get_type().get_return_type())
+                    .is_none();
+                if fn_returns_void {
+                    self.builder.build_return(None).unwrap();
+                } else {
+                    self.builder.build_return(Some(&val)).unwrap();
+                }
             } else {
                 self.builder.build_return(None).unwrap();
             }
