@@ -1409,6 +1409,21 @@ impl<'a> super::TypeChecker<'a> {
 
         // `Client` / `Response` / `HttpError` / `RequestBuilder` method dispatch.
         if let Type::Named { name, .. } = &obj_ty_for_named {
+            if matches!(
+                name.as_str(),
+                "Client" | "Response" | "HttpError" | "RequestBuilder"
+            ) {
+                // Record the precise `Type.method` callee for this call site.
+                // These HTTP types dispatch through a hardcoded arm (not the
+                // resolved-method path), so without this insert the effect
+                // checker can't reach the `sends(Network)`/`receives(Network)`
+                // seeds for `Client.get` / `Client.post` / `RequestBuilder.send`
+                // — the call site would resolve to no precise key and the
+                // name-only heuristics can't distinguish `client.get()` from
+                // `map.get()`. Mirrors the resolved-method insert above.
+                self.method_callee_types
+                    .insert(SpanKey::from_span(span), format!("{}.{}", name, method));
+            }
             match name.as_str() {
                 "Client" => return self.infer_http_client_method(method, args, span),
                 "Response" => return self.infer_http_response_method(method, args, span),

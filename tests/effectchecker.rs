@@ -4951,6 +4951,123 @@ fn network_yield_table_marks_seeded_client_methods_as_boundary() {
     );
 }
 
+fn caller_has_network_pair(result: &EffectCheckResult, fn_name: &str) -> bool {
+    let inferred = result
+        .inferred_effects
+        .get(fn_name)
+        .unwrap_or_else(|| panic!("{fn_name} must have an inferred effect set"));
+    let has_sends = inferred
+        .effects
+        .iter()
+        .any(|te| te.effect.verb == EffectVerbKind::Sends && te.effect.resource == "Network");
+    let has_receives = inferred
+        .effects
+        .iter()
+        .any(|te| te.effect.verb == EffectVerbKind::Receives && te.effect.resource == "Network");
+    has_sends && has_receives
+}
+
+fn caller_has_any_network(result: &EffectCheckResult, fn_name: &str) -> bool {
+    result
+        .inferred_effects
+        .get(fn_name)
+        .map(|s| s.effects.iter().any(|te| te.effect.resource == "Network"))
+        .unwrap_or(false)
+}
+
+#[test]
+fn http_network_effects_propagate_to_callers() {
+    // Regression for the pre-lock API-shape audit (phase-8 line 64 / line 70
+    // "Effect annotations"): every `std.http` method that performs network
+    // I/O must propagate `sends(Network)` + `receives(Network)` to its
+    // caller's inferred effect set. Before the fix the client instance
+    // methods (`Client.get` / `Client.post` / `RequestBuilder.send`) and the
+    // `Server.*` entry points were invisible to network-effect conflict
+    // analysis, `karac explain` / `query effects`, and the effect-routed
+    // task-parking transform (phase-6 line 17) — the client methods because
+    // their qualified-key seed was unreachable through the name-only
+    // method-call heuristics, and the server methods because baked-stdlib
+    // `with` clauses are not consumed for propagation.
+    let src = r#"
+        fn call_get() -> i64 {
+            let c = Client.new();
+            let r = c.get("http://x/y");
+            0
+        }
+        fn call_post() -> i64 {
+            let c = Client.new();
+            let r = c.post("http://x/y", "body");
+            0
+        }
+        fn call_send() -> i64 {
+            let c = Client.new();
+            let r = c.request("GET", "http://x/y").send();
+            0
+        }
+        fn handler(req: Request) -> Response {
+            Response { status: 200, body: "ok" }
+        }
+        fn call_serve() -> i64 {
+            let r = Server.serve("127.0.0.1:0", handler);
+            0
+        }
+        fn call_serve_tls() -> i64 {
+            let r = Server.serve_tls("127.0.0.1:0", "cert", "key", handler);
+            0
+        }
+        fn call_serve_static() -> i64 {
+            let r = Server.serve_static("127.0.0.1:0", "ok");
+            0
+        }
+    "#;
+    let result = effectcheck_full_pipeline(src);
+    for fn_name in [
+        "call_get",
+        "call_post",
+        "call_send",
+        "call_serve",
+        "call_serve_tls",
+        "call_serve_static",
+    ] {
+        assert!(
+            caller_has_network_pair(&result, fn_name),
+            "{fn_name} must propagate sends+receives(Network): {:?}",
+            result.inferred_effects.get(fn_name).map(|s| &s.effects),
+        );
+    }
+}
+
+#[test]
+fn http_network_effect_resolution_does_not_taint_same_named_methods() {
+    // Guards the additive precise-key approach against same-name collisions:
+    // resolving `client.get()` to `Client.get` must NOT taint `map.get(...)`,
+    // which shares the `get` method name but is not a network operation. The
+    // precise typechecker-resolved callee distinguishes the two receivers,
+    // where a name-only `get` -> `Client.get` mapping could not — it is
+    // exactly this collision that makes the name-only `STDLIB_METHOD_MAP`
+    // unusable for the HTTP client surface. (`RequestBuilder.send` is resolved
+    // the same precise way, so no non-`RequestBuilder` `.send()` can acquire
+    // Network either; there is structurally no name-based `send` path in the
+    // fix to test against.)
+    let src = r#"
+        fn map_get_is_pure() -> i64 {
+            let mut m: Map[String, i64] = Map.new();
+            m.insert("k", 1);
+            let v = m.get("k");
+            0
+        }
+    "#;
+    let result = effectcheck_full_pipeline(src);
+    assert!(
+        !caller_has_any_network(&result, "map_get_is_pure"),
+        "map.get() must not acquire a Network effect: {:?}",
+        result
+            .inferred_effects
+            .get("map_get_is_pure")
+            .map(|s| &s.effects),
+    );
+}
+
 #[test]
 fn network_yield_table_excludes_receiver_recv_suspends() {
     // `Receiver.recv` carries `suspends` (no Network resource). The spec at

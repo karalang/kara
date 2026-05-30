@@ -525,8 +525,25 @@ impl<'a> super::EffectChecker<'a> {
                         }
                     }
                 }
-                // For method calls, we'd need type info to know the exact method.
-                // For now, search all impl methods with matching name.
+                // Precise resolution first: when the typechecker recorded the
+                // exact `Type.method` callee for this call site, push that key.
+                // This is the only path that reaches the effects of baked-stdlib
+                // instance methods whose `inferred_effects` seed is keyed by the
+                // fully-qualified name but which are absent from `method_bodies`
+                // and from the name-only `STDLIB_METHOD_MAP` below — notably the
+                // `std.http` client surface (`Client.get` / `Client.post` /
+                // `RequestBuilder.send`), whose `sends(Network)`/`receives(Network)`
+                // seeds were otherwise unreachable (the name-only heuristics can't
+                // distinguish `client.get()` from `map.get()`, so they cannot
+                // safely map `get`/`post`/`send`). Precise and additive: it can
+                // only contribute effects that genuinely belong to the resolved
+                // method, so it never taints `map.get()` / `sender.send()`.
+                if let Some(precise_key) = self.resolve_method_callee_key(&expr.span) {
+                    calls.push((precise_key, expr.span.clone()));
+                }
+                // For method calls without a recorded precise callee, we'd need
+                // type info to know the exact method. Fall back to searching all
+                // impl methods with matching name.
                 for key in self.method_bodies.keys() {
                     if key.ends_with(&format!(".{}", method)) {
                         calls.push((key.clone(), expr.span.clone()));

@@ -575,7 +575,23 @@ impl<'a> EffectChecker<'a> {
             self.inferred_effects
                 .insert("Receiver.recv".to_string(), set);
         }
-        // Client.get / Client.post: sends(Network) + receives(Network).
+        // `std.http` network surface: every method that performs network
+        // I/O carries sends(Network) + receives(Network). Seeding the
+        // qualified key is the only path that propagates these effects to
+        // callers' inferred sets — baked-stdlib `with` clauses (on
+        // `Server.serve` / `serve_tls`) are NOT consumed for propagation
+        // (mirrors the File.* hand-seeding rationale below), so the
+        // declarations in `runtime/stdlib/http.kara` are documentation, not
+        // the propagation mechanism. The client instance methods
+        // (`Client.get` / `Client.post` / `RequestBuilder.send`) reach this
+        // seed through the typechecker's precise `method_callee_types`
+        // resolution in `collect_calls_in_expr`'s `MethodCall` arm; the
+        // `Server.*` static calls resolve by qualified path directly (like
+        // `File.open`). Without these, the entire HTTP surface is invisible
+        // to network-effect conflict analysis, `karac explain` /
+        // `query effects`, and the effect-routed task-parking transform
+        // (phase-6 line 17), which keys off
+        // `sends(Network)`/`receives(Network)`.
         {
             let sends_network = Effect {
                 verb: EffectVerbKind::Sends,
@@ -585,7 +601,14 @@ impl<'a> EffectChecker<'a> {
                 verb: EffectVerbKind::Receives,
                 resource: "Network".to_string(),
             };
-            for fn_name in ["Client.get", "Client.post"] {
+            for fn_name in [
+                "Client.get",
+                "Client.post",
+                "RequestBuilder.send",
+                "Server.serve",
+                "Server.serve_tls",
+                "Server.serve_static",
+            ] {
                 let mut set = EffectSet::new();
                 set.add(
                     sends_network.clone(),
