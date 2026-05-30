@@ -1784,6 +1784,90 @@ impl<'ctx> Codegen<'ctx> {
             http_client_post_type,
             Some(Linkage::External),
         );
+        // Phase-8 line 24 — chained-builder request descriptor FFI.
+        // `_builder_new(method_ptr, method_len, url_ptr, url_len) ->
+        // i64`. Returns an opaque positive handle indexing the
+        // runtime-side `HTTP_BUILDERS` map; `0` signals an alloc
+        // failure (downstream `_builder_*` calls treat it as a
+        // missing entry and degrade gracefully).
+        let http_builder_new_type = i64_type.fn_type(
+            &[
+                ptr_type.into(), // method_ptr
+                i64_type.into(), // method_len
+                ptr_type.into(), // url_ptr
+                i64_type.into(), // url_len
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_http_builder_new",
+            http_builder_new_type,
+            Some(Linkage::External),
+        );
+        // `_builder_add_header(handle, key_ptr, key_len, val_ptr,
+        // val_len) -> void`. Appends to the builder's header list;
+        // unknown handle is a no-op.
+        let http_builder_add_header_type = context.void_type().fn_type(
+            &[
+                i64_type.into(), // handle
+                ptr_type.into(), // key_ptr
+                i64_type.into(), // key_len
+                ptr_type.into(), // val_ptr
+                i64_type.into(), // val_len
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_http_builder_add_header",
+            http_builder_add_header_type,
+            Some(Linkage::External),
+        );
+        // `_builder_set_body(handle, body_ptr, body_len) -> void`.
+        // Replaces the builder's request body bytes.
+        let http_builder_set_body_type = context.void_type().fn_type(
+            &[
+                i64_type.into(), // handle
+                ptr_type.into(), // body_ptr
+                i64_type.into(), // body_len
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_http_builder_set_body",
+            http_builder_set_body_type,
+            Some(Linkage::External),
+        );
+        // `_builder_set_timeout(handle, ms) -> void`. Configures the
+        // builder's request deadline; `ms <= 0` disables timeout.
+        let http_builder_set_timeout_type = context
+            .void_type()
+            .fn_type(&[i64_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_http_builder_set_timeout",
+            http_builder_set_timeout_type,
+            Some(Linkage::External),
+        );
+        // `_builder_send(handle, *mut i64 status, *mut *mut u8 body_ptr,
+        //   *mut i64 body_len, *mut *mut u8 err_ptr, *mut i64 err_len)
+        //   -> void`. Drives the configured request and drops the
+        // entry. Same out-param shape and Ok/Err discriminant as
+        // `_client_get`.
+        let http_builder_send_type = context.void_type().fn_type(
+            &[
+                i64_type.into(), // handle
+                ptr_type.into(), // out_status
+                ptr_type.into(), // out_body_ptr
+                ptr_type.into(), // out_body_len
+                ptr_type.into(), // out_err_ptr
+                ptr_type.into(), // out_err_len
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_http_builder_send",
+            http_builder_send_type,
+            Some(Linkage::External),
+        );
         let strlen_type = i64_type.fn_type(&[ptr_type.into()], false);
         if module.get_function("strlen").is_none() {
             module.add_function("strlen", strlen_type, Some(Linkage::External));

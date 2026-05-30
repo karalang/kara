@@ -3236,6 +3236,17 @@ impl<'ctx> super::Codegen<'ctx> {
             self.struct_field_names
                 .insert("HttpError".to_string(), vec!["message".to_string()]);
         }
+        if !self.struct_types.contains_key("RequestBuilder") {
+            // Phase-8 line 24 — `RequestBuilder { handle: i64 }`.
+            // Single-field opaque handle wrapping a runtime-side
+            // `HTTP_BUILDERS` entry. Same seeding rationale as
+            // Client / Response / HttpError above.
+            let rb_ty = self.context.struct_type(&[i64_t.into()], false);
+            self.struct_types
+                .insert("RequestBuilder".to_string(), rb_ty);
+            self.struct_field_names
+                .insert("RequestBuilder".to_string(), vec!["handle".to_string()]);
+        }
     }
 
     /// DP slice helper — classify a payload field's TypeExpr into an

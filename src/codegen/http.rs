@@ -1565,7 +1565,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(val)
             }
-            "body" => self.clone_string_field(slot.ptr, resp_ty, 1, "resp.body"),
+            // `body` / `text` (String view) and `bytes` (`Vec[u8]` view)
+            // all deep-clone field 1's `{ptr, len, cap}` buffer (phase-8
+            // line 32). String and `Vec[u8]` share the LLVM aggregate, and
+            // both scope-exit cleanups `free(data)` identically, so the
+            // single `karac_string_clone`-backed clone is sound for each;
+            // they differ only in the binding's surface type upstream.
+            "body" | "text" | "bytes" => {
+                self.clone_string_field(slot.ptr, resp_ty, 1, &format!("resp.{method}"))
+            }
             other => Err(format!(
                 "compile_response_accessor called with unsupported method '{other}'"
             )),
@@ -1625,5 +1633,461 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(str_ty, dst_slot, &format!("{label}.val"))
             .unwrap();
         Ok(cloned)
+    }
+
+    /// Phase-8 line 24 — lower `Client.request(method, url)`. The
+    /// receiver `c` is `ref self` on an empty `Client { }` struct;
+    /// codegen ignores it. Extracts `(data, len)` from both String
+    /// arguments and calls `karac_runtime_http_builder_new`, packing
+    /// the returned handle into a fresh `RequestBuilder { handle:
+    /// i64 }` aggregate. Caller is the std.http method-call dispatch
+    /// arm in `compile_method_call`.
+    pub(super) fn compile_client_request_builder(
+        &mut self,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 2 {
+            return Err(format!(
+                "Client.request expects 2 arguments (method, url), got {}",
+                args.len()
+            ));
+        }
+        let method_val = self.compile_expr(&args[0].value)?;
+        let method_sv = method_val.into_struct_value();
+        let method_data = self
+            .builder
+            .build_extract_value(method_sv, 0, "req.method.data")
+            .unwrap()
+            .into_pointer_value();
+        let method_len = self
+            .builder
+            .build_extract_value(method_sv, 1, "req.method.len")
+            .unwrap()
+            .into_int_value();
+        let url_val = self.compile_expr(&args[1].value)?;
+        let url_sv = url_val.into_struct_value();
+        let url_data = self
+            .builder
+            .build_extract_value(url_sv, 0, "req.url.data")
+            .unwrap()
+            .into_pointer_value();
+        let url_len = self
+            .builder
+            .build_extract_value(url_sv, 1, "req.url.len")
+            .unwrap()
+            .into_int_value();
+
+        let new_fn = self
+            .module
+            .get_function("karac_runtime_http_builder_new")
+            .expect("karac_runtime_http_builder_new declared in Codegen::new");
+        let handle = self
+            .builder
+            .build_call(
+                new_fn,
+                &[
+                    method_data.into(),
+                    method_len.into(),
+                    url_data.into(),
+                    url_len.into(),
+                ],
+                "req.builder.handle",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        // Pack the handle into `RequestBuilder { handle: i64 }`.
+        let rb_ty = self
+            .struct_types
+            .get("RequestBuilder")
+            .copied()
+            .expect("RequestBuilder seeded in seed_builtin_struct_types");
+        let mut agg: BasicValueEnum<'ctx> = rb_ty.get_undef().into();
+        agg = self
+            .builder
+            .build_insert_value(agg.into_struct_value(), handle, 0, "req.builder.ins")
+            .unwrap()
+            .into_struct_value()
+            .into();
+        Ok(agg)
+    }
+
+    /// Phase-8 line 24 — lower the chained-builder configuration
+    /// methods that mutate runtime-side state via handle. `method`
+    /// selects the runtime extern: `"header"` →
+    /// `karac_runtime_http_builder_add_header`, `"body"` →
+    /// `_set_body`, `"timeout"` → `_set_timeout`. Receiver is owned-
+    /// self (`self: RequestBuilder`) — codegen loads the handle from
+    /// the receiver, calls the runtime fn with the args, and returns
+    /// the same struct value unchanged. Owned-self semantics on the
+    /// Kāra side mean the previous binding is consumed, but the
+    /// handle value is identical so the runtime entry remains
+    /// reachable through the new binding.
+    pub(super) fn compile_request_builder_setter(
+        &mut self,
+        var_name: &str,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("RequestBuilder var '{var_name}' not bound"))?;
+        let rb_ty = self
+            .struct_types
+            .get("RequestBuilder")
+            .copied()
+            .expect("RequestBuilder seeded in seed_builtin_struct_types");
+        let i64_ty = self.context.i64_type();
+        let handle_ptr = self
+            .builder
+            .build_struct_gep(rb_ty, slot.ptr, 0, &format!("{var_name}.handle.ptr"))
+            .map_err(|e| format!("RequestBuilder handle gep failed: {e:?}"))?;
+        let handle = self
+            .builder
+            .build_load(i64_ty, handle_ptr, &format!("{var_name}.handle"))
+            .unwrap()
+            .into_int_value();
+
+        match method {
+            "header" => {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "RequestBuilder.header expects 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let key_val = self.compile_expr(&args[0].value)?;
+                let key_sv = key_val.into_struct_value();
+                let key_data = self
+                    .builder
+                    .build_extract_value(key_sv, 0, "rb.header.key.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let key_len = self
+                    .builder
+                    .build_extract_value(key_sv, 1, "rb.header.key.len")
+                    .unwrap()
+                    .into_int_value();
+                let val_val = self.compile_expr(&args[1].value)?;
+                let val_sv = val_val.into_struct_value();
+                let val_data = self
+                    .builder
+                    .build_extract_value(val_sv, 0, "rb.header.val.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let val_len = self
+                    .builder
+                    .build_extract_value(val_sv, 1, "rb.header.val.len")
+                    .unwrap()
+                    .into_int_value();
+                let extern_fn = self
+                    .module
+                    .get_function("karac_runtime_http_builder_add_header")
+                    .expect("karac_runtime_http_builder_add_header declared in Codegen::new");
+                self.builder
+                    .build_call(
+                        extern_fn,
+                        &[
+                            handle.into(),
+                            key_data.into(),
+                            key_len.into(),
+                            val_data.into(),
+                            val_len.into(),
+                        ],
+                        "rb.add_header",
+                    )
+                    .unwrap();
+            }
+            "body" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "RequestBuilder.body expects 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let body_val = self.compile_expr(&args[0].value)?;
+                let body_sv = body_val.into_struct_value();
+                let body_data = self
+                    .builder
+                    .build_extract_value(body_sv, 0, "rb.body.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let body_len = self
+                    .builder
+                    .build_extract_value(body_sv, 1, "rb.body.len")
+                    .unwrap()
+                    .into_int_value();
+                let extern_fn = self
+                    .module
+                    .get_function("karac_runtime_http_builder_set_body")
+                    .expect("karac_runtime_http_builder_set_body declared in Codegen::new");
+                self.builder
+                    .build_call(
+                        extern_fn,
+                        &[handle.into(), body_data.into(), body_len.into()],
+                        "rb.set_body",
+                    )
+                    .unwrap();
+            }
+            "timeout" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "RequestBuilder.timeout expects 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let ms_val = self.compile_expr(&args[0].value)?.into_int_value();
+                let extern_fn = self
+                    .module
+                    .get_function("karac_runtime_http_builder_set_timeout")
+                    .expect("karac_runtime_http_builder_set_timeout declared in Codegen::new");
+                self.builder
+                    .build_call(extern_fn, &[handle.into(), ms_val.into()], "rb.set_timeout")
+                    .unwrap();
+            }
+            other => {
+                return Err(format!(
+                    "compile_request_builder_setter called with unsupported method '{other}'"
+                ));
+            }
+        }
+
+        // Return the receiver unchanged — same handle, same runtime
+        // entry; Kāra-side owned-self semantics treat the returned
+        // value as a fresh binding.
+        let recv = self
+            .builder
+            .build_load(rb_ty, slot.ptr, &format!("{var_name}.builder.return"))
+            .unwrap();
+        Ok(recv)
+    }
+
+    /// Phase-8 line 24 — lower `RequestBuilder.send()`. Receiver is
+    /// `ref self`; load the handle, call
+    /// `karac_runtime_http_builder_send` with five out-param allocas,
+    /// then pack the result into `Result[Response, HttpError]` using
+    /// the same 5-word layout as `compile_client_http_method`. The
+    /// runtime drops the builder entry on every code path (Ok / Err /
+    /// unknown handle), so subsequent uses of the receiver bind to a
+    /// stale handle that returns the unknown-handle error path.
+    pub(super) fn compile_request_builder_send(
+        &mut self,
+        var_name: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("RequestBuilder var '{var_name}' not bound"))?;
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "RequestBuilder.send called outside fn".to_string())?;
+        let ctx = self.context;
+        let i64_ty = ctx.i64_type();
+        let ptr_ty = ctx.ptr_type(AddressSpace::default());
+        let rb_ty = self
+            .struct_types
+            .get("RequestBuilder")
+            .copied()
+            .expect("RequestBuilder seeded in seed_builtin_struct_types");
+
+        let handle_ptr = self
+            .builder
+            .build_struct_gep(rb_ty, slot.ptr, 0, "rb.send.handle.ptr")
+            .map_err(|e| format!("RequestBuilder handle gep failed: {e:?}"))?;
+        let handle = self
+            .builder
+            .build_load(i64_ty, handle_ptr, "rb.send.handle")
+            .unwrap()
+            .into_int_value();
+
+        // Five out-param slots — same layout as compile_client_http_method.
+        let status_slot = self.create_entry_alloca(fn_val, "rb.send.status", i64_ty.into());
+        let body_ptr_slot = self.create_entry_alloca(fn_val, "rb.send.body_ptr", ptr_ty.into());
+        let body_len_slot = self.create_entry_alloca(fn_val, "rb.send.body_len", i64_ty.into());
+        let err_ptr_slot = self.create_entry_alloca(fn_val, "rb.send.err_ptr", ptr_ty.into());
+        let err_len_slot = self.create_entry_alloca(fn_val, "rb.send.err_len", i64_ty.into());
+
+        let send_fn = self
+            .module
+            .get_function("karac_runtime_http_builder_send")
+            .expect("karac_runtime_http_builder_send declared in Codegen::new");
+        self.builder
+            .build_call(
+                send_fn,
+                &[
+                    handle.into(),
+                    status_slot.into(),
+                    body_ptr_slot.into(),
+                    body_len_slot.into(),
+                    err_ptr_slot.into(),
+                    err_len_slot.into(),
+                ],
+                "rb.send.call",
+            )
+            .unwrap();
+
+        // Same pack-into-Result[Response, HttpError] as
+        // compile_client_http_method.
+        let status_val = self
+            .builder
+            .build_load(i64_ty, status_slot, "rb.send.status.v")
+            .unwrap()
+            .into_int_value();
+        let body_ptr_val = self
+            .builder
+            .build_load(ptr_ty, body_ptr_slot, "rb.send.body_ptr.v")
+            .unwrap()
+            .into_pointer_value();
+        let body_len_val = self
+            .builder
+            .build_load(i64_ty, body_len_slot, "rb.send.body_len.v")
+            .unwrap()
+            .into_int_value();
+        let err_ptr_val = self
+            .builder
+            .build_load(ptr_ty, err_ptr_slot, "rb.send.err_ptr.v")
+            .unwrap()
+            .into_pointer_value();
+        let err_len_val = self
+            .builder
+            .build_load(i64_ty, err_len_slot, "rb.send.err_len.v")
+            .unwrap()
+            .into_int_value();
+
+        let result_layout = self
+            .enum_layouts
+            .get("Result")
+            .expect("Result layout registered before RequestBuilder.send dispatch");
+        let result_ty = result_layout.llvm_type;
+        let result_slot = self.create_entry_alloca(fn_val, "rb.send.result", result_ty.into());
+        let total_fields = result_ty.count_fields() as u64;
+        let ok_tag = self
+            .enum_tag_for_variant("Ok")
+            .expect("Ok variant tag registered before RequestBuilder.send dispatch");
+        let err_tag = self
+            .enum_tag_for_variant("Err")
+            .expect("Err variant tag registered before RequestBuilder.send dispatch");
+
+        let zero_i64 = i64_ty.const_zero();
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::SGT,
+                status_val,
+                zero_i64,
+                "rb.send.is_ok",
+            )
+            .unwrap();
+        let ok_bb = ctx.append_basic_block(fn_val, "rb.send.ok");
+        let err_bb = ctx.append_basic_block(fn_val, "rb.send.err");
+        let cont_bb = ctx.append_basic_block(fn_val, "rb.send.cont");
+        self.builder
+            .build_conditional_branch(is_ok, ok_bb, err_bb)
+            .unwrap();
+
+        // Ok arm: pack Response { status, body }.
+        self.builder.position_at_end(ok_bb);
+        let tag_ptr_ok = self
+            .builder
+            .build_struct_gep(result_ty, result_slot, 0, "rb.ok.tag")
+            .unwrap();
+        self.builder
+            .build_store(tag_ptr_ok, i64_ty.const_int(ok_tag, false))
+            .unwrap();
+        let body_ptr_int = self
+            .builder
+            .build_ptr_to_int(body_ptr_val, i64_ty, "rb.ok.body_ptr.i64")
+            .unwrap();
+        if total_fields > 1 {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 1, "rb.ok.w0.status")
+                .unwrap();
+            self.builder.build_store(p, status_val).unwrap();
+        }
+        if total_fields > 2 {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 2, "rb.ok.w1.body.data")
+                .unwrap();
+            self.builder.build_store(p, body_ptr_int).unwrap();
+        }
+        if total_fields > 3 {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 3, "rb.ok.w2.body.len")
+                .unwrap();
+            self.builder.build_store(p, body_len_val).unwrap();
+        }
+        if total_fields > 4 {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 4, "rb.ok.w3.body.cap")
+                .unwrap();
+            self.builder.build_store(p, body_len_val).unwrap();
+        }
+        for w in 5..total_fields {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, w as u32, &format!("rb.ok.w{w}"))
+                .unwrap();
+            self.builder.build_store(p, zero_i64).unwrap();
+        }
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // Err arm: pack HttpError { message } into w0..w2.
+        self.builder.position_at_end(err_bb);
+        let tag_ptr_err = self
+            .builder
+            .build_struct_gep(result_ty, result_slot, 0, "rb.err.tag")
+            .unwrap();
+        self.builder
+            .build_store(tag_ptr_err, i64_ty.const_int(err_tag, false))
+            .unwrap();
+        let err_ptr_int = self
+            .builder
+            .build_ptr_to_int(err_ptr_val, i64_ty, "rb.err.msg.ptr.i64")
+            .unwrap();
+        if total_fields > 1 {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 1, "rb.err.w0.msg.data")
+                .unwrap();
+            self.builder.build_store(p, err_ptr_int).unwrap();
+        }
+        if total_fields > 2 {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 2, "rb.err.w1.msg.len")
+                .unwrap();
+            self.builder.build_store(p, err_len_val).unwrap();
+        }
+        if total_fields > 3 {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 3, "rb.err.w2.msg.cap")
+                .unwrap();
+            self.builder.build_store(p, err_len_val).unwrap();
+        }
+        for w in 4..total_fields {
+            let p = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, w as u32, &format!("rb.err.w{w}"))
+                .unwrap();
+            self.builder.build_store(p, zero_i64).unwrap();
+        }
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        self.builder.position_at_end(cont_bb);
+        let result = self
+            .builder
+            .build_load(result_ty, result_slot, "rb.send.result.v")
+            .unwrap();
+        Ok(result)
     }
 }

@@ -3163,6 +3163,24 @@ unsafe fn write_owned_bytes_into_out_params(
     *out_len = bytes.len() as i64;
 }
 
+/// Read a `ureq::Response` entity to raw bytes, bypassing the UTF-8
+/// validation `ureq::Response::into_string` performs. This is what lets
+/// `Response.bytes()` (phase-8 line 32) surface binary payloads (image
+/// downloads, protobuf, file transfers) intact: the body buffer the
+/// client FFI hands back holds the verbatim wire bytes rather than the
+/// empty string `into_string().unwrap_or_default()` produces on invalid
+/// UTF-8. `Response.text()` / `.body()` reinterpret the same buffer as a
+/// Kāra `String` — valid UTF-8 for the common text response, raw bytes
+/// otherwise (matching reqwest's lossy-`text` posture). A mid-stream
+/// read error yields whatever was read so far, mirroring
+/// `into_string().unwrap_or_default()`'s lenient stance.
+fn read_response_body_bytes(resp: ureq::Response) -> Vec<u8> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    let _ = resp.into_reader().read_to_end(&mut buf);
+    buf
+}
+
 /// Synchronously fetch `url` via HTTP GET and populate the success or
 /// error out-params. The two out-paths are mutually exclusive — only
 /// one of `(body_ptr, body_len)` / `(err_ptr, err_len)` carries a real
@@ -3211,8 +3229,8 @@ pub unsafe extern "C" fn karac_runtime_http_client_get(
     match ureq::get(url).call() {
         Ok(resp) => {
             *out_status = resp.status() as i64;
-            let body = resp.into_string().unwrap_or_default();
-            write_owned_bytes_into_out_params(body.as_bytes(), out_body_ptr, out_body_len);
+            let body = read_response_body_bytes(resp);
+            write_owned_bytes_into_out_params(&body, out_body_ptr, out_body_len);
         }
         Err(e) => {
             write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
@@ -3271,8 +3289,369 @@ pub unsafe extern "C" fn karac_runtime_http_client_post(
     match ureq::post(url).send_bytes(body_bytes) {
         Ok(resp) => {
             *out_status = resp.status() as i64;
-            let body = resp.into_string().unwrap_or_default();
-            write_owned_bytes_into_out_params(body.as_bytes(), out_body_ptr, out_body_len);
+            let body = read_response_body_bytes(resp);
+            write_owned_bytes_into_out_params(&body, out_body_ptr, out_body_len);
+        }
+        Err(e) => {
+            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
+        }
+    }
+}
+
+// ── Chained-builder send path (phase-8 line 24) ───────────────────────
+//
+// `karac_runtime_http_client_send` backs `RequestBuilder.send()`. The
+// eager `Client.get` / `Client.post` paths keep their dedicated FFI; the
+// chained builder path needs method + headers + timeout, so it gets its
+// own extern rather than overloading the simple eager surface.
+
+/// FFI mirror of a Kāra `String { data, len, cap }` aggregate. Pairs
+/// of these back the `headers: Vec[(String, String)]` field — the Vec's
+/// `data` ptr points at a flat `[KaracHttpHeaderPair; N]` whose layout
+/// matches `(String, String)` (two `KaracStr` halves, natural alignment,
+/// no padding on 64-bit since pointer + i64 are both 8 bytes).
+#[repr(C)]
+pub struct KaracStr {
+    pub data: *const u8,
+    pub len: i64,
+    pub cap: i64,
+}
+
+#[repr(C)]
+pub struct KaracHttpHeaderPair {
+    pub key: KaracStr,
+    pub val: KaracStr,
+}
+
+unsafe fn kara_str_to_str(s: &KaracStr) -> Option<&str> {
+    if s.data.is_null() || s.len <= 0 {
+        return Some("");
+    }
+    let bytes = std::slice::from_raw_parts(s.data, s.len as usize);
+    std::str::from_utf8(bytes).ok()
+}
+
+/// Synchronously send an HTTP request via the chained-builder surface
+/// (`Client.request(method, url).header(...).body(...).timeout(...).send()`).
+/// Same out-param ownership convention as `karac_runtime_http_client_get`:
+/// `*out_status > 0` means HTTP transaction completed; `0` means
+/// transport error (`out_err_ptr` carries ureq's display message). Both
+/// `body` and `err` buffers are libc::malloc-allocated and freed by the
+/// Kāra-side `String { data, len, cap }`'s Drop.
+///
+/// `method`: ASCII verb (`"GET"`, `"POST"`, `"PUT"`, `"DELETE"`,
+/// `"PATCH"`, etc.); forwarded verbatim to `ureq::request(method, url)`.
+/// `body_ptr` / `body_len`: request entity bytes; `(null, 0)` sends an
+/// empty entity (correct for GET / HEAD; benign for verbs that ignore
+/// the body). `headers_ptr` / `headers_count`: array of `(key, val)`
+/// String pairs; each non-empty (key, val) is applied via `req.set(k, v)`.
+/// `timeout_ms`: `> 0` configures `ureq::Request::timeout`; `0` leaves
+/// ureq's default (no timeout).
+///
+/// # Safety
+///
+/// Same as `karac_runtime_http_client_get` for url / out-params, plus:
+/// `method_ptr` / `body_ptr` must point at the indicated number of bytes
+/// (or be null with the matching length `0`); `headers_ptr` must point
+/// at `headers_count` initialized `KaracHttpHeaderPair` entries (or be
+/// null with `headers_count == 0`).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_client_send(
+    method_ptr: *const u8,
+    method_len: usize,
+    url_ptr: *const u8,
+    url_len: usize,
+    body_ptr: *const u8,
+    body_len: usize,
+    headers_ptr: *const KaracHttpHeaderPair,
+    headers_count: usize,
+    timeout_ms: i64,
+    out_status: *mut i64,
+    out_body_ptr: *mut *mut u8,
+    out_body_len: *mut i64,
+    out_err_ptr: *mut *mut u8,
+    out_err_len: *mut i64,
+) {
+    *out_status = 0;
+    *out_body_ptr = std::ptr::null_mut();
+    *out_body_len = 0;
+    *out_err_ptr = std::ptr::null_mut();
+    *out_err_len = 0;
+
+    let method_bytes: &[u8] = if method_ptr.is_null() || method_len == 0 {
+        b"GET"
+    } else {
+        std::slice::from_raw_parts(method_ptr, method_len)
+    };
+    let method = match std::str::from_utf8(method_bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
+            return;
+        }
+    };
+    let url_bytes: &[u8] = if url_ptr.is_null() || url_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(url_ptr, url_len)
+    };
+    let url = match std::str::from_utf8(url_bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
+            return;
+        }
+    };
+
+    let mut req = ureq::request(method, url);
+    if headers_count > 0 && !headers_ptr.is_null() {
+        let pairs = std::slice::from_raw_parts(headers_ptr, headers_count);
+        for pair in pairs {
+            let key = match kara_str_to_str(&pair.key) {
+                Some(k) if !k.is_empty() => k,
+                _ => continue,
+            };
+            let val = kara_str_to_str(&pair.val).unwrap_or("");
+            req = req.set(key, val);
+        }
+    }
+    if timeout_ms > 0 {
+        req = req.timeout(std::time::Duration::from_millis(timeout_ms as u64));
+    }
+
+    let body_bytes: &[u8] = if body_ptr.is_null() || body_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(body_ptr, body_len)
+    };
+
+    let result = if body_bytes.is_empty() {
+        req.call()
+    } else {
+        req.send_bytes(body_bytes)
+    };
+
+    match result {
+        Ok(resp) => {
+            *out_status = resp.status() as i64;
+            let body = read_response_body_bytes(resp);
+            write_owned_bytes_into_out_params(&body, out_body_ptr, out_body_len);
+        }
+        Err(e) => {
+            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
+        }
+    }
+}
+
+// ── Handle-based request builder (phase-8 line 24) ────────────────────
+//
+// `RequestBuilder` on the Kāra side is a thin `{ handle: i64 }` wrapper;
+// the actual config lives in `HTTP_BUILDERS` keyed by handle. Each
+// chained Kāra method routes through a `_builder_*` extern that
+// mutates the entry by handle. `_builder_send` performs the request
+// and drops the entry. Handles abandoned without a `send` call leak
+// their entry until process exit — acceptable v1 trade-off, resolved
+// when `impl Drop for RequestBuilder` is wired through codegen.
+
+struct HttpBuilderState {
+    method: String,
+    url: String,
+    body: Vec<u8>,
+    headers: Vec<(String, String)>,
+    timeout_ms: i64,
+}
+
+static HTTP_BUILDERS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<i64, HttpBuilderState>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+static HTTP_BUILDER_NEXT_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
+
+unsafe fn slice_to_owned_string(ptr: *const u8, len: usize) -> String {
+    if ptr.is_null() || len == 0 {
+        return String::new();
+    }
+    let bytes = std::slice::from_raw_parts(ptr, len);
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+unsafe fn slice_to_owned_bytes(ptr: *const u8, len: usize) -> Vec<u8> {
+    if ptr.is_null() || len == 0 {
+        return Vec::new();
+    }
+    std::slice::from_raw_parts(ptr, len).to_vec()
+}
+
+/// Allocate a new builder entry pre-populated with `method` + `url`,
+/// returning a positive handle the chained methods can address. A
+/// non-positive return signals allocation failure (treated as a no-op
+/// builder by downstream calls, since their handle-lookup is a no-op
+/// when the handle isn't present). Backs `Client.request(method, url)`.
+///
+/// # Safety
+///
+/// `method_ptr` and `url_ptr` must each point at the indicated number
+/// of UTF-8 bytes (or be null with the matching length `0`).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_builder_new(
+    method_ptr: *const u8,
+    method_len: usize,
+    url_ptr: *const u8,
+    url_len: usize,
+) -> i64 {
+    let method = slice_to_owned_string(method_ptr, method_len);
+    let url = slice_to_owned_string(url_ptr, url_len);
+    let state = HttpBuilderState {
+        method: if method.is_empty() {
+            "GET".to_string()
+        } else {
+            method
+        },
+        url,
+        body: Vec::new(),
+        headers: Vec::new(),
+        timeout_ms: 0,
+    };
+    let handle = HTTP_BUILDER_NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if let Ok(mut map) = HTTP_BUILDERS.lock() {
+        map.insert(handle, state);
+        handle
+    } else {
+        0
+    }
+}
+
+/// Append `(name, value)` to the builder's header list. Empty key is
+/// silently dropped (mirrors `karac_runtime_http_client_send`'s
+/// `skip-empty-key` behavior). Unknown handle is a no-op so an
+/// allocation failure at `_builder_new` time degrades gracefully into
+/// "send fires with whatever state was successfully set." Backs
+/// `RequestBuilder.header(name, value)`.
+///
+/// # Safety
+///
+/// `key_ptr` / `val_ptr` must each point at the indicated number of
+/// bytes (or be null with the matching length `0`).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_builder_add_header(
+    handle: i64,
+    key_ptr: *const u8,
+    key_len: usize,
+    val_ptr: *const u8,
+    val_len: usize,
+) {
+    let key = slice_to_owned_string(key_ptr, key_len);
+    if key.is_empty() {
+        return;
+    }
+    let val = slice_to_owned_string(val_ptr, val_len);
+    if let Ok(mut map) = HTTP_BUILDERS.lock() {
+        if let Some(state) = map.get_mut(&handle) {
+            state.headers.push((key, val));
+        }
+    }
+}
+
+/// Replace the builder's request body bytes (`(null, 0)` clears).
+/// Unknown handle is a no-op. Backs `RequestBuilder.body(b)`.
+///
+/// # Safety
+///
+/// `body_ptr` must point at `body_len` initialized bytes (or be null
+/// with `body_len == 0`).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_builder_set_body(
+    handle: i64,
+    body_ptr: *const u8,
+    body_len: usize,
+) {
+    let body = slice_to_owned_bytes(body_ptr, body_len);
+    if let Ok(mut map) = HTTP_BUILDERS.lock() {
+        if let Some(state) = map.get_mut(&handle) {
+            state.body = body;
+        }
+    }
+}
+
+/// Configure the builder's request deadline. `ms <= 0` disables the
+/// timeout (ureq default). Unknown handle is a no-op. Backs
+/// `RequestBuilder.timeout(ms)`.
+///
+/// # Safety
+///
+/// Marked `unsafe extern "C"` for ABI symmetry with the sibling
+/// `_builder_*` externs; the body itself touches no raw pointers, so
+/// callers have no additional obligation beyond providing a `handle`
+/// that was minted by `_builder_new` (which is the only correctness
+/// requirement — an unknown handle is a silent no-op).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_builder_set_timeout(handle: i64, ms: i64) {
+    if let Ok(mut map) = HTTP_BUILDERS.lock() {
+        if let Some(state) = map.get_mut(&handle) {
+            state.timeout_ms = ms;
+        }
+    }
+}
+
+/// Drive the configured request and populate the success / error
+/// out-params. Same discriminant + buffer ownership convention as
+/// `karac_runtime_http_client_get`. The builder entry is removed from
+/// `HTTP_BUILDERS` on every code path (Ok, Err, or unknown handle) so
+/// the handle's storage is bounded. An unknown handle yields the
+/// transport-error path with a descriptive message. Backs
+/// `RequestBuilder.send()`.
+///
+/// # Safety
+///
+/// Same as `karac_runtime_http_client_get` for the out-params.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_builder_send(
+    handle: i64,
+    out_status: *mut i64,
+    out_body_ptr: *mut *mut u8,
+    out_body_len: *mut i64,
+    out_err_ptr: *mut *mut u8,
+    out_err_len: *mut i64,
+) {
+    *out_status = 0;
+    *out_body_ptr = std::ptr::null_mut();
+    *out_body_len = 0;
+    *out_err_ptr = std::ptr::null_mut();
+    *out_err_len = 0;
+
+    let state = if let Ok(mut map) = HTTP_BUILDERS.lock() {
+        map.remove(&handle)
+    } else {
+        None
+    };
+    let state = match state {
+        Some(s) => s,
+        None => {
+            let msg = "unknown request-builder handle";
+            write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
+            return;
+        }
+    };
+
+    let mut req = ureq::request(&state.method, &state.url);
+    for (k, v) in &state.headers {
+        req = req.set(k, v);
+    }
+    if state.timeout_ms > 0 {
+        req = req.timeout(std::time::Duration::from_millis(state.timeout_ms as u64));
+    }
+
+    let result = if state.body.is_empty() {
+        req.call()
+    } else {
+        req.send_bytes(&state.body)
+    };
+
+    match result {
+        Ok(resp) => {
+            *out_status = resp.status() as i64;
+            let body = read_response_body_bytes(resp);
+            write_owned_bytes_into_out_params(&body, out_body_ptr, out_body_len);
         }
         Err(e) => {
             write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
@@ -5536,6 +5915,47 @@ mod tests {
         assert_eq!(body, b"hello");
     }
 
+    /// Phase-8 line 32 — `Response.bytes()` raw-byte path. The origin
+    /// returns a body containing invalid-UTF-8 bytes (`0xFF 0xFE 0x00
+    /// 0x41`). Pre-fix, the FFI ran the body through
+    /// `into_string().unwrap_or_default()`, so a non-UTF-8 body collapsed
+    /// to an empty buffer (`body_len == 0`) and `Response.bytes()` would
+    /// surface nothing. With `read_response_body_bytes`, the body buffer
+    /// carries the four bytes verbatim — which is what lets binary
+    /// downloads (images / protobuf / file transfers) round-trip.
+    #[test]
+    fn test_http_client_get_returns_raw_bytes_for_non_utf8_body() {
+        let canned: &[u8] =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\xff\xfe\x00\x41";
+        let port = spawn_oneshot_origin(canned);
+        let url = format!("http://127.0.0.1:{port}/");
+
+        let mut status: i64 = -1;
+        let mut body_ptr: *mut u8 = std::ptr::null_mut();
+        let mut body_len: i64 = -1;
+        let mut err_ptr: *mut u8 = std::ptr::null_mut();
+        let mut err_len: i64 = -1;
+        unsafe {
+            super::karac_runtime_http_client_get(
+                url.as_ptr(),
+                url.len(),
+                &mut status,
+                &mut body_ptr,
+                &mut body_len,
+                &mut err_ptr,
+                &mut err_len,
+            );
+        }
+        assert_eq!(status, 200);
+        assert_eq!(
+            body_len, 4,
+            "non-UTF-8 body must survive verbatim, not collapse to empty"
+        );
+        assert!(err_ptr.is_null());
+        let body = unsafe { take_owned_buffer(body_ptr, body_len) };
+        assert_eq!(body, vec![0xFFu8, 0xFE, 0x00, 0x41]);
+    }
+
     /// Transport-failure path — connect to a port nothing's listening
     /// on. FFI reports status = 0 (the discriminant the caller-side
     /// codegen uses to build `Result.Err`), no body buffer, and an
@@ -5608,5 +6028,373 @@ mod tests {
         assert!(err_ptr.is_null());
         let resp_body = unsafe { take_owned_buffer(body_ptr, body_len) };
         assert_eq!(resp_body, b"created");
+    }
+
+    // ── Chained-builder FFI tests (phase-8 line 24) ───────────────────
+    //
+    // `karac_runtime_http_client_send` is the chained-builder backend —
+    // accepts method + headers + timeout where `_get` / `_post` don't.
+    // Tests use a capture-aware origin helper so the assertion can pin
+    // the bytes the client actually sent (method, header lines, body).
+
+    /// Bind an ephemeral-port server that accepts exactly one connection,
+    /// captures the request bytes into the supplied `Arc<Mutex<Vec<u8>>>`,
+    /// then writes `canned_response` back. Same end-of-headers detection
+    /// as `spawn_oneshot_origin` plus a Content-Length-bounded body read,
+    /// so the captured buffer contains the full request line + headers +
+    /// body when the caller used either GET (no body) or a Content-Length-
+    /// declaring verb.
+    fn spawn_capturing_origin(
+        canned_response: &'static [u8],
+        captured: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    ) -> u16 {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 8192];
+                let mut headers_end = None;
+                let mut total = 0usize;
+                while headers_end.is_none() && total < buf.len() {
+                    let n = match stream.read(&mut buf[total..]) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => return,
+                    };
+                    total += n;
+                    if let Some(pos) = buf[..total].windows(4).position(|w| w == b"\r\n\r\n") {
+                        headers_end = Some(pos + 4);
+                    }
+                }
+                if let Some(end) = headers_end {
+                    let headers = &buf[..end];
+                    let header_text = std::str::from_utf8(headers).unwrap_or("");
+                    let mut content_length = 0usize;
+                    for line in header_text.split("\r\n") {
+                        let lower = line.to_ascii_lowercase();
+                        if let Some(rest) = lower.strip_prefix("content-length:") {
+                            content_length = rest.trim().parse().unwrap_or(0);
+                            break;
+                        }
+                    }
+                    let already_have = total.saturating_sub(end);
+                    let mut remaining = content_length.saturating_sub(already_have);
+                    while remaining > 0 {
+                        let cap = remaining.min(buf.len() - total);
+                        if cap == 0 {
+                            break;
+                        }
+                        match stream.read(&mut buf[total..total + cap]) {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                total += n;
+                                remaining -= n;
+                            }
+                            Err(_) => return,
+                        }
+                    }
+                }
+                if let Ok(mut guard) = captured.lock() {
+                    guard.extend_from_slice(&buf[..total]);
+                }
+                let _ = stream.write_all(canned_response);
+                let _ = stream.flush();
+            }
+        });
+        port
+    }
+
+    /// Build a `KaracStr` borrowing the bytes of `s`. The lifetime of the
+    /// returned `KaracStr` is bound to `s` — callers must keep the source
+    /// `String` alive for the duration of the FFI call. `cap` matches
+    /// `len` since the runtime doesn't read it for input strings.
+    fn kara_str_for(s: &str) -> super::KaracStr {
+        super::KaracStr {
+            data: s.as_ptr(),
+            len: s.len() as i64,
+            cap: s.len() as i64,
+        }
+    }
+
+    /// send() happy path with a custom request header: the chained
+    /// builder's `.header("X-Custom", "abc")` is reflected in the wire
+    /// bytes the origin sees, and the response status / body propagate
+    /// back through the out-params identically to `_get`.
+    #[test]
+    fn test_http_client_send_forwards_custom_headers_to_origin() {
+        let canned = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let port = spawn_capturing_origin(canned, std::sync::Arc::clone(&captured));
+        let url = format!("http://127.0.0.1:{port}/test");
+
+        let key = String::from("x-custom");
+        let val = String::from("abc");
+        let pair = super::KaracHttpHeaderPair {
+            key: kara_str_for(&key),
+            val: kara_str_for(&val),
+        };
+        let headers = [pair];
+
+        let method = "GET";
+        let mut status: i64 = -1;
+        let mut body_ptr: *mut u8 = std::ptr::null_mut();
+        let mut body_len: i64 = -1;
+        let mut err_ptr: *mut u8 = std::ptr::null_mut();
+        let mut err_len: i64 = -1;
+        unsafe {
+            super::karac_runtime_http_client_send(
+                method.as_ptr(),
+                method.len(),
+                url.as_ptr(),
+                url.len(),
+                std::ptr::null(),
+                0,
+                headers.as_ptr(),
+                headers.len(),
+                0,
+                &mut status,
+                &mut body_ptr,
+                &mut body_len,
+                &mut err_ptr,
+                &mut err_len,
+            );
+        }
+        assert_eq!(status, 200);
+        assert_eq!(body_len, 5);
+        let body = unsafe { take_owned_buffer(body_ptr, body_len) };
+        assert_eq!(body, b"hello");
+
+        let wire = captured.lock().unwrap().clone();
+        let wire_text = String::from_utf8_lossy(&wire).to_lowercase();
+        assert!(
+            wire_text.contains("get /test"),
+            "expected GET /test in captured wire bytes, got: {wire_text}"
+        );
+        assert!(
+            wire_text.contains("x-custom: abc"),
+            "expected x-custom header in captured wire bytes, got: {wire_text}"
+        );
+    }
+
+    /// send() POST path: the chained builder routes a `body("...")` call
+    /// through the request entity even though headers may also be set.
+    /// Pins both knobs at once: the origin sees `POST /api` with the
+    /// custom header AND the body in the request entity.
+    #[test]
+    fn test_http_client_send_post_carries_body_and_headers() {
+        let canned = b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let port = spawn_capturing_origin(canned, std::sync::Arc::clone(&captured));
+        let url = format!("http://127.0.0.1:{port}/api");
+
+        let key = String::from("x-trace-id");
+        let val = String::from("trace-42");
+        let pair = super::KaracHttpHeaderPair {
+            key: kara_str_for(&key),
+            val: kara_str_for(&val),
+        };
+        let headers = [pair];
+        let body = b"hello world";
+
+        let method = "POST";
+        let mut status: i64 = -1;
+        let mut body_ptr: *mut u8 = std::ptr::null_mut();
+        let mut body_len: i64 = -1;
+        let mut err_ptr: *mut u8 = std::ptr::null_mut();
+        let mut err_len: i64 = -1;
+        unsafe {
+            super::karac_runtime_http_client_send(
+                method.as_ptr(),
+                method.len(),
+                url.as_ptr(),
+                url.len(),
+                body.as_ptr(),
+                body.len(),
+                headers.as_ptr(),
+                headers.len(),
+                0,
+                &mut status,
+                &mut body_ptr,
+                &mut body_len,
+                &mut err_ptr,
+                &mut err_len,
+            );
+        }
+        assert_eq!(status, 201);
+        assert_eq!(body_len, 2);
+        let resp = unsafe { take_owned_buffer(body_ptr, body_len) };
+        assert_eq!(resp, b"ok");
+
+        let wire = captured.lock().unwrap().clone();
+        let wire_text = String::from_utf8_lossy(&wire).to_lowercase();
+        assert!(
+            wire_text.contains("post /api"),
+            "expected POST /api in captured wire bytes, got: {wire_text}"
+        );
+        assert!(
+            wire_text.contains("x-trace-id: trace-42"),
+            "expected x-trace-id header in captured wire bytes, got: {wire_text}"
+        );
+        assert!(
+            wire_text.contains("hello world"),
+            "expected body in captured wire bytes, got: {wire_text}"
+        );
+    }
+
+    /// Handle-based builder happy path: new + add_header + set_body +
+    /// set_timeout + send round-trips a POST through the capturing
+    /// origin. Pins both the wire-side state (origin sees the verb +
+    /// custom header + body) and the entry-lifecycle invariant
+    /// (HTTP_BUILDERS no longer contains the handle after `_send`).
+    #[test]
+    fn test_http_builder_send_consumes_handle_and_round_trips_state() {
+        let canned = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhi-fu";
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let port = spawn_capturing_origin(canned, std::sync::Arc::clone(&captured));
+        let url = format!("http://127.0.0.1:{port}/api/items");
+
+        let method = "POST";
+        let handle = unsafe {
+            super::karac_runtime_http_builder_new(
+                method.as_ptr(),
+                method.len(),
+                url.as_ptr(),
+                url.len(),
+            )
+        };
+        assert!(handle > 0, "expected positive handle, got {handle}");
+
+        let key = b"x-trace-id";
+        let val = b"trace-99";
+        unsafe {
+            super::karac_runtime_http_builder_add_header(
+                handle,
+                key.as_ptr(),
+                key.len(),
+                val.as_ptr(),
+                val.len(),
+            );
+        }
+        let body = b"hi-server";
+        unsafe {
+            super::karac_runtime_http_builder_set_body(handle, body.as_ptr(), body.len());
+        }
+        unsafe {
+            super::karac_runtime_http_builder_set_timeout(handle, 5000);
+        }
+
+        let mut status: i64 = -1;
+        let mut body_ptr: *mut u8 = std::ptr::null_mut();
+        let mut body_len: i64 = -1;
+        let mut err_ptr: *mut u8 = std::ptr::null_mut();
+        let mut err_len: i64 = -1;
+        unsafe {
+            super::karac_runtime_http_builder_send(
+                handle,
+                &mut status,
+                &mut body_ptr,
+                &mut body_len,
+                &mut err_ptr,
+                &mut err_len,
+            );
+        }
+        assert_eq!(status, 200);
+        assert_eq!(body_len, 5);
+        let response_body = unsafe { take_owned_buffer(body_ptr, body_len) };
+        assert_eq!(response_body, b"hi-fu");
+
+        let wire = captured.lock().unwrap().clone();
+        let wire_text = String::from_utf8_lossy(&wire).to_lowercase();
+        assert!(
+            wire_text.contains("post /api/items"),
+            "expected POST in wire bytes: {wire_text}"
+        );
+        assert!(
+            wire_text.contains("x-trace-id: trace-99"),
+            "expected x-trace-id header in wire bytes: {wire_text}"
+        );
+        assert!(
+            wire_text.contains("hi-server"),
+            "expected body in wire bytes: {wire_text}"
+        );
+
+        // Handle is consumed by `_send` — calling `_send` again with the
+        // same handle yields the unknown-handle error path, not a
+        // duplicate request.
+        let mut status2: i64 = -1;
+        let mut body_ptr2: *mut u8 = std::ptr::null_mut();
+        let mut body_len2: i64 = -1;
+        let mut err_ptr2: *mut u8 = std::ptr::null_mut();
+        let mut err_len2: i64 = -1;
+        unsafe {
+            super::karac_runtime_http_builder_send(
+                handle,
+                &mut status2,
+                &mut body_ptr2,
+                &mut body_len2,
+                &mut err_ptr2,
+                &mut err_len2,
+            );
+        }
+        assert_eq!(status2, 0);
+        assert!(err_len2 > 0);
+        let err = unsafe { take_owned_buffer(err_ptr2, err_len2) };
+        let err_text = String::from_utf8_lossy(&err);
+        assert!(
+            err_text.contains("unknown"),
+            "expected unknown-handle err text: {err_text}"
+        );
+    }
+
+    /// send() timeout path: pointing at a host that accepts the TCP
+    /// connection but never responds. The runtime's ureq timeout fires
+    /// at the configured deadline and yields the transport-error
+    /// out-params (status = 0, error-message buffer populated).
+    #[test]
+    fn test_http_client_send_timeout_returns_transport_error() {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Accept the connection but block reading without ever responding;
+        // ureq's read timeout fires before the test thread joins.
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 64];
+                let _ = stream.read(&mut buf);
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+            }
+        });
+        let url = format!("http://127.0.0.1:{port}/");
+
+        let method = "GET";
+        let mut status: i64 = -1;
+        let mut body_ptr: *mut u8 = std::ptr::null_mut();
+        let mut body_len: i64 = -1;
+        let mut err_ptr: *mut u8 = std::ptr::null_mut();
+        let mut err_len: i64 = -1;
+        unsafe {
+            super::karac_runtime_http_client_send(
+                method.as_ptr(),
+                method.len(),
+                url.as_ptr(),
+                url.len(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                200,
+                &mut status,
+                &mut body_ptr,
+                &mut body_len,
+                &mut err_ptr,
+                &mut err_len,
+            );
+        }
+        assert_eq!(status, 0, "timeout should yield status = 0");
+        assert!(body_ptr.is_null());
+        assert!(err_len > 0, "expected error-message buffer on timeout");
+        let err = unsafe { take_owned_buffer(err_ptr, err_len) };
+        assert!(!err.is_empty());
     }
 }

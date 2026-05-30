@@ -1407,12 +1407,15 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // `Client` / `Response` / `HttpError` method dispatch.
+        // `Client` / `Response` / `HttpError` / `RequestBuilder` method dispatch.
         if let Type::Named { name, .. } = &obj_ty_for_named {
             match name.as_str() {
                 "Client" => return self.infer_http_client_method(method, args, span),
                 "Response" => return self.infer_http_response_method(method, args, span),
                 "HttpError" => return self.infer_http_error_method(method, args, span),
+                "RequestBuilder" => {
+                    return self.infer_http_request_builder_method(method, args, span)
+                }
                 _ => {}
             }
         }

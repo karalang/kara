@@ -1223,22 +1223,39 @@ impl<'ctx> super::Codegen<'ctx> {
                         };
                         if let Some(name) = ast_hint {
                             self.var_type_names.insert(var_name.clone(), name);
-                        } else if let Some((name, _)) =
-                            self.struct_types.iter().find(|(_, ty)| **ty == st)
-                        {
-                            let name = name.clone();
-                            self.var_type_names.insert(var_name.clone(), name);
-                        } else if let Some((name, _)) =
-                            self.union_types.iter().find(|(_, ty)| **ty == st)
-                        {
-                            // Phase 5 line 569 slice 4: union RHS recognition.
-                            // Union literals return a `StructValue` of the
-                            // union's storage type; without this branch the
-                            // let-bound binding never lands in `var_type_names`
-                            // and downstream `u.field` codegen can't route
-                            // through the union-aware field-access path.
-                            let name = name.clone();
-                            self.var_type_names.insert(var_name.clone(), name);
+                        } else if !self.var_type_names.contains_key(var_name.as_str()) {
+                            // LLVM-struct-identity reverse-lookup fallback.
+                            // Only fires when `pattern_binding_types`
+                            // (read above via line ~781 and written to
+                            // `var_type_names` at line ~817) hasn't
+                            // already populated the entry — otherwise
+                            // this would override the typechecker's
+                            // authoritative answer with a HashMap-
+                            // iteration-order pick when multiple
+                            // seeded structs share the same LLVM shape
+                            // (e.g. `RequestBuilder { handle: i64 }`
+                            // vs `TaskGroup { id: i64 }`, both `{i64}`).
+                            // Phase-8 line 24 guard, 2026-05-29.
+                            //
+                            // Phase 5 line 569 slice 4: union RHS
+                            // recognition. Union literals return a
+                            // StructValue of the union's storage type;
+                            // without the union arm the let-bound
+                            // binding never lands in `var_type_names`
+                            // and downstream `u.field` codegen can't
+                            // route through the union-aware field-
+                            // access path.
+                            if let Some((name, _)) =
+                                self.struct_types.iter().find(|(_, ty)| **ty == st)
+                            {
+                                let name = name.clone();
+                                self.var_type_names.insert(var_name.clone(), name);
+                            } else if let Some((name, _)) =
+                                self.union_types.iter().find(|(_, ty)| **ty == st)
+                            {
+                                let name = name.clone();
+                                self.var_type_names.insert(var_name.clone(), name);
+                            }
                         }
                     }
                 }

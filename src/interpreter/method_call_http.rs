@@ -100,7 +100,11 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
             }
-            "body" => {
+            // `body` / `text` are the String view of the entity (phase-8
+            // line 32); they alias each other. `Request.body` is handled
+            // by the earlier `path | method | body` arm, so this arm only
+            // sees Response receivers for `body`; `text` is Response-only.
+            "body" | "text" => {
                 if let Value::Struct {
                     ref name,
                     ref fields,
@@ -111,6 +115,31 @@ impl<'a> super::Interpreter<'a> {
                             return Some(v.clone());
                         }
                         return Some(Value::String(String::new()));
+                    }
+                }
+            }
+            // `bytes` is the raw-byte view of the entity (phase-8 line 32),
+            // returned as a `Vec[u8]` (array of int-valued bytes). The
+            // interpreter captures the body as a String (`into_string`), so
+            // it surfaces that string's UTF-8 bytes — best-effort parity
+            // with codegen, which preserves true binary payloads. Empty
+            // array when the Response carries no body field.
+            "bytes" => {
+                if let Value::Struct {
+                    ref name,
+                    ref fields,
+                } = obj
+                {
+                    if name == "Response" {
+                        let bytes: Vec<Value> = match fields.get("body") {
+                            Some(Value::String(s)) => {
+                                s.as_bytes().iter().map(|b| Value::Int(*b as i64)).collect()
+                            }
+                            _ => Vec::new(),
+                        };
+                        return Some(Value::Array(std::sync::Arc::new(std::sync::RwLock::new(
+                            bytes,
+                        ))));
                     }
                 }
             }

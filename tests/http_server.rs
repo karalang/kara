@@ -1912,4 +1912,230 @@ fn main() with sends(Network) receives(Network) {{
             "client binary stdout should contain origin body; stdout={stdout:?} stderr={stderr:?}"
         );
     }
+
+    /// Phase-8 line 32 — `Response.bytes()` raw-byte E2E.
+    ///
+    /// Same shape as `test_client_get_end_to_end_against_rust_origin`, but
+    /// the origin returns a body of invalid-UTF-8 bytes (`0xFF 0xFE 0x00
+    /// 0x41`) and the karac binary destructures `Ok(resp)`, calls
+    /// `resp.bytes()`, and prints the resulting `Vec[u8]`'s length. Pre-
+    /// fix the runtime decoded the body via `into_string()`, so a non-
+    /// UTF-8 body collapsed to empty and the length would print `0`; the
+    /// `read_response_body_bytes` change makes the four bytes survive
+    /// intact, so the binary prints `4`.
+    ///
+    /// What this pins end-to-end: the runtime raw-byte capture, the
+    /// `Response.bytes()` typechecker return type (`Vec[u8]`), the codegen
+    /// dispatch arm + `compile_response_accessor` clone, and the
+    /// `Vec[u8]` binding (drop / `len()`) on the cloned buffer.
+    #[test]
+    fn test_client_get_bytes_end_to_end_binary_body() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!(
+                "skip: libkarac_runtime.a not built \
+                 (run `cargo build -p karac-runtime --release`)"
+            );
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let canned: &[u8] =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\xff\xfe\x00\x41";
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral origin port");
+        let port = listener.local_addr().expect("local_addr").port();
+        let origin_thread = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let mut total = 0usize;
+                while total < buf.len() {
+                    let n = match stream.read(&mut buf[total..]) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => return,
+                    };
+                    total += n;
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let _ = stream.write_all(canned);
+                let _ = stream.flush();
+            }
+        });
+
+        let url = format!("http://127.0.0.1:{port}/bin");
+        let src = format!(
+            r#"
+fn main() with sends(Network) receives(Network) {{
+    let url: String = "{url}";
+    let c = Client.new();
+    match c.get(url) {{
+        Ok(resp) => {{
+            let b: Vec[u8] = resp.bytes();
+            println(b.len());
+        }}
+        Err(e) => {{
+            println("ERR");
+            println(e.message());
+        }}
+    }}
+}}
+"#
+        );
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_http_bytes_e2e_{pid}_{nanos}"));
+        if let Err(e) = compile_and_link(&src, &exe_path) {
+            let _ = origin_thread.join();
+            panic!("compile/link failed: {e}");
+        }
+
+        let output = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("run client binary");
+        let _ = origin_thread.join();
+        let _ = std::fs::remove_file(&exe_path);
+
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(
+            output.status.success(),
+            "client binary exited non-zero; stdout={stdout:?} stderr={stderr:?}"
+        );
+        assert!(
+            stdout.lines().any(|l| l.trim() == "4"),
+            "resp.bytes().len() should be 4 (raw bytes survive UTF-8); stdout={stdout:?} stderr={stderr:?}"
+        );
+    }
+
+    /// Phase-8 line 24 — chained-builder E2E smoke test.
+    ///
+    /// Same shape as `test_client_get_end_to_end_against_rust_origin`,
+    /// but the karac binary uses the chained surface
+    /// `c.request("GET", url).header("X-Trace-Id", "trace-zzz").send()`
+    /// instead of the eager `c.get(url)`. The Rust origin captures the
+    /// inbound request bytes so the assertion can pin BOTH halves:
+    /// (a) stdout proves the binary destructured the `Result.Ok(resp)`
+    /// and got the right response body back, (b) the captured request
+    /// proves the chained `.header(...)` was forwarded to the wire,
+    /// not silently dropped.
+    ///
+    /// What this pins: the full chained-builder codegen path — runtime
+    /// FFI (`karac_runtime_http_builder_new` / `_add_header` /
+    /// `_send`), codegen dispatch through `compile_client_request_builder`
+    /// / `compile_request_builder_setter` / `compile_request_builder_send`,
+    /// non-identifier-receiver routing in `compile_method_call`
+    /// (the chained call's receiver is the prior `.method()` return),
+    /// and Result-payload packing into the same `{tag, status,
+    /// body.data, body.len, body.cap}` shape as `Client.get`.
+    #[test]
+    fn test_client_request_builder_chain_end_to_end() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!(
+                "skip: libkarac_runtime.a not built \
+                 (run `cargo build -p karac-runtime --release`)"
+            );
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let canned =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 18\r\nConnection: close\r\n\r\nhello-from-origin\n";
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral origin port");
+        let port = listener.local_addr().expect("local_addr").port();
+        let captured: std::sync::Arc<std::sync::Mutex<Vec<u8>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_thread = std::sync::Arc::clone(&captured);
+        let origin_thread = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let mut total = 0usize;
+                while total < buf.len() {
+                    let n = match stream.read(&mut buf[total..]) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => return,
+                    };
+                    total += n;
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                if let Ok(mut guard) = captured_thread.lock() {
+                    guard.extend_from_slice(&buf[..total]);
+                }
+                let _ = stream.write_all(canned);
+                let _ = stream.flush();
+            }
+        });
+
+        let url = format!("http://127.0.0.1:{port}/test");
+        let src = format!(
+            r#"
+fn main() with sends(Network) receives(Network) {{
+    let url: String = "{url}";
+    let c = Client.new();
+    match c.request("GET", url).header("X-Trace-Id", "trace-zzz").send() {{
+        Ok(resp) => {{
+            println(resp.body());
+        }}
+        Err(e) => {{
+            println("ERR");
+            println(e.message());
+        }}
+    }}
+}}
+"#
+        );
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_http_builder_e2e_{pid}_{nanos}"));
+        if let Err(e) = compile_and_link(&src, &exe_path) {
+            let _ = origin_thread.join();
+            panic!("compile/link failed: {e}");
+        }
+
+        let output = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("run client binary");
+        let _ = origin_thread.join();
+        let _ = std::fs::remove_file(&exe_path);
+
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(
+            output.status.success(),
+            "client binary exited non-zero; stdout={stdout:?} stderr={stderr:?}"
+        );
+        assert!(
+            stdout.contains("hello-from-origin"),
+            "client binary stdout should contain origin body; stdout={stdout:?} stderr={stderr:?}"
+        );
+
+        let wire = captured.lock().unwrap().clone();
+        let wire_text = String::from_utf8_lossy(&wire).to_lowercase();
+        assert!(
+            wire_text.contains("x-trace-id: trace-zzz"),
+            "origin should have observed the chained X-Trace-Id header; \
+             wire was:\n{wire_text}"
+        );
+    }
 }

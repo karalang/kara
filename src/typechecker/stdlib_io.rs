@@ -7,7 +7,7 @@
 use crate::ast::*;
 use crate::token::Span;
 
-use super::types::{IntSize, Type};
+use super::types::{IntSize, Type, UIntSize};
 use super::TypeErrorKind;
 
 impl<'a> super::TypeChecker<'a> {
@@ -137,7 +137,117 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 result_response
             }
-            _ => self.handle_unknown_method("Client", method, &["get", "post"], args, span),
+            "request" => {
+                // Phase-8 line 24 — chained-builder entrypoint.
+                if args.len() != 2 {
+                    self.type_error(
+                        "Client.request() takes 2 arguments (method: str, url: str)".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                for arg in args {
+                    self.check_expr(&arg.value, &Type::Str);
+                }
+                Type::Named {
+                    name: "RequestBuilder".to_string(),
+                    args: vec![],
+                }
+            }
+            _ => self.handle_unknown_method(
+                "Client",
+                method,
+                &["get", "post", "request"],
+                args,
+                span,
+            ),
+        }
+    }
+
+    /// Phase-8 line 24 — chained-builder method dispatch. `header` /
+    /// `body` / `timeout` return `RequestBuilder` (owned-self chain);
+    /// `send` returns `Result[Response, HttpError]` matching the eager
+    /// `Client.get` / `Client.post` shape.
+    pub(super) fn infer_http_request_builder_method(
+        &mut self,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let rb_ty = Type::Named {
+            name: "RequestBuilder".to_string(),
+            args: vec![],
+        };
+        match method {
+            "header" => {
+                if args.len() != 2 {
+                    self.type_error(
+                        "RequestBuilder.header() takes 2 arguments (name: str, value: str)"
+                            .to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                for arg in args {
+                    self.check_expr(&arg.value, &Type::Str);
+                }
+                rb_ty
+            }
+            "body" => {
+                if args.len() != 1 {
+                    self.type_error(
+                        "RequestBuilder.body() takes 1 argument (body: str)".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                for arg in args {
+                    self.check_expr(&arg.value, &Type::Str);
+                }
+                rb_ty
+            }
+            "timeout" => {
+                if args.len() != 1 {
+                    self.type_error(
+                        "RequestBuilder.timeout() takes 1 argument (ms: i64)".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                for arg in args {
+                    self.check_expr(&arg.value, &Type::Int(IntSize::I64));
+                }
+                rb_ty
+            }
+            "send" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "RequestBuilder.send() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Named {
+                    name: "Result".to_string(),
+                    args: vec![
+                        Type::Named {
+                            name: "Response".to_string(),
+                            args: vec![],
+                        },
+                        Type::Named {
+                            name: "HttpError".to_string(),
+                            args: vec![],
+                        },
+                    ],
+                }
+            }
+            _ => self.handle_unknown_method(
+                "RequestBuilder",
+                method,
+                &["header", "body", "timeout", "send"],
+                args,
+                span,
+            ),
         }
     }
 
@@ -158,15 +268,30 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Int(IntSize::I64)
             }
-            "body" => {
+            // `body()` and `text()` share semantics (string view of the
+            // entity); `bytes()` is the raw-byte view (phase-8 line 32).
+            "body" | "text" => {
                 if !args.is_empty() {
                     self.type_error(
-                        "Response.body() takes no arguments".to_string(),
+                        format!("Response.{method}() takes no arguments"),
                         span.clone(),
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
                 Type::Str
+            }
+            "bytes" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "Response.bytes() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![Type::UInt(UIntSize::U8)],
+                }
             }
             "header" => {
                 if args.len() != 1 {
@@ -187,7 +312,7 @@ impl<'a> super::TypeChecker<'a> {
             _ => self.handle_unknown_method(
                 "Response",
                 method,
-                &["body", "header", "status"],
+                &["body", "bytes", "header", "status", "text"],
                 args,
                 span,
             ),

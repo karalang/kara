@@ -39,6 +39,25 @@ struct HttpError {
     message: String,
 }
 
+// Chained-builder request descriptor (phase-8 line 24). Declared
+// before `impl Client` so `Client.request(...) -> RequestBuilder`
+// finds the type at impl-block registration time. The `handle` is an
+// opaque i64 keying a runtime-side `HTTP_BUILDERS` entry
+// (`runtime/src/lib.rs::HTTP_BUILDERS`) that carries the actual
+// method / URL / headers / body / timeout configuration. Each chained
+// method routes through a runtime extern that mutates the state by
+// handle and returns the same handle wrapped in a fresh
+// `RequestBuilder` value — owned-self semantics on the Kāra side,
+// shared state on the runtime side. `send()` consumes the handle
+// (removing the runtime entry) so handles don't accumulate when the
+// chain is followed through to completion; abandoned builders leak
+// their runtime entry until process exit (a known v1 limitation
+// resolved when `impl Drop for RequestBuilder` becomes wired through
+// codegen).
+struct RequestBuilder {
+    handle: i64,
+}
+
 impl Client {
     #[compiler_builtin]
     fn new() -> Client { Client { } }
@@ -52,14 +71,88 @@ impl Client {
     fn post(ref self, url: String, body: String) -> Result[Response, HttpError] {
         Err(HttpError { message: "" })
     }
+
+    // Chained-builder entrypoint (phase-8 line 24). Returns a fresh
+    // `RequestBuilder` pre-populated with the given HTTP method verb
+    // (e.g. `"GET"`, `"POST"`) and target URL; the builder's
+    // `.header(...)` / `.body(...)` / `.timeout(...)` methods refine
+    // it, and `.send()` performs the actual call. The eager
+    // `Client.get(url)` / `Client.post(url, body)` paths remain the
+    // shortest form for unconfigured requests — the chained surface
+    // is purely additive.
+    #[compiler_builtin]
+    fn request(ref self, method: String, url: String) -> RequestBuilder {
+        RequestBuilder { handle: 0 }
+    }
+}
+
+impl RequestBuilder {
+    // Append `(name, value)` to the chained header list. Repeated
+    // calls with the same name preserve both entries — the runtime
+    // applies them in insertion order so the last one wins for
+    // semantically-deduplicating headers like `Authorization`, and
+    // multiple values stack for set-semantics headers like
+    // `Set-Cookie` (though the latter is request-side rare).
+    #[compiler_builtin]
+    fn header(self, name: String, value: String) -> RequestBuilder {
+        self
+    }
+
+    // Replace the request entity body. Idempotent — last call wins.
+    // Empty string means no entity (correct for GET / HEAD).
+    #[compiler_builtin]
+    fn body(self, b: String) -> RequestBuilder {
+        self
+    }
+
+    // Configure the request deadline in milliseconds. `0` (the
+    // default) leaves ureq's no-timeout posture in place; positive
+    // values apply `ureq::Request::timeout` so a slow / hung origin
+    // yields a transport error rather than blocking forever.
+    #[compiler_builtin]
+    fn timeout(self, ms: i64) -> RequestBuilder {
+        self
+    }
+
+    // Drive the configured request and return its
+    // `Result[Response, HttpError]`. Routes through the runtime's
+    // handle-based send extern — same Ok/Err shape as the eager
+    // `Client.get` / `Client.post` paths, with method + headers +
+    // body + timeout sourced from the builder. The runtime drops the
+    // builder state after the call so subsequent uses of the handle
+    // are no-ops.
+    #[compiler_builtin]
+    fn send(ref self) -> Result[Response, HttpError] {
+        Err(HttpError { message: "" })
+    }
 }
 
 impl Response {
     #[compiler_builtin]
     fn status(ref self) -> i64 { 0 }
 
+    // Return the response entity as an owned `String`. Equivalent to
+    // `text()` — `body()` is retained as the original name from the
+    // `Client.get` minimum (phase-8 line 18). The runtime captures the
+    // entity as raw wire bytes (no UTF-8 validation), so for a text
+    // response this is the decoded body and for a binary response it is
+    // the raw bytes reinterpreted as a String (use `bytes()` for binary
+    // payloads). Freshly allocated per call.
     #[compiler_builtin]
     fn body(ref self) -> String { "" }
+
+    // `text()` / `bytes()` return-type split (phase-8 line 32). `text()`
+    // is the string view of the entity (same semantics as `body()`);
+    // `bytes()` is the raw-byte view that does NOT go through UTF-8
+    // validation, so image / protobuf / file-transfer payloads survive
+    // intact. Both reinterpret the single entity buffer the response
+    // carries — they differ only in surface type, so calling one does
+    // not consume or invalidate the other.
+    #[compiler_builtin]
+    fn text(ref self) -> String { "" }
+
+    #[compiler_builtin]
+    fn bytes(ref self) -> Vec[u8] { Vec.new() }
 
     #[compiler_builtin]
     fn header(ref self, name: String) -> Option[String] { None }

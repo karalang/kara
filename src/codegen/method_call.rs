@@ -900,6 +900,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return self.compile_client_http_method(method, args);
                 }
+                // Phase-8 line 24 — `Client.request(method, url)`
+                // chained-builder entrypoint. Returns a `RequestBuilder
+                // { handle: i64 }` wrapping a runtime-side
+                // `HTTP_BUILDERS` entry; subsequent `.header(...) /
+                // .body(...) / .timeout(...) / .send()` chain through
+                // the handle-based runtime externs.
+                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Client")
+                    && method == "request"
+                {
+                    return self.compile_client_request_builder(args);
+                }
+                // Phase-8 line 24 — `RequestBuilder` chained methods
+                // (`.header / .body / .timeout / .send`). Configuration
+                // methods route through `compile_request_builder_setter`
+                // (handle stays the same, runtime entry mutates); `.send()`
+                // routes through `compile_request_builder_send` (consumes
+                // the handle and packs the result).
+                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "RequestBuilder")
+                {
+                    if method == "header" || method == "body" || method == "timeout" {
+                        let name = name.clone();
+                        return self.compile_request_builder_setter(&name, method, args);
+                    }
+                    if method == "send" && args.is_empty() {
+                        let name = name.clone();
+                        return self.compile_request_builder_send(&name);
+                    }
+                }
                 // Phase-8 line 17 slice 3 — `Response.status() / .body()`
                 // and `HttpError.message()`. Stdlib stubs are
                 // `#[compiler_builtin]` so the bodies are never compiled;
@@ -909,8 +937,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // through `karac_string_clone` so the caller's String
                 // doesn't alias the receiver's field (a subsequent
                 // `Drop` of either would double-free otherwise).
+                // `body` / `text` clone the entity as a `String`; `bytes`
+                // clones the same buffer as `Vec[u8]` (phase-8 line 32) —
+                // the buffers are layout-identical (`{ptr, len, cap}`), so
+                // all three route through `compile_response_accessor`; the
+                // binding's surface type (String vs Vec[u8]) comes from the
+                // typechecker, not the cloned aggregate.
                 if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Response")
-                    && (method == "status" || method == "body")
+                    && matches!(method, "status" | "body" | "text" | "bytes")
                     && args.is_empty()
                 {
                     let name = name.clone();
@@ -1065,6 +1099,52 @@ impl<'ctx> super::Codegen<'ctx> {
                             .into(),
                         _ => unreachable!(),
                     });
+                }
+            }
+        }
+
+        // Phase-8 line 24 — `RequestBuilder` non-identifier receiver
+        // dispatch. The chained-builder shape
+        // `c.request("GET", url).header(...).timeout(...).send()` has
+        // each call's receiver as the prior call's return value (a
+        // MethodCall expr, not an Identifier). Detect the receiver's
+        // LLVM struct type at the seeded `RequestBuilder` shape, stash
+        // it in a synthesized alloca, register the synth name in
+        // `var_type_names`, then re-dispatch through the identifier
+        // path so the existing setter / send arms fire.
+        if !matches!(&object.kind, ExprKind::Identifier(_))
+            && matches!(method, "header" | "body" | "timeout" | "send")
+        {
+            let rb_ty = self.struct_types.get("RequestBuilder").copied();
+            if let Some(rb_ty) = rb_ty {
+                let recv_val = self.compile_expr(object)?;
+                if let BasicValueEnum::StructValue(sv) = recv_val {
+                    if sv.get_type() == rb_ty {
+                        let fn_val = self.current_fn.ok_or_else(|| {
+                            "RequestBuilder chained method call outside fn".to_string()
+                        })?;
+                        let synth = format!("__rb_tmp_{}", self.indexed_elem_counter);
+                        self.indexed_elem_counter += 1;
+                        let slot_ptr = self.create_entry_alloca(fn_val, &synth, rb_ty.into());
+                        self.builder.build_store(slot_ptr, sv).unwrap();
+                        self.variables.insert(
+                            synth.clone(),
+                            super::VarSlot {
+                                ptr: slot_ptr,
+                                ty: rb_ty.into(),
+                            },
+                        );
+                        self.var_type_names
+                            .insert(synth.clone(), "RequestBuilder".to_string());
+                        let synth_expr = Expr {
+                            kind: ExprKind::Identifier(synth.clone()),
+                            span: object.span.clone(),
+                        };
+                        let result = self.compile_method_call(&synth_expr, method, args, call_span);
+                        self.variables.remove(&synth);
+                        self.var_type_names.remove(&synth);
+                        return result;
+                    }
                 }
             }
         }

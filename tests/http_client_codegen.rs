@@ -122,4 +122,135 @@ fn main() with sends(Network) receives(Network) {
             main_body
         );
     }
+
+    /// Phase-8 line 24 — all five chained-builder runtime externs are
+    /// declared unconditionally in `Codegen::new`. Same rationale as
+    /// the eager-form siblings above: pin the declarations so the
+    /// `module.get_function(...).expect(...)` calls inside
+    /// `compile_client_request_builder` / `compile_request_builder_*`
+    /// can never regress to a panic.
+    #[test]
+    fn test_ir_http_builder_runtime_ffis_declared() {
+        let ir = ir_for("fn main() {}");
+        for name in [
+            "karac_runtime_http_builder_new",
+            "karac_runtime_http_builder_add_header",
+            "karac_runtime_http_builder_set_body",
+            "karac_runtime_http_builder_set_timeout",
+            "karac_runtime_http_builder_send",
+        ] {
+            assert!(
+                ir.contains("declare ") && ir.contains(name),
+                "expected declaration of `{name}` in IR"
+            );
+        }
+    }
+
+    /// `c.request("GET", url).header("X", "y").timeout(5000).send()`
+    /// lowers to the full handle-based dispatch chain: one
+    /// `_builder_new` call to mint the handle, one `_builder_add_header`
+    /// per `.header(...)`, one `_builder_set_timeout` for the `.timeout`,
+    /// and one `_builder_send` to drive the request and pack the
+    /// `Result[Response, HttpError]`. Pins the dispatch + the Ok/Err
+    /// branch-label convention from `compile_request_builder_send`.
+    #[test]
+    fn test_ir_request_builder_chain_dispatches_through_handle_ffi() {
+        let ir = ir_for(
+            r#"
+fn main() with sends(Network) receives(Network) {
+    let c = Client.new();
+    let url = "http://127.0.0.1:65535/api";
+    let _r = c.request("GET", url).header("X-Custom", "abc").timeout(5000).send();
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").expect("main body");
+        assert!(
+            main_body.contains("call i64 @karac_runtime_http_builder_new("),
+            "expected _builder_new call in main; body was:\n{}",
+            main_body
+        );
+        assert!(
+            main_body.contains("call void @karac_runtime_http_builder_add_header("),
+            "expected _builder_add_header call in main; body was:\n{}",
+            main_body
+        );
+        assert!(
+            main_body.contains("call void @karac_runtime_http_builder_set_timeout("),
+            "expected _builder_set_timeout call in main; body was:\n{}",
+            main_body
+        );
+        assert!(
+            main_body.contains("call void @karac_runtime_http_builder_send("),
+            "expected _builder_send call in main; body was:\n{}",
+            main_body
+        );
+        assert!(
+            main_body.contains("rb.send.ok") && main_body.contains("rb.send.err"),
+            "expected rb.send.ok / rb.send.err arms; body was:\n{}",
+            main_body
+        );
+    }
+
+    /// `c.request("POST", url).body("payload").send()` lowers the
+    /// chained `.body(...)` call to `_builder_set_body`. Pins the
+    /// body-setter routing distinctly from the headers/timeout paths
+    /// (different runtime extern, different lowering arm in
+    /// `compile_request_builder_setter`).
+    #[test]
+    fn test_ir_request_builder_body_dispatches_to_set_body_ffi() {
+        let ir = ir_for(
+            r#"
+fn main() with sends(Network) receives(Network) {
+    let c = Client.new();
+    let url = "http://127.0.0.1:65535/api";
+    let body = "hello-world";
+    let _r = c.request("POST", url).body(body).send();
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").expect("main body");
+        assert!(
+            main_body.contains("call void @karac_runtime_http_builder_set_body("),
+            "expected _builder_set_body call in main; body was:\n{}",
+            main_body
+        );
+    }
+
+    /// Phase-8 line 32 — `Response.text()` / `.bytes()` both lower through
+    /// `compile_response_accessor`'s `karac_string_clone`-backed deep
+    /// clone of the entity buffer (String for `text`, `Vec[u8]` for
+    /// `bytes` — layout-identical). This pins that the dispatch arm in
+    /// `compile_method_call` recognises both methods (a regression would
+    /// surface as `codegen failed` from `ir_for`) and that each emits a
+    /// clone rather than aliasing the receiver's field.
+    #[test]
+    fn test_ir_response_text_and_bytes_clone_entity_buffer() {
+        let ir = ir_for(
+            r#"
+fn main() with sends(Network) receives(Network) {
+    let c = Client.new();
+    let url = "http://127.0.0.1:65535/";
+    match c.get(url) {
+        Ok(resp) => {
+            let t: String = resp.text();
+            let b: Vec[u8] = resp.bytes();
+            println(t);
+            println(b.len());
+        }
+        Err(e) => {
+            println(e.message());
+        }
+    }
+}
+"#,
+        );
+        // Two distinct accessor sites (text + bytes) → at least two
+        // `karac_string_clone` calls inside the Ok arm of `main`.
+        let clone_calls = ir.matches("call void @karac_string_clone(").count();
+        assert!(
+            clone_calls >= 2,
+            "expected >= 2 karac_string_clone calls (text + bytes); saw {clone_calls}\n{ir}"
+        );
+    }
 }

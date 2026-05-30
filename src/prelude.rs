@@ -96,6 +96,11 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Client",
     "Response",
     "HttpError",
+    // Phase-8 line 24 — chained-builder request descriptor for
+    // `c.request(...).header(...).body(...).timeout(...).send()`.
+    // Opaque `{ handle: i64 }` wrapping a runtime-side `HTTP_BUILDERS`
+    // entry; see `runtime/stdlib/http.kara`.
+    "RequestBuilder",
     // Slice B (2026-05-09): minimal `std.http` server surface.
     // `Server` hosts the `serve_static` entry that v1's smoke test uses;
     // `Request` is the forward-compat opaque marker for the future
@@ -1412,11 +1417,23 @@ mod tests {
 
     #[test]
     fn baked_http_carries_inherent_impl_with_compiler_builtin_methods() {
-        assert_inherent_impl_compiler_builtin("http.kara", "Client", &["new", "get", "post"]);
+        assert_inherent_impl_compiler_builtin(
+            "http.kara",
+            "Client",
+            &["new", "get", "post", "request"],
+        );
+        // Phase-8 line 24 — chained-builder configuration + send.
+        assert_inherent_impl_compiler_builtin(
+            "http.kara",
+            "RequestBuilder",
+            &["header", "body", "timeout", "send"],
+        );
+        // Phase-8 line 32 — `text()` / `bytes()` return-type split
+        // (text = String view, bytes = `Vec[u8]` raw-byte view).
         assert_inherent_impl_compiler_builtin(
             "http.kara",
             "Response",
-            &["status", "body", "header"],
+            &["status", "body", "text", "bytes", "header"],
         );
         assert_inherent_impl_compiler_builtin("http.kara", "HttpError", &["message"]);
         // Slice B (2026-05-09): server surface. `serve` is the Slice B
