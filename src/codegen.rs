@@ -43,6 +43,8 @@ mod functions;
 mod helpers;
 mod http;
 mod json;
+#[cfg(all(feature = "llvm", feature = "lljit_prototype"))]
+mod lljit;
 mod maps;
 mod method_call;
 mod module_bindings;
@@ -266,6 +268,33 @@ pub fn jit_run_main(
         .map_err(|e| format!("Failed to look up main: {}", e))?;
     type MainFn = unsafe extern "C" fn() -> i32;
     let main_fn: MainFn = unsafe { std::mem::transmute(addr) };
+    let result = unsafe { main_fn() };
+    Ok(result)
+}
+
+/// Phase-7 L560 W1: orc2/LLJIT round-trip of a Kāra program.
+///
+/// Same compiler pipeline as `compile_to_ir`, but instead of returning
+/// the IR text, parses it back into an LLJIT-owned `Module`, looks up
+/// `main`, and invokes it. Returns the i32 exit code that the user's
+/// `main` produced.
+///
+/// W1 acceptance criterion (per L558 (a) finding): must round-trip a
+/// `printf` call on macOS arm64. If this entry hangs on a printf-bearing
+/// test, halt and revisit the v2 Cranelift question before W2+.
+#[cfg(feature = "lljit_prototype")]
+pub fn jit_run_main_lljit(
+    program: &Program,
+    ownership: Option<&OwnershipCheckResult>,
+    concurrency: Option<&ConcurrencyAnalysis>,
+) -> Result<i32, String> {
+    let ir = compile_to_ir(program, ownership, concurrency)?;
+    let engine = lljit::LLJITEngine::new()?;
+    engine.add_ir_module(&ir)?;
+    let addr = engine.lookup_address("main")?;
+    // LLVM `main` signature is `i32 ()` — see `functions.rs:61`.
+    type MainFn = unsafe extern "C" fn() -> i32;
+    let main_fn: MainFn = unsafe { std::mem::transmute(addr as usize) };
     let result = unsafe { main_fn() };
     Ok(result)
 }

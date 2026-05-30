@@ -29,9 +29,19 @@ llvm = ["inkwell"]
 # round-trip of representative Kāra modules. Off by default; not shipped
 # in the normal karac binary. Removed when the orc2 wrap (L560) lands.
 mcjit_prototype = ["llvm"]
+# Phase-7 L560 W1+ gate: orc2/LLJIT wrap, calling `llvm-sys::orc2`
+# directly (inkwell does not expose ORC v2). Off by default; promoted
+# to default + integrated into `karac repl`/`karac test` once W6 closes.
+lljit_prototype = ["llvm", "dep:llvm-sys"]
 
 [dependencies]
 inkwell = { version = "0.9", features = ["llvm18-1-prefer-dynamic"], optional = true }
+# Phase-7 L560 (Always-JIT via LLJIT): inkwell 0.9 does not expose ORC v2 /
+# LLJIT, so the JIT subset calls `llvm-sys::orc2` directly. Same LLVM 18.1
+# pin inkwell uses; `prefer-dynamic` matches inkwell's link strategy so we
+# don't end up with two LLVM copies. Only activated by `lljit_prototype`
+# feature — the normal `karac build` / AOT path keeps using inkwell-only.
+llvm-sys = { version = "181", features = ["prefer-dynamic"], optional = true }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 regex = "1"
 # Slice 2 of the PubGrub resolver entry (phase-5 line 813): structured
