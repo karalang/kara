@@ -179,6 +179,96 @@ fn repl_jit_let_rhs_is_not_re_evaluated() {
 }
 
 #[test]
+fn repl_jit_string_let_rhs_is_not_re_evaluated() {
+    // Slice c-repl.B.5.2 — extend B.5.1's value-snapshot mechanism to
+    // String bindings. Cell 1 defines a side-effecting fn that
+    // allocates + returns a String and binds the result via
+    // `let s = note();`; cell 2 references `s`. The interpreter
+    // caches the bound value, so cell 2 must NOT re-run `note()`.
+    // Pre-B.5.2 the JIT path re-evaluated the RHS on the replay cell
+    // (Strings hadn't been wired into the snapshot mechanism yet),
+    // so "called" printed twice. B.5.2 routes String lets through a
+    // per-binding LLVM global holding the (ptr, len, cap) triple
+    // and suppresses the let's scope-exit cleanup so the buffer
+    // survives the cell boundary.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured(
+        "fn note() -> String { \
+            println(\"called\"); \
+            let mut out: String = String.new(); \
+            out.push_str(\"hi\"); \
+            out \
+         }",
+    );
+    assert!(r.errors.is_empty(), "fn def: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let s: String = note();");
+    assert!(r.errors.is_empty(), "let cell: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "called",
+        "let cell should print the side effect once",
+    );
+    let r = s.evaluate_cell_captured("println(s);");
+    assert!(r.errors.is_empty(), "use cell: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "hi",
+        "use cell should print only `s`'s cached value — `note()` must NOT re-run",
+    );
+}
+
+#[test]
+fn repl_jit_string_cross_cell_shadow_drops_runner() {
+    // Slice c-repl.B.5.2 — cross-cell String shadow must reach the
+    // same runner-drop cleanup path the primitive case uses. The
+    // B.5.1 follow-up extended `prune_shadowed_lets` to drop the
+    // runner whenever a new cell rebinds a name that's in
+    // `jit_snapshotted_lets`; String entries land in that same map
+    // so the existing shadow detection picks them up uniformly.
+    // Without the drop, cell 2's snapshot global would still hold
+    // cell 1's `(ptr, len, cap)` triple, and cell 2's classifier
+    // would route the rebind through REPLAY → load stale data.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("let s: String = \"alpha\";");
+    assert!(r.errors.is_empty(), "cell 1: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let s: String = \"omega\"; println(s);");
+    assert!(r.errors.is_empty(), "cell 2: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "omega",
+        "cross-cell String shadow must re-capture, not replay; stdout: {:?}",
+        r.stdout,
+    );
+}
+
+#[test]
+fn repl_jit_string_mut_let_falls_through_to_passthrough() {
+    // Slice c-repl.B.5.2 — `let mut s: String = …` must NOT take the
+    // snapshot path. The classifier filters out mut String bindings
+    // because capture's cap-zero suppression would leave a same-cell
+    // `s.push_str(…)` reading cap=0, reallocating into a fresh
+    // buffer, and dropping the global's reference — cell N+1's
+    // replay would then load the pre-push buffer and diverge from
+    // the interpreter's post-mutation snapshot semantic. Pass-
+    // through gives correct (re-evaluating, slower) behavior. We
+    // exercise the same-cell mutation to confirm push_str works
+    // cleanly without divergence.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured(
+        "let mut s: String = String.new(); s.push_str(\"hi\"); println(s);",
+    );
+    assert!(
+        r.errors.is_empty(),
+        "mut String cell should run cleanly: {:?}",
+        r.errors,
+    );
+    assert_eq!(r.stdout.trim(), "hi");
+}
+
+#[test]
 fn repl_jit_snapshot_covers_f64_bool_char() {
     // Slice c-repl.B.5.1 — verify the snapshot replay path handles
     // every supported primitive kind. Each `tag` fn fires a side-

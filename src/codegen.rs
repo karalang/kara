@@ -119,17 +119,14 @@ pub fn compile_to_ir_with_options(
     )
 }
 
-/// Slice c-repl.B.5.1: primitive types eligible for REPL value-
-/// snapshotting. A top-level `let name = expr` binding whose Kāra
-/// type lowers to one of these forms can have its bound value
-/// stashed in an LLVM global at first emission and replayed (via
-/// a load from that global, skipping the original RHS) by every
-/// subsequent cell. The supported set is intentionally narrow:
-/// these are the types with trivial copy semantics and a fixed
-/// width that round-trips through a single LLVM `load` / `store`
-/// pair. String and the aggregate types (Vec, Map, struct, …)
-/// would each need their own per-type stash format and ownership
-/// handshake; they're deferred to follow-on slices.
+/// Slice c-repl.B.5.1: types eligible for REPL value-snapshotting.
+/// A top-level immutable `let name = expr` binding whose Kāra type
+/// lowers to one of these forms can have its bound value stashed in
+/// an LLVM global at first emission and replayed (via a load from
+/// that global, skipping the original RHS) on every subsequent cell.
+/// The `Prim` in the name is historical (B.5.2 extends the set to
+/// String — see the `String` variant below); the name is kept to
+/// avoid churning the public surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapshotPrimKind {
     /// Kāra `i64`.
@@ -141,6 +138,16 @@ pub enum SnapshotPrimKind {
     Bool,
     /// Kāra `Char` — lowered as i32 (Unicode scalar value).
     Char,
+    /// Slice c-repl.B.5.2: Kāra `String` — lowered as the standard
+    /// `{ i8*, i64, i64 }` (ptr, len, cap) struct. The global holds
+    /// the same triple; capture transfers buffer ownership to the
+    /// global by zeroing the let slot's cap (so the queued
+    /// `FreeVecBuffer` cleanup no-ops at scope exit) and replay
+    /// loads the triple into a fresh slot whose own cleanup is
+    /// skipped. Mut String bindings fall through to pass-through —
+    /// same-cell `push_str` after capture would otherwise leave the
+    /// global pointing at a freed buffer.
+    String,
 }
 
 /// Slice c-repl.B.4: REPL-cell codegen entry for the JIT path.

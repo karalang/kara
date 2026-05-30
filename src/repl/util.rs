@@ -977,7 +977,12 @@ pub(super) fn parse_let_binding_names(let_src: &str) -> std::collections::HashSe
 /// primitive form per snapshot kind keeps the storage discipline
 /// tight for B.5.1.
 ///
-/// String, Vec, Map, struct, enum, tuple, Slice, Option, Rc/Arc,
+/// Slice c-repl.B.5.2 extends the set to `String` — the global
+/// holds the standard `{ ptr, len, cap }` triple, and the capture
+/// path transfers buffer ownership to the JITDylib by suppressing
+/// the let slot's scope-exit cleanup.
+///
+/// Vec, Map, struct, enum, tuple, Slice, Option, Rc/Arc,
 /// closures, etc. all return `None`. Each of those types would
 /// need its own cross-cell ownership story (the global holds a
 /// heap pointer; who runs the destructor? when?), which is a
@@ -993,6 +998,7 @@ pub(super) fn snapshot_kind_for_type(
         Type::Float(FloatSize::F64) => Some(SnapshotPrimKind::F64),
         Type::Bool => Some(SnapshotPrimKind::Bool),
         Type::Char => Some(SnapshotPrimKind::Char),
+        Type::Str => Some(SnapshotPrimKind::String),
         _ => None,
     }
 }

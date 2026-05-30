@@ -2171,7 +2171,13 @@ impl Session {
             return (replay, capture);
         };
         for stmt in &main_fn.body.stmts {
-            let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+            let StmtKind::Let {
+                is_mut,
+                pattern,
+                value,
+                ..
+            } = &stmt.kind
+            else {
                 continue;
             };
             let PatternKind::Binding(name) = &pattern.kind else {
@@ -2192,6 +2198,23 @@ impl Session {
                 continue;
             };
             if let Some(kind) = snapshot_kind_for_type(ty) {
+                // Slice c-repl.B.5.2: skip `let mut s = …` for String
+                // bindings. Capture transfers buffer ownership from
+                // the let slot to the snapshot global by zeroing the
+                // slot's cap, which leaves the binding intact for
+                // reads but breaks same-cell `s.push_str(…)` — push
+                // would read cap=0, realloc into a fresh buffer, and
+                // the global ends up pointing at the original buffer
+                // while the slot points at the new one; cell N+1's
+                // replay then loads the old buffer (pre-push) and
+                // diverges from the interpreter's post-mutation
+                // snapshot. Pass-through gives correct (if slower)
+                // re-evaluation semantics. Primitive kinds keep the
+                // B.5.1 behavior — mut primitives don't have the
+                // same alias hazard.
+                if *is_mut && matches!(kind, crate::codegen::SnapshotPrimKind::String) {
+                    continue;
+                }
                 capture.insert(name.clone(), kind);
             }
         }

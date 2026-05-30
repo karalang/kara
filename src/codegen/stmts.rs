@@ -2276,6 +2276,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .map_err(|e| format!("snapshot load: {e}"))?;
         let bound_val = self.snapshot_storage_to_binding(kind, loaded)?;
         self.bind_pattern(pattern, bound_val)?;
+        // Slice c-repl.B.5.2: String replay needs the same dispatch-
+        // map entries the normal let-arm String detection sets
+        // (`vec_elem_types[name] = i8` so the slot is recognized as
+        // a `{ptr, i64, i64}` Vec/String layout for GEPs, and
+        // `string_vars.insert(name)` so method calls like `s.len()`,
+        // `s.push_str(…)`, `println(s)` resolve through the String
+        // dispatch surface). The replay path short-circuits at the
+        // top of `compile_stmt`, so the let-arm's String detection
+        // never runs for replayed bindings — without these
+        // registrations, subsequent ops fall through to "unknown
+        // type" handlers and crash. NO `track_vec_var` though: the
+        // buffer is owned by the snapshot global, not this slot;
+        // scope-exit cleanup must skip the free entirely.
+        if matches!(kind, super::SnapshotPrimKind::String) {
+            self.vec_elem_types
+                .insert(name.clone(), self.context.i8_type().into());
+            self.string_vars.insert(name.clone());
+        }
         Ok(true)
     }
 
@@ -2311,19 +2329,37 @@ impl<'ctx> super::Codegen<'ctx> {
             Err(_) => return,
         };
         let _ = self.builder.build_store(global.as_pointer_value(), stored);
+        // Slice c-repl.B.5.2: String capture transfers buffer ownership
+        // from the let slot to the global (option (a) "leak the
+        // buffer" per the tracker entry). The slot's queued
+        // `FreeVecBuffer` cleanup is suppressed by zeroing its cap —
+        // `emit_scope_cleanup`'s walker treats `cap == 0` as
+        // "nothing to free". The buffer survives until the JITDylib
+        // is torn down (runner death / `:reset` / cross-cell shadow,
+        // all of which drop the runner and reclaim its heap). No
+        // suppression needed for primitive kinds — their globals
+        // hold values, not pointers.
+        if matches!(kind, super::SnapshotPrimKind::String) {
+            self.zero_vec_alloca_cap(slot.ptr);
+        }
     }
 
     /// LLVM storage type for a snapshot global. Distinct from the
     /// binding-slot LLVM type for `Bool` (slot is i1, storage is i8)
     /// so the global's width is portable across cells that may load
     /// it through a different codegen invocation; every other kind
-    /// uses the same width as the slot.
+    /// uses the same width as the slot. `String` uses the standard
+    /// `{ i8*, i64, i64 }` (ptr, len, cap) layout that `vec_struct_type`
+    /// produces — same struct shape both `let` slots and the
+    /// snapshot global use, so the load/store handshake doesn't need
+    /// a conversion step.
     fn snapshot_storage_type(&self, kind: super::SnapshotPrimKind) -> BasicTypeEnum<'ctx> {
         match kind {
             super::SnapshotPrimKind::I64 => self.context.i64_type().into(),
             super::SnapshotPrimKind::F64 => self.context.f64_type().into(),
             super::SnapshotPrimKind::Bool => self.context.i8_type().into(),
             super::SnapshotPrimKind::Char => self.context.i32_type().into(),
+            super::SnapshotPrimKind::String => self.vec_struct_type().into(),
         }
     }
 
@@ -2338,7 +2374,8 @@ impl<'ctx> super::Codegen<'ctx> {
         match kind {
             super::SnapshotPrimKind::I64
             | super::SnapshotPrimKind::F64
-            | super::SnapshotPrimKind::Char => Ok(loaded),
+            | super::SnapshotPrimKind::Char
+            | super::SnapshotPrimKind::String => Ok(loaded),
             super::SnapshotPrimKind::Bool => {
                 let i8_val = loaded.into_int_value();
                 let zero = self.context.i8_type().const_zero();
@@ -2362,7 +2399,8 @@ impl<'ctx> super::Codegen<'ctx> {
         match kind {
             super::SnapshotPrimKind::I64
             | super::SnapshotPrimKind::F64
-            | super::SnapshotPrimKind::Char => Ok(loaded),
+            | super::SnapshotPrimKind::Char
+            | super::SnapshotPrimKind::String => Ok(loaded),
             super::SnapshotPrimKind::Bool => {
                 let i1 = loaded.into_int_value();
                 let i8_ty = self.context.i8_type();
@@ -2412,13 +2450,28 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let ty = self.snapshot_storage_type(kind);
         let g = self.module.add_global(ty, None, &sym);
-        let zero: BasicValueEnum<'ctx> = match kind {
-            super::SnapshotPrimKind::I64 => self.context.i64_type().const_zero().into(),
-            super::SnapshotPrimKind::F64 => self.context.f64_type().const_zero().into(),
-            super::SnapshotPrimKind::Bool => self.context.i8_type().const_zero().into(),
-            super::SnapshotPrimKind::Char => self.context.i32_type().const_zero().into(),
-        };
-        g.set_initializer(&zero);
+        match kind {
+            super::SnapshotPrimKind::I64 => {
+                g.set_initializer(&self.context.i64_type().const_zero());
+            }
+            super::SnapshotPrimKind::F64 => {
+                g.set_initializer(&self.context.f64_type().const_zero());
+            }
+            super::SnapshotPrimKind::Bool => {
+                g.set_initializer(&self.context.i8_type().const_zero());
+            }
+            super::SnapshotPrimKind::Char => {
+                g.set_initializer(&self.context.i32_type().const_zero());
+            }
+            super::SnapshotPrimKind::String => {
+                // Slice c-repl.B.5.2: zero-initialize the (ptr, len, cap)
+                // triple. cap = 0 is the sentinel that `FreeVecBuffer`
+                // checks before freeing, so an uncaptured global (no
+                // cell has executed the capture path yet) won't free
+                // anything if accidentally treated as a String slot.
+                g.set_initializer(&self.vec_struct_type().const_zero());
+            }
+        }
         g.set_linkage(Linkage::External);
         g
     }
