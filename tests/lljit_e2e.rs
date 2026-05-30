@@ -1,153 +1,48 @@
-//! Phase-7 L560 W3.1: JIT-based E2E test harness with stdout capture.
+//! Phase-7 L560 W3.1: JIT-based E2E test harness.
 //!
-//! Mirrors the shape of `tests/codegen.rs::codegen_tests::run_program`
-//! but routes through `LLJITEngine` instead of the AOT path (object
-//! file, link, spawn subprocess). The JIT runs `main` in this process,
-//! so we redirect fd 1 around the call to capture printf output and
-//! restore on the way out.
+//! Originally W3.1 used in-process `dup`/`dup2` to redirect fd 1 around
+//! a JIT'd `main` call so stdout could be captured. That model raced
+//! cargo's libtest runner writes against the per-test redirect under
+//! the default parallel `--test-threads`, surfacing as flaky
+//! cross-test stdout leakage. Ported to spawn `karac_jit_runner` in
+//! one-shot mode (same helper `tests/codegen.rs::jit_dispatch` uses):
+//! each test gets its own subprocess with its own fd table, so the
+//! libtest-writer-vs-redirect race is structurally impossible.
 //!
-//! W3.1 acceptance: a representative subset of the existing codegen
-//! E2E tests (println int / bool / Vec sum / Map insert+get / `?` on
-//! Result / par-block) round-trips through this harness with output
-//! matching the AOT path. If ≥80% pass, the JIT path is real and we
-//! can grind through the rest in W3.2+. If a category fails for a
-//! structural reason (e.g., par-block thread lifecycle clashes with
-//! engine Drop), that's a real W3+ design item to address.
+//! The "in-process JIT" promise still lives in production (`karac run
+//! foo.kara` is true in-process) and is independently exercised by
+//! `tests/lljit_prototype.rs`'s engine-level lifecycle tests. The
+//! E2E suite below uses subprocess JIT as a test-runner artifact —
+//! parallel to how the AOT codegen suite already spawns compiled
+//! binaries.
 
 #![cfg(feature = "lljit_prototype")]
 
-use std::io::{Read, Seek, SeekFrom};
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
-use karac::codegen::{compile_to_ir, LLJITEngine};
+use karac::codegen::compile_to_ir;
 
-// `karac_runtime::__preserve_no_mangle_symbols` (see
-// `runtime/src/lib.rs`) holds each `#[no_mangle]` symbol live via
-// `black_box` so rlib-level DCE can't drop them — that's what makes
-// `dlsym(RTLD_DEFAULT, ...)` (the LLJIT process-symbol-search
-// generator's lookup mechanism) succeed for `karac_*` runtime
-// symbols at JIT-link time. Called once at module init via a static
-// initializer pattern; the `#[used]` static below is what guarantees
-// the call site itself isn't optimized out.
-fn force_link_karac_runtime() -> usize {
-    karac_runtime::__preserve_no_mangle_symbols()
-}
+mod common;
 
-#[used]
-static _FORCE_LINK_CALL_SITE: fn() -> usize = force_link_karac_runtime;
+static IR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-// ── KARAC_SPAWN_SITES test-binary stand-ins ──────────────────────────
-// In AOT builds, codegen emits these globals into the user program's
-// LLVM module; the runtime's `extern KARAC_SPAWN_SITES*` declarations
-// (`runtime/src/lib.rs` ~L1059, `#[cfg(not(test))]`-gated) resolve
-// against them at link time. In the LLJIT integration tests, codegen
-// emits them into each JITted module (visible only inside that
-// module's JITDylib), so the test binary's static link of the runtime
-// rlib has no satisfier for these references.
-//
-// We provide neutral stand-ins here:
-//   - `_ENABLED = 0` so `karac_runtime_has_debug_metadata` returns
-//     false and the slice-4/5 introspection paths short-circuit;
-//   - `_LEN = 0` so any iteration over the table is a no-op;
-//   - `KARAC_SPAWN_SITES` is a 32-byte zero placeholder (alignment 8
-//     to match `KaracSpawnSiteEntry`'s pointer-field alignment).
-// JITted user code reads its OWN KARAC_SPAWN_SITES from its module's
-// definitions — these stand-ins only satisfy the test binary's runtime
-// link, not the user program's runtime behavior.
-#[no_mangle]
-#[allow(non_upper_case_globals)]
-pub static KARAC_SPAWN_SITES_ENABLED: u8 = 0;
-#[no_mangle]
-#[allow(non_upper_case_globals)]
-pub static KARAC_SPAWN_SITES_LEN: u32 = 0;
-#[no_mangle]
-#[allow(non_upper_case_globals)]
-pub static KARAC_SPAWN_SITES: KaracSpawnSitesPad = KaracSpawnSitesPad([0; 4]);
-
-#[repr(C, align(8))]
-pub struct KaracSpawnSitesPad([u64; 4]);
-unsafe impl Sync for KaracSpawnSitesPad {}
-
-/// JIT-route a Kāra program through `LLJITEngine` and capture its
+/// JIT-route a Kāra program through `karac_jit_runner` and capture its
 /// stdout. Mirrors `tests/codegen.rs::codegen_tests::run_program`'s
-/// return type (`Option<String>`) so individual tests adopting this
-/// harness keep the same shape.
+/// return shape (`Option<String>`).
 ///
-/// Returns `Some(stdout)` if the JIT compiles + executes; `None` is
-/// reserved for environments where the JIT can't initialize (none
-/// expected on the host platforms we care about, but matching the
-/// AOT helper's `Option` shape).
+/// Returns `Some(stdout)` if the helper spawns + runs. `None` indicates
+/// the helper binary couldn't be spawned at all (unexpected on the host
+/// platforms we care about); matches `output_with_hang_watchdog`'s
+/// soft-skip contract for missing dependencies.
 fn jit_run_program(src: &str) -> Option<String> {
-    // Belt-and-suspenders: the `#[used]` static above pins the call
-    // site at link time, and this runtime call ensures the function
-    // body's symbol references are evaluated (not const-folded away).
-    let _ = force_link_karac_runtime();
-    let mut parsed = karac::parse(src);
-    if !parsed.errors.is_empty() {
-        let mut msg = String::from("test source failed to parse:\n");
-        for e in &parsed.errors {
-            msg.push_str(&format!("  {:?}\n", e));
-        }
-        panic!("{}", msg);
-    }
-    let resolved = karac::resolve(&parsed.program);
-    let typed = karac::typecheck(&parsed.program, &resolved);
-    karac::lower(&mut parsed.program, &typed);
-
-    let ir = compile_to_ir(&parsed.program, None, None).expect("compile_to_ir");
-
-    let engine = LLJITEngine::new().ok()?;
-    engine.add_ir_module(&ir).expect("add_ir_module");
-    let addr = engine.lookup_address("main").expect("lookup main");
-
-    // dup2-based stdout redirect to a temp file. A tempfile (not a
-    // pipe) sidesteps buffer-fill blocking for programs that print
-    // more than a pipe buffer's worth — at the cost of disk IO, which
-    // is acceptable for tests. Order:
-    //   1. Force-flush whatever the host process's stdout has buffered
-    //      so it doesn't leak into our captured stream.
-    //   2. Save fd 1 via dup, redirect 1 → tempfile.
-    //   3. Call JIT'd main.
-    //   4. Force-flush JIT'd stdio (printf is line-buffered on TTYs and
-    //      fully-buffered when redirected; we want all of it).
-    //   5. Restore fd 1 from the saved dup, close + drop the saved fd.
-    //   6. Rewind tempfile to start, read.
-    // exit code is intentionally discarded — the AOT harness's
-    // run_program also returns stdout only. Programs that intend to
-    // fail via exit code are out of scope for W3.1's representative
-    // subset.
-    let captured = unsafe {
-        libc::fflush(std::ptr::null_mut());
-        let saved_stdout = libc::dup(1);
-        assert!(saved_stdout >= 0, "dup(stdout) failed");
-        let mut tmpfile = tempfile().expect("create tempfile");
-        let rc = libc::dup2(tmpfile.as_raw_fd(), 1);
-        assert!(rc >= 0, "dup2 failed");
-
-        type MainFn = unsafe extern "C" fn() -> i32;
-        let main_fn: MainFn = std::mem::transmute(addr as usize);
-        let _exit = main_fn();
-
-        libc::fflush(std::ptr::null_mut());
-        let rc = libc::dup2(saved_stdout, 1);
-        assert!(rc >= 0, "dup2 restore failed");
-        libc::close(saved_stdout);
-
-        tmpfile.seek(SeekFrom::Start(0)).expect("seek");
-        let mut out = String::new();
-        tmpfile.read_to_string(&mut out).expect("read");
-        out
-    };
-
-    Some(captured)
+    jit_run_program_capturing(src).map(|(out, _exit)| out)
 }
 
 /// Captured stdout + the JIT'd `main`'s C-ABI exit code. Mirrors what
-/// the AOT path's `Output` exposes via `Command::output()`; tests that
-/// need to assert on non-zero exit codes (panics, error returns, etc.)
-/// use this variant instead of `jit_run_program`. W3.2c.
+/// the AOT path's `Output` exposes via `Command::output()`.
 fn jit_run_program_capturing(src: &str) -> Option<(String, i32)> {
-    let _ = force_link_karac_runtime();
     let mut parsed = karac::parse(src);
     if !parsed.errors.is_empty() {
         let mut msg = String::from("test source failed to parse:\n");
@@ -162,59 +57,31 @@ fn jit_run_program_capturing(src: &str) -> Option<(String, i32)> {
 
     let ir = compile_to_ir(&parsed.program, None, None).expect("compile_to_ir");
 
-    let engine = LLJITEngine::new().ok()?;
-    engine.add_ir_module(&ir).expect("add_ir_module");
-    let addr = engine.lookup_address("main").expect("lookup main");
-
-    let (captured, exit_code) = unsafe {
-        libc::fflush(std::ptr::null_mut());
-        let saved_stdout = libc::dup(1);
-        assert!(saved_stdout >= 0, "dup(stdout) failed");
-        let mut tmpfile = tempfile().expect("create tempfile");
-        let rc = libc::dup2(tmpfile.as_raw_fd(), 1);
-        assert!(rc >= 0, "dup2 failed");
-
-        type MainFn = unsafe extern "C" fn() -> i32;
-        let main_fn: MainFn = std::mem::transmute(addr as usize);
-        let exit = main_fn();
-
-        libc::fflush(std::ptr::null_mut());
-        let rc = libc::dup2(saved_stdout, 1);
-        assert!(rc >= 0, "dup2 restore failed");
-        libc::close(saved_stdout);
-
-        tmpfile.seek(SeekFrom::Start(0)).expect("seek");
-        let mut out = String::new();
-        tmpfile.read_to_string(&mut out).expect("read");
-        (out, exit)
-    };
-
-    Some((captured, exit_code))
-}
-
-/// Create a fresh unnamed temp file (O_RDWR). Stays open via the
-/// returned `std::fs::File`; unlinks on close (mkstemp + unlink).
-fn tempfile() -> std::io::Result<std::fs::File> {
-    use std::ffi::CString;
-    let template = CString::new("/tmp/karac_jit_e2e_XXXXXX").unwrap();
-    let mut bytes = template.into_bytes_with_nul();
-    let fd = unsafe { libc::mkstemp(bytes.as_mut_ptr() as *mut libc::c_char) };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
+    let id = IR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let ir_path = format!("/tmp/karac_jit_e2e_{}_{}.ll", std::process::id(), id);
+    {
+        let mut f = std::fs::File::create(&ir_path).expect("create IR tempfile");
+        f.write_all(ir.as_bytes()).expect("write IR");
     }
-    // Immediately unlink so the inode goes away when the fd closes.
-    let path = std::ffi::CStr::from_bytes_with_nul(&bytes).unwrap();
-    unsafe {
-        libc::unlink(path.as_ptr());
-    }
-    let owned = unsafe { OwnedFd::from_raw_fd(fd) };
-    Ok(std::fs::File::from(owned))
-}
 
-// Bind `OwnedFd::into_raw_fd` so the import isn't dead.
-#[allow(dead_code)]
-fn _suppress_into_raw_fd_unused(fd: OwnedFd) -> i32 {
-    fd.into_raw_fd()
+    // `CARGO_BIN_EXE_<name>` is a cargo-set compile-time env var
+    // resolving to the helper binary's path. Cargo guarantees the bin
+    // target is built before the test crate, so no runtime path-hunting.
+    let runner = env!("CARGO_BIN_EXE_karac_jit_runner");
+    let mut cmd = std::process::Command::new(runner);
+    cmd.arg(&ir_path);
+
+    let output = common::output_with_hang_watchdog(cmd, Duration::from_secs(15));
+    let _ = std::fs::remove_file(&ir_path);
+
+    let output = output?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    // `ExitStatus::code()` is `None` only when the child was killed by
+    // a signal — `output_with_hang_watchdog` panics in its watchdog
+    // path before we reach here, so any `None` is a real signal kill
+    // and -1 is a reasonable sentinel for tests that didn't expect one.
+    let exit = output.status.code().unwrap_or(-1);
+    Some((stdout, exit))
 }
 
 // ── W3.1 representative subset ───────────────────────────────────────
@@ -292,15 +159,17 @@ fn jit_e2e_fstring_interpolation() {
 
 // ── W3.2 surface ─────────────────────────────────────────────────────
 // par-blocks, `?` on Result, and other surface that depends on runtime
-// symbols beyond the libc/Vec/Map base. The W3.2a finding (KARAC_SPAWN_SITES
-// stand-ins above) was needed before this could link at all.
+// symbols beyond the libc/Vec/Map base. Originally needed in-test
+// KARAC_SPAWN_SITES stand-ins for the W3.2a finding; under the
+// subprocess port the helper binary carries its own stand-ins and the
+// test binary doesn't link against any JIT'd symbols.
 
 #[test]
 fn jit_e2e_question_mark_happy_path() {
     // `?` propagates an Ok through to the surrounding Result. Happy
     // path: `add_ten(true)` returns Ok(52), main prints 52. Exercises
     // codegen's `?` lowering + the runtime's karac_error_trace_clear
-    // at startup (which the force-link list covers).
+    // at startup (which the helper bin's force-link list covers).
     let src = r#"
 fn parse_int(flag: bool) -> Result[i64, i64] {
     if flag { Ok(42_i64) } else { Err(99_i64) }
@@ -324,7 +193,8 @@ fn main() {
 fn jit_e2e_question_mark_err_path() {
     // `?` propagates Err. Codegen emits karac_error_trace_push at the
     // failure block; runtime's atexit handler prints the trace to
-    // stderr. Stdout only carries the println output from main.
+    // stderr (now visible on the subprocess's exit, not at test-binary
+    // exit). Stdout only carries the println output from main.
     let src = r#"
 fn parse_int(flag: bool) -> Result[i64, i64] {
     if flag { Ok(42_i64) } else { Err(99_i64) }
@@ -347,10 +217,10 @@ fn main() {
 #[test]
 fn jit_e2e_exit_code_zero_on_clean_run() {
     // A clean main exits 0; `jit_run_program_capturing` exposes that
-    // explicitly. Sanity check the variant before pivoting to non-zero
-    // exit code tests (which would need codegen to lower a non-zero
-    // exit from a top-level `Err(_)` — out of scope for W3.2, but the
-    // capturing variant is the right shape for when that lands).
+    // explicitly. Sanity check the variant — under the subprocess
+    // port the exit code comes from `Command::output`'s ExitStatus,
+    // sourced from the helper binary's own `ExitCode::from(rc)` at
+    // the end of `oneshot_main`.
     let (out, exit) = jit_run_program_capturing("fn main() { println(42); }").expect("jit");
     assert_eq!(out, "42\n");
     assert_eq!(exit, 0);
