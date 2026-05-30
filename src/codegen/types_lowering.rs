@@ -41,6 +41,14 @@ impl<'ctx> super::Codegen<'ctx> {
         match &ty.kind {
             TypeKind::Path(path) => {
                 let name = path.segments.first().map(|s| s.as_str()).unwrap_or("");
+                // Refinement alias (`type Email = String where …`): lower to
+                // the base's layout (phase-9 step 4). A refinement is
+                // layout-identical to its base — without this it would hit
+                // the `i64` fall-through in `llvm_type_for_name` and
+                // mis-size a non-`i64`-based refinement.
+                if let Some(base) = self.refinement_bases.get(name) {
+                    return self.llvm_type_for_type_expr(&base.clone());
+                }
                 if name == "Array" {
                     if let Some(arr_ty) = self.llvm_array_type(&path.generic_args) {
                         return arr_ty;
@@ -817,6 +825,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // Active monomorphization substitution takes priority.
         if let Some(&ty) = self.type_subst.get(name) {
             return ty;
+        }
+        // Refinement alias → base layout (phase-9 step 4). See the parallel
+        // arm in `llvm_type_for_type_expr`; this name-level path is hit when
+        // a refinement is referenced by bare name (e.g. a recorded
+        // `var_type_names` entry or a struct-field type name).
+        if let Some(base) = self.refinement_bases.get(name) {
+            return self.llvm_type_for_type_expr(&base.clone());
         }
         match name {
             "i8" | "u8" => self.context.i8_type().into(),

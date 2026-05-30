@@ -447,6 +447,16 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) variables: HashMap<String, VarSlot<'ctx>>,
     /// Maps variable name → Kāra type name (for struct/enum field resolution).
     pub(crate) var_type_names: HashMap<String, String>,
+    /// Refinement type alias name → its base `TypeExpr` (`type Email =
+    /// String where …` → the `String` type expr). Populated from the
+    /// program's `Item::TypeAlias`es that carry a `where` predicate.
+    /// Consulted by `llvm_type_for_type_expr` / `llvm_type_for_name` so a
+    /// refinement lowers to its *base*'s layout — without this a refinement
+    /// over a non-`i64` base would hit the `i64` fall-through default and
+    /// silently mis-size the slot (phase-9 step 4). A refinement is
+    /// layout-identical to its base (no runtime tag), so this is a pure
+    /// alias resolution.
+    pub(crate) refinement_bases: HashMap<String, crate::ast::TypeExpr>,
     /// Set of top-level Atomic[T]-typed bindings whose inner T is `bool`.
     /// The slot itself is widened to `i8` (LLVM atomics reject `i1`); this
     /// set drives the `.load` trunc-to-i1 and `.store` zext-to-i8 wrapping
@@ -2911,6 +2921,7 @@ impl<'ctx> Codegen<'ctx> {
             builder,
             variables: HashMap::new(),
             var_type_names: HashMap::new(),
+            refinement_bases: HashMap::new(),
             atomic_var_inner_is_bool: HashSet::new(),
             current_fn: None,
             printf_fn,
@@ -3370,6 +3381,18 @@ impl<'ctx> Codegen<'ctx> {
         for item in &program.items {
             if let Item::ConstDecl(c) = item {
                 self.consts.insert(c.name.clone(), c.value.clone());
+            }
+        }
+
+        // Refinement type aliases (`type Email = String where …`): record
+        // each one's base `TypeExpr` so type lowering resolves the
+        // refinement to its base's layout (phase-9 step 4). A refinement
+        // carries no runtime tag — it is layout-identical to its base.
+        for item in &program.items {
+            if let Item::TypeAlias(t) = item {
+                if t.refinement.is_some() {
+                    self.refinement_bases.insert(t.name.clone(), t.ty.clone());
+                }
             }
         }
 

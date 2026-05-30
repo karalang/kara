@@ -20258,3 +20258,39 @@ fn refinement_as_cast_from_non_base_rejected() {
             .join(" | ")
     );
 }
+
+// ── Refinement types (phase-9 line 30, step 4 — arithmetic) ──────
+//
+// Arithmetic on refined operands returns the base type — no automatic
+// constraint propagation (design.md § Refinement Types).
+
+#[test]
+fn refinement_arithmetic_returns_base() {
+    // `a + b` where both are `Even` has type `i64` (the base), so it
+    // satisfies an `i64` return.
+    typecheck_ok(
+        "type Even = i64 where self % 2 == 0;
+         fn add(a: Even, b: Even) -> i64 { a + b }",
+    );
+}
+
+#[test]
+fn refinement_arithmetic_result_is_not_refined() {
+    // The result of `a + b` is `i64`, NOT `Even` — so returning it where
+    // `Even` is expected is rejected (no implicit narrowing of the base
+    // arithmetic result back into the refinement).
+    let errors = typecheck_errors(
+        "type Even = i64 where self % 2 == 0;
+         fn add(a: Even, b: Even) -> Even { a + b }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch
+            || e.kind == TypeErrorKind::ReturnTypeMismatch),
+        "expected a type mismatch (i64 arithmetic result is not Even), got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}

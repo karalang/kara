@@ -26,8 +26,8 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 use super::types::{
-    is_integer, is_numeric, is_prelude_type_or_module_name, is_string_concat_operand, type_display,
-    types_compatible, Type, UIntSize, VariantTypeInfo,
+    is_integer, is_numeric, is_prelude_type_or_module_name, is_string_concat_operand,
+    strip_refinement, type_display, types_compatible, Type, UIntSize, VariantTypeInfo,
 };
 use super::TypeErrorKind;
 
@@ -415,8 +415,15 @@ impl<'a> super::TypeChecker<'a> {
         right: &Expr,
         span: &Span,
     ) -> Type {
-        let left_ty = self.infer_expr(left);
-        let right_ty = self.infer_expr(right);
+        // Arithmetic-returns-base (design.md § Refinement Types: "Arithmetic
+        // on refined types returns the base type — no automatic constraint
+        // propagation"). Strip any refinement off the operand types before
+        // the result-type logic below, so `Positive + Positive -> i64` and
+        // comparisons / bitwise ops on refined operands operate on the base.
+        // The operands' *own* recorded types (in `expr_types`) are untouched
+        // — only the local types driving this binop's result are normalized.
+        let left_ty = strip_refinement(&self.infer_expr(left)).clone();
+        let right_ty = strip_refinement(&self.infer_expr(right)).clone();
 
         if left_ty == Type::Error || right_ty == Type::Error {
             return Type::Error;

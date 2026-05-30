@@ -26028,4 +26028,90 @@ fn main() {
             );
         }
     }
+
+    // ── Refinement types (phase-9 step 4) ───────────────────────
+
+    #[test]
+    fn test_e2e_refinement_arithmetic_returns_base() {
+        // `d + d` where `d: Doubled` strips to the base `i64` for the add,
+        // and the result is the base type — so it prints as a plain i64.
+        let out = run_program(
+            r#"
+type Doubled = i64 where self % 2 == 0;
+fn main() {
+    let d = 4 as Doubled;
+    println(d + d);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "8");
+        }
+    }
+
+    #[test]
+    fn test_ir_refinement_param_uses_base_layout() {
+        // A refinement over `i64` lowers its parameter to an `i64`, not a
+        // pointer / struct — the base-layout resolution at work.
+        let ir = ir_for(
+            "type Even = i64 where self % 2 == 0;
+             fn takes(e: Even) -> i64 { e + e }",
+        );
+        assert!(
+            ir.contains("i64 @takes(i64") || ir.contains("define i64 @takes(i64"),
+            "refinement param should lower to its i64 base:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_refinement_over_string_matches_base_layout() {
+        // The bug the layout arm fixes: a refinement over a *non-`i64`*
+        // base (`type Name = String`) must lower to the base's layout, not
+        // the `i64` fall-through default. Prove it by comparing the `@takes`
+        // parameter type against the equivalent plain-`String` signature —
+        // they must be identical.
+        fn takes_param_type(ir: &str) -> String {
+            let i = ir.find("@takes(").expect("no @takes in IR");
+            let rest = &ir[i + "@takes(".len()..];
+            let end = rest.find([' ', ')']).unwrap_or(rest.len());
+            rest[..end].to_string()
+        }
+        let refined = ir_for(
+            "type Name = String where self.len() > 0;
+             fn takes(n: Name) -> i64 { 0 }",
+        );
+        let plain = ir_for("fn takes(n: String) -> i64 { 0 }");
+        assert_eq!(
+            takes_param_type(&refined),
+            takes_param_type(&plain),
+            "refinement over String must lower to the String base layout\nrefined IR:\n{refined}"
+        );
+        // Sanity: it is NOT the i64 fall-through default.
+        assert_ne!(
+            takes_param_type(&refined),
+            "i64",
+            "refinement over String must not hit the i64 fall-through:\n{refined}"
+        );
+    }
+
+    #[test]
+    #[ignore = "blocked on phase-9 step 5: codegen value-dispatch (method calls, \
+                println) does not yet recognize a refinement receiver as its base, \
+                so `n.len()` on a refinement-over-String binding falls through"]
+    fn test_e2e_refinement_string_base_method_deref() {
+        // Once step-5 codegen value-dispatch strips refinements, `n.len()`
+        // (base-deref, step 2) reads 5 from the String value.
+        let out = run_program(
+            r#"
+type Name = String where self.len() > 0;
+fn main() {
+    let n = "hello" as Name;
+    println(n.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5");
+        }
+    }
 }
