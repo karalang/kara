@@ -462,11 +462,30 @@ pub extern "C" fn karac_runtime_event_loop_register_fd(
             // fd until some *other* fd fires — and an fd that is already
             // readable at registration time (e.g. a listener re-armed in an
             // accept loop while connections sit in the backlog) would be
-            // silently missed, wedging the task parked on it. The waker is
-            // coalescing, so a wake that races ahead of the next poll is
-            // not lost. Harmless when no poller is running.
-            if let Some(h) = EVENT_LOOP_HANDLE.get() {
-                let _ = h.wake();
+            // silently missed, wedging the task parked on it.
+            //
+            // **Gated on a background poller actually existing.** mio's
+            // waker is coalescing AND edge-triggered: a `wake()` issued
+            // before any `poll()` call leaves a pending waker event that
+            // the NEXT `poll()` consumes immediately (returning 0 user-
+            // facing wakeups, since WAKER_TOKEN is filtered out in
+            // `run_once`). That breaks the synchronous-FFI case where the
+            // same thread registers an fd and then calls
+            // `karac_runtime_event_loop_poll` itself: the prefired wake
+            // would race ahead of any real readiness event, returning 0
+            // wakeups well under the caller's `max_wait_nanos`. Gating
+            // the wake on `BACKGROUND_POLLER` being installed restricts
+            // the wake to the only state it's needed for (a poller
+            // blocked in `run_once`) and leaves the synchronous-poll
+            // path race-free.
+            if BACKGROUND_POLLER
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_some()
+            {
+                if let Some(h) = EVENT_LOOP_HANDLE.get() {
+                    let _ = h.wake();
+                }
             }
             token.0 as u64
         }
