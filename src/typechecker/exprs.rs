@@ -400,6 +400,20 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        // Refinement narrowing elision (design.md § Refinement Types >
+        // "Compile-time elision procedure (v1)"; phase-9 line 37). When the
+        // slot is a refinement that `actual` does not already satisfy, run
+        // the two elision rules + the explicit-coercion rejection *before*
+        // the generic `check_assignable`, since the procedure needs the
+        // initializer expression (for const-eval), not just its type. This
+        // single site covers every check-mode position uniformly — `let`
+        // initializers, function-call arguments, struct-field inits, and
+        // function-body returns all flow through `check_expr`.
+        if !self.is_subtype_with_projections(expected, &actual) {
+            if let Some(narrowed) = self.try_refinement_narrowing(expr, expected, &actual) {
+                return narrowed;
+            }
+        }
         self.check_assignable(expected, &actual, expr.span.clone());
         actual
     }

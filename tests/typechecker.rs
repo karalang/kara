@@ -20294,3 +20294,154 @@ fn refinement_arithmetic_result_is_not_refined() {
             .join(" | ")
     );
 }
+
+// ── Refinement types (phase-9 line 37 — compile-time elision pass) ──
+//
+// The two elision rules (const-evaluable narrowing + type-identity) plus
+// the explicit-coercion rejection, applied uniformly at every check-mode
+// position (binding init, call argument, return). design.md § Refinement
+// Types > "Compile-time elision procedure (v1)".
+
+fn refinement_error_code(source: &str, code: &str) {
+    let errors = typecheck_errors(source);
+    assert!(
+        errors.iter().any(|e| e.to_string().contains(code)),
+        "expected `{code}` for `{}`, got: {}",
+        source,
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn refinement_elision_rule1_const_literal_admitted() {
+    // Rule 1: `80` const-evaluates, the predicate `1 <= 80 <= 65535`
+    // holds, so the narrowing is admitted with no runtime check. The
+    // binding then widens back to its base `u16` at the return.
+    typecheck_ok(
+        "type ValidPort = u16 where self >= 1 and self <= 65535;
+         fn open() -> u16 { let port: ValidPort = 80; port }",
+    );
+}
+
+#[test]
+fn refinement_elision_rule1_const_arithmetic_admitted() {
+    // Rule 1 reduces const-literal arithmetic before checking the
+    // predicate: `2 + 2 == 4`, `4 % 2 == 0` holds.
+    typecheck_ok(
+        "type Even = i64 where self % 2 == 0;
+         fn four() -> i64 { let x: Even = 2 + 2; x }",
+    );
+}
+
+#[test]
+fn refinement_elision_rule1_const_violation_is_build_error() {
+    // Rule 1 failure is a deterministic, catchable *build-time* error —
+    // `3 % 2 == 0` is false, so the const value is rejected at compile
+    // time (not a runtime fault).
+    refinement_error_code(
+        "type Even = i64 where self % 2 == 0;
+         fn three() -> i64 { let x: Even = 3; x }",
+        "E_REFINEMENT_PREDICATE_VIOLATION",
+    );
+}
+
+#[test]
+fn refinement_elision_rule1_admit_at_call_arg() {
+    // Rule 6: the same rule-1 procedure applies at call-argument
+    // positions. `8` const-evaluates and satisfies `8 % 2 == 0`.
+    typecheck_ok(
+        "type Even = i64 where self % 2 == 0;
+         fn takes(e: Even) -> i64 { 0 }
+         fn call() -> i64 { takes(8) }",
+    );
+}
+
+#[test]
+fn refinement_elision_rule1_const_violation_at_call_arg() {
+    // Rule 6 + rule 1 failure at a call argument: `5 % 2 == 0` is false.
+    refinement_error_code(
+        "type Even = i64 where self % 2 == 0;
+         fn takes(e: Even) -> i64 { 0 }
+         fn call() -> i64 { takes(5) }",
+        "E_REFINEMENT_PREDICATE_VIOLATION",
+    );
+}
+
+#[test]
+fn refinement_elision_rule2_identity_admitted() {
+    // Rule 2: the initializer's static type is *exactly* the target
+    // refinement, so no check is emitted (pass-through `let q = p`).
+    typecheck_ok(
+        "type ValidPort = u16 where self >= 1 and self <= 65535;
+         fn pass(p: ValidPort) -> u16 { let q: ValidPort = p; q }",
+    );
+}
+
+#[test]
+fn refinement_elision_rule4_runtime_value_rejected() {
+    // Rule 4: a runtime (non-const) base value cannot narrow implicitly —
+    // it needs `Even.try_from(n)?` or `n as Even`.
+    refinement_error_code(
+        "type Even = i64 where self % 2 == 0;
+         fn bind(n: i64) -> i64 { let x: Even = n; x }",
+        "E_REFINEMENT_IMPLICIT_NARROWING",
+    );
+}
+
+#[test]
+fn refinement_elision_rule5_cross_refinement_rejected() {
+    // Rule 5: two distinct refinements over the same base have no implicit
+    // relationship, even when their predicates are textually identical.
+    refinement_error_code(
+        "type A = i64 where self > 0;
+         type B = i64 where self > 0;
+         fn coerce(a: A) -> i64 { let b: B = a; b }",
+        "E_REFINEMENT_IMPLICIT_NARROWING",
+    );
+}
+
+#[test]
+fn refinement_elision_rule7_generic_param_not_elided() {
+    // Rule 7 (generic-code guard): inside `fn id[T](v: T)` the expected
+    // type of `let x: T = v` is the opaque `T`, never a refinement, so the
+    // elision procedure never engages and the body type-checks cleanly.
+    typecheck_ok("fn id[T](v: T) -> T { let x: T = v; x }");
+}
+
+#[test]
+fn refinement_elision_string_literal_needs_explicit_construction() {
+    // v1 boundary: the const-evaluator does not reduce string literals to
+    // a value it can take `.len()` of, so a `self.len()` refinement is not
+    // const-elided — implicit string narrowing is rejected and the user
+    // must construct through `NonEmpty.try_from(s)?` / `s as NonEmpty`.
+    refinement_error_code(
+        "type NonEmpty = String where self.len() > 0;
+         fn name() -> String { let s: NonEmpty = \"hi\"; s }",
+        "E_REFINEMENT_IMPLICIT_NARROWING",
+    );
+}
+
+#[test]
+fn refinement_elision_wrong_base_keeps_generic_mismatch() {
+    // A genuinely wrong base type (`i32` into an `i64`-based refinement)
+    // is a base mismatch, not a narrowing — the procedure falls through to
+    // the ordinary "expected X, found Y" so the diagnostic still names the
+    // base-type discrepancy rather than an elision suggestion.
+    let errors = typecheck_errors(
+        "type Even = i64 where self % 2 == 0;
+         fn bad(n: i32) -> i64 { let x: Even = n; x }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected a TypeMismatch for the i32->Even base mismatch, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}

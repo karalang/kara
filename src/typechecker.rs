@@ -34,6 +34,7 @@ mod inference;
 mod items;
 mod lowering;
 mod patterns;
+mod refinement_elision;
 mod stdlib_io;
 mod stdlib_iter;
 mod stdlib_map;
