@@ -1,7 +1,7 @@
 {
   "ok": true,
   "config": {
-    "target": "127.0.0.1:15991",
+    "target": "127.0.0.1:36605",
     "connections": 1000000,
     "concurrency": 512,
     "churn_rounds": 3,
@@ -40,34 +40,34 @@
     "established": 1000000,
     "failed": 0,
     "samples": 1000000,
-    "min_ms": 0.287027,
-    "mean_ms": 465.8776304390396,
-    "p50_ms": 43.026619000000004,
-    "p95_ms": 1687.567601,
-    "p99_ms": 1855.723935,
-    "p999_ms": 2021.183668,
-    "max_ms": 2306.46411
+    "min_ms": 0.274862,
+    "mean_ms": 436.58994947889,
+    "p50_ms": 43.012071,
+    "p95_ms": 1586.196522,
+    "p99_ms": 1737.972498,
+    "p999_ms": 1837.675182,
+    "max_ms": 2016.871075
   },
   "memory": {
     "available": true,
-    "server_pid": 2960,
-    "rss_before_kb": 2324,
-    "rss_after_kb": 7619176,
-    "per_conn_bytes": 7799.656448
+    "server_pid": 1385,
+    "rss_before_kb": 2100,
+    "rss_after_kb": 7619448,
+    "per_conn_bytes": 7800.164352
   },
   "churn": {
     "rounds": 3,
-    "batch": 10000,
-    "reconnect_established": 30000,
-    "reconnect_failed": 0,
-    "samples": 30000,
-    "min_ms": 66.95732799999999,
-    "mean_ms": 1821.2743973602953,
-    "p50_ms": 1856.348636,
-    "p95_ms": 1986.799123,
-    "p99_ms": 2060.8249060000003,
-    "p999_ms": 2574.246998,
-    "max_ms": 2893.267317,
-    "cliff_ratio": 1.1105234281520437
+    "batch": 100000,
+    "reconnect_established": 249993,
+    "reconnect_failed": 50007,
+    "samples": 249993,
+    "min_ms": 62.425657,
+    "mean_ms": 1620.1360430866057,
+    "p50_ms": 1618.06383,
+    "p95_ms": 1796.5657689999998,
+    "p99_ms": 1859.894856,
+    "p999_ms": 1934.751903,
+    "max_ms": 2120.25444,
+    "cliff_ratio": 1.0701520640518212
   }
 }
