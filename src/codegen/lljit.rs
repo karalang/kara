@@ -14,13 +14,16 @@
 use std::ffi::{c_char, CStr, CString};
 use std::ptr;
 
-use llvm_sys::core::{LLVMCreateMemoryBufferWithMemoryRange, LLVMDisposeMessage};
+use llvm_sys::core::{
+    LLVMCreateMemoryBufferWithMemoryRange, LLVMDisposeMessage, LLVMSetDataLayout, LLVMSetTarget,
+};
 use llvm_sys::error::{LLVMDisposeErrorMessage, LLVMErrorRef, LLVMGetErrorMessage};
 use llvm_sys::ir_reader::LLVMParseIRInContext;
 use llvm_sys::orc2::lljit::{
     LLVMOrcCreateLLJIT, LLVMOrcCreateLLJITBuilder, LLVMOrcDisposeLLJIT,
-    LLVMOrcLLJITAddLLVMIRModule, LLVMOrcLLJITAddLLVMIRModuleWithRT, LLVMOrcLLJITGetGlobalPrefix,
-    LLVMOrcLLJITGetMainJITDylib, LLVMOrcLLJITLookup, LLVMOrcLLJITRef,
+    LLVMOrcLLJITAddLLVMIRModule, LLVMOrcLLJITAddLLVMIRModuleWithRT, LLVMOrcLLJITGetDataLayoutStr,
+    LLVMOrcLLJITGetGlobalPrefix, LLVMOrcLLJITGetMainJITDylib, LLVMOrcLLJITGetTripleString,
+    LLVMOrcLLJITLookup, LLVMOrcLLJITRef,
 };
 use llvm_sys::orc2::LLVMOrcThreadSafeModuleRef;
 use llvm_sys::orc2::{
@@ -182,6 +185,26 @@ impl LLJITEngine {
                 return Err(msg);
             }
 
+            // Align the module's data layout and target triple with the
+            // LLJIT's. AOT codegen never sets these on the module (the
+            // AOT TargetMachine provides them at object-write time), so
+            // the parsed module here has empty / module-default layout.
+            // LLJIT requires the module to match its own
+            // JITTargetMachineBuilder layout — mismatch shows up as
+            // wrong struct field offsets and segfaults / aborts at
+            // runtime (observed on `enum E { V(Vec[i64]) }` + match
+            // destructure: free() got an offset-into-the-stack pointer
+            // instead of the Vec's heap data pointer). Fix: ask LLJIT
+            // for its layout + triple and stamp them on the module
+            // before TSM wrap.
+            let dl_str = LLVMOrcLLJITGetDataLayoutStr(self.jit);
+            if !dl_str.is_null() {
+                LLVMSetDataLayout(module, dl_str);
+            }
+            let triple_str = LLVMOrcLLJITGetTripleString(self.jit);
+            if !triple_str.is_null() {
+                LLVMSetTarget(module, triple_str);
+            }
             // ThreadSafeModule takes ownership of the module — DO NOT
             // dispose the LLVMModuleRef separately.
             Ok(LLVMOrcCreateNewThreadSafeModule(module, self.ts_ctx))

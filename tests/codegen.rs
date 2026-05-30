@@ -6,8 +6,59 @@
 //!
 //! End-to-end execution tests (compile → link → run → compare output) are
 //! gated on the host having `cc` available and are marked accordingly.
+//!
+//! **W3.3 (LLJIT bulk migration, 2026-05-29).** When built with the
+//! `lljit_prototype` feature *and* run with `KARAC_TEST_JIT=1`, the
+//! E2E `run_program_capturing_inner` dispatches through LLJIT (in-
+//! process JIT compile + execute) instead of the AOT
+//! object-and-spawn path. This lets the existing ~543 E2E tests
+//! retarget at the JIT runtime via the same source; failures bucket
+//! into known causes (missing runtime symbol in the force-link list,
+//! missing `KARAC_*` global stand-in, stderr-dependent assertion).
 
 mod common;
+
+// ── LLJIT test-binary linkage scaffolding ─────────────────────────────
+// In AOT builds, the runtime's `extern KARAC_SPAWN_SITES*` declarations
+// (runtime/src/lib.rs L1059, `#[cfg(not(test))]`-gated) are satisfied by
+// codegen-emitted globals in each user binary. In the JIT path, codegen
+// emits those globals per-JITted-module (visible only inside that
+// module's JITDylib), so the test binary's static link of the runtime
+// rlib has no satisfier — we provide neutral stand-ins at the test
+// binary level. JITted user code reads its own module-local defs;
+// these stand-ins only satisfy the test binary's link, not user-
+// program semantics.
+
+#[cfg(feature = "lljit_prototype")]
+#[no_mangle]
+#[allow(non_upper_case_globals)]
+pub static KARAC_SPAWN_SITES_ENABLED: u8 = 0;
+
+#[cfg(feature = "lljit_prototype")]
+#[no_mangle]
+#[allow(non_upper_case_globals)]
+pub static KARAC_SPAWN_SITES_LEN: u32 = 0;
+
+#[cfg(feature = "lljit_prototype")]
+#[no_mangle]
+#[allow(non_upper_case_globals)]
+pub static KARAC_SPAWN_SITES: KaracSpawnSitesPad = KaracSpawnSitesPad([0; 4]);
+
+#[cfg(feature = "lljit_prototype")]
+#[repr(C, align(8))]
+pub struct KaracSpawnSitesPad([u64; 4]);
+
+#[cfg(feature = "lljit_prototype")]
+unsafe impl Sync for KaracSpawnSitesPad {}
+
+#[cfg(feature = "lljit_prototype")]
+#[used]
+static _FORCE_LINK_CALL_SITE: fn() -> usize = force_link_karac_runtime;
+
+#[cfg(feature = "lljit_prototype")]
+fn force_link_karac_runtime() -> usize {
+    karac_runtime::__preserve_no_mangle_symbols()
+}
 
 #[cfg(feature = "llvm")]
 mod codegen_tests {
@@ -622,6 +673,17 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
 
+        // W3.3 — LLJIT dispatch under env-var control. Routes the whole
+        // 543-test E2E suite through `LLJITEngine` instead of the AOT
+        // object+link+spawn path. Stderr is always empty under this
+        // path (the runtime's atexit handler runs at test-binary exit,
+        // not per-test) — stderr-dependent assertions need a different
+        // approach and are currently the known failure bucket.
+        #[cfg(feature = "lljit_prototype")]
+        if std::env::var("KARAC_TEST_JIT").as_deref() == Ok("1") {
+            return jit_dispatch(&parsed.program, filename);
+        }
+
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_e2e_{}_{}.o", std::process::id(), id);
         let exe_path = format!("/tmp/karac_e2e_{}_{}", std::process::id(), id);
@@ -646,6 +708,77 @@ fn main() {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         })
+    }
+
+    /// W3.3 LLJIT dispatch. Mirrors `tests/lljit_e2e.rs::jit_run_program`
+    /// but returns the `CapturedRun` shape (stdout + stderr) the AOT
+    /// path uses, so callers don't need to fork on the dispatch path.
+    /// Stderr is always empty — see comment in the dispatch site.
+    #[cfg(feature = "lljit_prototype")]
+    fn jit_dispatch(program: &karac::ast::Program, _filename: Option<&str>) -> Option<CapturedRun> {
+        use karac::codegen::{compile_to_ir, LLJITEngine};
+        use std::io::{Read, Seek, SeekFrom};
+        use std::os::fd::AsRawFd;
+
+        let _ = super::force_link_karac_runtime();
+
+        let ir = compile_to_ir(program, None, None).expect("compile_to_ir");
+        let engine = LLJITEngine::new().ok()?;
+        engine.add_ir_module(&ir).expect("jit add_ir_module");
+        let addr = engine.lookup_address("main").expect("jit lookup main");
+
+        let stdout = unsafe {
+            libc::fflush(std::ptr::null_mut());
+            let saved = libc::dup(1);
+            assert!(saved >= 0, "dup(stdout) failed");
+            let mut tmp = jit_tempfile().expect("tempfile");
+            let rc = libc::dup2(tmp.as_raw_fd(), 1);
+            assert!(rc >= 0, "dup2 redirect failed");
+
+            type MainFn = unsafe extern "C" fn() -> i32;
+            let main_fn: MainFn = std::mem::transmute(addr as usize);
+            let _exit = main_fn();
+
+            libc::fflush(std::ptr::null_mut());
+            let rc = libc::dup2(saved, 1);
+            assert!(rc >= 0, "dup2 restore failed");
+            libc::close(saved);
+
+            tmp.seek(SeekFrom::Start(0)).expect("seek");
+            let mut out = String::new();
+            tmp.read_to_string(&mut out).expect("read");
+            out
+        };
+
+        Some(CapturedRun {
+            stdout,
+            // Stderr is per-test-empty under the JIT path. The
+            // runtime's `karac_error_trace_push` atexit handler only
+            // fires once per test-binary exit, so trace-dependent
+            // assertions can't run in this dispatch. Tests that check
+            // stderr will see "" and fail their assertions — that's
+            // the W3.3 known limitation, addressed in W3.4+ if needed.
+            stderr: String::new(),
+        })
+    }
+
+    #[cfg(feature = "lljit_prototype")]
+    fn jit_tempfile() -> std::io::Result<std::fs::File> {
+        use std::ffi::{CStr, CString};
+        use std::os::fd::FromRawFd;
+        let template = CString::new("/tmp/karac_jit_codegen_XXXXXX").unwrap();
+        let mut bytes = template.into_bytes_with_nul();
+        let fd = unsafe { libc::mkstemp(bytes.as_mut_ptr() as *mut libc::c_char) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let path = CStr::from_bytes_with_nul(&bytes).unwrap();
+        unsafe {
+            libc::unlink(path.as_ptr());
+        }
+        Ok(std::fs::File::from(unsafe {
+            std::os::fd::OwnedFd::from_raw_fd(fd)
+        }))
     }
 
     /// Like `run_program` but also runs the ownership checker and passes the
