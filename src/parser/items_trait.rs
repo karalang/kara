@@ -88,6 +88,7 @@ impl super::Parser {
         };
 
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
         Some(MarkerTraitDef {
             span: self.span_from(&start),
@@ -101,6 +102,7 @@ impl super::Parser {
             where_clause,
             body_brace,
             deprecation,
+            unstable,
             lint_overrides,
         })
     }
@@ -234,6 +236,7 @@ impl super::Parser {
         self.expect(&Token::RightBrace)?;
 
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
         let on_unimplemented = self.scan_on_unimplemented_attr(&attributes);
         Some(TraitDef {
@@ -250,6 +253,7 @@ impl super::Parser {
             items,
             stdlib_origin: false,
             deprecation,
+            unstable,
             lint_overrides,
             on_unimplemented,
         })
@@ -309,6 +313,7 @@ impl super::Parser {
         self.expect(&Token::Semicolon)?;
 
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
         Some(TraitAliasDef {
             span: self.span_from(start),
@@ -321,6 +326,7 @@ impl super::Parser {
             bounds,
             where_clause,
             deprecation,
+            unstable,
             lint_overrides,
         })
     }
@@ -453,6 +459,7 @@ impl super::Parser {
         // `E_DEPRECATED_*` diagnostics for malformed forms.
         let is_track_caller = self.scan_track_caller_attr(&attributes);
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let unstable = self.scan_unstable_attr(&attributes);
 
         Some(TraitMethod {
             span: self.span_from(&start),
@@ -470,6 +477,7 @@ impl super::Parser {
             where_clause,
             body,
             deprecation,
+            unstable,
             is_track_caller,
         })
     }

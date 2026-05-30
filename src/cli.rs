@@ -2568,6 +2568,11 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // `OnceCell[T]`, raw pointer) per
                 // `src/cross_task_safe.rs`'s closed structural list.
                 crate::typechecker::TypeErrorKind::CrossTaskUnsafeCapture => "E0254",
+                // Phase-8 line 49 — `#[unstable]` use-site lint
+                // promoted to error via `#[deny(unstable_api)]`.
+                // Reuses the same numeric slot as the warning
+                // (`W0255`) by convention with `Deprecated`.
+                crate::typechecker::TypeErrorKind::UnstableApi => "E0255",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
@@ -2596,6 +2601,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::Deprecated => "W0245",
                 crate::typechecker::TypeErrorKind::MissingNonExhaustive => "W0246",
                 crate::typechecker::TypeErrorKind::UnfulfilledLintExpectation => "W0249",
+                crate::typechecker::TypeErrorKind::UnstableApi => "W0255",
                 // Other kinds aren't expected to appear as warnings today.
                 _ => "W0299",
             };
@@ -3450,6 +3456,10 @@ fn cmd_run(
     }
 
     let source = read_source(filename);
+    let mut lint_overrides = lint_overrides;
+    if let Some(ref m) = discovered_manifest {
+        lint_overrides.apply_manifest_lints(&m.lints);
+    }
     let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
     if let Some(ref m) = discovered_manifest {
         pipeline.profile = m.profile;
@@ -4455,9 +4465,16 @@ fn cmd_build_project(
     // tree attached so cross-module `E0221` and the CR-18 field-access rule
     // can fire. Skipped when earlier phases reported errors, since a half-
     // resolved program produces unhelpful type cascades.
+    // Phase-8 line 49 prereq 4 — lift `[lints].allow_unstable_api`
+    // from the manifest into a per-module `CliLintOverrides` so the
+    // project-build typecheck honors the global opt-in. Today this
+    // is the only manifest-driven lint override; future fields land
+    // beside it.
+    let mut module_lint_overrides = crate::lints::CliLintOverrides::default();
+    module_lint_overrides.apply_manifest_lints(&mf.lints);
     let type_errors: Vec<ModuleTypeErrors> =
         if parse_errors.is_empty() && cycles.is_empty() && resolve_errors.is_empty() {
-            typecheck_modules(&tree)
+            typecheck_modules(&tree, &module_lint_overrides)
         } else {
             Vec::new()
         };
@@ -5242,7 +5259,10 @@ struct ModuleTypeErrors {
 /// the CR-24 slice-6 cross-module `E0221` + field-access rules can fire.
 /// A fresh resolver pass per module provides the `ResolveResult` the
 /// typechecker still consumes internally.
-fn typecheck_modules(tree: &ProgramTree) -> Vec<ModuleTypeErrors> {
+fn typecheck_modules(
+    tree: &ProgramTree,
+    lint_overrides: &crate::lints::CliLintOverrides,
+) -> Vec<ModuleTypeErrors> {
     let mut out = Vec::new();
     for (id, m) in tree.modules.iter().enumerate() {
         // Skip the compiler-injected `std.prelude` placeholder — its stubs
@@ -5260,6 +5280,7 @@ fn typecheck_modules(tree: &ProgramTree) -> Vec<ModuleTypeErrors> {
             .resolve();
         let result = crate::typechecker::TypeChecker::new(&program, &resolved)
             .with_tree(tree, id as ModuleId)
+            .with_cli_lint_overrides(lint_overrides.clone())
             .check();
         if !result.errors.is_empty() {
             out.push(ModuleTypeErrors {
@@ -7471,6 +7492,7 @@ fn lower_test_case_to_function(tc: &crate::ast::TestCase, mangled_name: String) 
         body: tc.body.clone(),
         stdlib_origin: false,
         deprecation: None,
+        unstable: None,
         is_track_caller: false,
         lint_overrides: Vec::new(),
         profile_compat: Vec::new(),
@@ -7813,9 +7835,15 @@ fn cmd_test(filter: Option<String>, all: bool) {
         Vec::new()
     };
 
+    // Phase-8 line 49 prereq 4 — mirror the build path: lift
+    // `[lints].allow_unstable_api` from the manifest into the
+    // per-module typecheck overrides so `karac test` honors the
+    // global opt-in.
+    let mut module_lint_overrides = crate::lints::CliLintOverrides::default();
+    module_lint_overrides.apply_manifest_lints(&mf.lints);
     let type_errors: Vec<ModuleTypeErrors> =
         if parse_errors.is_empty() && cycles.is_empty() && resolve_errors.is_empty() {
-            typecheck_modules(&tree)
+            typecheck_modules(&tree, &module_lint_overrides)
         } else {
             Vec::new()
         };

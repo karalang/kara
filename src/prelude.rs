@@ -799,6 +799,7 @@ fn stub_struct(name: &str, span: &Span) -> Item {
         invariants: Vec::new(),
         stdlib_origin: true,
         deprecation: None,
+        unstable: None,
         is_non_exhaustive: false,
         lint_overrides: Vec::new(),
     })
@@ -849,6 +850,7 @@ fn stub_trait(name: &str, span: &Span) -> Item {
         items: Vec::new(),
         stdlib_origin: true,
         deprecation: None,
+        unstable: None,
         lint_overrides: Vec::new(),
         on_unimplemented: None,
     })
@@ -878,6 +880,7 @@ fn stub_function(name: &str, span: &Span) -> Item {
         },
         stdlib_origin: true,
         deprecation: None,
+        unstable: None,
         is_track_caller: false,
         lint_overrides: Vec::new(),
         profile_compat: Vec::new(),

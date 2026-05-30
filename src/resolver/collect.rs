@@ -713,7 +713,10 @@ impl<'a> super::Resolver<'a> {
             f.span.clone(),
             f.is_pub,
         ) {
-            Ok(id) => self.record_deprecation_if_present(id, &f.deprecation),
+            Ok(id) => {
+                self.record_deprecation_if_present(id, &f.deprecation);
+                self.record_unstable_if_present(id, &f.unstable);
+            }
             Err(e) => self.errors.push(e),
         }
     }
@@ -748,7 +751,10 @@ impl<'a> super::Resolver<'a> {
             s.span.clone(),
             s.is_pub,
         ) {
-            Ok(id) => self.record_deprecation_if_present(id, &s.deprecation),
+            Ok(id) => {
+                self.record_deprecation_if_present(id, &s.deprecation);
+                self.record_unstable_if_present(id, &s.unstable);
+            }
             Err(e) => self.errors.push(e),
         }
     }
@@ -810,7 +816,10 @@ impl<'a> super::Resolver<'a> {
             u.span.clone(),
             u.is_pub,
         ) {
-            Ok(id) => self.record_deprecation_if_present(id, &u.deprecation),
+            Ok(id) => {
+                self.record_deprecation_if_present(id, &u.deprecation);
+                self.record_unstable_if_present(id, &u.unstable);
+            }
             Err(e) => self.errors.push(e),
         }
     }
@@ -841,6 +850,7 @@ impl<'a> super::Resolver<'a> {
         ) {
             Ok(id) => {
                 self.record_deprecation_if_present(id, &e.deprecation);
+                self.record_unstable_if_present(id, &e.unstable);
                 id
             }
             Err(err) => {
@@ -872,6 +882,7 @@ impl<'a> super::Resolver<'a> {
                 e.is_pub,
             ) {
                 self.record_deprecation_if_present(variant_id, &variant.deprecation);
+                self.record_unstable_if_present(variant_id, &variant.unstable);
             }
         }
     }
@@ -907,6 +918,7 @@ impl<'a> super::Resolver<'a> {
         ) {
             Ok(id) => {
                 self.record_deprecation_if_present(id, &t.deprecation);
+                self.record_unstable_if_present(id, &t.unstable);
                 Some(id)
             }
             Err(e) => {
@@ -940,7 +952,10 @@ impl<'a> super::Resolver<'a> {
             t.span.clone(),
             t.is_pub,
         ) {
-            Ok(id) => self.record_deprecation_if_present(id, &t.deprecation),
+            Ok(id) => {
+                self.record_deprecation_if_present(id, &t.deprecation);
+                self.record_unstable_if_present(id, &t.unstable);
+            }
             Err(e) => self.errors.push(e),
         }
     }
@@ -962,7 +977,10 @@ impl<'a> super::Resolver<'a> {
             t.span.clone(),
             t.is_pub,
         ) {
-            Ok(id) => self.record_deprecation_if_present(id, &t.deprecation),
+            Ok(id) => {
+                self.record_deprecation_if_present(id, &t.deprecation);
+                self.record_unstable_if_present(id, &t.unstable);
+            }
             Err(e) => self.errors.push(e),
         }
     }
@@ -1011,6 +1029,7 @@ impl<'a> super::Resolver<'a> {
                 });
                 self.table.register_method(&type_name, method_id);
                 self.record_deprecation_if_present(method_id, &method.deprecation);
+                self.record_unstable_if_present(method_id, &method.unstable);
             }
         }
     }
@@ -1079,7 +1098,10 @@ impl<'a> super::Resolver<'a> {
             c.span.clone(),
             c.is_pub,
         ) {
-            Ok(id) => self.record_deprecation_if_present(id, &c.deprecation),
+            Ok(id) => {
+                self.record_deprecation_if_present(id, &c.deprecation);
+                self.record_unstable_if_present(id, &c.unstable);
+            }
             Err(err) => self.errors.push(err),
         }
     }
@@ -1136,7 +1158,10 @@ impl<'a> super::Resolver<'a> {
             b.span.clone(),
             b.is_pub,
         ) {
-            Ok(id) => self.record_deprecation_if_present(id, &b.deprecation),
+            Ok(id) => {
+                self.record_deprecation_if_present(id, &b.deprecation);
+                self.record_unstable_if_present(id, &b.unstable);
+            }
             Err(mut err) => {
                 if matches!(err.kind, ResolveErrorKind::DuplicateDefinition) {
                     err.message = format!("error[E_DUPLICATE_MODULE_BINDING]: {}", err.message,);
@@ -1160,7 +1185,10 @@ impl<'a> super::Resolver<'a> {
             t.span.clone(),
             t.is_pub,
         ) {
-            Ok(id) => self.record_deprecation_if_present(id, &t.deprecation),
+            Ok(id) => {
+                self.record_deprecation_if_present(id, &t.deprecation);
+                self.record_unstable_if_present(id, &t.unstable);
+            }
             Err(err) => self.errors.push(err),
         }
     }
@@ -1172,7 +1200,10 @@ impl<'a> super::Resolver<'a> {
             d.span.clone(),
             d.is_pub,
         ) {
-            Ok(id) => self.record_deprecation_if_present(id, &d.deprecation),
+            Ok(id) => {
+                self.record_deprecation_if_present(id, &d.deprecation);
+                self.record_unstable_if_present(id, &d.unstable);
+            }
             Err(err) => self.errors.push(err),
         }
     }
@@ -1184,6 +1215,17 @@ impl<'a> super::Resolver<'a> {
     fn record_deprecation_if_present(&mut self, id: SymbolId, dep: &Option<Deprecation>) {
         if let Some(d) = dep {
             self.table.record_deprecation(id, d.clone());
+        }
+    }
+
+    /// Phase-8 line 49 mirror of `record_deprecation_if_present` —
+    /// record a `#[unstable]` payload against the freshly-defined
+    /// symbol when the parser captured one. Use-site `unstable_api`
+    /// lint emission (`TypeChecker::check_unstable_use_at`) reads
+    /// the payload back from the symbol table.
+    fn record_unstable_if_present(&mut self, id: SymbolId, payload: &Option<Unstable>) {
+        if let Some(p) = payload {
+            self.table.record_unstable(id, p.clone());
         }
     }
 

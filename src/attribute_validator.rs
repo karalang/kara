@@ -91,6 +91,14 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     "deprecated",
     "non_exhaustive",
     "track_caller",
+    // Phase-8 line 49 — stdlib API stability marker. Use-site
+    // emission of the `unstable_api` lint reads the symbol-table
+    // payload populated from this attribute. At v1 the spec
+    // restricts placement to stdlib items (user-side use is a
+    // future RFC), but the parser/recogniser accepts it
+    // anywhere so user-side experiments compile silently — the
+    // lint emission is what enforces the gating.
+    "unstable",
     // FFI / linker.
     "no_mangle",
     "used",

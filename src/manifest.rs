@@ -154,7 +154,34 @@ pub struct Manifest {
     /// time so the build pipeline reads it without re-walking the
     /// TOML table.
     pub build_default_target: Option<String>,
+    /// `[lints]` table — project-wide lint posture, the global mirror of
+    /// source-level `#[allow(...)]` / `#[deny(...)]`. Empty struct when
+    /// the table is absent. The CLI lifts this into the typechecker's
+    /// `CliLintOverrides` so resolution flows through the same cascade
+    /// as the per-source `#[allow]` family (source attribute beats CLI
+    /// flag beats `[lints]` beats registry default). Today exposes one
+    /// knob, `allow_unstable_api`, with more lifted as the surface
+    /// grows (e.g., a future `allow = ["lint_name"]` array).
+    ///
+    /// Phase-8 line 49 / design.md § v1 Positioning > Stable surface
+    /// vs. unstable extension points.
+    pub lints: ManifestLints,
     pub warnings: Vec<ManifestWarning>,
+}
+
+/// `[lints]` table contents lifted from the manifest. Defaults are
+/// "no global override" — equivalent to no `[lints]` block at all.
+/// Each field maps to a CLI-side lint override in
+/// `crate::lints::CliLintOverrides`.
+#[derive(Debug, Clone, Default)]
+pub struct ManifestLints {
+    /// `[lints].allow_unstable_api = true` — globally suppresses the
+    /// `unstable_api` lint, opting the entire build into the
+    /// `#[unstable]`-gated stdlib surface. Phase-8 line 49 prereq 4.
+    /// Source-level `#[deny(unstable_api)]` still wins per the
+    /// cascade's "inner scope is most specific authority" rule
+    /// ([`crate::lints::effective_level_for_module_lint`]).
+    pub allow_unstable_api: bool,
 }
 
 /// One `[dependencies]` (or `[dev-dependencies]`) entry. Three shapes are
@@ -553,6 +580,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     let (target_dependencies, target_dev_dependencies, target_profile_overrides) =
         parse_target_tables(path, &table, &mut warnings)?;
     let build_default_target = parse_build_default_target(path, &table)?;
+    let lints = parse_lints_table(path, &table, &mut warnings)?;
 
     // Stable order across package-key + dependency warnings — same sort key
     // (message string) used as before, but now applied after the full
@@ -573,8 +601,52 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         target_dev_dependencies,
         target_profile_overrides,
         build_default_target,
+        lints,
         warnings,
     })
+}
+
+/// Parse the `[lints]` table when present. Recognised keys at v1:
+/// `allow_unstable_api` (bool). Unknown keys soft-warn; non-bool
+/// values for known keys hard-error so a typo (`= "true"`) doesn't
+/// silently no-op. Absent table → `ManifestLints::default()`.
+fn parse_lints_table(
+    path: &Path,
+    table: &toml::Table,
+    warnings: &mut Vec<ManifestWarning>,
+) -> Result<ManifestLints, ManifestError> {
+    let Some(value) = table.get("lints") else {
+        return Ok(ManifestLints::default());
+    };
+    let lints_table = value
+        .as_table()
+        .ok_or_else(|| ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "lints".to_string(),
+            expected: "a table (e.g. `[lints]`)",
+        })?;
+    let mut out = ManifestLints::default();
+    for (key, val) in lints_table {
+        match key.as_str() {
+            "allow_unstable_api" => match val {
+                toml::Value::Boolean(b) => out.allow_unstable_api = *b,
+                _ => {
+                    return Err(ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: "lints.allow_unstable_api".to_string(),
+                        expected: "a boolean (`true` or `false`)",
+                    });
+                }
+            },
+            other => warnings.push(ManifestWarning {
+                line: None,
+                message: format!(
+                    "unknown key `[lints].{other}` — ignored in v1 (reserved for a later release)"
+                ),
+            }),
+        }
+    }
+    Ok(out)
 }
 
 /// Parse `[workspace.dependencies]` (when present) into a stable-ordered map.

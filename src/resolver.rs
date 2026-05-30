@@ -163,6 +163,13 @@ pub struct SymbolTable {
     /// is preferred over a field on `Symbol` because most symbols are not
     /// deprecated; matches the `generic_param_bounds` pattern.
     pub deprecations: HashMap<SymbolId, Deprecation>,
+    /// `#[unstable]` payload keyed by the symbol's id (phase-8 line 49).
+    /// Populated by `collect::collect_*` at every site that records
+    /// deprecation; consulted by the use-site `unstable_api` lint via
+    /// [`Self::unstable_for`]. Same sidecar shape as `deprecations` — most
+    /// symbols are stable, so out-of-band storage avoids growing every
+    /// `Symbol` for a sparse annotation.
+    pub unstables: HashMap<SymbolId, Unstable>,
 }
 
 impl Default for SymbolTable {
@@ -186,6 +193,7 @@ impl SymbolTable {
             type_methods: HashMap::new(),
             generic_param_bounds: HashMap::new(),
             deprecations: HashMap::new(),
+            unstables: HashMap::new(),
         };
         table.register_primitives();
         table
@@ -411,6 +419,22 @@ impl SymbolTable {
     /// lint emission infrastructure lands at line 419 slice 4).
     pub fn deprecation_for(&self, id: SymbolId) -> Option<&Deprecation> {
         self.deprecations.get(&id)
+    }
+
+    /// Record a `#[unstable]` payload against `id` (phase-8 line 49).
+    /// Idempotent on identical payloads is not enforced — the parser
+    /// already collapses duplicate `#[unstable]` attributes on one item
+    /// to the first (`E_UNSTABLE_DUPLICATE`), so each symbol reaches
+    /// us at most once.
+    pub fn record_unstable(&mut self, id: SymbolId, payload: Unstable) {
+        self.unstables.insert(id, payload);
+    }
+
+    /// Look up the recorded `#[unstable]` payload for `id`, if any.
+    /// Consulted by the use-site `unstable_api` lint emission pass
+    /// (`TypeChecker::check_unstable_use_at`).
+    pub fn unstable_for(&self, id: SymbolId) -> Option<&Unstable> {
+        self.unstables.get(&id)
     }
 
     /// Trait bounds attached to `param_id`. Empty slice if the symbol is not a

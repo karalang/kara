@@ -16990,6 +16990,214 @@ fn deprecated_slice4_self_referential_use_inside_deprecated_fn_emits() {
     }));
 }
 
+// ── `#[unstable]` (phase-8 line 49) — use-site warning emission ────
+//
+// At every reference site that resolves to an `Unstable`-bearing
+// symbol, the typechecker emits an `unstable_api` lint warning
+// through `type_lint_warning`. Mirrors the `deprecated` slice-4
+// shape: `#[allow(unstable_api)]` suppresses,
+// `#[deny(unstable_api)]` promotes, registry default is `Warn`.
+// The optional `note` payload (shorthand or long form) is surfaced
+// in the message body.
+
+#[test]
+fn unstable_api_call_to_unstable_fn_emits_warning() {
+    let result = typecheck_ok(
+        "#[unstable]\npub fn experimental() -> i64 { 0 }\n\
+         fn caller() -> i64 { experimental() }",
+    );
+    let warn = result
+        .warnings
+        .iter()
+        .find(|w| w.lint_name.as_deref() == Some("unstable_api"))
+        .expect("expected an `unstable_api` warning at the call site");
+    assert!(warn.message.contains("experimental"));
+    assert!(warn.message.contains("unstable"));
+    assert!(warn.message.contains("#[allow(unstable_api)]"));
+    assert!(warn.message.contains("allow_unstable_api"));
+}
+
+#[test]
+fn unstable_api_shorthand_note_surfaces_in_warning() {
+    let result = typecheck_ok(
+        "#[unstable = \"shape may change before v1 lock\"]\n\
+         pub fn experimental() -> i64 { 0 }\n\
+         fn caller() -> i64 { experimental() }",
+    );
+    let warn = result
+        .warnings
+        .iter()
+        .find(|w| w.lint_name.as_deref() == Some("unstable_api"))
+        .expect("expected an `unstable_api` warning");
+    assert!(
+        warn.message.contains("shape may change before v1 lock"),
+        "shorthand `note` should surface in the warning; got: {}",
+        warn.message,
+    );
+}
+
+#[test]
+fn unstable_api_long_form_note_surfaces_in_warning() {
+    let result = typecheck_ok(
+        "#[unstable(note: \"behind frame access — RFC pending\")]\n\
+         pub fn experimental() -> i64 { 0 }\n\
+         fn caller() -> i64 { experimental() }",
+    );
+    let warn = result
+        .warnings
+        .iter()
+        .find(|w| w.lint_name.as_deref() == Some("unstable_api"))
+        .expect("expected an `unstable_api` warning");
+    assert!(warn.message.contains("behind frame access — RFC pending"));
+}
+
+#[test]
+fn unstable_api_allow_suppresses_at_caller() {
+    let result = typecheck_ok(
+        "#[unstable]\npub fn experimental() -> i64 { 0 }\n\
+         #[allow(unstable_api)]\n\
+         fn caller() -> i64 { experimental() }",
+    );
+    assert!(!result
+        .warnings
+        .iter()
+        .any(|w| w.lint_name.as_deref() == Some("unstable_api")));
+}
+
+#[test]
+fn unstable_api_deny_promotes_to_error() {
+    let parsed = parse(
+        "#[unstable]\npub fn experimental() -> i64 { 0 }\n\
+         #[deny(unstable_api)]\n\
+         fn caller() -> i64 { experimental() }",
+    );
+    assert!(parsed.errors.is_empty());
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty());
+    let result = typecheck(&parsed.program, &resolved);
+    assert!(result
+        .errors
+        .iter()
+        .any(|e| e.lint_name.as_deref() == Some("unstable_api")));
+}
+
+#[test]
+fn unstable_api_non_unstable_fn_no_warning() {
+    let result = typecheck_ok("pub fn settled() -> i64 { 0 }\nfn caller() -> i64 { settled() }");
+    assert!(!result
+        .warnings
+        .iter()
+        .any(|w| w.lint_name.as_deref() == Some("unstable_api")));
+}
+
+#[test]
+fn unstable_api_type_position_use_emits_warning() {
+    let result = typecheck_ok(
+        "#[unstable]\npub struct ExperimentalShape { x: i64 }\n\
+         fn use_it(s: ExperimentalShape) -> i64 { s.x }",
+    );
+    let warn = result
+        .warnings
+        .iter()
+        .find(|w| w.lint_name.as_deref() == Some("unstable_api"))
+        .expect("expected an `unstable_api` warning on the type-position use");
+    assert!(warn.message.contains("ExperimentalShape"));
+}
+
+#[test]
+fn unstable_api_struct_literal_emits_warning() {
+    let result = typecheck_ok(
+        "#[unstable]\npub struct ExperimentalShape { x: i64 }\n\
+         fn make() -> ExperimentalShape { ExperimentalShape { x: 0 } }",
+    );
+    let warnings_count = result
+        .warnings
+        .iter()
+        .filter(|w| {
+            w.lint_name.as_deref() == Some("unstable_api")
+                && w.message.contains("ExperimentalShape")
+        })
+        .count();
+    assert!(warnings_count >= 1);
+}
+
+#[test]
+fn unstable_api_const_use_emits_warning() {
+    let result = typecheck_ok(
+        "#[unstable]\npub const EXPERIMENTAL_LIMIT: i64 = 100;\n\
+         fn ceiling() -> i64 { EXPERIMENTAL_LIMIT }",
+    );
+    let warn = result
+        .warnings
+        .iter()
+        .find(|w| {
+            w.lint_name.as_deref() == Some("unstable_api")
+                && w.message.contains("EXPERIMENTAL_LIMIT")
+        })
+        .expect("expected an `unstable_api` warning naming EXPERIMENTAL_LIMIT");
+    assert!(warn.message.contains("unstable"));
+}
+
+#[test]
+fn unstable_api_manifest_opt_in_suppresses_via_cli_overrides() {
+    // Phase-8 line 49 prereq 4 — `[lints].allow_unstable_api = true`
+    // in `kara.toml` lifts into the per-build `CliLintOverrides`, and
+    // the cascade fall-through resolves to `Allow`. Test the lift +
+    // suppression path end-to-end without a real kara.toml on disk.
+    use karac::lints::CliLintOverrides;
+    use karac::manifest::ManifestLints;
+    let parsed = parse(
+        "#[unstable]\npub fn experimental() -> i64 { 0 }\n\
+         fn caller() -> i64 { experimental() }",
+    );
+    assert!(parsed.errors.is_empty());
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty());
+    let mut overrides = CliLintOverrides::default();
+    overrides.apply_manifest_lints(&ManifestLints {
+        allow_unstable_api: true,
+    });
+    let result = karac::typecheck_with_lint_overrides(&parsed.program, &resolved, overrides);
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|w| w.lint_name.as_deref() == Some("unstable_api")),
+        "manifest opt-in should suppress the use-site warning",
+    );
+    assert!(!result
+        .errors
+        .iter()
+        .any(|e| e.lint_name.as_deref() == Some("unstable_api")),);
+}
+
+#[test]
+fn unstable_api_source_deny_beats_manifest_opt_in() {
+    // The cascade pins "inner scope is most specific authority":
+    // source `#[deny(unstable_api)]` wins over a global
+    // `[lints].allow_unstable_api = true`.
+    use karac::lints::CliLintOverrides;
+    use karac::manifest::ManifestLints;
+    let parsed = parse(
+        "#[unstable]\npub fn experimental() -> i64 { 0 }\n\
+         #[deny(unstable_api)]\n\
+         fn caller() -> i64 { experimental() }",
+    );
+    let resolved = resolve(&parsed.program);
+    let mut overrides = CliLintOverrides::default();
+    overrides.apply_manifest_lints(&ManifestLints {
+        allow_unstable_api: true,
+    });
+    let result = karac::typecheck_with_lint_overrides(&parsed.program, &resolved, overrides);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.lint_name.as_deref() == Some("unstable_api")),
+        "source #[deny(unstable_api)] must beat the manifest opt-in",
+    );
+}
+
 // ── Slice 6 of item 36: #[diagnostic::on_unimplemented] substitution ──
 
 #[test]

@@ -196,6 +196,80 @@ documentation = "https://example.com/docs"
 }
 
 #[test]
+fn lints_allow_unstable_api_lifts_into_manifest_lints() {
+    // Phase-8 line 49 prereq 4 — `[lints].allow_unstable_api = true`
+    // in `kara.toml` parses cleanly and lifts into `ManifestLints`.
+    let scratch = ScratchDir::new("lints-allow-unstable-api");
+    scratch.write(
+        MANIFEST_FILENAME,
+        r#"[package]
+name = "hello"
+
+[lints]
+allow_unstable_api = true
+"#,
+    );
+    let m = load_from_root(scratch.root()).unwrap();
+    assert!(m.lints.allow_unstable_api);
+    assert!(m.warnings.is_empty(), "{:?}", m.warnings);
+}
+
+#[test]
+fn lints_table_absent_defaults_to_no_opt_in() {
+    let scratch = ScratchDir::new("lints-absent");
+    scratch.write(MANIFEST_FILENAME, "[package]\nname = \"x\"\n");
+    let m = load_from_root(scratch.root()).unwrap();
+    assert!(!m.lints.allow_unstable_api);
+}
+
+#[test]
+fn lints_allow_unstable_api_non_bool_is_hard_error() {
+    // A typo'd string value (`= "true"`) should not silently no-op —
+    // it's a hard error so the operator surfaces the mistake on the
+    // first `karac build` instead of wondering why the global opt-in
+    // didn't take.
+    let scratch = ScratchDir::new("lints-non-bool");
+    scratch.write(
+        MANIFEST_FILENAME,
+        r#"[package]
+name = "x"
+
+[lints]
+allow_unstable_api = "true"
+"#,
+    );
+    let err = load_from_root(scratch.root()).unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("lints.allow_unstable_api") && msg.contains("boolean"),
+        "expected boolean rejection, got: {msg}",
+    );
+}
+
+#[test]
+fn lints_unknown_key_soft_warns() {
+    let scratch = ScratchDir::new("lints-unknown-key");
+    scratch.write(
+        MANIFEST_FILENAME,
+        r#"[package]
+name = "x"
+
+[lints]
+some_future_lint = true
+"#,
+    );
+    let m = load_from_root(scratch.root()).unwrap();
+    assert!(!m.lints.allow_unstable_api);
+    assert!(
+        m.warnings
+            .iter()
+            .any(|w| w.message.contains("some_future_lint")),
+        "expected soft warning for unknown key, got {:?}",
+        m.warnings,
+    );
+}
+
+#[test]
 fn canonical_scaffolded_manifest_has_no_warnings() {
     // Matches what `karac init` writes — must round-trip through the parser
     // with zero warnings so fresh projects don't see manifest noise on first

@@ -376,6 +376,7 @@ impl<'a> super::EffectChecker<'a> {
                                 }),
                                 stdlib_origin: t.stdlib_origin,
                                 deprecation: None,
+                                unstable: None,
                                 is_track_caller: false,
                                 lint_overrides: Vec::new(),
                                 profile_compat: Vec::new(),

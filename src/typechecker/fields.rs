@@ -347,6 +347,7 @@ impl<'a> super::TypeChecker<'a> {
             .clone();
 
         self.check_deprecated_use_at(span, union_name);
+        self.check_unstable_use_at(span, union_name);
 
         if let Some(spread_expr) = spread {
             self.infer_expr(spread_expr);
@@ -452,6 +453,7 @@ impl<'a> super::TypeChecker<'a> {
         // `lower_path_type` site, and the pattern reference is covered
         // by `check_pattern_against`'s struct-pattern arm.
         self.check_deprecated_use_at(span, &struct_name);
+        self.check_unstable_use_at(span, &struct_name);
 
         // `#[non_exhaustive]` slice 4 — cross-package struct-literal
         // enforcement. A `pub struct` marked `#[non_exhaustive]` may

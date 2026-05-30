@@ -37,6 +37,39 @@ pub struct Deprecation {
     pub note: Option<String>,
 }
 
+// ── `#[unstable]` payload ────────────────────────────────────────
+
+/// `#[unstable]` payload captured at parse time. Attached as
+/// `Option<Unstable>` to every item kind the spec lists as a valid
+/// target (struct/enum/fn/method/trait/const — design.md §
+/// v1 Positioning > Stable surface vs. unstable extension points,
+/// surface table in syntax.md § 8). The attribute marks an API
+/// surface point as deliberately unstable across compiler releases;
+/// callers must opt in via `#[allow(unstable_api)]` on the
+/// enclosing scope or via the global `[lints].allow_unstable_api`
+/// opt-in in `kara.toml`. Stdlib-only at v1 (user-side use is a
+/// future RFC); enforcement of "stdlib-only" is socially via the
+/// stdlib-audit pass rather than parser-rejected.
+///
+/// Recognised forms (mirror `#[deprecated]`'s surface):
+/// - bare `#[unstable]` → `Unstable { note: None, span }`
+/// - shorthand `#[unstable = "note"]` → `note` populated
+///
+/// Long-form (`#[unstable(feature: "...", issue: "...", note: "...")]`)
+/// is reserved syntactically — the parser accepts named args today
+/// but only `note` is captured; unknown keys soft-warn (no hard
+/// error) so a future RFC can add `feature` / `issue` without a
+/// source break.
+#[derive(Debug, Clone)]
+pub struct Unstable {
+    pub span: Span,
+    /// `note: "low-level frame access — shape may change before \
+    /// v1 lock"` — surfaced verbatim in the use-site
+    /// `unstable_api` warning. Populated by the shorthand
+    /// `#[unstable = "..."]` and by the long-form `note: "..."`.
+    pub note: Option<String>,
+}
+
 // ── `#[diagnostic::on_unimplemented]` payload ────────────────────
 
 /// `#[diagnostic::on_unimplemented(message: "...", label: "...", note: "...")]`
@@ -178,6 +211,11 @@ pub struct Function {
     /// field is structurally populated but no warning is emitted.
     /// See design.md § `#[deprecated]` for Item Deprecation.
     pub deprecation: Option<Deprecation>,
+    /// `#[unstable]` payload — see [`Unstable`] and design.md §
+    /// v1 Positioning > Stable surface vs. unstable extension points.
+    /// `None` when the attribute is absent. Use-site `unstable_api`
+    /// lint emission reads this through the resolver's symbol table.
+    pub unstable: Option<Unstable>,
     /// `#[track_caller]` declared on this function — at call sites, the
     /// codegen pass injects a hidden caller-location argument carrying
     /// the call site's `(file, line, col)` so the panic runtime
@@ -304,6 +342,11 @@ pub struct StructDef {
     /// `#[deprecated]` payload — see [`Deprecation`] and design.md §
     /// `#[deprecated]` for Item Deprecation.
     pub deprecation: Option<Deprecation>,
+    /// `#[unstable]` payload — see [`Unstable`] and design.md §
+    /// v1 Positioning > Stable surface vs. unstable extension points.
+    /// `None` when the attribute is absent. Use-site `unstable_api`
+    /// lint emission reads this through the resolver's symbol table.
+    pub unstable: Option<Unstable>,
     /// `#[non_exhaustive]` declared on this struct — the type may grow
     /// new public fields in future versions, and cross-package
     /// consumers must use `..` in exhaustive struct patterns and a
@@ -366,6 +409,11 @@ pub struct UnionDef {
     /// stdlib source flip this to `true` after parsing.
     pub stdlib_origin: bool,
     pub deprecation: Option<Deprecation>,
+    /// `#[unstable]` payload — see [`Unstable`] and design.md §
+    /// v1 Positioning > Stable surface vs. unstable extension points.
+    /// `None` when the attribute is absent. Use-site `unstable_api`
+    /// lint emission reads this through the resolver's symbol table.
+    pub unstable: Option<Unstable>,
     pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
 
@@ -398,6 +446,11 @@ pub struct EnumDef {
     pub stdlib_origin: bool,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// `#[unstable]` payload — see [`Unstable`] and design.md §
+    /// v1 Positioning > Stable surface vs. unstable extension points.
+    /// `None` when the attribute is absent. Use-site `unstable_api`
+    /// lint emission reads this through the resolver's symbol table.
+    pub unstable: Option<Unstable>,
     /// `#[non_exhaustive]` declared on this enum — the type may grow
     /// new variants in future versions, and cross-package consumers'
     /// `match` expressions must include a wildcard arm regardless of
@@ -422,6 +475,11 @@ pub struct Variant {
     /// the attribute is absent. Mirrors the `deprecation` field on
     /// every item-kind that supports the attribute.
     pub deprecation: Option<Deprecation>,
+    /// `#[unstable]` payload — see [`Unstable`] and design.md §
+    /// v1 Positioning > Stable surface vs. unstable extension points.
+    /// `None` when the attribute is absent. Use-site `unstable_api`
+    /// lint emission reads this through the resolver's symbol table.
+    pub unstable: Option<Unstable>,
     /// Joined contents of `///` doc comments preceding the variant.
     /// `None` when no doc comments were attached. CommonMark.
     pub doc_comment: Option<String>,
@@ -458,6 +516,11 @@ pub struct TraitDef {
     pub stdlib_origin: bool,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// `#[unstable]` payload — see [`Unstable`] and design.md §
+    /// v1 Positioning > Stable surface vs. unstable extension points.
+    /// `None` when the attribute is absent. Use-site `unstable_api`
+    /// lint emission reads this through the resolver's symbol table.
+    pub unstable: Option<Unstable>,
     /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
     pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
     /// `#[diagnostic::on_unimplemented(...)]` payload — see
@@ -491,6 +554,11 @@ pub struct TraitAliasDef {
     pub where_clause: Option<WhereClause>,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// `#[unstable]` payload — see [`Unstable`] and design.md §
+    /// v1 Positioning > Stable surface vs. unstable extension points.
+    /// `None` when the attribute is absent. Use-site `unstable_api`
+    /// lint emission reads this through the resolver's symbol table.
+    pub unstable: Option<Unstable>,
     /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
     pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
@@ -519,6 +587,11 @@ pub struct MarkerTraitDef {
     pub body_brace: bool,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// `#[unstable]` payload — see [`Unstable`] and design.md §
+    /// v1 Positioning > Stable surface vs. unstable extension points.
+    /// `None` when the attribute is absent. Use-site `unstable_api`
+    /// lint emission reads this through the resolver's symbol table.
+    pub unstable: Option<Unstable>,
     /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
     pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
@@ -574,6 +647,11 @@ pub struct TraitMethod {
     pub body: Option<Block>,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// `#[unstable]` payload — see [`Unstable`] and design.md §
+    /// v1 Positioning > Stable surface vs. unstable extension points.
+    /// `None` when the attribute is absent. Use-site `unstable_api`
+    /// lint emission reads this through the resolver's symbol table.
+    pub unstable: Option<Unstable>,
     /// `#[track_caller]` on this trait method declaration. Per
     /// design.md the attribute applies to every impl unless the impl
     /// explicitly drops it. Parsed here so the impl coherence pass
@@ -792,6 +870,11 @@ pub struct ConstDecl {
     pub value: Expr,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// `#[unstable]` payload — see [`Unstable`] and design.md §
+    /// v1 Positioning > Stable surface vs. unstable extension points.
+    /// `None` when the attribute is absent. Use-site `unstable_api`
+    /// lint emission reads this through the resolver's symbol table.
+    pub unstable: Option<Unstable>,
     /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
     pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
@@ -821,6 +904,11 @@ pub struct ModuleBinding {
     pub value: Expr,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// `#[unstable]` payload — see [`Unstable`] and design.md §
+    /// v1 Positioning > Stable surface vs. unstable extension points.
+    /// `None` when the attribute is absent. Use-site `unstable_api`
+    /// lint emission reads this through the resolver's symbol table.
+    pub unstable: Option<Unstable>,
     /// See [`Function::lint_overrides`].
     pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
@@ -954,6 +1042,11 @@ pub struct TypeAliasDef {
     pub refinement: Option<Expr>,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// `#[unstable]` payload — see [`Unstable`] and design.md §
+    /// v1 Positioning > Stable surface vs. unstable extension points.
+    /// `None` when the attribute is absent. Use-site `unstable_api`
+    /// lint emission reads this through the resolver's symbol table.
+    pub unstable: Option<Unstable>,
     /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
     pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
@@ -974,6 +1067,11 @@ pub struct DistinctTypeDef {
     pub refinement: Option<Expr>,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// `#[unstable]` payload — see [`Unstable`] and design.md §
+    /// v1 Positioning > Stable surface vs. unstable extension points.
+    /// `None` when the attribute is absent. Use-site `unstable_api`
+    /// lint emission reads this through the resolver's symbol table.
+    pub unstable: Option<Unstable>,
     /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
     pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }

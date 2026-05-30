@@ -248,6 +248,7 @@ fn synth_main_function(body: Block) -> Function {
         body,
         stdlib_origin: false,
         deprecation: None,
+        unstable: None,
         is_track_caller: false,
         lint_overrides: Vec::new(),
         profile_compat: Vec::new(),

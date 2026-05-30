@@ -362,6 +362,7 @@ impl<'a> super::TypeChecker<'a> {
                 || self.env.traits.contains_key(name)
             {
                 self.check_deprecated_use_at(&path.span, name);
+                self.check_unstable_use_at(&path.span, name);
             }
             Type::Named {
                 name: name.clone(),

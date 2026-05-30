@@ -273,6 +273,7 @@ impl super::Parser {
         // still see the captured attribute.
         let is_track_caller = self.scan_track_caller_attr(&attributes);
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
         let profile_compat = self.scan_profile_attr(&attributes);
 
@@ -295,6 +296,7 @@ impl super::Parser {
             body,
             stdlib_origin: false,
             deprecation,
+            unstable,
             is_track_caller,
             lint_overrides,
             profile_compat,
@@ -544,6 +546,81 @@ impl super::Parser {
             first = Some(Deprecation {
                 span: attr.span.clone(),
                 since,
+                note,
+            });
+        }
+        first
+    }
+
+    /// Scan `attributes` for `#[unstable]` and produce the
+    /// `Unstable` payload (phase-8 line 49 / design.md § v1
+    /// Positioning > Stable surface vs. unstable extension
+    /// points). Recognises:
+    /// - bare `#[unstable]` → `Unstable { note: None }`
+    /// - shorthand `#[unstable = "note"]` → `note` populated
+    /// - long form `#[unstable(note: "...")]` — `note` is the
+    ///   only field captured at v1; future RFC may add `feature`
+    ///   / `issue`. Unknown named keys are silently ignored
+    ///   (no `E_*` for those — so adding a key later is
+    ///   non-breaking). Positional args emit
+    ///   `E_UNSTABLE_POSITIONAL_ARG`; multiple occurrences emit
+    ///   `E_UNSTABLE_DUPLICATE`.
+    pub(crate) fn scan_unstable_attr(&mut self, attributes: &[Attribute]) -> Option<Unstable> {
+        let mut first: Option<Unstable> = None;
+        for attr in attributes {
+            if !attr.is_bare("unstable") {
+                continue;
+            }
+            if first.is_some() {
+                self.errors.push(super::ParseError {
+                    message: "error[E_UNSTABLE_DUPLICATE]: \
+                              multiple `#[unstable]` attributes on the \
+                              same item; keep one and remove the rest"
+                        .to_string(),
+                    span: attr.span.clone(),
+                });
+                continue;
+            }
+            // Shorthand: `#[unstable = "note"]`
+            if let Some(s) = &attr.string_value {
+                first = Some(Unstable {
+                    span: attr.span.clone(),
+                    note: Some(s.clone()),
+                });
+                continue;
+            }
+            // Bare or long form.
+            let mut note: Option<String> = None;
+            for arg in &attr.args {
+                let Some(name) = &arg.name else {
+                    self.errors.push(super::ParseError {
+                        message: "error[E_UNSTABLE_POSITIONAL_ARG]: \
+                                  `#[unstable(...)]` requires named \
+                                  arguments — use `note: \"...\"`, or \
+                                  the shorthand `#[unstable = \"note\"]`"
+                            .to_string(),
+                        span: arg.span.clone(),
+                    });
+                    continue;
+                };
+                if name != "note" {
+                    // Unknown keys are silently ignored so a future
+                    // RFC can add `feature` / `issue` without
+                    // breaking existing source.
+                    continue;
+                }
+                let Some(value_expr) = &arg.value else {
+                    continue;
+                };
+                let ExprKind::StringLit(s) = &value_expr.kind else {
+                    continue;
+                };
+                if note.is_none() {
+                    note = Some(s.clone());
+                }
+            }
+            first = Some(Unstable {
+                span: attr.span.clone(),
                 note,
             });
         }
@@ -1073,6 +1150,7 @@ impl super::Parser {
         // captures-flag and resolver-validates-placement.
         let is_non_exhaustive = attributes.iter().any(|a| a.is_bare("non_exhaustive"));
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
 
         Some(StructDef {
@@ -1092,6 +1170,7 @@ impl super::Parser {
             invariants,
             stdlib_origin: false,
             deprecation,
+            unstable,
             is_non_exhaustive,
             lint_overrides,
         })
@@ -1159,6 +1238,7 @@ impl super::Parser {
         }
 
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
 
         Some(UnionDef {
@@ -1171,6 +1251,7 @@ impl super::Parser {
             fields,
             stdlib_origin: false,
             deprecation,
+            unstable,
             lint_overrides,
         })
     }
@@ -1294,6 +1375,7 @@ impl super::Parser {
 
         let is_non_exhaustive = attributes.iter().any(|a| a.is_bare("non_exhaustive"));
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
 
         Some(EnumDef {
@@ -1309,6 +1391,7 @@ impl super::Parser {
             variants,
             stdlib_origin: false,
             deprecation,
+            unstable,
             is_non_exhaustive,
             lint_overrides,
         })
@@ -1356,10 +1439,12 @@ impl super::Parser {
         };
 
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let unstable = self.scan_unstable_attr(&attributes);
         Some(Variant {
             span: self.span_from(&start),
             attributes,
             deprecation,
+            unstable,
             doc_comment,
             name,
             kind,
@@ -1509,6 +1594,7 @@ impl super::Parser {
         self.expect(&Token::Semicolon)?;
         let doc_comment = self.take_pending_doc();
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
         Some(ModuleBinding {
             span: self.span_from(&start),
@@ -1521,6 +1607,7 @@ impl super::Parser {
             ty,
             value,
             deprecation,
+            unstable,
             lint_overrides,
         })
     }
@@ -1724,6 +1811,7 @@ impl super::Parser {
         self.expect(&Token::Semicolon)?;
         let doc_comment = self.take_pending_doc();
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
         Some(ConstDecl {
             span: self.span_from(&start),
@@ -1735,6 +1823,7 @@ impl super::Parser {
             ty,
             value,
             deprecation,
+            unstable,
             lint_overrides,
         })
     }
@@ -1793,6 +1882,7 @@ impl super::Parser {
         self.expect(&Token::Semicolon)?;
         let doc_comment = self.take_pending_doc();
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
         Some(TypeAliasDef {
             span: self.span_from(&start),
@@ -1805,6 +1895,7 @@ impl super::Parser {
             ty,
             refinement,
             deprecation,
+            unstable,
             lint_overrides,
         })
     }
@@ -1837,6 +1928,7 @@ impl super::Parser {
         self.expect(&Token::Semicolon)?;
         let doc_comment = self.take_pending_doc();
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
         Some(DistinctTypeDef {
             span: self.span_from(&start),
@@ -1849,6 +1941,7 @@ impl super::Parser {
             base_type,
             refinement,
             deprecation,
+            unstable,
             lint_overrides,
         })
     }

@@ -2459,6 +2459,118 @@ fn profile_slice1_set_on_non_fn_item_parser_does_not_reject() {
     assert!(s.attributes[0].is_bare("profile"));
 }
 
+// ── #[unstable] (phase-8 line 49) — parser + AST payload ──────────
+//
+// Two forms accepted at v1:
+//   - bare `#[unstable]`
+//   - shorthand `#[unstable = "note"]`
+// Long form `#[unstable(note: "...")]` is also accepted; unknown
+// named keys are silently ignored so a future RFC adding `feature`
+// / `issue` is non-breaking. Positional args
+// (`E_UNSTABLE_POSITIONAL_ARG`) and multiple occurrences
+// (`E_UNSTABLE_DUPLICATE`) are hard parse errors.
+
+#[test]
+fn unstable_attr_bare_form_on_function() {
+    let prog = parse_ok("#[unstable]\nfn experimental() { }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    let u = f.unstable.as_ref().expect("expected Unstable payload");
+    assert!(u.note.is_none());
+}
+
+#[test]
+fn unstable_attr_shorthand_populates_note() {
+    let prog = parse_ok("#[unstable = \"shape may change before v1 lock\"]\nfn experimental() { }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    let u = f.unstable.as_ref().expect("expected Unstable payload");
+    assert_eq!(u.note.as_deref(), Some("shape may change before v1 lock"));
+}
+
+#[test]
+fn unstable_attr_long_form_with_note() {
+    let prog = parse_ok("#[unstable(note: \"low-level frame access\")]\nfn experimental() { }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    let u = f.unstable.as_ref().expect("expected Unstable payload");
+    assert_eq!(u.note.as_deref(), Some("low-level frame access"));
+}
+
+#[test]
+fn unstable_attr_unknown_named_key_silently_ignored() {
+    // Future-RFC keys (e.g. `feature`, `issue`) must parse silently so
+    // they can be added later without a source break. Today they're
+    // dropped on the floor.
+    let prog = parse_ok(
+        "#[unstable(feature: \"http_transport\", note: \"keep\")]\n\
+         fn experimental() { }",
+    );
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    let u = f.unstable.as_ref().expect("expected Unstable payload");
+    assert_eq!(u.note.as_deref(), Some("keep"));
+}
+
+#[test]
+fn unstable_attr_struct_captures_payload() {
+    let prog = parse_ok("#[unstable]\npub struct LowLevelShape { x: i64, }");
+    let Item::StructDef(s) = &prog.items[0] else {
+        panic!("Expected StructDef");
+    };
+    assert!(s.unstable.is_some());
+}
+
+#[test]
+fn unstable_attr_enum_captures_payload() {
+    let prog = parse_ok("#[unstable = \"variants growing\"]\npub enum ExperimentalKind { A, B, }");
+    let Item::EnumDef(e) = &prog.items[0] else {
+        panic!("Expected EnumDef");
+    };
+    let u = e.unstable.as_ref().expect("expected Unstable payload");
+    assert_eq!(u.note.as_deref(), Some("variants growing"));
+}
+
+#[test]
+fn unstable_attr_duplicate_is_parse_error() {
+    let parsed = karac::parse("#[unstable]\n#[unstable]\nfn experimental() { }");
+    assert!(parsed
+        .errors
+        .iter()
+        .any(|e| e.message.contains("E_UNSTABLE_DUPLICATE")));
+}
+
+#[test]
+fn unstable_attr_positional_arg_is_parse_error() {
+    let parsed = karac::parse("#[unstable(\"oops\")]\nfn experimental() { }");
+    assert!(parsed
+        .errors
+        .iter()
+        .any(|e| e.message.contains("E_UNSTABLE_POSITIONAL_ARG")));
+}
+
+#[test]
+fn unstable_attr_recognised_by_validator_no_unknown_attr_error() {
+    // attribute_validator.rs registers `unstable` in
+    // RECOGNIZED_BARE_ATTRIBUTES; the resolver pass must not emit
+    // E_UNKNOWN_ATTRIBUTE on it.
+    let parsed = karac::parse("#[unstable]\npub fn experimental() -> i64 { 0 }");
+    assert!(parsed.errors.is_empty());
+    let resolved = karac::resolve(&parsed.program);
+    assert!(
+        !resolved
+            .errors
+            .iter()
+            .any(|e| e.message.contains("E_UNKNOWN_ATTRIBUTE")),
+        "unstable should not be E_UNKNOWN_ATTRIBUTE; got: {:?}",
+        resolved.errors,
+    );
+}
+
 // ── #[deprecated] slices 1+2 — parser + AST payload ───────────────
 //
 // Three forms per design.md § `#[deprecated]` for Item Deprecation:

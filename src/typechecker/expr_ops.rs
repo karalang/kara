@@ -189,6 +189,7 @@ impl<'a> super::TypeChecker<'a> {
             // identifier reference). The lookup queries the resolver's
             // symbol table by name to find the deprecation payload.
             self.check_deprecated_use_at(span, name);
+            self.check_unstable_use_at(span, name);
             return Type::Function {
                 params,
                 return_type: Box::new(return_type),
@@ -197,6 +198,7 @@ impl<'a> super::TypeChecker<'a> {
         // Check constants
         if let Some(ty) = self.env.constants.get(name).cloned() {
             self.check_deprecated_use_at(span, name);
+            self.check_unstable_use_at(span, name);
             return ty;
         }
         // Check enum variants (unit variants used as values; tuple variants

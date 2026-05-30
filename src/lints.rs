@@ -105,6 +105,14 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         description: "Use of an item annotated with `#[deprecated]`.",
     },
     LintInfo {
+        name: "unstable_api",
+        default_level: LintLevel::Warn,
+        description:
+            "Use of an item annotated with `#[unstable]` — the API surface may change \
+             before v1 lock. Opt in with `#[allow(unstable_api)]` on the enclosing item \
+             or globally via `[lints].allow_unstable_api = true` in `kara.toml`.",
+    },
+    LintInfo {
         name: "rc_fallback",
         default_level: LintLevel::Warn,
         description: "An owned binding fell back to RC because a closure or borrow conflict made stack ownership infeasible.",
@@ -341,6 +349,26 @@ impl CliLintOverrides {
             ..Self::default()
         }
     }
+
+    /// Phase-8 line 49 prereq 4 — merge a `[lints]` block from a
+    /// `kara.toml` manifest into this override set. `allow_unstable_api
+    /// = true` installs a per-name `Allow` for `unstable_api` so the
+    /// cascade fall-through (after the per-item `lint_override_stack`
+    /// misses) returns `Allow` and the use-site lint is suppressed
+    /// build-wide. Source-level `#[deny(unstable_api)]` still wins
+    /// because it lands earlier in the cascade. Manifest fields that
+    /// are absent / false leave the corresponding entry untouched so
+    /// later CLI flags layered on top still take effect.
+    pub fn apply_manifest_lints(&mut self, lints: &crate::manifest::ManifestLints) {
+        if lints.allow_unstable_api {
+            // Only install when CLI hasn't already named the lint —
+            // an explicit `-D unstable_api` on the CLI wins over the
+            // manifest opt-in (CLI is more specific to this build).
+            self.levels
+                .entry("unstable_api".to_string())
+                .or_insert(LintLevel::Allow);
+        }
+    }
 }
 
 /// The post-cascade severity for a per-module lint emission
@@ -436,6 +464,7 @@ mod tests {
         // a registry entry breaks this test loudly.
         let required = [
             "deprecated",
+            "unstable_api",
             "rc_fallback",
             "implicit_clone",
             "mutual_recursion_note",

@@ -494,6 +494,13 @@ pub enum TypeErrorKind {
     /// `#[deny(deprecated)]` / `#[expect(deprecated)]` attributes. The
     /// message surfaces the optional `note` / `since` fields when set.
     Deprecated,
+    /// Phase-8 line 49 — use of an `#[unstable]`-annotated symbol.
+    /// Emitted by [`Self::check_unstable_use_at`]; routed through
+    /// the `unstable_api` lint so `#[allow(unstable_api)]` on the
+    /// enclosing item suppresses, `#[deny(unstable_api)]` promotes
+    /// to error, and the global `[lints].allow_unstable_api = true`
+    /// in `kara.toml` suppresses build-wide.
+    UnstableApi,
     /// `#[non_exhaustive]` slice 6 — a stdlib `pub enum` whose name ends
     /// in `Error` lacks `#[non_exhaustive]`. The attribute is what lets
     /// cross-package consumers' `match` arms include a wildcard so the
@@ -617,6 +624,7 @@ pub(crate) fn class_for_type_error_kind(
         TypeErrorKind::UnreachableArm
         | TypeErrorKind::UnknownLint
         | TypeErrorKind::Deprecated
+        | TypeErrorKind::UnstableApi
         | TypeErrorKind::ForbiddenLintAllow
         | TypeErrorKind::ExpectOnUnfulfilled
         | TypeErrorKind::UnfulfilledLintExpectation => Some(DC::LintWarning),
@@ -1925,6 +1933,57 @@ impl<'a> TypeChecker<'a> {
             span.clone(),
             TypeErrorKind::Deprecated,
             "deprecated",
+        );
+    }
+
+    /// Phase-8 line 49 — at a reference site, check whether the
+    /// resolved name is an `#[unstable]`-annotated symbol and emit
+    /// the `unstable_api` lint warning through `type_lint_warning`
+    /// if so. Routes via the same cascade as the `deprecated` lint
+    /// — `#[allow(unstable_api)]` on the enclosing scope (or
+    /// `[lints].allow_unstable_api = true` in `kara.toml` lifted
+    /// into [`Self::cli_lint_overrides`]) suppresses;
+    /// `#[deny(unstable_api)]` promotes to error.
+    ///
+    /// Symbol lookup mirrors [`Self::check_deprecated_use_at`]: first
+    /// try the per-span resolution map, then fall back to a
+    /// global-scope name lookup for the cases where the typechecker
+    /// resolved the name via its own env rather than threading the
+    /// resolver's `SpanKey` (free fns / consts / variants).
+    pub(super) fn check_unstable_use_at(&mut self, span: &Span, display_name: &str) {
+        use crate::resolver::ScopeId;
+        let span_key = SpanKey::from_span(span);
+        let sym_id = self
+            .resolve_result
+            .resolutions
+            .get(&span_key)
+            .copied()
+            .or_else(|| {
+                self.resolve_result
+                    .symbol_table
+                    .lookup_in_scope(ScopeId(0), display_name)
+                    .map(|s| s.id)
+            });
+        let Some(sym_id) = sym_id else { return };
+        let Some(payload) = self.resolve_result.symbol_table.unstable_for(sym_id) else {
+            return;
+        };
+        let mut message = format!(
+            "warning[unstable_api]: use of `#[unstable]` item `{display_name}` — the API \
+             surface may change before v1 lock",
+        );
+        if let Some(ref note) = payload.note {
+            message.push_str(&format!(": {note}"));
+        }
+        message.push_str(
+            " — opt in with `#[allow(unstable_api)]` on the enclosing item, or globally \
+             via `[lints].allow_unstable_api = true` in `kara.toml`",
+        );
+        self.type_lint_warning(
+            message,
+            span.clone(),
+            TypeErrorKind::UnstableApi,
+            "unstable_api",
         );
     }
 
