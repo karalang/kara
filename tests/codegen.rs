@@ -3062,6 +3062,73 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_splice_retain_before_release() {
+        // Regression for the `Option[shared T]` field-store retain-order
+        // bug (2026-05-30, kata #19). `slow.next = target.next` splices a
+        // node out of a list: the new value (`target.next`) is reachable
+        // only *through* the old value (`target`). The store must retain
+        // the new inner BEFORE releasing the old — otherwise the old
+        // node's drop recursively dec_refs the new node to zero and frees
+        // it out from under the store, and the result list is corrupt
+        // (pre-fix: trap / garbage like `[1,2,3,3]`).
+        //
+        // Shape mirrors LeetCode #19 `remove_nth_from_end`: build a list
+        // in `from_array`, wrap it in a dummy, two-pointer to the node
+        // before the target, splice. Removing the 2nd-from-end of
+        // [1,2,3,4,5] drops the 4 → [1,2,3,5].
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 { return None; }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+fn remove_nth_from_end(head: Option[ListNode], n: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut fast = head;
+    let mut i = 0i64;
+    while i < n {
+        if let Some(node) = fast { fast = node.next; }
+        i = i + 1i64;
+    }
+    let mut slow = dummy;
+    loop {
+        match fast {
+            Some(node) => { fast = node.next; if let Some(s) = slow.next { slow = s; } }
+            None => break,
+        }
+    }
+    if let Some(target) = slow.next { slow.next = target.next; }
+    dummy.next
+}
+fn main() {
+    let data: Array[i64, 5] = [1, 2, 3, 4, 5];
+    let head = from_array(data);
+    let out = remove_nth_from_end(head, 2i64);
+    let mut cur = out;
+    loop {
+        match cur {
+            Some(node) => { println(node.val); cur = node.next; }
+            None => break,
+        }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\n2\n3\n5");
+        }
+    }
+
+    #[test]
     fn test_e2e_bug8_call_chain_field_assoc_call() {
         // Sibling shape: associated-function call (`Node.make()`)
         // returning a shared struct, then bare `.val` access. The

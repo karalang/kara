@@ -822,7 +822,9 @@ impl<'ctx> super::Codegen<'ctx> {
             let _ = self.builder.build_store(field_ptr, new_val);
             return;
         };
-        // ── Step 1: dec old inner if old is Some. ──
+        // ── Step 1: load the old slot (tag + inner ptr) up front, before
+        //           the store clobbers it. The dec itself happens last, so
+        //           the new value can be retained first (Step 2/3 order). ──
         let old_tag_ptr = self
             .builder
             .build_struct_gep(
@@ -846,16 +848,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 &format!("opt.fld.{field_name}.old.is_some"),
             )
             .unwrap();
-        let old_do_bb = self
-            .context
-            .append_basic_block(fn_val, &format!("opt.fld.{field_name}.old.do"));
-        let old_skip_bb = self
-            .context
-            .append_basic_block(fn_val, &format!("opt.fld.{field_name}.old.skip"));
-        self.builder
-            .build_conditional_branch(old_is_some, old_do_bb, old_skip_bb)
-            .unwrap();
-        self.builder.position_at_end(old_do_bb);
         let old_w0_ptr = self
             .builder
             .build_struct_gep(
@@ -870,45 +862,31 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(i64_t, old_w0_ptr, &format!("opt.fld.{field_name}.old.w0"))
             .unwrap()
             .into_int_value();
+        // `old_inner` is only dereferenced inside the `old_is_some` +
+        // non-null guard below, so materializing it eagerly (even for a
+        // None old slot, where w0 is undef) is harmless.
         let old_inner = self
             .builder
             .build_int_to_ptr(old_w0, ptr_ty, &format!("opt.fld.{field_name}.old.inner"))
             .unwrap();
-        let old_is_null = self
-            .builder
-            .build_is_null(
-                old_inner,
-                &format!("opt.fld.{field_name}.old.inner.is_null"),
-            )
-            .unwrap();
-        let old_real_do_bb = self
-            .context
-            .append_basic_block(fn_val, &format!("opt.fld.{field_name}.old.real_do"));
-        self.builder
-            .build_conditional_branch(old_is_null, old_skip_bb, old_real_do_bb)
-            .unwrap();
-        self.builder.position_at_end(old_real_do_bb);
-        self.emit_rc_dec(inner_heap_type, old_inner);
-        self.builder
-            .build_unconditional_branch(old_skip_bb)
-            .unwrap();
-        self.builder.position_at_end(old_skip_bb);
-        // ── Step 2: store the new Option value. ──
-        self.builder.build_store(field_ptr, new_val).unwrap();
-        // ── Step 3: inc new inner if RHS is an aliasing source. ──
+        // ── Step 2: retain the new inner BEFORE releasing the old. ──
+        // Read the new inner from the `new_val` SSA (not the slot, which is
+        // not stored yet). If the RHS aliases *through* the old value — the
+        // canonical `slow.next = slow.next.next` splice, where the new node's
+        // only live reference is the old node's `next` field — releasing old
+        // first runs its drop, which recursively dec_refs the new node to
+        // zero and frees it out from under us (use-after-free). Retain-
+        // before-release is the ARC setter rule; it also makes the
+        // self-assignment case (`x.next = x.next`) a no-op. A fresh RHS can't
+        // alias old, so the inc is skipped.
         if !rhs_is_fresh {
-            let new_tag_ptr = self
-                .builder
-                .build_struct_gep(
-                    option_ty,
-                    field_ptr,
-                    0,
-                    &format!("opt.fld.{field_name}.new.tag.p"),
-                )
-                .unwrap();
             let new_tag = self
                 .builder
-                .build_load(i64_t, new_tag_ptr, &format!("opt.fld.{field_name}.new.tag"))
+                .build_extract_value(
+                    new_val.into_struct_value(),
+                    0,
+                    &format!("opt.fld.{field_name}.new.tag"),
+                )
                 .unwrap()
                 .into_int_value();
             let new_is_some = self
@@ -930,18 +908,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_conditional_branch(new_is_some, new_do_bb, new_skip_bb)
                 .unwrap();
             self.builder.position_at_end(new_do_bb);
-            let new_w0_ptr = self
-                .builder
-                .build_struct_gep(
-                    option_ty,
-                    field_ptr,
-                    1,
-                    &format!("opt.fld.{field_name}.new.w0.p"),
-                )
-                .unwrap();
             let new_w0 = self
                 .builder
-                .build_load(i64_t, new_w0_ptr, &format!("opt.fld.{field_name}.new.w0"))
+                .build_extract_value(
+                    new_val.into_struct_value(),
+                    1,
+                    &format!("opt.fld.{field_name}.new.w0"),
+                )
                 .unwrap()
                 .into_int_value();
             let new_inner = self
@@ -968,6 +941,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             self.builder.position_at_end(new_skip_bb);
         }
+        // ── Step 3: store the new Option value now that it is retained. ──
+        self.builder.build_store(field_ptr, new_val).unwrap();
+        // ── Step 4: release the old inner if old was Some and non-null. ──
+        let old_do_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("opt.fld.{field_name}.old.do"));
+        let old_skip_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("opt.fld.{field_name}.old.skip"));
+        self.builder
+            .build_conditional_branch(old_is_some, old_do_bb, old_skip_bb)
+            .unwrap();
+        self.builder.position_at_end(old_do_bb);
+        let old_is_null = self
+            .builder
+            .build_is_null(
+                old_inner,
+                &format!("opt.fld.{field_name}.old.inner.is_null"),
+            )
+            .unwrap();
+        let old_real_do_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("opt.fld.{field_name}.old.real_do"));
+        self.builder
+            .build_conditional_branch(old_is_null, old_skip_bb, old_real_do_bb)
+            .unwrap();
+        self.builder.position_at_end(old_real_do_bb);
+        self.emit_rc_dec(inner_heap_type, old_inner);
+        self.builder
+            .build_unconditional_branch(old_skip_bb)
+            .unwrap();
+        self.builder.position_at_end(old_skip_bb);
     }
 
     /// Niche-opt variant of `emit_option_shared_field_store` — the field
@@ -994,41 +999,13 @@ impl<'ctx> super::Codegen<'ctx> {
             self.niche_store_option_field(field_ptr, new_val);
             return;
         };
-        // ── Step 1: dec old inner if old ptr is non-null. ──
-        let old_inner = self
-            .builder
-            .build_load(
-                ptr_ty,
-                field_ptr,
-                &format!("niche.fld.{field_name}.old.ptr"),
-            )
-            .unwrap()
-            .into_pointer_value();
-        let old_is_null = self
-            .builder
-            .build_is_null(old_inner, &format!("niche.fld.{field_name}.old.is_null"))
-            .unwrap();
-        let old_do_bb = self
-            .context
-            .append_basic_block(fn_val, &format!("niche.fld.{field_name}.old.do"));
-        let old_skip_bb = self
-            .context
-            .append_basic_block(fn_val, &format!("niche.fld.{field_name}.old.skip"));
-        self.builder
-            .build_conditional_branch(old_is_null, old_skip_bb, old_do_bb)
-            .unwrap();
-        self.builder.position_at_end(old_do_bb);
-        self.emit_rc_dec(inner_heap_type, old_inner);
-        self.builder
-            .build_unconditional_branch(old_skip_bb)
-            .unwrap();
-        self.builder.position_at_end(old_skip_bb);
-        // ── Step 2: tag-aware extract w0 from new_val, store as ptr.
-        //           When tag == None the payload words are LLVM `undef`
-        //           (see `try_compile_enum_variant`'s None build); a
-        //           bare `w0 as ptr` would materialize garbage. Select
-        //           against null on the None branch so the niche slot
-        //           always reads back correctly.
+        // ── Step 1: compute the new inner ptr from `new_val`. ──
+        //           Tag-aware: when tag == None the payload words are LLVM
+        //           `undef` (see `try_compile_enum_variant`'s None build),
+        //           so a bare `w0 as ptr` would materialize garbage. Select
+        //           against null on the None branch so the niche slot always
+        //           reads back correctly. Done up front so the new value can
+        //           be retained *before* the old one is released (Step 2).
         let sv = new_val.into_struct_value();
         let new_tag = self
             .builder
@@ -1072,8 +1049,26 @@ impl<'ctx> super::Codegen<'ctx> {
             )
             .unwrap()
             .into_pointer_value();
-        self.builder.build_store(field_ptr, new_inner).unwrap();
-        // ── Step 3: inc new inner if RHS is aliasing and ptr non-null. ──
+        // ── Step 2: retain new, store, then release old. ──
+        // Load the old inner ptr (the value being overwritten) before the
+        // store clobbers the slot.
+        let old_inner = self
+            .builder
+            .build_load(
+                ptr_ty,
+                field_ptr,
+                &format!("niche.fld.{field_name}.old.ptr"),
+            )
+            .unwrap()
+            .into_pointer_value();
+        // Retain the new inner BEFORE releasing the old. If the RHS aliases
+        // *through* the old value — the canonical `slow.next = slow.next.next`
+        // splice, where the new node's only live reference is the old node's
+        // `next` field — releasing old first runs its drop, which recursively
+        // dec_refs the new node to zero and frees it out from under us
+        // (use-after-free: a trap, or a garbage store). Retain-before-release
+        // is the ARC setter rule; it also makes the self-assignment case
+        // (`x.next = x.next`) a no-op. A fresh RHS can't alias old, so skip.
         let _ = i64_t;
         if !rhs_is_fresh {
             let new_is_null = self
@@ -1096,6 +1091,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             self.builder.position_at_end(new_skip_bb);
         }
+        // Store the new inner ptr now that it is retained.
+        self.builder.build_store(field_ptr, new_inner).unwrap();
+        // Release the old inner if non-null (after new is retained + stored).
+        let old_is_null = self
+            .builder
+            .build_is_null(old_inner, &format!("niche.fld.{field_name}.old.is_null"))
+            .unwrap();
+        let old_do_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("niche.fld.{field_name}.old.do"));
+        let old_skip_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("niche.fld.{field_name}.old.skip"));
+        self.builder
+            .build_conditional_branch(old_is_null, old_skip_bb, old_do_bb)
+            .unwrap();
+        self.builder.position_at_end(old_do_bb);
+        self.emit_rc_dec(inner_heap_type, old_inner);
+        self.builder
+            .build_unconditional_branch(old_skip_bb)
+            .unwrap();
+        self.builder.position_at_end(old_skip_bb);
     }
 
     pub(super) fn compile_tuple_index(
