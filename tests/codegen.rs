@@ -24459,6 +24459,156 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_sort_by_mono_i64_ascending() {
+        // Slice 6.1 — Vec[i64].sort_by(|a, b| a.cmp(b)) routes through the
+        // monomorphized fast path `emit_sort_by_mono_i64`: insertion sort
+        // body emitted into the user binary, comparator inlined at the
+        // inner compare, no `karac_vec_sort_by` callback. Canonical
+        // ascending shape (kata 15 + 16 idiom).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(30); v.push(10); v.push(20); v.push(40); v.push(15);
+    v.sort_by(|a, b| a.cmp(b));
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["10", "15", "20", "30", "40"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_mono_i64_descending() {
+        // Slice 6.1 — the comparator controls the ORDER, not just the
+        // value extraction. `b.cmp(a)` inverts the ascending shape and
+        // the mono path must respect it (the closure body is inlined; if
+        // we hardcoded ascending in the sort, this test would fail).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(30); v.push(10); v.push(20); v.push(40);
+    v.sort_by(|a, b| b.cmp(a));
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["40", "30", "20", "10"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_mono_i64_computed_key() {
+        // Slice 6.1 — closure body with arithmetic on the params. Pins
+        // that the param-binding step (a = data[jj], b = key) correctly
+        // feeds the closure body's computation; if either binding were
+        // swapped, this would produce a wrong order. Sorts by squared
+        // value, so the sign of the input is irrelevant.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(-3i64); v.push(1i64); v.push(-2i64); v.push(4i64); v.push(0i64);
+    v.sort_by(|a, b| (a * a).cmp(b * b));
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // Squared: 9, 1, 4, 16, 0 — sorted ascending: 0(0), 1(1), -2(4), -3(9), 4(16)
+            assert_eq!(lines, vec!["0", "1", "-2", "-3", "4"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_mono_i64_with_duplicates() {
+        // Slice 6.1 — equal values sit adjacent after sort; the mono path
+        // must not lose any element. Insertion-sort is stable, but stability
+        // isn't pinned here (sort_by has no stable contract); we only
+        // assert the multiset and order.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(3); v.push(1); v.push(3); v.push(2); v.push(1); v.push(3);
+    v.sort_by(|a, b| a.cmp(b));
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["1", "1", "2", "3", "3", "3"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_mono_i64_empty_and_single() {
+        // Slice 6.1 — edge cases. Empty Vec (len=0) and single-element
+        // Vec (len=1) must both produce no-op behavior: the outer-chk
+        // condition (ii=1 < len) is false at entry, the body never runs,
+        // we return immediately. If the BB chain were wrong, either would
+        // crash or corrupt the (one-element) buffer.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut empty: Vec[i64] = Vec.new();
+    empty.sort_by(|a, b| a.cmp(b));
+    println(empty.len());
+
+    let mut one: Vec[i64] = Vec.new();
+    one.push(42);
+    one.sort_by(|a, b| a.cmp(b));
+    println(one[0i64]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["0", "42"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_mono_i64_fallback_on_captures() {
+        // Slice 6.1 gate boundary — closure that captures an outer
+        // variable falls through to the existing thunk path (the mono
+        // emitter explicitly rejects captures in v1; the
+        // `collect_closure_free_vars(...).is_empty()` check at the
+        // dispatch site is the chokepoint). Sorts by distance² from a
+        // captured pivot. If the gate misclassified and routed to the
+        // mono fn (which discards captures), the output would either be
+        // the ascending raw values OR a crash, neither matching the
+        // pivot-distance ordering this asserts.
+        let out = run_program(
+            r#"
+fn main() {
+    let pivot: i64 = 5i64;
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1); v.push(10); v.push(4); v.push(9);
+    v.sort_by(|a, b| ((a - pivot) * (a - pivot)).cmp((b - pivot) * (b - pivot)));
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // Distance² from pivot=5: 1→16, 10→25, 4→1, 9→16 — sorted
+            // ascending by distance: 4 (d²=1), then either 1 or 9 (both
+            // d²=16; stable sort preserves input order so 1 before 9),
+            // then 10 (d²=25). The runtime stable-sort gives 4, 1, 9, 10.
+            assert_eq!(lines, vec!["4", "1", "9", "10"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_sort_by_key_tuple_lexicographic() {
         // Integer-tuple keys (`(i64, i64)`) sort lexicographically — first
         // field is primary, second tie-breaks. Pins the StructValue arm of

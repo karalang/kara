@@ -1674,6 +1674,54 @@ impl<'ctx> super::Codegen<'ctx> {
                     ));
                 }
 
+                // Slice 6.1: monomorphized fast path for
+                // `Vec[i64].sort_by(inline_closure)` with no captures. Emits a
+                // per-call-site sort function (insertion sort over data) with
+                // the comparator closure inlined at the inner compare — no
+                // `karac_vec_sort_by` callback dispatch, LLVM has full
+                // visibility into both the sort algorithm and the comparator.
+                // All other shapes (non-i64 element, non-inline callee,
+                // captures present) fall through to the existing thunk path
+                // below. Surfaced by kata 16 (3Sum Closest) — see the
+                // `Slice 6 (Vec[T]) — natural-pull trigger event` entry in
+                // `docs/implementation_checklist/phase-7-codegen.md`.
+                if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
+                    if self.should_use_mono_vec_sort_by_for(elem_ty)
+                        && self.collect_closure_free_vars(params, body).is_empty()
+                    {
+                        let mono_fn = self.emit_sort_by_mono_i64(params, body)?;
+                        let data_ptr_ptr = self
+                            .builder
+                            .build_struct_gep(vec_ty, data_ptr, 0, "vec.data.ptr")
+                            .unwrap();
+                        let len_ptr = self
+                            .builder
+                            .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
+                            .unwrap();
+                        let data = self
+                            .builder
+                            .build_load(ptr_ty, data_ptr_ptr, "data")
+                            .unwrap()
+                            .into_pointer_value();
+                        let len = self
+                            .builder
+                            .build_load(i64_t, len_ptr, "len")
+                            .unwrap()
+                            .into_int_value();
+                        self.builder
+                            .build_call(
+                                mono_fn,
+                                &[
+                                    BasicMetadataValueEnum::from(data),
+                                    BasicMetadataValueEnum::from(len),
+                                ],
+                                "",
+                            )
+                            .unwrap();
+                        return Ok(self.context.i64_type().const_int(0, false).into());
+                    }
+                }
+
                 // Three thunk shapes, dispatched by AST kind (mirror of
                 // `sort_by_key` above):
                 //   (a) inline closure expression — fuse the closure body
@@ -2990,6 +3038,298 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         Ok((thunk_fn, env_alloca))
+    }
+
+    /// Slice 6.1 gate: monomorphized `Vec[T].sort_by` is enabled for
+    /// `T = i64` only in v1. Other elem types fall through to the existing
+    /// `karac_vec_sort_by` callback path. Future slices add i32 / u64 /
+    /// String / tuple / struct element types when a workload pulls. Cross-
+    /// ref: `docs/implementation_checklist/phase-7-codegen.md` Slice 6
+    /// (Vec[T]) trigger entry.
+    pub(super) fn should_use_mono_vec_sort_by_for(&self, elem_ty: BasicTypeEnum<'ctx>) -> bool {
+        matches!(elem_ty, BasicTypeEnum::IntType(t) if t == self.context.i64_type())
+    }
+
+    /// Slice 6.1: emit a per-call-site monomorphized sort function for
+    /// `Vec[i64].sort_by(inline_closure)`. Signature:
+    /// `void __vec_i64_sort_by_mono_<id>(data: *mut i64, len: i64)`
+    /// (Internal linkage). The function body is an insertion sort with the
+    /// user's comparator inlined at the inner compare — no `karac_vec_sort_by`
+    /// callback, LLVM has direct visibility into both the sort algorithm and
+    /// the comparator, so the compare-and-shift loop optimises end-to-end
+    /// (branchless compares, hoisted loads, fused arithmetic).
+    ///
+    /// **Algorithm choice — insertion sort.** Simple (~30 lines of IR
+    /// builder), validated by the kata-16 README's inline-insertion-sort
+    /// A/B experiment that closed 76% of the gap to Rust (96.8 → 70.6 ms at
+    /// N=16). O(N²) is fine for the current corpus (kata 15 / 16 both run
+    /// N=16, ~120 compares per sort). A future slice can swap in a PDQ
+    /// small-sort network or call out to a typed `karac_vec_sort_i64_*`
+    /// runtime helper when a larger-N workload pulls — the gate predicate
+    /// above is the chokepoint.
+    ///
+    /// **Captures unsupported in this slice.** The caller's free-vars check
+    /// gates entry on `collect_closure_free_vars` returning empty. Closures
+    /// that capture outer scope (e.g. `s.sort_by(|a, b| (a - pivot).cmp(b - pivot))`
+    /// referencing `pivot`) fall through to the existing thunk path. Future
+    /// slice threads captures as extra params or via an env struct mirror.
+    ///
+    /// **Ordering result handling** mirrors `emit_sort_by_inline_thunk` —
+    /// the closure body returns either an `Ordering` struct `{ i64 tag }`
+    /// (for `a.cmp(b)` shapes) or a bare `i64` (for hand-rolled `if a < b
+    /// { -1i64 } else if ...` shapes); we extract the tag in the struct
+    /// case and subtract 1 to get the `-1 / 0 / +1` signed comparator
+    /// value. We then test `> 0` (meaning `a > b`) to decide whether to
+    /// shift `data[jj]` rightward — i.e. the closure controls the sort
+    /// ORDER, not just the value extraction.
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn emit_sort_by_mono_i64(
+        &mut self,
+        params: &[ClosureParam],
+        body: &Expr,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let void_t = self.context.void_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        // 1. Declare per-call-site mono fn. Internal linkage — each call
+        //    site emits a fresh copy (closure body varies per call site, so
+        //    LinkOnceODR would risk silent body-mismatch across TUs sharing
+        //    a counter id).
+        let id = self.closure_counter;
+        self.closure_counter += 1;
+        let name = format!("__vec_i64_sort_by_mono_{}", id);
+        let fn_ty = void_t.fn_type(&[ptr_ty.into(), i64_t.into()], false);
+        let sort_fn = self
+            .module
+            .add_function(&name, fn_ty, Some(Linkage::Internal));
+
+        // 2. Save outer codegen state — we're about to compile into a new fn.
+        //    Same save/restore dance as `emit_sort_by_inline_thunk`.
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_subst = std::mem::take(&mut self.type_subst);
+        let saved_cfn = std::mem::take(&mut self.closure_fn_types);
+        let saved_pct = self.pending_closure_fn_type.take();
+
+        self.current_fn = Some(sort_fn);
+
+        let data = sort_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let len = sort_fn.get_nth_param(1).unwrap().into_int_value();
+
+        // 3. BB scaffold for insertion sort:
+        //
+        //     entry        → ii = 1; goto outer_chk
+        //     outer_chk    → if ii < len then outer_body else exit
+        //     outer_body   → key = data[ii]; jj = ii - 1; goto inner_chk
+        //     inner_chk    → if jj >= 0 then inner_cmp else inner_done
+        //     inner_cmp    → load data[jj]; compile closure body with
+        //                    a = data[jj], b = key; tag - 1 > 0 ?
+        //                    inner_shift : inner_done
+        //     inner_shift  → data[jj+1] = data[jj]; jj -= 1; goto inner_chk
+        //     inner_done   → data[jj+1] = key; ii += 1; goto outer_chk
+        //     exit         → ret void
+        let entry = self.context.append_basic_block(sort_fn, "entry");
+        let outer_chk = self.context.append_basic_block(sort_fn, "outer.chk");
+        let outer_body = self.context.append_basic_block(sort_fn, "outer.body");
+        let inner_chk = self.context.append_basic_block(sort_fn, "inner.chk");
+        let inner_cmp = self.context.append_basic_block(sort_fn, "inner.cmp");
+        let inner_shift = self.context.append_basic_block(sort_fn, "inner.shift");
+        let inner_done = self.context.append_basic_block(sort_fn, "inner.done");
+        let exit = self.context.append_basic_block(sort_fn, "exit");
+
+        self.builder.position_at_end(entry);
+        let ii_alloca = self.create_entry_alloca(sort_fn, "ii", i64_t.into());
+        let jj_alloca = self.create_entry_alloca(sort_fn, "jj", i64_t.into());
+        let key_alloca = self.create_entry_alloca(sort_fn, "key", i64_t.into());
+        let one = i64_t.const_int(1, false);
+        let zero = i64_t.const_zero();
+        self.builder.build_store(ii_alloca, one).unwrap();
+        self.builder.build_unconditional_branch(outer_chk).unwrap();
+
+        // outer_chk: ii < len ?
+        self.builder.position_at_end(outer_chk);
+        let ii_v = self
+            .builder
+            .build_load(i64_t, ii_alloca, "ii.load")
+            .unwrap()
+            .into_int_value();
+        let outer_cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, ii_v, len, "outer.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(outer_cond, outer_body, exit)
+            .unwrap();
+
+        // outer_body: key = data[ii]; jj = ii - 1
+        self.builder.position_at_end(outer_body);
+        let ii_v2 = self
+            .builder
+            .build_load(i64_t, ii_alloca, "ii.load2")
+            .unwrap()
+            .into_int_value();
+        let key_addr = unsafe {
+            self.builder
+                .build_in_bounds_gep(i64_t, data, &[ii_v2], "key.addr")
+                .unwrap()
+        };
+        let key_v = self
+            .builder
+            .build_load(i64_t, key_addr, "key.load")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(key_alloca, key_v).unwrap();
+        let jj_init = self.builder.build_int_sub(ii_v2, one, "jj.init").unwrap();
+        self.builder.build_store(jj_alloca, jj_init).unwrap();
+        self.builder.build_unconditional_branch(inner_chk).unwrap();
+
+        // inner_chk: jj >= 0 ?
+        self.builder.position_at_end(inner_chk);
+        let jj_v = self
+            .builder
+            .build_load(i64_t, jj_alloca, "jj.load")
+            .unwrap()
+            .into_int_value();
+        let jj_ge_0 = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGE, jj_v, zero, "jj.ge.0")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(jj_ge_0, inner_cmp, inner_done)
+            .unwrap();
+
+        // inner_cmp: load data[jj]; bind closure params (a = data[jj],
+        // b = key); compile closure body; tag - 1 > 0 means "a > b" →
+        // shift; otherwise done.
+        self.builder.position_at_end(inner_cmp);
+        let jj_v2 = self
+            .builder
+            .build_load(i64_t, jj_alloca, "jj.load2")
+            .unwrap()
+            .into_int_value();
+        let dj_addr = unsafe {
+            self.builder
+                .build_in_bounds_gep(i64_t, data, &[jj_v2], "dj.addr")
+                .unwrap()
+        };
+        let dj_v = self.builder.build_load(i64_t, dj_addr, "dj.load").unwrap();
+        let key_v2 = self
+            .builder
+            .build_load(i64_t, key_alloca, "key.load2")
+            .unwrap();
+
+        // Bind closure params. param[0] = data[jj] (the "left" side, swept
+        // back through the sorted prefix); param[1] = key (the "right" side,
+        // the freshly-chosen unsorted element being inserted).
+        let param_vals = [dj_v, key_v2];
+        for (i, cp) in params.iter().enumerate().take(2) {
+            let val = param_vals[i];
+            let param_name = match &cp.pattern.kind {
+                PatternKind::Binding(n) => n.clone(),
+                _ => format!("_cp{}", i),
+            };
+            let ty = val.get_type();
+            let alloca = self.create_entry_alloca(sort_fn, &param_name, ty);
+            self.builder.build_store(alloca, val).unwrap();
+            self.variables
+                .insert(param_name, VarSlot { ptr: alloca, ty });
+        }
+
+        // Compile closure body; extract Ordering tag if struct-typed;
+        // compute cmp = tag - 1 (yields -1 / 0 / +1).
+        let result = self.compile_expr(body)?;
+        let tag = if result.is_struct_value() {
+            self.builder
+                .build_extract_value(result.into_struct_value(), 0, "tag")
+                .unwrap()
+                .into_int_value()
+        } else {
+            result.into_int_value()
+        };
+        let cmp_value = self.builder.build_int_sub(tag, one, "cmp").unwrap();
+        let cmp_gt_0 = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, cmp_value, zero, "cmp.gt.0")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cmp_gt_0, inner_shift, inner_done)
+            .unwrap();
+
+        // inner_shift: data[jj+1] = data[jj]; jj -= 1; goto inner_chk
+        self.builder.position_at_end(inner_shift);
+        let jj_v3 = self
+            .builder
+            .build_load(i64_t, jj_alloca, "jj.load3")
+            .unwrap()
+            .into_int_value();
+        let dj_addr2 = unsafe {
+            self.builder
+                .build_in_bounds_gep(i64_t, data, &[jj_v3], "dj.addr2")
+                .unwrap()
+        };
+        let dj_v2 = self
+            .builder
+            .build_load(i64_t, dj_addr2, "dj.load2")
+            .unwrap();
+        let jj_p1 = self.builder.build_int_add(jj_v3, one, "jj.p1").unwrap();
+        let dst_addr = unsafe {
+            self.builder
+                .build_in_bounds_gep(i64_t, data, &[jj_p1], "dst.addr")
+                .unwrap()
+        };
+        self.builder.build_store(dst_addr, dj_v2).unwrap();
+        let jj_m1 = self.builder.build_int_sub(jj_v3, one, "jj.m1").unwrap();
+        self.builder.build_store(jj_alloca, jj_m1).unwrap();
+        self.builder.build_unconditional_branch(inner_chk).unwrap();
+
+        // inner_done: data[jj+1] = key; ii += 1; goto outer_chk
+        self.builder.position_at_end(inner_done);
+        let jj_v4 = self
+            .builder
+            .build_load(i64_t, jj_alloca, "jj.load4")
+            .unwrap()
+            .into_int_value();
+        let key_v3 = self
+            .builder
+            .build_load(i64_t, key_alloca, "key.load3")
+            .unwrap();
+        let dst2_idx = self.builder.build_int_add(jj_v4, one, "dst2.idx").unwrap();
+        let dst2_addr = unsafe {
+            self.builder
+                .build_in_bounds_gep(i64_t, data, &[dst2_idx], "dst2.addr")
+                .unwrap()
+        };
+        self.builder.build_store(dst2_addr, key_v3).unwrap();
+        let ii_v3 = self
+            .builder
+            .build_load(i64_t, ii_alloca, "ii.load3")
+            .unwrap()
+            .into_int_value();
+        let ii_new = self.builder.build_int_add(ii_v3, one, "ii.new").unwrap();
+        self.builder.build_store(ii_alloca, ii_new).unwrap();
+        self.builder.build_unconditional_branch(outer_chk).unwrap();
+
+        // exit
+        self.builder.position_at_end(exit);
+        self.builder.build_return(None).unwrap();
+
+        // Restore outer state.
+        self.type_subst = saved_subst;
+        self.loop_stack = saved_loop_stack;
+        self.var_type_names = saved_var_types;
+        self.variables = saved_vars;
+        self.current_fn = saved_fn;
+        self.closure_fn_types = saved_cfn;
+        self.pending_closure_fn_type = saved_pct;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        Ok(sort_fn)
     }
 
     /// Emit a per-call-site bridge thunk for `Vec.sort_by`. Signature:
