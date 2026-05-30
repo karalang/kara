@@ -1802,20 +1802,55 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                     // Free the LHS's existing heap buffer before writing
-                    // the new value, when both LHS is a tracked Vec /
-                    // String AND the RHS materializes a fresh heap buffer
-                    // (currently `InterpolatedStringLit`). Without the
+                    // the new value, when LHS is a tracked Vec / String
+                    // and the RHS won't end up aliasing it. Without the
                     // free, the OLD buffer leaks on every assignment —
                     // a loop of `s = f"…"` accumulates one leaked buffer
-                    // per iteration. The `cap > 0` guard skips static
+                    // per iteration, and a BFS frontier-swap loop
+                    // (`out = next;`) leaks the entire prior frontier
+                    // per outer step. The `cap > 0` guard skips static
                     // string-literal slots (cap = 0) so the inert
                     // `let mut s: String = "[";` → first assignment is
                     // free of any free; only previously heap-grown slots
                     // get reclaimed. Symmetric guard is already in the
                     // `FreeVecBuffer` cleanup walker; this is the eager-
                     // free analogue for the move-overwrite path.
+                    //
+                    // Triggered for RHS shapes that produce a heap buffer
+                    // distinct from the LHS slot's prior buffer:
+                    //   - `InterpolatedStringLit` (staged_fstr_acc set):
+                    //     f-string accumulator is in a separate slot.
+                    //   - `Identifier(rhs_name)` to a different tracked
+                    //     Vec/String binding: source slot's buffer is
+                    //     about to be moved into LHS; old LHS buffer is
+                    //     orphaned. Skip when `rhs_name == name`
+                    //     (self-alias `x = x` would free the buffer
+                    //     we're about to point to).
+                    //   - Call / MethodCall / StructLiteral
+                    //     (`rhs_yields_fresh_ref` is true): the RHS
+                    //     materializes a +1 transfer, distinct slot.
+                    //
+                    // Vec[Vec[T]] / Vec[String] elements get their inner
+                    // buffers freed too — `emit_free_vec_buffer_if_owned`
+                    // takes the registered elem_ty and does the
+                    // recursive-drop walk inline. Without this, kata-17's
+                    // K=100k Letter-Combinations workload retains 38.5
+                    // MiB peak RSS instead of plateauing at the C/Rust
+                    // working-set baseline of 1.3 MiB.
                     let lhs_is_tracked_vec = self.vec_elem_types.contains_key(name.as_str());
-                    if lhs_is_tracked_vec && staged_fstr_acc.is_some() {
+                    let rhs_is_self_alias = matches!(
+                        &value.kind,
+                        ExprKind::Identifier(rhs_name) if rhs_name == name
+                    );
+                    let rhs_is_moved_alias = matches!(
+                        &value.kind,
+                        ExprKind::Identifier(rhs_name) if rhs_name != name
+                            && self.vec_elem_types.contains_key(rhs_name.as_str())
+                    );
+                    let trigger_eager_free = lhs_is_tracked_vec
+                        && !rhs_is_self_alias
+                        && (staged_fstr_acc.is_some() || rhs_is_moved_alias || rhs_is_fresh);
+                    if trigger_eager_free {
                         if let Some(slot) = self.variables.get(name).copied() {
                             self.emit_free_vec_buffer_if_owned(slot.ptr);
                         }

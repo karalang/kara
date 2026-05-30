@@ -496,6 +496,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// for the eager-free position. `cap = 0` slots (string literals,
     /// already-transferred sources) skip the free, preserving the static-
     /// vs-heap invariant the scope walker also relies on.
+    ///
+    /// **Outer-buffer free only** — does NOT walk inner elements when the
+    /// element type is itself heap-owning. The eager-free site sits in
+    /// the middle of a user's control flow, so inner heap-owning elements
+    /// may already be co-owned by other live bindings (`let x = vec[i]`
+    /// shapes that haven't gone out of scope yet, sibling aliases mid-
+    /// loop, etc.). Walking the inner buffers here races with the per-
+    /// alias scope-exit cleanup the let-binding registered at its own
+    /// site — a double-free that hangs in macOS malloc. The scope-exit
+    /// `FreeVecBuffer` cleanup walker IS safe to do the recursive walk
+    /// because it runs at function exit when every per-alias cleanup has
+    /// already drained.
+    ///
+    /// Result: outer-buffer leak is closed, inner heap-owned elements
+    /// are still freed via their existing per-alias scope-exit cleanup
+    /// (e.g., the `let prefix = out[i]` body in kata-17 frees each
+    /// indexed String at end-of-iter; the leak there was the outer
+    /// {ptr,len,cap} array per BFS step). Workloads that move-overwrite
+    /// without per-element aliases keep their existing scope-exit
+    /// recursive drop unchanged.
     pub(super) fn emit_free_vec_buffer_if_owned(&mut self, vec_alloca: PointerValue<'ctx>) {
         let vec_ty = self.vec_struct_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
