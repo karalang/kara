@@ -31,6 +31,10 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         arms: &[MatchArm],
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Tail-return context: consume now (the scrutinee is not a tail
+        // return), re-applied per arm body below so a bare-arg `Option[shared]`
+        // arm leaf gets its per-branch inc.
+        let tail = self.tail_ret_inner.take();
         // Slice 3b: when the scrutinee is a ref-typed identifier
         // (function parameter `f: ref T` / `mut ref T`), obtain the raw
         // scrutinee pointer in addition to the auto-derefed value.
@@ -185,7 +189,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_destructured_enum_payload_cleanup(scrutinee, &arm.pattern);
             }
 
-            let arm_val = self.compile_expr(&arm.body)?;
+            let arm_val = self.compile_tail_final_expr(&arm.body, tail)?;
             let arm_body_end = self.builder.get_insert_block().unwrap();
             if arm_body_end.get_terminator().is_none() {
                 // Move-aware: if the arm's tail expression is an

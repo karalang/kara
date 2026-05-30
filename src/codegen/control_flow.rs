@@ -33,6 +33,10 @@ impl<'ctx> super::Codegen<'ctx> {
         then_block: &Block,
         else_branch: Option<&Expr>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Tail-return context: consume it now (the scrutinee `value` below is
+        // NOT a tail return), then re-arm it for each branch's final expr so
+        // a bare-arg `Option[shared]` leaf gets its per-branch inc.
+        let tail = self.tail_ret_inner.take();
         let val = self.compile_expr(value)?;
         let cond = self.compile_pattern_condition(pattern, val)?;
         // Reuse if-else codegen
@@ -47,6 +51,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(then_bb);
         self.bind_pattern_values(pattern, val)?;
+        self.tail_ret_inner = tail;
         let then_val = self.compile_block_with_frame(then_block)?;
         let then_terminated = self
             .builder
@@ -61,6 +66,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(else_bb);
         let else_val = if let Some(eb) = else_branch {
+            self.tail_ret_inner = tail;
             match &eb.kind {
                 ExprKind::Block(blk) => self.compile_block_with_frame(blk)?,
                 _ => Some(self.compile_expr(eb)?),
@@ -68,6 +74,7 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             None
         };
+        self.tail_ret_inner = None;
         let else_terminated = self
             .builder
             .get_insert_block()
@@ -393,6 +400,7 @@ impl<'ctx> super::Codegen<'ctx> {
         then_block: &Block,
         else_branch: Option<&Expr>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        let tail = self.tail_ret_inner.take();
         let cond_val = self.compile_expr(condition)?.into_int_value();
         let fn_val = self.current_fn.unwrap();
         let then_bb = self.context.append_basic_block(fn_val, "then");
@@ -404,6 +412,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(then_bb);
+        self.tail_ret_inner = tail;
         let then_val = self.compile_block_with_frame(then_block)?;
         let then_terminated = self
             .builder
@@ -418,6 +427,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(else_bb);
         let else_val = if let Some(else_expr) = else_branch {
+            self.tail_ret_inner = tail;
             match &else_expr.kind {
                 ExprKind::Block(blk) => self.compile_block_with_frame(blk)?,
                 ExprKind::If {
@@ -436,6 +446,7 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             None
         };
+        self.tail_ret_inner = None;
         let else_terminated = self
             .builder
             .get_insert_block()

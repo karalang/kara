@@ -13,7 +13,7 @@ use crate::ast::*;
 use crate::concurrency::ParallelGroup;
 
 use inkwell::module::Linkage;
-use inkwell::types::BasicTypeEnum;
+use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{BasicValue, BasicValueEnum, GlobalValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -28,6 +28,10 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         block: &Block,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Consume the tail-return context up front so block STATEMENTS compile
+        // with it cleared (a non-tail `if let` in stmt position must not pick up
+        // tail-return compensation); restore it for the final expr below.
+        let tail_inner = self.tail_ret_inner.take();
         for stmt in &block.stmts {
             self.compile_stmt(stmt)?;
             if self
@@ -41,10 +45,55 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         if let Some(ref expr) = block.final_expr {
-            let val = self.compile_expr(expr)?;
+            let val = self.compile_tail_final_expr(expr, tail_inner)?;
             Ok(Some(val))
         } else {
             Ok(None)
+        }
+    }
+
+    /// Compile a block's final expression, applying per-branch tail-return
+    /// compensation for `Option[shared T]` returns when `tail_inner` is `Some`
+    /// (i.e. this block's value IS the function's return value).
+    ///
+    /// - A bare `Option[shared]` binding leaf (`l1`) is inc'd in THIS block —
+    ///   returning the binding moves it out, but its scope-exit `RcDecOption`
+    ///   still fires, so the returned chain needs +1. Emitting it here (in the
+    ///   specific arm that returns it) is the per-branch compensation that lets
+    ///   a function mix `Some(<alias>)` tails (no inc) with bare-arg tails.
+    /// - `if` / `if let` / `match` / block constructs PROPAGATE the context to
+    ///   their own branch finals (re-set `tail_ret_inner`), so the inc lands in
+    ///   the deepest arm that actually returns a bare binding.
+    /// - `Some(...)` / a call move-out / `var.field` / anything else get no inc
+    ///   (the constructor already inc'd a `Some` payload; a call owns its ref;
+    ///   `var.field` is handled by `suppress_tail_field_option_dec`).
+    pub(super) fn compile_tail_final_expr(
+        &mut self,
+        expr: &Expr,
+        tail_inner: Option<StructType<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Some(inner) = tail_inner else {
+            return self.compile_expr(expr);
+        };
+        match &expr.kind {
+            ExprKind::If { .. }
+            | ExprKind::IfLet { .. }
+            | ExprKind::Match { .. }
+            | ExprKind::Block(_)
+            | ExprKind::Unsafe(_)
+            | ExprKind::LabeledBlock { .. } => {
+                // Re-arm the context for the construct's branch finals.
+                self.tail_ret_inner = Some(inner);
+                let v = self.compile_expr(expr)?;
+                self.tail_ret_inner = None;
+                Ok(v)
+            }
+            ExprKind::Identifier(n) if self.var_option_shared_heap.contains_key(n.as_str()) => {
+                let v = self.compile_expr(expr)?;
+                self.share_option_shared_ref_for_arg(expr);
+                Ok(v)
+            }
+            _ => self.compile_expr(expr),
         }
     }
 
@@ -138,6 +187,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(decision) = decision else {
             return self.compile_block(body);
         };
+
+        // The auto-par emission path below compiles statements and the final
+        // expr through its own machinery (not `compile_block`). Park the
+        // tail-return context in a local and clear the field so a non-tail
+        // `if let` in STATEMENT position doesn't pick it up; re-apply it to the
+        // final expr via `compile_tail_final_expr` at the tail emission below.
+        let auto_par_tail = self.tail_ret_inner.take();
 
         // Auto-par reduction diagnostic (slice 3a / 3b, 2026-05-19). When
         // the env var `KARAC_REDUCE_DEBUG=1` is set, print every
@@ -451,7 +507,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         if let Some(ref expr) = body.final_expr {
-            let val = self.compile_expr(expr)?;
+            let val = self.compile_tail_final_expr(expr, auto_par_tail)?;
             Ok(Some(val))
         } else {
             Ok(None)

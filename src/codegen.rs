@@ -796,6 +796,20 @@ pub(super) struct Codegen<'ctx> {
     /// stranded the old inner ref and over-decremented at scope
     /// exit, freeing a still-aliased chain.
     pub(crate) var_option_shared_heap: HashMap<String, StructType<'ctx>>,
+    /// Flow-sensitive tail-return context for `Option[shared T]` returns.
+    /// `Some(inner_heap)` means "the expression about to be compiled at a
+    /// block's final-expr position is in function-tail-return position, and
+    /// the function returns `Option[shared T]` whose inner heap layout is
+    /// this". Threaded by `compile_function` → `compile_block` (final expr) →
+    /// `compile_if_let` / `compile_match` (each branch's final expr), and
+    /// CLEARED while compiling block statements so a non-tail `if let` in
+    /// statement position never picks it up. When a tail leaf is a bare
+    /// `Option[shared]` binding (`l1` / `l2`), `compile_block` inc's its inner
+    /// in that branch's own block — the per-branch compensation that lets a
+    /// function MIX `Some(<alias>)` tails (which need no inc) with bare-arg
+    /// returns (which do) without the over/under-count a single merge-block
+    /// inc would cause. See docs/implementation_checklist/phase-7-codegen.md.
+    pub(crate) tail_ret_inner: Option<StructType<'ctx>>,
     /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
     /// are emitted in reverse-push order at scope exit (innermost first).
     pub(crate) scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,
@@ -2985,6 +2999,7 @@ impl<'ctx> Codegen<'ctx> {
             fn_return_type_names: HashMap::new(),
             fn_return_option_inner_shared: HashMap::new(),
             var_option_shared_heap: HashMap::new(),
+            tail_ret_inner: None,
             soa_layouts: HashMap::new(),
             scope_cleanup_actions: Vec::new(),
             pending_errdefer_payload: None,

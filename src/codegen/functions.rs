@@ -445,12 +445,27 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Per-branch `Option[shared T]` tail-return compensation: arm the
+        // flow-sensitive context so the body's final expression (and, through
+        // `compile_block` / `compile_if_let` / `compile_match`, each branch's
+        // final expression) compensates a bare-arg `Option[shared]` leaf in the
+        // specific arm that returns it. Subsumes the old single merge-block
+        // inc, which could not balance a function MIXING `Some(<alias>)` tails
+        // with bare-arg returns (the recursive merge-two-sorted-lists shape).
+        // Cleared right after the body so it never leaks into later state.
+        self.tail_ret_inner = func
+            .return_type
+            .as_ref()
+            .and_then(|te| self.option_inner_shared_type_for_type_expr(te))
+            .map(|(_, info)| info.heap_type);
+
         // Slice 2 (auto-par codegen MVP): route the function body through
         // `compile_function_body`, which dispatches inferred parallel
         // groups to `karac_par_run` when a `ConcurrencyAnalysis` was
         // threaded into codegen. With no analysis, `compile_function_body`
         // falls through to `compile_block` and behavior is unchanged.
         let result = self.compile_function_body(&func.body)?;
+        self.tail_ret_inner = None;
 
         if self
             .builder
@@ -479,18 +494,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // they don't need this — the move-aware suppression only
             // matters when scope cleanup is about to run.
             self.suppress_cleanup_for_tail_return(&func.body);
-            // Branch-buried `Option[shared]` arg return: when the tail is an
-            // `if` / `if let` / `match` every leaf of which returns an aliasing
-            // Option-shared value, inc the returned value's inner ref once so
-            // the scope-exit `RcDecOption` of whichever bound binding it
-            // aliases is balanced. The direct-Identifier / `var.field` tail
-            // cases inside `suppress_cleanup_for_tail_return` don't fire for
-            // branch tails, so this is the only compensation site for
-            // `fn pick(l1,l2){ if let Some(_)=l1 {l1} else {l2} }` and the
-            // recursive merge-two-sorted-lists shape.
-            if let Some(res) = result {
-                self.inc_branch_buried_option_arg_return(&func.body, res, &func.return_type);
-            }
+            // (Branch-buried `Option[shared]` tail returns are now compensated
+            // per-branch during body compilation via `tail_ret_inner` →
+            // `compile_tail_final_expr`; no merge-block inc here.)
             // Sibling to `suppress_cleanup_for_tail_return` for the
             // InterpolatedStringLit-tail case: when the function's final
             // expression is `f"…"`, the loaded {data, len, cap} is the
