@@ -157,7 +157,7 @@ sized box for its real-world deployment shape:
 |---|---|---|---|---|---|
 | Kāra / Rust / Go / Phoenix / Java / .NET Linux / Node | `r8g.4xlarge` | 16 (Graviton4) | 128 GB | arm64 | matches the Kāra & Rust 1M/2M baseline rig; cheap RAM headroom for the 2M target |
 | .NET Windows | `m7i.4xlarge` | 16 (Intel x86) | 64 GB | x86_64 | SChannel is x86-default on Windows Server; matched vCPU; 64 GB is sufficient for 1M target |
-| Cross-platform confirmation _(opportunistic)_ | `c7i.4xlarge` | 16 (Intel x86) | 32 GB | x86_64 | confirm Kāra+Rust numbers are not arm64 artifacts; wip task #62 |
+| Cross-platform confirmation _(landed 2026-05-31)_ | `c7i.8xlarge` | 32 (Intel x86) | 64 GB | x86_64 | Kāra 1M density confirmed not arm64-specific (7,725 B, −1.54 % vs arm64); wip task #62 closed. `c7i.8xlarge` over `.4xlarge` — co-located 1M client+server needs >32 GB |
 
 **Each comparator gets a fresh box.** No co-tenancy between runs
 within a measurement session. Box is terminated after the run's
@@ -346,6 +346,33 @@ threshold. The 250K-vs-250K comparator measurements scoped in
 [§Scale per comparator](#scale-per-comparator) will yield the
 same headline ratio as 1M-vs-1M would, with one chance of
 escalation (Phoenix BEAM) reserved by the linearity gate.
+
+**Cross-ISA confirmation (x86, landed 2026-05-31).** The 7.8 KB/conn
+density is **not** Graviton4-specific. A Kāra 1M run on `c7i.8xlarge`
+(Intel x86_64, 32 vCPU, 64 GB, Ubuntu 24.04) landed `per_conn_bytes
+= 7,725.3 B` — **−1.54 % vs the arm64 1M baseline of 7,846 B**, well
+inside the ±5 % gate:
+
+| metric | x86 (`c7i.8xlarge`) | arm64 1M (`r8g.4xlarge`) |
+|---|---|---|
+| established | 1,000,000 / 1,000,000 | 1,000,000 / 1,000,000 |
+| per-conn bytes | **7,725.3 B** | 7,846 B |
+| connect p50 | **41.02 ms** | 41.0 ms (floor) |
+| connect mean | 46.3 ms | 81.7 ms |
+| ramp | 722.8 s (1,384 c/s) | 1,311 s (763 c/s) |
+
+The **p50 reproduces the arm64 floor to the millisecond** (41.02 vs
+41.0 ms), confirming that floor is an architectural property of the
+runtime's park/wake path, not an ISA artifact. Mean/ramp look faster
+but are **not apples-to-apples** — `c7i.8xlarge` is 32 vCPU vs
+`r8g.4xlarge`'s 16, so establishment throughput is confounded by core
+count; only per-conn density (core-count-independent) is under test.
+x86 2M was deliberately skipped: 1M→2M scale-invariance is already
+locked on arm64 (0.19 %) and is a per-conn-allocation property
+orthogonal to ISA. Raw JSON: `docs/investigations/demo1_m3_1m_x86.json`.
+This was the first-ever x86_64-Linux karac build and surfaced + fixed
+two karac/rig gaps en route (PIC reloc model, commit `bda38682`;
+`fs.nr_open` + systemd nofile cap, commit `6437e765`).
 
 **Ramp-rate note.** The 298 conns/sec average ramp at 2M is
 ~38 % of the 1M ramp rate (783 conns/sec). This is the
@@ -838,7 +865,7 @@ their role's headline scale (`250K` or `100K`).
 
 | comparator | role | linearity (50K) | headline | 2M | active-traffic | reproduction script | raw JSON |
 |---|---|---|---|---|---|---|---|
-| Kāra | self | n/a (multi-scale ladder) | 1M landed | **2M landed (2026-05-30)** | pending (#66) | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `docs/investigations/demo1_m1_verification.md`; 2M: `kara-2m.json` (mirror pending) |
+| Kāra | self | n/a (multi-scale ladder) | 1M landed _(+x86 1M cross-ISA, 2026-05-31)_ | **2M landed (2026-05-30)** | pending (#66) | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `docs/investigations/demo1_m1_verification.md`; 2M: `kara-2m.json` (mirror pending); x86 1M: `docs/investigations/demo1_m3_1m_x86.json` |
 | Rust | credibility | n/a (tracks Kāra) | 1M landed | **2M landed (2026-05-30)** | pending (#66) | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `rust-1m.json`; 2M: `rust-2m.json` (mirror pending) |
 | Phoenix Channels | commercial | pending (#67) | 250K pending (#67) | n/a unless gate escalates | pending | TBD | TBD |
 | Java / Netty | commercial | pending (#68) | 250K pending (#68) | n/a unless gate escalates | pending | TBD | TBD |
@@ -911,3 +938,20 @@ their role's headline scale (`250K` or `100K`).
   `landed @ 2M`. Top-level `README.md` `Concurrency Runtime` line
   updated in the same commit to lead with the head-to-head 2M
   number rather than the Kāra-solo 1M number. Closes wip task #63.
+- **2026-05-31 (x86 cross-ISA confirmation landed):** Kāra 1M run on
+  `c7i.8xlarge` (Intel x86_64, 32 vCPU, 64 GB, Ubuntu 24.04):
+  1,000,000 / 1,000,000 established, 0 failed, `per_conn_bytes =
+  7,725.3 B` — **−1.54 % vs the arm64 1M baseline of 7,846 B**,
+  inside the ±5 % gate. The 7.8 KB/conn density is confirmed **not
+  Graviton4-specific**. `p50 = 41.02 ms` reproduces the arm64 p50
+  floor (41.0 ms) to the millisecond — that floor is an
+  architectural property of the runtime's park/wake path, not an ISA
+  artifact. Mean/ramp look faster but are confounded by core count
+  (32 vCPU vs the arm64 rig's 16), so only per-conn density (core-
+  count-independent) is claimed cross-ISA. x86 2M deliberately
+  skipped (1M→2M scale-invariance already locked on arm64 and is
+  ISA-orthogonal). First-ever x86_64-Linux karac build; surfaced +
+  fixed a PIC-reloc codegen gap (`bda38682`) and `fs.nr_open` +
+  systemd-nofile rig gaps (`6437e765`). Kāra §Cross-ISA block +
+  rig-table row + status matrix updated. Raw JSON:
+  `docs/investigations/demo1_m3_1m_x86.json`. Closes wip task #62.
