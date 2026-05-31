@@ -164,6 +164,36 @@ the end of this doc as the seed for slice 2.
   solves with drop tracking in the generator — it needs deliberate
   scheduling onto the cleanup edges, not a freebie.
 
+## 6½. Key integration finding (the seam map, 2026-05-30)
+
+A read of the existing runtime + drive paths (event_loop.rs, declarations.rs,
+call_dispatch.rs, tcp.rs) collapsed slice 2b's risk substantially — two facts
+mean the coroutine model drops into the existing machinery almost verbatim:
+
+1. **The runtime dispatcher drives any `KaracParkedTask { poll_fn, state }`
+   unchanged.** Its loop is literally `(task.poll_fn)(task.state, &cancel)` →
+   interpret `i8` (0 = Pending, 1 = Ready) (event_loop.rs ~2992). So a
+   coroutine plugs in with **zero runtime changes** by registering an fd with
+   `parked = { poll_fn: @__kara_coro_resume, state: <coro handle> }`. The shim
+   (`@__kara_coro_resume`, slice 2b.1) is built to that exact ABI: it
+   `coro.resume`s the handle, and on `coro.done` destroys the frame + returns
+   Ready, else returns Pending and stays parked. The frame must hold its own
+   `KaracParkedTask` (so `&frame.parked` outlives the registration — same
+   lifetime contract the current state-struct path already honours).
+2. **The leaf already separates park from syscall.** `TcpStream.read/write` /
+   `TcpListener.accept` lower (tcp.rs) to *park-then-syscall*: the park
+   (`park_on_fd` → register + `park_slot_wait` thread-block) only establishes
+   readiness, then a *separate* blocking FFI (`karac_runtime_tcp_read/write/
+   accept`) does the actual syscall on the now-ready fd. The coroutine
+   transform therefore **keeps the syscall call verbatim** and only swaps the
+   park's thread-block for `register_fd(&frame.parked) + coro.suspend`; the
+   syscall moves onto the resume edge. No new non-blocking I/O path needed.
+
+Net: the only genuinely new codegen is (a) emitting the network-boundary fn as
+a coroutine (ramp/suspend/end) and (b) the leaf suspend swap; the drive,
+fd-registration, dispatcher, and syscalls are all reused. Drop-across-suspend
+(slice 4) remains the real correctness risk.
+
 ## 7. Effort estimate (honest)
 
 | Slice | Work | Size |
@@ -171,7 +201,10 @@ the end of this doc as the seed for slice 2.
 | 0 (done) | Toolchain de-risk — CoroSplit works in our LLVM/inkwell | ✅ proven |
 | 1 (done) | Run coro passes unconditionally (incl. `-O0`); keep existing tests green | ✅ small |
 | 2a (done) | Validate the builder + llvm-sys coro-emission path: `src/codegen/coro.rs` (`CoroIntrinsics` + `build_demo_coroutine`) emits a coroutine through the real codegen API, survives CoroSplit (`.resume` clone), re-verifies. Bidirectional inkwell⇄llvm-sys bridge confirmed; `llvm-sys` promoted to the base `llvm` feature | ✅ small |
-| 2b | Wire it into real codegen: emit a network-boundary fn as a coroutine (one network suspend); ramp + register-fd + dispatcher-`coro.resume`. **Goal: a straight-line spawned echo handler services a real connection E2E** (the current no-op) | 2–3 |
+| 2b.1 (done) | **Drive bridge.** `CoroIntrinsics` gains the drive intrinsics (`coro.resume`/`coro.done`/`coro.destroy`) + `emit_coro_resume_shim` → `i8 @__kara_coro_resume(ptr handle, ptr cancel)`, whose signature is *exactly* the runtime `KaracParkedTask.poll_fn` ABI. Test `resume_shim_lowers_alongside_coroutine`: the shim lowers cleanly through the coro pipeline (no leftover `@llvm.coro.*`) and re-verifies. This is the zero-runtime-change bridge — see § 6½ | ✅ small |
+| 2b.2 | **Leaf suspend lowering.** In `tcp.rs`, when the enclosing fn is a coroutine, replace the `park_on_fd`/`park_slot_wait` thread-block with: `register_fd(fd, dir, &frame.parked)` (where `frame.parked = {@__kara_coro_resume, hdl}`) + `coro.suspend`; keep the existing post-park syscall (`karac_runtime_tcp_read/write/accept`) unchanged on the resume edge | 1–2 |
+| 2b.3 | **Compile a network-boundary fn as a coroutine** (replace the degenerate `emit_state_machine_poll_fn_for_key`): normal body + `coro.id`/`begin` ramp + `coro.end`; sync call-site drives the ramp to completion. **Goal: a straight-line synchronous handler services a real connection E2E** | 2 |
+| 2b.4 | **Spawn drive.** Spawn wrapper ramps the coroutine, hands `hdl` to the scheduler (frees the thread); dispatcher resumes via the shim. **Goal: a straight-line *spawned* echo handler services a real connection E2E** (the current no-op) | 1–2 |
 | 3 | Control flow (`loop`/`match` around suspends) — should "just work" via CoroSplit; validate against the demo handler shape | 1 (mostly testing) |
 | 4 | Drop-across-suspend correctness (heap locals freed on completion + on destroy/cancel) — ASAN-gated | 1–2 (trickiest) |
 | 5 | Spawn + TaskGroup + cancellation; retire the spin-loop / thread-block drive | 2 |

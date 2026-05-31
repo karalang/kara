@@ -37,8 +37,9 @@ use inkwell::attributes::AttributeLoc;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::module::Module;
-use inkwell::values::{FunctionValue, IntValue, PointerValue};
+use inkwell::module::{Linkage, Module};
+use inkwell::values::{AsValueRef, FunctionValue, IntValue, PointerValue};
+use inkwell::AddressSpace;
 
 use llvm_sys::core::{
     LLVMAddFunction, LLVMBuildCall2, LLVMConstInt, LLVMConstNull, LLVMConstPointerNull,
@@ -79,6 +80,12 @@ pub(super) struct CoroIntrinsics {
     coro_suspend: Declared,
     coro_free: Declared,
     coro_end: Declared,
+    // Drive intrinsics (used from the resume shim / call-site ramp, not the
+    // coroutine body). These take/return `ptr`/`i1` — no token — but are kept
+    // here so the whole coro ABI is declared in one place.
+    coro_resume: Declared,
+    coro_done: Declared,
+    coro_destroy: Declared,
     malloc: Declared,
     free: Declared,
 }
@@ -126,6 +133,9 @@ impl CoroIntrinsics {
         let coro_suspend = declare_fn(c"llvm.coro.suspend", i8_ty, &mut [token_ty, i1_ty]);
         let coro_free = declare_fn(c"llvm.coro.free", ptr_ty, &mut [token_ty, ptr_ty]);
         let coro_end = declare_fn(c"llvm.coro.end", i1_ty, &mut [ptr_ty, i1_ty, token_ty]);
+        let coro_resume = declare_fn(c"llvm.coro.resume", void_ty, &mut [ptr_ty]);
+        let coro_done = declare_fn(c"llvm.coro.done", i1_ty, &mut [ptr_ty]);
+        let coro_destroy = declare_fn(c"llvm.coro.destroy", void_ty, &mut [ptr_ty]);
         let malloc = declare_fn(c"malloc", ptr_ty, &mut [i64_ty]);
         let free = declare_fn(c"free", void_ty, &mut [ptr_ty]);
 
@@ -140,6 +150,9 @@ impl CoroIntrinsics {
             coro_suspend,
             coro_free,
             coro_end,
+            coro_resume,
+            coro_done,
+            coro_destroy,
             malloc,
             free,
         }
@@ -209,6 +222,28 @@ impl CoroIntrinsics {
         let unwind = LLVMConstInt(self.i1_ty, 0, 0);
         self.call(builder, self.coro_end, &mut [hdl, unwind, none], c"");
     }
+
+    // --- Drive leaves: called from the resume shim / call-site ramp on a
+    //     live handle, NOT from inside the coroutine body. ---
+
+    /// `call void @llvm.coro.resume(ptr %hdl)` — resume a suspended coroutine
+    /// to its next suspend point (or completion). CoroSplit lowers this to a
+    /// load of the resume-fn pointer from the frame + an indirect call.
+    unsafe fn resume(&self, builder: &Builder<'_>, hdl: LLVMValueRef) {
+        self.call(builder, self.coro_resume, &mut [hdl], c"");
+    }
+
+    /// `%d = call i1 @llvm.coro.done(ptr %hdl)` — true once the coroutine is
+    /// suspended at its final suspend point (ready to destroy).
+    unsafe fn done(&self, builder: &Builder<'_>, hdl: LLVMValueRef) -> LLVMValueRef {
+        self.call(builder, self.coro_done, &mut [hdl], c"done")
+    }
+
+    /// `call void @llvm.coro.destroy(ptr %hdl)` — free a completed coroutine's
+    /// frame (runs the cleanup path / drops + frees the malloc'd frame).
+    unsafe fn destroy(&self, builder: &Builder<'_>, hdl: LLVMValueRef) {
+        self.call(builder, self.coro_destroy, &mut [hdl], c"");
+    }
 }
 
 /// Mark `func` `presplitcoroutine` so LLVM's CoroSplit pass rewrites it into
@@ -222,6 +257,84 @@ pub(super) fn mark_presplit_coroutine(context: &Context, func: FunctionValue<'_>
     );
     let attr = context.create_enum_attribute(kind, 0);
     func.add_attribute(AttributeLoc::Function, attr);
+}
+
+/// The name of the runtime-driven coroutine resume shim (see
+/// [`emit_coro_resume_shim`]). Stable so the network transform can reference it
+/// when building the parked-task record.
+pub(super) const CORO_RESUME_SHIM: &str = "__kara_coro_resume";
+
+/// Emit (idempotently) `i8 @__kara_coro_resume(ptr handle, ptr cancel)` — the
+/// bridge that lets the EXISTING runtime dispatcher drive an LLVM coroutine
+/// with no runtime changes.
+///
+/// Its signature is exactly the runtime `KaracParkedTask.poll_fn` ABI
+/// (`unsafe extern "C" fn(*mut c_void state, *const AtomicBool cancel) -> u8`,
+/// `runtime/src/event_loop.rs`). So the network transform (slice 2b.2+)
+/// registers an fd with `parked = { poll_fn: @__kara_coro_resume, state: <coro
+/// handle> }`, and the dispatcher loop (`(task.poll_fn)(task.state, &cancel)`,
+/// event_loop.rs ~2992) resumes the coroutine on fd-readiness — the same path
+/// it already drives state-machine poll-fns through.
+///
+/// Body: resume the handle; if the coroutine has reached its final suspend
+/// (`coro.done`), destroy the frame and report Ready (1); else report Pending
+/// (0) and stay parked for the next readiness wakeup. `cancel` is unused at v1
+/// (the runtime passes a process-global never-cancelled flag); per-task cancel
+/// routing is later work.
+///
+/// Internal linkage: the runtime calls it only through the function pointer
+/// stored in the parked-task record (address-taken → survives DCE), never by
+/// cross-module name.
+///
+/// # Safety
+/// `context` must own `module`.
+pub(super) unsafe fn emit_coro_resume_shim<'ctx>(
+    context: &'ctx Context,
+    module: &Module<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(f) = module.get_function(CORO_RESUME_SHIM) {
+        return f;
+    }
+    let intr = CoroIntrinsics::declare(context, module);
+
+    let i8t = context.i8_type();
+    let ptrt = context.ptr_type(AddressSpace::default());
+    // i8 (ptr handle, ptr cancel)
+    let fn_ty = i8t.fn_type(&[ptrt.into(), ptrt.into()], false);
+    let func = module.add_function(CORO_RESUME_SHIM, fn_ty, Some(Linkage::Internal));
+
+    let handle = func
+        .get_nth_param(0)
+        .expect("resume shim handle param")
+        .into_pointer_value();
+
+    let builder = context.create_builder();
+    let entry = context.append_basic_block(func, "entry");
+    let done_bb = context.append_basic_block(func, "done");
+    let pending_bb = context.append_basic_block(func, "pending");
+
+    builder.position_at_end(entry);
+    intr.resume(&builder, handle.as_value_ref());
+    let done_raw = intr.done(&builder, handle.as_value_ref()); // i1
+    let done_flag = IntValue::new(done_raw);
+    builder
+        .build_conditional_branch(done_flag, done_bb, pending_bb)
+        .unwrap();
+
+    // done: free the frame, report Ready (1).
+    builder.position_at_end(done_bb);
+    intr.destroy(&builder, handle.as_value_ref());
+    builder
+        .build_return(Some(&i8t.const_int(1, false)))
+        .unwrap();
+
+    // pending: still suspended — report Pending (0), stay parked.
+    builder.position_at_end(pending_bb);
+    builder
+        .build_return(Some(&i8t.const_int(0, false)))
+        .unwrap();
+
+    func
 }
 
 /// Build a minimal valid switched-resume coroutine `@demo_coro` via the
@@ -297,6 +410,7 @@ pub(super) unsafe fn build_demo_coroutine<'ctx>(
 mod tests {
     use super::*;
     use inkwell::context::Context;
+    use inkwell::values::AnyValue;
 
     /// The builder-path coroutine emission survives `coro-early,coro-split,
     /// coro-cleanup`: CoroSplit produces the `.resume` clone, proving the
@@ -334,6 +448,56 @@ mod tests {
         );
 
         // Post-split the module must still verify.
+        module
+            .verify()
+            .unwrap_or_else(|e| panic!("post-split module invalid: {}", e.to_string()));
+    }
+
+    /// The resume shim (`__kara_coro_resume`) lowers cleanly through the coro
+    /// pipeline alongside a real coroutine: `coro.resume`/`coro.done`/
+    /// `coro.destroy` are rewritten by CoroCleanup into frame accesses, the
+    /// shim survives, and the module re-verifies. This is the slice-2b.1 gate —
+    /// the drive bridge that plugs a coroutine into the existing dispatcher.
+    #[test]
+    fn resume_shim_lowers_alongside_coroutine() {
+        let context = Context::create();
+        let module = context.create_module("coro_drive");
+        let builder = context.create_builder();
+
+        unsafe {
+            build_demo_coroutine(&context, &module, &builder);
+            emit_coro_resume_shim(&context, &module);
+        }
+
+        module
+            .verify()
+            .unwrap_or_else(|e| panic!("pre-split module invalid: {}", e.to_string()));
+
+        let tm = crate::codegen::driver::create_target_machine()
+            .expect("create target machine for coro drive");
+        let opts = inkwell::passes::PassBuilderOptions::create();
+        module
+            .run_passes("coro-early,coro-split,coro-cleanup", &tm, opts)
+            .unwrap_or_else(|e| panic!("coro pipeline failed: {}", e.to_string()));
+
+        // The shim survives lowering, and the coroutine still split.
+        let shim = module
+            .get_function(CORO_RESUME_SHIM)
+            .expect("resume shim must survive the coro pipeline");
+        assert!(
+            module.get_function("demo_coro.resume").is_some(),
+            "CoroSplit did not emit demo_coro.resume"
+        );
+        // The coro.resume/done/destroy intrinsics must be fully lowered away in
+        // the shim (CoroCleanup replaces them with frame loads + indirect
+        // calls) — no leftover `@llvm.coro.*` calls remain.
+        let shim_ir = shim.print_to_string().to_string();
+        assert!(
+            !shim_ir.contains("@llvm.coro."),
+            "resume shim still has un-lowered coro intrinsics:\n{}",
+            shim_ir
+        );
+
         module
             .verify()
             .unwrap_or_else(|e| panic!("post-split module invalid: {}", e.to_string()));
