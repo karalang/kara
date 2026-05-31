@@ -2230,12 +2230,18 @@ impl Session {
                 // no-op via `karac_map_*`'s null guards). Pass-
                 // through (no capture, no null-slot) preserves
                 // correct re-evaluating semantics for mut Maps.
+                // Slice c-repl.B.5.3c extends the mut filter to Set.
+                // Set reuses the Map handle / `karac_map_*` runtime,
+                // so the same alias hazards apply — pass-through
+                // preserves correct re-evaluating semantics for mut
+                // Sets, symmetric to the Map and Vec/String cases.
                 if *is_mut
                     && matches!(
                         kind,
                         crate::codegen::SnapshotPrimKind::String
                             | crate::codegen::SnapshotPrimKind::Vec(_)
                             | crate::codegen::SnapshotPrimKind::Map { .. }
+                            | crate::codegen::SnapshotPrimKind::Set(_)
                     )
                 {
                     continue;

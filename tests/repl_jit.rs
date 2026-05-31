@@ -530,6 +530,93 @@ fn repl_jit_map_mut_let_falls_through_to_passthrough() {
 }
 
 #[test]
+fn repl_jit_set_let_rhs_is_not_re_evaluated() {
+    // Slice c-repl.B.5.3c friction probe — Set[primitive] cross-cell
+    // let snapshot. Mirrors B.5.3b's Map probe shape: cell 1 binds a
+    // Set via `Set.new()` and inserts an entry in the same cell; cell
+    // 2 reads via `s.contains(1)`. Persistent-let replay re-emits the
+    // `let s = Set.new();` into cell 2's synth source. Pre-B.5.3c the
+    // JIT path lacks Set snapshot support, so the replayed Set.new()
+    // produces a fresh empty handle → `contains(1)` returns false →
+    // prints 0. Post-B.5.3c the snapshot mechanism replays cell 1's
+    // populated handle → `contains(1)` returns true → prints 1.
+    //
+    // Set.new() shares the Map[K, V] runtime (`karac_map_new` with
+    // val_size = 0, single opaque handle), so the storage layout is
+    // identical to B.5.3b. We sidestep the fn-return path for the
+    // same reason the Map probe did (Set-returned-from-fn surfaces
+    // the same `FreeMapHandle` tail-return path, which we already
+    // fixed for Map; the inline shape is the cleaner probe).
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r =
+        s.evaluate_cell_captured("let s: Set[i64] = Set.new(); s.insert(1); println(\"called\");");
+    assert!(r.errors.is_empty(), "cell 1: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "called",
+        "cell 1 should print the side effect once"
+    );
+    let r = s.evaluate_cell_captured("if s.contains(1) { println(1); } else { println(0); }");
+    assert!(r.errors.is_empty(), "cell 2: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "1",
+        "cell 2 should see cell 1's inserted element via the snapshot global",
+    );
+}
+
+#[test]
+fn repl_jit_set_cross_cell_shadow_drops_runner() {
+    // Slice c-repl.B.5.3c — Set entries land in `jit_snapshotted_lets`
+    // the same way primitive/String/Vec/Map entries do, so the cross-
+    // cell shadow detection in `prune_shadowed_lets` (B.5.1 follow-up)
+    // picks them up uniformly. Cell 1 binds a Set[i64]; cell 2 rebinds
+    // the same name to a different Set without `:reset`. The shadow
+    // detection drops the runner, the fresh runner re-captures cell
+    // 2's new value, and the use cell observes the new element.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("let s: Set[i64] = Set.new(); s.insert(1);");
+    assert!(r.errors.is_empty(), "cell 1: {:?}", r.errors);
+    let r = s.evaluate_cell_captured(
+        "let s: Set[i64] = Set.new(); s.insert(42); \
+         if s.contains(42) { println(42); } else { println(-1); }",
+    );
+    assert!(r.errors.is_empty(), "cell 2: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "42",
+        "cross-cell Set shadow must re-capture, not replay cell 1's stale handle; stdout: {:?}",
+        r.stdout,
+    );
+}
+
+#[test]
+fn repl_jit_set_mut_let_falls_through_to_passthrough() {
+    // Slice c-repl.B.5.3c — `let mut s: Set[i64] = …` must NOT take the
+    // snapshot path. Same alias-hazard reasoning as the Map mut case:
+    // although the current Map/Set registration-site suppression keeps
+    // the slot's live handle (so same-cell mutations work post-capture),
+    // the mut filter still kicks in for symmetry and protects against
+    // future capture-design changes that might add slot-side
+    // suppression. Exercise both `insert` and `contains` in the same
+    // cell to confirm the pass-through path doesn't diverge.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured(
+        "let mut s: Set[i64] = Set.new(); s.insert(1); s.insert(2); \
+         if s.contains(2) { println(2); } else { println(-1); }",
+    );
+    assert!(
+        r.errors.is_empty(),
+        "mut Set cell should run cleanly: {:?}",
+        r.errors,
+    );
+    assert_eq!(r.stdout.trim(), "2");
+}
+
+#[test]
 fn repl_jit_banner_advertises_jit_mode() {
     // Slice c-repl.B.B — drive the actual `karac repl` binary with
     // `KARAC_REPL_JIT=1`. Verifies the banner picked up the JIT tag

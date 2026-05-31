@@ -208,7 +208,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // the key-side walk via `map_key_shared_heap_type_for`
         // (which consults `set_elem_type_exprs` for Set bindings).
         let key_shared_heap = self.map_key_shared_heap_type_for(var_name);
-        self.track_map_var(slot_ptr, key_is_vec, false, None, key_shared_heap);
+        // Slice c-repl.B.5.3c: skip the scope-exit FreeMapHandle when
+        // the let binding is destined for the cross-cell snapshot
+        // global — same rationale as the Map.new() arm in
+        // `compile_map_new_stmt`. The snapshot owns the handle's
+        // lifetime; freeing at scope exit would leave the global
+        // pointing at reclaimed memory. The slot still keeps the
+        // handle so same-cell `s.insert(...)` / `s.contains(...)`
+        // observe the live Set via direct slot reads.
+        if !self.snapshot_capture.contains_key(var_name) {
+            self.track_map_var(slot_ptr, key_is_vec, false, None, key_shared_heap);
+        }
         Ok(())
     }
 

@@ -1033,7 +1033,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         && self.set_elem_types.contains_key(var_name.as_str())
                     {
                         let name = var_name.clone();
-                        return self.compile_set_new_stmt(&name);
+                        self.compile_set_new_stmt(&name)?;
+                        // Slice c-repl.B.5.3c: same plumbing as the
+                        // Map.new() arm just above — Set.new() bypasses
+                        // the let-arm's snapshot capture hook at the
+                        // bottom of this match. Fire it here so REPL
+                        // `Set[T]` bindings get the cross-cell handle
+                        // stash. No-op outside REPL mode
+                        // (snapshot_capture is empty), no-op for
+                        // non-primitive T (the classifier skips them).
+                        self.try_emit_snapshot_capture(pattern);
+                        return Ok(());
                     }
                 }
                 // Map literal: `let m: Map[K, V] = ["k": v, ...]` (bare) or
@@ -2392,6 +2402,21 @@ impl<'ctx> super::Codegen<'ctx> {
             self.map_key_type_names
                 .insert(name.clone(), Self::vec_elem_kind_name(key).to_string());
         }
+        // Slice c-repl.B.5.3c: Set replay registers the binding under
+        // `set_elem_types[name]` / `set_elem_type_names[name]` so
+        // downstream method dispatch (`s.contains(x)`, `s.insert(x)`,
+        // `s.len()`, etc.) routes through the Set surface unchanged.
+        // Set's runtime is `karac_map_*` with val_size = 0, so the
+        // handle in the snapshot global is layout-compatible with a
+        // Map handle. No `track_map_var`: the handle is owned by the
+        // snapshot global, not this slot's alloca; scope-exit cleanup
+        // must skip the free entirely.
+        if let super::SnapshotPrimKind::Set(elem) = kind {
+            let elem_ty = self.vec_elem_llvm_type(elem);
+            self.set_elem_types.insert(name.clone(), elem_ty);
+            self.set_elem_type_names
+                .insert(name.clone(), Self::vec_elem_kind_name(elem).to_string());
+        }
         Ok(true)
     }
 
@@ -2443,15 +2468,17 @@ impl<'ctx> super::Codegen<'ctx> {
         ) {
             self.zero_vec_alloca_cap(slot.ptr);
         }
-        // Slice c-repl.B.5.3b: no slot-suppression for Map. Unlike
-        // Vec/String which use a cap=0 sentinel in the slot's struct
-        // triple, Map's cleanup is queue-driven (`FreeMapHandle` is
-        // pushed to `scope_cleanup_actions` from a known set of
-        // sites). Suppression happens at the registration site
-        // instead — `compile_map_new_stmt` skips `track_map_var` when
+        // Slice c-repl.B.5.3b/B.5.3c: no slot-suppression for Map or
+        // Set. Unlike Vec/String which use a cap=0 sentinel in the
+        // slot's struct triple, Map/Set cleanup is queue-driven
+        // (`FreeMapHandle` is pushed to `scope_cleanup_actions` from a
+        // known set of sites). Suppression happens at the registration
+        // site instead — `compile_map_new_stmt` / `compile_set_new_stmt`
+        // skip `track_map_var` when
         // `snapshot_capture.contains_key(var_name)`. The slot keeps
         // the live handle so same-cell `m.insert(...)` / `m.get(...)`
-        // still find the Map; no nulling required.
+        // / `s.insert(...)` / `s.contains(...)` still find the Map/Set;
+        // no nulling required.
     }
 
     /// LLVM storage type for a snapshot global. Distinct from the
@@ -2472,7 +2499,7 @@ impl<'ctx> super::Codegen<'ctx> {
             super::SnapshotPrimKind::String | super::SnapshotPrimKind::Vec(_) => {
                 self.vec_struct_type().into()
             }
-            super::SnapshotPrimKind::Map { .. } => {
+            super::SnapshotPrimKind::Map { .. } | super::SnapshotPrimKind::Set(_) => {
                 self.context.ptr_type(AddressSpace::default()).into()
             }
         }
@@ -2519,7 +2546,8 @@ impl<'ctx> super::Codegen<'ctx> {
             | super::SnapshotPrimKind::Char
             | super::SnapshotPrimKind::String
             | super::SnapshotPrimKind::Vec(_)
-            | super::SnapshotPrimKind::Map { .. } => Ok(loaded),
+            | super::SnapshotPrimKind::Map { .. }
+            | super::SnapshotPrimKind::Set(_) => Ok(loaded),
             super::SnapshotPrimKind::Bool => {
                 let i8_val = loaded.into_int_value();
                 let zero = self.context.i8_type().const_zero();
@@ -2546,7 +2574,8 @@ impl<'ctx> super::Codegen<'ctx> {
             | super::SnapshotPrimKind::Char
             | super::SnapshotPrimKind::String
             | super::SnapshotPrimKind::Vec(_)
-            | super::SnapshotPrimKind::Map { .. } => Ok(loaded),
+            | super::SnapshotPrimKind::Map { .. }
+            | super::SnapshotPrimKind::Set(_) => Ok(loaded),
             super::SnapshotPrimKind::Bool => {
                 let i1 = loaded.into_int_value();
                 let i8_ty = self.context.i8_type();
@@ -2618,11 +2647,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // treated as a String/Vec slot.
                 g.set_initializer(&self.vec_struct_type().const_zero());
             }
-            super::SnapshotPrimKind::Map { .. } => {
-                // Slice c-repl.B.5.3b: zero-initialize the handle
-                // pointer. `karac_map_free` early-returns on a null
-                // map, so an uncaptured global accidentally treated
-                // as a Map slot is a safe no-op.
+            super::SnapshotPrimKind::Map { .. } | super::SnapshotPrimKind::Set(_) => {
+                // Slice c-repl.B.5.3b/B.5.3c: zero-initialize the
+                // handle pointer. `karac_map_free` early-returns on a
+                // null map, so an uncaptured global accidentally
+                // treated as a Map/Set slot is a safe no-op. Set
+                // lowers to `Map[T, ()]` so the same handle layout
+                // and same `karac_map_free` cleanup apply.
                 g.set_initializer(&self.context.ptr_type(AddressSpace::default()).const_null());
             }
         }

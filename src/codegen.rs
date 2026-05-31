@@ -187,6 +187,22 @@ pub enum SnapshotPrimKind {
     /// shared rc-dec walk both need per-entry retain/release that
     /// the shallow handle transfer can't carry.
     Map { key: VecElemKind, val: VecElemKind },
+    /// Slice c-repl.B.5.3c: Kāra `Set[T]` for primitive `T`. Set lowers
+    /// to `Map[T, ()]` at codegen (`karac_map_new(elem_size, 0, …)` —
+    /// `val_size = 0` collapses the value slot inside the bucket
+    /// layout) and reuses the Map runtime end-to-end — same opaque
+    /// handle storage, same `karac_map_free` cleanup, same
+    /// `FreeMapHandle` `CleanupAction`. Capture/replay mirror
+    /// `Map { … }` exactly; the variant only carries the element kind
+    /// so replay can re-register `set_elem_types[name]` /
+    /// `set_elem_type_names[name]` for downstream method dispatch
+    /// (`s.contains(x)`, `s.insert(x)`). Mut Set bindings fall through
+    /// to pass-through, same as Map. Aggregate-element sets
+    /// (`Set[String]`, `Set[<user struct>]`) and `Set[shared T]` are
+    /// out of scope for v1 — they need the per-entry retain/release
+    /// walk the shallow handle transfer can't carry, same as the
+    /// aggregate Map cases.
+    Set(VecElemKind),
 }
 
 /// Slice c-repl.B.5.3: Vec element kinds eligible for the v1 snapshot

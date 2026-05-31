@@ -1034,6 +1034,20 @@ pub(super) fn snapshot_kind_for_type(
             let val = kind_for(&args[1])?;
             Some(SnapshotPrimKind::Map { key, val })
         }
+        // Slice c-repl.B.5.3c: Set[T] for primitive T. Set lowers to
+        // `Map[T, ()]` at codegen (same `karac_map_new` constructor
+        // with val_size = 0) and reuses the Map handle layout. The
+        // primitive constraint matches the Map arm above — `Set[T]`
+        // for aggregate / shared T needs per-entry drop accounting
+        // the shallow handle transfer can't carry, same constraint
+        // Map faces.
+        Type::Named { name, args } if name == "Set" && args.len() == 1 => match &args[0] {
+            Type::Int(IntSize::I64) => Some(SnapshotPrimKind::Set(VecElemKind::I64)),
+            Type::Float(FloatSize::F64) => Some(SnapshotPrimKind::Set(VecElemKind::F64)),
+            Type::Bool => Some(SnapshotPrimKind::Set(VecElemKind::Bool)),
+            Type::Char => Some(SnapshotPrimKind::Set(VecElemKind::Char)),
+            _ => None,
+        },
         _ => None,
     }
 }
