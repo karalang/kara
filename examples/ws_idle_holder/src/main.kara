@@ -65,6 +65,10 @@ fn handle_connection(ws: WebSocket) {
                 if n == 0 {
                     break;
                 }
+                match ws.send_text(buf[0..n]) {
+                    Result.Ok(_) => {}
+                    Result.Err(_) => { break; }
+                }
             }
             Result.Err(_) => {
                 break;
