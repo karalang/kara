@@ -1036,6 +1036,43 @@ mod tests {
         );
     }
 
+    /// Slice 5c — **cooperative cancellation mechanism is emitted**. The resume
+    /// shim (`__kara_coro_resume`) checks the cancel flag the dispatcher passes
+    /// and, when set, `coro.destroy`s instead of resuming; the coroutine's
+    /// per-park destroy edge then `park_slot_signal`s the completion slot so a
+    /// cancelled coroutine's waiter wakes instead of hanging. Both are inert
+    /// until a cancel flag is actually set (the dispatcher passes a
+    /// never-cancelled flag today), so this is verified structurally. The
+    /// trigger half — per-task cancel routing + `TaskGroup.cancel()` + the
+    /// dispatcher sweep for parked-but-never-ready coroutines — is the follow-on.
+    #[test]
+    fn coroutine_cancel_mechanism_emitted() {
+        let ir = compile_coro_split_ir(HANDLER_SRC).expect("coro-split IR");
+
+        // The resume shim checks the cancel flag (a load + a teardown branch)
+        // before resuming.
+        let shim = extract_fn_ir(&ir, "@__kara_coro_resume(")
+            .unwrap_or_else(|| panic!("no resume shim in IR:\n{ir}"));
+        assert!(
+            shim.contains("cancel.flag") && shim.contains("cancel.teardown"),
+            "resume shim must load the cancel flag and branch to a teardown path; \
+             shim:\n{shim}"
+        );
+
+        // The coroutine's `.destroy` clone signals the completion slot on its
+        // per-park destroy edge — without this, cancelling a parked coroutine
+        // hangs its waiter forever.
+        let destroy = extract_fn_ir(&ir, "@serve_one.destroy(")
+            .unwrap_or_else(|| panic!("no serve_one.destroy clone:\n{ir}"));
+        let dblock = extract_block(destroy, "kara.coro.destroy.0")
+            .unwrap_or_else(|| panic!("no kara.coro.destroy.0 block:\n{destroy}"));
+        assert!(
+            dblock.contains("karac_runtime_park_slot_signal"),
+            "the per-park destroy edge must signal the completion slot so a \
+             cancelled coroutine's waiter wakes; destroy block:\n{dblock}"
+        );
+    }
+
     #[test]
     fn coroutine_heap_local_freed_on_destroy_edge() {
         let ir = match compile_coro_split_ir(HEAP_HANDLER_SRC) {

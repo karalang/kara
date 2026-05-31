@@ -363,13 +363,71 @@ pub(super) unsafe fn emit_coro_resume_shim<'ctx>(
         .get_nth_param(0)
         .expect("resume shim handle param")
         .into_pointer_value();
+    let cancel = func
+        .get_nth_param(1)
+        .expect("resume shim cancel param")
+        .into_pointer_value();
 
     let builder = context.create_builder();
     let entry = context.append_basic_block(func, "entry");
+    let cancel_check_bb = context.append_basic_block(func, "cancel.check");
+    let cancel_bb = context.append_basic_block(func, "cancel.teardown");
+    let resume_bb = context.append_basic_block(func, "resume");
     let done_bb = context.append_basic_block(func, "done");
     let pending_bb = context.append_basic_block(func, "pending");
 
+    // A2 cooperative cancellation: before resuming, check the cancel flag the
+    // dispatcher passes. The runtime always passes a valid pointer today (a
+    // process-global never-cancelled flag); per-task routing (so `TaskGroup.
+    // cancel()` targets specific coroutines) is the follow-on. A null pointer
+    // is still tolerated (treated as not-cancelled) so the shim is robust to
+    // any future caller that passes null.
     builder.position_at_end(entry);
+    let cancel_is_null = builder
+        .build_int_compare(
+            inkwell::IntPredicate::EQ,
+            cancel,
+            ptrt.const_null(),
+            "cancel.is_null",
+        )
+        .unwrap();
+    builder
+        .build_conditional_branch(cancel_is_null, resume_bb, cancel_check_bb)
+        .unwrap();
+
+    // cancel.check: load the flag (a `*const AtomicBool`, i8-wide); branch to
+    // teardown when set.
+    builder.position_at_end(cancel_check_bb);
+    let cancel_val = builder
+        .build_load(i8t, cancel, "cancel.flag")
+        .unwrap()
+        .into_int_value();
+    let cancelled = builder
+        .build_int_compare(
+            inkwell::IntPredicate::NE,
+            cancel_val,
+            i8t.const_int(0, false),
+            "cancel.set",
+        )
+        .unwrap();
+    builder
+        .build_conditional_branch(cancelled, cancel_bb, resume_bb)
+        .unwrap();
+
+    // cancel.teardown: do NOT resume — destroy the frame. `coro.destroy` runs
+    // the destroy clone, which (for a coroutine suspended at a park) executes
+    // that park's `kara.coro.destroy.N` edge: deregister the fd, drop the heap
+    // locals live across the park (slice 4), `park_slot_signal` the completion
+    // slot so the waiter wakes (slice 5c), then `coro.free`. Report Ready (1)
+    // so the dispatcher stops driving this task.
+    builder.position_at_end(cancel_bb);
+    intr.destroy(&builder, handle.as_value_ref());
+    builder
+        .build_return(Some(&i8t.const_int(1, false)))
+        .unwrap();
+
+    // resume: drive the coroutine to its next suspend (or completion).
+    builder.position_at_end(resume_bb);
     intr.resume(&builder, handle.as_value_ref());
     let done_raw = intr.done(&builder, handle.as_value_ref()); // i1
     let done_flag = IntValue::new(done_raw);
@@ -796,9 +854,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .expect("karac_runtime_event_loop_deregister_fd declared in Codegen::new");
 
         // Destroy edge: the coroutine is being torn down while parked here
-        // (a future slice-5 cancel; today this clone is emitted-but-unreached
-        // because the only `coro.destroy` is the dispatcher's post-completion
-        // one, which lands on the final suspend's free-only edge). Order:
+        // (cooperative cancellation — the resume shim sees the cancel flag set
+        // and `coro.destroy`s instead of resuming, landing on THIS edge). Order:
         //   1. deregister the fd — the event loop still holds a pointer to the
         //      frame-resident parked record; freeing the frame without this
         //      dangles it (the dispatcher would deref freed memory on the next
@@ -806,9 +863,19 @@ impl<'ctx> super::Codegen<'ctx> {
         //   2. drop the heap locals live across this park — the set a cancel
         //      here would otherwise leak. CoroSplit spills each to the frame
         //      because they are used on this (post-suspend) edge.
-        //   3. branch to the shared `cleanup_bb`, which `coro.free`s the frame.
-        // Deregister-vs-drops order is immaterial (independent resources); the
-        // frame free strictly follows both.
+        //   3. `park_slot_signal` the completion slot (slice 5c) — a cancelled
+        //      coroutine never reaches its normal `coro_return` signal, so
+        //      without this the waiter (`park_slot_wait` inline, or the
+        //      spawn-coro join) HANGS forever. The completion and cancel paths
+        //      are mutually exclusive (the coroutine either runs to completion
+        //      and signals from `coro_return`, or is destroyed at a park and
+        //      signals here), and `park_slot_signal` is idempotent, so there is
+        //      no double-signal. `slot` is the last use of `ctx.slot` here — the
+        //      woken waiter may free the slot immediately after, and the rest of
+        //      this edge (deregister/drops/free) never touches it again.
+        //   4. branch to the shared `cleanup_bb`, which `coro.free`s the frame.
+        // Deregister-vs-drops-vs-signal order is immaterial (independent); the
+        // frame free strictly follows all three.
         self.builder.position_at_end(destroy_bb);
         let token_field_d = self
             .builder
@@ -823,6 +890,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_call(deregister_fd, &[fd.into(), token_d.into()], "")
             .unwrap();
         self.emit_coro_destroy_edge_drops();
+        let signal_fn = self
+            .module
+            .get_function("karac_runtime_park_slot_signal")
+            .expect("karac_runtime_park_slot_signal declared in Codegen::new");
+        self.builder
+            .build_call(signal_fn, &[ctx.slot.into()], "")
+            .unwrap();
         self.builder
             .build_unconditional_branch(ctx.cleanup_bb)
             .unwrap();
