@@ -40,6 +40,14 @@ if [[ ! -x "$SERVER_BIN" ]]; then
     exit 1
 fi
 
+# Absolutise the server-bin path. The bench harness spawns it via Rust's
+# `Command::new`, which PATH-looks-up a bare name with no slash (e.g.
+# `ws_idle_holder`) rather than resolving it against cwd — so a bare path
+# that passes the `-x` check above would still fail to spawn with "No such
+# file or directory". Canonicalising here makes any accepted path spawn
+# correctly regardless of the bench's working directory.
+SERVER_BIN="$(cd "$(dirname "$SERVER_BIN")" && pwd)/$(basename "$SERVER_BIN")"
+
 # Resolve the bench harness binary relative to this script.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BENCH_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"

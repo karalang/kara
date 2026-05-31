@@ -63,6 +63,21 @@ fi
 # = 2× headroom over the 2M-conn ceiling. nofile (per-process,
 # below) is necessary but not sufficient: file-max gates the kernel's
 # global file-table allocation independently of any per-process cap.
+#
+# `fs.nr_open=8000000`: the kernel's per-process upper bound on a file
+# descriptor number — the hard ceiling on how high RLIMIT_NOFILE
+# (`ulimit -n`) can ever be raised, even by root with CAP_SYS_RESOURCE.
+# The Ubuntu default is 1,048,576 (2^20). That is *below* a 1M-conn
+# run's client-side fd need once overhead is counted, and the run
+# scripts ask for `ulimit -n 1.25M`/`3M` which silently fail against
+# the 1,048,576 cap (the inline `ulimit` is `|| true`), stranding the
+# soft limit at the login default. The 2026-05-31 x86_64 Ubuntu 24.04
+# confirmation run surfaced this: `nofile` would not lift past
+# 1,048,576 no matter what limits.d said. Raise to 8M so a 2M-conn
+# run's ~2M-fd-per-process need (and the 3M nofile target below) fits
+# with headroom. Distinct from `fs.file-max`: file-max is the global
+# table size, nr_open is the per-process fd-number ceiling — a 2M run
+# needs BOTH raised.
 echo "[ec2_setup] applying sysctl bumps..."
 $SUDO sysctl -w net.core.somaxconn=65535
 $SUDO sysctl -w net.ipv4.tcp_max_syn_backlog=65535
@@ -70,6 +85,7 @@ $SUDO sysctl -w net.ipv4.ip_local_port_range="15000 65535"
 $SUDO sysctl -w net.ipv4.tcp_rmem="4096 87380 6291456"
 $SUDO sysctl -w net.ipv4.tcp_wmem="4096 65536 4194304"
 $SUDO sysctl -w fs.file-max=8000000
+$SUDO sysctl -w fs.nr_open=8000000
 
 # ── Loopback aliases ─────────────────────────────────────────────────
 #
@@ -102,6 +118,27 @@ root soft nofile 3000000
 root hard nofile 3000000
 EOF
 
+# ── systemd session nofile cap ───────────────────────────────────────
+#
+# On systemd-managed Ubuntu, an interactive SSH login's nofile *hard*
+# cap is set by systemd-logind's session scope (DefaultLimitNOFILE),
+# which OVERRIDES /etc/security/limits.d for the login shell. The
+# 2026-05-31 x86_64 Ubuntu 24.04 box showed a hard cap of 524288 that
+# limits.d's 3M never lifted — below even a 1M-conn run's fd need.
+# Raise systemd's default so a *fresh login* actually reaches 3M;
+# `daemon-reexec` applies it to sessions started afterward. If you
+# can't re-login (or want to skip the relogin), the run scripts work
+# under `sudo bash -c 'ulimit -n 3000000; ./run_1m.sh …'` instead —
+# root + CAP_SYS_RESOURCE can raise the limit in-shell now that
+# fs.nr_open is lifted above it.
+echo "[ec2_setup] raising systemd DefaultLimitNOFILE (session cap)..."
+$SUDO mkdir -p /etc/systemd/system.conf.d
+$SUDO tee /etc/systemd/system.conf.d/bench-nofile.conf >/dev/null <<EOF
+[Manager]
+DefaultLimitNOFILE=3000000:3000000
+EOF
+$SUDO systemctl daemon-reexec
+
 # ── Verification ─────────────────────────────────────────────────────
 echo
 echo "[ec2_setup] current state:"
@@ -109,9 +146,16 @@ echo "  somaxconn          = $(sysctl -n net.core.somaxconn)"
 echo "  tcp_max_syn_backlog= $(sysctl -n net.ipv4.tcp_max_syn_backlog)"
 echo "  ip_local_port_range= $(sysctl -n net.ipv4.ip_local_port_range)"
 echo "  fs.file-max        = $(sysctl -n fs.file-max)"
+echo "  fs.nr_open         = $(sysctl -n fs.nr_open)"
 echo "  loopback alias cnt = $(ip addr show lo | grep -c 'inet 127\.0\.0\.')"
-echo "  ulimit -n (current)= $(ulimit -n)"
+echo "  ulimit -n (current)= $(ulimit -n)  (hard $(ulimit -Hn))"
 echo
-echo "[ec2_setup] DONE. ulimit changes from limits.d/ apply on next"
-echo "  login; run_1m.sh / run_2m.sh set ulimit -n inline so it works"
-echo "  in-shell too."
+echo "[ec2_setup] DONE. The nofile cap only lifts to 3M on a NEW login"
+echo "  session (systemd applies DefaultLimitNOFILE on the next login,"
+echo "  not the current shell). So before running the bench, EITHER:"
+echo "    1. exit + SSH back in, then verify: ulimit -n  ->  3000000"
+echo "    2. or run under root, which can raise it in-shell now that"
+echo "       fs.nr_open is lifted:"
+echo "         sudo bash -c 'ulimit -n 3000000; \\"
+echo "           bench/scripts/run_1m.sh ./<server-bin> out.json'"
+echo "  Do not skip this — a stale 1024/524288 cap strands the ramp."
