@@ -268,9 +268,10 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Int(IntSize::I64)
             }
-            // `body()` and `text()` share semantics (string view of the
-            // entity); `bytes()` is the raw-byte view (phase-8 line 32).
-            "body" | "text" => {
+            // `body()` is the string view of the entity; `bytes()` is the
+            // raw-byte view (phase-8 line 32). The `text()` alias of
+            // `body()` was dropped at the line-64 pre-lock surface freeze.
+            "body" => {
                 if !args.is_empty() {
                     self.type_error(
                         format!("Response.{method}() takes no arguments"),
@@ -327,7 +328,7 @@ impl<'a> super::TypeChecker<'a> {
             _ => self.handle_unknown_method(
                 "Response",
                 method,
-                &["body", "bytes", "header", "headers", "status", "text"],
+                &["body", "bytes", "header", "headers", "status"],
                 args,
                 span,
             ),

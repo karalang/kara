@@ -217,15 +217,17 @@ fn main() with sends(Network) receives(Network) {
         );
     }
 
-    /// Phase-8 line 32 — `Response.text()` / `.bytes()` both lower through
+    /// Phase-8 line 32 — `Response.body()` / `.bytes()` both lower through
     /// `compile_response_accessor`'s `karac_string_clone`-backed deep
-    /// clone of the entity buffer (String for `text`, `Vec[u8]` for
+    /// clone of the entity buffer (String for `body`, `Vec[u8]` for
     /// `bytes` — layout-identical). This pins that the dispatch arm in
     /// `compile_method_call` recognises both methods (a regression would
     /// surface as `codegen failed` from `ir_for`) and that each emits a
-    /// clone rather than aliasing the receiver's field.
+    /// clone rather than aliasing the receiver's field. (The `text()`
+    /// alias of `body()` was dropped at the line-64 pre-lock surface
+    /// freeze — `body()` + `bytes()` is the v1 read surface.)
     #[test]
-    fn test_ir_response_text_and_bytes_clone_entity_buffer() {
+    fn test_ir_response_body_and_bytes_clone_entity_buffer() {
         let ir = ir_for(
             r#"
 fn main() with sends(Network) receives(Network) {
@@ -233,7 +235,7 @@ fn main() with sends(Network) receives(Network) {
     let url = "http://127.0.0.1:65535/";
     match c.get(url) {
         Ok(resp) => {
-            let t: String = resp.text();
+            let t: String = resp.body();
             let b: Vec[u8] = resp.bytes();
             println(t);
             println(b.len());
@@ -245,12 +247,12 @@ fn main() with sends(Network) receives(Network) {
 }
 "#,
         );
-        // Two distinct accessor sites (text + bytes) → at least two
+        // Two distinct accessor sites (body + bytes) → at least two
         // `karac_string_clone` calls inside the Ok arm of `main`.
         let clone_calls = ir.matches("call void @karac_string_clone(").count();
         assert!(
             clone_calls >= 2,
-            "expected >= 2 karac_string_clone calls (text + bytes); saw {clone_calls}\n{ir}"
+            "expected >= 2 karac_string_clone calls (body + bytes); saw {clone_calls}\n{ir}"
         );
     }
 

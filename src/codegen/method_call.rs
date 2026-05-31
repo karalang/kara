@@ -975,7 +975,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // binding's surface type (String vs Vec[u8]) comes from the
                 // typechecker, not the cloned aggregate.
                 if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Response")
-                    && matches!(method, "status" | "body" | "text" | "bytes")
+                    && matches!(method, "status" | "body" | "bytes")
                     && args.is_empty()
                 {
                     let name = name.clone();

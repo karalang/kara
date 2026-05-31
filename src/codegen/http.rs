@@ -1749,13 +1749,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(val)
             }
-            // `body` / `text` (String view) and `bytes` (`Vec[u8]` view)
-            // all deep-clone field 1's `{ptr, len, cap}` buffer (phase-8
-            // line 32). String and `Vec[u8]` share the LLVM aggregate, and
-            // both scope-exit cleanups `free(data)` identically, so the
-            // single `karac_string_clone`-backed clone is sound for each;
-            // they differ only in the binding's surface type upstream.
-            "body" | "text" | "bytes" => {
+            // `body` (String view) and `bytes` (`Vec[u8]` view) both
+            // deep-clone field 1's `{ptr, len, cap}` buffer (phase-8 line
+            // 32). String and `Vec[u8]` share the LLVM aggregate, and both
+            // scope-exit cleanups `free(data)` identically, so the single
+            // `karac_string_clone`-backed clone is sound for each; they
+            // differ only in the binding's surface type upstream. (`text`
+            // alias dropped at the line-64 pre-lock surface freeze.)
+            "body" | "bytes" => {
                 self.clone_string_field(slot.ptr, resp_ty, 1, &format!("resp.{method}"))
             }
             other => Err(format!(

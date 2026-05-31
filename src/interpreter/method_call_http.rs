@@ -103,8 +103,9 @@ impl<'a> super::Interpreter<'a> {
             // `body` / `text` are the String view of the entity (phase-8
             // line 32); they alias each other. `Request.body` is handled
             // by the earlier `path | method | body` arm, so this arm only
-            // sees Response receivers for `body`; `text` is Response-only.
-            "body" | "text" => {
+            // sees Response receivers for `body`. (`text()` alias dropped
+            // at the line-64 pre-lock surface freeze.)
+            "body" => {
                 if let Value::Struct {
                     ref name,
                     ref fields,

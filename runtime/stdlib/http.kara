@@ -141,16 +141,19 @@ impl Response {
     #[compiler_builtin]
     fn body(ref self) -> String { "" }
 
-    // `text()` / `bytes()` return-type split (phase-8 line 32). `text()`
-    // is the string view of the entity (same semantics as `body()`);
-    // `bytes()` is the raw-byte view that does NOT go through UTF-8
-    // validation, so image / protobuf / file-transfer payloads survive
-    // intact. Both reinterpret the single entity buffer the response
-    // carries — they differ only in surface type, so calling one does
-    // not consume or invalidate the other.
-    #[compiler_builtin]
-    fn text(ref self) -> String { "" }
-
+    // `body()` / `bytes()` return-type split (phase-8 line 32). `body()`
+    // is the string view of the entity (UTF-8 reinterpreted); `bytes()`
+    // is the raw-byte view that does NOT go through UTF-8 validation, so
+    // image / protobuf / file-transfer payloads survive intact. Both
+    // reinterpret the single entity buffer the response carries — they
+    // differ only in surface type, so calling one does not consume or
+    // invalidate the other.
+    //
+    // (Pre-lock surface decision, phase-8 line 64: the v1 read surface is
+    // `body()` + `bytes()`. The earlier `text()` alias of `body()` was
+    // dropped — one name per concept, and `body()` matches the `body`
+    // field server handlers construct (`Response { status, body }`),
+    // whereas `text()` implied a charset decode v1 doesn't perform.)
     #[compiler_builtin]
     fn bytes(ref self) -> Vec[u8] { Vec.new() }
 
@@ -278,10 +281,15 @@ impl Server {
     // `serve(handler)` ships, `serve_static` is a strict subset of it and
     // matches no reference API (Go / hyper / Node). It carries no v1
     // stability commitment — kept behind `#[unstable]` as a marginal
-    // convenience for trivial fixed-response servers (health stubs, mocks)
-    // and removable without semver concern. Callers opt in via
-    // `#[allow(unstable_api)]` or `[lints].allow_unstable_api = true`. To be
-    // revisited for removal at the v1 lock if nothing has adopted it.
+    // convenience for trivial fixed-response servers (health stubs, mocks).
+    // Removal was considered at the freeze (zero real consumers) and
+    // **reversed**: it is now the *sole* `#[unstable]` baked-stdlib method,
+    // so it is the test specimen that exercises the line-96
+    // `#[unstable]`-baked-method enforcement (`tests/typechecker.rs`:
+    // warn / `#[allow]`-suppress / `#[deny]`-promote). Callers opt in via
+    // `#[allow(unstable_api)]` or `[lints].allow_unstable_api = true`.
+    // Revisit at v1 lock only if a real `#[unstable]` consumer appears to
+    // take over the canary role.
     #[unstable = "serve_static is a fixed-body convenience subsumed by Server.serve(handler); use serve(handler) for real servers"]
     #[compiler_builtin]
     fn serve_static(addr: String, body: String) -> Result[Unit, HttpError] {
