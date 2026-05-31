@@ -434,6 +434,11 @@ impl<'a> EffectChecker<'a> {
                 .iter()
                 .filter_map(|item| match item {
                     Item::TypeAlias(t) if t.refinement.is_some() => Some(t.name.clone()),
+                    // Combined `distinct type T = Base where pred`: the
+                    // `T(value)` constructor runs a runtime predicate
+                    // assertion, so the constructor call propagates `panics`
+                    // (same as a refinement `x as T` cast).
+                    Item::DistinctType(d) if d.refinement.is_some() => Some(d.name.clone()),
                     _ => None,
                 })
                 .collect(),

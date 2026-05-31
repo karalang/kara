@@ -287,11 +287,15 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Distinct-type constructor: `UserId(value)` is a zero-cost wrap —
         // the compiled value IS the base value (layout-identical, no runtime
-        // tag), so the constructor just compiles its single argument.
-        // design.md § Distinct Types (Newtypes).
+        // tag), so the constructor just compiles its single argument. For the
+        // combined `distinct type T = Base where pred` form, it also emits the
+        // runtime predicate assertion (`emit_refinement_assert` is a no-op
+        // when `name` carries no predicate). design.md § Distinct Types.
         if self.distinct_bases.contains_key(&name) {
             if let Some(arg) = args.first() {
-                return self.compile_expr(&arg.value);
+                let value = self.compile_expr(&arg.value)?;
+                self.emit_refinement_assert(&name, value)?;
+                return Ok(value);
             }
         }
 

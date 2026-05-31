@@ -127,6 +127,26 @@ impl TypeChecker<'_> {
         Some(Type::Error)
     }
 
+    /// Compile-time predicate check for a combined distinct-type constructor
+    /// `T(value)` where `T = distinct type … = Base where pred` (design.md
+    /// § Distinct Types — "Construction semantics", rule 1). When `value` is
+    /// const-evaluable and the predicate fails against it, emit a build-time
+    /// `E_REFINEMENT_PREDICATE_VIOLATION`. A non-const argument is a no-op
+    /// here — its predicate is enforced by the runtime assertion the
+    /// interpreter / codegen constructor emits. Reuses the elision helpers.
+    pub(super) fn check_distinct_constructor_predicate(
+        &mut self,
+        name: &str,
+        base: &Type,
+        arg: &Expr,
+    ) {
+        if let Ok(value) = self.eval_const_expr(arg, base) {
+            if self.eval_refinement_predicate_const(name, arg) == Some(false) {
+                self.emit_refinement_predicate_violation(name, &value, arg);
+            }
+        }
+    }
+
     /// Evaluate the refinement `rname`'s `where` predicate against the
     /// const-evaluable initializer `init` at compile time. The predicate's
     /// `self` references are replaced by `init`, and the whole expression is

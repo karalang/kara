@@ -4478,6 +4478,86 @@ fn test_distinct_raw_rejects_arguments() {
     );
 }
 
+// ── Combined `distinct type T = Base where pred` ───────────────────
+//
+// design.md § Distinct Types — "Construction semantics": `T(value)`
+// always checks the predicate — compile-time for a const-evaluable arg
+// (compile error on failure), runtime assertion otherwise; `T.try_from`
+// is auto-generated returning `Result[T, String]`; `.raw()` strips both
+// the wrapper and the predicate.
+
+#[test]
+fn test_distinct_where_const_violation_is_compile_error() {
+    // `Even(3)` const-evaluates and fails the predicate → build-time error.
+    let errors = typecheck_errors(
+        "distinct type Even = i64 where self % 2 == 0;
+         fn f() -> i64 { let e = Even(3); 0 }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("E_REFINEMENT_PREDICATE_VIOLATION")),
+        "expected predicate-violation for `Even(3)`, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_distinct_where_const_ok_admitted() {
+    // `Even(4)` const-evaluates and satisfies the predicate → no error,
+    // and `.raw()` returns the base `i64`.
+    typecheck_ok(
+        "distinct type Even = i64 where self % 2 == 0;
+         fn f() -> i64 { let e = Even(4); e.raw() }",
+    );
+}
+
+#[test]
+fn test_distinct_where_runtime_arg_typechecks() {
+    // A non-const argument is not checked at compile time (the predicate is
+    // enforced at runtime) — `Even(n)` type-checks and produces an `Even`.
+    typecheck_ok(
+        "distinct type Even = i64 where self % 2 == 0;
+         fn mk(n: i64) -> Even { Even(n) }",
+    );
+}
+
+#[test]
+fn test_distinct_where_try_from_returns_result_of_distinct() {
+    // The synthetic `impl TryFrom[i64] for Even` makes `Even.try_from(n)`
+    // resolve to `Result[Even, String]` (the nominal distinct type, not a
+    // refinement).
+    typecheck_ok(
+        "distinct type Even = i64 where self % 2 == 0;
+         fn make(n: i64) -> Result[Even, String] { Even.try_from(n) }",
+    );
+}
+
+#[test]
+fn test_distinct_where_invalid_predicate_rejected() {
+    // The predicate grammar applies to the combined form too — a
+    // free-function call is not an allowed predicate.
+    let errors = typecheck_errors(
+        "distinct type Bad = i64 where is_valid(self);
+         fn is_valid(x: i64) -> bool { true }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("E_INVALID_REFINEMENT_PREDICATE")),
+        "expected E_INVALID_REFINEMENT_PREDICATE for combined distinct, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
 // ── defer / errdefer ───────────────────────────────────────────
 
 #[test]

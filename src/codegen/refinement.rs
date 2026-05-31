@@ -77,7 +77,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 ty: value.get_type(),
             },
         );
-        if let Some(base_te) = self.refinement_bases.get(rname).cloned() {
+        // The base `TypeExpr` lives in `refinement_bases` for a plain
+        // refinement and in `distinct_bases` for a combined `distinct type T
+        // = Base where pred`; consult both so a method-form predicate
+        // (`self.len()`) gets the base side-tables in either case.
+        if let Some(base_te) = self
+            .refinement_bases
+            .get(rname)
+            .or_else(|| self.distinct_bases.get(rname))
+            .cloned()
+        {
             self.register_var_from_type_expr(REFINE_SELF, &base_te);
         }
     }

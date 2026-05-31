@@ -5008,6 +5008,54 @@ fn test_distinct_constructor_passed_through_function() {
     assert_eq!(output, "7\n");
 }
 
+#[test]
+fn test_distinct_where_constructor_runtime_holds() {
+    // Combined `distinct type Even = i64 where self % 2 == 0`: a runtime
+    // argument that satisfies the predicate constructs successfully.
+    let output = run_no_errors(
+        "distinct type Even = i64 where self % 2 == 0;\n\
+         fn mk(n: i64) -> Even { Even(n) }\n\
+         fn main() { println(mk(8).raw()); }",
+    );
+    assert_eq!(output, "8\n");
+}
+
+#[test]
+fn test_distinct_where_constructor_runtime_fails() {
+    // A runtime argument that violates the predicate faults with a
+    // `contract violated` runtime error.
+    let errors = runtime_errors(
+        "distinct type Even = i64 where self % 2 == 0;\n\
+         fn mk(n: i64) -> Even { Even(n) }\n\
+         fn main() { println(mk(7).raw()); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("contract violated")),
+        "expected a `contract violated` fault, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_distinct_where_try_from_ok_and_err() {
+    // `Even.try_from` returns `Ok` for an even value and `Err` for an odd.
+    let ok = run_no_errors(
+        "distinct type Even = i64 where self % 2 == 0;\n\
+         fn main() {\n\
+             match Even.try_from(8) { Ok(e) => println(e.raw()), Err(_) => println(-1) }\n\
+         }",
+    );
+    assert_eq!(ok, "8\n");
+    let err = run_no_errors(
+        "distinct type Even = i64 where self % 2 == 0;\n\
+         fn main() {\n\
+             match Even.try_from(7) { Ok(e) => println(e.raw()), Err(_) => println(-1) }\n\
+         }",
+    );
+    assert_eq!(err, "-1\n");
+}
+
 // ── Map[K, V] interpreter tests ────────────────────────────────────────────
 
 #[test]

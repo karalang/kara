@@ -3499,6 +3499,14 @@ impl<'ctx> Codegen<'ctx> {
             if let Item::DistinctType(d) = item {
                 self.distinct_bases
                     .insert(d.name.clone(), d.base_type.clone());
+                // Combined `distinct type T = Base where pred`: register the
+                // predicate so the `T(value)` constructor emits the runtime
+                // assertion via `emit_refinement_assert`. Keyed by the
+                // distinct name, parallel to refinements.
+                if let Some(pred) = &d.refinement {
+                    self.refinement_predicates
+                        .insert(d.name.clone(), pred.clone());
+                }
             }
         }
 

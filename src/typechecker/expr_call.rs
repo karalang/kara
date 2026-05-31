@@ -156,6 +156,33 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Combined distinct-type constructor: `ValidPort(value)` where
+        // `distinct type ValidPort = u16 where pred`. The argument is checked
+        // against the base, the predicate is enforced at compile time for a
+        // const-evaluable argument (compile error on failure; no runtime
+        // check on success) and otherwise at runtime, and the result is the
+        // nominal distinct type. design.md § Distinct Types — "Construction
+        // semantics for `distinct type T = Base where predicate`". The plain
+        // (predicate-free) distinct constructor stays on the normal
+        // `Function([base], Named{T})` dispatch from `resolve_identifier_type`.
+        if let ExprKind::Identifier(name) = &callee.kind {
+            if args.len() == 1
+                && self.local_scope.lookup(name).is_none()
+                && self.env.refinement_predicates.contains_key(name)
+                && self.env.distinct_bases.contains_key(name)
+            {
+                let base = self.env.distinct_bases.get(name).cloned().unwrap();
+                self.check_expr(&args[0].value, &base);
+                self.check_distinct_constructor_predicate(name, &base, &args[0].value);
+                let ty = Type::Named {
+                    name: name.clone(),
+                    args: Vec::new(),
+                };
+                self.record_expr_type(span, &ty);
+                return ty;
+            }
+        }
+
         // Uppercase-receiver method-dispatch rewrite. The parser at
         // `src/parser/exprs.rs` 1298–1326 greedily wraps `X.method(args)`
         // in `Call(Path([X, method]))` whenever `X` starts uppercase —

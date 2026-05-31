@@ -655,12 +655,24 @@ impl<'a> super::Interpreter<'a> {
                     };
                 }
                 // Distinct-type constructor: `UserId(value)` is a zero-cost
-                // wrap — the runtime value IS the base value. The typechecker
-                // has already checked the argument against the base type
-                // (and, for the combined `distinct type T = B where P` form,
-                // the predicate); the interpreter just returns it unchanged.
+                // wrap — the runtime value IS the base value. For the combined
+                // `distinct type T = B where P` form, the constructor enforces
+                // the predicate at runtime (a const-arg violation was already
+                // caught at compile time); a false predicate is a `contract
+                // violated` fault, exactly like `x as Refined`.
                 if self.is_distinct_type(name) {
-                    return arg_vals.into_iter().next().unwrap_or(Value::Unit);
+                    let val = arg_vals.into_iter().next().unwrap_or(Value::Unit);
+                    if let Some(pred) = self.refinement_predicate(name) {
+                        if self.eval_refinement_predicate(&pred, val.clone()) != Some(true) {
+                            return self.record_runtime_error(
+                                format!(
+                                    "contract violated: value does not satisfy distinct type `{name}`"
+                                ),
+                                span,
+                            );
+                        }
+                    }
+                    return val;
                 }
             }
         }

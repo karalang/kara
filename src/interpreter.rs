@@ -366,6 +366,10 @@ impl<'a> Interpreter<'a> {
     pub(crate) fn refinement_predicate(&self, name: &str) -> Option<Expr> {
         self.program.items.iter().find_map(|item| match item {
             Item::TypeAlias(t) if t.name == name => t.refinement.clone(),
+            // Combined `distinct type T = Base where pred` carries the same
+            // construction-time predicate; the `T(value)` constructor and
+            // `T.try_from` enforce it identically (design.md § Distinct Types).
+            Item::DistinctType(d) if d.name == name => d.refinement.clone(),
             _ => None,
         })
     }

@@ -495,6 +495,18 @@ impl<'a> super::EffectChecker<'a> {
                     }
                     n
                 };
+                // Combined distinct-type constructor `T(value)` where
+                // `distinct type T = Base where pred`: the constructor runs a
+                // runtime predicate assertion → propagates `panics`,
+                // attributed to the synthetic `__builtin_refinement_assert`
+                // callee (mirrors the `x as Refined` cast arm). The callee is
+                // a bare `Identifier(T)`; `Path` callees (`T.try_from`) carry
+                // their own declared effects.
+                if let ExprKind::Identifier(n) = &callee.kind {
+                    if self.refinement_type_names.contains(n) {
+                        calls.push(("__builtin_refinement_assert".to_string(), expr.span.clone()));
+                    }
+                }
                 self.collect_calls_in_expr(callee, calls, bounds);
                 for arg in args {
                     self.collect_calls_in_expr(&arg.value, calls, bounds);

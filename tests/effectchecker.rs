@@ -7247,3 +7247,40 @@ fn plain_numeric_cast_does_not_infer_panics() {
         "a plain numeric `as` cast must not infer `panics`"
     );
 }
+
+#[test]
+fn distinct_where_constructor_infers_panics() {
+    // The `T(value)` constructor of a combined `distinct type T = Base where
+    // pred` runs a runtime predicate assertion, so it propagates `panics`
+    // (same mechanism as the refinement `as` cast).
+    let result = effectcheck_ok(
+        "distinct type Even = i64 where self % 2 == 0;
+         fn mk(n: i64) -> Even { Even(n) }",
+    );
+    let inferred = result.inferred_effects.get("mk").unwrap();
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Panics),
+        "`Even(n)` on a combined distinct type should infer `panics`"
+    );
+}
+
+#[test]
+fn plain_distinct_constructor_does_not_infer_panics() {
+    // A predicate-free `distinct type` constructor is a zero-cost wrap with
+    // no runtime check, so it must not infer `panics`.
+    let result = effectcheck_ok(
+        "distinct type UserId = i64;
+         fn mk(n: i64) -> UserId { UserId(n) }",
+    );
+    let inferred = result.inferred_effects.get("mk").unwrap();
+    assert!(
+        !inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Panics),
+        "a plain distinct constructor must not infer `panics`"
+    );
+}

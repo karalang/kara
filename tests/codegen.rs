@@ -26376,4 +26376,78 @@ fn main() {
             assert_eq!(out.trim(), "7");
         }
     }
+
+    // ── Combined `distinct type T = Base where pred` ───────────────
+
+    #[test]
+    fn test_e2e_distinct_where_constructor_holds() {
+        // `Even(8)` passes the predicate — the constructor compiles to the
+        // base value with the runtime assertion satisfied.
+        let out = run_program(
+            r#"
+distinct type Even = i64 where self % 2 == 0;
+fn mk(n: i64) -> Even { Even(n) }
+fn main() { println(mk(8).raw()); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "8");
+        }
+    }
+
+    #[test]
+    fn test_e2e_distinct_where_constructor_aborts() {
+        // `Even(7)` violates the predicate at runtime: the constructor emits
+        // a contract-violation abort, and code after it does not run.
+        let captured = run_program_capturing(
+            r#"
+distinct type Even = i64 where self % 2 == 0;
+fn mk(n: i64) -> Even { Even(n) }
+fn main() {
+    let e = mk(7);
+    println(e.raw());
+    println(42);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated"),
+                "expected a contract-violation abort, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after a violated distinct constructor must not run"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_distinct_where_try_from_branches() {
+        // `Even.try_from` builds `Ok`/`Err` with no abort (recoverable form).
+        let ok = run_program(
+            r#"
+distinct type Even = i64 where self % 2 == 0;
+fn main() {
+    match Even.try_from(8) { Ok(e) => println(e.raw()), Err(_) => println(-1) }
+}
+"#,
+        );
+        if let Some(out) = ok {
+            assert_eq!(out.trim(), "8");
+        }
+        let err = run_program(
+            r#"
+distinct type Even = i64 where self % 2 == 0;
+fn main() {
+    match Even.try_from(7) { Ok(e) => println(e.raw()), Err(_) => println(-1) }
+}
+"#,
+        );
+        if let Some(out) = err {
+            assert_eq!(out.trim(), "-1");
+        }
+    }
 }

@@ -1862,7 +1862,59 @@ impl<'a> super::TypeChecker<'a> {
         // `.raw()` surface treats the head name non-generically.
         let generics = Self::generic_param_names(&d.generic_params);
         let base = self.lower_type_expr(&d.base_type, &generics);
-        self.env.distinct_bases.insert(d.name.clone(), base);
+        self.env.distinct_bases.insert(d.name.clone(), base.clone());
+
+        // Combined form: `distinct type T = Base where <pred>` layers a
+        // refinement predicate over the distinct wrapper (design.md
+        // § Distinct Types — "Construction semantics"). Validate the
+        // predicate against the allowed constraint language and, on success,
+        // store it in `refinement_predicates` (keyed by the distinct name) so
+        // the `T(value)` constructor enforces it — compile-time for a
+        // const-evaluable argument, runtime assertion otherwise — and
+        // register the synthetic `T.try_from(value) -> Result[T, String]`.
+        // Unlike a plain refinement, the *result* type is the nominal
+        // `Type::Named { T }`, not a `Type::Refinement`: the distinct
+        // identity (no widening to base) is preserved, the predicate is the
+        // construction-time guarantee.
+        if let Some(pred) = &d.refinement {
+            match validate_refinement_predicate(pred) {
+                Ok(()) => {
+                    self.env
+                        .refinement_predicates
+                        .insert(d.name.clone(), RefinementPred { expr: pred.clone() });
+                    let distinct_ty = Type::Named {
+                        name: d.name.clone(),
+                        args: Vec::new(),
+                    };
+                    let mut methods = HashMap::new();
+                    methods.insert(
+                        "try_from".to_string(),
+                        FunctionSig {
+                            generic_params: Vec::new(),
+                            param_names: vec![Some("value".to_string())],
+                            params: vec![base],
+                            return_type: Type::Named {
+                                name: "Result".to_string(),
+                                args: vec![distinct_ty, Type::Str],
+                            },
+                            where_clause: None,
+                        },
+                    );
+                    self.env.add_impl(ImplInfo {
+                        target_type: d.name.clone(),
+                        do_not_recommend: false,
+                        target_args: Vec::new(),
+                        trait_name: Some("TryFrom".to_string()),
+                        methods,
+                        generic_params: None,
+                        where_clause: None,
+                    });
+                }
+                Err((msg, span)) => {
+                    self.type_error(msg, span, TypeErrorKind::InvalidRefinementPredicate);
+                }
+            }
+        }
     }
 
     fn env_add_opaque_foreign_type(&mut self, o: &crate::ast::OpaqueTypeDecl) {
