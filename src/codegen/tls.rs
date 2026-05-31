@@ -324,8 +324,30 @@ impl<'ctx> super::Codegen<'ctx> {
         let (listener_fd, config_ptr) =
             self.extract_fd_and_config_from_tls_listener(listener_val, "ws.accept_tls.listener");
 
-        let direction = self.context.i8_type().const_int(0, false);
-        self.emit_state_machine_invocation_for_park_on_fd(listener_fd, direction);
+        // A2 resume-race fix: `karac_runtime_ws_accept_tls` is SELF-WAITING — it
+        // drains the accept backlog into an async handshake pool, then loops on
+        // a 5 ms re-drain until a completed handshake is available, returning it.
+        // It cannot wedge once entered. The park-on-listener-readability emitted
+        // here is therefore redundant AND harmful: after the first accept drains
+        // the backlog, a pending connection's *handshake completion* does not
+        // make the listener readable, so the park never resumes and the accept
+        // loop wedges while completed handshakes sit ready (the concurrent
+        // WS-over-TLS wedge — see tests/coro_e2e.rs
+        // `coroutine_ws_over_tls_concurrent_handlers_all_execute`).
+        //
+        // In the **inline** case (`coro_ctx` is None — the canonical `loop {
+        // accept_tls() }` in a dedicated accept thread / `main`), drop the park
+        // and let the function self-wait on the *right* condition. That blocks
+        // only the accept thread, never the shared dispatcher (which keeps
+        // driving the per-connection handler coroutines). The park is kept only
+        // when accept is lowered *inside* a coroutine body (`coro_ctx` is Some),
+        // where blocking the dispatcher would be worse — an unusual shape, left
+        // on its existing (park) path until the handshake-pool gets an explicit
+        // completion-readiness signal (task #21).
+        if self.coro_ctx.is_some() {
+            let direction = self.context.i8_type().const_int(0, false);
+            self.emit_state_machine_invocation_for_park_on_fd(listener_fd, direction);
+        }
 
         let accept_fn = self
             .module

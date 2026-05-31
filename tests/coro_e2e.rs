@@ -1502,28 +1502,25 @@ mod tests {
         }
     }
 
-    /// Concurrent WS-over-TLS gate — **KNOWN-FAILING**, tracks the coroutine
-    /// resume race (task #21). The single-shot test above passes because it
-    /// almost always hits the good path; under concurrency ~half the
-    /// connections wedge (`ws_recv_data_frame` never fires server-side).
+    /// Concurrent WS-over-TLS gate — the single-shot test above almost always
+    /// hits the good path; this fires 16 connections at once, all of which must
+    /// recv+echo. Regression gate for the accept-loop resume race.
     ///
-    /// Root cause (traced 2026-05-31): NOT a simple `register_fd` edge-miss.
-    /// `WebSocket.accept_tls` drives an async handshake pool — its first resume
-    /// drains the whole accept backlog and submits every pending connection to
-    /// handshake workers, then returns one completed handshake. But `main`'s
-    /// *next* `accept_tls` parks on **listener-readiness**, and the pending
-    /// connections' **handshake completions do not make the listener readable**
-    /// (the backlog is already drained). So the accept coroutine wedges waiting
-    /// for a new connection while completed handshakes sit ready — and their
-    /// handlers never spawn. Flipping coroutines on by default (3eda2b06)
-    /// replaced the degenerate re-entering poll drive (which re-ran the accept
-    /// pool's internal timeout-drain each tick) with a single park, exposing
-    /// this. The fix is architecture-sensitive (the accept path is tuned for
-    /// 1M idle conns) — likely: keep accept on a re-entering drive, or resume
-    /// the accept park on handshake-completion, not just listener-readiness.
-    /// Un-`ignore` when that lands.
+    /// The race (fixed): `WebSocket.accept_tls` runs a SELF-WAITING runtime
+    /// function — it drains the accept backlog into an async handshake pool,
+    /// then loops on a 5 ms re-drain until a completed handshake is available.
+    /// Codegen used to emit a park-on-listener-readiness *before* it; after the
+    /// first accept drained the backlog, a pending connection's **handshake
+    /// completion does not make the listener readable**, so that park never
+    /// resumed and the accept loop wedged while completed handshakes sat ready —
+    /// their handlers never spawned (~half wedged under concurrency). Flipping
+    /// coroutines on by default (3eda2b06) replaced the degenerate re-entering
+    /// poll drive with that single park, exposing it. Fix: `lower_websocket_
+    /// accept_tls` drops the redundant park in the inline case (`coro_ctx` is
+    /// None — the canonical accept loop runs on its own thread, so the
+    /// function's correct self-wait blocks only that thread, never the shared
+    /// dispatcher). See task #21.
     #[test]
-    #[ignore = "KNOWN-FAILING: concurrent coroutine resume race — accept-path handshake-pool vs listener-readiness park; see task #21"]
     fn coroutine_ws_over_tls_concurrent_handlers_all_execute() {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let Some(rt) = runtime_path() else {
