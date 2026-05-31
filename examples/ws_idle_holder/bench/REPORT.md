@@ -13,27 +13,44 @@ Harness mechanics, flags, and CI-gate JSON shape live in `README.md`
 alongside; this file is **what we measured and what it means**, not
 **how the harness works**.
 
-> # ⚠️ PROVISIONAL — Kāra density figures pending the line-17 re-measure
+> # ⚠️ PROVISIONAL — handler-execution blocker FIXED; EC2 re-measure now unblocked
 >
-> Every **Kāra per-connection density** number in this report — 7.8 KB/conn,
-> the **3.55× ratio vs Rust**, the 1M↔2M scale-invariance, the x86 cross-ISA
-> confirmation, and the cost reframe derived from them — was measured
-> **before phase-6 line 17 (effect-routed task parking codegen) landed**, on
-> a build where the demo's per-connection **handler does not execute**.
-> `__kara_poll_handle_connection` currently compiles to a body-less state
-> machine (no `recv_text`/`send_text`/parking emitted) — see
-> [`phase-6-runtime.md` line 17 sub-bullet 2](../../../docs/implementation_checklist/phase-6-runtime.md).
-> The connections are genuinely established + held (so "holds N connections"
-> is real), but the handler's per-conn state — the **4 KB recv buffer +
-> state machine + parking** — is **freed, not held**, whereas Rust's 27.8 KB
-> *includes* its per-conn task state. **So the density figures are not
-> apples-to-apples and understate a working server.**
+> **The blocker that made these figures provisional is resolved (A2,
+> 2026-05-31).** Every **Kāra per-connection density** number in this report —
+> 7.8 KB/conn, the **3.55× ratio vs Rust**, the 1M↔2M scale-invariance, the x86
+> cross-ISA confirmation, and the cost reframe derived from them — was measured
+> **before the per-connection handler executed**, on a build where
+> `__kara_poll_handle_connection` compiled to a body-less state machine (no
+> `recv_text`/`send_text`/parking emitted — "bug C" of the A2 track). The
+> connections were genuinely established + held (so "holds N connections" was
+> real), but the handler's per-conn state — the **4 KB recv buffer + frame +
+> parking** — was **freed, not held**, whereas Rust's 27.8 KB *includes* its
+> per-conn task state. **So these figures are not apples-to-apples and understate
+> a working server.**
 >
-> **Expected after the fix + re-measure:** per-conn-bytes ~7.8 → **~12–13 KB**,
-> ratio 3.55× → **~2–2.5×** (partly tunable via the demo's recv-buffer size).
-> **Unaffected:** Rust's figures, established counts, and connect-latency
-> percentiles (the `accept_tls` path is real). **Do not quote the Kāra
-> density / ratio externally until the re-measure lands.**
+> **What changed (all landed on `main`):** the A2 LLVM-coroutine network-async
+> transform compiles network-boundary fns (incl. `handle_connection`) as
+> dispatcher-driven coroutines, flipped **on by default** for `karac build`; the
+> WS-over-TLS recv/send path executes as a coroutine suspend/resume; and the
+> concurrent accept-loop resume race (which wedged ~half of connections under
+> load) is fixed. The demo handler **now executes** `recv_text`/`send_text` and
+> holds its per-conn state.
+>
+> **Local validation (M-series, loopback, post-fix):** the demo holds + services
+> real `wss://` connections with **0 wedges** under concurrency — established
+> 2000/2000 and 5000/5000 cleanly, per-conn settling at **~13.5–14 KB** (the
+> small-N figure is fixed-baseline-dominated and trends down with N). A sanity
+> baseline, **not** the headline — single-box loopback can't sustain ≥10K
+> connections (port/rig limits), which is exactly what the EC2 rig is for.
+>
+> **Re-measure (the real headline) is now unblocked** — rebuild the demo with
+> current `karac`, then run `bench/scripts/run_1m.sh` / `run_2m.sh` on the EC2
+> rig. **Expected:** per-conn-bytes ~7.8 → **~12–13 KB** (the ~13.5–14 KB local
+> read already lands there), ratio 3.55× → **~2–2.5×** (partly tunable via the
+> demo's recv-buffer size). **Unaffected:** Rust's figures, established counts,
+> connect-latency percentiles. The headline table below still carries the
+> pre-fix `‡` figures — **do not quote the Kāra density / ratio externally until
+> the EC2 re-measure replaces them.**
 
 > **Status:** _in progress_. Kāra 1M + 2M and Rust 1M + 2M numbers are
 > landed (credibility-comparator head-to-head at the ceiling is
