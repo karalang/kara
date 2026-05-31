@@ -207,6 +207,13 @@ pub struct Interpreter<'a> {
     /// configured timeout seconds + observed elapsed wall-clock)
     /// rather than a generic `test_fail`.
     pub timed_out: bool,
+    /// Per-call stack of `old(expr)` pre-state snapshots for `ensures`
+    /// clauses (design.md § Contracts rule 4). At a contracted function's
+    /// entry, each `old(arg)` occurrence in its `ensures` clauses is
+    /// evaluated and stored here keyed by the arg expression's span; when
+    /// the postcondition runs at exit, the `old(arg)` call reads the
+    /// snapshot back. A stack so nested contracted calls don't collide.
+    pub(crate) old_snapshots: Vec<HashMap<crate::resolver::SpanKey, Value>>,
 }
 
 /// Per-pool state for the `Pool[T]` intrinsic. Lives in
@@ -323,6 +330,7 @@ impl<'a> Interpreter<'a> {
             captured_let_values: HashMap::new(),
             test_deadline: None,
             timed_out: false,
+            old_snapshots: Vec::new(),
         }
     }
 
@@ -407,6 +415,88 @@ impl<'a> Interpreter<'a> {
             }
             _ => None,
         })
+    }
+
+    /// The `requires` / `ensures` contract clauses of the instance method
+    /// `method` on `type_name`, if it declares any (design.md § Contracts).
+    /// Mirrors [`function_contract`] for the impl-method dispatch path so
+    /// method contracts (and `old(...)`) are enforced at runtime too.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn method_contract(
+        &self,
+        type_name: &str,
+        method: &str,
+    ) -> Option<(Vec<Expr>, Vec<crate::ast::EnsuresClause>)> {
+        self.program.items.iter().find_map(|item| match item {
+            Item::ImplBlock(imp) => {
+                let target = match &imp.target_type.kind {
+                    TypeKind::Path(p) => p.segments.last().map(String::as_str),
+                    _ => None,
+                };
+                if target != Some(type_name) {
+                    return None;
+                }
+                imp.items.iter().find_map(|it| match it {
+                    ImplItem::Method(m)
+                        if m.name == method
+                            && (!m.requires.is_empty() || !m.ensures.is_empty()) =>
+                    {
+                        Some((m.requires.clone(), m.ensures.clone()))
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
+    }
+
+    /// Walk a contract expression and, for every `old(arg)` occurrence,
+    /// evaluate `arg` *now* (function entry, pre-state) and record the value
+    /// in `snap` keyed by the arg's span. Used to build the `old(...)`
+    /// snapshot for an `ensures` clause before the body runs (design.md
+    /// § Contracts rule 4). Recurses through the contract-expression grammar;
+    /// the arg of an `old(...)` is captured but not recursed into (no nested
+    /// `old`).
+    pub(crate) fn capture_old_in_expr(
+        &mut self,
+        expr: &Expr,
+        snap: &mut HashMap<crate::resolver::SpanKey, Value>,
+    ) {
+        match &expr.kind {
+            ExprKind::Call { callee, args } => {
+                if let ExprKind::Identifier(n) = &callee.kind {
+                    if n == "old" && args.len() == 1 {
+                        let val = self.eval_expr_inner(&args[0].value);
+                        snap.insert(
+                            crate::resolver::SpanKey::from_span(&args[0].value.span),
+                            val,
+                        );
+                        return;
+                    }
+                }
+                self.capture_old_in_expr(callee, snap);
+                for a in args {
+                    self.capture_old_in_expr(&a.value, snap);
+                }
+            }
+            ExprKind::Binary { left, right, .. } => {
+                self.capture_old_in_expr(left, snap);
+                self.capture_old_in_expr(right, snap);
+            }
+            ExprKind::Unary { operand, .. } => self.capture_old_in_expr(operand, snap),
+            ExprKind::FieldAccess { object, .. } => self.capture_old_in_expr(object, snap),
+            ExprKind::MethodCall { object, args, .. } => {
+                self.capture_old_in_expr(object, snap);
+                for a in args {
+                    self.capture_old_in_expr(&a.value, snap);
+                }
+            }
+            ExprKind::Index { object, index } => {
+                self.capture_old_in_expr(object, snap);
+                self.capture_old_in_expr(index, snap);
+            }
+            _ => {}
+        }
     }
 
     /// The struct `invariant` predicates that must hold at the exit of pub

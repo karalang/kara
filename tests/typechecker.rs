@@ -21137,3 +21137,89 @@ fn test_contract_invariant_unknown_field_rejected() {
         "expected an error for an unknown field in an invariant",
     );
 }
+
+// ── Contracts — old(expr) validation (steps 1, 3) ──────────────────
+
+#[test]
+fn test_contract_old_in_ensures_accepted() {
+    typecheck_ok(
+        "struct Account { balance: i64 }
+         impl Account {
+             pub fn withdraw(mut ref self, amount: i64) -> i64
+                 ensures(result) self.balance == old(self.balance) - amount
+             { self.balance = self.balance - amount; amount }
+         }",
+    );
+}
+
+#[test]
+fn test_contract_old_in_requires_rejected() {
+    let errors = typecheck_errors("fn f(x: i64) -> i64 requires old(x) > 0 { x }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("E_OLD_OUTSIDE_ENSURES")),
+        "expected E_OLD_OUTSIDE_ENSURES, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_contract_old_in_invariant_rejected() {
+    let errors = typecheck_errors("struct S { x: i64, invariant old(self.x) > 0 }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("E_OLD_OUTSIDE_ENSURES")),
+        "expected E_OLD_OUTSIDE_ENSURES in invariant, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_contract_old_result_rejected() {
+    let errors =
+        typecheck_errors("fn f(x: i64) -> i64 ensures(result) result == old(result) { x }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("E_OLD_RESULT")),
+        "expected E_OLD_RESULT, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_contract_old_non_clone_rejected() {
+    // `old(self)` where the struct does not derive Clone is rejected.
+    let errors = typecheck_errors(
+        "struct Big { data: Vec[i64] }
+         impl Big {
+             pub fn f(mut ref self) -> i64
+                 ensures(result) self.data.len() >= old(self).data.len() { 0 }
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("E_OLD_NOT_CLONE")),
+        "expected E_OLD_NOT_CLONE, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}

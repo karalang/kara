@@ -1149,6 +1149,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_self_type = Some(self_ty);
         for inv in &s.invariants {
             self.check_expr(inv, &Type::Bool);
+            self.reject_old_calls(inv, "invariant");
         }
         self.current_self_type = saved_self;
     }
@@ -1166,6 +1167,10 @@ impl<'a> super::TypeChecker<'a> {
     ) {
         for req in requires {
             self.check_expr(req, &Type::Bool);
+            // `old(...)` is only valid in `ensures` (design.md § Contracts
+            // rule 4 — preconditions already run at entry, so pre-state is
+            // just "state").
+            self.reject_old_calls(req, "requires");
         }
         for ens in ensures {
             self.local_scope.push();
@@ -1173,7 +1178,56 @@ impl<'a> super::TypeChecker<'a> {
                 self.local_scope.insert(param.clone(), return_type.clone());
             }
             self.check_expr(&ens.body, &Type::Bool);
+            // Validate `old(...)` occurrences: `old(result)` is rejected
+            // (result does not exist at entry) and the captured expression
+            // must be `Clone` (design.md § Contracts rule 4).
+            let mut olds = Vec::new();
+            collect_old_calls(&ens.body, &mut olds);
+            for (old_span, arg) in olds {
+                if let (Some(param), ExprKind::Identifier(n)) = (&ens.param, &arg.kind) {
+                    if n == param {
+                        self.type_error(
+                            "error[E_OLD_RESULT]: `old(result)` is invalid — `result` does \
+                             not exist at function entry; `old(...)` captures pre-state only"
+                                .to_string(),
+                            old_span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        continue;
+                    }
+                }
+                let arg_ty = self.infer_expr(&arg);
+                if !matches!(arg_ty, Type::Error) && !self.type_supports_clone(&arg_ty) {
+                    self.type_error(
+                        format!(
+                            "error[E_OLD_NOT_CLONE]: `old(...)` requires the captured \
+                             expression to be Clone, but `{}` is not — capture a narrower \
+                             Clone field (e.g. `old(self.field)`) instead",
+                            type_display(&arg_ty)
+                        ),
+                        old_span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+            }
             self.local_scope.pop();
+        }
+    }
+
+    /// Emit an error for every `old(...)` occurrence inside a contract
+    /// expression where `old` is not permitted (`requires` / `invariant`).
+    fn reject_old_calls(&mut self, expr: &Expr, ctx: &str) {
+        let mut olds = Vec::new();
+        collect_old_calls(expr, &mut olds);
+        for (old_span, _) in olds {
+            self.type_error(
+                format!(
+                    "error[E_OLD_OUTSIDE_ENSURES]: `old(...)` is only valid inside an \
+                     `ensures` clause, not in a {ctx} contract"
+                ),
+                old_span,
+                TypeErrorKind::TypeMismatch,
+            );
         }
     }
 
@@ -2307,5 +2361,44 @@ impl<'a> super::TypeChecker<'a> {
             }
             TypeKind::Unit | TypeKind::Error => {}
         }
+    }
+}
+
+/// Collect every `old(arg)` occurrence in a contract expression, returning
+/// `(old_call_span, arg_expr)` for each. Walks the contract-expression
+/// grammar; the arg of an `old(...)` is captured but not recursed into.
+/// Used to validate `old(...)` placement and Clone-ability (design.md
+/// § Contracts rule 4).
+fn collect_old_calls(expr: &Expr, out: &mut Vec<(Span, Expr)>) {
+    match &expr.kind {
+        ExprKind::Call { callee, args } => {
+            if let ExprKind::Identifier(n) = &callee.kind {
+                if n == "old" && args.len() == 1 {
+                    out.push((expr.span.clone(), args[0].value.clone()));
+                    return;
+                }
+            }
+            collect_old_calls(callee, out);
+            for a in args {
+                collect_old_calls(&a.value, out);
+            }
+        }
+        ExprKind::Binary { left, right, .. } => {
+            collect_old_calls(left, out);
+            collect_old_calls(right, out);
+        }
+        ExprKind::Unary { operand, .. } => collect_old_calls(operand, out),
+        ExprKind::FieldAccess { object, .. } => collect_old_calls(object, out),
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_old_calls(object, out);
+            for a in args {
+                collect_old_calls(&a.value, out);
+            }
+        }
+        ExprKind::Index { object, index } => {
+            collect_old_calls(object, out);
+            collect_old_calls(index, out);
+        }
+        _ => {}
     }
 }

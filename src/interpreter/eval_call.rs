@@ -61,6 +61,24 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // `old(expr)` inside an `ensures` clause reads the pre-state snapshot
+        // captured at function entry (design.md § Contracts rule 4). Keyed by
+        // the arg's span on the top `old_snapshots` frame. Falls back to
+        // evaluating the arg directly when no snapshot is active (defensive —
+        // the typechecker restricts `old(...)` to `ensures` clauses).
+        if let ExprKind::Identifier(n) = &callee.kind {
+            if n == "old" && args.len() == 1 && self.env.get("old").is_none() {
+                if let Some(snap) = self.old_snapshots.last() {
+                    if let Some(v) =
+                        snap.get(&crate::resolver::SpanKey::from_span(&args[0].value.span))
+                    {
+                        return v.clone();
+                    }
+                }
+                return self.eval_expr_inner(&args[0].value);
+            }
+        }
+
         // Refinement construction: `Name.try_from(x)` runs the predicate at
         // runtime (phase-9 step 5b). Parses as `Call(Path([Name, try_from]))`
         // because an uppercase head segment roots a Path in `parse_primary`.
@@ -724,6 +742,25 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
 
+                // Capture `old(expr)` pre-state snapshots for the ensures
+                // clauses BEFORE the body runs (design.md § Contracts rule 4):
+                // each `old(arg)` arg is evaluated at entry and stashed by
+                // span; the postcondition reads it back at exit.
+                let mut pushed_old = false;
+                if contract_fault.is_none() {
+                    if let Some((_, ensures)) = &contract {
+                        let mut snap = HashMap::new();
+                        for ens in ensures {
+                            let ens_body = ens.body.clone();
+                            self.capture_old_in_expr(&ens_body, &mut snap);
+                        }
+                        if !snap.is_empty() {
+                            self.old_snapshots.push(snap);
+                            pushed_old = true;
+                        }
+                    }
+                }
+
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
@@ -732,7 +769,7 @@ impl<'a> super::Interpreter<'a> {
 
                 // `ensures` predicates run after the body, with `result`
                 // bound to the return value (skipped if the body itself
-                // already faulted).
+                // already faulted). `old(arg)` reads the entry snapshot.
                 if contract_fault.is_none() {
                     if let Some((_, ensures)) = &contract {
                         let ret_val = match &result {
@@ -756,6 +793,10 @@ impl<'a> super::Interpreter<'a> {
                             }
                         }
                     }
+                }
+
+                if pushed_old {
+                    self.old_snapshots.pop();
                 }
 
                 // CICO write-back: for each `mut`-marked call arg whose

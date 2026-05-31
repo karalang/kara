@@ -408,31 +408,94 @@ impl<'a> super::Interpreter<'a> {
                     };
                     self.bind_pattern(pat, val);
                 }
-                let result = self.eval_block_inner(&body);
+                // Method `requires` / `ensures` contracts (design.md
+                // § Contracts) — same enforcement as free functions, applied
+                // on the method-dispatch path. `requires` at entry (self +
+                // params in scope), `old(arg)` pre-state captured before the
+                // body, `ensures` at the return point with `result` bound.
+                let mcontract = self.method_contract(&type_name, method);
+                let mut contract_fault: Option<String> = None;
+                if let Some((requires, _)) = &mcontract {
+                    for req in requires {
+                        if self.eval_expr_inner(req) != Value::Bool(true) {
+                            contract_fault = Some("contract violated: requires clause".to_string());
+                            break;
+                        }
+                    }
+                }
+                let mut pushed_old = false;
+                if contract_fault.is_none() {
+                    if let Some((_, ensures)) = &mcontract {
+                        let mut snap = std::collections::HashMap::new();
+                        for ens in ensures {
+                            let ens_body = ens.body.clone();
+                            self.capture_old_in_expr(&ens_body, &mut snap);
+                        }
+                        if !snap.is_empty() {
+                            self.old_snapshots.push(snap);
+                            pushed_old = true;
+                        }
+                    }
+                }
+
+                let result = if contract_fault.is_some() {
+                    Ok(Value::Unit)
+                } else {
+                    self.eval_block_inner(&body)
+                };
+
+                if contract_fault.is_none() {
+                    if let Some((_, ensures)) = &mcontract {
+                        let ret_val = match &result {
+                            Ok(v) => Some(v.clone()),
+                            Err(ControlFlow::Return(v)) => Some(v.clone()),
+                            _ => None,
+                        };
+                        if let Some(rv) = ret_val {
+                            for ens in ensures {
+                                self.env.push_scope();
+                                if let Some(param) = &ens.param {
+                                    self.env.define(param.clone(), rv.clone());
+                                }
+                                let ok = self.eval_expr_inner(&ens.body);
+                                self.env.pop_scope();
+                                if ok != Value::Bool(true) {
+                                    contract_fault =
+                                        Some("contract violated: ensures clause".to_string());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if pushed_old {
+                    self.old_snapshots.pop();
+                }
 
                 // Struct-invariant check at pub method exit (design.md
                 // § Contracts rule 3). On a type with an `invariant` block,
                 // every pub method re-checks it at the return point with
-                // `self` bound to the (possibly mutated) receiver value. A
-                // false invariant faults `contract violated`.
-                let mut inv_fault: Option<String> = None;
-                if let Some(invariants) = self.pub_method_invariants(&type_name, method) {
-                    if let Some(self_val) = self.env.get("self") {
-                        for inv in &invariants {
-                            self.env.push_scope();
-                            self.env.define("self".to_string(), self_val.clone());
-                            let ok = self.eval_expr_inner(inv);
-                            self.env.pop_scope();
-                            if ok != Value::Bool(true) {
-                                inv_fault = Some("contract violated: invariant".to_string());
-                                break;
+                // `self` bound to the (possibly mutated) receiver value.
+                if contract_fault.is_none() {
+                    if let Some(invariants) = self.pub_method_invariants(&type_name, method) {
+                        if let Some(self_val) = self.env.get("self") {
+                            for inv in &invariants {
+                                self.env.push_scope();
+                                self.env.define("self".to_string(), self_val.clone());
+                                let ok = self.eval_expr_inner(inv);
+                                self.env.pop_scope();
+                                if ok != Value::Bool(true) {
+                                    contract_fault =
+                                        Some("contract violated: invariant".to_string());
+                                    break;
+                                }
                             }
                         }
                     }
                 }
 
                 self.env.pop_scope();
-                if let Some(msg) = inv_fault {
+                if let Some(msg) = contract_fault {
                     return self.record_runtime_error(msg, span);
                 }
                 return match result {

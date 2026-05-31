@@ -11253,3 +11253,74 @@ fn test_contract_invariant_private_method_not_checked() {
         "a private method must not trigger the invariant check, got: {errors:?}"
     );
 }
+
+// ── Contracts — old(expr) pre-state + method contracts ─────────────
+//
+// design.md § Contracts rule 4: `old(expr)` in an `ensures` clause reads
+// the value captured at function entry. Method `requires`/`ensures` are
+// enforced on the method-dispatch path (same as free functions).
+
+#[test]
+fn test_contract_old_method_holds() {
+    // `withdraw` reduces the balance by `amount`; the postcondition
+    // `self.balance == old(self.balance) - amount` holds.
+    let errors = runtime_errors(
+        "struct Account { balance: i64 }\n\
+         impl Account {\n\
+             pub fn withdraw(mut ref self, amount: i64) -> i64\n\
+                 ensures(result) self.balance == old(self.balance) - amount\n\
+             { self.balance = self.balance - amount; amount }\n\
+         }\n\
+         fn main() { let mut a = Account { balance: 100 }; let _ = a.withdraw(30); }",
+    );
+    assert!(
+        errors.is_empty(),
+        "a satisfied old() postcondition must not fault, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_contract_old_method_violation_faults() {
+    // The body mutates the balance wrongly, so the `old()` postcondition fails.
+    let errors = runtime_errors(
+        "struct Account { balance: i64 }\n\
+         impl Account {\n\
+             pub fn withdraw(mut ref self, amount: i64) -> i64\n\
+                 ensures(result) self.balance == old(self.balance) - amount\n\
+             { self.balance = self.balance - 999; amount }\n\
+         }\n\
+         fn main() { let mut a = Account { balance: 100 }; let _ = a.withdraw(30); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("contract violated")),
+        "expected a `contract violated` fault for the old() postcondition, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_contract_method_requires_violation_faults() {
+    // Method `requires` is enforced on the dispatch path.
+    let errors = runtime_errors(
+        "struct Counter { n: i64 }\n\
+         impl Counter { pub fn step(self, by: i64) -> i64 requires by > 0 { self.n + by } }\n\
+         fn main() { let c = Counter { n: 5 }; let _ = c.step(-1); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("contract violated")),
+        "expected a method-requires fault, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_contract_old_free_function() {
+    // `old(x)` in a free-function ensures evaluates to the entry value.
+    let output = run_no_errors(
+        "fn bump(x: i64) -> i64 ensures(result) result > old(x) { x + 1 }\n\
+         fn main() { println(bump(5)); }",
+    );
+    assert_eq!(output, "6\n");
+}
