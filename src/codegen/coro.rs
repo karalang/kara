@@ -406,6 +406,156 @@ pub(super) unsafe fn build_demo_coroutine<'ctx>(
     func
 }
 
+/// Build a **park-shaped** switched-resume coroutine `@demo_park_coro(i32 fd)`
+/// that mirrors the production network-leaf lowering shape (slice 2b.2), so the
+/// load-bearing question can be answered before wiring into the real compile
+/// path: **does the frame-resident parked-task slot survive CoroSplit with a
+/// stable address, and does the post-park syscall land on the resume edge (not
+/// get dropped — the bug-C failure mode)?**
+///
+/// The emitted shape matches `emit_state_machine_invocation_for_park_on_fd`
+/// (`tcp.rs`) but with the thread-block swapped for a real suspend:
+///
+/// ```text
+/// entry:   id/begin; alloca parked{poll_fn,state,token};
+///          parked = {@__kara_coro_resume, hdl};
+///          token = register_fd(fd, dir, &parked);   // dispatcher reads &parked
+///          token -> parked.token;                   // (while suspended)
+///          suspend; switch [0->resume, 1->cleanup] default suspend
+/// resume:  deregister(fd, load parked.token);       // reload FORCES the slot
+///          n = syscall(fd);                          // into the coro frame —
+///          br cleanup                                // the post-park work
+/// cleanup: free_frame; br suspend
+/// suspend: coro.end; ret hdl
+/// ```
+///
+/// The `parked.token` reload on the resume edge is what makes the slot live
+/// across the suspend, so CoroSplit promotes it into the frame and the address
+/// register_fd captured stays valid for the dispatcher to dereference during
+/// suspension — exactly the lifetime contract the production leaf needs. The
+/// extern `__demo_register_fd`/`_deregister_fd`/`_syscall` stand in for
+/// `karac_runtime_event_loop_register_fd` / `_deregister_fd` /
+/// `karac_runtime_tcp_read`; this validates the emission *shape*, not the FFI.
+///
+/// # Safety
+/// `context`, `module`, and `builder` must share one LLVM context.
+pub(super) unsafe fn build_demo_park_coroutine<'ctx>(
+    context: &'ctx Context,
+    module: &Module<'ctx>,
+    builder: &Builder<'ctx>,
+) -> FunctionValue<'ctx> {
+    let intr = CoroIntrinsics::declare(context, module);
+    let shim = emit_coro_resume_shim(context, module);
+
+    let i8t = context.i8_type();
+    let i32t = context.i32_type();
+    let i64t = context.i64_type();
+    let ptrt = context.ptr_type(AddressSpace::default());
+
+    // Extern stubs standing in for the runtime FFI the production leaf calls.
+    let register_fd = module.add_function(
+        "__demo_register_fd",
+        i64t.fn_type(&[i32t.into(), i8t.into(), ptrt.into()], false),
+        None,
+    );
+    let deregister_fd = module.add_function(
+        "__demo_deregister_fd",
+        context
+            .void_type()
+            .fn_type(&[i32t.into(), i64t.into()], false),
+        None,
+    );
+    let syscall = module.add_function("__demo_syscall", i64t.fn_type(&[i32t.into()], false), None);
+
+    // `define ptr @demo_park_coro(i32 %fd) presplitcoroutine`.
+    let func = module.add_function("demo_park_coro", ptrt.fn_type(&[i32t.into()], false), None);
+    mark_presplit_coroutine(context, func);
+    let fd = func
+        .get_nth_param(0)
+        .expect("demo_park_coro fd param")
+        .into_int_value();
+
+    // Demo parked-task slot: `{ptr poll_fn, ptr state, i64 token}`. The first
+    // two words are the runtime `KaracParkedTask` ABI; the third holds the
+    // registration token (production keeps it in a state-struct field).
+    let parked_ty = context.struct_type(&[ptrt.into(), ptrt.into(), i64t.into()], false);
+
+    let entry = context.append_basic_block(func, "entry");
+    let resume = context.append_basic_block(func, "resume");
+    let cleanup = context.append_basic_block(func, "cleanup");
+    let suspend = context.append_basic_block(func, "suspend");
+
+    // entry: set up the frame, build the parked record, register, suspend.
+    builder.position_at_end(entry);
+    let id = intr.coro_id(builder);
+    let hdl = intr.begin(builder, id);
+    let hdl_pv = PointerValue::new(hdl);
+
+    let slot = builder.build_alloca(parked_ty, "parked").unwrap();
+    let poll_fn_field = builder
+        .build_struct_gep(parked_ty, slot, 0, "parked.poll_fn")
+        .unwrap();
+    builder
+        .build_store(poll_fn_field, shim.as_global_value().as_pointer_value())
+        .unwrap();
+    let state_field = builder
+        .build_struct_gep(parked_ty, slot, 1, "parked.state")
+        .unwrap();
+    builder.build_store(state_field, hdl_pv).unwrap();
+
+    let dir = i8t.const_int(0, false);
+    let token = builder
+        .build_call(register_fd, &[fd.into(), dir.into(), slot.into()], "token")
+        .unwrap()
+        .try_as_basic_value()
+        .unwrap_basic()
+        .into_int_value();
+    let token_field = builder
+        .build_struct_gep(parked_ty, slot, 2, "parked.token")
+        .unwrap();
+    builder.build_store(token_field, token).unwrap();
+
+    let sp = IntValue::new(intr.suspend(builder, false));
+    builder
+        .build_switch(
+            sp,
+            suspend,
+            &[
+                (i8t.const_int(0, false), resume),
+                (i8t.const_int(1, false), cleanup),
+            ],
+        )
+        .unwrap();
+
+    // resume: reload the token (this cross-suspend use forces the slot into the
+    // frame), deregister, run the post-park syscall, then clean up.
+    builder.position_at_end(resume);
+    let token_field2 = builder
+        .build_struct_gep(parked_ty, slot, 2, "parked.token.reload")
+        .unwrap();
+    let token2 = builder
+        .build_load(i64t, token_field2, "token.val")
+        .unwrap()
+        .into_int_value();
+    builder
+        .build_call(deregister_fd, &[fd.into(), token2.into()], "")
+        .unwrap();
+    builder.build_call(syscall, &[fd.into()], "n").unwrap();
+    builder.build_unconditional_branch(cleanup).unwrap();
+
+    // cleanup: free the frame, then fall through to the final suspend.
+    builder.position_at_end(cleanup);
+    intr.free_frame(builder, id, hdl);
+    builder.build_unconditional_branch(suspend).unwrap();
+
+    // suspend: final coro.end, return the handle.
+    builder.position_at_end(suspend);
+    intr.end(builder, hdl);
+    builder.build_return(Some(&hdl_pv)).unwrap();
+
+    func
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,6 +646,93 @@ mod tests {
             !shim_ir.contains("@llvm.coro."),
             "resume shim still has un-lowered coro intrinsics:\n{}",
             shim_ir
+        );
+
+        module
+            .verify()
+            .unwrap_or_else(|e| panic!("post-split module invalid: {}", e.to_string()));
+    }
+
+    /// The **park-shaped** coroutine (the production leaf shape, slice 2b.2)
+    /// splits correctly: the frame-resident parked-task slot survives with a
+    /// stable address (no `alloca` left in the ramp — CoroSplit lifted it into
+    /// the frame), the registration stays in the ramp, and the post-park
+    /// syscall lands in the `.resume` clone rather than being dropped (the
+    /// bug-C failure mode). This is the slice-2b.2 emission de-risk.
+    #[test]
+    fn park_shaped_coroutine_splits_with_frame_resident_slot() {
+        let context = Context::create();
+        let module = context.create_module("coro_park");
+        let builder = context.create_builder();
+
+        unsafe {
+            build_demo_park_coroutine(&context, &module, &builder);
+        }
+
+        module
+            .verify()
+            .unwrap_or_else(|e| panic!("pre-split module invalid: {}", e.to_string()));
+
+        let tm = crate::codegen::driver::create_target_machine()
+            .expect("create target machine for coro park");
+        let opts = inkwell::passes::PassBuilderOptions::create();
+        module
+            .run_passes("coro-early,coro-split,coro-cleanup", &tm, opts)
+            .unwrap_or_else(|e| panic!("coro pipeline failed: {}", e.to_string()));
+
+        // The state machine was generated.
+        let ramp = module
+            .get_function("demo_park_coro")
+            .expect("ramp survives split");
+        let resume_clone = module
+            .get_function("demo_park_coro.resume")
+            .expect("CoroSplit must emit demo_park_coro.resume");
+
+        let ramp_ir = ramp.print_to_string().to_string();
+        let resume_ir = resume_clone.print_to_string().to_string();
+
+        // (1) The park registration stays in the ramp — the dispatcher gets a
+        //     pointer into the (now frame-resident) parked slot.
+        assert!(
+            ramp_ir.contains("@__demo_register_fd"),
+            "register_fd must stay in the ramp; ramp IR:\n{}",
+            ramp_ir
+        );
+        // (2) Frame residency — the load-bearing invariant. The pointer
+        //     register_fd captures (and the dispatcher dereferences while the
+        //     coroutine is suspended) must be a GEP into the coro frame, not a
+        //     ramp-local stack alloca that would dangle the moment the ramp
+        //     returns. (CoroSplit may leave a *dead* `alloca` behind that the
+        //     full opt pipeline's DCE strips — so we check what register_fd
+        //     actually receives, not the mere presence of `alloca`.)
+        let call_line = ramp_ir
+            .lines()
+            .find(|l| l.contains("@__demo_register_fd"))
+            .expect("register_fd call must be in the ramp");
+        let parked_arg = call_line
+            .rsplit("ptr ")
+            .next()
+            .and_then(|s| s.split(')').next())
+            .map(str::trim)
+            .expect("register_fd parked pointer arg");
+        let def_line = ramp_ir
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("{parked_arg} = ")))
+            .unwrap_or_else(|| panic!("no definition for {parked_arg}:\n{}", ramp_ir));
+        assert!(
+            def_line.contains("getelementptr") && def_line.contains("demo_park_coro.Frame"),
+            "register_fd's parked pointer ({parked_arg}) must be a coro-frame GEP \
+             (stable address the dispatcher can deref while suspended), got:\n  {}\nramp IR:\n{}",
+            def_line.trim(),
+            ramp_ir
+        );
+        // (3) Anti-bug-C: the post-park syscall landed on the resume edge, not
+        //     dropped. The degenerate body-splitter this replaces drops exactly
+        //     this work.
+        assert!(
+            resume_ir.contains("@__demo_syscall"),
+            "post-park syscall must execute in the .resume clone; resume IR:\n{}",
+            resume_ir
         );
 
         module
