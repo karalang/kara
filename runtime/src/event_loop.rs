@@ -1081,6 +1081,56 @@ pub extern "C" fn karac_runtime_tcp_accept(listener_fd: i32) -> i32 {
     result
 }
 
+/// Open a plain-TCP client connection to `addr` (an `IP:port` literal,
+/// e.g. `127.0.0.1:8080`) and return the connected socket fd, or `-1`
+/// on UTF-8 / parse / connect failure. The client mirror of
+/// `karac_runtime_tcp_bind`'s server side — the only TCP *initiation*
+/// primitive (accept handles inbound; this handles outbound).
+///
+/// v1 does a blocking `connect(2)` inline (same posture as the TLS
+/// client `karac_runtime_tls_client_connect`, which this is the
+/// handshake-free subset of). The returned fd backs a `TcpStream`, so
+/// subsequent `karac_runtime_tcp_read` / `_write` reach it through the
+/// same park-then-syscall path an accepted fd uses.
+///
+/// The fd is returned via `IntoRawFd::into_raw_fd` (no destructor —
+/// the caller owns the close on `TcpStream` drop).
+///
+/// Returns a bare `-1` on every failure at v1; enriching to `-errno`
+/// (so callers can branch `ConnectionRefused` vs fatal) is phase-8
+/// line 74.
+///
+/// # Safety
+///
+/// `addr_ptr` must point to `addr_len` readable bytes for the duration
+/// of the call (the kara `String`'s `{ptr, len}`), or be null with
+/// `addr_len <= 0` (rejected via the early return). The bytes are read
+/// once and not retained.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_tcp_connect(addr_ptr: *const u8, addr_len: i64) -> i32 {
+    use std::os::unix::io::IntoRawFd;
+    if addr_ptr.is_null() || addr_len <= 0 {
+        return -1;
+    }
+    let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
+    let addr_str = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    // Strict literal `SocketAddr` parse — same posture as
+    // `karac_runtime_tcp_bind` / `_tls_client_connect`: the stdlib
+    // never hands a hostname to this FFI, so no DNS resolution path.
+    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => return -1,
+    };
+    match std::net::TcpStream::connect(socket_addr) {
+        Ok(sock) => sock.into_raw_fd(),
+        Err(_) => -1,
+    }
+}
+
 // ── TCP stream read/write FFI (stdlib `TcpStream.read` / `.write`) ────────
 //
 // Always-on FFIs (no feature gate) backing `runtime/stdlib/tcp.kara`'s
@@ -3279,6 +3329,69 @@ mod tests {
              connect_result = {connect_result:?}"
         );
         connect_result.expect("connector should have completed successfully");
+    }
+
+    /// `karac_runtime_tcp_connect` must open a real connection to a
+    /// listening peer (returns a positive fd that the peer accepts) and
+    /// must fail with `-1` against a closed port. Client-side mirror of
+    /// `tcp_bind_produces_connectable_listener`.
+    #[cfg(unix)]
+    #[test]
+    fn tcp_connect_reaches_a_listener() {
+        // Harness listener owns the server side.
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("harness listener bind failed");
+        let port = listener.local_addr().expect("local_addr").port();
+        listener.set_nonblocking(true).expect("nonblocking");
+
+        let addr = format!("127.0.0.1:{port}");
+        let fd = unsafe { karac_runtime_tcp_connect(addr.as_ptr(), addr.len() as i64) };
+        assert!(
+            fd > 0,
+            "tcp_connect to a live listener should return a positive fd, got {fd}"
+        );
+
+        // The listener must observe the connection the FFI just opened.
+        let mut accepted = None;
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_secs(3) {
+            match listener.accept() {
+                Ok(c) => {
+                    accepted = Some(c);
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => panic!("accept errored: {e}"),
+            }
+        }
+        assert!(
+            accepted.is_some(),
+            "listener did not accept the connection karac_runtime_tcp_connect opened",
+        );
+        // Reclaim the raw fd into a std TcpStream so its Drop closes it.
+        unsafe {
+            use std::os::unix::io::FromRawFd;
+            drop(std::net::TcpStream::from_raw_fd(fd));
+        }
+
+        // Closed port → connect fails with -1 (the v1 bare sentinel;
+        // line 74 enriches this to -errno).
+        let dead = b"127.0.0.1:1";
+        let dead_fd = unsafe { karac_runtime_tcp_connect(dead.as_ptr(), dead.len() as i64) };
+        assert_eq!(
+            dead_fd, -1,
+            "connect to a closed port should return -1, got {dead_fd}"
+        );
+
+        // Malformed address → -1 (parse failure).
+        let bad = b"not an address";
+        let bad_fd = unsafe { karac_runtime_tcp_connect(bad.as_ptr(), bad.len() as i64) };
+        assert_eq!(
+            bad_fd, -1,
+            "connect to an unparseable address should return -1"
+        );
     }
 
     #[test]

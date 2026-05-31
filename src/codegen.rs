@@ -2295,6 +2295,19 @@ impl<'ctx> Codegen<'ctx> {
             tcp_bind_ty,
             Some(Linkage::External),
         );
+        // `karac_runtime_tcp_connect(addr_ptr: *const u8, addr_len: i64)
+        // -> i32` — backs `TcpStream.connect(addr: String) ->
+        // Result[TcpStream, TcpError]`, the plain-TCP client primitive.
+        // Same signature shape as `karac_runtime_tcp_bind`; returns the
+        // connected socket fd, -1 on UTF-8 / parse / connect failure.
+        let tcp_connect_ty = context
+            .i32_type()
+            .fn_type(&[ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_tcp_connect",
+            tcp_connect_ty,
+            Some(Linkage::External),
+        );
         // `karac_runtime_tcp_accept(listener_fd: i32) -> i32` — backs
         // the *raw* accept(2) inside `TcpListener.accept`'s codegen
         // lowering. Caller (codegen) is responsible for parking via

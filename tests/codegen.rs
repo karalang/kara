@@ -4057,6 +4057,34 @@ fn main() {
     // when a kara binding goes out of scope, replacing the previous
     // "kernel reaps fds on process exit" leak.
 
+    /// Phase-8 line 74 prereq — `TcpStream.connect(addr)` dispatches to
+    /// the `karac_runtime_tcp_connect` FFI and wraps the fd via the
+    /// shared `build_fd_construct_result` (the `tcp.connect.*` labels).
+    /// Pins the assoc-dispatch arm + extern wiring.
+    #[test]
+    fn test_ir_tcp_stream_connect_dispatches_to_runtime_ffi() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let s = TcpStream.connect("127.0.0.1:8080").unwrap();
+    println(s.fd);
+}
+"#,
+        );
+        let body = function_body(&ir, "main").expect("main body");
+        assert!(
+            body.contains("call i32 @karac_runtime_tcp_connect("),
+            "main should call @karac_runtime_tcp_connect; body was:\n{}",
+            body
+        );
+        assert!(
+            body.contains("tcp.connect.is_ok"),
+            "connect should wrap its fd via build_fd_construct_result \
+             (tcp.connect.is_ok branch); body was:\n{}",
+            body
+        );
+    }
+
     #[test]
     fn test_ir_tcp_listener_drop_body_calls_tcp_close() {
         let ir = ir_for(

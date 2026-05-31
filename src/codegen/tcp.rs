@@ -274,6 +274,46 @@ impl<'ctx> super::Codegen<'ctx> {
         self.build_fd_construct_result(fd, "TcpError", "Other", "tcp.bind")
     }
 
+    /// Lower `TcpStream.connect(addr: String) -> Result[TcpStream,
+    /// TcpError]` — the plain-TCP client mirror of `bind`. Extract the
+    /// addr `String`'s `{ptr, len}`, call `karac_runtime_tcp_connect`
+    /// (a blocking `connect(2)`, no parking), then wrap the returned fd
+    /// in `Result[TcpStream, TcpError]` via the shared
+    /// `build_fd_construct_result` (`Ok(TcpStream { fd })` on `fd >= 0`,
+    /// else `Err(TcpError.Other(-1))`).
+    pub(super) fn lower_tcp_stream_connect(
+        &mut self,
+        addr_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let addr_sv = addr_val.into_struct_value();
+        let addr_ptr = self
+            .builder
+            .build_extract_value(addr_sv, 0, "tcp.connect.addr.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let addr_len = self
+            .builder
+            .build_extract_value(addr_sv, 1, "tcp.connect.addr.len")
+            .unwrap()
+            .into_int_value();
+
+        let connect_fn = self
+            .module
+            .get_function("karac_runtime_tcp_connect")
+            .expect("karac_runtime_tcp_connect declared in Codegen::new");
+        let fd_call = self
+            .builder
+            .build_call(
+                connect_fn,
+                &[addr_ptr.into(), addr_len.into()],
+                "tcp.connect.fd",
+            )
+            .expect("call karac_runtime_tcp_connect");
+        let fd = fd_call.try_as_basic_value().unwrap_basic().into_int_value();
+
+        self.build_fd_construct_result(fd, "TcpError", "Other", "tcp.connect")
+    }
+
     /// Lower `TcpListener.accept(ref self) -> TcpStream` to: park on
     /// the listener's fd (via `karac_park_on_fd(self.fd, 0u8)`), call
     /// `karac_runtime_tcp_accept(self.fd)` for the raw accept(2), then

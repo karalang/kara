@@ -150,6 +150,26 @@ impl TcpListener {
 }
 
 impl TcpStream {
+    // Open a plain-TCP client connection to `addr` (an `IP:port`
+    // literal, e.g. `"127.0.0.1:8080"`) and return `Ok(stream)`
+    // wrapping the connected fd, or `Err(TcpError.Other(-1))` on
+    // connect failure. The client mirror of `TcpListener.bind`:
+    // `accept` handles inbound connections, `connect` initiates
+    // outbound ones. Plain-TCP counterpart of `TlsStream.connect`
+    // (which is this plus a rustls handshake).
+    //
+    // v1 does a blocking `connect(2)`; the carried errno is `-1`
+    // (the runtime `karac_runtime_tcp_connect` FFI returns a bare
+    // `-1`, not `-errno`) — distinguishing `ConnectionRefused` from
+    // a fatal failure is phase-8 line 74. Stub body never executes —
+    // codegen replaces via `lower_tcp_stream_connect`.
+    #[compiler_builtin]
+    fn connect(addr: String) -> Result[TcpStream, TcpError]
+        with sends(Network) receives(Network)
+    {
+        Result.Err(TcpError.Other(-1))
+    }
+
     // Park on read-readiness of `self.fd`, then perform `read(2)`
     // into `buf`'s backing buffer (up to `buf.len` bytes).
     // Returns `Ok(n)` with the byte count (0 = clean EOF) or

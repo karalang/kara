@@ -678,4 +678,151 @@ mod tcp_stream_tests {
             "write_all should have pushed the exact payload byte-for-byte"
         );
     }
+
+    /// Phase-8 line 74 prereq — `TcpStream.connect(addr)` Ok-path E2E,
+    /// the plain-TCP *client*. Roles are reversed from the round-trip
+    /// tests above: the harness owns the listener (a `std::net`
+    /// listener on an ephemeral port), and the kara binary is the one
+    /// that *initiates* the connection via the new `TcpStream.connect`,
+    /// then writes a payload onto it. The harness accepts and reads the
+    /// payload — proving `connect` produced a real, writable connected
+    /// socket. The port is interpolated into the kara source (the
+    /// dynamic-compile harness already takes a source string), so no
+    /// runtime port-passing is needed.
+    #[test]
+    fn test_tcp_stream_connect_ok_round_trip() {
+        let _guard = TCP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!(
+                "skip: libkarac_runtime.a not built \
+                 (run `cargo build -p karac-runtime --release`)"
+            );
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        // Harness-owned listener on an ephemeral port. Accept happens on
+        // a worker thread so the main thread can drive compile/run.
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("harness listener bind failed");
+        let port = listener.local_addr().expect("local_addr").port();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let accept_thread = std::thread::spawn(move || {
+            if let Ok((mut conn, _)) = listener.accept() {
+                conn.set_read_timeout(Some(Duration::from_secs(10))).ok();
+                let mut buf = Vec::with_capacity(64);
+                let mut chunk = [0u8; 64];
+                loop {
+                    match conn.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                        Err(_) => break,
+                    }
+                    if buf.ends_with(b"\n") {
+                        break;
+                    }
+                }
+                let _ = tx.send(String::from_utf8_lossy(&buf).to_string());
+            }
+        });
+
+        let src = format!(
+            "fn main() {{\n\
+             \x20   match TcpStream.connect(\"127.0.0.1:{port}\") {{\n\
+             \x20       Result.Ok(stream) => {{\n\
+             \x20           let msg: String = \"hi from connect\\n\";\n\
+             \x20           let _n = stream.write(msg.bytes());\n\
+             \x20       }}\n\
+             \x20       Result.Err(_) => {{ println(99); }}\n\
+             \x20   }}\n\
+             }}\n"
+        );
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_tcp_connect_e2e_{pid}_{nanos}"));
+
+        if let Err(e) = compile_and_link(&src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let output = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .output()
+            .expect("failed to run tcp connect binary");
+
+        let payload = rx.recv_timeout(Duration::from_secs(10)).ok();
+        let _ = accept_thread.join();
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            output.status.success(),
+            "connect binary exited non-success {:?} — stderr {:?}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let payload = payload.expect("harness never received a connection from the kara binary");
+        assert!(
+            payload.contains("hi from connect"),
+            "expected `hi from connect` over the kara-initiated connection, got: {payload:?}",
+        );
+    }
+
+    /// Phase-8 line 74 prereq — `TcpStream.connect` Err path. Connecting
+    /// to a closed local port surfaces `Result.Err(TcpError)` rather than
+    /// hanging or crashing. (The carried errno is `-1` at v1; line 74
+    /// enriches it to a real cause — that slice's tests assert the
+    /// variant.) Here we only pin that the Err arm is taken and the
+    /// destructure + drop path is clean.
+    #[test]
+    fn test_tcp_stream_connect_err_on_closed_port() {
+        let _guard = TCP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        // Port 1 is privileged + almost certainly unbound for a normal
+        // test user → connect fails fast.
+        let src = r#"
+            fn main() {
+                match TcpStream.connect("127.0.0.1:1") {
+                    Result.Ok(_) => { println(98); }
+                    Result.Err(_) => { println(2); }
+                }
+            }
+        "#;
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_tcp_connect_err_{pid}_{nanos}"));
+
+        if let Err(e) = compile_and_link(src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+        let output = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .output()
+            .expect("failed to run tcp connect-err binary");
+        let _ = std::fs::remove_file(&exe_path);
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "connect-err binary exited non-success {:?} — stderr {:?}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(
+            stdout.contains('2') && !stdout.contains("98"),
+            "expected Err arm (printed 2), got stdout {stdout:?}",
+        );
+    }
 }

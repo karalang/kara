@@ -632,6 +632,7 @@ impl<'a> EffectChecker<'a> {
                 "Server.serve_static",
                 // std.tcp
                 "TcpListener.accept",
+                "TcpStream.connect",
                 "TcpStream.read",
                 "TcpStream.write",
                 "TcpStream.write_all",

@@ -409,6 +409,15 @@ impl<'ctx> super::Codegen<'ctx> {
             let addr_val = self.compile_expr(&_args[0].value)?;
             return self.lower_tcp_listener_bind(addr_val);
         }
+        // Phase-8 line 74 prereq — `TcpStream.connect(addr) ->
+        // Result[TcpStream, TcpError]`, the plain-TCP client. Mirror of
+        // `bind` on the codegen side: extract the addr `String` `{ptr,
+        // len}`, feed `karac_runtime_tcp_connect(addr_ptr, addr_len) ->
+        // i32`, wrap the connected fd into `Result[TcpStream, TcpError]`.
+        if type_name == "TcpStream" && method == "connect" && _args.len() == 1 {
+            let addr_val = self.compile_expr(&_args[0].value)?;
+            return self.lower_tcp_stream_connect(addr_val);
+        }
         // Phase 6 line 236 slice 2 — `TlsListener.bind_tls(addr, cert,
         // key) -> TlsListener`. Lowering in `src/codegen/tls.rs` calls
         // `karac_runtime_tls_config_new` + `_tls_listener_bind` then
