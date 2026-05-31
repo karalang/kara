@@ -765,20 +765,66 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.build_store(token_field, token).unwrap();
 
-        // Suspend; switch to the shared exit blocks + a fresh resume block.
+        // Suspend; switch to the shared suspend-return (default), a fresh resume
+        // block (case 0), and a fresh per-park DESTROY block (case 1). The
+        // destroy edge is the cancel/teardown path for a coroutine suspended
+        // *at this park*: case 1 cannot share the final-suspend's free-only
+        // `ctx.cleanup_bb` directly, because here the fd is still registered and
+        // the heap locals live across this park are still owned by the frame —
+        // both must be torn down before the frame is freed (A2 slice 4).
         let sp = unsafe { IntValue::new(ctx.intr.suspend(&self.builder, false)) };
         let resume_bb = self
             .context
             .append_basic_block(fn_val, &format!("kara.coro.resume.{n}"));
+        let destroy_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("kara.coro.destroy.{n}"));
         self.builder
             .build_switch(
                 sp,
                 ctx.suspend_ret_bb,
                 &[
                     (i8_ty.const_int(0, false), resume_bb),
-                    (i8_ty.const_int(1, false), ctx.cleanup_bb),
+                    (i8_ty.const_int(1, false), destroy_bb),
                 ],
             )
+            .unwrap();
+
+        let deregister_fd = self
+            .module
+            .get_function("karac_runtime_event_loop_deregister_fd")
+            .expect("karac_runtime_event_loop_deregister_fd declared in Codegen::new");
+
+        // Destroy edge: the coroutine is being torn down while parked here
+        // (a future slice-5 cancel; today this clone is emitted-but-unreached
+        // because the only `coro.destroy` is the dispatcher's post-completion
+        // one, which lands on the final suspend's free-only edge). Order:
+        //   1. deregister the fd — the event loop still holds a pointer to the
+        //      frame-resident parked record; freeing the frame without this
+        //      dangles it (the dispatcher would deref freed memory on the next
+        //      readiness poll). MUST precede the frame free.
+        //   2. drop the heap locals live across this park — the set a cancel
+        //      here would otherwise leak. CoroSplit spills each to the frame
+        //      because they are used on this (post-suspend) edge.
+        //   3. branch to the shared `cleanup_bb`, which `coro.free`s the frame.
+        // Deregister-vs-drops order is immaterial (independent resources); the
+        // frame free strictly follows both.
+        self.builder.position_at_end(destroy_bb);
+        let token_field_d = self
+            .builder
+            .build_struct_gep(ctx.parked_ty, parked, 2, "kara.coro.parked.token.destroy")
+            .unwrap();
+        let token_d = self
+            .builder
+            .build_load(i64_ty, token_field_d, "kara.coro.token.destroy.val")
+            .unwrap()
+            .into_int_value();
+        self.builder
+            .build_call(deregister_fd, &[fd.into(), token_d.into()], "")
+            .unwrap();
+        self.emit_coro_destroy_edge_drops();
+        self.builder
+            .build_unconditional_branch(ctx.cleanup_bb)
             .unwrap();
 
         // Resume edge: reload the token (forces frame residency), deregister,
@@ -793,10 +839,6 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(i64_ty, token_field2, "kara.coro.token.val")
             .unwrap()
             .into_int_value();
-        let deregister_fd = self
-            .module
-            .get_function("karac_runtime_event_loop_deregister_fd")
-            .expect("karac_runtime_event_loop_deregister_fd declared in Codegen::new");
         self.builder
             .build_call(deregister_fd, &[fd.into(), token2.into()], "")
             .unwrap();

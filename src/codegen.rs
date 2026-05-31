@@ -390,6 +390,38 @@ pub fn compile_to_object_with_coro(
         .map_err(|e| format!("Failed to write object file: {}", e))
 }
 
+/// Like [`compile_to_object_with_coro`] but returns the textual LLVM IR **after
+/// the coroutine lowering passes** (`coro-early,coro-split,coro-cleanup`) have
+/// run, so the CoroSplit-generated `.resume` / `.destroy` / `.cleanup` clones
+/// are present for structural inspection. The general optimization pipeline is
+/// deliberately NOT run, keeping the clones close to what CoroSplit emits.
+///
+/// Used by the A2 slice-4 destroy-edge drop test
+/// (`tests/coro_e2e.rs`): it asserts the `.destroy` clone of a coroutine that
+/// holds a heap local across a park frees that heap on the cancel/teardown edge
+/// — the path a future slice-5 cancel trigger exercises at runtime, and the one
+/// that would otherwise leak. See
+/// docs/spikes/network-async-coroutine-transform.md § 7 slice 4.
+pub fn compile_to_ir_with_coro_split(
+    program: &Program,
+    ownership: Option<&OwnershipCheckResult>,
+    concurrency: Option<&ConcurrencyAnalysis>,
+) -> Result<String, String> {
+    let context = Context::create();
+    let mut cg = Codegen::new(&context, "karac_module");
+    cg.load_rc_fallback(ownership);
+    cg.load_concurrency_analysis(concurrency);
+    cg.set_coro_enabled(true);
+    cg.compile_program(program)?;
+
+    let target_machine = create_target_machine()?;
+    let opts = inkwell::passes::PassBuilderOptions::create();
+    cg.module
+        .run_passes("coro-early,coro-split,coro-cleanup", &target_machine, opts)
+        .map_err(|e| format!("coro pipeline failed: {}", e))?;
+    Ok(cg.module.print_to_string().to_string())
+}
+
 /// Like [`compile_to_object`] but accepts optional source-filename and
 /// source-text strings; see [`compile_to_ir_with_options`] for the
 /// rationale and how each is consumed.

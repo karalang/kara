@@ -139,6 +139,30 @@ mod tests {
         }
     "#;
 
+    /// Slice 4: a **heap local live across a park**. `buf` (a `Vec[i64]`,
+    /// stand-in for a read buffer) is allocated + filled BEFORE the `accept`
+    /// park and used AFTER it (`buf.len()`), so CoroSplit must spill it into the
+    /// coro frame — it is live across the suspend. On normal completion the
+    /// body-end scope cleanup frees the buffer; on a destroy/cancel at the park
+    /// the per-park destroy edge must free it too (else leak). This exercises
+    /// the drop-across-suspend correctness slice 3 deliberately did not (slice 3
+    /// handlers held only `i64` / fd locals).
+    const HEAP_HANDLER_SRC: &str = r#"
+        fn serve_buf(listener: TcpListener) {
+            let mut buf: Vec[i64] = Vec.new();
+            buf.push(1);
+            buf.push(2);
+            buf.push(3);
+            let _stream = listener.accept().unwrap();
+            println(buf.len());
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            serve_buf(listener);
+            println(2);
+        }
+    "#;
+
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn workspace_root() -> PathBuf {
@@ -722,6 +746,236 @@ mod tests {
         assert!(
             lines.iter().any(|l| l == "1") && lines.iter().any(|l| l == "2"),
             "method-handler coroutine did not complete; stdout lines: {lines:?}"
+        );
+    }
+
+    /// Compile `src` with the coroutine path on and run the coro lowering
+    /// passes, returning post-CoroSplit IR (the `.resume`/`.destroy` clones).
+    /// Mirrors `compile_link_coro`'s full network-boundary pipeline population
+    /// but routes to `compile_to_ir_with_coro_split` instead of object emission.
+    fn compile_coro_split_ir(src: &str) -> Result<String, String> {
+        use karac::cli::{
+            build_call_effect_subs_table, build_callee_network_yield_effect_table,
+            build_callee_purely_polymorphic_effects_set, build_state_struct_layouts,
+            build_yield_points_table,
+        };
+        use karac::codegen::compile_to_ir_with_coro_split;
+
+        let mut parsed = karac::parse(src);
+        if !parsed.errors.is_empty() {
+            return Err(format!("parse errors: {:?}", parsed.errors));
+        }
+        let resolved = karac::resolve(&parsed.program);
+        if !resolved.errors.is_empty() {
+            return Err(format!("resolve errors: {:?}", resolved.errors));
+        }
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        if !typed.errors.is_empty() {
+            return Err(format!("typecheck errors: {:?}", typed.errors));
+        }
+        let method_types = typed.method_callee_types.clone();
+        let call_type_subs = typed.call_type_subs.clone();
+        let pattern_binding_types = typed.pattern_binding_types.clone();
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck_with_typecheck_data(
+            &parsed.program,
+            karac::effectchecker::PublicEffectsPolicy::default(),
+            karac::manifest::CompileProfile::Default,
+            method_types.clone(),
+            call_type_subs,
+        );
+        parsed.program.callee_network_yield_effect =
+            build_callee_network_yield_effect_table(&effects);
+        parsed.program.yield_points = build_yield_points_table(
+            &parsed.program,
+            &parsed.program.callee_network_yield_effect,
+            &method_types,
+        );
+        parsed.program.state_struct_layouts = build_state_struct_layouts(
+            &parsed.program,
+            &parsed.program.callee_network_yield_effect,
+            &method_types,
+            &pattern_binding_types,
+        );
+        parsed.program.call_effect_subs = build_call_effect_subs_table(&effects);
+        parsed.program.callee_purely_polymorphic_effects =
+            build_callee_purely_polymorphic_effects_set(&effects);
+        let _ownership = karac::ownershipcheck(&parsed.program, &typed);
+
+        compile_to_ir_with_coro_split(&parsed.program, None, None)
+    }
+
+    /// Extract one `define ... @<sig_marker>...{ ... }` function body from module
+    /// IR text. `sig_marker` is the `@name(`-style signature fragment (e.g.
+    /// `@serve_buf.destroy(`); the slice runs from the preceding `define` to the
+    /// function's closing `\n}`.
+    fn extract_fn_ir<'a>(ir: &'a str, sig_marker: &str) -> Option<&'a str> {
+        let at = ir.find(sig_marker)?;
+        let start = ir[..at].rfind("\ndefine").map(|p| p + 1).unwrap_or(0);
+        let end = ir[at..].find("\n}").map(|p| at + p + 2).unwrap_or(ir.len());
+        Some(&ir[start..end])
+    }
+
+    /// Extract one `<label>:` basic block (up to the next blank-line-separated
+    /// label) from a function-body IR slice.
+    fn extract_block<'a>(fn_ir: &'a str, label: &str) -> Option<&'a str> {
+        let marker = format!("\n{label}:");
+        let start = fn_ir.find(&marker)? + 1;
+        let end = fn_ir[start..]
+            .find("\n\n")
+            .map(|p| start + p)
+            .unwrap_or(fn_ir.len());
+        Some(&fn_ir[start..end])
+    }
+
+    /// Slice 4 — **destroy/cancel-edge heap drop is emitted**. A coroutine that
+    /// holds a heap local (`Vec[i64] buf`) across the `accept` park must, on the
+    /// per-park destroy edge (the path a future slice-5 cancel triggers), (a)
+    /// deregister the fd before the frame is freed — else the dispatcher dangles
+    /// a pointer into the freed frame — and (b) free the heap buffer — else a
+    /// mid-flight cancel leaks it. This inspects the CoroSplit `.destroy` clone
+    /// directly: today the destroy edge is emitted-but-unreached (the only
+    /// runtime `coro.destroy` lands on the final suspend's free-only edge), so a
+    /// structural assertion is the right gate until slice 5 wires a live cancel.
+    /// The non-heap contrast handler proves the buffer free is tied to the live
+    /// heap local, not emitted unconditionally.
+    #[test]
+    fn coroutine_heap_local_freed_on_destroy_edge() {
+        let ir = match compile_coro_split_ir(HEAP_HANDLER_SRC) {
+            Ok(ir) => ir,
+            Err(e) => panic!("coro-split IR for heap handler failed: {e}"),
+        };
+
+        let destroy = extract_fn_ir(&ir, "@serve_buf.destroy(")
+            .unwrap_or_else(|| panic!("no serve_buf.destroy clone in IR:\n{ir}"));
+
+        // The per-park destroy edge exists and, in its own block, tears down the
+        // fd registration (the dispatcher's reference into the frame).
+        let destroy_block = extract_block(destroy, "kara.coro.destroy.0").unwrap_or_else(|| {
+            panic!("no kara.coro.destroy.0 block in serve_buf.destroy:\n{destroy}")
+        });
+        assert!(
+            destroy_block.contains("karac_runtime_event_loop_deregister_fd"),
+            "destroy edge must deregister the fd before the frame is freed; \
+             kara.coro.destroy.0 block:\n{destroy_block}"
+        );
+
+        // The live heap buffer is freed on the destroy clone (FreeVecBuffer:
+        // `is_heap` cap-guard → `cleanup.free` → `free(%cleanup.data)`), ahead of
+        // the shared frame free.
+        assert!(
+            destroy.contains("cleanup.free") && destroy.contains("cleanup.data"),
+            "destroy clone must free the Vec buffer live across the park; \
+             serve_buf.destroy:\n{destroy}"
+        );
+        assert!(
+            destroy.contains("call void @free(ptr %cleanup.data)"),
+            "destroy clone must call free on the Vec buffer pointer; \
+             serve_buf.destroy:\n{destroy}"
+        );
+        // …and the frame itself is freed exactly once, after the heap drops.
+        assert!(
+            destroy.contains("call void @free(ptr %hdl)"),
+            "destroy clone must free the coro frame; serve_buf.destroy:\n{destroy}"
+        );
+
+        // Contrast: a handler with NO heap local across the park has a destroy
+        // edge that deregisters + frees the frame but emits no buffer free —
+        // the drop is wired to the live heap local, not unconditional.
+        let ir_no_heap = compile_coro_split_ir(HANDLER_SRC).expect("coro-split IR for non-heap");
+        let destroy_no_heap = extract_fn_ir(&ir_no_heap, "@serve_one.destroy(")
+            .unwrap_or_else(|| panic!("no serve_one.destroy clone:\n{ir_no_heap}"));
+        assert!(
+            !destroy_no_heap.contains("cleanup.free"),
+            "non-heap handler's destroy edge must not emit a buffer free; \
+             serve_one.destroy:\n{destroy_no_heap}"
+        );
+    }
+
+    #[test]
+    fn coroutine_heap_local_across_park_services_connection() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_heap_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(HEAP_HANDLER_SRC, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let (exit_status, lines) = service_one_connection(&exe_path, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "heap-local coroutine binary exited non-success {exit_status:?}; stdout lines: {lines:?}"
+        );
+        // The post-park resume edge ran and read the frame-resident buffer
+        // (`buf.len()` == 3), then main resumed (`2`).
+        assert!(
+            lines.iter().any(|l| l == "3") && lines.iter().any(|l| l == "2"),
+            "heap-local handler did not print buf.len()==3 then main's 2; \
+             stdout lines: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn coroutine_heap_local_across_park_under_asan() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        if !asan_available() {
+            eprintln!("skip: ASAN unavailable on this host");
+            return;
+        }
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_heap_asan_{pid}_{nanos}"));
+
+        if let Err(e) =
+            compile_link_coro(HEAP_HANDLER_SRC, &exe_path, Some(&["-fsanitize=address"]))
+        {
+            eprintln!("skip: ASAN compile/link failed: {e}");
+            return;
+        }
+        // On Linux, `detect_leaks=1` makes this the load-bearing leak gate: the
+        // frame-resident `Vec` buffer is freed exactly once on the completion
+        // path (body-end scope cleanup), with no leak and no UAF/double-free
+        // against the coro frame. macOS Apple-clang ASAN lacks LeakSanitizer, so
+        // there it covers UAF/double-free only.
+        let asan_options = if cfg!(target_os = "macos") {
+            "abort_on_error=0:exitcode=23"
+        } else {
+            "detect_leaks=1:abort_on_error=0:exitcode=23"
+        };
+
+        let (exit_status, lines) = service_one_connection(&exe_path, Some(asan_options));
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "ASAN reported a memory error for the heap-local-across-park coroutine \
+             (exit {exit_status:?}); stdout lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "3") && lines.iter().any(|l| l == "2"),
+            "heap-local handler did not complete under ASAN; stdout lines: {lines:?}"
         );
     }
 

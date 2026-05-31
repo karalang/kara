@@ -882,6 +882,57 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Emit the heap-local drops for a coroutine **destroy/cancel edge** (A2
+    /// slice 4 — `docs/spikes/network-async-coroutine-transform.md` § 7 slice
+    /// 4). Called from `emit_coro_park_suspend`'s per-park destroy block, where
+    /// the live `scope_cleanup_actions` stack is exactly the set of locals live
+    /// across that suspend — so a coroutine destroyed *while parked here* frees
+    /// exactly the heap a mid-flight cancel would otherwise leak (Vec read
+    /// buffers, String, Map/file handles, RC-fallback boxes, struct/enum drops,
+    /// user `Drop` impls).
+    ///
+    /// Mirrors [`Self::emit_scope_cleanup`]'s whole-stack LIFO drain, with two
+    /// deliberate differences:
+    ///   * It skips **both** `UserDefer` and `UserErrDefer`. These are
+    ///     scope-exit *control-flow* constructs, not heap ownership; their
+    ///     bodies must not be re-compiled onto every park's destroy edge, and
+    ///     defer-on-cancel semantics are out of scope until the slice-5 cancel
+    ///     work wires a real teardown trigger. (`emit_scope_cleanup` runs
+    ///     `UserDefer` on the normal-completion path; that asymmetry is the
+    ///     documented v1 limitation — a destroyed-mid-flight coroutine drops its
+    ///     heap but does not run user `defer` blocks.)
+    ///   * The frame is **not** freed here — the shared `cleanup_bb`
+    ///     (`coro.free`) the destroy block branches into does that. This only
+    ///     runs the Kāra-level drops.
+    ///
+    /// Each remaining action goes through the same `emit_cleanup_action_at` the
+    /// normal path uses, so it inherits the null-guards / conditional-init
+    /// handling (e.g. `RcDec`'s null-sentinel skip) verbatim. The
+    /// completion-path drops and these destroy-edge drops are on mutually
+    /// exclusive control-flow paths (a coroutine either runs to completion —
+    /// body-end `emit_scope_cleanup` drops, then parks at the final suspend
+    /// whose destroy edge is free-only — or is destroyed at a park, reaching
+    /// this drain), so no value is dropped twice.
+    pub(super) fn emit_coro_destroy_edge_drops(&mut self) {
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+
+        for frame_idx in (0..self.scope_cleanup_actions.len()).rev() {
+            let n = self.scope_cleanup_actions[frame_idx].len();
+            for action_idx in (0..n).rev() {
+                if matches!(
+                    &self.scope_cleanup_actions[frame_idx][action_idx],
+                    CleanupAction::UserDefer(_) | CleanupAction::UserErrDefer { .. }
+                ) {
+                    continue;
+                }
+                self.emit_cleanup_action_at(frame_idx, action_idx, fn_val, vec_ty, ptr_ty, i64_t);
+            }
+        }
+    }
+
     /// Error-exit drain. Per design.md § *Drop ordering within a branch*,
     /// when control exits a scope via an error path (the `?` operator's
     /// Err-propagation branch, an explicit `return Err(...)` or `return
