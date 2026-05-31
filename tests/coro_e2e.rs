@@ -96,6 +96,49 @@ mod tests {
         }
     "#;
 
+    /// Slice 3: a park inside a `while` LOOP. One *static* `coro.suspend` (the
+    /// single `accept` call site) resumed N times across the loop back-edge —
+    /// the canonical CoroSplit multi-resume case, and the real echo-handler
+    /// shape. Exercises frame-residency of loop locals (`count`, `listener`)
+    /// across a back-edge suspend, and the parked-record alloca being
+    /// re-registered each iteration.
+    const LOOP_HANDLER_SRC: &str = r#"
+        fn serve_n(listener: TcpListener, n: i64) {
+            let mut count: i64 = 0;
+            while count < n {
+                let _stream = listener.accept().unwrap();
+                println(1);
+                count = count + 1;
+            }
+            println(9);
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            serve_n(listener, 2);
+            println(2);
+        }
+    "#;
+
+    /// Slice 3: a park inside an `if` BRANCH. CoroSplit must thread the suspend
+    /// through the conditional CFG and keep the post-`if` join (`println(9)`)
+    /// reachable on the resume edge.
+    const IF_HANDLER_SRC: &str = r#"
+        fn serve_if(listener: TcpListener, doit: bool) {
+            if doit {
+                let _stream = listener.accept().unwrap();
+                println(1);
+            } else {
+                println(0);
+            }
+            println(9);
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            serve_if(listener, true);
+            println(2);
+        }
+    "#;
+
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn workspace_root() -> PathBuf {
@@ -366,6 +409,206 @@ mod tests {
         };
         let lines = join.join().unwrap_or_default();
         (exit_status, lines)
+    }
+
+    /// Like `service_one_connection` but establishes `n` connections — for
+    /// handlers whose loop services multiple connections (one static
+    /// `coro.suspend` resumed across the loop back-edge). A small gap between
+    /// connects lets the coroutine re-park on the next `accept`; the listener
+    /// backlog absorbs any overlap. Returns the exit status + stdout lines.
+    fn service_n_connections(
+        exe_path: &Path,
+        n: usize,
+        asan_options: Option<&str>,
+    ) -> (std::process::ExitStatus, Vec<String>) {
+        let mut cmd = Command::new(exe_path);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(opts) = asan_options {
+            cmd.env("ASAN_OPTIONS", opts);
+        }
+        let mut child = cmd.spawn().expect("failed to spawn coro e2e binary");
+        let stdout = child.stdout.take().expect("child stdout missing");
+        let (rx, join) = spawn_stdout_reader(stdout);
+        let port = match rx.recv_timeout(Duration::from_secs(15)) {
+            Ok(p) => p,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("binary did not emit BOUND_PORT line within 15s");
+            }
+        };
+        assert!(port > 0, "BOUND_PORT must be a non-zero ephemeral port");
+        for k in 0..n {
+            let started = Instant::now();
+            let mut connected = false;
+            for _ in 0..40 {
+                if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
+                    connected = true;
+                    break;
+                }
+                if started.elapsed() > Duration::from_secs(3) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            if !connected {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("could not establish connection {k} of {n} to 127.0.0.1:{port}");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let wait_started = Instant::now();
+        let exit_status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if wait_started.elapsed() > Duration::from_secs(15) {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        panic!(
+                            "binary did not exit within 15s after {n} connects — \
+                             the loop coroutine drive did not complete."
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => panic!("try_wait failed: {e}"),
+            }
+        };
+        let lines = join.join().unwrap_or_default();
+        (exit_status, lines)
+    }
+
+    #[test]
+    fn coroutine_loop_handler_services_multiple_connections() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_loop_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(LOOP_HANDLER_SRC, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let (exit_status, lines) = service_n_connections(&exe_path, 2, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "loop coroutine binary exited non-success {exit_status:?}; stdout lines: {lines:?}"
+        );
+        // Two accept iterations each printed `1` (the resume edge ran per
+        // iteration), the loop exited (`9`), and main resumed (`2`).
+        let ones = lines.iter().filter(|l| *l == "1").count();
+        assert!(
+            ones == 2,
+            "expected 2 per-iteration `1` markers (one per accept across the loop \
+             back-edge), got {ones}; stdout lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "9") && lines.iter().any(|l| l == "2"),
+            "loop did not exit + main did not resume; stdout lines: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn coroutine_loop_handler_under_asan() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        if !asan_available() {
+            eprintln!("skip: ASAN unavailable on this host");
+            return;
+        }
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_loop_asan_{pid}_{nanos}"));
+
+        if let Err(e) =
+            compile_link_coro(LOOP_HANDLER_SRC, &exe_path, Some(&["-fsanitize=address"]))
+        {
+            eprintln!("skip: ASAN compile/link failed: {e}");
+            return;
+        }
+        let asan_options = if cfg!(target_os = "macos") {
+            "abort_on_error=0:exitcode=23"
+        } else {
+            "detect_leaks=1:abort_on_error=0:exitcode=23"
+        };
+
+        let (exit_status, lines) = service_n_connections(&exe_path, 2, Some(asan_options));
+        let _ = std::fs::remove_file(&exe_path);
+
+        // Clean ASAN exit across two loop iterations == the coroutine frame is
+        // re-registered + resumed across the back-edge with no UAF/double-free,
+        // and freed exactly once at completion.
+        assert!(
+            exit_status.success(),
+            "ASAN reported a memory error in the looping coroutine (exit \
+             {exit_status:?}); stdout lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().filter(|l| *l == "1").count() == 2,
+            "looping coroutine did not service both connections under ASAN; \
+             stdout lines: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn coroutine_if_branch_handler_services_connection() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_if_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(IF_HANDLER_SRC, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let (exit_status, lines) = service_one_connection(&exe_path, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "if-branch coroutine binary exited non-success {exit_status:?}; \
+             stdout lines: {lines:?}"
+        );
+        // The park inside the taken `if` branch ran (`1`), the post-`if` join
+        // was reached on the resume edge (`9`), and main resumed (`2`).
+        assert!(
+            lines.iter().any(|l| l == "1")
+                && lines.iter().any(|l| l == "9")
+                && lines.iter().any(|l| l == "2"),
+            "if-branch coroutine did not complete; stdout lines: {lines:?}"
+        );
     }
 
     #[test]
