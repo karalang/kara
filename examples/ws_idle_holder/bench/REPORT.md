@@ -13,6 +13,28 @@ Harness mechanics, flags, and CI-gate JSON shape live in `README.md`
 alongside; this file is **what we measured and what it means**, not
 **how the harness works**.
 
+> # ⚠️ PROVISIONAL — Kāra density figures pending the line-17 re-measure
+>
+> Every **Kāra per-connection density** number in this report — 7.8 KB/conn,
+> the **3.55× ratio vs Rust**, the 1M↔2M scale-invariance, the x86 cross-ISA
+> confirmation, and the cost reframe derived from them — was measured
+> **before phase-6 line 17 (effect-routed task parking codegen) landed**, on
+> a build where the demo's per-connection **handler does not execute**.
+> `__kara_poll_handle_connection` currently compiles to a body-less state
+> machine (no `recv_text`/`send_text`/parking emitted) — see
+> [`phase-6-runtime.md` line 17 sub-bullet 2](../../../docs/implementation_checklist/phase-6-runtime.md).
+> The connections are genuinely established + held (so "holds N connections"
+> is real), but the handler's per-conn state — the **4 KB recv buffer +
+> state machine + parking** — is **freed, not held**, whereas Rust's 27.8 KB
+> *includes* its per-conn task state. **So the density figures are not
+> apples-to-apples and understate a working server.**
+>
+> **Expected after the fix + re-measure:** per-conn-bytes ~7.8 → **~12–13 KB**,
+> ratio 3.55× → **~2–2.5×** (partly tunable via the demo's recv-buffer size).
+> **Unaffected:** Rust's figures, established counts, and connect-latency
+> percentiles (the `accept_tls` path is real). **Do not quote the Kāra
+> density / ratio externally until the re-measure lands.**
+
 > **Status:** _in progress_. Kāra 1M + 2M and Rust 1M + 2M numbers are
 > landed (credibility-comparator head-to-head at the ceiling is
 > complete). All non-Rust comparators are pending — see the
@@ -30,8 +52,8 @@ alongside; this file is **what we measured and what it means**, not
 
 | Stack | role | per-conn bytes (idle) | ratio vs Kāra | scale tested | status | section |
 |---|---|---|---|---|---|---|
-| **Kāra** | self | **7.8 KB** | 1.00× (baseline) | 1M + 2M landed | landed @ 2M | [§Kāra](#kāra) |
-| Rust (rustls + tokio) | credibility | 27.9 KB | 3.55× | 1M + 2M landed | landed @ 2M | [§Rust](#rust-rustls--tokio) |
+| **Kāra** | self | **7.8 KB** ‡ | 1.00× (baseline) | 1M + 2M landed | landed @ 2M ‡ | [§Kāra](#kāra) |
+| Rust (rustls + tokio) | credibility | 27.9 KB | 3.55× ‡ | 1M + 2M landed | landed @ 2M | [§Rust](#rust-rustls--tokio) |
 | Phoenix Channels (Elixir) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #67) | pending | [§Phoenix](#phoenix-channels-elixir) |
 | Java / Netty | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #68) | pending | [§Java/Netty](#java--netty) |
 | Go (gorilla/websocket) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #69) | pending | [§Go](#go-gorillawebsocket) |
@@ -41,6 +63,12 @@ alongside; this file is **what we measured and what it means**, not
 | SignalR _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #74) | stretch | [§SignalR](#signalr-stretch) |
 | socket.io _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #75) | stretch | [§socket.io](#socketio-stretch) |
 | Python asyncio websockets _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #76) | stretch | [§Python](#python-asyncio-websockets-stretch) |
+
+> **‡ Provisional** — the Kāra per-conn-bytes (and therefore the 3.55×
+> ratio) are pre-line-17 figures measured with non-executing handlers; they
+> understate a working server and will rise to ~12–13 KB / ~2–2.5× after the
+> re-measure. See the ⚠️ banner at the top of this report. Rust's number is
+> unaffected.
 
 > **About the `role` column and asymmetric scale:** comparators serve
 > different argumentative roles (credibility vs commercial vs stretch)
