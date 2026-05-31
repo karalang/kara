@@ -6678,8 +6678,7 @@ fn main() { let y = helper(5); println(y); }
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
-        let ir = karac::codegen::compile_to_ir(&parsed.program, None, None)
-            .expect("compile_to_ir");
+        let ir = karac::codegen::compile_to_ir(&parsed.program, None, None).expect("compile_to_ir");
         assert!(
             !ir.contains("DICompileUnit") && !ir.contains("DISubprogram"),
             "default codegen must emit no DWARF debug metadata, got:\n{}",
