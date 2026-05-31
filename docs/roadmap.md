@@ -812,15 +812,15 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
 **Goal:** Enforce the gradual verification features whose syntax was parsed in Phase 2. Adds the correctness layer on top of the working MVP compiler — language semantics are fully locked before new backends.
 
 ### Refinement Types (Level 2)
-- [ ] Constraint validation at construction boundaries
-- [ ] Compile-time elision when provable (v1 two-rule procedure)
-- [ ] `TryFrom` generation for fallible construction
-- [ ] Reject implicit runtime-value narrowing — require explicit `R.try_from(x)?` or `x as R`
+- [x] Constraint validation at construction boundaries
+- [x] Compile-time elision when provable (v1 two-rule procedure)
+- [x] `TryFrom` generation for fallible construction
+- [x] Reject implicit runtime-value narrowing — require explicit `R.try_from(x)?` or `x as R`
 
 ### Distinct Types
-- [ ] Enforce opacity (no implicit operations on the underlying type)
-- [ ] Verify `#[derive]` compatibility
-- [ ] Interaction with refinement types: `distinct type ValidPort = u16 where self >= 1 and self <= 65535`
+- [x] Enforce opacity (no implicit operations on the underlying type)
+- [x] Verify `#[derive]` compatibility
+- [x] Interaction with refinement types: `distinct type ValidPort = u16 where self >= 1 and self <= 65535`
 
 ### Contracts (`requires` / `ensures` / `invariant`)
 - [x] Verify contract expressions are pure (effect set ⊆ `{panics}`)
@@ -830,10 +830,10 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
 - [x] Strip all contract machinery in release builds
 
 ### Extended Patterns
-- [ ] Range patterns: `LITERAL "..=" LITERAL` in match arms (integer and `char` types)
-- [ ] `@` bindings: `IDENT "@" PATTERN` — capture value while testing pattern
-- [ ] Exhaustiveness: range patterns integrate with Maranget's algorithm (cover their value set)
-- [ ] Composition: range + or-pattern, `@` + range, `@` + or-pattern, nested in struct/enum fields
+- [x] Range patterns: `LITERAL "..=" LITERAL` in match arms (integer and `char` types). **Matching shipped end-to-end** — AST `PatternKind::RangePattern` (`src/ast/patterns.rs`), parser (`src/parser/patterns.rs`, all five forms: `lo..hi`, `lo..=hi`, `..hi`, `..=hi`, `lo..`), typechecker (`src/typechecker/patterns.rs`), interpreter (`src/interpreter/pattern_match.rs`), codegen (`src/codegen/control_flow_match.rs:357`, signed/unsigned-aware comparisons). The exhaustiveness *integration* for ranges is its own open item below.
+- [ ] `@` bindings: `IDENT "@" PATTERN` — capture value while testing pattern. **Parse + typecheck + interpreter shipped; codegen is a no-op — compiled `@`-binding matches are broken.** `bind_pattern_values` (`src/codegen/pattern_binding.rs:496`, the `_ => Ok(())` catch-all) has no `AtBinding` arm, so the bound name is never stored; and `compile_pattern_condition` (`src/codegen/control_flow_match.rs`) has no `AtBinding` case, so the inner pattern's test falls through to always-true. The interpreter path (`src/interpreter/pattern_match.rs`) is correct. Remaining work: a codegen `AtBinding` arm that binds the name to the scrutinee value **and** recurses into the inner pattern for both the match condition and the binding walk; add E2E codegen tests (none exist today — only parser/typechecker tests cover `@`).
+- [ ] Exhaustiveness: range patterns integrate with Maranget's algorithm (cover their value set). **Open** — `lower_pattern` (`src/exhaustive.rs:259`) collapses every `RangePattern` to `Pat::Wildcard` (comment: *"Slice 6 will model integer/char ranges as constructor ranges for proper gap analysis"*), so range coverage is invisible to the checker: a match partitioned by ranges (e.g. `1..=100 | 101..=200`) still requires an explicit `_` arm and gap detection across ranges does not fire. Remaining work is the "Slice 6" range-as-constructor modeling.
+- [ ] Composition: range + or-pattern, `@` + range, `@` + or-pattern, nested in struct/enum fields. Range compositions match correctly (or-pattern and nested struct/enum field cases verified in codegen); `@`-binding compositions parse but inherit the `@`-binding codegen no-op above, so they are not yet correct in compiled code.
 
 **Done when:** `type Percentage = f64 where self >= 0.0 and self <= 100.0` compiles with boundary checks. `distinct type UserId = i64` rejects implicit operations. `requires`/`ensures` annotations produce runtime checks in debug and are stripped in release. All three features compose correctly (e.g., distinct + refinement types). Range patterns and `@` bindings work in match, `if let`, and `while let` contexts.
 
