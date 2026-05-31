@@ -24,8 +24,10 @@ cargo fmt --all -- --check             # Verify formatted (must be clean before 
 **Codegen E2E + memory_sanitizer require the runtime library.** One-time setup on a fresh checkout:
 
 ```bash
-cargo build -p karac-runtime --release   # produces target/release/libkarac_runtime.a
+cargo rustc -p karac-runtime --release --crate-type staticlib   # produces target/release/libkarac_runtime.a
 ```
+
+**Use `cargo rustc … --crate-type staticlib`, NOT `cargo build -p karac-runtime --release`.** The runtime's `[lib] crate-type` is `["staticlib", "rlib"]` (the `rlib` exists only for the opt-in `lljit_prototype` test path). Under `lto = "fat"`, emitting both artifacts in one `cargo build` defeats the staticlib's cross-module DCE — std's panic/alloc-error default hooks stay reachable and the ~57 KiB DWARF backtrace symbolizer survives `-dead_strip` into *every* AOT binary (measured: auto-par floor 295.7 KiB → 417.7 KiB, +41%). `cargo rustc --crate-type staticlib` builds only the staticlib, so LTO strips the symbolizer. See the comment at `runtime/Cargo.toml`'s `crate-type` line for the full rationale.
 
 Without this, the E2E tests (including all `tests/memory_sanitizer.rs` cases) skip with a stderr notice rather than exercise real binaries — they pass vacuously. `tests/memory_sanitizer.rs` additionally requires a `cc` that supports `-fsanitize=address`; if missing (or if `KARAC_SKIP_ASAN_TESTS=1` is set), it skips gracefully.
 

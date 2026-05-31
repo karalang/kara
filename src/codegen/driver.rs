@@ -164,7 +164,7 @@ pub(super) fn resolve_runtime_path() -> Result<String, String> {
         return Ok(dev.to_string_lossy().into_owned());
     }
     Err(
-        "libkarac_runtime.a not found; set KARAC_RUNTIME or build the runtime crate (`cargo build -p karac-runtime --release`)".to_string(),
+        "libkarac_runtime.a not found; set KARAC_RUNTIME or build the runtime crate (`cargo rustc -p karac-runtime --release --crate-type staticlib` — NOT plain `cargo build`, which co-emits the rlib and defeats the staticlib's dead-strip; see runtime/Cargo.toml)".to_string(),
     )
 }
 

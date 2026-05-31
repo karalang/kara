@@ -9,11 +9,32 @@ name = "karac_runtime"
 # `staticlib` is the production artifact — `link_executable` in `karac`
 # links the resulting `libkarac_runtime.a` into every compiled Kāra
 # binary. `rlib` is added solely so the `karac` compiler crate can
-# pull this crate in as a `[dev-dependencies]` under the
-# `lljit_prototype` feature, putting the runtime's `karac_*` symbols
-# in the test binary's symbol table so the LLJIT process-symbol-search
-# generator (per W1) can resolve them at JIT-link time. Production
-# AOT builds are unaffected — they still consume only the `.a`.
+# pull this crate in as an optional dep under the (opt-in, non-default)
+# `lljit_prototype` feature, putting the runtime's `karac_*` symbols in
+# the test binary's symbol table so the LLJIT process-symbol-search
+# generator (per W1) can resolve them at JIT-link time.
+#
+# ⚠️  BUILD THE PRODUCTION STATICLIB WITH:
+#         cargo rustc -p karac-runtime --release --crate-type staticlib
+#     NOT `cargo build -p karac-runtime --release`.
+#
+# Why: under `lto = "fat"` (workspace `[profile.release]`), emitting BOTH
+# `staticlib` and `rlib` in one `cargo build` invocation defeats the
+# cross-module DCE that the staticlib relies on. The linker can no longer
+# prove std's panic / alloc-error default hooks unreachable, so the full
+# DWARF backtrace symbolizer (gimli + addr2line + object + rustc_demangle,
+# ~57 KiB) survives `-dead_strip` into *every* AOT binary — even a pure
+# compute program that never panics with a backtrace. Measured regression:
+# the auto-par binary floor jumped 295.7 KiB → 417.7 KiB (+41%) the moment
+# `rlib` was added (karac-rust 712d8f4d). `cargo rustc --crate-type
+# staticlib` builds ONLY the staticlib, so fat-LTO + `-dead_strip` strip
+# the symbolizer and the floor returns to ~295 KiB. The `rlib` stays
+# declared here so the opt-in `lljit_prototype` test path still resolves;
+# it is only ever materialized by `cargo {build,test} --features
+# lljit_prototype`, never by the production staticlib build above.
+#
+# A clean default (so plain `cargo build` is also DCE-correct) would mean
+# splitting the rlib core out into its own crate — tracked as a follow-up.
 crate-type = ["staticlib", "rlib"]
 
 [features]
