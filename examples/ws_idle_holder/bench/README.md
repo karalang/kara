@@ -103,6 +103,26 @@ bash examples/ws_idle_holder/bench/scripts/run_1m.sh \
     rust-1m.json
 ```
 
+**Before terminating the rig — pull the JSONs off-box.** This is a hard
+gate, not optional: once the instance is gone, the raw JSON artifacts
+are gone with it. The denormalized headline numbers survive in
+`REPORT.md`, but the full per-percentile / per-step structure (needed
+for audit, replay, or any later re-analysis) does not. Each `run_*m.sh`
+prints the absolute path of its output JSON as its last log line — use
+those paths in the `scp` step. Pattern (from your local shell, before
+`aws ec2 terminate-instances`):
+
+```sh
+# Pull both runs into the local repo (paths shown by run_*m.sh log tail):
+scp ec2-user@<rig>:/path/to/kara-1m.json     docs/investigations/demo1_m3_1m.kara.json
+scp ec2-user@<rig>:/path/to/rust-1m.json     docs/investigations/demo1_m3_1m.rust.json
+# (At 2M, rename target files to *_2m.* — same pattern.)
+```
+
+The script tail emits a `>>> BEFORE TERMINATING` reminder block as a
+backstop; treat the JSON-off-box step as a peer to "ship the commit"
+in the per-comparator close-out flow.
+
 Key flags (`--help` for all): `-n/--connections`, `--concurrency`
 (in-flight handshake cap), `--churn-rounds` (0 = off), `--churn-fraction`,
 `--hold-secs`, `--connect-timeout-ms` (per-connection deadline so a stuck

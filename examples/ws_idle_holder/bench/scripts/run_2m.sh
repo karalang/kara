@@ -83,6 +83,7 @@ echo
 echo
 echo "[run_2m] complete at : $(date -u +%FT%TZ)"
 echo "[run_2m] JSON written: $OUTPUT"
+echo "[run_2m] absolute    : $(cd "$(dirname "$OUTPUT")" && pwd)/$(basename "$OUTPUT")"
 
 # Post-run diagnostic: any SYN flood / cookie messages? If yes the
 # listen-backlog is being saturated and the connect-tail latencies are
@@ -96,3 +97,9 @@ if command -v dmesg >/dev/null 2>&1; then
         sudo dmesg | tail -20 || true
     fi
 fi
+
+echo
+echo "[run_2m] >>> BEFORE TERMINATING THIS INSTANCE: scp the JSON above"
+echo "[run_2m] >>> off-box to docs/investigations/ in the local repo."
+echo "[run_2m] >>> Once the rig is gone, the raw JSON is gone — only the"
+echo "[run_2m] >>> denormalized numbers in REPORT.md survive."
