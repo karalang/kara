@@ -842,13 +842,107 @@ impl<'ctx> super::Codegen<'ctx> {
     /// return `Result`, not an `fd: -1` sentinel). On `fd >= 0` returns
     /// `Ok` with the fd zero-extended into payload word 0 (the seeded
     /// single-`i32` struct's reconstruction truncates it back at the
-    /// destructure); on `fd < 0` returns `Err(<err_enum>.<err_variant>(-1))`
-    /// — a 2-word enum `{tag, i32}` packed into Result payload words 0/1.
-    /// The `-1` errno is the v1 information content (the bind / accept /
-    /// connect FFIs return a bare `-1`, not `-errno`); enriching the FFIs to
-    /// surface the real errno is a follow-on. `T`'s identity comes from the
-    /// call's typechecker-resolved Result type, so this helper need not know
+    /// destructure); on `fd < 0` returns `Err(E)` — a 2-word enum
+    /// `{tag, i32}` packed into Result payload words 0/1.
+    ///
+    /// **Cause decoding (phase-8 line 74).** The negative `fd` is a
+    /// Kāra-stable error code from `net_construct_error_code` (runtime):
+    /// `-2` → `AddrInUse`, `-3` → `ConnectionRefused`, `-4` →
+    /// `PermissionDenied` (fieldless variants), and any other code →
+    /// `err_variant_name` (the caller-supplied default — `Other` for the
+    /// TCP surface, `Protocol` for TLS) carrying the code in its `i32`
+    /// payload. The named-variant mapping is applied only when the target
+    /// enum declares those variants (`TcpError` / `TlsError` do), so the
+    /// helper degrades to "always the default variant" for any future
+    /// caller whose enum lacks them. `T`'s identity comes from the call's
+    /// typechecker-resolved Result type, so this helper need not know
     /// which single-fd struct it is wrapping.
+    /// Decode the runtime's stable network-construction error code (`fd`,
+    /// negative in this context) into the `(variant_tag, payload)` pair for
+    /// an `Err(E)` aggregate (phase-8 line 74). Named causes map `-2 →
+    /// AddrInUse`, `-3 → ConnectionRefused`, `-4 → PermissionDenied`
+    /// (fieldless variants, when `err_enum_name` declares them) via a
+    /// `select` chain; every other code maps to `default_variant_name`
+    /// (`Other` for the TCP surface, `Protocol` for TLS) carrying the code
+    /// sign-extended into the payload word (meaningful for the default
+    /// variant, unread for the fieldless named ones). Shared by
+    /// [`Self::build_fd_construct_result`] and
+    /// `build_tls_listener_construct_result` so every network-construct Err
+    /// arm classifies identically. Must be called with the builder
+    /// positioned at the Err block (it emits the compares/selects inline).
+    pub(super) fn classify_construct_err(
+        &mut self,
+        fd: inkwell::values::IntValue<'ctx>,
+        err_enum_name: &str,
+        default_variant_name: &str,
+        label_prefix: &str,
+    ) -> (
+        inkwell::values::IntValue<'ctx>,
+        inkwell::values::IntValue<'ctx>,
+    ) {
+        let i64_ty = self.context.i64_type();
+        let err_layout = self
+            .enum_layouts
+            .get(err_enum_name)
+            .unwrap_or_else(|| panic!("{err_enum_name} layout seeded"));
+        let default_tag = *err_layout
+            .tags
+            .get(default_variant_name)
+            .unwrap_or_else(|| panic!("{err_enum_name}.{default_variant_name} tag seeded"));
+        // Copy the named-cause tags out so the `self.enum_layouts` borrow
+        // ends before the builder calls below.
+        let named = [
+            (
+                -2i64,
+                err_layout.tags.get("AddrInUse").copied(),
+                "addr_in_use",
+            ),
+            (
+                -3i64,
+                err_layout.tags.get("ConnectionRefused").copied(),
+                "conn_refused",
+            ),
+            (
+                -4i64,
+                err_layout.tags.get("PermissionDenied").copied(),
+                "perm_denied",
+            ),
+        ];
+
+        let i32_ty = fd.get_type();
+        // Start from the default variant tag and wrap a `select` for each
+        // named cause the target enum declares. Codes are mutually
+        // exclusive, so chain order is immaterial.
+        let mut variant_tag_val = i64_ty.const_int(default_tag, false);
+        for (code, tag_opt, name) in named {
+            let Some(tag) = tag_opt else { continue };
+            let is_cause = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    fd,
+                    i32_ty.const_int(code as u64, true),
+                    &format!("{label_prefix}.err.is_{name}"),
+                )
+                .unwrap();
+            variant_tag_val = self
+                .builder
+                .build_select(
+                    is_cause,
+                    i64_ty.const_int(tag, false),
+                    variant_tag_val,
+                    &format!("{label_prefix}.err.variant_tag.{name}"),
+                )
+                .unwrap()
+                .into_int_value();
+        }
+        let payload = self
+            .builder
+            .build_int_s_extend(fd, i64_ty, &format!("{label_prefix}.err.code"))
+            .unwrap();
+        (variant_tag_val, payload)
+    }
+
     pub(super) fn build_fd_construct_result(
         &mut self,
         fd: inkwell::values::IntValue<'ctx>,
@@ -869,14 +963,6 @@ impl<'ctx> super::Codegen<'ctx> {
             .tags
             .get("Err")
             .expect("Result.Err tag seeded");
-
-        let err_layout = self.enum_layouts.get(err_enum_name).unwrap_or_else(|| {
-            panic!("{err_enum_name} layout seeded by seed_builtin_enum_layouts")
-        });
-        let err_variant_tag = *err_layout
-            .tags
-            .get(err_variant_name)
-            .unwrap_or_else(|| panic!("{err_enum_name}.{err_variant_name} tag seeded"));
 
         let fn_val = self
             .current_fn
@@ -925,11 +1011,18 @@ impl<'ctx> super::Codegen<'ctx> {
         let ok_end_bb = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(cont_bb).unwrap();
 
-        // ── Err arm: Result.Err(<err_enum>.<err_variant>(-1)). The 2-word
-        //    enum {tag, i32-payload} occupies Result payload words 0 and 1
-        //    (fields 1 and 2).
+        // ── Err arm: Result.Err(E). The 2-word enum {variant_tag, payload}
+        //    occupies Result payload words 0 and 1 (fields 1 and 2). The
+        //    variant tag is decoded from the runtime's stable negative
+        //    code (`fd`) via a select chain: each named code maps to its
+        //    fieldless variant, every other code to the default variant
+        //    (`err_variant_tag`). The payload word carries the code
+        //    sign-extended to i64 — meaningful for the default `Other` /
+        //    `Protocol(code)` variant and simply unread for the fieldless
+        //    named variants (their `field_counts` is 0).
         self.builder.position_at_end(err_bb);
-        let neg_one = i64_ty.const_int((-1i64) as u64, false);
+        let (variant_tag_val, payload) =
+            self.classify_construct_err(fd, err_enum_name, err_variant_name, label_prefix);
         let mut err_agg = result_ty.get_undef();
         err_agg = self
             .builder
@@ -945,7 +1038,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_insert_value(
                 err_agg,
-                i64_ty.const_int(err_variant_tag, false),
+                variant_tag_val,
                 1,
                 &format!("{label_prefix}.err.variant_tag"),
             )
@@ -953,7 +1046,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_struct_value();
         err_agg = self
             .builder
-            .build_insert_value(err_agg, neg_one, 2, &format!("{label_prefix}.err.payload"))
+            .build_insert_value(err_agg, payload, 2, &format!("{label_prefix}.err.payload"))
             .unwrap()
             .into_struct_value();
         let err_end_bb = self.builder.get_insert_block().unwrap();

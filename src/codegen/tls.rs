@@ -137,15 +137,6 @@ impl<'ctx> super::Codegen<'ctx> {
             .tags
             .get("Err")
             .expect("Result.Err tag seeded");
-        let tls_err_layout = self
-            .enum_layouts
-            .get("TlsError")
-            .expect("TlsError layout seeded by seed_builtin_enum_layouts");
-        let protocol_tag = *tls_err_layout
-            .tags
-            .get("Protocol")
-            .expect("TlsError.Protocol tag seeded");
-
         let fn_val = self
             .current_fn
             .ok_or_else(|| "tls bind Result wrapping outside fn".to_string())?;
@@ -200,7 +191,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let ok_end_bb = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(cont_bb).unwrap();
 
-        // ── Err: free the config (null-safe), then Err(TlsError.Protocol(-1)).
+        // ── Err: free the config (null-safe), then classify the stable
+        //    code into a named TlsError variant (AddrInUse etc. when the
+        //    delegated `karac_runtime_tcp_bind` reports them) or the
+        //    `Protocol` default — phase-8 line 74, via the shared
+        //    `classify_construct_err` so the TLS listener bind matches the
+        //    plain-TCP / TLS-connect classification exactly.
         self.builder.position_at_end(err_bb);
         let free_fn = self
             .module
@@ -209,7 +205,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(free_fn, &[config_ptr.into()], "tls.bind.err.config_free")
             .expect("call karac_runtime_tls_config_free");
-        let neg_one = i64_ty.const_int((-1i64) as u64, false);
+        let (variant_tag_val, payload) =
+            self.classify_construct_err(fd, "TlsError", "Protocol", "tls.bind");
         let mut err_agg = result_ty.get_undef();
         err_agg = self
             .builder
@@ -223,17 +220,12 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_struct_value();
         err_agg = self
             .builder
-            .build_insert_value(
-                err_agg,
-                i64_ty.const_int(protocol_tag, false),
-                1,
-                "tls.bind.err.variant_tag",
-            )
+            .build_insert_value(err_agg, variant_tag_val, 1, "tls.bind.err.variant_tag")
             .unwrap()
             .into_struct_value();
         err_agg = self
             .builder
-            .build_insert_value(err_agg, neg_one, 2, "tls.bind.err.payload")
+            .build_insert_value(err_agg, payload, 2, "tls.bind.err.payload")
             .unwrap()
             .into_struct_value();
         let err_end_bb = self.builder.get_insert_block().unwrap();

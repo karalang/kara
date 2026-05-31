@@ -975,6 +975,33 @@ const KARAC_RUNTIME_TCP_LISTEN_BACKLOG: i32 = 16384;
 #[cfg(not(target_os = "macos"))]
 const KARAC_RUNTIME_TCP_LISTEN_BACKLOG: i32 = 65535;
 
+/// Map an `io::Error` from a network *construction* syscall (bind /
+/// listen / accept / connect) to a Kāra-stable negative error code that
+/// codegen's `build_fd_construct_result` decodes into a named
+/// `TcpError` / `TlsError` variant (phase-8 line 74).
+///
+/// **Why a stable code rather than `-errno`.** Raw errno numbers are
+/// platform-specific (`EADDRINUSE` is 48 on macOS, 98 on Linux), so a
+/// `fd == -48` comparison baked into codegen would be wrong on Linux.
+/// `std::io::ErrorKind` already normalizes the OS errno into
+/// platform-independent names — we map those to a small fixed code
+/// space here, and codegen branches on the *code*, never on a raw
+/// errno. The catch-all is `-1` (decoded as `Other`, carrying the code
+/// so the i32 payload is still a usable signal).
+///
+/// Code space (negative so `fd >= 0` stays the success test):
+///   -1 → Other (catch-all)      -3 → ConnectionRefused (ECONNREFUSED)
+///   -2 → AddrInUse (EADDRINUSE)  -4 → PermissionDenied (EACCES)
+pub(crate) fn net_construct_error_code(e: &std::io::Error) -> i32 {
+    use std::io::ErrorKind;
+    match e.kind() {
+        ErrorKind::AddrInUse => -2,
+        ErrorKind::ConnectionRefused => -3,
+        ErrorKind::PermissionDenied => -4,
+        _ => -1,
+    }
+}
+
 /// Bind a TCP listener on `addr` (e.g. `"127.0.0.1:0"` for ephemeral-
 /// port binding). On success, print `BOUND_PORT=<port>` to stdout if
 /// the bound port was ephemeral (caller asked for `:0`), then return
@@ -1029,11 +1056,14 @@ pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i
     // SO_REUSEADDR mirrors what std::net::TcpListener::bind sets
     // implicitly on Unix; preserve that for parity with prior behavior.
     let _ = socket.set_reuse_address(true);
-    if socket.bind(&socket_addr.into()).is_err() {
-        return -1;
+    // `bind`/`listen` failures carry a meaningful cause (EADDRINUSE when
+    // the port is taken, EACCES for a privileged port) — surface it via
+    // the stable code so callers can branch (phase-8 line 74).
+    if let Err(e) = socket.bind(&socket_addr.into()) {
+        return net_construct_error_code(&e);
     }
-    if socket.listen(KARAC_RUNTIME_TCP_LISTEN_BACKLOG).is_err() {
-        return -1;
+    if let Err(e) = socket.listen(KARAC_RUNTIME_TCP_LISTEN_BACKLOG) {
+        return net_construct_error_code(&e);
     }
     let listener: std::net::TcpListener = socket.into();
     // Only print BOUND_PORT for ephemeral-port binds; a fixed-port
@@ -1074,7 +1104,7 @@ pub extern "C" fn karac_runtime_tcp_accept(listener_fd: i32) -> i32 {
     let listener = unsafe { std::net::TcpListener::from_raw_fd(listener_fd) };
     let result = match listener.accept() {
         Ok((conn, _addr)) => conn.into_raw_fd(),
-        Err(_) => -1,
+        Err(e) => net_construct_error_code(&e),
     };
     // Release ownership of the listener fd back to the caller.
     let _ = listener.into_raw_fd();
@@ -1096,9 +1126,12 @@ pub extern "C" fn karac_runtime_tcp_accept(listener_fd: i32) -> i32 {
 /// The fd is returned via `IntoRawFd::into_raw_fd` (no destructor —
 /// the caller owns the close on `TcpStream` drop).
 ///
-/// Returns a bare `-1` on every failure at v1; enriching to `-errno`
-/// (so callers can branch `ConnectionRefused` vs fatal) is phase-8
-/// line 74.
+/// On failure returns a Kāra-stable negative error code (see
+/// [`net_construct_error_code`]): `-3` for `ConnectionRefused` (the
+/// common "server not up yet" case a reconnect loop branches on), `-1`
+/// for any other cause. UTF-8 / parse failures return `-1` (no OS
+/// error to classify). Codegen's `build_fd_construct_result` decodes
+/// the code into the matching `TcpError` variant (phase-8 line 74).
 ///
 /// # Safety
 ///
@@ -1127,7 +1160,9 @@ pub unsafe extern "C" fn karac_runtime_tcp_connect(addr_ptr: *const u8, addr_len
     };
     match std::net::TcpStream::connect(socket_addr) {
         Ok(sock) => sock.into_raw_fd(),
-        Err(_) => -1,
+        // ECONNREFUSED (server not up) vs a fatal cause is exactly the
+        // distinction a reconnect loop needs — surface it (line 74).
+        Err(e) => net_construct_error_code(&e),
     }
 }
 
@@ -3376,21 +3411,80 @@ mod tests {
             drop(std::net::TcpStream::from_raw_fd(fd));
         }
 
-        // Closed port → connect fails with -1 (the v1 bare sentinel;
-        // line 74 enriches this to -errno).
+        // Closed port → ConnectionRefused stable code (-3) since the
+        // line-74 enrichment. (`net_construct_error_codes_surface_from_
+        // real_syscalls` is the dedicated pin; this asserts it here too so
+        // the connect path's failure classification stays covered.)
         let dead = b"127.0.0.1:1";
         let dead_fd = unsafe { karac_runtime_tcp_connect(dead.as_ptr(), dead.len() as i64) };
         assert_eq!(
-            dead_fd, -1,
-            "connect to a closed port should return -1, got {dead_fd}"
+            dead_fd, -3,
+            "connect to a closed port should classify ConnectionRefused (-3), got {dead_fd}"
         );
 
-        // Malformed address → -1 (parse failure).
+        // Malformed address → -1 (parse failure, no OS error to classify).
         let bad = b"not an address";
         let bad_fd = unsafe { karac_runtime_tcp_connect(bad.as_ptr(), bad.len() as i64) };
         assert_eq!(
             bad_fd, -1,
             "connect to an unparseable address should return -1"
+        );
+    }
+
+    /// `net_construct_error_code` maps platform-normalized
+    /// `io::ErrorKind`s to the stable codes codegen decodes (phase-8
+    /// line 74). Pins the contract the codegen-side `build_fd_construct_
+    /// result` select chain mirrors.
+    #[test]
+    fn net_construct_error_code_maps_io_error_kinds() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(
+            net_construct_error_code(&Error::from(ErrorKind::AddrInUse)),
+            -2
+        );
+        assert_eq!(
+            net_construct_error_code(&Error::from(ErrorKind::ConnectionRefused)),
+            -3
+        );
+        assert_eq!(
+            net_construct_error_code(&Error::from(ErrorKind::PermissionDenied)),
+            -4
+        );
+        // Any other cause → -1 (decoded as the default `Other` variant).
+        assert_eq!(
+            net_construct_error_code(&Error::from(ErrorKind::TimedOut)),
+            -1
+        );
+        assert_eq!(
+            net_construct_error_code(&Error::from(ErrorKind::ConnectionReset)),
+            -1
+        );
+    }
+
+    /// End-to-end: `karac_runtime_tcp_connect` to a closed port returns
+    /// the `ConnectionRefused` stable code (-3), and a live bind +
+    /// rebind on the same port returns the `AddrInUse` code (-2). Pins
+    /// the runtime half of line 74's cause classification.
+    #[cfg(unix)]
+    #[test]
+    fn net_construct_error_codes_surface_from_real_syscalls() {
+        // Closed port → ConnectionRefused (-3).
+        let dead = b"127.0.0.1:1";
+        let code = unsafe { karac_runtime_tcp_connect(dead.as_ptr(), dead.len() as i64) };
+        assert_eq!(
+            code, -3,
+            "connect to closed port should classify ConnectionRefused (-3)"
+        );
+
+        // Occupy a port, then bind the same port again → AddrInUse (-2).
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("harness listener bind failed");
+        let port = listener.local_addr().expect("local_addr").port();
+        let addr = format!("127.0.0.1:{port}");
+        let code = unsafe { karac_runtime_tcp_bind(addr.as_ptr(), addr.len() as i64) };
+        assert_eq!(
+            code, -2,
+            "rebind of an in-use port should classify AddrInUse (-2)"
         );
     }
 

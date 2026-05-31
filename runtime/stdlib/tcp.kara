@@ -74,16 +74,29 @@
 //     surfaces the case if it ever occurs). ECONNRESET / EPIPE
 //     also land here in v1.
 //
-// **Why not richer variants in v1?** Granular variants like
-// `WouldBlock` / `ConnectionReset` / `BrokenPipe` would require
-// per-errno codegen branching (currently 5+ targets per platform)
-// and the v1 demand from M1 / M2 milestone code is "can I retry"
-// vs "did something fatal happen" — which `Interrupted` vs
-// `Other` already answers. Richer variants are an additive,
-// non-breaking change when a real consumer needs them.
+// **Construction-error variants (phase-8 line 74).** `bind` / `accept`
+// / `connect` failures carry a cause a caller branches on, so the
+// `supervised_echo` kata (a server that picks another port on
+// `AddrInUse`, a client that retries on `ConnectionRefused`) drove
+// three named fieldless variants:
+//   - `AddrInUse` — EADDRINUSE; the port is already bound. The
+//     canonical "try another port" / "server already running" signal.
+//   - `ConnectionRefused` — ECONNREFUSED; nothing is listening at the
+//     target. The "server not up yet, retry with backoff" signal.
+//   - `PermissionDenied` — EACCES; e.g. binding a privileged port
+//     without the capability.
+// These are platform-independent: the runtime maps `io::ErrorKind`
+// (which already normalizes the OS errno) to a stable code that
+// codegen decodes — no `EADDRINUSE = 48`-on-macOS / `98`-on-Linux
+// number ever reaches user code. Read/write still use `Interrupted` /
+// `Other(errno)` (the retry-vs-fatal split from M1 / M2); any cause
+// without a named variant falls through to `Other`.
 enum TcpError {
     Interrupted,
     Other(i32),
+    AddrInUse,
+    ConnectionRefused,
+    PermissionDenied,
 }
 
 // `TcpListener` carries the bound listener's raw fd. Codegen

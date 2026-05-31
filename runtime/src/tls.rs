@@ -441,9 +441,13 @@ pub unsafe extern "C" fn karac_runtime_tls_client_connect(
     };
 
     // ── TCP connect + handshake ──
+    // The TCP-connect leg carries the same branchable causes as the
+    // plain-TCP client (ECONNREFUSED etc.) — surface them via the stable
+    // code (phase-8 line 74). Handshake failures below stay `-1`
+    // (decoded as the TlsError default variant, `Protocol`).
     let mut sock = match std::net::TcpStream::connect(socket_addr) {
         Ok(s) => s,
-        Err(_) => return -1,
+        Err(e) => return crate::event_loop::net_construct_error_code(&e),
     };
     let mut client_conn = match ClientConnection::new(Arc::new(client_config), server_name) {
         Ok(c) => c,

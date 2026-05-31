@@ -327,4 +327,70 @@ mod tcp_listener_tests {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+
+    /// Phase-8 line 74 — binding a port already held by another socket
+    /// surfaces the named `TcpError.AddrInUse` variant (the "port busy /
+    /// server already running" signal a port-picker branches on). The
+    /// harness occupies an ephemeral port with a `std::net` listener and
+    /// the kara binary binds the *same* port (interpolated into source),
+    /// expecting the AddrInUse arm. SO_REUSEADDR (set by the runtime
+    /// bind) still rejects a second *active* listener on the port, so
+    /// EADDRINUSE fires deterministically.
+    #[test]
+    fn test_tcp_bind_err_is_addr_in_use() {
+        let _guard = TCP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let rt = match runtime_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping: runtime static lib unavailable");
+                return;
+            }
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        // Harness occupies a port for the lifetime of the test.
+        let occupier =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("harness occupier bind failed");
+        let port = occupier.local_addr().expect("local_addr").port();
+
+        let src = format!(
+            "fn main() {{\n\
+             \x20   match TcpListener.bind(\"127.0.0.1:{port}\") {{\n\
+             \x20       Result.Ok(_) => {{ println(\"ok\"); }}\n\
+             \x20       Result.Err(TcpError.AddrInUse) => {{ println(\"addrinuse\"); }}\n\
+             \x20       Result.Err(TcpError.PermissionDenied) => {{ println(\"perm\"); }}\n\
+             \x20       Result.Err(_) => {{ println(\"other\"); }}\n\
+             \x20   }}\n\
+             }}\n"
+        );
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_tcp_addrinuse_{pid}_{nanos}"));
+
+        if let Err(e) = compile_and_link(&src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+        let out = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .output()
+            .expect("failed to run addr-in-use binary");
+        let _ = std::fs::remove_file(&exe_path);
+        drop(occupier);
+
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "binary exited non-success {:?} — stderr {:?}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr),
+        );
+        assert!(
+            stdout.contains("addrinuse") && !stdout.contains("other"),
+            "expected the AddrInUse arm binding an in-use port, got stdout {stdout:?}",
+        );
+    }
 }

@@ -825,4 +825,58 @@ mod tcp_stream_tests {
             "expected Err arm (printed 2), got stdout {stdout:?}",
         );
     }
+
+    /// Phase-8 line 74 — `TcpStream.connect` to a closed port surfaces the
+    /// *named* `TcpError.ConnectionRefused` variant (not the `Other`
+    /// catch-all), so a reconnect loop can branch on "server not up yet".
+    /// The fieldless variant matches cleanly end-to-end.
+    #[test]
+    fn test_tcp_stream_connect_err_is_connection_refused() {
+        let _guard = TCP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let src = r#"
+            fn main() {
+                match TcpStream.connect("127.0.0.1:1") {
+                    Result.Ok(_) => { println("ok"); }
+                    Result.Err(TcpError.ConnectionRefused) => { println("refused"); }
+                    Result.Err(TcpError.AddrInUse) => { println("addrinuse"); }
+                    Result.Err(TcpError.PermissionDenied) => { println("perm"); }
+                    Result.Err(_) => { println("other"); }
+                }
+            }
+        "#;
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_tcp_connect_refused_{pid}_{nanos}"));
+
+        if let Err(e) = compile_and_link(src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+        let output = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .output()
+            .expect("failed to run connect-refused binary");
+        let _ = std::fs::remove_file(&exe_path);
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "binary exited non-success {:?} — stderr {:?}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(
+            stdout.contains("refused") && !stdout.contains("other"),
+            "expected the ConnectionRefused arm, got stdout {stdout:?}",
+        );
+    }
 }

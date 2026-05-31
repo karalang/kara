@@ -3060,15 +3060,32 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut tags = HashMap::new();
             tags.insert("Interrupted".to_string(), 0u64);
             tags.insert("Other".to_string(), 1u64);
+            // Phase-8 line 74 — named construction-error variants
+            // (fieldless; the cause is the variant identity). Tags follow
+            // the stdlib `enum TcpError` declaration order after `Other`.
+            // `build_fd_construct_result` maps the runtime's stable
+            // negative code (-2/-3/-4) onto these tags.
+            tags.insert("AddrInUse".to_string(), 2u64);
+            tags.insert("ConnectionRefused".to_string(), 3u64);
+            tags.insert("PermissionDenied".to_string(), 4u64);
             let mut field_counts = HashMap::new();
             field_counts.insert("Interrupted".to_string(), 0usize);
             field_counts.insert("Other".to_string(), 1usize);
+            field_counts.insert("AddrInUse".to_string(), 0usize);
+            field_counts.insert("ConnectionRefused".to_string(), 0usize);
+            field_counts.insert("PermissionDenied".to_string(), 0usize);
             let mut field_word_offsets = HashMap::new();
             field_word_offsets.insert("Interrupted".to_string(), Vec::new());
             field_word_offsets.insert("Other".to_string(), vec![(0, 1usize)]);
+            field_word_offsets.insert("AddrInUse".to_string(), Vec::new());
+            field_word_offsets.insert("ConnectionRefused".to_string(), Vec::new());
+            field_word_offsets.insert("PermissionDenied".to_string(), Vec::new());
             let mut field_drop_kinds = HashMap::new();
             field_drop_kinds.insert("Interrupted".to_string(), Vec::new());
             field_drop_kinds.insert("Other".to_string(), vec![EnumDropKind::None]);
+            field_drop_kinds.insert("AddrInUse".to_string(), Vec::new());
+            field_drop_kinds.insert("ConnectionRefused".to_string(), Vec::new());
+            field_drop_kinds.insert("PermissionDenied".to_string(), Vec::new());
             self.enum_layouts.insert(
                 "TcpError".to_string(),
                 EnumLayout {
@@ -3096,18 +3113,33 @@ impl<'ctx> super::Codegen<'ctx> {
             tags.insert("Interrupted".to_string(), 0u64);
             tags.insert("Other".to_string(), 1u64);
             tags.insert("Protocol".to_string(), 2u64);
+            // Phase-8 line 74 — named construction-error variants, mirror
+            // of TcpError's (tags follow the stdlib decl order after
+            // Protocol). Fieldless; same -2/-3/-4 stable-code decoding.
+            tags.insert("AddrInUse".to_string(), 3u64);
+            tags.insert("ConnectionRefused".to_string(), 4u64);
+            tags.insert("PermissionDenied".to_string(), 5u64);
             let mut field_counts = HashMap::new();
             field_counts.insert("Interrupted".to_string(), 0usize);
             field_counts.insert("Other".to_string(), 1usize);
             field_counts.insert("Protocol".to_string(), 1usize);
+            field_counts.insert("AddrInUse".to_string(), 0usize);
+            field_counts.insert("ConnectionRefused".to_string(), 0usize);
+            field_counts.insert("PermissionDenied".to_string(), 0usize);
             let mut field_word_offsets = HashMap::new();
             field_word_offsets.insert("Interrupted".to_string(), Vec::new());
             field_word_offsets.insert("Other".to_string(), vec![(0, 1usize)]);
             field_word_offsets.insert("Protocol".to_string(), vec![(0, 1usize)]);
+            field_word_offsets.insert("AddrInUse".to_string(), Vec::new());
+            field_word_offsets.insert("ConnectionRefused".to_string(), Vec::new());
+            field_word_offsets.insert("PermissionDenied".to_string(), Vec::new());
             let mut field_drop_kinds = HashMap::new();
             field_drop_kinds.insert("Interrupted".to_string(), Vec::new());
             field_drop_kinds.insert("Other".to_string(), vec![EnumDropKind::None]);
             field_drop_kinds.insert("Protocol".to_string(), vec![EnumDropKind::None]);
+            field_drop_kinds.insert("AddrInUse".to_string(), Vec::new());
+            field_drop_kinds.insert("ConnectionRefused".to_string(), Vec::new());
+            field_drop_kinds.insert("PermissionDenied".to_string(), Vec::new());
             self.enum_layouts.insert(
                 "TlsError".to_string(),
                 EnumLayout {

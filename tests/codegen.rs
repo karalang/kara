@@ -4085,6 +4085,34 @@ fn main() {
         );
     }
 
+    /// Phase-8 line 74 — `build_fd_construct_result`'s Err arm decodes the
+    /// runtime's stable negative code into a named `TcpError` variant via
+    /// a `select` chain (`.err.is_conn_refused` / `.err.variant_tag.*`),
+    /// rather than packing a fixed `Other(-1)`. Pins the classification.
+    #[test]
+    fn test_ir_fd_construct_result_classifies_named_causes() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let s = TcpStream.connect("127.0.0.1:8080").unwrap();
+    println(s.fd);
+}
+"#,
+        );
+        let body = function_body(&ir, "main").expect("main body");
+        assert!(
+            body.contains("tcp.connect.err.is_conn_refused")
+                && body.contains("tcp.connect.err.is_addr_in_use"),
+            "Err arm should emit the cause-classification comparisons; body was:\n{}",
+            body
+        );
+        assert!(
+            body.contains("tcp.connect.err.variant_tag.conn_refused"),
+            "Err arm should select the variant tag per cause; body was:\n{}",
+            body
+        );
+    }
+
     #[test]
     fn test_ir_tcp_listener_drop_body_calls_tcp_close() {
         let ir = ir_for(

@@ -117,6 +117,16 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // (`send_text` / `recv_text` framing protocol).
     "TcpListener",
     "TcpStream",
+    // `TcpError` — the `Result[_, TcpError]` error type for `bind` /
+    // `accept` / `connect` / `read` / `write`. Scope-0 like its
+    // `TlsError` mirror (below) so user code can pattern-match its
+    // variants (`Interrupted` / `Other` / `AddrInUse` /
+    // `ConnectionRefused` / `PermissionDenied`) without an explicit
+    // import. (Added phase-8 line 74 — the named construction-cause
+    // variants made naming `TcpError.<variant>` in a `match` the common
+    // case; the earlier read/write surface only ever used `Err(_)`, so
+    // the missing scope-0 registration went unnoticed.)
+    "TcpError",
     "WebSocket",
     // Phase 6 line 236 slice 2 — TLS / HTTPS server-side surface.
     // `TlsListener` mirrors `TcpListener` (struct value carrying the

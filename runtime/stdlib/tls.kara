@@ -95,6 +95,13 @@ enum TlsError {
     Interrupted,
     Other(i32),
     Protocol(i32),
+    // Construction-error variants (phase-8 line 74) — mirror of
+    // `TcpError`'s. The TCP-connect leg of `TlsStream.connect` and the
+    // bind leg (delegated to `karac_runtime_tcp_bind`) surface these;
+    // rustls handshake / protocol faults remain `Protocol(code)`.
+    AddrInUse,
+    ConnectionRefused,
+    PermissionDenied,
 }
 
 // Opaque marker type — see file-header `TlsConfig opacity` block.
