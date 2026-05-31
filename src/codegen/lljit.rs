@@ -13,6 +13,7 @@
 
 use std::ffi::{c_char, CStr, CString};
 use std::ptr;
+use std::sync::OnceLock;
 
 use llvm_sys::core::{
     LLVMCreateMemoryBufferWithMemoryRange, LLVMDisposeMessage, LLVMSetDataLayout, LLVMSetTarget,
@@ -35,10 +36,35 @@ use llvm_sys::orc2::{
 };
 use llvm_sys::prelude::{LLVMContextRef, LLVMModuleRef};
 
+/// Initialize the native target exactly once, process-wide.
+///
+/// The native-target init touches LLVM global registries that are not
+/// safe to mutate from multiple threads concurrently; `OnceLock` both
+/// serializes the first call and caches its outcome so subsequent
+/// engine creations (on any thread) are a cheap clone of the result.
+fn ensure_native_target_initialized() -> Result<(), String> {
+    static INIT: OnceLock<Result<(), String>> = OnceLock::new();
+    INIT.get_or_init(|| {
+        inkwell::targets::Target::initialize_native(
+            &inkwell::targets::InitializationConfig::default(),
+        )
+        .map_err(|e| format!("init native target: {}", e))
+    })
+    .clone()
+}
+
 /// RAII wrapper around an LLJIT instance + its thread-safe context.
 ///
 /// Both handles are disposed by `Drop`. The engine is keyed against
 /// the native target; `Target::initialize_native` is invoked at `new`.
+///
+/// Holds raw LLVM pointers, so it is intentionally neither `Send` nor
+/// `Sync` — an engine is owned and used by a single thread. Concurrency
+/// is supported by giving each thread its own engine (the native-target
+/// init they share is funnelled through [`ensure_native_target_initialized`]);
+/// the JIT'd code may itself spawn threads (e.g. `par {}` blocks), which
+/// is independent of engine ownership because worker threads run compiled
+/// function pointers and never touch the engine handle.
 pub struct LLJITEngine {
     ts_ctx: LLVMOrcThreadSafeContextRef,
     jit: LLVMOrcLLJITRef,
@@ -49,10 +75,16 @@ impl LLJITEngine {
         // inkwell shares the same llvm-sys library this crate links;
         // calling its target-init keeps a single ownership story for
         // LLVM globals.
-        inkwell::targets::Target::initialize_native(
-            &inkwell::targets::InitializationConfig::default(),
-        )
-        .map_err(|e| format!("init native target: {}", e))?;
+        //
+        // W5 (threading): `Target::initialize_native` mutates LLVM's
+        // global target registries. Calling it from two threads at once
+        // (e.g. each thread building its own engine) races that global
+        // state. Funnel it through a `OnceLock` so the init runs exactly
+        // once process-wide regardless of how many engines are created
+        // concurrently; later callers see the cached result. `get_or_init`
+        // blocks competing threads until the first init completes, which
+        // is the serialization the underlying C API needs.
+        ensure_native_target_initialized()?;
 
         unsafe {
             // `LLVMOrcCreateLLJIT` consumes the builder regardless of
@@ -277,11 +309,14 @@ impl Drop for LLJITEngine {
         unsafe {
             if !self.jit.is_null() {
                 // Returns an error if any module materialization fails
-                // during teardown; W1 ignores (we can't propagate from
-                // Drop). W2 logs to stderr via a panic-hook-aware path.
+                // during teardown. We can't propagate a `Result` from
+                // `Drop`, but swallowing the failure silently hides real
+                // problems (W5 error-handling: teardown failures must be
+                // observable), so surface it on stderr. `consume_error`
+                // reads the message and frees both the error and message.
                 let err = LLVMOrcDisposeLLJIT(self.jit);
                 if !err.is_null() {
-                    LLVMDisposeErrorMessage(LLVMGetErrorMessage(err));
+                    eprintln!("LLJITEngine::drop: dispose error: {}", consume_error(err));
                 }
             }
             if !self.ts_ctx.is_null() {

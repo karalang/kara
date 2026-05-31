@@ -238,3 +238,108 @@ fn lljit_w2_many_trackers_one_engine() {
         tracker.remove().expect("tracker.remove");
     }
 }
+
+// ── W5 — error handling + threading edge cases ────────────────────────
+// W5's scope per the L581 milestone list: harden the wrapper against
+// failure modes (malformed IR, missing symbols, post-error reuse) and
+// prove the thread-safety the type system advertises. The engine holds
+// raw LLVM pointers so it is `!Send + !Sync` — concurrency means one
+// engine per thread, all racing the process-wide native-target init.
+
+/// W5 error-handling: garbage IR must surface as a clean `Err`, not a
+/// panic, abort, or crash. Exercises the `LLVMParseIRInContext` failure
+/// path in `parse_ir_into_tsm` (the memory buffer is consumed by the
+/// parser even on failure, so this also guards against a double-free /
+/// leak on the error edge).
+#[test]
+fn lljit_w5_malformed_ir_returns_err() {
+    let engine = LLJITEngine::new().expect("engine");
+    let result = engine.add_ir_module("this is definitely not valid LLVM IR {{{");
+    assert!(
+        result.is_err(),
+        "malformed IR must return Err, got {:?}",
+        result
+    );
+}
+
+/// W5 error-handling: looking up a name that was never defined must
+/// return `Err`, not address 0. A 0 address transmuted to a fn pointer
+/// and called is a null-deref crash, so a clean error here is
+/// load-bearing for the always-JIT dispatch path.
+#[test]
+fn lljit_w5_lookup_missing_symbol_returns_err() {
+    let engine = LLJITEngine::new().expect("engine");
+    engine
+        .add_ir_module(&ir("fn main() { let _x = 1; }"))
+        .expect("add module");
+    let result = engine.lookup_address("no_such_symbol_anywhere");
+    assert!(
+        result.is_err(),
+        "missing symbol lookup must return Err, got {:?}",
+        result
+    );
+}
+
+/// W5 error-handling: a failed `add_ir_module` (parse error) must not
+/// poison the engine — a subsequent valid module still installs, looks
+/// up, and runs. Guards against the LLVM gotcha where a failed parse
+/// leaves the shared context in a half-populated state that breaks the
+/// next module. If this regresses, `parse_ir_into_tsm` needs to parse
+/// into a throwaway context and only graft onto the engine's TS context
+/// on success.
+#[test]
+fn lljit_w5_engine_usable_after_parse_error() {
+    let engine = LLJITEngine::new().expect("engine");
+    assert!(
+        engine.add_ir_module("garbage ir @@@").is_err(),
+        "malformed IR should error"
+    );
+    engine
+        .add_ir_module(&ir("fn main() { let _x = 7; }"))
+        .expect("valid module installs after a prior parse error");
+    let addr = engine.lookup_address("main").expect("main lookup");
+    type Fn = unsafe extern "C" fn() -> i32;
+    let f: Fn = unsafe { std::mem::transmute(addr as usize) };
+    assert_eq!(unsafe { f() }, 0);
+}
+
+/// W5 threading: N threads each build + run + drop their own engine
+/// concurrently. They all race `LLJITEngine::new`'s native-target init,
+/// which `ensure_native_target_initialized`'s `OnceLock` serializes —
+/// the regression guard for that fix. Each engine is independent (its
+/// own JITDylib), so no cross-thread symbol sharing is involved; this
+/// isolates the global-init race. Pre-guard, concurrent
+/// `initialize_native` calls mutate LLVM's target registry from multiple
+/// threads with no synchronization.
+#[test]
+fn lljit_w5_concurrent_engines_across_threads() {
+    const THREADS: usize = 8;
+    // Deterministic compute (sum 0..100 = 4950) so each thread does real
+    // JIT work, but `main` still returns 0 — the assertion is "ran
+    // cleanly on every thread", which is the no-race contract.
+    let ir_text = ir("fn main() { \
+        let mut acc: i64 = 0; let mut i: i64 = 0; \
+        while i < 100 { acc = acc + i; i = i + 1; } \
+       }");
+
+    let handles: Vec<_> = (0..THREADS)
+        .map(|t| {
+            let ir_text = ir_text.clone();
+            std::thread::spawn(move || {
+                // Engine built inside the thread — it is `!Send` by
+                // design, so ownership never crosses the boundary.
+                let engine = LLJITEngine::new().expect("engine");
+                engine.add_ir_module(&ir_text).expect("add module");
+                let addr = engine.lookup_address("main").expect("main lookup");
+                type Fn = unsafe extern "C" fn() -> i32;
+                let f: Fn = unsafe { std::mem::transmute(addr as usize) };
+                let rc = unsafe { f() };
+                assert_eq!(rc, 0, "thread {t} main returned {rc}");
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().expect("worker thread panicked");
+    }
+}
