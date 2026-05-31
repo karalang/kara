@@ -35,6 +35,13 @@ use llvm_sys::orc2::{
     LLVMOrcResourceTrackerRemove, LLVMOrcThreadSafeContextGetContext, LLVMOrcThreadSafeContextRef,
 };
 use llvm_sys::prelude::{LLVMContextRef, LLVMModuleRef};
+use llvm_sys::target_machine::{
+    LLVMCodeGenOptLevel, LLVMCodeModel, LLVMCreateTargetMachine, LLVMDisposeTargetMachine,
+    LLVMGetTargetFromTriple, LLVMRelocMode, LLVMTargetMachineRef, LLVMTargetRef,
+};
+use llvm_sys::transforms::pass_builder::{
+    LLVMCreatePassBuilderOptions, LLVMDisposePassBuilderOptions, LLVMRunPasses,
+};
 
 /// Initialize the native target exactly once, process-wide.
 ///
@@ -237,9 +244,106 @@ impl LLJITEngine {
             if !triple_str.is_null() {
                 LLVMSetTarget(module, triple_str);
             }
+
+            // Run the coroutine-lowering pipeline before handing the module
+            // to LLJIT. CoroSplit is a *correctness* pass, not an
+            // optimization: a `presplitcoroutine` function (the A2
+            // network-async transform) is not a valid runnable function
+            // until split into its ramp/resume/destroy clones — the
+            // `llvm.coro.*` intrinsics are otherwise left unlowered and the
+            // JIT would materialize a no-op task (the bug-C failure class).
+            // The AOT path runs this inside `driver::apply_optimization_passes`;
+            // the JIT path bypasses that driver entirely and hands raw IR
+            // straight to `LLVMOrcLLJITAddLLVMIRModule`, so the same pass must
+            // run here. For the non-coroutine modules that are everything
+            // today this is a pure no-op — the coro passes only touch
+            // `presplitcoroutine` functions. A pass-run failure would
+            // otherwise be silent (un-split coroutine → no-op), so it is
+            // surfaced as a hard `Err`. See `phase-7-codegen.md` L591 +
+            // `driver.rs`.
+            self.run_coro_passes(module)?;
+
             // ThreadSafeModule takes ownership of the module — DO NOT
             // dispose the LLVMModuleRef separately.
             Ok(LLVMOrcCreateNewThreadSafeModule(module, self.ts_ctx))
+        }
+    }
+
+    /// Run the LLVM coroutine-lowering pipeline (`coro-early`, `coro-split`,
+    /// `coro-cleanup`) on a freshly parsed module before it is added to the
+    /// JIT. Kept in lockstep with the AOT pipeline in
+    /// `driver::apply_optimization_passes` — same pass string, run
+    /// unconditionally because coroutine splitting is a correctness
+    /// requirement, not an optimization.
+    ///
+    /// `LLVMRunPasses` needs a non-null `TargetMachine`; the JIT path has no
+    /// inkwell `TargetMachine` handy (the LLJIT owns its own internally and
+    /// does not expose it through the C API), so build a throwaway one from
+    /// the engine's own triple. The coro passes are target-independent
+    /// transforms, so a generic machine on the right triple is sufficient;
+    /// it is disposed before returning.
+    ///
+    /// `module` must be a valid `LLVMModuleRef` owned by this engine's
+    /// context and not yet handed to a `ThreadSafeModule` — the only caller
+    /// is `parse_ir_into_tsm`, which upholds that. FFI is localized to the
+    /// `unsafe` block, mirroring `lookup_address` / `parse_ir_into_tsm`.
+    fn run_coro_passes(&self, module: LLVMModuleRef) -> Result<(), String> {
+        unsafe {
+            let triple = LLVMOrcLLJITGetTripleString(self.jit);
+            if triple.is_null() {
+                return Err("LLJIT returned a null triple; cannot build a \
+                            target machine for the coro pass run"
+                    .to_string());
+            }
+
+            let mut target: LLVMTargetRef = ptr::null_mut();
+            let mut err_msg: *mut c_char = ptr::null_mut();
+            if LLVMGetTargetFromTriple(triple, &mut target, &mut err_msg) != 0 {
+                let msg = if err_msg.is_null() {
+                    "LLVMGetTargetFromTriple failed (no message)".to_string()
+                } else {
+                    let s = CStr::from_ptr(err_msg).to_string_lossy().into_owned();
+                    LLVMDisposeMessage(err_msg);
+                    s
+                };
+                return Err(format!("coro pass target lookup failed: {msg}"));
+            }
+
+            // Empty CPU + features: coro lowering is target-independent, so
+            // the generic baseline for the triple is fine. PIC/Default mirror
+            // the AOT machine's reloc/code-model so the throwaway machine
+            // cannot disagree with the module's stamped layout.
+            let empty = CString::new("").unwrap();
+            let tm: LLVMTargetMachineRef = LLVMCreateTargetMachine(
+                target,
+                triple,
+                empty.as_ptr(),
+                empty.as_ptr(),
+                LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault,
+                LLVMRelocMode::LLVMRelocPIC,
+                LLVMCodeModel::LLVMCodeModelDefault,
+            );
+            if tm.is_null() {
+                return Err("LLVMCreateTargetMachine returned null; cannot run \
+                            the coro pass pipeline"
+                    .to_string());
+            }
+
+            let passes = CString::new("coro-early,coro-split,coro-cleanup").unwrap();
+            let opts = LLVMCreatePassBuilderOptions();
+            let run_err = LLVMRunPasses(module, passes.as_ptr(), tm, opts);
+            LLVMDisposePassBuilderOptions(opts);
+            LLVMDisposeTargetMachine(tm);
+
+            if !run_err.is_null() {
+                return Err(format!(
+                    "LLVM coroutine lowering passes failed on the JIT path: {}. \
+                     This is a correctness pass (CoroSplit) — it cannot be \
+                     skipped for `presplitcoroutine` functions.",
+                    consume_error(run_err)
+                ));
+            }
+            Ok(())
         }
     }
 

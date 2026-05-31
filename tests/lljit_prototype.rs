@@ -343,3 +343,73 @@ fn lljit_w5_concurrent_engines_across_threads() {
         h.join().expect("worker thread panicked");
     }
 }
+
+/// A minimal switch-resumed coroutine in the LLVM 18 (opaque-pointer)
+/// coroutine ABI. The `@mycoro` ramp is marked `presplitcoroutine`, so it
+/// is NOT a valid runnable function until `coro-split` rewrites it — the
+/// `llvm.coro.*` intrinsics survive to instruction selection otherwise and
+/// the function cannot be materialized. `@malloc` / `@free` resolve via the
+/// process-symbol generator like any other libc call.
+fn ir_presplit_coroutine() -> &'static str {
+    r#"
+declare ptr @malloc(i64)
+declare void @free(ptr)
+declare token @llvm.coro.id(i32, ptr, ptr, ptr)
+declare i64 @llvm.coro.size.i64()
+declare ptr @llvm.coro.begin(token, ptr)
+declare i8 @llvm.coro.suspend(token, i1)
+declare ptr @llvm.coro.free(token, ptr)
+declare i1 @llvm.coro.end(ptr, i1, token)
+
+define ptr @mycoro() presplitcoroutine {
+entry:
+  %id = call token @llvm.coro.id(i32 0, ptr null, ptr null, ptr null)
+  %size = call i64 @llvm.coro.size.i64()
+  %alloc = call ptr @malloc(i64 %size)
+  %hdl = call ptr @llvm.coro.begin(token %id, ptr %alloc)
+  br label %susp
+susp:
+  %s = call i8 @llvm.coro.suspend(token none, i1 false)
+  switch i8 %s, label %suspend [i8 0, label %resume
+                                i8 1, label %cleanup]
+resume:
+  br label %susp
+cleanup:
+  %mem = call ptr @llvm.coro.free(token %id, ptr %hdl)
+  call void @free(ptr %mem)
+  br label %suspend
+suspend:
+  %u = call i1 @llvm.coro.end(ptr %hdl, i1 false, token none)
+  ret ptr %hdl
+}
+"#
+}
+
+/// Regression for phase-7-codegen.md L591: the JIT path must run the coro
+/// correctness passes before installing a module. Without the
+/// `coro-early,coro-split,coro-cleanup` run inside `parse_ir_into_tsm`, the
+/// `presplitcoroutine` ramp keeps its un-lowered `llvm.coro.*` intrinsics
+/// and LLJIT cannot materialize it — `lookup_address` (which forces
+/// materialization) fails. With the fix, CoroSplit turns the ramp into an
+/// ordinary function that returns a non-null coroutine handle.
+///
+/// (The suspended frame is intentionally leaked — resuming/destroying it
+/// would require calling the ABI resume/destroy clones by raw offset, which
+/// adds no coverage of the seam under test. lljit_prototype tests are not
+/// run under ASAN.)
+#[test]
+fn lljit_coro_split_runs_on_jit_path() {
+    let engine = LLJITEngine::new().expect("engine");
+    engine
+        .add_ir_module(ir_presplit_coroutine())
+        .expect("add coroutine module (coro passes must run during install)");
+    let addr = engine
+        .lookup_address("mycoro")
+        .expect("lookup mycoro — fails if coro-split did not run (intrinsics unlowered)");
+    let ramp: extern "C" fn() -> *mut std::ffi::c_void = unsafe { std::mem::transmute(addr) };
+    let handle = ramp();
+    assert!(
+        !handle.is_null(),
+        "split coroutine ramp must return a non-null frame handle"
+    );
+}
