@@ -26,7 +26,8 @@
 
 use std::net::SocketAddr;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -80,6 +81,24 @@ struct Args {
     /// the path to 100K+ on a single box without root to widen the
     /// range. See README § "Beating the loopback port cap".
     source_ips: Vec<String>,
+    /// Active-traffic phase: after the N idle connections are established,
+    /// drive request/response echo on this many of them for
+    /// `active_secs`, measuring round-trip latency and per-conn memory
+    /// under mixed load. 0 = skip the active phase (pure idle hold).
+    active_conns: usize,
+    /// Duration of the active-traffic phase, seconds.
+    active_secs: u64,
+    /// Payload bytes per active-traffic message.
+    msg_bytes: usize,
+    /// Messages per second per active connection (the decided profile is
+    /// 1 msg/sec — a chat-app baseline).
+    msg_rate: f64,
+    /// Handshake-QPS (reconnect-storm) mode: when > 0, skip the idle hold
+    /// and instead open+immediately-close connections as fast as
+    /// `concurrency` allows for this many seconds, reporting sustained
+    /// full-TLS+WS handshakes/sec. Mutually exclusive with the idle-hold
+    /// flow.
+    handshake_qps_secs: u64,
 }
 
 impl Default for Args {
@@ -97,6 +116,11 @@ impl Default for Args {
             connect_timeout_ms: 10_000,
             server_name: "localhost".to_string(),
             source_ips: Vec::new(),
+            active_conns: 0,
+            active_secs: 10,
+            msg_bytes: 128,
+            msg_rate: 1.0,
+            handshake_qps_secs: 0,
         }
     }
 }
@@ -133,6 +157,17 @@ OPTIONS:
                             ephemeral-port pool, so N IPs raise the
                             ceiling past the ~28K single-tuple port cap.
                             e.g. 127.0.0.2,127.0.0.3,127.0.0.4,127.0.0.5
+
+ACTIVE-TRAFFIC (after the idle hold; measures mixed-load density + latency):
+  --active-conns <N>        of the held conns, drive echo on this many  (default 0=off)
+  --active-secs <N>         duration of the active phase                (default 10)
+  --msg-bytes <N>           payload bytes per message                   (default 128)
+  --msg-rate <f>            messages/sec per active connection          (default 1.0)
+
+HANDSHAKE-QPS (reconnect-storm; mutually exclusive with the idle hold):
+  --handshake-qps-secs <N>  open+close as fast as --concurrency allows for N
+                            seconds; report sustained TLS+WS handshakes/sec  (default 0=off)
+
   -h, --help                this help
 "
 }
@@ -161,6 +196,11 @@ fn parse_args() -> Result<Args, BoxErr> {
                     .filter(|s| !s.is_empty())
                     .collect()
             }
+            "--active-conns" => a.active_conns = next()?.parse()?,
+            "--active-secs" => a.active_secs = next()?.parse()?,
+            "--msg-bytes" => a.msg_bytes = next()?.parse()?,
+            "--msg-rate" => a.msg_rate = next()?.parse()?,
+            "--handshake-qps-secs" => a.handshake_qps_secs = next()?.parse()?,
             "-h" | "--help" => {
                 eprint!("{}", usage());
                 std::process::exit(0);
@@ -176,6 +216,26 @@ fn parse_args() -> Result<Args, BoxErr> {
     }
     if a.concurrency == 0 {
         return Err("--concurrency must be > 0".into());
+    }
+    if a.handshake_qps_secs > 0 && a.active_conns > 0 {
+        return Err(
+            "--handshake-qps-secs and --active-conns are mutually exclusive \
+                    (one skips the idle hold, the other runs on top of it)"
+                .into(),
+        );
+    }
+    // The Kāra demo's `recv_text` reads into a fixed 4096-byte buffer, so a
+    // larger echo payload would be truncated server-side and the round-trip
+    // read would desync. Cap to keep both impls honest at the same size.
+    if a.active_conns > 0 && a.msg_bytes > 4096 {
+        return Err(format!(
+            "--msg-bytes {} exceeds the server's 4096-byte recv buffer",
+            a.msg_bytes
+        )
+        .into());
+    }
+    if a.active_conns > 0 && a.msg_rate <= 0.0 {
+        return Err("--msg-rate must be > 0 when --active-conns is set".into());
     }
     // Validate source IPs up front so a typo fails fast instead of
     // surfacing as a per-connection bind error mid-run.
@@ -374,6 +434,240 @@ async fn open_batch(
     (streams, latencies, failed, errors)
 }
 
+// ── WebSocket client framing (active-traffic mode) ───────────────────
+//
+// The harness rolls its own RFC 6455 framing — it never pulled in
+// tungstenite. For active traffic we only need to send text frames and
+// read the echoed frame back. Client→server frames MUST be masked (RFC
+// 6455 §5.3); server→client frames arrive unmasked. The masking key need
+// not be cryptographically random on a loopback rig — the server XORs
+// with whatever key the frame carries — so a fixed key keeps the harness
+// RNG-free.
+const WS_MASK_KEY: [u8; 4] = [0x21, 0x9a, 0x4c, 0x7e];
+
+/// Write a single masked WebSocket text frame carrying `payload`.
+async fn ws_send_text_masked(stream: &mut Tls, payload: &[u8]) -> Result<(), BoxErr> {
+    let mut frame: Vec<u8> = Vec::with_capacity(payload.len() + 14);
+    frame.push(0x81); // FIN + text opcode (0x1)
+    let len = payload.len();
+    if len < 126 {
+        frame.push(0x80 | (len as u8)); // MASK bit + 7-bit length
+    } else if len <= u16::MAX as usize {
+        frame.push(0x80 | 126);
+        frame.extend_from_slice(&(len as u16).to_be_bytes());
+    } else {
+        frame.push(0x80 | 127);
+        frame.extend_from_slice(&(len as u64).to_be_bytes());
+    }
+    frame.extend_from_slice(&WS_MASK_KEY);
+    for (i, b) in payload.iter().enumerate() {
+        frame.push(b ^ WS_MASK_KEY[i % 4]);
+    }
+    stream.write_all(&frame).await?;
+    stream.flush().await?;
+    Ok(())
+}
+
+/// Read one WebSocket data frame from the server and return its payload.
+/// Control frames (ping/pong) are skipped; a close frame is an error.
+/// Servers don't mask, but the unmask path is honored defensively.
+async fn ws_read_frame(stream: &mut Tls) -> Result<Vec<u8>, BoxErr> {
+    loop {
+        let mut hdr = [0u8; 2];
+        stream.read_exact(&mut hdr).await?;
+        let opcode = hdr[0] & 0x0f;
+        let masked = (hdr[1] & 0x80) != 0;
+        let payload_len = match hdr[1] & 0x7f {
+            126 => {
+                let mut l = [0u8; 2];
+                stream.read_exact(&mut l).await?;
+                u16::from_be_bytes(l) as usize
+            }
+            127 => {
+                let mut l = [0u8; 8];
+                stream.read_exact(&mut l).await?;
+                u64::from_be_bytes(l) as usize
+            }
+            n => n as usize,
+        };
+        let mut mask = [0u8; 4];
+        if masked {
+            stream.read_exact(&mut mask).await?;
+        }
+        let mut payload = vec![0u8; payload_len];
+        if payload_len > 0 {
+            stream.read_exact(&mut payload).await?;
+        }
+        if masked {
+            for (i, b) in payload.iter_mut().enumerate() {
+                *b ^= mask[i % 4];
+            }
+        }
+        match opcode {
+            0x1 | 0x2 => return Ok(payload), // text / binary
+            0x8 => return Err("server sent a close frame".into()), // close
+            0x9 | 0xa => continue,           // ping / pong — skip
+            other => return Err(format!("unexpected ws opcode {other:#x}").into()),
+        }
+    }
+}
+
+// ── Active-traffic phase ─────────────────────────────────────────────
+
+/// Aggregated result of the active-traffic phase.
+struct ActiveOutcome {
+    streams: Vec<Tls>,
+    roundtrip_ms: Vec<f64>,
+    sent: usize,
+    echoed: usize,
+    failed: usize,
+}
+
+/// Drive request/response echo on the given `active` streams for
+/// `duration`: each connection sends a `msg_bytes` text frame every
+/// `1/msg_rate` seconds and awaits the echo, recording the round-trip.
+/// The streams are returned (kept alive) so the caller can hold them for
+/// the post-phase RSS read and a clean teardown.
+async fn run_active_traffic(
+    active: Vec<Tls>,
+    msg_bytes: usize,
+    msg_rate: f64,
+    duration: Duration,
+) -> ActiveOutcome {
+    let payload: Arc<Vec<u8>> = Arc::new(vec![b'k'; msg_bytes]);
+    let interval = Duration::from_secs_f64(1.0 / msg_rate);
+    let deadline = Instant::now() + duration;
+
+    let mut handles = Vec::with_capacity(active.len());
+    for mut stream in active.into_iter() {
+        let payload = payload.clone();
+        handles.push(tokio::spawn(async move {
+            let mut lats: Vec<f64> = Vec::new();
+            let (mut sent, mut echoed, mut failed) = (0usize, 0usize, 0usize);
+            let mut tick = tokio::time::interval(interval);
+            // Don't fire a burst to catch up if a tick is missed — pace it.
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                if Instant::now() >= deadline {
+                    break;
+                }
+                let t0 = Instant::now();
+                sent += 1;
+                if ws_send_text_masked(&mut stream, &payload).await.is_err() {
+                    failed += 1;
+                    break;
+                }
+                match timeout(Duration::from_secs(10), ws_read_frame(&mut stream)).await {
+                    Ok(Ok(_)) => {
+                        echoed += 1;
+                        lats.push(t0.elapsed().as_secs_f64() * 1000.0);
+                    }
+                    _ => {
+                        failed += 1;
+                        break;
+                    }
+                }
+            }
+            (stream, lats, sent, echoed, failed)
+        }));
+    }
+
+    let mut out = ActiveOutcome {
+        streams: Vec::with_capacity(handles.len()),
+        roundtrip_ms: Vec::new(),
+        sent: 0,
+        echoed: 0,
+        failed: 0,
+    };
+    for h in handles {
+        match h.await {
+            Ok((stream, lats, sent, echoed, failed)) => {
+                out.streams.push(stream);
+                out.roundtrip_ms.extend(lats);
+                out.sent += sent;
+                out.echoed += echoed;
+                out.failed += failed;
+            }
+            Err(_) => out.failed += 1, // task panicked; the stream is gone
+        }
+    }
+    out
+}
+
+// ── Handshake-QPS (reconnect-storm) mode ─────────────────────────────
+
+/// For `duration`, open+immediately-close connections as fast as
+/// `concurrency` allows, counting completed full TLS+WS handshakes.
+/// Returns (completed, failed, per-handshake latencies in ms).
+#[allow(clippy::too_many_arguments)]
+async fn run_handshake_qps(
+    connector: &TlsConnector,
+    addr: &str,
+    server_name: &ServerName<'static>,
+    concurrency: usize,
+    connect_timeout: Duration,
+    source_ips: &[String],
+    duration: Duration,
+) -> (usize, usize, Vec<f64>) {
+    let deadline = Instant::now() + duration;
+    let sem = Arc::new(Semaphore::new(concurrency));
+    let completed = Arc::new(AtomicUsize::new(0));
+    let failed = Arc::new(AtomicUsize::new(0));
+    let lats: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
+    let mut idx = 0usize;
+
+    // Spawn detached tasks bounded by the semaphore. Tasks update the
+    // atomics + push their latency, so we don't retain a handle each (which
+    // would grow unbounded over a long, high-QPS window).
+    while Instant::now() < deadline {
+        let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
+        let connector = connector.clone();
+        let addr = addr.to_string();
+        let sni = server_name.clone();
+        let src_ip = if source_ips.is_empty() {
+            None
+        } else {
+            Some(source_ips[idx % source_ips.len()].clone())
+        };
+        idx += 1;
+        let (completed, failed, lats) = (completed.clone(), failed.clone(), lats.clone());
+        tokio::spawn(async move {
+            let _permit = permit; // released on task end
+            let t0 = Instant::now();
+            match timeout(
+                connect_timeout,
+                establish(&connector, &addr, sni, src_ip.as_deref()),
+            )
+            .await
+            {
+                Ok(Ok(stream)) => {
+                    let dt = t0.elapsed().as_secs_f64() * 1000.0;
+                    completed.fetch_add(1, Ordering::Relaxed);
+                    if let Ok(mut v) = lats.lock() {
+                        v.push(dt);
+                    }
+                    drop(stream); // immediate close — this is a churn workload
+                }
+                _ => {
+                    failed.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+    }
+
+    // Drain: acquiring every permit means all in-flight tasks have ended.
+    let _ = sem.acquire_many(concurrency as u32).await;
+    let lats = Arc::try_unwrap(lats)
+        .map(|m| m.into_inner().unwrap_or_default())
+        .unwrap_or_default();
+    (
+        completed.load(Ordering::Relaxed),
+        failed.load(Ordering::Relaxed),
+        lats,
+    )
+}
+
 // ── Stats ────────────────────────────────────────────────────────────
 
 /// Nearest-rank percentile on an ascending-sorted slice. `p` in [0,100].
@@ -516,6 +810,39 @@ struct ChurnReport {
 }
 
 #[derive(Serialize)]
+struct ActiveTrafficReport {
+    active_conns: usize,
+    msg_bytes: usize,
+    msg_rate: f64,
+    duration_secs: u64,
+    messages_sent: usize,
+    messages_echoed: usize,
+    echo_failures: usize,
+    /// Round-trip latency (send → echo received), per message.
+    #[serde(flatten)]
+    roundtrip: LatencyStats,
+    /// Server RSS while the active phase ran, and per-conn bytes derived
+    /// from it (delta over the pre-active idle baseline / total held). The
+    /// headline check is whether this stays within ~10% of the idle
+    /// per-conn baseline — i.e. traffic doesn't blow up memory.
+    rss_during_kb: Option<u64>,
+    per_conn_bytes_active: Option<f64>,
+}
+
+#[derive(Serialize)]
+struct HandshakeQpsReport {
+    duration_secs: u64,
+    concurrency: usize,
+    handshakes_completed: usize,
+    handshakes_failed: usize,
+    /// Sustained full TLS+WS handshakes per second over the window.
+    qps: f64,
+    /// Per-handshake latency under the storm.
+    #[serde(flatten)]
+    latency: LatencyStats,
+}
+
+#[derive(Serialize)]
 struct Report {
     ok: bool,
     config: Config,
@@ -523,6 +850,10 @@ struct Report {
     memory: MemoryReport,
     #[serde(skip_serializing_if = "Option::is_none")]
     churn: Option<ChurnReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_traffic: Option<ActiveTrafficReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    handshake_qps: Option<HandshakeQpsReport>,
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -550,12 +881,85 @@ async fn main() -> Result<(), BoxErr> {
     };
 
     let rss_before = server_pid.and_then(read_rss_kb);
+    let connect_timeout = Duration::from_millis(args.connect_timeout_ms);
+
+    // Handshake-QPS (reconnect-storm) mode: skip the idle hold entirely.
+    // Open+immediately-close connections as fast as --concurrency allows
+    // for the window and report sustained full TLS+WS handshakes/sec — the
+    // "reconnect storm survivability" number.
+    if args.handshake_qps_secs > 0 {
+        eprintln!(
+            "[bench] handshake-QPS storm: {}s at concurrency {}...",
+            args.handshake_qps_secs, args.concurrency
+        );
+        let storm_start = Instant::now();
+        let (completed, hs_failed, lats) = run_handshake_qps(
+            &connector,
+            &addr,
+            &server_name,
+            args.concurrency,
+            connect_timeout,
+            &args.source_ips,
+            Duration::from_secs(args.handshake_qps_secs),
+        )
+        .await;
+        let elapsed = storm_start.elapsed().as_secs_f64();
+        let qps = if elapsed > 0.0 {
+            completed as f64 / elapsed
+        } else {
+            0.0
+        };
+        eprintln!("[bench] handshake-QPS: {completed} done, {hs_failed} failed, {qps:.0}/sec");
+        let report = Report {
+            ok: completed > 0 && hs_failed == 0,
+            config: Config {
+                target: addr,
+                connections: args.connections,
+                concurrency: args.concurrency,
+                churn_rounds: args.churn_rounds,
+                churn_fraction: args.churn_fraction,
+                source_ips: args.source_ips.clone(),
+            },
+            // No conns are held in storm mode — the headline lives in the
+            // handshake_qps section. Keep `connect` minimal but valid.
+            connect: ConnectReport {
+                established: 0,
+                failed: 0,
+                latency: LatencyStats::from(Vec::new()),
+                sample_errors: Vec::new(),
+            },
+            memory: MemoryReport {
+                available: false,
+                server_pid,
+                rss_before_kb: rss_before,
+                rss_after_kb: None,
+                per_conn_bytes: None,
+            },
+            churn: None,
+            active_traffic: None,
+            handshake_qps: Some(HandshakeQpsReport {
+                duration_secs: args.handshake_qps_secs,
+                concurrency: args.concurrency,
+                handshakes_completed: completed,
+                handshakes_failed: hs_failed,
+                qps,
+                latency: LatencyStats::from(lats),
+            }),
+        };
+        if let Some(mut c) = child {
+            let _ = c.kill().await;
+        }
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        if !report.ok {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     eprintln!(
         "[bench] opening {} connections (concurrency {})...",
         args.connections, args.concurrency
     );
-    let connect_timeout = Duration::from_millis(args.connect_timeout_ms);
     let connect_start = Instant::now();
     let (mut held, latencies, failed, errors) = open_batch(
         &connector,
@@ -595,6 +999,57 @@ async fn main() -> Result<(), BoxErr> {
     } else {
         eprintln!("[bench] server RSS unavailable (no server pid)");
     }
+
+    // Active-traffic phase: drive request/response echo on a subset of the
+    // held connections while the rest stay idle — the "1M idle + 10K
+    // active" mixed-load profile. Measures round-trip latency under load
+    // and whether per-conn memory stays near the idle baseline.
+    let active_traffic = if args.active_conns > 0 && established > 0 {
+        let n_active = args.active_conns.min(held.len());
+        eprintln!(
+            "[bench] active traffic: {n_active} conns x {:.2} msg/s x {}B for {}s...",
+            args.msg_rate, args.msg_bytes, args.active_secs
+        );
+        // Peel off the active subset (the tail); the rest stay held idle.
+        let active: Vec<Tls> = held.split_off(held.len() - n_active);
+        let outcome = run_active_traffic(
+            active,
+            args.msg_bytes,
+            args.msg_rate,
+            Duration::from_secs(args.active_secs),
+        )
+        .await;
+        // RSS at the end of the active phase vs the idle baseline (rss_before).
+        let rss_during = server_pid.and_then(read_rss_kb);
+        let per_conn_bytes_active = match (rss_before, rss_during) {
+            (Some(b), Some(a)) if established > 0 && a >= b => {
+                Some((a - b) as f64 * 1024.0 / established as f64)
+            }
+            _ => None,
+        };
+        eprintln!(
+            "[bench] active traffic: {} sent / {} echoed / {} failed; rss_during {:?} KiB",
+            outcome.sent, outcome.echoed, outcome.failed, rss_during
+        );
+        let roundtrip = LatencyStats::from(outcome.roundtrip_ms);
+        let report = ActiveTrafficReport {
+            active_conns: n_active,
+            msg_bytes: args.msg_bytes,
+            msg_rate: args.msg_rate,
+            duration_secs: args.active_secs,
+            messages_sent: outcome.sent,
+            messages_echoed: outcome.echoed,
+            echo_failures: outcome.failed,
+            roundtrip,
+            rss_during_kb: rss_during,
+            per_conn_bytes_active,
+        };
+        // Return the active streams to `held` for a clean teardown.
+        held.extend(outcome.streams);
+        Some(report)
+    } else {
+        None
+    };
 
     // Churn: close+reopen a fraction each round; watch the reconnect tail.
     let churn = if args.churn_rounds > 0 && established > 0 {
@@ -653,7 +1108,9 @@ async fn main() -> Result<(), BoxErr> {
     };
 
     let report = Report {
-        ok: established > 0 && failed == 0,
+        ok: established > 0
+            && failed == 0
+            && active_traffic.as_ref().is_none_or(|a| a.echo_failures == 0),
         config: Config {
             target: addr,
             connections: args.connections,
@@ -676,6 +1133,8 @@ async fn main() -> Result<(), BoxErr> {
             per_conn_bytes,
         },
         churn,
+        active_traffic,
+        handshake_qps: None,
     };
 
     // Drop held connections before killing the server (clean close).

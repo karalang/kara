@@ -44,9 +44,19 @@
 //!   from disk at compile-time keeps the two impls source-equivalent
 //!   without re-pasting the PEM.
 //!
+//! ## Echo on message (Phase 2)
+//!
+//! The per-connection task echoes any text/binary frame it receives
+//! straight back, mirroring the Kāra demo's `handle_connection`. This
+//! lets the active-traffic bench drive request/response load through both
+//! impls identically. Idle connections send nothing, so the echo branch
+//! is never reached on an idle hold — the per-connection density numbers
+//! are unchanged, and the same binary serves both idle and active loads
+//! (so per-conn memory under traffic stays comparable to the idle
+//! baseline with no cross-binary confound).
+//!
 //! ## What this impl deliberately omits
 //!
-//! - No echo / per-connection work — the milestone measures idle hold.
 //! - No structured logging.
 //! - No graceful shutdown / max-conn cap.
 
@@ -54,7 +64,7 @@ use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
 use socket2::{Domain, Protocol, Socket, Type};
@@ -140,13 +150,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Ok(s) => s,
                 Err(_) => return,
             };
-            // Hold idle: consume messages until the peer closes or
-            // errors. The bench's idle-hold workload sends nothing
-            // after the upgrade, so this awaits the eventual close.
-            let (_writer, mut reader) = ws.split();
+            // Echo on message; hold idle otherwise. Text/binary frames are
+            // echoed straight back (the active-traffic bench's round-trip
+            // path); ping/pong/close are left to tungstenite's defaults. An
+            // idle connection sends nothing, so this awaits the eventual
+            // close exactly as the pure idle holder did — density unchanged.
+            let (mut writer, mut reader) = ws.split();
             while let Some(msg) = reader.next().await {
-                if msg.is_err() {
-                    break;
+                match msg {
+                    Ok(m) if m.is_text() || m.is_binary() => {
+                        if writer.send(m).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(_) => break,
                 }
             }
         });
