@@ -751,6 +751,14 @@ pub(super) struct Codegen<'ctx> {
     /// Per-coroutine-function counter for unique park resume-block names; reset
     /// by `emit_coro_ramp`, bumped by each `emit_coro_park_suspend`.
     pub(crate) coro_park_counter: u32,
+    /// A2 slice 5a — non-blocking spawn drive. Set to `Some(slot)` only while
+    /// compiling a `__spawn_coro_wrap_N` wrapper body (task_group.rs): the
+    /// `is_coroutine_compiled` call-site intercept then emits `ramp(args,
+    /// slot)` and returns **without** `park_slot_new`/`wait`/`free` — the
+    /// runtime owns the slot and binds it to the `TaskHandle`, so the wrapper
+    /// ramps and returns, freeing the worker. `None` (the default) is the
+    /// inline blocking drive (allocate slot, ramp, wait, free).
+    pub(crate) coro_spawn_slot: Option<PointerValue<'ctx>>,
     pub(crate) current_fn: Option<FunctionValue<'ctx>>,
     pub(crate) printf_fn: FunctionValue<'ctx>,
     /// `int snprintf(char* buf, size_t n, const char* fmt, ...)` — used by f-string
@@ -2756,6 +2764,28 @@ impl<'ctx> Codegen<'ctx> {
         );
         module.add_function("karac_runtime_spawn", spawn_ty, Some(Linkage::External));
 
+        // A2 slice 5a — `karac_runtime_spawn_coro(wrap_fn: ptr, env: ptr)
+        // -> ptr` — density-optimal non-blocking coroutine spawn. `wrap_fn`
+        // is a codegen-synthesized `extern "C" fn(env, *KaracParkSlot,
+        // cancel)` that unpacks `env` → args and calls the coroutine *ramp*
+        // with the bound slot (register fd + suspend + return). The worker
+        // is freed the moment the ramp suspends; the dispatcher drives the
+        // parked coroutine, whose body signals the slot at completion. The
+        // returned handle's `karac_runtime_task_join` waits on that slot.
+        // See runtime/src/scheduler.rs + spike § 6⅞.
+        let spawn_coro_ty = ptr_type.fn_type(
+            &[
+                ptr_type.into(), // wrap_fn (CoroSpawnFn)
+                ptr_type.into(), // env
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_spawn_coro",
+            spawn_coro_ty,
+            Some(Linkage::External),
+        );
+
         // `karac_runtime_task_join(handle: ptr, out_slot: ptr) -> u8`
         // — block until the task reaches a terminal state, memcpy the
         // result into `*out_slot` on COMPLETED, free the handle, return
@@ -3413,6 +3443,7 @@ impl<'ctx> Codegen<'ctx> {
             coro_fn_keys: HashSet::new(),
             coro_ctx: None,
             coro_park_counter: 0,
+            coro_spawn_slot: None,
         }
     }
 

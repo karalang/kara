@@ -91,6 +91,19 @@ pub struct KaracTaskHandle {
     /// The joiner reacquires the mutex, checks state, releases.
     notify_mutex: Mutex<()>,
     notify_cv: Condvar,
+    /// A2 slice 5a — density-optimal non-blocking coroutine spawn. Null
+    /// for an ordinary `spawn` (the worker runs the closure to completion
+    /// and the `notify_cv` above is the join signal). Non-null for a
+    /// `karac_runtime_spawn_coro` handle: the worker only *ramps* the
+    /// coroutine (register fd + suspend + return) and the OS thread is
+    /// freed immediately; the dispatcher drives the parked coroutine to
+    /// completion, whose body `park_slot_signal`s **this** slot. So a
+    /// coro-handle's `karac_runtime_task_join` waits on `coro_slot`, not
+    /// `notify_cv` — the worker is long gone and never stores a terminal
+    /// state on the normal-completion path (state stays `PENDING`, which
+    /// the join reads back as COMPLETED; the ramp-panic path stores
+    /// PANICKED + signals the slot so the joiner still wakes).
+    coro_slot: *mut crate::event_loop::KaracParkSlot,
 }
 
 // SAFETY: KaracTaskHandle stores a raw `*mut u8` (result_buf) which is
@@ -181,6 +194,7 @@ pub unsafe extern "C" fn karac_runtime_spawn(
         cancel: AtomicBool::new(false),
         notify_mutex: Mutex::new(()),
         notify_cv: Condvar::new(),
+        coro_slot: std::ptr::null_mut(),
     });
     let handle_ptr: *mut KaracTaskHandle = Box::into_raw(handle_box);
 
@@ -245,6 +259,135 @@ pub unsafe extern "C" fn karac_runtime_spawn(
     handle_ptr
 }
 
+/// Coroutine-spawn wrapper signature (A2 slice 5a). Codegen emits one per
+/// `spawn(|| handle(conn))` site whose closure body is a **tail coroutine
+/// call**. Unlike [`SpawnFn`], it receives the bound completion **slot**
+/// (not a result buffer): the wrapper unpacks `env` → args and calls the
+/// coroutine *ramp* with this slot, which registers the fd + suspends +
+/// returns — so the wrapper returns while the coroutine is still parked.
+/// The coroutine body later `park_slot_signal`s this same slot at
+/// completion (its existing `emit_coro_finish` path), which is what the
+/// join waits on.
+/// - `env`: captured-environment struct pointer (freed by the wrapper);
+/// - `slot`: the `KaracParkSlot` the coroutine ramp is handed as its
+///   hidden completion-slot param;
+/// - `cancel`: the handle's per-task cancel flag (observed by the
+///   cancellation slice, 5c — unused at 5a).
+pub type CoroSpawnFn = unsafe extern "C" fn(
+    env: *mut c_void,
+    slot: *mut crate::event_loop::KaracParkSlot,
+    cancel: *const AtomicBool,
+);
+
+/// Density-optimal non-blocking coroutine spawn (A2 slice 5a — the per-conn
+/// density headline; see `docs/spikes/network-async-coroutine-transform.md`
+/// § 6⅞). Where [`karac_runtime_spawn`] blocks a pool worker for the whole
+/// time the coroutine is parked (the wrapper's nested `park_slot_wait`),
+/// this allocates a `KaracParkSlot`, enqueues a worker that only **ramps**
+/// the coroutine and **returns immediately** (freeing the OS thread), and
+/// binds the returned `KaracTaskHandle`'s completion to that slot. The
+/// dispatcher drives the parked coroutine; its body signals the slot at
+/// completion; [`karac_runtime_task_join`] on this handle waits on the
+/// slot. Result is unit at v1 (coroutine network handlers return unit), so
+/// no result buffer is allocated.
+///
+/// The worker's run-closure does **not** mark the handle terminal on the
+/// normal path — the worker returns the moment the ramp suspends, long
+/// before the coroutine completes. State stays `PENDING` and the join reads
+/// that back as COMPLETED. Only the ramp-panic path stores `PANICKED` +
+/// signals the slot (so a joiner still wakes rather than hanging on a
+/// coroutine that never registered).
+///
+/// Returns a non-null handle pointer; the caller joins it via
+/// `karac_runtime_task_join` (which waits on the slot, then frees both the
+/// slot and the handle) exactly as for an ordinary spawn handle.
+///
+/// # Safety
+/// - `wrap_fn` must be a valid `CoroSpawnFn` that hands `slot` to a
+///   coroutine ramp and frees `env`.
+/// - `env` is opaque to the runtime; its lifetime + cross-thread safety is
+///   the caller's responsibility (same contract as [`karac_runtime_spawn`]).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_spawn_coro(
+    wrap_fn: CoroSpawnFn,
+    env: *mut c_void,
+) -> *mut KaracTaskHandle {
+    // The bound completion slot — the coroutine ramp's hidden param, and
+    // the object the join waits on.
+    let slot = crate::event_loop::karac_runtime_park_slot_new();
+
+    let handle_box = Box::new(KaracTaskHandle {
+        state: AtomicU8::new(TASK_STATE_PENDING),
+        result_buf: std::ptr::null_mut(),
+        result_layout: Layout::from_size_align(0, 1).unwrap(),
+        cancel: AtomicBool::new(false),
+        notify_mutex: Mutex::new(()),
+        notify_cv: Condvar::new(),
+        coro_slot: slot,
+    });
+    let handle_ptr: *mut KaracTaskHandle = Box::into_raw(handle_box);
+
+    let call = Arc::new(ParCall {
+        cancel: AtomicBool::new(false),
+        remaining: Mutex::new(1),
+        notify: Condvar::new(),
+        spawn_site_id: 0,
+        parent_addr: 0,
+        track_frames: false,
+    });
+
+    let env_addr = env as usize;
+    let handle_addr = handle_ptr as usize;
+    let slot_addr = slot as usize;
+
+    let task = Task {
+        call,
+        branch_idx: 0,
+        run: Box::new(move |_pool_cancel: &AtomicBool| {
+            // SAFETY: handle_ptr is the just-leaked Box; the worker is the
+            // exclusive accessor until the ramp suspends. `slot` outlives
+            // this closure (freed only in task_join, after the coroutine
+            // signals it).
+            let handle = unsafe { &*(handle_addr as *const KaracTaskHandle) };
+            let env_ptr = env_addr as *mut c_void;
+            let slot_ptr = slot_addr as *mut crate::event_loop::KaracParkSlot;
+            let cancel_ptr = &handle.cancel as *const AtomicBool;
+
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                // Ramp: register fd + suspend + return. Returns ~immediately;
+                // the worker is freed while the coroutine stays parked under
+                // the dispatcher.
+                wrap_fn(env_ptr, slot_ptr, cancel_ptr);
+            }))
+            .is_err();
+
+            // Normal path: do NOT touch terminal state — the coroutine
+            // completes later and signals the slot; the join reads PENDING
+            // back as COMPLETED. Only a ramp panic (the coroutine never
+            // registered → the dispatcher will never signal the slot) needs
+            // to wake a waiting joiner here.
+            if panicked {
+                let _g = handle
+                    .notify_mutex
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                handle.state.store(TASK_STATE_PANICKED, Ordering::Release);
+                // SAFETY: slot is live (not yet freed by task_join).
+                unsafe { crate::event_loop::karac_runtime_park_slot_signal(slot_ptr) };
+            }
+        }),
+    };
+
+    let p = pool();
+    {
+        let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
+        q.push_back(task);
+    }
+    p.cv.notify_all();
+
+    handle_ptr
+}
+
 /// Block until the task completes, copy the result into `out_slot`, and
 /// free the handle. Returns one of the `TASK_STATE_*` terminal codes
 /// (never `PENDING` — the function only returns after a terminal
@@ -276,6 +419,24 @@ pub unsafe extern "C" fn karac_runtime_task_join(
         return TASK_STATE_CANCELLED;
     }
     let h = &*handle;
+
+    // A2 slice 5a — coroutine-spawn handle: completion is the dispatcher
+    // signalling the bound slot (the worker that ramped it is long gone and
+    // never stores a terminal state on the normal path). Wait on the slot,
+    // not the worker's `notify_cv`. A `PENDING` state after the slot fires
+    // means the coroutine completed normally (the run-closure left state
+    // untouched); a non-PENDING state is the ramp-panic override.
+    if !h.coro_slot.is_null() {
+        crate::event_loop::karac_runtime_park_slot_wait(h.coro_slot);
+        let st = h.state.load(Ordering::Acquire);
+        let terminal = if st == TASK_STATE_PENDING {
+            TASK_STATE_COMPLETED
+        } else {
+            st
+        };
+        free_handle(handle);
+        return terminal;
+    }
 
     // Wait until the worker writes a terminal state.
     let guard = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
@@ -347,6 +508,12 @@ unsafe fn free_handle(handle: *mut KaracTaskHandle) {
     let boxed = Box::from_raw(handle);
     if !boxed.result_buf.is_null() && boxed.result_layout.size() > 0 {
         std::alloc::dealloc(boxed.result_buf, boxed.result_layout);
+    }
+    // A2 slice 5a — free the bound completion slot for a coroutine-spawn
+    // handle. The coroutine has signalled it (the join's slot-wait returned)
+    // and will not touch it again, so this is the single free site.
+    if !boxed.coro_slot.is_null() {
+        crate::event_loop::karac_runtime_park_slot_free(boxed.coro_slot);
     }
     // `boxed` drops here, releasing the Mutex / Condvar / AtomicU8 / etc.
 }
@@ -770,6 +937,119 @@ mod tests {
             // join hangs, the test framework's per-test timeout
             // (defaults to 60s in cargo test) will catch it.
             karac_runtime_taskgroup_join_and_free(group);
+        }
+    }
+
+    // ── A2 slice 5a — non-blocking coroutine spawn ──────────────────────
+
+    /// Fake coroutine ramp for the slice-5a tests. Models the production
+    /// ramp's observable contract: it returns ~immediately (the worker is
+    /// freed) and arranges for the bound slot to be signalled LATER from a
+    /// separate thread — exactly as the real dispatcher drives a parked
+    /// coroutine to completion (whose body then `park_slot_signal`s the
+    /// slot). `env` is a `*const RampProbe`: the ramp records that it ran +
+    /// returned, then detaches a thread that sleeps `delay_ms` and signals.
+    struct RampProbe {
+        ran: AtomicBool,
+        delay_ms: u64,
+    }
+
+    unsafe extern "C" fn delayed_signal_ramp(
+        env: *mut c_void,
+        slot: *mut crate::event_loop::KaracParkSlot,
+        _cancel: *const AtomicBool,
+    ) {
+        let probe = &*(env as *const RampProbe);
+        let delay = probe.delay_ms;
+        let slot_addr = slot as usize;
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(delay));
+            // SAFETY: the test keeps the handle (and thus the slot) alive
+            // until join returns; the signal happens-before the join wakes.
+            unsafe {
+                crate::event_loop::karac_runtime_park_slot_signal(
+                    slot_addr as *mut crate::event_loop::KaracParkSlot,
+                );
+            }
+        });
+        // The ramp itself returns at once — the worker thread is now free.
+        probe.ran.store(true, AtomicOrdering::Release);
+    }
+
+    /// The join of a non-blocking coroutine-spawn handle waits on the bound
+    /// slot (the dispatcher's completion signal), NOT on the worker that
+    /// ramped it — the worker returns ~immediately, while the coroutine is
+    /// still "parked". A `PENDING` state at slot-fire time reads back as
+    /// COMPLETED. This is the slice-5a density binding.
+    #[test]
+    fn spawn_coro_join_waits_on_completion_slot_not_worker() {
+        let probe = Box::into_raw(Box::new(RampProbe {
+            ran: AtomicBool::new(false),
+            delay_ms: 60,
+        }));
+        unsafe {
+            let handle = karac_runtime_spawn_coro(delayed_signal_ramp, probe as *mut c_void);
+            assert!(!handle.is_null(), "spawn_coro must return a handle");
+
+            let start = Instant::now();
+            let status = karac_runtime_task_join(handle, std::ptr::null_mut());
+            let elapsed = start.elapsed();
+
+            assert_eq!(
+                status, TASK_STATE_COMPLETED,
+                "a normally-completing coroutine join must report COMPLETED"
+            );
+            assert!(
+                (*probe).ran.load(AtomicOrdering::Acquire),
+                "the ramp must have run on a worker"
+            );
+            // The join actually blocked on the slot for ~delay_ms — proof it
+            // waited on the dispatcher's completion signal, not the (already
+            // returned) worker. Lower bound is loose to absorb scheduling.
+            assert!(
+                elapsed >= Duration::from_millis(40),
+                "join returned in {elapsed:?}, too fast — it did not wait on the \
+                 completion slot (the density binding is broken)"
+            );
+
+            drop(Box::from_raw(probe));
+        }
+    }
+
+    /// Many non-blocking coroutine spawns ramp concurrently and all of their
+    /// joins resolve — the workers are freed after each ramp (returns fast),
+    /// so a batch far larger than the worker count does not serialize or
+    /// deadlock. Under the old thread-blocking drive each handler would pin
+    /// a worker for the whole `delay_ms`; here the workers churn through all
+    /// the ramps immediately and the dispatcher-signal threads complete them.
+    #[test]
+    fn spawn_coro_batch_larger_than_workers_all_complete() {
+        const N: usize = 64;
+        let probes: Vec<*mut RampProbe> = (0..N)
+            .map(|_| {
+                Box::into_raw(Box::new(RampProbe {
+                    ran: AtomicBool::new(false),
+                    delay_ms: 40,
+                }))
+            })
+            .collect();
+        unsafe {
+            let handles: Vec<*mut KaracTaskHandle> = probes
+                .iter()
+                .map(|&p| karac_runtime_spawn_coro(delayed_signal_ramp, p as *mut c_void))
+                .collect();
+            // Join all — every coroutine's slot must fire.
+            for h in handles {
+                let status = karac_runtime_task_join(h, std::ptr::null_mut());
+                assert_eq!(status, TASK_STATE_COMPLETED);
+            }
+            for &p in &probes {
+                assert!(
+                    (*p).ran.load(AtomicOrdering::Acquire),
+                    "every ramp must have run"
+                );
+                drop(Box::from_raw(p));
+            }
         }
     }
 }

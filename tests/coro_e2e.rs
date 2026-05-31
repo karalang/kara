@@ -139,6 +139,28 @@ mod tests {
         }
     "#;
 
+    /// Slice 5a — **density-optimal non-blocking spawn**. The closure body is
+    /// a *tail* coroutine-handler call (`tg.spawn(|| serve_one(listener))`), so
+    /// codegen routes it through `karac_runtime_spawn_coro`: the pool worker
+    /// *ramps and returns* (no `park_slot_wait` blocking it), and the
+    /// `TaskHandle`'s completion is bound to the coroutine's `KaracParkSlot`.
+    /// The `TaskGroup`'s scope-exit drop joins the child — waiting on the
+    /// coroutine slot, not a blocked worker. Contrast `SPAWN_HANDLER_SRC`,
+    /// whose `{ serve_one(listener); 0 }` tail is `0` (not the coro call), so
+    /// it stays on the 2b.4 thread-blocking path.
+    const SPAWN_NONBLOCK_SRC: &str = r#"
+        fn serve_one(listener: TcpListener) {
+            let _stream = listener.accept().unwrap();
+            println(1);
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            let mut tg = TaskGroup.new();
+            tg.spawn(|| serve_one(listener));
+            println(2);
+        }
+    "#;
+
     /// Slice 4: a **heap local live across a park**. `buf` (a `Vec[i64]`,
     /// stand-in for a read buffer) is allocated + filled BEFORE the `accept`
     /// park and used AFTER it (`buf.len()`), so CoroSplit must spill it into the
@@ -716,6 +738,95 @@ mod tests {
     }
 
     #[test]
+    fn coroutine_nonblocking_spawn_services_connection() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_nbspawn_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(SPAWN_NONBLOCK_SRC, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let (exit_status, lines) = service_one_connection(&exe_path, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "non-blocking spawned-coroutine binary exited non-success {exit_status:?}; \
+             stdout lines: {lines:?}"
+        );
+        // The handler ramped on a worker (which returned), the dispatcher drove
+        // it to completion (`1`), and the TaskGroup drop joined it by waiting on
+        // the coroutine slot before `main` returned. `2` is main's own line.
+        assert!(
+            lines.iter().any(|l| l == "1") && lines.iter().any(|l| l == "2"),
+            "non-blocking spawned coroutine did not complete; stdout lines: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn coroutine_nonblocking_spawn_under_asan() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        if !asan_available() {
+            eprintln!("skip: ASAN unavailable on this host");
+            return;
+        }
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_nbspawn_asan_{pid}_{nanos}"));
+
+        if let Err(e) =
+            compile_link_coro(SPAWN_NONBLOCK_SRC, &exe_path, Some(&["-fsanitize=address"]))
+        {
+            eprintln!("skip: ASAN compile/link failed: {e}");
+            return;
+        }
+        let asan_options = if cfg!(target_os = "macos") {
+            "abort_on_error=0:exitcode=23"
+        } else {
+            "detect_leaks=1:abort_on_error=0:exitcode=23"
+        };
+
+        let (exit_status, lines) = service_one_connection(&exe_path, Some(asan_options));
+        let _ = std::fs::remove_file(&exe_path);
+
+        // Clean ASAN exit == the non-blocking drive's new lifetimes are sound:
+        // the runtime-owned `KaracParkSlot` is freed exactly once (in
+        // `task_join` after the slot fires), the coro frame is freed once by the
+        // dispatcher, and the handle/env are freed once — no UAF/double-free
+        // across the worker→dispatcher→joiner handoff.
+        assert!(
+            exit_status.success(),
+            "ASAN reported a memory error in the non-blocking spawn path (exit \
+             {exit_status:?}); stdout lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "1") && lines.iter().any(|l| l == "2"),
+            "non-blocking spawned coroutine did not complete under ASAN; \
+             stdout lines: {lines:?}"
+        );
+    }
+
+    #[test]
     fn coroutine_method_handler_services_connection() {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let Some(rt) = runtime_path() else {
@@ -839,6 +950,45 @@ mod tests {
     /// structural assertion is the right gate until slice 5 wires a live cancel.
     /// The non-heap contrast handler proves the buffer free is tied to the live
     /// heap local, not emitted unconditionally.
+    #[test]
+    fn nonblocking_spawn_uses_spawn_coro_ffi() {
+        let ir = match compile_coro_split_ir(SPAWN_NONBLOCK_SRC) {
+            Ok(ir) => ir,
+            Err(e) => panic!("coro-split IR for non-blocking spawn failed: {e}"),
+        };
+        // The tail-coroutine `tg.spawn(|| serve_one(listener))` must lower to
+        // the non-blocking primitive, not the thread-blocking `karac_runtime_spawn`.
+        assert!(
+            ir.contains("call ptr @karac_runtime_spawn_coro("),
+            "non-blocking spawn must call karac_runtime_spawn_coro; IR:\n{ir}"
+        );
+        assert!(
+            !ir.contains("call ptr @karac_runtime_spawn("),
+            "tail-coroutine spawn must NOT call the blocking karac_runtime_spawn; IR:\n{ir}"
+        );
+        // The wrapper must ramp WITHOUT a nested `park_slot_wait` — that is the
+        // worker-freeing density property. It hands the runtime-owned slot to
+        // the coroutine ramp and returns; the blocking 2b.4 wrapper would call
+        // `park_slot_new` + `park_slot_wait` here.
+        let wrap = extract_fn_ir(&ir, "@__spawn_wrap_0(")
+            .unwrap_or_else(|| panic!("no spawn wrapper in IR:\n{ir}"));
+        assert!(
+            !wrap.contains("@karac_runtime_park_slot_wait"),
+            "the non-blocking spawn wrapper must NOT block on park_slot_wait \
+             (the density property); wrapper:\n{wrap}"
+        );
+        assert!(
+            !wrap.contains("@karac_runtime_park_slot_new"),
+            "the non-blocking spawn wrapper must use the runtime-owned slot, \
+             not allocate its own; wrapper:\n{wrap}"
+        );
+        // It does invoke the coroutine ramp (the handler runs).
+        assert!(
+            wrap.contains("@serve_one"),
+            "the wrapper must call the coroutine ramp `serve_one`; wrapper:\n{wrap}"
+        );
+    }
+
     #[test]
     fn coroutine_heap_local_freed_on_destroy_edge() {
         let ir = match compile_coro_split_ir(HEAP_HANDLER_SRC) {

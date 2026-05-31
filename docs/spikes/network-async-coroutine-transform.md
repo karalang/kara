@@ -281,6 +281,85 @@ neither of which CoroSplit-survival/IR-grep would have caught:
 Landed shape, gate, and file map are in the §7 table's "2b.2b + 2b.3 (done)"
 row. `tests/coro_e2e.rs` is the gate (functional + `-fsanitize=address`).
 
+## 6⅞. Slice-5 drive design (non-blocking spawn + cancellation)
+
+Slice 5 is the **density headline** — and, like the 2b.3 drive, it has a
+semantic trap that must be designed around before coding. Decomposed into three
+sub-slices with the constraints surfaced by reading the runtime + spawn codegen.
+
+**The thread-block today (2b.4).** A spawned handler `spawn(|| handle(conn))`
+compiles the closure body through the normal `compile_expr` path, so the
+coroutine call inside hits the **inline** drive (`call_dispatch.rs`):
+`slot=park_slot_new(); ramp(args,slot); park_slot_wait(slot); park_slot_free`.
+The `park_slot_wait` **blocks the pool worker** for the entire time the
+coroutine is parked → one OS thread per concurrent handler. That is the
+opposite of the per-conn-density thesis (the whole reason A2 chose stackless
+coroutines): at 1M idle conns it would need ~1M blocked threads.
+
+**Sub-slice 5a — non-blocking spawn (the density win).** The worker must
+**ramp and return**, freeing the thread while the dispatcher drives the parked
+coroutine to completion. The binding mechanism (validated against the runtime
+structs):
+  * New runtime `karac_runtime_spawn_coro(wrap_fn, env)` allocates a
+    `KaracTaskHandle` **plus a `KaracParkSlot`** stored on the handle, and
+    enqueues a worker task whose run-closure calls `wrap_fn(env, slot, cancel)`
+    and **returns without marking the handle complete** (the existing
+    `karac_runtime_spawn` marks COMPLETED the moment `fn_ptr` returns — wrong
+    for a ramp, which returns while the coroutine is still parked).
+  * The coroutine's completion is its existing `park_slot_signal(slot)` in
+    `emit_coro_finish` — unchanged. `karac_runtime_task_join` on a coro-handle
+    **waits on the bound slot** (not the handle's own condvar), so the
+    coroutine's completion signal unblocks the joiner directly. The worker is
+    long gone.
+  * New wrapper ABI `CoroSpawnFn = fn(env, *KaracParkSlot, *AtomicBool)`.
+    Codegen emits `__spawn_coro_wrap_N` that unpacks `env` → args, calls the
+    **ramp** with the passed slot (register fd + suspend + return — no
+    `park_slot_new`/`wait`/`free`), frees `env`. A new `Codegen.coro_spawn_slot:
+    Option<PointerValue>` flips the `is_coroutine_compiled` intercept into
+    "emit just `ramp(args, slot)`" mode for the wrapper-body compile.
+  * **Semantic restriction (load-bearing): tail position only.** The ramp
+    returns immediately after the *first* suspend, so any code after the
+    coroutine call in the closure would run *while the coroutine is still
+    parked* — wrong. So 5a applies only when the closure body **is** a single
+    coroutine call (`spawn(|| handle(conn))` — the demo-faithful shape); a
+    closure with post-coroutine work or a non-unit tail value falls back to the
+    2b.4 blocking spawn. v1 coroutine handlers return unit, so the join result
+    is unit. Gate: an E2E that spawns **more handlers than pool workers** and
+    services them all concurrently — impossible under the blocking drive.
+
+**Sub-slice 5b — TaskGroup over coroutine handlers + cancel routing.** Make
+`tg.spawn(|| handle(conn))` route through 5a's non-blocking path and bind each
+child's slot to the group. `TaskGroup.drop` (`taskgroup_join_and_free`) already
+joins each child — with 5a, join waits on the coro slot, so the group waits for
+the parked coroutines, not blocked workers. Expose `TaskGroup.cancel()` →
+flips each child handle's `cancel: AtomicBool` (already plumbed).
+
+**Sub-slice 5c — cooperative cancellation (activates slice 4's destroy edge).**
+A flipped `cancel` flag must actually tear the coroutine down via slice 4's
+per-park destroy edge. Two pieces, both with traps:
+  * The resume shim `__kara_coro_resume(handle, cancel)` checks `cancel`
+    *before* `coro.resume`; if set, it calls `coro.destroy(handle)` (runs the
+    per-park destroy edge → deregister fd + `emit_coro_destroy_edge_drops` +
+    `coro.free`) and returns Ready. **But** the shim only runs on an fd-readiness
+    wakeup — a cancelled-but-never-ready coroutine needs the dispatcher to
+    *proactively* destroy it (a cancel sweep), which is the harder half.
+  * **Slot-signal-on-cancel:** the destroy edge must `park_slot_signal(slot)`
+    so a waiter (inline caller, or 5a's join) wakes with a CANCELLED status —
+    otherwise cancelling a coroutine **hangs its joiner forever** (slice 4
+    deliberately made the destroy edge *not* signal; cancellation has to add
+    it, with a status distinct from normal completion). This is why 5c can't be
+    a pure shim tweak — it touches the destroy-edge emission and the join ABI.
+  * Then the slice-4-deferred **live mid-flight-cancel ASAN+leak test** lands: a
+    handler parked across a `Vec[u8]`/`String`, cancelled, must free heap +
+    frame exactly once (Linux `detect_leaks=1`), and its joiner must wake.
+  * Decide defer-on-cancel: 5a/5b leave `UserDefer` unrun on the destroy edge
+    (slice 4's `emit_coro_destroy_edge_drops` skips it); 5c decides whether
+    cancel runs user `defer` and, if so, threads the defer-body emission in.
+
+This file's §7 row tracks 5a/5b/5c. Order is forced: 5a before 5c (you can't
+cancel a coroutine that's blocking a worker — it has to be parked under the
+dispatcher first), 5b composes 5a's binding with the group.
+
 ## 7. Effort estimate (honest)
 
 | Slice | Work | Size |
@@ -294,7 +373,9 @@ row. `tests/coro_e2e.rs` is the gate (functional + `-fsanitize=address`).
 | 2b.4 (done) | **Spawn drive (functional) + method-handler coroutines.** (a) **Spawn:** a coroutine handler driven inside `spawn(\|\| handle(conn))` already services a real connection E2E with **zero new codegen** — the spawn wrapper (`task_group.rs`) runs 2b.3's coro-drive (`park_slot_new` + ramp + `park_slot_wait`) on a worker-pool thread, which the dispatcher unblocks via the shim; `join` returns after the coroutine completes. Functionally correct but **thread-blocking** (one pool worker per concurrent handler) — the density-optimal non-blocking spawn (wrapper *ramps and returns*, `TaskHandle` completion bound to the coroutine slot) is **slice 5** ("retire the thread-block drive"). (b) **Method handlers:** dropped the free-fn-only (`!key.contains('.')`) restriction and added the coro ramp-drive to `method_call.rs`'s intercept (receiver = the ramp's `self` arg at param 0, method args at 1..K, hidden slot last). Impl methods are named by the dotted key (`make_impl_method_function`), so `coro_fn_keys` / `declare_function` line up unchanged. Gate: `tests/coro_e2e.rs` — `coroutine_spawned_free_fn_services_connection` (spawn) + `coroutine_method_handler_services_connection` (impl method `Acceptor.run`) | ✅ small |
 | 3 (done) | Control flow around suspends — it **does** "just work" via CoroSplit; no codegen change. Validated by `tests/coro_e2e.rs`: `coroutine_loop_handler_services_multiple_connections` (a `while` loop with one *static* `accept` suspend resumed across the back-edge, servicing 2 connections — frame-residency of loop locals + the parked-record re-registered each iteration), `coroutine_loop_handler_under_asan` (the same, ASAN-clean — no UAF/double-free across iterations, frame freed once), and `coroutine_if_branch_handler_services_connection` (a park inside a taken `if` branch; the post-`if` join stays reachable on the resume edge). Test-only slice | ✅ small |
 | 4 (done) | **Drop-across-suspend correctness.** A heap local live across a park (`Vec[u8]`/`String`/Map handle/RC box) must be dropped exactly once on **every** exit path. The completion path already did — body-end `emit_scope_cleanup` runs before the `coro_return` branch, and the frame-resident buffer is freed on the resume edge. The gap was the **destroy/cancel edge**: the load-bearing trap is that after normal completion the coroutine parks at the *final* suspend and the dispatcher's `coro.destroy` runs the destroy clone down *that* suspend's cleanup edge — so a single shared cleanup block reached by both the final suspend and the mid-flight parks would **double-free** (completion already dropped) or, with no drops, **leak** a mid-flight cancel. Fix (matches Rust's per-suspend-point cleanup): `emit_coro_park_suspend` routes each park's suspend-switch case-1 to a **fresh per-park `kara.coro.destroy.N` block** that (a) **deregisters the fd** — the event loop still points into the about-to-be-freed frame; freeing without this dangles the dispatcher — then (b) drops the heap locals **live at that park** (`emit_coro_destroy_edge_drops`, a snapshot of the `scope_cleanup_actions` stack = the liveness oracle, skipping `UserDefer`/`UserErrDefer`), then branches to the shared free-only `cleanup_bb`. The **final** suspend's destroy edge stays free-only (body already dropped → no double-free). Per-park-vs-final edges are mutually exclusive, so every heap value drops exactly once. Today the per-park destroy edge is **emitted-but-unreached** (the only runtime `coro.destroy` is the dispatcher's post-completion one on the final suspend); a live cancel trigger is slice 5. Gate: `tests/coro_e2e.rs` — `coroutine_heap_local_across_park_services_connection` + `_under_asan` (a `Vec[i64]` live across the `accept` park, completion path, ASAN-clean — Linux `detect_leaks=1` is the leak gate), and `coroutine_heap_local_freed_on_destroy_edge` (structural: the CoroSplit `.destroy` clone deregisters + `free`s the buffer on `kara.coro.destroy.0`, with a non-heap contrast handler proving the free is tied to the live local). New: `compile_to_ir_with_coro_split` (post-CoroSplit IR for the structural assertion). **Known v1 limit:** the destroy edge drops heap but does not run user `defer` blocks (defer-on-cancel waits for slice-5 cancel semantics) | ✅ 1–2 (trickiest) |
-| 5 | Spawn + TaskGroup + cancellation; retire the spin-loop / thread-block drive | 2 |
+| 5a (done) | **Non-blocking spawn (density headline).** Worker ramps + returns; `karac_runtime_spawn_coro(wrap_fn, env)` allocates a `KaracParkSlot` bound to the `KaracTaskHandle` and enqueues a worker whose run-closure calls `wrap_fn(env, slot, cancel)` and **returns without marking the handle terminal** (the existing `karac_runtime_spawn` marks COMPLETED the instant the wrapper returns — wrong for a ramp). `karac_runtime_task_join` on a coro-handle **waits on the bound slot** (the coroutine's existing `park_slot_signal` in `emit_coro_finish`), not the worker; `PENDING`-after-signal reads back as COMPLETED, the ramp-panic path stores PANICKED + signals so the joiner still wakes; `free_handle` frees the slot. Codegen: `Codegen.coro_spawn_slot: Option<PointerValue>` flips the `is_coroutine_compiled` call-site intercept (call_dispatch.rs + method_call.rs) into "emit `ramp(args, slot)` and return — no `park_slot_new`/`wait`/`free`" for the wrapper-body compile; `task_group.rs` detects a **tail free-fn coroutine call** (`spawn_coro_tail_fn_key` — body is exactly `handle(conn)`, directly or trivially block-wrapped), threads the wrapper's slot param through `coro_spawn_slot`, and calls `karac_runtime_spawn_coro` instead of `karac_runtime_spawn`. **Tail-coroutine free-fn closures only** (the ramp returns after the first suspend, so pre/post-call code would run while parked); method-handler / multi-statement / non-unit-tail shapes fall back to the 2b.4 blocking spawn. Gates: `runtime/src/scheduler.rs` — `spawn_coro_join_waits_on_completion_slot_not_worker` (join blocks ~60 ms on the slot while the ramp returned at once) + `spawn_coro_batch_larger_than_workers_all_complete` (64 ramps, no serialize/deadlock — impossible under the blocking drive); `tests/coro_e2e.rs` — `nonblocking_spawn_uses_spawn_coro_ffi` (IR: `spawn_coro` called, no blocking `spawn` call, wrapper has no `park_slot_wait`), `coroutine_nonblocking_spawn_services_connection` + `_under_asan` (`tg.spawn(\|\| serve_one(listener))` services a real connection, TaskGroup-drop joins via the slot, ASAN-clean). See § 6⅞ | ✅ 2 |
+| 5b | **TaskGroup over coroutine handlers + cancel routing.** `tg.spawn(\|\| handle(conn))` routes through 5a; `TaskGroup.drop` waits on the parked coroutines (not blocked workers). Expose `TaskGroup.cancel()` → child `cancel` flags. See § 6⅞ | 1–2 |
+| 5c | **Cooperative cancellation (activates slice 4's destroy edge).** Resume shim checks `cancel` → `coro.destroy` (runs the per-park destroy edge); dispatcher cancel-sweep for parked-but-not-ready; **slot-signal-on-cancel** so the joiner wakes CANCELLED (else hang); land the slice-4-deferred live mid-flight-cancel ASAN+leak test; decide defer-on-cancel. See § 6⅞ | 2 |
 | 6 | Full E2E (demo-faithful echo + the actual `ws_idle_holder` demo) + **re-measure per-conn density vs Rust** | 1–2 |
 
 **Total ≈ 7–10 bounded, individually-testable slices.** Multi-session, but

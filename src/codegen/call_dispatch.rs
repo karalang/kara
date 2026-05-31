@@ -387,19 +387,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 .module
                 .get_function(&name)
                 .expect("coroutine ramp fn declared in declare_function");
-            // The completion slot the caller owns: allocate it, pass it as the
-            // ramp's hidden trailing param, block on it, free it.
-            let slot_new = self
-                .module
-                .get_function("karac_runtime_park_slot_new")
-                .expect("karac_runtime_park_slot_new declared in Codegen::new");
-            let slot = self
-                .builder
-                .build_call(slot_new, &[], "kara.coro.slot")
-                .expect("call karac_runtime_park_slot_new")
-                .try_as_basic_value()
-                .unwrap_basic()
-                .into_pointer_value();
+            // A2 slice 5a — non-blocking spawn: inside a `__spawn_coro_wrap`
+            // body (`self.coro_spawn_slot` is `Some`), the runtime owns the
+            // completion slot and binds it to the `TaskHandle`. We hand that
+            // slot to the ramp and return *without* waiting — the worker is
+            // freed while the coroutine stays parked. Otherwise (the inline
+            // drive) the caller owns the slot: allocate it, ramp, block on it,
+            // free it.
+            let spawn_slot = self.coro_spawn_slot;
+            let slot = match spawn_slot {
+                Some(s) => s,
+                None => {
+                    let slot_new = self
+                        .module
+                        .get_function("karac_runtime_park_slot_new")
+                        .expect("karac_runtime_park_slot_new declared in Codegen::new");
+                    self.builder
+                        .build_call(slot_new, &[], "kara.coro.slot")
+                        .expect("call karac_runtime_park_slot_new")
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_pointer_value()
+                }
+            };
             let ref_flags = self.fn_param_ref.get(&name).cloned().unwrap_or_default();
             let slice_elems = self
                 .fn_param_slice_elem
@@ -442,20 +452,26 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder
                 .build_call(ramp, &call_args, "kara.coro.drive")
                 .expect("call coroutine ramp");
-            let wait_fn = self
-                .module
-                .get_function("karac_runtime_park_slot_wait")
-                .expect("karac_runtime_park_slot_wait declared in Codegen::new");
-            self.builder
-                .build_call(wait_fn, &[slot.into()], "")
-                .expect("call karac_runtime_park_slot_wait");
-            let free_fn = self
-                .module
-                .get_function("karac_runtime_park_slot_free")
-                .expect("karac_runtime_park_slot_free declared in Codegen::new");
-            self.builder
-                .build_call(free_fn, &[slot.into()], "")
-                .expect("call karac_runtime_park_slot_free");
+            // Non-blocking spawn (slot provided by the runtime): the wrapper
+            // returns here, freeing the worker; the dispatcher drives the
+            // parked coroutine and its completion signals the runtime-owned
+            // slot (bound to the TaskHandle). No wait/free in this body.
+            if spawn_slot.is_none() {
+                let wait_fn = self
+                    .module
+                    .get_function("karac_runtime_park_slot_wait")
+                    .expect("karac_runtime_park_slot_wait declared in Codegen::new");
+                self.builder
+                    .build_call(wait_fn, &[slot.into()], "")
+                    .expect("call karac_runtime_park_slot_wait");
+                let free_fn = self
+                    .module
+                    .get_function("karac_runtime_park_slot_free")
+                    .expect("karac_runtime_park_slot_free declared in Codegen::new");
+                self.builder
+                    .build_call(free_fn, &[slot.into()], "")
+                    .expect("call karac_runtime_park_slot_free");
+            }
             return Ok(self.context.i64_type().const_int(0, false).into());
         }
         if let Some(ctor_fn) = self.state_machine_state_constructors.get(&name).copied() {

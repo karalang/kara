@@ -93,6 +93,44 @@ impl<'ctx> super::Codegen<'ctx> {
         self.lower_spawn_shared(closure_expr, Some(group_ptr.into()))
     }
 
+    /// A2 slice 5a — if the spawn closure body is a **tail free-function
+    /// call to a coroutine-compiled handler** (`spawn(|| handle(conn))`),
+    /// return that handler's key. Only this shape gets the density-optimal
+    /// non-blocking drive (`karac_runtime_spawn_coro` — worker ramps + returns,
+    /// `TaskHandle` completion bound to the coroutine slot). The restriction
+    /// is load-bearing: the ramp returns after the *first* suspend, so any
+    /// code before or after the call would run while the coroutine is still
+    /// parked. So we require the body to be *exactly* that call — directly, or
+    /// wrapped in a trivial block (`{ handle(conn) }` / `{ handle(conn); }`).
+    /// Method-handler, multi-statement, and non-unit-tail shapes fall back to
+    /// the 2b.4 blocking spawn. See spike § 6⅞.
+    fn spawn_coro_tail_fn_key(&self, body: &Expr) -> Option<String> {
+        let call_expr: &Expr = match &body.kind {
+            ExprKind::Block(b) => match (b.stmts.as_slice(), &b.final_expr) {
+                ([], Some(e)) => e.as_ref(),
+                ([only], None) => match &only.kind {
+                    StmtKind::Expr(e) => e,
+                    _ => return None,
+                },
+                _ => return None,
+            },
+            _ => body,
+        };
+        let name = match &call_expr.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(n) => n.clone(),
+                ExprKind::Path { segments, .. } if segments.len() == 1 => segments[0].clone(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if self.is_coroutine_compiled(&name) {
+            Some(name)
+        } else {
+            None
+        }
+    }
+
     /// Shared codegen for `spawn(closure)` and `tg.spawn(closure)`. The
     /// `group_ptr` parameter — when `Some(...)` — is registered with
     /// `karac_runtime_taskgroup_register` after the spawn FFI returns
@@ -154,6 +192,15 @@ impl<'ctx> super::Codegen<'ctx> {
             BasicTypeEnum::StructType(s) if s.count_fields() == 0
         );
 
+        // A2 slice 5a — density-optimal non-blocking drive when the closure is
+        // a tail coroutine-handler call. The wrapper then *ramps and returns*
+        // (the coroutine call inside compiles to `ramp(args, slot)` with no
+        // `park_slot_wait` — see the `coro_spawn_slot` intercept), and the
+        // outer site calls `karac_runtime_spawn_coro` (binds the TaskHandle's
+        // completion to the coroutine slot) instead of `karac_runtime_spawn`
+        // (which would block a worker on the wrapper's nested wait).
+        let use_coro_spawn = self.spawn_coro_tail_fn_key(body).is_some();
+
         // 4. Synthesize `__spawn_wrap_N(env, result_out, cancel)`.
         let id = self.closure_counter;
         self.closure_counter += 1;
@@ -185,8 +232,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(entry);
 
         let env_ptr = wrapper_fn.get_nth_param(0).unwrap().into_pointer_value();
+        // Param 1 is `result_out` for an ordinary spawn; for the non-blocking
+        // coroutine spawn (`use_coro_spawn`) the same slot is the runtime-owned
+        // `KaracParkSlot` handed to the coroutine ramp (CoroSpawnFn ABI).
         let result_out = wrapper_fn.get_nth_param(1).unwrap().into_pointer_value();
-        // `cancel` ptr unused in slice 4 (per-handle cancel flag wires up in slice 5).
+        // `cancel` ptr unused until slice 5c (cooperative cancellation).
         let _cancel_ptr = wrapper_fn.get_nth_param(2).unwrap();
 
         // Load the env struct value through the env pointer.
@@ -219,11 +269,21 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // Compile the closure body inside the wrapper context.
+        // Compile the closure body inside the wrapper context. For the
+        // non-blocking coroutine spawn, flip the call-site intercept into
+        // "ramp with this runtime-owned slot, don't wait" mode for the
+        // duration of the body emission (`result_out` here IS the slot).
+        let saved_spawn_slot = self.coro_spawn_slot;
+        if use_coro_spawn {
+            self.coro_spawn_slot = Some(result_out);
+        }
         let result = self.compile_expr(body)?;
+        self.coro_spawn_slot = saved_spawn_slot;
 
-        // Store the result into *result_out (unless unit-returning).
-        if !is_unit_return {
+        // Store the result into *result_out (ordinary spawn only). A coroutine
+        // spawn returns unit and `result_out` is the completion slot, not a
+        // result buffer — nothing to store.
+        if !use_coro_spawn && !is_unit_return {
             // result_out can legally be null when result_size == 0;
             // codegen-side wrappers always pass a non-null buffer for
             // non-unit returns, but skip the store if the buffer is
@@ -351,24 +411,41 @@ impl<'ctx> super::Codegen<'ctx> {
             self.context.i32_type()
         };
 
-        let spawn_fn = self
-            .module
-            .get_function("karac_runtime_spawn")
-            .expect("karac_runtime_spawn declared in Codegen::new");
         let wrapper_ptr = wrapper_fn.as_global_value().as_pointer_value();
-        let handle_call = self
-            .builder
-            .build_call(
-                spawn_fn,
-                &[
-                    wrapper_ptr.into(),
-                    heap_env.into(),
-                    usize_ty.const_int(result_size, false).into(),
-                    usize_ty.const_int(result_align, false).into(),
-                ],
-                "__spawn_handle",
-            )
-            .unwrap();
+        let handle_call = if use_coro_spawn {
+            // A2 slice 5a — non-blocking: the runtime allocates the bound
+            // completion slot and enqueues a worker that ramps + returns; the
+            // wrapper takes `(env, slot, cancel)` (CoroSpawnFn) so no result
+            // size/align is threaded (coroutine handlers return unit).
+            let spawn_coro_fn = self
+                .module
+                .get_function("karac_runtime_spawn_coro")
+                .expect("karac_runtime_spawn_coro declared in Codegen::new");
+            self.builder
+                .build_call(
+                    spawn_coro_fn,
+                    &[wrapper_ptr.into(), heap_env.into()],
+                    "__spawn_coro_handle",
+                )
+                .unwrap()
+        } else {
+            let spawn_fn = self
+                .module
+                .get_function("karac_runtime_spawn")
+                .expect("karac_runtime_spawn declared in Codegen::new");
+            self.builder
+                .build_call(
+                    spawn_fn,
+                    &[
+                        wrapper_ptr.into(),
+                        heap_env.into(),
+                        usize_ty.const_int(result_size, false).into(),
+                        usize_ty.const_int(result_align, false).into(),
+                    ],
+                    "__spawn_handle",
+                )
+                .unwrap()
+        };
         let handle_ptr = handle_call
             .try_as_basic_value()
             .unwrap_basic()
