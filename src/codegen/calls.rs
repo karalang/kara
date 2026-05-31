@@ -952,10 +952,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// built-in/primitive handling. Keys off `var_type_names`, which the
     /// existing struct-literal and struct-param paths populate.
     pub(super) fn inferred_receiver_type(&self, object: &Expr) -> Option<String> {
-        if let ExprKind::Identifier(name) = &object.kind {
-            return self.var_type_names.get(name.as_str()).cloned();
+        match &object.kind {
+            ExprKind::Identifier(name) => self.var_type_names.get(name.as_str()).cloned(),
+            // `self.method()` inside an impl body: the receiver parses as
+            // `SelfValue`, not `Identifier("self")`. `make_impl_method_function`
+            // prepends a regular `self` param whose declared type registers in
+            // `var_type_names["self"]`, so the qualified `Type.method` lookup
+            // resolves the same way an identifier receiver would.
+            ExprKind::SelfValue => self.var_type_names.get("self").cloned(),
+            _ => None,
         }
-        None
     }
 
     /// Slice OR (2026-05-16): Option/Result `unwrap` / `expect` / `is_some`

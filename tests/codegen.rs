@@ -26828,6 +26828,89 @@ fn main() { let mut c = Counter { n: 0 }; c.dec(); println(7); }
         }
     }
 
+    // ── `self.method()` self-dispatch (codegen method dispatch) ───────
+    //
+    // Inside an impl body, `self` parses as `ExprKind::SelfValue`, not
+    // `Identifier("self")`. Before this slice the user-method dispatch in
+    // `compile_method_call` only matched identifier receivers, so a method
+    // calling another method on `self` fell through to the "no handler for
+    // method 'X' on non-identifier receiver" codegen error. The fix adds a
+    // `SelfValue` arm to `inferred_receiver_type` (resolving the type via the
+    // synthesized `self` param registered in `var_type_names`) and to the
+    // receiver-storage path (addressing `self`'s alloca for the ptr-self ABI).
+
+    #[test]
+    fn test_e2e_self_dispatch_ref_self_returns_value() {
+        // A `pub ref self` method calls a private `ref self` helper via
+        // `self.doubled()` and uses its return value. Exercises the
+        // SelfValue receiver through the ptr-self (ref) calling convention.
+        let out = run_program(
+            r#"
+struct Counter { n: i64 }
+impl Counter {
+    fn doubled(ref self) -> i64 { self.n * 2 }
+    pub fn report(ref self) -> i64 { self.doubled() + 1 }
+}
+fn main() { let c = Counter { n: 10 }; println(c.report()); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "21");
+        }
+    }
+
+    #[test]
+    fn test_e2e_self_dispatch_mut_ref_self_mutation_persists() {
+        // A `pub mut ref self` method calls a private `mut ref self` helper
+        // via `self.bump()` twice. The mutation must address the *same*
+        // storage `self` points at, so it accumulates and persists back to
+        // the caller's `c`.
+        let out = run_program(
+            r#"
+struct Counter { n: i64 }
+impl Counter {
+    fn bump(mut ref self) { self.n = self.n + 5; }
+    pub fn run(mut ref self) -> i64 { self.bump(); self.bump(); self.n }
+}
+fn main() { let mut c = Counter { n: 0 }; println(c.run()); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "10");
+        }
+    }
+
+    #[test]
+    fn test_e2e_self_dispatch_helper_invariant_fires() {
+        // Ties self-dispatch back to contracts: a `pub` method calls a
+        // private `mut ref self` helper via `self.dec()` that breaks the
+        // `impl invariant`. Reaching the helper at all proves dispatch
+        // works; the helper's own exit-invariant check then aborts.
+        let captured = run_program_capturing(
+            r#"
+struct Counter { n: i64, impl invariant self.n >= 0 }
+impl Counter {
+    fn dec(mut ref self) { self.n = self.n - 1; }
+    pub fn drive(mut ref self) { self.dec(); }
+}
+fn main() { let mut c = Counter { n: 0 }; c.drive(); println(42); }
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated"),
+                "expected the helper's impl-invariant abort via self-dispatch, \
+                 got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after the abort must not run"
+            );
+        }
+    }
+
     // ── Contracts — release-mode stripping (design.md § Contracts) ────
     //
     // "Checked at runtime in debug builds, stripped in release." With

@@ -1081,17 +1081,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     .first()
                     .map(|t| matches!(t, BasicMetadataTypeEnum::PointerType(_)))
                     .unwrap_or(false);
+                // Receiver storage name for the ptr-self ABI. Both `obj`
+                // (Identifier) and `self` (SelfValue, registered under the
+                // synthesized "self" param) resolve to a data pointer; any
+                // other shape has no stable storage to address.
+                let recv_storage_name: Option<&str> = match &object.kind {
+                    ExprKind::Identifier(var_name) => Some(var_name.as_str()),
+                    ExprKind::SelfValue => Some("self"),
+                    _ => None,
+                };
                 let receiver_arg: BasicMetadataValueEnum<'ctx> = if first_param_is_ptr {
-                    if let ExprKind::Identifier(var_name) = &object.kind {
-                        if let Some(ptr) = self.get_data_ptr(var_name) {
-                            ptr.into()
-                        } else {
-                            self.compile_expr(object)?.into()
-                        }
+                    if let Some(ptr) = recv_storage_name.and_then(|n| self.get_data_ptr(n)) {
+                        ptr.into()
                     } else {
-                        // Non-identifier receiver into a ref-self method:
-                        // unsupported in v1 (would require materializing a
-                        // temporary alloca). Fall through to compile_expr;
+                        // Non-identifier / non-self receiver into a ref-self
+                        // method: unsupported in v1 (would require materializing
+                        // a temporary alloca). Fall through to compile_expr;
                         // mismatched ABI may surface at link time.
                         self.compile_expr(object)?.into()
                     }
