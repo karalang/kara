@@ -15752,7 +15752,8 @@ fn main() {
             None,
             None,
             None,
-            true,
+            true,  // enable_hot_swap
+            false, // strip_contracts
         );
         assert!(
             result.is_ok(),

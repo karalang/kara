@@ -152,6 +152,17 @@ pub enum Command {
         /// 266). Reads the same instantiation table as `karac query
         /// monomorphization`.
         monomorphization_budget: crate::monomorphization::MonomorphizationBudget,
+        /// `--release`: strip debug-only runtime checks from the emitted
+        /// binary. Today this means contracts (`requires` / `ensures` /
+        /// `old` / `invariant`) per design.md § Contracts ("checked at
+        /// runtime in debug builds, stripped in release"); the future
+        /// `?`-propagation trace strip lands behind the same flag. A bare
+        /// `karac build` is the debug profile (contracts checked). Note
+        /// that mid-end optimization is already `-O2` by default
+        /// (`KARAC_OPT_LEVEL`), so `--release` is about removing runtime
+        /// *checks*, not turning the optimizer on. Composes with the
+        /// `KARAC_STRIP_CONTRACTS` env knob (OR): either strips.
+        release: bool,
         /// See [`Command::Run::lint_overrides`].
         lint_overrides: crate::lints::CliLintOverrides,
     },
@@ -527,6 +538,7 @@ pub fn execute(cmd: Command) {
             no_proxy,
             target,
             monomorphization_budget,
+            release,
             lint_overrides,
         } => cmd_build(
             &file,
@@ -537,6 +549,7 @@ pub fn execute(cmd: Command) {
             no_proxy,
             target.as_deref(),
             monomorphization_budget,
+            release,
             lint_overrides,
         ),
         Command::BuildProject {
@@ -3970,6 +3983,7 @@ fn cmd_build(
     no_proxy: bool,
     target: Option<&str>,
     monomorphization_budget: crate::monomorphization::MonomorphizationBudget,
+    release: bool,
     lint_overrides: crate::lints::CliLintOverrides,
 ) {
     // Single-file mode runs no dep resolution and reaches no network surface,
@@ -4046,6 +4060,7 @@ fn cmd_build(
             Some(filename),
             Some(&source),
             enable_hot_swap,
+            release,
         ) {
             eprintln!("error: codegen failed: {e}");
             process::exit(1);
@@ -4069,6 +4084,10 @@ fn cmd_build(
     #[cfg(not(feature = "llvm"))]
     {
         let _ = enable_hot_swap;
+        // `--release` only affects codegen (contract stripping), which the
+        // non-llvm fallback doesn't reach — accepted-but-inert, consistent
+        // with --offline / --target / --enable-hot-swap above.
+        let _ = release;
         // The budget check rides the llvm build path (after typecheck,
         // before codegen); the non-llvm fallback type-checks only, so the
         // flag is accepted-but-inert here, consistent with --offline /
@@ -4880,6 +4899,11 @@ fn run_multi_file_codegen(
         None,
         None,
         enable_hot_swap,
+        // Project-mode `--release` is a tracked follow-on (BuildProject has
+        // no `release` field yet); single-file build is the `--release`
+        // surface today. Pass `false` — env `KARAC_STRIP_CONTRACTS` still
+        // applies via the `Codegen::new` default for project builds.
+        false,
     ) {
         let _ = std::fs::remove_file(&obj_path);
         return BuildCodegenStatus::Failed {

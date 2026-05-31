@@ -1225,6 +1225,113 @@ fn test_build_bare_file_hot_swap_accepted() {
     );
 }
 
+// ── Phase-9: `karac build --release` contract stripping ─────────
+//
+// `--release` strips debug-only runtime checks (contracts today) from the
+// emitted binary, per design.md § Contracts ("checked at runtime in debug
+// builds, stripped in release"). Single-file build only; project-mode is a
+// tracked follow-on and rejected loudly rather than silently shipping a
+// debug binary.
+
+#[test]
+fn test_build_release_flag_accepted_single_file() {
+    // The parser must recognise `--release` on a single-file build — no
+    // "unknown flag" rejection. (Under no-llvm the build falls back to a
+    // type check; either way the flag parses.)
+    let out = karac_bin()
+        .args(["build", "tests/snapshots/clean.kara", "--release"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(if cfg!(windows) { "clean.exe" } else { "clean" });
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unknown flag"),
+        "expected --release to parse, got stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_build_release_project_mode_rejected() {
+    // `--release` with no file argument is project mode, which isn't wired
+    // for stripping yet. The parser rejects loudly (before any manifest
+    // lookup) rather than silently emit a contract-checked binary.
+    let out = karac_bin().args(["build", "--release"]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--release is only supported in single-file build"),
+        "expected a loud project-mode rejection, got stderr={stderr}",
+    );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_release_strips_contracts_e2e() {
+    use std::io::Write;
+    // `checked(5)` violates `requires x > 100`. A debug build aborts at
+    // runtime with `contract violated`; `--release` strips the check so the
+    // program runs to completion and prints 5. Building into a temp CWD keeps
+    // the produced binary out of the worktree (the runtime archive resolves
+    // via CARGO_MANIFEST_DIR, so the CWD change is safe).
+    let src = r#"
+fn checked(x: i64) -> i64 requires x > 100 { x }
+fn main() { println(checked(5)); }
+"#;
+    let dir = std::env::temp_dir().join(format!("karac_release_e2e_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let kara_path = dir.join("relprog.kara");
+    {
+        let mut f = std::fs::File::create(&kara_path).expect("write temp .kara");
+        f.write_all(src.as_bytes()).expect("write src");
+    }
+    let exe = dir.join("relprog");
+
+    // Build (with/without --release) into the temp dir, then run the binary.
+    // Returns None to soft-skip when the no-llvm fallback fires or linking
+    // can't find the runtime archive (so the test passes vacuously in those
+    // environments rather than failing on an unrelated cause).
+    let build_and_run = |release: bool| -> Option<(String, Option<i32>)> {
+        let mut args: Vec<&str> = vec!["build", "relprog.kara"];
+        if release {
+            args.push("--release");
+        }
+        let build = karac_bin().current_dir(&dir).args(args).output().unwrap();
+        let berr = String::from_utf8_lossy(&build.stderr);
+        if berr.contains("requires the llvm feature") || !exe.exists() {
+            return None;
+        }
+        let run = common::output_with_hang_watchdog(
+            std::process::Command::new(&exe),
+            std::time::Duration::from_secs(15),
+        )?;
+        let out = String::from_utf8_lossy(&run.stdout).to_string();
+        let code = run.status.code();
+        let _ = std::fs::remove_file(&exe);
+        Some((out, code))
+    };
+
+    if let Some((out, code)) = build_and_run(false) {
+        assert!(
+            out.contains("contract violated"),
+            "debug build must abort on the requires violation, got stdout={out:?}",
+        );
+        assert_ne!(code, Some(0), "debug build must exit nonzero on the abort");
+    }
+    if let Some((out, code)) = build_and_run(true) {
+        assert!(
+            !out.contains("contract violated"),
+            "--release must strip the contract, got stdout={out:?}",
+        );
+        assert_eq!(
+            out.trim(),
+            "5",
+            "stripped build runs the body to completion"
+        );
+        assert_eq!(code, Some(0), "stripped build exits cleanly");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ── Theme 4: multi-file project-mode codegen ────────────────────
 //
 // Theme 4 wires `cmd_build_project` through the existing single-file

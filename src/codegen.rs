@@ -379,12 +379,28 @@ pub fn compile_to_object_with_options(
         source_filename,
         source_text,
         false,
+        false,
     )
 }
 
 /// Variant of [`compile_to_object_with_options`] that accepts the
-/// phase-7 line-5 `--enable-hot-swap` flag. See
-/// [`compile_to_ir_with_hot_swap`] for the codegen contract.
+/// phase-7 line-5 `--enable-hot-swap` flag and the phase-9 `--release`
+/// contract-stripping flag. See [`compile_to_ir_with_hot_swap`] for the
+/// hot-swap codegen contract and [`compile_to_ir_with_contracts_stripped`]
+/// for the stripping semantics.
+///
+/// `strip_contracts` carries `karac build --release`: when `true` it forces
+/// contract emission off for this compile via [`Codegen::set_strip_contracts`].
+/// When `false` the field keeps the env-derived default
+/// (`read_strip_contracts_env`, i.e. `KARAC_STRIP_CONTRACTS`) that
+/// `Codegen::new` already applied — so the flag and the env knob compose with
+/// OR semantics and a bare build never *un*-strips an env-requested strip.
+// Two build-toggle bools (hot-swap, contract-strip) on top of the source/
+// ownership/concurrency context push this to 8 params. A bundling options
+// struct would ripple through every call site for no readability win at this
+// thin public-API boundary; the `enable_hot_swap` / `strip_contracts` names
+// are self-documenting at the (few) call sites. Matches `cmd_build`'s allow.
+#[allow(clippy::too_many_arguments)]
 pub fn compile_to_object_with_hot_swap(
     program: &Program,
     output_path: &str,
@@ -393,6 +409,7 @@ pub fn compile_to_object_with_hot_swap(
     source_filename: Option<&str>,
     source_text: Option<&str>,
     enable_hot_swap: bool,
+    strip_contracts: bool,
 ) -> Result<(), String> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
@@ -401,6 +418,9 @@ pub fn compile_to_object_with_hot_swap(
     cg.set_source_filename(source_filename);
     cg.set_source_text(source_text);
     cg.set_hot_swap_enabled(enable_hot_swap);
+    if strip_contracts {
+        cg.set_strip_contracts(true);
+    }
     cg.compile_program(program)?;
 
     let target_machine = create_target_machine()?;
