@@ -529,7 +529,36 @@ impl<'ctx> super::Codegen<'ctx> {
         // the i64 default.
         let fn_ast = find_function_ast(program, ast_key);
         for field in &layout.fields {
+            // Coro-frame heap-overflow fix: `pattern_binding_types` records
+            // a **name-only** surface string (`type_display`'s head segment)
+            // for every named binding — for a fixed-size `Array[u8, 4096]`
+            // local that string is just `"Array"`, with the element type and
+            // length `N` dropped. `llvm_type_for_name("Array")` has no array
+            // arm, so it falls through to the i64 default and sizes the coro
+            // frame slot at **8 bytes** for what is a 4096-byte inline array.
+            // The `recv_text` FFI (and the `[0u8; 4096]` memset) then write
+            // up to N bytes into that 8-byte frame slot, overflowing into the
+            // adjacent heap chunk — the `corrupted size vs. prev_size` /
+            // `double free or corruption` the ws_idle_holder coroutine
+            // handler hits on glibc (and ASAN catches on every OS).
+            //
+            // The size-bearing form lives only in the binding's declared
+            // `TypeExpr` (`Array[T, N]`), which `llvm_type_for_type_expr`
+            // sizes correctly via its `"Array"` arm. So for any name whose
+            // layout is not fully determined by the name string alone
+            // (currently `"Array"`), prefer the param/let `TypeExpr` lookup
+            // — the same recovery path the `None` arm already uses — and only
+            // fall back to the name-level lookup when no `TypeExpr` is
+            // recoverable. `Vec` / `String` / `Slice` etc. are unaffected:
+            // their name string fully determines their (header-only) layout,
+            // so they keep taking the fast `llvm_type_for_name` path.
             let ty: BasicTypeEnum<'ctx> = match &field.type_name {
+                Some(name) if name_layout_needs_type_expr(name) => {
+                    lookup_param_type_expr(fn_ast, &field.name)
+                        .or_else(|| lookup_let_type_expr(fn_ast, &field.name))
+                        .map(|te| self.llvm_type_for_type_expr(&te))
+                        .unwrap_or_else(|| self.llvm_type_for_name(name))
+                }
                 Some(name) => self.llvm_type_for_name(name),
                 None => lookup_param_type_expr(fn_ast, &field.name)
                     .or_else(|| lookup_let_type_expr(fn_ast, &field.name))
@@ -3590,6 +3619,31 @@ pub(super) fn state_machine_return_type_for<'ctx>(
 /// `emit_state_struct_type_for_key` per-mono path to recover the
 /// generic-typed parameter's `TypeExpr` so `llvm_type_for_type_expr`
 /// can resolve it through the active `type_subst`.
+/// Does the recorded `pattern_binding_types` surface name fully determine
+/// the binding's LLVM layout on its own, or does codegen need the binding's
+/// declared `TypeExpr` (with its generic args) to size the field correctly?
+///
+/// `pattern_binding_types` records only the **head segment** of a binding's
+/// type name (`type_display`'s first token) — it drops generic arguments.
+/// For most layout-relevant names that's fine: `Vec` / `VecDeque` / `String`
+/// / `str` always lower to the `{ptr, len, cap}` header, `Slice` to
+/// `{ptr, len}`, `Map` / `Set` to a pointer — the element type never changes
+/// the field's *size*. But a fixed-size array `Array[T, N]` has its element
+/// type **and** its length `N` only in the generic args, and the inline
+/// LLVM type is `[N x T]` — N×sizeof(T) bytes. `llvm_type_for_name("Array")`
+/// has no array arm and falls through to the i64 default (8 bytes), so a
+/// coro-frame slot built from the name alone is catastrophically undersized
+/// (8 bytes for a 4096-byte buffer), and the `recv_text` write / `[0u8; N]`
+/// memset overflows into the adjacent heap chunk. For these names the caller
+/// must recover the declared `TypeExpr` and size through
+/// `llvm_type_for_type_expr` (which has the `"Array"` arm).
+fn name_layout_needs_type_expr(name: &str) -> bool {
+    // `Array` is the only baked surface name whose head segment loses
+    // size-determining information. Add future fixed-layout-by-generic-arg
+    // names here if they arise.
+    name == "Array"
+}
+
 pub(super) fn lookup_param_type_expr(
     fn_ast: Option<&Function>,
     field_name: &str,

@@ -16596,6 +16596,45 @@ fn main() {
     }
 
     #[test]
+    fn test_state_struct_type_sizes_fixed_array_field_inline() {
+        // Regression (coro frame heap overflow): a `let buf: Array[u8, 4096]`
+        // local held live across a network-yield park must occupy a
+        // `[4096 x i8]` INLINE slot in the coro frame's state struct — NOT
+        // the 8-byte i64 default that `llvm_type_for_name("Array")` returns
+        // when the size-bearing `TypeExpr` is dropped. With the bug, the
+        // typechecker's `pattern_binding_types` recorded only the head name
+        // `"Array"` (no element type, no length), the state struct sized the
+        // field at i64 (8 bytes), and the post-resume write into the
+        // 4096-byte buffer overflowed the frame and clobbered the adjacent
+        // heap chunk (`corrupted size vs. prev_size` / `double free or
+        // corruption` on glibc; ASAN heap-buffer-overflow on every OS). The
+        // buffer is touched (`buf[0]`) after the park so it is live across
+        // the suspend and lands in the captured-locals set.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() {
+                 let mut buf: Array[u8, 4096] = [0u8; 4096];
+                 fetch();
+                 buf[0] = 1u8;
+                 let _ = buf[0];
+             }",
+        );
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no state struct type def in IR:\n{ir}"));
+        // The array slot must be the full inline `[4096 x i8]`, not the i64
+        // default that under-sizes the coro frame.
+        assert!(
+            line.contains("[4096 x i8]"),
+            "coro state struct must size the Array[u8, 4096] field as an \
+             inline [4096 x i8] slot (got the i64 default — frame overflow); \
+             line: {line}"
+        );
+    }
+
+    #[test]
     fn test_state_struct_type_not_emitted_for_pure_function() {
         // A pure function that calls no network-effect callee gets no
         // entry in `state_struct_layouts` (slice-4 presence rule) and

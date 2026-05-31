@@ -161,6 +161,47 @@ mod tests {
         }
     "#;
 
+    /// Coro-frame heap-overflow regression. A **fixed-size `Array[u8, 4096]`
+    /// local live across a park** — the exact shape of the ws_idle_holder
+    /// flagship handler's `recv_text` buffer. The array is touched at BOTH
+    /// ends (`buf[0]`, `buf[4095]`) before the `accept` park, forcing
+    /// full-extent frame residency across the suspend; after resume the whole
+    /// 4096-byte extent is written then summed. Before the fix the coro
+    /// frame's state struct sized this field at the 8-byte i64 default
+    /// (`llvm_type_for_name("Array")` dropped the `[u8, 4096]` generic args),
+    /// so the post-resume writes overflowed the frame slot into the adjacent
+    /// heap chunk — `corrupted size vs. prev_size` / `double free or
+    /// corruption` on glibc, ASAN heap-buffer-overflow on every OS. The sum
+    /// of 4096 ones is `4096`, printed to prove the writes/reads landed in
+    /// the buffer (not over a neighbour). Driven by the connect-only
+    /// `service_n_connections` helper — the park is a plain-TCP `accept`, so
+    /// no client payload is needed to make the buffer live across the suspend.
+    const ARRAY_BUF_HANDLER_SRC: &str = r#"
+        fn serve(listener: TcpListener) {
+            let mut buf: Array[u8, 4096] = [0u8; 4096];
+            buf[0] = 7u8;
+            buf[4095] = 9u8;
+            let _stream = listener.accept().unwrap();
+            let mut i: i64 = 0;
+            while i < 4096 {
+                buf[i] = 1u8;
+                i = i + 1;
+            }
+            let mut sum: i64 = 0;
+            let mut j: i64 = 0;
+            while j < 4096 {
+                sum = sum + (buf[j] as i64);
+                j = j + 1;
+            }
+            println(sum);
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            serve(listener);
+            println(2);
+        }
+    "#;
+
     /// Slice 4: a **heap local live across a park**. `buf` (a `Vec[i64]`,
     /// stand-in for a read buffer) is allocated + filled BEFORE the `accept`
     /// park and used AFTER it (`buf.len()`), so CoroSplit must spill it into the
@@ -1669,6 +1710,108 @@ mod tests {
             oks, N,
             "only {oks}/{N} concurrent WS-over-TLS handlers echoed — the rest \
              wedged (coroutine resume race / accept-path handshake-pool mismatch)"
+        );
+    }
+
+    #[test]
+    fn coroutine_array_buffer_handler_services_connection() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_arrbuf_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(ARRAY_BUF_HANDLER_SRC, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let (exit_status, lines) = service_n_connections(&exe_path, 1, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "array-buffer coroutine binary exited non-success {exit_status:?}; \
+             stdout lines: {lines:?}"
+        );
+        // The post-resume writes filled the whole 4096-byte buffer with 1s;
+        // the sum proves they landed in-bounds (not over a neighbour or a
+        // truncated 8-byte slot).
+        assert!(
+            lines.iter().any(|l| l == "4096"),
+            "expected `4096` (sum over the fully-written Array[u8, 4096] \
+             buffer) in stdout; got {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "2"),
+            "expected `2` (main resumed after the coroutine drive); got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn coroutine_array_buffer_handler_under_asan() {
+        // Coro-frame heap-overflow regression under ASAN. A fixed-size
+        // `Array[u8, 4096]` local held live across the `accept` park is the
+        // ws_idle_holder flagship handler's `recv_text`-buffer shape. With
+        // the frame-sizing bug the state-struct slot was 8 bytes (the i64
+        // default) and the post-resume full-extent write overflowed into the
+        // adjacent heap chunk — ASAN reports heap-buffer-overflow regardless
+        // of the host allocator (silent on the macOS default malloc, aborts
+        // under glibc / under ASAN everywhere). A clean ASAN exit proves the
+        // frame slot is now the full `[4096 x i8]`.
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        if !asan_available() {
+            eprintln!("skip: ASAN unavailable on this host");
+            return;
+        }
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_arrbuf_asan_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(
+            ARRAY_BUF_HANDLER_SRC,
+            &exe_path,
+            Some(&["-fsanitize=address"]),
+        ) {
+            eprintln!("skip: ASAN compile/link failed: {e}");
+            return;
+        }
+        let asan_options = if cfg!(target_os = "macos") {
+            "abort_on_error=0:exitcode=23"
+        } else {
+            "detect_leaks=1:abort_on_error=0:exitcode=23"
+        };
+
+        let (exit_status, lines) = service_n_connections(&exe_path, 1, Some(asan_options));
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "ASAN reported a memory error in the Array[u8, 4096] coroutine \
+             handler (exit {exit_status:?}) — the coro frame slot for the \
+             fixed-size array is undersized and the post-resume write \
+             overflows it. stdout lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "4096"),
+            "array-buffer coroutine did not complete its in-bounds writes \
+             under ASAN; stdout lines: {lines:?}"
         );
     }
 }
