@@ -209,42 +209,17 @@ the table to be truly apples-to-apples — the existing numbers are
 from 2026-05-10 and the user may want a fresh sweep before the
 commercial framing lands. Tracked as a follow-up.)
 
-## Bench harness integration (follow-up)
+## Bench harness integration
 
-`bench.sh` doesn't currently know about Phoenix; the four numbers
-above were captured by running `wrk` directly against `./bin/server`,
-matching `bench.sh`'s invocation shape exactly so the numbers are
-comparable to the existing table.
-
-Adding Phoenix to the harness sweep would be a five-line change in
-`bench.sh`:
-
-```sh
-prepare_phoenix() {
-  if ! have mix; then
-    echo "skip: phoenix not built (elixir/mix not installed)" >&2
-    return 1
-  fi
-  if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] phoenix: would mix deps.get + mix compile --env prod" >&2
-    return 0
-  fi
-  (cd "$BENCH_DIR/phoenix" && MIX_ENV=prod mix deps.get >/dev/null 2>&1 \
-    && MIX_ENV=prod mix compile >/dev/null 2>&1) || {
-    echo "skip: phoenix build failed" >&2
-    return 1
-  }
-  return 0
-}
-
-# ...
-PHOENIX_CMD_HOLDER="$BENCH_DIR/phoenix/bin/server"
-out=$(run_impl "p" "phoenix" prepare_phoenix "$PHOENIX_CMD_HOLDER")
-```
-
-Plus extending `IMPLS_FILTER`'s `k,r,g,n` default to `k,r,g,n,p`. Not
-landed here per the instructions for this comparator slice — modifying
-the harness is a separate decision for the user to review.
+`bench.sh` builds + runs Phoenix as the fifth impl alongside kara /
+rust / go / node. The 2026-05-30 numbers above were captured by
+running `wrk` directly against `./bin/server` (before the harness
+wiring landed), matching `bench.sh`'s invocation shape exactly so the
+numbers are comparable to the existing table. From 2026-05-30 onward,
+`bench.sh --impls=k,r,g,n,p` (the new default) sweeps all five impls
+in one session — see the `prepare_phoenix` runner and `PHOENIX_CMD_HOLDER`
+wiring in `bench.sh`. The `tests/parallax_bench.rs::test_bench_script_dry_run`
+CI smoke also checks Phoenix is present in the dry-run table.
 
 ## Project layout
 
@@ -283,9 +258,6 @@ phoenix/
   is small (~10); raising it (via Endpoint config's `:thousand_island_options`)
   likely lifts the c5000 row above zero. Worth measuring whether
   raising it also affects -c100 / -c1000 numbers before landing.
-- **Wire Phoenix into `bench.sh`** so the sweep covers all five
-  impls in one run. Sketched above; needs sign-off on extending the
-  harness's impl set.
 - **Cowboy adapter cross-check.** Phoenix lets you swap Bandit for
   Cowboy with one config line; would be informative to capture both
   numbers, since Cowboy is the historical default and some Elixir

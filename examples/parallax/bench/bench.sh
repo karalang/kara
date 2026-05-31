@@ -2,16 +2,19 @@
 # Slice E (2026-05-09) — Parallax bench driver. Updated 2026-05-10
 # (G2 + G3 + G4) to sweep connection counts, run multiple measurement
 # rounds per (impl, conn) pair, and report a richer percentile spectrum.
+# Updated 2026-05-30 to add the Phoenix/Elixir reference impl as the
+# fifth comparator (commercial-tier foil for the auto-par claim).
 #
-# Builds + runs the four reference impls (kara, rust, go, node) and
-# probes each with `wrk` for throughput + latency-distribution.
+# Builds + runs the five reference impls (kara, rust, go, node, phoenix)
+# and probes each with `wrk` for throughput + latency-distribution.
 # Sequential per-impl runs on the same machine — F4 fairness control.
 #
 # Usage:
-#   bench.sh                          # full bench, all four impls
+#   bench.sh                          # full bench, all five impls
 #   bench.sh --dry-run                # print what would run; touch nothing
 #   bench.sh --impls=k,r              # comma-separated subset
-#                                     # (k=kara, r=rust, g=go, n=node)
+#                                     # (k=kara, r=rust, g=go, n=node,
+#                                     #  p=phoenix)
 #   bench.sh --connections=100,1000   # connection-count sweep (default
 #                                     # 100,1000,5000). One row per
 #                                     # (impl, conn) pair in the output.
@@ -55,7 +58,7 @@ REPO_ROOT=$(CDPATH= cd -- "$BENCH_DIR/../../.." && pwd)
 
 # ── Defaults ───────────────────────────────────────────────────────
 DRY_RUN=0
-IMPLS_FILTER="k,r,g,n"
+IMPLS_FILTER="k,r,g,n,p"
 # Default warmup = 0 (no warmup). With $RUNS=3 measure rounds and
 # median-of-runs aggregation, the first-round JIT/cold-start outlier
 # is naturally excluded — warmup adds time without improving the
@@ -202,6 +205,28 @@ prepare_node() {
   fi
   [ -f "$BENCH_DIR/node/server.js" ] || {
     echo "skip: node server.js missing" >&2
+    return 1
+  }
+  return 0
+}
+
+prepare_phoenix() {
+  if ! have mix; then
+    echo "skip: phoenix not built (elixir/mix not installed)" >&2
+    return 1
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] phoenix: would MIX_ENV=prod mix deps.get + mix compile in bench/phoenix/" >&2
+    return 0
+  fi
+  (cd "$BENCH_DIR/phoenix" \
+    && MIX_ENV=prod mix deps.get >/dev/null 2>&1 \
+    && MIX_ENV=prod mix compile >/dev/null 2>&1) || {
+    echo "skip: phoenix build failed (mix deps.get / mix compile)" >&2
+    return 1
+  }
+  [ -x "$BENCH_DIR/phoenix/bin/server" ] || {
+    echo "skip: phoenix launcher missing at $BENCH_DIR/phoenix/bin/server" >&2
     return 1
   }
   return 0
@@ -473,7 +498,7 @@ run_impl() {
 }
 
 # ── Main ────────────────────────────────────────────────────────────
-echo "Parallax bench harness — kara, rust, go, node"
+echo "Parallax bench harness — kara, rust, go, node, phoenix"
 echo "  bench dir: $BENCH_DIR"
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "  mode: DRY RUN (no servers spawned, no wrk)"
@@ -509,20 +534,25 @@ out=$(run_impl "n" "node" prepare_node "$NODE_CMD_HOLDER")
 results="$results
 $out"
 
+PHOENIX_CMD_HOLDER="$BENCH_DIR/phoenix/bin/server"
+out=$(run_impl "p" "phoenix" prepare_phoenix "$PHOENIX_CMD_HOLDER")
+results="$results
+$out"
+
 echo
 echo "Cold-start (first ~1s after server spawn, -t1 -c1 sequential)"
 echo
-printf "  %-6s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
+printf "  %-7s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
   "impl" "req/s" "p50 ms" "p75 ms" "p90 ms" "p99 ms" "max ms"
-printf "  %s\n" "-------+----------------------------+----------+----------+----------+----------+----------"
+printf "  %s\n" "--------+----------------------------+----------+----------+----------+----------+----------"
 printf "%s\n" "$results" | while IFS='|' read -r name conns rps_med rps_min rps_max p50 p75 p90 p99 lmax; do
   [ -z "$name" ] && continue
   [ "$conns" = "cold" ] || continue
   if [ "$rps_med" = "DRY" ] || [ "$rps_med" = "SKIP" ] || [ "$rps_med" = "NA" ]; then
-    printf "  %-6s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
+    printf "  %-7s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
       "$name" "$rps_med" "$rps_med" "$rps_med" "$rps_med" "$rps_med" "$rps_med"
   else
-    printf "  %-6s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
+    printf "  %-7s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
       "$name" "$rps_med" "$p50" "$p75" "$p90" "$p99" "$lmax"
   fi
 done
@@ -531,18 +561,18 @@ echo
 echo "Steady-state — req/s reported as median across $RUNS rounds, [min..max] in brackets;"
 echo "               latencies are median across rounds in milliseconds."
 echo
-printf "  %-6s | %-6s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
+printf "  %-7s | %-6s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
   "impl" "-c" "req/s (med [min..max])" "p50 ms" "p75 ms" "p90 ms" "p99 ms" "max ms"
-printf "  %s\n" "-------+--------+----------------------------+----------+----------+----------+----------+----------"
+printf "  %s\n" "--------+--------+----------------------------+----------+----------+----------+----------+----------"
 printf "%s\n" "$results" | while IFS='|' read -r name conns rps_med rps_min rps_max p50 p75 p90 p99 lmax; do
   [ -z "$name" ] && continue
   [ "$conns" = "cold" ] && continue
   if [ "$rps_med" = "DRY" ] || [ "$rps_med" = "SKIP" ] || [ "$rps_med" = "NA" ]; then
-    printf "  %-6s | %-6s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
+    printf "  %-7s | %-6s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
       "$name" "$conns" "$rps_med" "$rps_med" "$rps_med" "$rps_med" "$rps_med" "$rps_med"
   else
     rps_summary=$(printf "%.0f [%.0f..%.0f]" "$rps_med" "$rps_min" "$rps_max")
-    printf "  %-6s | %-6s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
+    printf "  %-7s | %-6s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
       "$name" "$conns" "$rps_summary" "$p50" "$p75" "$p90" "$p99" "$lmax"
   fi
 done

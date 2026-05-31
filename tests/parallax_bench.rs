@@ -10,8 +10,8 @@
 //!
 //! * `test_bench_script_dry_run` — invoke
 //!   `examples/parallax/bench/bench.sh --dry-run`, assert exit 0 + stdout
-//!   names all four impls (kara, rust, go, node). Pins script syntactic
-//!   correctness without paying the bench cost in CI.
+//!   names all five impls (kara, rust, go, node, phoenix). Pins script
+//!   syntactic correctness without paying the bench cost in CI.
 //!
 //! The Rust/Go/Node impls deliberately have no unit tests — they're
 //! reference implementations, not karac code; their correctness is
@@ -261,7 +261,7 @@ mod parallax_bench_tests {
         );
     }
 
-    /// `bench.sh --dry-run` exits 0 and lists the four impl names on
+    /// `bench.sh --dry-run` exits 0 and lists the five impl names on
     /// stdout. Doesn't actually start any server or invoke `wrk`.
     #[test]
     fn test_bench_script_dry_run() {
@@ -281,7 +281,7 @@ mod parallax_bench_tests {
             String::from_utf8_lossy(&output.stderr)
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
-        for impl_name in &["kara", "rust", "go", "node"] {
+        for impl_name in &["kara", "rust", "go", "node", "phoenix"] {
             assert!(
                 stdout.contains(impl_name),
                 "bench.sh --dry-run stdout should mention `{impl_name}`; got:\n{stdout}"
