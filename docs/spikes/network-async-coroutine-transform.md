@@ -96,11 +96,30 @@ the end of this doc as the seed for slice 2.
 
 ## 6. A2 implementation sketch (against the existing seams)
 
+> **Implementation constraint discovered during slice-1 prep — coro
+> intrinsics must be emitted via raw `llvm-sys`, not inkwell's safe API.**
+> inkwell 0.9 *panics* on the LLVM `token` type (`LLVMTokenTypeKind =>
+> panic!("FIXME: Unsupported type: Token")` in `types/enums.rs`), and the
+> coro intrinsics are token-typed (`coro.id -> token`, `coro.begin(token)`,
+> `coro.save -> token`, `coro.suspend(token)`, `coro.end(…, token)`). So the
+> coro-scaffolding calls (id/begin/save/suspend/end/free) are emitted with
+> `llvm-sys` raw FFI — `LLVMTokenTypeInContext`, `LLVMFunctionType`,
+> `LLVMAddFunction`, `LLVMBuildCall2` — interleaved with the inkwell-built
+> body (same builder/blocks; grab raw refs via inkwell's `as_*_ref()`).
+> Kāra already depends on `llvm-sys` and uses it directly
+> (`src/codegen/lljit.rs`), so the interop is established; this is verbosity,
+> not a blocker. The **first task of slice 2 is to validate exactly this**:
+> emit a minimal coroutine via inkwell-builder + llvm-sys coro intrinsics,
+> run it through the (now-wired) coro pipeline, and confirm CoroSplit emits
+> the `.resume` clone and it runs — the builder-path analogue of the IR-text
+> probe that's already green.
+
 - **Pass pipeline** (`src/codegen/driver.rs::apply_optimization_passes`):
   CoroSplit is a *correctness* pass, not an optimization — it must run even
-  at `-O0`. Today that function returns early when opt level is 0; add the
-  coro passes (`coro-early,coro-split,coro-elide,coro-cleanup`)
-  unconditionally before the opt pipeline.
+  at `-O0`. **DONE (slice 1):** `coro-early,coro-split,coro-cleanup` now runs
+  unconditionally (before the opt pipeline / the `-O0` early-return); pure
+  no-op for non-coroutine modules (verified — full codegen + ASAN suites
+  green, normal programs build/run identically at `-O0` and `-O2`).
 - **The transform** (replace `emit_state_machine_poll_fn_for_key`): compile
   the network-boundary function's body *normally* (reuse `compile_function`
   /`@handle`), but emit `coro.id`/`coro.begin` in the entry ramp, and at

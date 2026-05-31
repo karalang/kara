@@ -414,6 +414,33 @@ pub(super) fn apply_optimization_passes(
     module: &Module<'_>,
     target_machine: &TargetMachine,
 ) -> Result<(), String> {
+    // Coroutine lowering is a CORRECTNESS pass, not an optimization: a
+    // function marked `presplitcoroutine` (the A2 network-async transform —
+    // see `docs/spikes/network-async-coroutine-transform.md`) is NOT a
+    // valid runnable function until CoroSplit rewrites it into the
+    // ramp/resume/destroy clones. So the coro pipeline must run at EVERY
+    // opt level, including `-O0` / `KARAC_OPT_LEVEL=0` — otherwise a debug
+    // build would silently emit un-split coroutines (a no-op task, exactly
+    // the bug C class). For non-coroutine modules (everything today) this is
+    // a pure no-op: the coro passes only touch `presplitcoroutine` funcs.
+    {
+        let coro_opts = inkwell::passes::PassBuilderOptions::create();
+        module
+            .run_passes(
+                "coro-early,coro-split,coro-cleanup",
+                target_machine,
+                coro_opts,
+            )
+            .map_err(|e| {
+                format!(
+                    "LLVM coroutine lowering passes failed: {}. \
+                     This is a correctness pass (CoroSplit) — it cannot be \
+                     skipped for `presplitcoroutine` functions.",
+                    e.to_string()
+                )
+            })?;
+    }
+
     let level = read_opt_level_env();
     if level == "0" {
         return Ok(());
