@@ -1501,4 +1501,140 @@ mod tests {
             ),
         }
     }
+
+    /// Concurrent WS-over-TLS gate — **KNOWN-FAILING**, tracks the coroutine
+    /// resume race (task #21). The single-shot test above passes because it
+    /// almost always hits the good path; under concurrency ~half the
+    /// connections wedge (`ws_recv_data_frame` never fires server-side).
+    ///
+    /// Root cause (traced 2026-05-31): NOT a simple `register_fd` edge-miss.
+    /// `WebSocket.accept_tls` drives an async handshake pool — its first resume
+    /// drains the whole accept backlog and submits every pending connection to
+    /// handshake workers, then returns one completed handshake. But `main`'s
+    /// *next* `accept_tls` parks on **listener-readiness**, and the pending
+    /// connections' **handshake completions do not make the listener readable**
+    /// (the backlog is already drained). So the accept coroutine wedges waiting
+    /// for a new connection while completed handshakes sit ready — and their
+    /// handlers never spawn. Flipping coroutines on by default (3eda2b06)
+    /// replaced the degenerate re-entering poll drive (which re-ran the accept
+    /// pool's internal timeout-drain each tick) with a single park, exposing
+    /// this. The fix is architecture-sensitive (the accept path is tuned for
+    /// 1M idle conns) — likely: keep accept on a re-entering drive, or resume
+    /// the accept park on handshake-completion, not just listener-readiness.
+    /// Un-`ignore` when that lands.
+    #[test]
+    #[ignore = "KNOWN-FAILING: concurrent coroutine resume race — accept-path handshake-pool vs listener-readiness park; see task #21"]
+    fn coroutine_ws_over_tls_concurrent_handlers_all_execute() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let cert_path = workspace_root().join("tests/fixtures/tls/cert.pem");
+        let key_path = workspace_root().join("tests/fixtures/tls/key.pem");
+        let (Ok(cert_pem), Ok(key_pem)) = (
+            std::fs::read_to_string(&cert_path),
+            std::fs::read_to_string(&key_path),
+        ) else {
+            eprintln!("skip: tls fixtures not present");
+            return;
+        };
+        fn kara_escape(s: &str) -> String {
+            s.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+        }
+        let src = format!(
+            r#"
+            fn handle_ws(ws: WebSocket) {{
+                let mut buf: Array[u8, 4096] = [0u8; 4096];
+                loop {{
+                    let r = ws.recv_text(mut buf);
+                    match r {{
+                        Result.Ok(n) => {{ if n == 0 {{ break; }} let _s = ws.send_text(buf); }}
+                        Result.Err(_) => {{ break; }}
+                    }}
+                }}
+            }}
+            fn main() {{
+                let cert: String = "{cert}";
+                let key: String = "{key}";
+                let listener: TlsListener =
+                    TlsListener.bind_tls("127.0.0.1:0", cert, key).unwrap();
+                let mut tg: TaskGroup = TaskGroup.new();
+                loop {{
+                    match WebSocket.accept_tls(listener) {{
+                        Result.Ok(ws) => {{ tg.spawn(|| handle_ws(ws)); }}
+                        Result.Err(_) => {{}}
+                    }}
+                }}
+            }}
+        "#,
+            cert = kara_escape(&cert_pem),
+            key = kara_escape(&key_pem),
+        );
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_wss_conc_{pid}_{nanos}"));
+        if let Err(e) = compile_link_coro(&src, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn wss coro server");
+        let stdout = child.stdout.take().expect("child stdout");
+        let (rx, _join) = spawn_stdout_reader(stdout);
+        let port = match rx.recv_timeout(Duration::from_secs(15)) {
+            Ok(p) => p,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("server did not emit BOUND_PORT within 15s");
+            }
+        };
+
+        // Fire N concurrent wss echo round-trips; every one must complete.
+        const N: usize = 16;
+        let results: std::sync::Arc<Mutex<Vec<bool>>> =
+            std::sync::Arc::new(Mutex::new(vec![false; N]));
+        let mut handles = Vec::new();
+        for i in 0..N {
+            let results = std::sync::Arc::clone(&results);
+            handles.push(std::thread::spawn(move || {
+                let ok = matches!(
+                    wss_echo_roundtrip(port, b"PINGconc"),
+                    Ok(body) if body.starts_with(b"PINGconc")
+                );
+                results.lock().unwrap_or_else(|p| p.into_inner())[i] = ok;
+            }));
+        }
+        for h in handles {
+            let _ = h.join();
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+
+        let oks = results
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .filter(|&&b| b)
+            .count();
+        assert_eq!(
+            oks, N,
+            "only {oks}/{N} concurrent WS-over-TLS handlers echoed — the rest \
+             wedged (coroutine resume race / accept-path handshake-pool mismatch)"
+        );
+    }
 }
