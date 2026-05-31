@@ -518,6 +518,20 @@ pub(super) fn read_strip_contracts_env() -> bool {
     matches!(std::env::var("KARAC_STRIP_CONTRACTS"), Ok(v) if v == "1" || v == "true")
 }
 
+/// Release trigger for the `?`-error-return-trace instrumentation (`KARAC_STRIP
+/// _ERROR_TRACE`). When set, codegen emits no `karac_error_trace_push` at `?`
+/// failure sites and no `karac_error_trace_clear` on the success path — the
+/// trace is a debug-only diagnostic (mirrors `strip_contracts`), so a release
+/// build pays zero `?`-site instrumentation cost. `karac build --release` forces
+/// this on alongside contract stripping; the env var is the per-construction
+/// knob the `release` flag and `Codegen::new` default compose with (OR).
+///
+/// - `Ok("1")` / `Ok("true")` → `true` (strip the trace).
+/// - anything else (incl. unset) → `false` (debug default — trace active).
+pub(super) fn read_strip_error_trace_env() -> bool {
+    matches!(std::env::var("KARAC_STRIP_ERROR_TRACE"), Ok(v) if v == "1" || v == "true")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{default_cpu_and_features, symbol_listing_references_tls};

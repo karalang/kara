@@ -96,6 +96,24 @@ mod codegen_tests {
         compile_to_ir_with_contracts_stripped(&parsed.program, None, None).expect("codegen failed")
     }
 
+    /// Like [`ir_for`] but compiles with the `?`-error-return-trace
+    /// instrumentation stripped (the `release` strip). Race-free — forces the
+    /// decision via the explicit codegen entry, not `KARAC_STRIP_ERROR_TRACE`.
+    fn ir_for_error_trace_stripped(src: &str) -> String {
+        use karac::codegen::compile_to_ir_with_error_trace_stripped;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        compile_to_ir_with_error_trace_stripped(&parsed.program, None, None)
+            .expect("codegen failed")
+    }
+
     // ── Basic arithmetic ─────────────────────────────────────────
 
     #[test]
@@ -8819,6 +8837,44 @@ fn main() {
                 frame_lines, c.stderr
             );
         }
+    }
+
+    #[test]
+    fn test_release_strips_error_trace_instrumentation() {
+        // The `?`-error-return-trace is debug-only instrumentation: a debug
+        // build emits a `karac_error_trace_push` at the `?` failure site (and a
+        // `karac_error_trace_clear` on the success path); a release build emits
+        // neither, paying zero `?`-site cost (peer to contract stripping).
+        let src = r#"
+fn boom() -> Result[i64, i64] { Err(7_i64) }
+fn caller() -> Result[i64, i64] {
+    let _ = boom()?;
+    Ok(0_i64)
+}
+fn main() {
+    match caller() {
+        Ok(_) => println(0_i64),
+        Err(e) => println(e),
+    }
+}
+"#;
+        // Assert on the `call` instruction, not the bare symbol — the runtime
+        // fns are always *declared* in `Codegen::new` (the `declare void @…`
+        // line survives either way); only the emitted *calls* are stripped.
+        let debug = ir_for(src);
+        assert!(
+            debug.contains("call void @karac_error_trace_push"),
+            "debug build must emit the `?`-trace push call"
+        );
+        let stripped = ir_for_error_trace_stripped(src);
+        assert!(
+            !stripped.contains("call void @karac_error_trace_push"),
+            "release must strip the `?`-trace push call:\n{stripped}"
+        );
+        assert!(
+            !stripped.contains("call void @karac_error_trace_clear"),
+            "release must strip the `?`-trace clear call too"
+        );
     }
 
     #[test]

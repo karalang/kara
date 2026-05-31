@@ -73,7 +73,7 @@ mod vec_method;
 
 use driver::{
     apply_optimization_passes, create_target_machine, read_auto_par_env,
-    read_runtime_debug_metadata_env, read_strip_contracts_env,
+    read_runtime_debug_metadata_env, read_strip_contracts_env, read_strip_error_trace_env,
 };
 pub use driver::{link_executable, link_executable_with_sanitizer};
 use helpers::{impl_target_name, make_impl_method_function, method_self_is_value};
@@ -350,6 +350,25 @@ pub fn compile_to_ir_with_contracts_stripped(
     Ok(cg.module.print_to_string().to_string())
 }
 
+/// Like [`compile_to_ir_with_options`] but forces the `?`-error-return-trace
+/// instrumentation off (the `release` strip, as if `KARAC_STRIP_ERROR_TRACE=1`)
+/// via an explicit setter so the decision is race-free. No `karac_error_trace
+/// _push` / `_clear` calls are emitted at `?` sites. Used by the IR-contrast
+/// tests; the `release` build path strips this alongside contracts.
+pub fn compile_to_ir_with_error_trace_stripped(
+    program: &Program,
+    ownership: Option<&OwnershipCheckResult>,
+    concurrency: Option<&ConcurrencyAnalysis>,
+) -> Result<String, String> {
+    let context = Context::create();
+    let mut cg = Codegen::new(&context, "karac_module");
+    cg.load_rc_fallback(ownership);
+    cg.load_concurrency_analysis(concurrency);
+    cg.set_strip_error_trace(true);
+    cg.compile_program(program)?;
+    Ok(cg.module.print_to_string().to_string())
+}
+
 /// Compile a Kāra program to a native object file.
 pub fn compile_to_object(
     program: &Program,
@@ -451,17 +470,18 @@ pub fn compile_to_object_with_options(
 /// hot-swap codegen contract and [`compile_to_ir_with_contracts_stripped`]
 /// for the stripping semantics.
 ///
-/// `strip_contracts` carries `karac build --release`: when `true` it forces
-/// contract emission off for this compile via [`Codegen::set_strip_contracts`].
-/// When `false` the field keeps the env-derived default
-/// (`read_strip_contracts_env`, i.e. `KARAC_STRIP_CONTRACTS`) that
-/// `Codegen::new` already applied — so the flag and the env knob compose with
-/// OR semantics and a bare build never *un*-strips an env-requested strip.
-// Two build-toggle bools (hot-swap, contract-strip) on top of the source/
+/// `release` carries `karac build --release`: when `true` it strips **all**
+/// debug-only runtime instrumentation for this compile — contracts (via
+/// [`Codegen::set_strip_contracts`]) and the `?`-error-return-trace (via
+/// [`Codegen::set_strip_error_trace`]). When `false` each field keeps the
+/// env-derived default (`KARAC_STRIP_CONTRACTS` / `KARAC_STRIP_ERROR_TRACE`)
+/// that `Codegen::new` already applied — so the flag and the env knobs compose
+/// with OR semantics and a bare build never *un*-strips an env-requested strip.
+// Two build-toggle bools (hot-swap, release-strip) on top of the source/
 // ownership/concurrency context push this to 8 params. A bundling options
 // struct would ripple through every call site for no readability win at this
-// thin public-API boundary; the `enable_hot_swap` / `strip_contracts` names
-// are self-documenting at the (few) call sites. Matches `cmd_build`'s allow.
+// thin public-API boundary; the `enable_hot_swap` / `release` names are
+// self-documenting at the (few) call sites. Matches `cmd_build`'s allow.
 #[allow(clippy::too_many_arguments)]
 pub fn compile_to_object_with_hot_swap(
     program: &Program,
@@ -471,7 +491,7 @@ pub fn compile_to_object_with_hot_swap(
     source_filename: Option<&str>,
     source_text: Option<&str>,
     enable_hot_swap: bool,
-    strip_contracts: bool,
+    release: bool,
 ) -> Result<(), String> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
@@ -480,8 +500,9 @@ pub fn compile_to_object_with_hot_swap(
     cg.set_source_filename(source_filename);
     cg.set_source_text(source_text);
     cg.set_hot_swap_enabled(enable_hot_swap);
-    if strip_contracts {
+    if release {
         cg.set_strip_contracts(true);
+        cg.set_strip_error_trace(true);
     }
     cg.compile_program(program)?;
 
@@ -701,6 +722,15 @@ pub(super) struct Codegen<'ctx> {
     /// a natural no-op, and `old(...)` (which lives only inside `ensures`
     /// bodies) is never reached because those bodies aren't compiled.
     pub(crate) strip_contracts: bool,
+    /// When `true`, the `?`-error-return-trace instrumentation is elided: no
+    /// `karac_error_trace_push` at `?` failure sites, no `karac_error_trace_clear`
+    /// on the success path. The trace is a debug-only diagnostic, so a release
+    /// build pays zero `?`-site cost (peer to `strip_contracts`). Defaults from
+    /// `read_strip_error_trace_env` (`KARAC_STRIP_ERROR_TRACE`) at construction;
+    /// `set_strip_error_trace` overrides it (the `release` build path forces it
+    /// on alongside contract stripping). The gate lives at the two emission
+    /// sites in `compile_expr`'s `?` lowering.
+    pub(crate) strip_error_trace: bool,
     /// Runtime contract-predicate-context FFI (design.md § Contracts rule 2).
     /// `emit_contract_assert` brackets a predicate's *runtime* evaluation with
     /// `karac_runtime_enter_predicate()` / `karac_runtime_exit_predicate()` (a
@@ -3293,6 +3323,7 @@ impl<'ctx> Codegen<'ctx> {
             current_method_invariants: Vec::new(),
             constructor_invariant_self_type: None,
             strip_contracts: read_strip_contracts_env(),
+            strip_error_trace: read_strip_error_trace_env(),
             karac_runtime_enter_predicate_fn,
             karac_runtime_exit_predicate_fn,
             karac_runtime_panic_prefix_fn,
@@ -3528,6 +3559,14 @@ impl<'ctx> Codegen<'ctx> {
     /// on the process-global env var.
     pub(crate) fn set_strip_contracts(&mut self, strip: bool) {
         self.strip_contracts = strip;
+    }
+
+    /// Override the `?`-error-return-trace stripping decision (peer to
+    /// `set_strip_contracts`). `true` elides the `karac_error_trace_push` /
+    /// `_clear` instrumentation; `false` keeps it. Default from
+    /// `KARAC_STRIP_ERROR_TRACE`; the `release` build path forces it on.
+    pub(crate) fn set_strip_error_trace(&mut self, strip: bool) {
+        self.strip_error_trace = strip;
     }
 
     /// Enable the A2 slice 2b.3 coroutine compilation path (default off). When

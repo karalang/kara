@@ -208,15 +208,16 @@ OPTIONS:
                             calls in source order, their reads/writes effects,
                             and the analyzer's reason for parallelizing) to
                             stdout alongside the binary build.
-    --release               Strip debug-only runtime checks from the binary.
-                            Today: contracts (requires / ensures / old /
-                            invariant) per design.md — checked in debug
-                            builds, stripped in release. Optimization is
-                            already -O2 by default (see KARAC_OPT_LEVEL), so
-                            --release removes runtime checks rather than
-                            turning the optimizer on. Works in both single-file
-                            and project mode. Composes with the
-                            KARAC_STRIP_CONTRACTS env var.
+    --release               Strip debug-only runtime instrumentation from the
+                            binary: contracts (requires / ensures / old /
+                            invariant) and the `?`-error-return trace — both
+                            checked/recorded in debug builds, stripped in
+                            release per design.md. Optimization is already -O2
+                            by default (see KARAC_OPT_LEVEL), so --release
+                            removes runtime cost rather than turning the
+                            optimizer on. Works in both single-file and project
+                            mode. Composes (OR) with the KARAC_STRIP_CONTRACTS
+                            and KARAC_STRIP_ERROR_TRACE env vars.
     --enable-hot-swap       Emit PLT-style indirection for extern-public
                             module symbols so the AOT artifact format stays
                             forward-compatible with the post-v1 continuous-

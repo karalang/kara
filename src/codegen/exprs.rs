@@ -703,7 +703,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // the `?` site fires here exactly as the interpreter's
         // `run_cleanup` on `ExitPath::Err` would.
         self.builder.position_at_end(fail_bb);
-        self.emit_error_trace_push(outer_span);
+        // `?`-error-return-trace instrumentation — a debug-only diagnostic,
+        // elided in a release build (`strip_error_trace`) for zero `?`-site cost.
+        if !self.strip_error_trace {
+            self.emit_error_trace_push(outer_span);
+        }
         // Slice 4 (Phase 7 § *defer / errdefer codegen*): stage the
         // about-to-be-returned Err payload so any in-scope binding-form
         // errdefer (`errdefer(e) { ... }`) can bind `e` during its
@@ -828,9 +832,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // the interpreter's `clear_error_trace` call on the success path
         // (src/interpreter.rs:1501).
         self.builder.position_at_end(ok_bb);
-        self.builder
-            .build_call(self.karac_error_trace_clear_fn, &[], "q_trace_clear")
-            .unwrap();
+        // Paired with the push above — also elided under `strip_error_trace`.
+        if !self.strip_error_trace {
+            self.builder
+                .build_call(self.karac_error_trace_clear_fn, &[], "q_trace_clear")
+                .unwrap();
+        }
         Ok(w0)
     }
 
