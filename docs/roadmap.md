@@ -823,11 +823,11 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
 - [ ] Interaction with refinement types: `distinct type ValidPort = u16 where self >= 1 and self <= 65535`
 
 ### Contracts (`requires` / `ensures` / `invariant`)
-- [ ] Verify contract expressions are pure (effect set ⊆ `{panics}`)
-- [ ] Insert runtime checks in debug builds
-- [ ] `old(expr)` desugaring with `Clone` requirement
-- [ ] Invariant insertion at every `pub` method exit
-- [ ] Strip all contract machinery in release builds
+- [x] Verify contract expressions are pure (effect set ⊆ `{panics}`)
+- [x] Insert runtime checks in debug builds
+- [x] `old(expr)` desugaring with `Clone` requirement
+- [x] Invariant insertion at every `pub` method exit
+- [x] Strip all contract machinery in release builds
 
 ### Extended Patterns
 - [ ] Range patterns: `LITERAL "..=" LITERAL` in match arms (integer and `char` types)
