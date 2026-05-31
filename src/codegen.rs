@@ -3617,16 +3617,12 @@ impl<'ctx> Codegen<'ctx> {
                 // it stays on the existing thread-block park path even if it
                 // parks (e.g. a top-level `accept`).
                 //
-                // Free functions only this slice: a `Type.method` key (dotted)
-                // is driven by the method-call intercept (method_call.rs), whose
-                // receiver-as-self handling for the ramp-drive is a follow-on.
-                // Restricting here keeps the method intercept on the degenerate
-                // path (consistent) rather than emitting a coroutine ramp the
-                // method intercept wouldn't drive.
-                if key != "main"
-                    && !key.contains('.')
-                    && !declarations::is_generic_fn_key(program, key)
-                {
+                // Both free fns and `Type.method` keys (dotted) are eligible (A2
+                // slice 2b.4(b) wired the method-call intercept's receiver-as-
+                // self ramp-drive). Generics stay on the per-mono degenerate
+                // path. `KARAC_PARK_ON_FD` is the leaf primitive and never lands
+                // in `state_struct_layouts`.
+                if key != "main" && !declarations::is_generic_fn_key(program, key) {
                     self.coro_fn_keys.insert(key.clone());
                 }
             }

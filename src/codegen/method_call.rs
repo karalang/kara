@@ -297,6 +297,104 @@ impl<'ctx> super::Codegen<'ctx> {
         // call. Receiver compilation routes through the standard
         // `compile_expr` path, matching slice 8f's arg-store handling.
         if let Some(ref key) = dispatch_key {
+            // A2 slice 2b.4(b): coroutine-compiled method handler. Same
+            // dispatcher-driven slot-wait drive as the free-fn intercept
+            // (call_dispatch.rs), but the receiver `object` is the ramp's first
+            // arg (self at param index 0), method args follow at 1..K, and the
+            // hidden completion slot is last. The caller never resumes — the
+            // dispatcher drives via the unchanged 2b.1 shim. Runs ahead of the
+            // degenerate poll-loop intercept below so a coro method key takes the
+            // coroutine path.
+            if self.is_coroutine_compiled(key) {
+                let ramp = self
+                    .module
+                    .get_function(key)
+                    .expect("coroutine method ramp declared in declare_function");
+                let ref_flags = self.fn_param_ref.get(key).cloned().unwrap_or_default();
+                let slice_elems = self
+                    .fn_param_slice_elem
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut call_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
+                    Vec::with_capacity(args.len() + 2);
+                // self (param index 0), dispatched by its declared mode.
+                let self_is_ref = ref_flags.first().copied().unwrap_or(false);
+                let self_val: BasicValueEnum<'ctx> = if self_is_ref {
+                    if let ExprKind::Identifier(var_name) = &object.kind {
+                        if let Some(ptr) = self.get_data_ptr(var_name) {
+                            ptr.into()
+                        } else {
+                            let v = self.compile_expr(object)?;
+                            self.materialize_rvalue_for_ref_arg(v, usize::MAX)
+                        }
+                    } else {
+                        let v = self.compile_expr(object)?;
+                        self.materialize_rvalue_for_ref_arg(v, usize::MAX)
+                    }
+                } else {
+                    self.compile_expr(object)?
+                };
+                call_args.push(self_val.into());
+                // Method args at param indices 1..K.
+                for (i, arg) in args.iter().enumerate() {
+                    let param_idx = i + 1;
+                    let is_ref = ref_flags.get(param_idx).copied().unwrap_or(false);
+                    let slice_elem = slice_elems.get(param_idx).copied().flatten();
+                    let val: BasicValueEnum<'ctx> = if is_ref {
+                        if let ExprKind::Identifier(var_name) = &arg.value.kind {
+                            if let Some(ptr) = self.get_data_ptr(var_name) {
+                                ptr.into()
+                            } else {
+                                let v = self.compile_expr(&arg.value)?;
+                                self.materialize_rvalue_for_ref_arg(v, i)
+                            }
+                        } else {
+                            let v = self.compile_expr(&arg.value)?;
+                            self.materialize_rvalue_for_ref_arg(v, i)
+                        }
+                    } else if let Some(elem_ty) = slice_elem {
+                        match self.coerce_to_slice(&arg.value, elem_ty)? {
+                            Some(slice_val) => slice_val,
+                            None => self.compile_expr(&arg.value)?,
+                        }
+                    } else {
+                        self.compile_expr(&arg.value)?
+                    };
+                    call_args.push(val.into());
+                }
+                // Hidden trailing completion slot; caller owns it.
+                let slot_new = self
+                    .module
+                    .get_function("karac_runtime_park_slot_new")
+                    .expect("karac_runtime_park_slot_new declared in Codegen::new");
+                let slot = self
+                    .builder
+                    .build_call(slot_new, &[], "kara.coro.slot")
+                    .expect("call karac_runtime_park_slot_new")
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                call_args.push(slot.into());
+                self.builder
+                    .build_call(ramp, &call_args, "kara.coro.drive")
+                    .expect("call coroutine method ramp");
+                let wait_fn = self
+                    .module
+                    .get_function("karac_runtime_park_slot_wait")
+                    .expect("karac_runtime_park_slot_wait declared in Codegen::new");
+                self.builder
+                    .build_call(wait_fn, &[slot.into()], "")
+                    .expect("call karac_runtime_park_slot_wait");
+                let free_fn = self
+                    .module
+                    .get_function("karac_runtime_park_slot_free")
+                    .expect("karac_runtime_park_slot_free declared in Codegen::new");
+                self.builder
+                    .build_call(free_fn, &[slot.into()], "")
+                    .expect("call karac_runtime_park_slot_free");
+                return Ok(self.context.i64_type().const_int(0, false).into());
+            }
             if let Some(ctor_fn) = self.state_machine_state_constructors.get(key).copied() {
                 let poll_fn = self
                     .state_machine_poll_fns

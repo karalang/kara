@@ -55,6 +55,47 @@ mod tests {
         }
     "#;
 
+    /// 2b.4 spawn variant: the coroutine handler is driven inside a *spawned*
+    /// task (`spawn(|| ...)` → a worker-pool wrapper) rather than inline in
+    /// `main`; `main` joins the handle. This services the connection
+    /// functionally (the spawn wrapper runs 2b.3's coro-drive — ramp +
+    /// `park_slot_wait` — on a pool worker, which the dispatcher unblocks). It
+    /// is thread-blocking (one worker per concurrent handler); the
+    /// density-optimal non-blocking spawn — wrapper ramps and returns, the
+    /// TaskHandle's completion bound to the coroutine slot — is slice 5.
+    const SPAWN_HANDLER_SRC: &str = r#"
+        fn serve_one(listener: TcpListener) {
+            let _stream = listener.accept().unwrap();
+            println(1);
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            let h: TaskHandle[i64] = spawn(|| { serve_one(listener); 0 });
+            let _r: i64 = h.join();
+            println(2);
+        }
+    "#;
+
+    /// 2b.4(b) method-handler variant: the coroutine handler is an impl method
+    /// (`Server.serve`), driven through the method-call intercept's coro
+    /// ramp-drive (the receiver is the ramp's `self` arg). Same dispatcher-driven
+    /// slot-wait drive as the free-fn path.
+    const METHOD_HANDLER_SRC: &str = r#"
+        struct Acceptor { listener: TcpListener }
+        impl Acceptor {
+            fn run(self) {
+                let _stream = self.listener.accept().unwrap();
+                println(1);
+            }
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            let a = Acceptor { listener: listener };
+            a.run();
+            println(2);
+        }
+    "#;
+
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn workspace_root() -> PathBuf {
@@ -369,6 +410,75 @@ mod tests {
             lines.iter().any(|l| l == "2"),
             "expected `2` (main's println after the coroutine drive returned) in \
              stdout; got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn coroutine_spawned_free_fn_services_connection() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_spawn_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(SPAWN_HANDLER_SRC, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let (exit_status, lines) = service_one_connection(&exe_path, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "spawned-coroutine binary exited non-success {exit_status:?}; stdout lines: {lines:?}"
+        );
+        // The spawned handler ran its post-park work (`1`) and `main` resumed
+        // after `join()` (`2`).
+        assert!(
+            lines.iter().any(|l| l == "1") && lines.iter().any(|l| l == "2"),
+            "spawned coroutine did not complete + join; stdout lines: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn coroutine_method_handler_services_connection() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_method_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(METHOD_HANDLER_SRC, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let (exit_status, lines) = service_one_connection(&exe_path, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "method-handler coroutine binary exited non-success {exit_status:?}; \
+             stdout lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "1") && lines.iter().any(|l| l == "2"),
+            "method-handler coroutine did not complete; stdout lines: {lines:?}"
         );
     }
 
