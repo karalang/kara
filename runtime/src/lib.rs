@@ -353,6 +353,58 @@ thread_local! {
     static CURRENT_FRAME: Cell<*const KaracFrame> = const { Cell::new(ptr::null()) };
 }
 
+// ── Contract-predicate context (design.md § Contracts rule 2) ─────────────
+//
+// A thread-local depth counter tracks whether the current thread is evaluating
+// a contract predicate. Codegen's `emit_contract_assert` brackets a predicate's
+// evaluation with `karac_runtime_enter_predicate` / `_exit_predicate`, and
+// `emit_panic` reads `karac_runtime_panic_prefix` to categorize a fault: a panic
+// raised while the depth is non-zero — inline in the predicate OR inside any
+// function it transitively calls — is `contract predicate panicked`, distinct
+// from `contract violated` (a predicate that simply returns false, evaluated
+// with the depth back at 0). A counter rather than a bool keeps nested
+// predicates correct: a predicate that calls a contracted function increments a
+// second time and the callee's exit only decrements its own level, leaving the
+// enclosing predicate's context intact. This subsumes the prior compile-time
+// `in_contract_predicate` flag, which could only see panics lexically inside the
+// predicate, not cross-call ones — matching the interpreter's global
+// `pending_cf` behavior. Thread-local because Kāra tasks run on multiple
+// scheduler threads, each evaluating its own predicates independently.
+thread_local! {
+    static CONTRACT_PREDICATE_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Enter a contract-predicate evaluation context (increment the depth).
+#[no_mangle]
+pub extern "C" fn karac_runtime_enter_predicate() {
+    CONTRACT_PREDICATE_DEPTH.with(|d| d.set(d.get().saturating_add(1)));
+}
+
+/// Leave a contract-predicate evaluation context (decrement the depth).
+/// Saturating so an unbalanced exit can never underflow.
+#[no_mangle]
+pub extern "C" fn karac_runtime_exit_predicate() {
+    CONTRACT_PREDICATE_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+}
+
+/// The panic-message infix for the current predicate context, as a
+/// null-terminated C string: `"contract predicate panicked: "` while a
+/// predicate is on the stack, else `""`. Codegen's panic path printfs
+/// `panic: %s%s\n` with this as the first `%s`, so the rendered fault is
+/// byte-identical to the two historical forms. The returned pointer is to a
+/// 'static byte string — never freed, always valid.
+#[no_mangle]
+pub extern "C" fn karac_runtime_panic_prefix() -> *const std::os::raw::c_char {
+    const IN_PREDICATE: &[u8] = b"contract predicate panicked: \0";
+    const NOT_IN_PREDICATE: &[u8] = b"\0";
+    let in_predicate = CONTRACT_PREDICATE_DEPTH.with(|d| d.get() > 0);
+    if in_predicate {
+        IN_PREDICATE.as_ptr() as *const std::os::raw::c_char
+    } else {
+        NOT_IN_PREDICATE.as_ptr() as *const std::os::raw::c_char
+    }
+}
+
 /// Newtype around `*const KaracFrame` that opts into `Send + Sync` for
 /// storage in the cross-thread `ACTIVE_FRAMES` registry. Raw pointers are
 /// `!Send` by default; the soundness comes from `FrameGuard::drop`

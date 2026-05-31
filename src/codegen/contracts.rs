@@ -25,22 +25,34 @@ impl<'ctx> super::Codegen<'ctx> {
     /// is left positioned in a block where the predicate held. Reuses the
     /// same shape as `emit_refinement_assert`.
     ///
-    /// The predicate's own compilation runs with `in_contract_predicate` set
-    /// (design.md § Contracts rule 2), so any inline panic site it emits — a
-    /// bounds check in `v[i]`, a divide-by-zero guard, an `unwrap` None-check —
-    /// aborts as the distinct `contract predicate panicked: <msg>` fault rather
-    /// than `contract violated`. The flag is cleared before the explicit
-    /// false-branch below, so a predicate that simply returns `false` still
-    /// reports `contract violated` (`fault_msg`).
+    /// The predicate's *runtime* evaluation is bracketed by
+    /// `karac_runtime_enter_predicate()` / `karac_runtime_exit_predicate()`
+    /// (design.md § Contracts rule 2), which bump a thread-local depth counter
+    /// in the runtime. Any panic that fires while the depth is non-zero — an
+    /// inline bounds check in `v[i]`, a divide-by-zero guard, an `unwrap`
+    /// None-check, OR a panic inside a function the predicate transitively
+    /// calls — aborts as the distinct `contract predicate panicked: <msg>`
+    /// fault rather than `contract violated`. The exit call is emitted on the
+    /// common path right after the predicate value is produced (before the
+    /// conditional branch), so it runs whether the predicate holds or fails;
+    /// the explicit false-branch panic below therefore reports `contract
+    /// violated` (depth back to 0). A panic *during* evaluation aborts the
+    /// process before reaching the exit call, which is correct — the prefix is
+    /// already set. The counter (not a bool) keeps a predicate that calls a
+    /// contracted function nesting correctly.
     pub(super) fn emit_contract_assert(
         &mut self,
         pred: &Expr,
         fault_msg: &str,
     ) -> Result<(), String> {
-        let prev_in_pred = self.in_contract_predicate;
-        self.in_contract_predicate = true;
+        self.builder
+            .build_call(self.karac_runtime_enter_predicate_fn, &[], "")
+            .unwrap();
         let cond = self.compile_expr(pred).map(|v| v.into_int_value());
-        self.in_contract_predicate = prev_in_pred;
+        // Exit on the common post-evaluation path, before the branch below.
+        self.builder
+            .build_call(self.karac_runtime_exit_predicate_fn, &[], "")
+            .unwrap();
         let cond = cond?;
         let fn_val = self
             .current_fn

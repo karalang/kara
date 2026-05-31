@@ -659,20 +659,23 @@ pub(super) struct Codegen<'ctx> {
     /// a natural no-op, and `old(...)` (which lives only inside `ensures`
     /// bodies) is never reached because those bodies aren't compiled.
     pub(crate) strip_contracts: bool,
-    /// `true` while a contract predicate expression is being compiled
-    /// (design.md § Contracts rule 2). Set by `emit_contract_assert` around
-    /// the predicate's `compile_expr` and cleared before the explicit
-    /// false-branch. `emit_panic` consults it: a panic emitted *during*
-    /// predicate compilation (an inline bounds / divide-by-zero / unwrap check
-    /// inside the predicate, e.g. `requires v[i] >= 0` with `i` out of range)
-    /// is the distinct `contract predicate panicked: <msg>` fault, NOT
-    /// `contract violated` — which is reserved for the predicate evaluating to
-    /// `false`. Matches the interpreter's `eval_contract_predicate`
-    /// classification for the inline-panic case. (A panic *inside a function
-    /// the predicate calls* compiles in that callee's own body with the flag
-    /// clear, so it surfaces as a plain panic — a follow-on would need a
-    /// runtime predicate-context flag to categorize it.)
-    pub(crate) in_contract_predicate: bool,
+    /// Runtime contract-predicate-context FFI (design.md § Contracts rule 2).
+    /// `emit_contract_assert` brackets a predicate's *runtime* evaluation with
+    /// `karac_runtime_enter_predicate()` / `karac_runtime_exit_predicate()` (a
+    /// thread-local depth counter in the runtime), and `emit_panic` reads
+    /// `karac_runtime_panic_prefix()` to choose its fault category. A panic that
+    /// fires while the depth is non-zero — whether an inline bounds/div/unwrap
+    /// check lexically inside the predicate (`requires v[i] >= 0`) OR a panic
+    /// inside a function the predicate transitively *calls* — is the distinct
+    /// `contract predicate panicked: <msg>` fault, not `contract violated`
+    /// (reserved for the predicate evaluating to `false`, where the depth is
+    /// back to 0). The runtime flag subsumes the prior compile-time flag: it
+    /// sees cross-call panics a lexical flag cannot, matching the interpreter's
+    /// global `pending_cf` behavior. The depth is a counter, not a bool, so a
+    /// predicate that calls a function with its own contract nests correctly.
+    pub(crate) karac_runtime_enter_predicate_fn: FunctionValue<'ctx>,
+    pub(crate) karac_runtime_exit_predicate_fn: FunctionValue<'ctx>,
+    pub(crate) karac_runtime_panic_prefix_fn: FunctionValue<'ctx>,
     /// Set of top-level Atomic[T]-typed bindings whose inner T is `bool`.
     /// The slot itself is widened to `i8` (LLVM atomics reject `i1`); this
     /// set drives the `.load` trunc-to-i1 and `.store` zext-to-i8 wrapping
@@ -1716,6 +1719,29 @@ impl<'ctx> Codegen<'ctx> {
             .void_type()
             .fn_type(&[BasicMetadataTypeEnum::from(i32_type)], false);
         let exit_fn = module.add_function("exit", exit_type, Some(Linkage::External));
+
+        // Contract-predicate-context FFI (design.md § Contracts rule 2). The
+        // enter/exit pair drives a thread-local depth counter in the runtime;
+        // `karac_runtime_panic_prefix() -> *const c_char` returns the panic
+        // message infix (`"contract predicate panicked: "` while a predicate is
+        // on the stack, else `""`). See the field docs on `Codegen`.
+        let pred_ctx_type = context.void_type().fn_type(&[], false);
+        let karac_runtime_enter_predicate_fn = module.add_function(
+            "karac_runtime_enter_predicate",
+            pred_ctx_type,
+            Some(Linkage::External),
+        );
+        let karac_runtime_exit_predicate_fn = module.add_function(
+            "karac_runtime_exit_predicate",
+            pred_ctx_type,
+            Some(Linkage::External),
+        );
+        let panic_prefix_type = ptr_type.fn_type(&[], false);
+        let karac_runtime_panic_prefix_fn = module.add_function(
+            "karac_runtime_panic_prefix",
+            panic_prefix_type,
+            Some(Linkage::External),
+        );
 
         let memcmp_type = i32_type.fn_type(
             &[
@@ -3194,7 +3220,9 @@ impl<'ctx> Codegen<'ctx> {
             contract_old_snapshots: HashMap::new(),
             current_method_invariants: Vec::new(),
             strip_contracts: read_strip_contracts_env(),
-            in_contract_predicate: false,
+            karac_runtime_enter_predicate_fn,
+            karac_runtime_exit_predicate_fn,
+            karac_runtime_panic_prefix_fn,
             atomic_var_inner_is_bool: HashSet::new(),
             current_fn: None,
             printf_fn,

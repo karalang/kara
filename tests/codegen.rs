@@ -27098,4 +27098,46 @@ fn main() {
             );
         }
     }
+
+    #[test]
+    fn test_e2e_contract_predicate_panicked_cross_call() {
+        // The cross-call case: the `requires` predicate calls a helper, and the
+        // panic (`v[i]` OOB) fires inside the HELPER's body — a separate
+        // function compiled with no lexical predicate context. The prior
+        // compile-time flag could not categorize this (the helper's panic site
+        // compiles with the flag clear); the runtime depth counter set around
+        // the predicate's evaluation does, so it still reports
+        // `contract predicate panicked`, NOT a plain `panic:` and NOT
+        // `contract violated`. This is the divergence-from-interpreter the
+        // step-7 inline slice left open, now closed.
+        let captured = run_program_capturing(
+            r#"
+fn deref_at(v: ref Vec[i64], i: i64) -> bool { v[i] >= 0 }
+fn at(v: ref Vec[i64], i: i64) -> i64 requires deref_at(v, i) { 0 }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1); v.push(2); v.push(3);
+    println(at(v, 99));
+    println(42);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract predicate panicked"),
+                "a panic inside a fn the predicate CALLS must report `contract predicate panicked`, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("contract violated"),
+                "a cross-call predicate panic must NOT report `contract violated`, got stdout={:?}",
+                c.stdout
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after the abort must not run"
+            );
+        }
+    }
 }

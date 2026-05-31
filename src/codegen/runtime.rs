@@ -23,27 +23,41 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Allocate a new RC heap object: `malloc(sizeof(heap_type))`, store refcount = 1.
     /// Returns a pointer to the heap object.
     pub(super) fn emit_panic(&self, message: &str) {
-        // design.md § Contracts rule 2: a panic emitted while a contract
-        // predicate is being compiled (an inline bounds / div / unwrap check
-        // inside the predicate) is the distinct `contract predicate panicked`
-        // fault category, kept separate from `contract violated` (the
-        // predicate returning false). The `in_contract_predicate` flag is set
-        // by `emit_contract_assert` only around the predicate's compilation,
-        // so it cannot leak to the explicit false-branch or to ordinary
-        // (non-contract) panic sites.
-        let formatted = if self.in_contract_predicate {
-            format!("panic: contract predicate panicked: {}\n\0", message)
-        } else {
-            format!("panic: {}\n\0", message)
-        };
+        // design.md § Contracts rule 2: the fault-category prefix is decided at
+        // RUNTIME by `karac_runtime_panic_prefix()`, which returns
+        // `"contract predicate panicked: "` while a contract predicate is on the
+        // stack (a thread-local depth counter set by the enter/exit calls
+        // `emit_contract_assert` brackets the predicate's evaluation with) and
+        // `""` otherwise. Reading the flag at runtime — rather than baking the
+        // prefix in from a compile-time flag — categorizes BOTH the inline case
+        // (a bounds / div / unwrap panic lexically inside the predicate) AND the
+        // cross-call case (a panic inside a function the predicate calls), which
+        // a lexical flag cannot see. The format string is fixed (`panic: %s%s`),
+        // so `message` is a `%s` data argument, not the format string — output
+        // is byte-identical to the two historical forms `panic: <msg>` and
+        // `panic: contract predicate panicked: <msg>`.
+        let prefix = self
+            .builder
+            .build_call(self.karac_runtime_panic_prefix_fn, &[], "panic_prefix")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+        let fmt = self
+            .builder
+            .build_global_string_ptr("panic: %s%s\n\0", "panic_fmt")
+            .unwrap();
         let msg = self
             .builder
-            .build_global_string_ptr(&formatted, "panic_msg")
+            .build_global_string_ptr(&format!("{}\0", message), "panic_msg")
             .unwrap();
         self.builder
             .build_call(
                 self.printf_fn,
-                &[msg.as_pointer_value().into()],
+                &[
+                    fmt.as_pointer_value().into(),
+                    prefix.into(),
+                    msg.as_pointer_value().into(),
+                ],
                 "panic_print",
             )
             .unwrap();
