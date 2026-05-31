@@ -6555,7 +6555,10 @@ fn main() {
             // Format: `panic at linecol.kara:<line>:<col> in main: <msg>`.
             let marker = "linecol.kara:";
             let idx = c.stdout.find(marker).unwrap_or_else(|| {
-                panic!("no panic location in stdout={:?} stderr={:?}", c.stdout, c.stderr)
+                panic!(
+                    "no panic location in stdout={:?} stderr={:?}",
+                    c.stdout, c.stderr
+                )
             });
             let rest = &c.stdout[idx + marker.len()..];
             // The two fields immediately after the filename must be numeric
@@ -6581,7 +6584,11 @@ fn main() {
                 "expected a non-zero column number, got stdout={:?}",
                 c.stdout
             );
-            assert_eq!(line, "4", "panicking index is on source line 4; stdout={:?}", c.stdout);
+            assert_eq!(
+                line, "4",
+                "panicking index is on source line 4; stdout={:?}",
+                c.stdout
+            );
         }
     }
 
