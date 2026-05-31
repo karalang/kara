@@ -36,12 +36,62 @@
 //! and function/closure parameters require this; `if let` / `while let`
 //! require the inverse). Returns `None` for skipped types so the caller
 //! can fall back to the older syntactic check on ref/function/typeparam
-//! scrutinees that Maranget doesn't reason about. Range and float literal
-//! patterns still lower to `Pat::Wildcard` (slice 6 gap analysis; floats
-//! wait on Eq/Hash modeling).
+//! scrutinees that Maranget doesn't reason about.
+//!
+//! Slice 6 — range gap analysis (this revision): integer and `char`
+//! literals *and* range patterns lower to `PatCtor::IntRange { lo, hi }`
+//! (inclusive, in `i128` space) and are reasoned about by **interval
+//! splitting** in `int_column_useful` — the type domain (and each query
+//! range) is partitioned at the endpoints present in a column into atomic
+//! sub-intervals, so a coverage gap yields a missing-value witness and a
+//! range tiled by the union of earlier ranges is correctly unreachable.
+//! This replaced the prior `RangePattern => Pat::Wildcard` lowering, which
+//! was unsound (a lone range arm acted as a catch-all). `i128`/`u128`
+//! (domains that don't fit `i128`) keep the open-domain default-matrix
+//! behaviour; float literal patterns still lower to `Pat::Wildcard`
+//! (awaiting an Eq/Hash story for `f64`).
 
 use crate::ast::{LiteralPattern, MatchArm, Pattern, PatternKind, RestPattern};
-use crate::typechecker::{Type, TypeEnv, VariantTypeInfo};
+use crate::typechecker::{IntSize, Type, TypeEnv, UIntSize, VariantTypeInfo};
+
+/// Inclusive integer/`char` domain `[min, max]` for a scrutinee type, in
+/// the common `i128` space used by `PatCtor::IntRange`. Returns `None` for
+/// `i128`/`u128` (their full domains don't fit `i128`, so the split math
+/// would be unsound) and for every non-integer/non-`char` type — those
+/// route through the open-domain default-matrix path (any non-wildcard arm
+/// demands an explicit wildcard), which is sound but imprecise.
+fn int_domain(ty: &Type) -> Option<(i128, i128)> {
+    match ty {
+        Type::Int(s) => match s {
+            IntSize::I8 => Some((i8::MIN as i128, i8::MAX as i128)),
+            IntSize::I16 => Some((i16::MIN as i128, i16::MAX as i128)),
+            IntSize::I32 => Some((i32::MIN as i128, i32::MAX as i128)),
+            IntSize::I64 => Some((i64::MIN as i128, i64::MAX as i128)),
+            IntSize::I128 => None,
+        },
+        Type::UInt(s) => match s {
+            UIntSize::U8 => Some((0, u8::MAX as i128)),
+            UIntSize::U16 => Some((0, u16::MAX as i128)),
+            UIntSize::U32 => Some((0, u32::MAX as i128)),
+            UIntSize::U64 | UIntSize::Usize => Some((0, u64::MAX as i128)),
+            UIntSize::U128 => None,
+        },
+        // Unicode scalar domain, treated as one contiguous interval. The
+        // surrogate gap [0xD800, 0xDFFF] has no inhabitants, so including
+        // it here is sound (no real char ever lands there to be a witness).
+        Type::Char => Some((0, 0x10FFFF)),
+        _ => None,
+    }
+}
+
+/// Integer / `char` value of a literal-pattern bound, in the `i128` space.
+fn lit_to_i128(l: &LiteralPattern) -> Option<i128> {
+    match l {
+        LiteralPattern::Integer(n, _) => Some(*n as i128),
+        LiteralPattern::Char(c) => Some(*c as i128),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone)]
 enum Pat {
@@ -55,6 +105,21 @@ enum PatCtor {
     Bool(bool),
     Variant(String),
     Lit(PatLit),
+    /// Integer / `char` value or range, modeled as an inclusive interval
+    /// `[lo, hi]` in a common `i128` space (chars map to their codepoint).
+    /// A single literal is `lo == hi`. Slice 6: integer/char columns are
+    /// reasoned about by **interval splitting** (see `int_column_useful`)
+    /// rather than per-value enumeration, so a partition of the type's
+    /// domain by the range endpoints present in a column drives both
+    /// exhaustiveness (uncovered sub-interval → witness) and reachability
+    /// (a range fully covered by the union of earlier ranges adds nothing).
+    /// `i128` / `u128` are excluded (their domains don't fit `i128` split
+    /// math — `int_domain` returns `None`); they keep the open-domain
+    /// default-matrix behaviour (any non-wildcard arm demands a wildcard).
+    IntRange {
+        lo: i128,
+        hi: i128,
+    },
     Tuple,
     Struct(String),
     /// Fixed-arity array slice pattern — `Array[T, N]` specializes exactly
@@ -79,10 +144,11 @@ enum PatCtor {
     },
 }
 
+/// Open-domain string literals. Integers and `char`s are modeled as
+/// `PatCtor::IntRange` instead (slice 6); only `String`/`str` literals
+/// remain a per-value point constructor here.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum PatLit {
-    Integer(i64),
-    Char(char),
     String(String),
 }
 
@@ -235,12 +301,20 @@ fn lower_pattern(p: &Pattern, scrut_type: &Type, env: &TypeEnv) -> Pat {
                 ctor: PatCtor::Bool(*b),
                 args: vec![],
             },
+            // Integers and `char`s become singleton `IntRange`s so they
+            // share the interval-splitting machinery with range patterns.
             LiteralPattern::Integer(n, _) => Pat::Ctor {
-                ctor: PatCtor::Lit(PatLit::Integer(*n)),
+                ctor: PatCtor::IntRange {
+                    lo: *n as i128,
+                    hi: *n as i128,
+                },
                 args: vec![],
             },
             LiteralPattern::Char(c) => Pat::Ctor {
-                ctor: PatCtor::Lit(PatLit::Char(*c)),
+                ctor: PatCtor::IntRange {
+                    lo: *c as i128,
+                    hi: *c as i128,
+                },
                 args: vec![],
             },
             LiteralPattern::String(s) => Pat::Ctor {
@@ -254,9 +328,31 @@ fn lower_pattern(p: &Pattern, scrut_type: &Type, env: &TypeEnv) -> Pat {
             // is_top_level gate already keeps rare).
             LiteralPattern::Float(_, _) => Pat::Wildcard,
         },
-        // Range patterns lower to wildcard for now. Slice 6 will model
-        // integer/char ranges as constructor ranges for proper gap analysis.
-        PatternKind::RangePattern { .. } => Pat::Wildcard,
+        // Range patterns lower to an inclusive `IntRange` interval. Open
+        // ends (`..=hi`, `lo..`) take the scrutinee type's domain bound;
+        // for `i128`/`u128` (no `int_domain`) the `i128` extreme is used as
+        // a best-effort bound — splitting won't engage there, so only the
+        // fact that this is a non-wildcard ctor matters (it correctly
+        // refuses to act as a catch-all, unlike the prior wildcard
+        // lowering, which made a lone range arm unsoundly "exhaustive").
+        PatternKind::RangePattern {
+            start,
+            end,
+            inclusive,
+        } => {
+            let (dmin, dmax) = int_domain(scrut_type).unwrap_or((i128::MIN, i128::MAX));
+            let lo = start.as_ref().and_then(lit_to_i128).unwrap_or(dmin);
+            let hi = match end.as_ref() {
+                Some(h) => lit_to_i128(h)
+                    .map(|v| if *inclusive { v } else { v - 1 })
+                    .unwrap_or(dmax),
+                None => dmax,
+            };
+            Pat::Ctor {
+                ctor: PatCtor::IntRange { lo, hi },
+                args: vec![],
+            }
+        }
         PatternKind::TupleVariant { path, patterns } => {
             let name = path.last().cloned().unwrap_or_default();
             let payload_types = variant_payload_types(scrut_type, &name, env);
@@ -506,6 +602,24 @@ fn usefulness(matrix: &Matrix, q: &[Pat], head_types: &[Type], env: &TypeEnv) ->
             }
             None
         }
+        // Integer / `char` column (slice 6): reason about it by interval
+        // splitting instead of per-value enumeration. A query range
+        // narrows the splitting domain to that interval; a wildcard query
+        // splits the whole type domain — but only when the column actually
+        // contains range/literal patterns (an all-wildcard int column
+        // falls through to the generic wildcard fast-path below for a
+        // clean `_` witness). `i128`/`u128` (no `int_domain`) skip this and
+        // take the generic open-domain path.
+        Pat::Ctor {
+            ctor: PatCtor::IntRange { lo, hi },
+            ..
+        } if int_domain(head_ty).is_some() => {
+            int_column_useful(matrix, (*lo, *hi), q_rest, rest_tys, env)
+        }
+        Pat::Wildcard if int_domain(head_ty).is_some() && matrix_has_int_head(matrix) => {
+            let (min, max) = int_domain(head_ty).unwrap();
+            int_column_useful(matrix, (min, max), q_rest, rest_tys, env)
+        }
         Pat::Ctor { ctor, args } => {
             let arity = args.len();
             let specialized = specialize(matrix, ctor, arity);
@@ -595,6 +709,123 @@ fn repackage_witness(ctor: &PatCtor, arity: usize, inner: Vec<Pat>) -> Vec<Pat> 
     });
     out.extend(tail);
     out
+}
+
+/// Head of an integer/`char` matrix column after flattening or-patterns:
+/// either a wildcard (matches anything) or a concrete inclusive range.
+enum IntHead {
+    Wild,
+    Range(i128, i128),
+}
+
+/// Flatten a matrix's head column into `(IntHead, tail)` pairs, expanding
+/// or-patterns into one entry per alternative. Non-int heads (which can't
+/// occur in a well-typed integer/`char` column) are dropped.
+fn int_rows(matrix: &Matrix) -> Vec<(IntHead, Vec<Pat>)> {
+    let mut out = Vec::new();
+    for row in &matrix.rows {
+        if let Some((head, tail)) = row.pats.split_first() {
+            push_int_head(head, tail, &mut out);
+        }
+    }
+    out
+}
+
+fn push_int_head(head: &Pat, tail: &[Pat], out: &mut Vec<(IntHead, Vec<Pat>)>) {
+    match head {
+        Pat::Wildcard => out.push((IntHead::Wild, tail.to_vec())),
+        Pat::Ctor {
+            ctor: PatCtor::IntRange { lo, hi },
+            ..
+        } => out.push((IntHead::Range(*lo, *hi), tail.to_vec())),
+        Pat::Or(alts) => {
+            for alt in alts {
+                push_int_head(alt, tail, out);
+            }
+        }
+        // A non-int ctor in an int column is ill-typed; ignore it.
+        Pat::Ctor { .. } => {}
+    }
+}
+
+fn matrix_has_int_head(matrix: &Matrix) -> bool {
+    int_rows(matrix)
+        .iter()
+        .any(|(h, _)| matches!(h, IntHead::Range(_, _)))
+}
+
+/// Interval-splitting usefulness for an integer/`char` column over the
+/// query interval `[qlo, qhi]`. Partitions the interval at every range
+/// endpoint present in the column so each sub-interval is *atomic* (each
+/// row range either fully contains or is disjoint from it), then checks
+/// each sub-interval in turn: a row range contributes iff it contains the
+/// sub-interval, and a wildcard row always contributes. The first
+/// sub-interval whose specialized matrix still leaves `q_rest` useful is
+/// the witness, repackaged as an `IntRange` head (rendered as a
+/// representative value of that interval by `render_int_range`).
+///
+/// This drives both directions soundly: a gap between/around the ranges
+/// specializes to a matrix that omits every range row → uncovered → a
+/// missing-value witness (exhaustiveness); and a range fully tiled by the
+/// union of earlier ranges has every sub-interval covered → no witness
+/// (precise reachability, including union coverage like `1..=10 | 11..=20`
+/// subsuming `1..=20`).
+fn int_column_useful(
+    matrix: &Matrix,
+    (qlo, qhi): (i128, i128),
+    q_rest: &[Pat],
+    rest_tys: &[Type],
+    env: &TypeEnv,
+) -> Option<Vec<Pat>> {
+    if qlo > qhi {
+        // Empty query interval (e.g. a degenerate exclusive `5..5`):
+        // matches no value, so it contributes no uncovered witness.
+        return None;
+    }
+    let rows = int_rows(matrix);
+
+    // Split points: the query lower bound, plus every range start and
+    // every range-end+1 that falls strictly inside the query interval.
+    // Each adjacent pair then bounds one atomic sub-interval.
+    let mut bounds = vec![qlo];
+    for (h, _) in &rows {
+        if let IntHead::Range(lo, hi) = h {
+            if *lo > qlo && *lo <= qhi {
+                bounds.push(*lo);
+            }
+            if let Some(next) = hi.checked_add(1) {
+                if next > qlo && next <= qhi {
+                    bounds.push(next);
+                }
+            }
+        }
+    }
+    bounds.sort_unstable();
+    bounds.dedup();
+
+    for (i, &start) in bounds.iter().enumerate() {
+        let end = bounds.get(i + 1).map(|n| n - 1).unwrap_or(qhi);
+        let mut spec = Matrix::default();
+        for (h, tail) in &rows {
+            let keep = match h {
+                IntHead::Wild => true,
+                IntHead::Range(lo, hi) => *lo <= start && end <= *hi,
+            };
+            if keep {
+                spec.rows.push(Row { pats: tail.clone() });
+            }
+        }
+        if let Some(w) = usefulness(&spec, q_rest, rest_tys, env) {
+            let mut out = Vec::with_capacity(w.len() + 1);
+            out.push(Pat::Ctor {
+                ctor: PatCtor::IntRange { lo: start, hi: end },
+                args: vec![],
+            });
+            out.extend(w);
+            return Some(out);
+        }
+    }
+    None
 }
 
 /// `S(c, P)`: rows that begin with `c(...)` or `_`, with the head replaced by
@@ -706,7 +937,7 @@ fn ctor_arity(ctor: &PatCtor, parent_ty: &Type, env: &TypeEnv) -> usize {
 
 fn ctor_field_types(ctor: &PatCtor, parent_ty: &Type, env: &TypeEnv) -> Vec<Type> {
     match ctor {
-        PatCtor::Bool(_) | PatCtor::Lit(_) => vec![],
+        PatCtor::Bool(_) | PatCtor::Lit(_) | PatCtor::IntRange { .. } => vec![],
         PatCtor::Variant(name) => {
             if let Type::Named {
                 name: enum_name, ..
@@ -777,14 +1008,63 @@ fn render_witness(witness: &Pat, ty: &Type, env: &TypeEnv) -> String {
 fn render_ctor(ctor: &PatCtor, args: &[Pat], ty: &Type, env: &TypeEnv) -> String {
     match ctor {
         PatCtor::Bool(b) => b.to_string(),
-        PatCtor::Lit(PatLit::Integer(n)) => n.to_string(),
-        PatCtor::Lit(PatLit::Char(c)) => format!("'{c}'"),
+        PatCtor::IntRange { lo, hi } => render_int_range(*lo, *hi, ty),
         PatCtor::Lit(PatLit::String(s)) => format!("{s:?}"),
         PatCtor::Variant(name) => render_variant(name, args, ty, env),
         PatCtor::Tuple => render_tuple(args, ty, env),
         PatCtor::Struct(name) => render_struct(name, args, env),
         PatCtor::Array(_) => render_slice_witness(args, ty, env, false),
         PatCtor::SliceLen { has_rest, .. } => render_slice_witness(args, ty, env, *has_rest),
+    }
+}
+
+/// Render a witness for an integer/`char` `IntRange`. Three shapes:
+/// - a **singleton** (`lo == hi`) renders as the value (`5`);
+/// - a **bounded interior gap** (neither bound is a domain extreme — a true
+///   hole between two covered ranges) renders as the range itself
+///   (`10..=19`), which tells the user exactly which interval to add;
+/// - an **extreme-touching gap** (`lo == MIN` or `hi == MAX` — i.e.
+///   "everything outside what you matched") renders a single representative
+///   value (`0`, `11`) instead of echoing the giant `MIN`/`MAX` bound.
+fn render_int_range(lo: i128, hi: i128, ty: &Type) -> String {
+    if lo == hi {
+        return render_scalar(lo, ty);
+    }
+    if let Some((dmin, dmax)) = int_domain(ty) {
+        if lo != dmin && hi != dmax {
+            return format!("{}..={}", render_scalar(lo, ty), render_scalar(hi, ty));
+        }
+    }
+    render_scalar(representative_value(lo, hi, ty), ty)
+}
+
+/// Render a single integer/`char` value as it would appear in source.
+fn render_scalar(v: i128, ty: &Type) -> String {
+    if matches!(ty, Type::Char) {
+        match u32::try_from(v.clamp(0, 0x10FFFF))
+            .ok()
+            .and_then(char::from_u32)
+        {
+            Some(c) if !c.is_control() => format!("'{c}'"),
+            _ => format!("'\\u{{{:X}}}'", v.max(0)),
+        }
+    } else {
+        v.to_string()
+    }
+}
+
+/// Pick a concrete value inside `[lo, hi]` for an extreme-touching gap:
+/// prefer `0` when it is in range; otherwise the bound adjacent to a
+/// covered region (the non-domain-extreme end), so a gap renders as e.g.
+/// `11` (just past a covered range) rather than the domain extreme.
+fn representative_value(lo: i128, hi: i128, ty: &Type) -> i128 {
+    if lo <= 0 && 0 <= hi {
+        return 0;
+    }
+    match int_domain(ty) {
+        Some((dmin, _)) if lo != dmin => lo,
+        Some(_) => hi,
+        None => lo,
     }
 }
 

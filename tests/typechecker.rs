@@ -796,6 +796,215 @@ fn test_binding_makes_exhaustive() {
     );
 }
 
+// ── Range-pattern exhaustiveness (Maranget interval splitting, slice 6) ──
+//
+// Before this slice, range patterns lowered to `Pat::Wildcard`, so a lone
+// range arm acted as a catch-all — `match n { 1..=10 => .. }` was reported
+// *exhaustive* (unsound). These tests pin the interval-splitting model:
+// a range covers exactly its interval, gaps demand coverage, and a union
+// of ranges that tiles the domain is exhaustive without a wildcard.
+
+#[test]
+fn test_range_lone_arm_non_exhaustive() {
+    // Soundness: a single range is NOT a catch-all.
+    let errors = typecheck_errors(
+        "fn f(n: i64) -> i64 {\n\
+             match n {\n\
+                 1..=10 => 0,\n\
+             }\n\
+         }",
+    );
+    let err = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::NonExhaustiveMatch)
+        .expect("lone range arm should be non-exhaustive");
+    // Gap below the range → a concrete missing value witness.
+    assert!(
+        err.message.contains("not covered"),
+        "expected a missing-value witness, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_range_with_wildcard_exhaustive() {
+    typecheck_ok(
+        "fn f(n: i64) -> i64 {\n\
+             match n {\n\
+                 1..=10 => 0,\n\
+                 _      => 99,\n\
+             }\n\
+         }",
+    );
+}
+
+#[test]
+fn test_range_full_domain_coverage_exhaustive() {
+    // Two inclusive ranges tile the entire u8 domain — exhaustive with no
+    // wildcard arm. This is the headline case the prior wildcard-collapse
+    // could not express.
+    typecheck_ok(
+        "fn f(b: u8) -> i64 {\n\
+             match b {\n\
+                 0..=127   => 0,\n\
+                 128..=255 => 1,\n\
+             }\n\
+         }",
+    );
+}
+
+#[test]
+fn test_range_half_open_full_coverage_exhaustive() {
+    // `..=0` ([MIN, 0]) and `1..` ([1, MAX]) partition all of i64.
+    typecheck_ok(
+        "fn f(n: i64) -> i64 {\n\
+             match n {\n\
+                 ..=0 => 0,\n\
+                 1..  => 1,\n\
+             }\n\
+         }",
+    );
+}
+
+#[test]
+fn test_range_gap_between_ranges_non_exhaustive() {
+    // 1..=100 and 101..=200 leave gaps below 1 and above 200.
+    let errors = typecheck_errors(
+        "fn f(n: i64) -> i64 {\n\
+             match n {\n\
+                 1..=100   => 0,\n\
+                 101..=200 => 1,\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NonExhaustiveMatch),
+        "ranges with gaps should be non-exhaustive, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_range_interior_gap_witness_is_a_range() {
+    // A bounded hole between two ranges renders as the missing interval
+    // itself (not a single value), so the fix is obvious.
+    let errors = typecheck_errors(
+        "fn f(n: i64) -> i64 {\n\
+             match n {\n\
+                 ..=9     => 0,\n\
+                 20..     => 1,\n\
+             }\n\
+         }",
+    );
+    let err = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::NonExhaustiveMatch)
+        .expect("interior gap should be non-exhaustive");
+    assert!(
+        err.message.contains("10..=19"),
+        "expected the missing interval `10..=19` in the witness, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_range_char_lone_arm_non_exhaustive() {
+    let errors = typecheck_errors(
+        "fn f(c: char) -> i64 {\n\
+             match c {\n\
+                 'a'..='z' => 0,\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NonExhaustiveMatch),
+        "lone char range should be non-exhaustive, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_range_overlapping_literal_unreachable() {
+    // `5` is already covered by the earlier `1..=10` range → unreachable.
+    let result = typecheck_ok(
+        "fn f(n: i64) -> i64 {\n\
+             match n {\n\
+                 1..=10 => 0,\n\
+                 5      => 1,\n\
+                 _      => 99,\n\
+             }\n\
+         }",
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.kind == TypeErrorKind::UnreachableArm),
+        "expected UnreachableArm for `5` after `1..=10`, got: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn test_range_union_subsumes_later_range_unreachable() {
+    // `1..=10` and `11..=20` together tile `1..=20`, so the later
+    // `1..=20` arm is fully covered — precise reachability across a union
+    // of ranges (the case the equality-only model could not detect).
+    let result = typecheck_ok(
+        "fn f(n: i64) -> i64 {\n\
+             match n {\n\
+                 1..=10  => 0,\n\
+                 11..=20 => 1,\n\
+                 1..=20  => 2,\n\
+                 _       => 99,\n\
+             }\n\
+         }",
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.kind == TypeErrorKind::UnreachableArm),
+        "expected UnreachableArm for `1..=20` subsumed by union, got: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn test_range_in_enum_payload_non_exhaustive() {
+    // `Some(1..=10)` covers only part of `Some`; other Some values are
+    // missing even though `None` is handled.
+    let errors = typecheck_errors(
+        "fn f(o: Option[i64]) -> i64 {\n\
+             match o {\n\
+                 Some(1..=10) => 0,\n\
+                 None         => -1,\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NonExhaustiveMatch),
+        "Some(range) should not cover all Some, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_range_in_enum_payload_exhaustive_with_inner_wildcard() {
+    typecheck_ok(
+        "fn f(o: Option[i64]) -> i64 {\n\
+             match o {\n\
+                 Some(1..=10) => 0,\n\
+                 Some(_)      => 1,\n\
+                 None         => -1,\n\
+             }\n\
+         }",
+    );
+}
+
 // ── Maranget field-level recursion (exhaustiveness slice 2) ──────
 
 #[test]
