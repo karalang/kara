@@ -169,6 +169,14 @@ pub enum EffectErrorKind {
     UndefinedEffectGroup,
     /// A function argument's effect set is not a subset of the slot's declared effects.
     EffectSubtypeViolation,
+    /// A contract expression (`requires` / `ensures` / `invariant`) has an
+    /// inferred effect set that is not a subset of `{panics}` — i.e. it
+    /// performs an observable side effect (`reads`, `writes`, `sends`,
+    /// `receives`, `allocates`, `blocks`, `suspends`). Contract predicates
+    /// must be pure (design.md § Contracts rule 1). `panics` alone is
+    /// permitted (indexing / division / `unwrap` are idiomatic in
+    /// predicates).
+    ForbiddenEffectInContract,
     /// An `extern` declaration includes an effect forbidden by the active compile profile.
     ProfileViolation,
     /// Advisory lint hint on an `extern` declaration — never a compile error.
@@ -779,6 +787,7 @@ impl<'a> EffectChecker<'a> {
         // Phase B: Infer and verify
         self.infer_effects();
         self.infer_private_trait_ceilings();
+        self.check_contract_purity();
         self.verify_declarations();
         self.verify_pub_fn_no_synthetic_resource();
         self.verify_impl_trait_ceilings();

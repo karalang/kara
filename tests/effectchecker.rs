@@ -7284,3 +7284,65 @@ fn plain_distinct_constructor_does_not_infer_panics() {
         "a plain distinct constructor must not infer `panics`"
     );
 }
+
+// ── Contracts — purity (effect set ⊆ {panics}) ─────────────────────
+//
+// design.md § Contracts rule 1: contract expressions must be pure. Any of
+// the seven non-panic effects appearing via a call inside a `requires` /
+// `ensures` / `invariant` is a compile error; `panics` alone is permitted.
+
+fn assert_contract_impure(source: &str) {
+    let errors = effectcheck_errors(source);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::ForbiddenEffectInContract),
+        "expected E_CONTRACT_IMPURE, got: {}",
+        errors
+            .iter()
+            .map(|e| e.message.clone())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn contract_requires_with_reads_effect_rejected() {
+    assert_contract_impure(
+        "effect resource Log;\n\
+         fn audit() -> bool with reads(Log) { true }\n\
+         fn f(x: i64) -> i64 requires audit() { x }",
+    );
+}
+
+#[test]
+fn contract_ensures_with_writes_effect_rejected() {
+    assert_contract_impure(
+        "effect resource Log;\n\
+         fn mark() -> bool with writes(Log) { true }\n\
+         fn f(x: i64) -> i64 ensures(result) mark() { x }",
+    );
+}
+
+#[test]
+fn contract_invariant_with_effect_rejected() {
+    assert_contract_impure(
+        "effect resource Log;\n\
+         fn probe() -> bool with reads(Log) { true }\n\
+         struct S { x: i64, invariant probe() }",
+    );
+}
+
+#[test]
+fn contract_with_panics_effect_allowed() {
+    // `panics` is the one permitted effect (indexing / unwrap idioms).
+    effectcheck_ok(
+        "fn boom() -> bool with panics { true }\n\
+         fn f(x: i64) -> i64 requires boom() { x }",
+    );
+}
+
+#[test]
+fn contract_pure_predicate_accepted() {
+    effectcheck_ok("fn f(x: i64) -> i64 requires x > 0 ensures(result) result > x { x + 1 }");
+}

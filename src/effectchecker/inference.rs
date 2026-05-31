@@ -347,6 +347,74 @@ impl<'a> super::EffectChecker<'a> {
         changed
     }
 
+    /// Contract purity (design.md § Contracts rule 1): every contract
+    /// expression — `requires`, `ensures` body, struct `invariant` — must
+    /// have an inferred effect set that is a subset of `{panics}`. Any of the
+    /// seven non-panic effects (`reads`/`writes`/`sends`/`receives`/
+    /// `allocates`/`blocks`/`suspends`) appearing via a call inside a
+    /// contract is a compile error naming the forbidden effect. `panics` is
+    /// permitted (indexing / division / `unwrap` / `panic()` are idiomatic in
+    /// predicates). Runs after inference so callee effect sets are settled.
+    pub(crate) fn check_contract_purity(&mut self) {
+        // Collect every (contract-expression, kind) pair up front so the
+        // immutable call-collection walk doesn't overlap the mutable error
+        // push. Contract clauses live on free functions, impl methods, and
+        // struct invariants.
+        let mut clauses: Vec<(Expr, &'static str)> = Vec::new();
+        for item in &self.program.items {
+            match item {
+                Item::Function(f) => {
+                    clauses.extend(f.requires.iter().map(|e| (e.clone(), "requires")));
+                    clauses.extend(f.ensures.iter().map(|e| (e.body.clone(), "ensures")));
+                }
+                Item::StructDef(s) => {
+                    clauses.extend(s.invariants.iter().map(|e| (e.clone(), "invariant")));
+                }
+                Item::ImplBlock(imp) => {
+                    for it in &imp.items {
+                        if let ImplItem::Method(m) = it {
+                            clauses.extend(m.requires.iter().map(|e| (e.clone(), "requires")));
+                            clauses.extend(m.ensures.iter().map(|e| (e.body.clone(), "ensures")));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let empty_bounds: HashMap<String, Vec<TraitBound>> = HashMap::new();
+        let mut violations: Vec<(Effect, Span, &'static str)> = Vec::new();
+        for (expr, kind) in &clauses {
+            let mut calls = Vec::new();
+            self.collect_calls_in_expr(expr, &mut calls, &empty_bounds);
+            for (callee, call_span) in &calls {
+                for effect in self.get_callee_effects(callee) {
+                    if effect.verb != EffectVerbKind::Panics {
+                        violations.push((effect, call_span.clone(), *kind));
+                    }
+                }
+            }
+        }
+
+        for (effect, span, kind) in violations {
+            let rendered = if effect.resource.is_empty() {
+                super::verb_name(&effect.verb)
+            } else {
+                format!("{}({})", super::verb_name(&effect.verb), effect.resource)
+            };
+            self.errors.push(super::EffectError {
+                message: format!(
+                    "error[E_CONTRACT_IMPURE]: `{rendered}` is not permitted in a {kind} \
+                     contract expression — contract predicates must be pure (effect set ⊆ \
+                     {{panics}}); only `panics` (indexing, division, unwrap) is allowed"
+                ),
+                span,
+                kind: super::EffectErrorKind::ForbiddenEffectInContract,
+                subtype_trace: None,
+            });
+        }
+    }
+
     /// Get the effects of a callee function.
     /// For public functions: use declared effects (inference firewall).
     /// For private functions: use inferred effects.
