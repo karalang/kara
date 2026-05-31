@@ -979,6 +979,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `compile_tail_final_expr`, which sees the SAME bare-Identifier
                 // final expr in this block AND in each branch arm. Inc'ing it
                 // here too would double-count, so the transfer-inc moved there.)
+                // Map tail-return cleanup suppression: when the tail is a
+                // bare Identifier bound to a Map (or Set, which lowers to
+                // Map[T, ()]), drop the matching `FreeMapHandle` from the
+                // current scope's cleanup queue. `track_map_var` was
+                // queued at `let m = Map.new()`; without this, the queued
+                // free fires at this function's scope exit BEFORE the
+                // caller receives the handle, leaving the caller with a
+                // dangling pointer. Mirrors the Vec/String tail
+                // suppression in `suppress_source_vec_cleanup_for_arg`,
+                // but Map's cleanup is queue-driven (no in-slot sentinel
+                // like `cap = 0` to flip) so we mutate the queue
+                // directly. AOT happens to mask this via post-codegen O2
+                // elision of the dead store/free; JIT runs pre-O2 IR and
+                // exposes it.
+                self.suppress_map_cleanup_for_tail_identifier(name);
             }
             // Extra: when the tail is `var.field` and `var` is a
             // shared struct whose field is `Option[shared T]`, the
@@ -1100,6 +1115,41 @@ impl<'ctx> super::Codegen<'ctx> {
 
     pub(super) fn suppress_source_vec_cleanup_for_arg(&self, arg_expr: &Expr) {
         self.suppress_source_vec_cleanup_for_arg_ex(arg_expr, true);
+    }
+
+    /// Map tail-return cleanup suppression — drop any
+    /// `FreeMapHandle` from the current scope's cleanup queue whose
+    /// `map_alloca` matches the named binding's slot. Called from
+    /// `suppress_cleanup_for_tail_return` when the function's tail
+    /// expression is an `Identifier(name)`. Map's cleanup is
+    /// queue-driven (no in-slot sentinel like Vec/String's `cap = 0`
+    /// to flip and have the cleanup walker no-op against), so we
+    /// mutate the queue directly. The `track_map_var` call site is
+    /// `compile_map_new_stmt` (direct `Map.new()`) or the fresh-
+    /// handle method-call branch in the let-stmt arm — both push
+    /// onto `scope_cleanup_actions.last()`, which is what the tail
+    /// suppression now reaches. Set bindings track via the same
+    /// `FreeMapHandle` action (Set lowers to `Map[T, ()]`), so this
+    /// helper covers both surfaces.
+    ///
+    /// Only mutates the innermost (function-body-top) frame. Inner
+    /// scopes that already drained their queue via
+    /// `emit_scope_cleanup` are gone by the time
+    /// `suppress_cleanup_for_tail_return` runs, so there's nothing
+    /// to suppress there.
+    pub(super) fn suppress_map_cleanup_for_tail_identifier(&mut self, name: &str) {
+        let slot_ptr = match self.variables.get(name) {
+            Some(s) => s.ptr,
+            None => return,
+        };
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.retain(|action| match action {
+                crate::codegen::state::CleanupAction::FreeMapHandle { map_alloca, .. } => {
+                    *map_alloca != slot_ptr
+                }
+                _ => true,
+            });
+        }
     }
 
     /// `apply_shared_transfer`: whether to emit the shared-struct/enum

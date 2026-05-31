@@ -157,6 +157,32 @@ fn jit_e2e_fstring_interpolation() {
     assert_eq!(out, "x = 7\n");
 }
 
+#[test]
+fn jit_e2e_map_returned_from_fn_preserves_entries() {
+    // Map tail-return cleanup suppression. Pre-fix, the `let m =
+    // Map.new()` inside `make_map` registers a `track_map_var` whose
+    // scope-exit `FreeMapHandle` fires before the caller receives
+    // the handle — the returned Map's heap is freed and the caller
+    // sees a dangling pointer. AOT masks this via post-codegen O2
+    // elision of the dead-store/free pair; JIT runs pre-O2 IR and
+    // exposes the bug. Surfaced during B.5.3b friction-probe
+    // investigation 2026-05-30.
+    //
+    // Fix: `suppress_cleanup_for_tail_return` now also walks the
+    // current scope's cleanup queue for a `FreeMapHandle` whose
+    // `map_alloca` matches the tail Identifier's slot, and drops
+    // it. Mirror of the Vec/String tail-suppression shape.
+    let src = "fn make_map() -> Map[i64, i64] { \
+        let m: Map[i64, i64] = Map.new(); m.insert(1, 100); m \
+       }\n\
+       fn main() { \
+        let mp: Map[i64, i64] = make_map(); \
+        match mp.get(1) { Some(v) => println(v), None => println(-1), } \
+       }";
+    let out = jit_run_program(src).expect("jit");
+    assert_eq!(out, "100\n");
+}
+
 // ── W3.2 surface ─────────────────────────────────────────────────────
 // par-blocks, `?` on Result, and other surface that depends on runtime
 // symbols beyond the libc/Vec/Map base. Originally needed in-test
