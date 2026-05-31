@@ -38,6 +38,24 @@ name = "karac_runtime"
 crate-type = ["staticlib", "rlib"]
 
 [features]
+# `default = ["tls"]` so a plain `cargo build`/`cargo test` keeps the full
+# runtime surface (HTTPS serving, the HTTP client, WS-over-TLS). The
+# production AOT build emits TWO archives: the full one (`--features tls`,
+# the default) and a lean one (`--no-default-features`) for compute-only
+# Kāra programs. See phase-7-codegen.md § "Phase 4 binary-size" — `rustls`
+# + `ring` are the *only* deps whose unwind machinery survives `-dead_strip`
+# onto a compute binary's shared panic/alloc path (+48.5 KiB, measured;
+# tokio/hyper/mio/serde_json are all DCE-clean). Gating just the TLS surface
+# behind this feature lets the lean archive compile the rustls-pulling deps
+# out entirely, recovering that ~48 KiB on every compute binary.
+default = ["tls"]
+
+# TLS surface: HTTPS server (`karac_runtime_serve_https`), the ureq-backed
+# HTTP client, WS-over-TLS, and the `tls` module. Pulls the rustls/ring
+# dependency tree. Disabling it (lean archive) drops those capabilities but
+# keeps plain-HTTP serving, TCP, plain WebSocket, and JSON.
+tls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls", "dep:webpki-roots", "dep:ureq"]
+
 # Test-only FFI surface for `tests/park_and_wake.rs`. Adds
 # `karac_runtime_test_bind_and_print_port`, which binds a TCP socket
 # on 127.0.0.1:0, prints `BOUND_PORT=<n>` to stdout, and returns the
@@ -104,15 +122,15 @@ socket2 = "0.5"
 # land additively when a real consumer needs them. `rustls-pemfile`
 # parses the PEM bytes the FFI receives at `tls_config_new` into
 # rustls's `CertificateDer` / `PrivateKeyDer` types.
-rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring", "logging"] }
-rustls-pemfile = "2"
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring", "logging"], optional = true }
+rustls-pemfile = { version = "2", optional = true }
 # Phase-8 std.http HTTPS serving (`Server.serve_tls` / `karac_runtime_serve_https`):
 # tokio-rustls terminates TLS in front of hyper, wrapping each accepted
 # `TcpStream` in a `TlsStream` whose AsyncRead/AsyncWrite halves feed
 # hyper's `serve_connection`. Features mirror `rustls` above: `default-
 # features = false` strips `aws_lc_rs`; `ring` matches the crypto
 # provider `runtime/src/tls.rs` already installs.
-tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"], optional = true }
 
 # Phase-8 std.http client codegen path (`Client.get` / `Client.post` /
 # `karac_runtime_http_client_get` / `_post`): synchronous HTTP client.
@@ -123,7 +141,7 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["loggin
 # crate uses ureq directly; the runtime mirrors it here so karac-built
 # binaries get the same client behavior without dragging ureq into the
 # generated binaries' direct dep set.
-ureq = { version = "2", default-features = false, features = ["tls"] }
+ureq = { version = "2", default-features = false, features = ["tls"], optional = true }
 # Phase-8 line 48 (public-CA trust default): all 4 ureq client fetch
 # sites (`_client_get` / `_post` / `_client_send` / `_builder_send`)
 # route through a shared `ureq::Agent` whose rustls ClientConfig
@@ -136,7 +154,7 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 # keeps working on stripped images (Alpine / scratch / distroless)
 # without a system CA bundle. Version pinned to match ureq 2.12.1's
 # transitive choice — see Cargo.lock.
-webpki-roots = "0.26"
+webpki-roots = { version = "0.26", optional = true }
 
 [dev-dependencies]
 # Hermetic test-cert generation for `src/tls.rs`'s unit tests. Slice 4

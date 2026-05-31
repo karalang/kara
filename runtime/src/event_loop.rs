@@ -33,7 +33,11 @@ use mio::{Events, Interest, Poll, Token};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
 use std::io;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+// `AtomicU64` backs `HandshakeStats`, which is part of the TLS handshake
+// pool — gated behind the `tls` feature so the lean archive doesn't carry it.
+#[cfg(all(unix, feature = "tls"))]
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -1624,6 +1628,9 @@ unsafe fn ws_send_data_frame(fd: i32, msg_ptr: *const u8, msg_len: i64, opcode: 
     // registered via `karac_runtime_ws_accept_tls` (or any other
     // path that called `tls::register_session_for_fd`), the WS
     // framing must encrypt through rustls. Otherwise plain TCP.
+    // Gated behind the `tls` feature: the lean archive has no TLS
+    // sessions, so this path can never fire there and is compiled out.
+    #[cfg(feature = "tls")]
     if let Some(session) = crate::tls::lookup_session(fd) {
         let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
         let mut sock = std::net::TcpStream::from_raw_fd(fd);
@@ -1705,7 +1712,8 @@ unsafe fn ws_recv_data_frame(
     // `ws_send_data_frame`: route through rustls when the fd has a
     // session in the TLS registry. The frame-parser closure is
     // generic over Read+Write so the same body services both
-    // transports.
+    // transports. Gated behind the `tls` feature (see `ws_send_data_frame`).
+    #[cfg(feature = "tls")]
     if let Some(session) = crate::tls::lookup_session(fd) {
         let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
         let mut sock = std::net::TcpStream::from_raw_fd(fd);
@@ -2247,7 +2255,7 @@ pub extern "C" fn karac_runtime_ws_accept(listener_fd: i32) -> i32 {
 // drain `conn.wants_write()` ciphertext via `conn.write_tls(sock)`.
 // `flush` ensures the ciphertext buffer is fully drained.
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "tls"))]
 struct TlsConnIo<'a> {
     // Phase-8 line 22: widened from `&mut ServerConnection` to
     // `&mut rustls::Connection` (the enum over Server + Client) so the
@@ -2260,7 +2268,7 @@ struct TlsConnIo<'a> {
     sock: &'a mut std::net::TcpStream,
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "tls"))]
 impl<'a> std::io::Read for TlsConnIo<'a> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
@@ -2308,7 +2316,7 @@ impl<'a> std::io::Read for TlsConnIo<'a> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "tls"))]
 impl<'a> std::io::Write for TlsConnIo<'a> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let n = self.conn.writer().write(buf)?;
@@ -2334,7 +2342,7 @@ impl<'a> std::io::Write for TlsConnIo<'a> {
 /// # Safety
 /// `conn_fd` must be a freshly-accepted, owned TCP connection fd; `config`
 /// must be a valid `*mut KaracTlsConfig` for the call's duration.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "tls"))]
 unsafe fn ws_handshake_conn_tls(
     conn_fd: i32,
     config: *mut crate::tls::KaracTlsConfig,
@@ -2411,6 +2419,7 @@ unsafe fn ws_handshake_conn_tls(
 /// WS upgrade off the accept-loop thread. `work` holds freshly-accepted
 /// raw connection fds awaiting handshake; `done` holds fully-upgraded
 /// connection fds awaiting pickup by `karac_runtime_ws_accept_tls`.
+#[cfg(all(unix, feature = "tls"))]
 struct WsHandshakePool {
     work: Mutex<VecDeque<i32>>,
     cv_work: Condvar,
@@ -2431,6 +2440,7 @@ struct WsHandshakePool {
 /// rustls / parse error text for the first few failures so the cause is
 /// inspectable from the stats stream alone — added 2026-05-30 as step
 /// (a) of the macOS bench-client TLS+WS-upgrade diagnosis plan.
+#[cfg(all(unix, feature = "tls"))]
 struct HandshakeStats {
     submitted: AtomicU64,
     completed: AtomicU64,
@@ -2452,8 +2462,10 @@ struct HandshakeStats {
 /// errors mustn't grow the buffer unboundedly. 32 covers diagnosing a
 /// failure mode that fires every connection (we only need a few) while
 /// keeping the worker-side allocation bounded.
+#[cfg(all(unix, feature = "tls"))]
 const FIRST_ERRORS_CAP: usize = 32;
 
+#[cfg(all(unix, feature = "tls"))]
 impl HandshakeStats {
     fn new_if_enabled(workers: usize) -> Option<Arc<Self>> {
         if std::env::var_os("KARAC_WS_STATS").is_some() {
@@ -2498,6 +2510,7 @@ impl HandshakeStats {
 /// Which step of `ws_handshake_conn_tls` a failure occurred at. Used
 /// only for the `KARAC_WS_STATS` instrumentation — the FFI's `i32`
 /// return shape is unchanged.
+#[cfg(all(unix, feature = "tls"))]
 #[derive(Debug, Clone, Copy)]
 enum HandshakeStep {
     TlsConfig,
@@ -2510,6 +2523,7 @@ enum HandshakeStep {
 /// depths to stderr. The format is grep-friendly (`[karac_ws_stats]`
 /// prefix, space-separated `k=v` pairs) so a bench run can be
 /// post-processed cheaply.
+#[cfg(all(unix, feature = "tls"))]
 fn ws_stats_reporter(stats: Arc<HandshakeStats>, pool: Arc<WsHandshakePool>) {
     let mut last_submitted = 0u64;
     let mut last_completed = 0u64;
@@ -2565,6 +2579,7 @@ fn ws_stats_reporter(stats: Arc<HandshakeStats>, pool: Arc<WsHandshakePool>) {
 
 /// Per-listener-fd handshake pools, created lazily on first
 /// `karac_runtime_ws_accept_tls` call for that listener.
+#[cfg(all(unix, feature = "tls"))]
 static WS_HANDSHAKE_POOLS: OnceLock<Mutex<HashMap<i32, Arc<WsHandshakePool>>>> = OnceLock::new();
 
 /// Handshake worker count per listener. Handshakes block in socket reads
@@ -2581,6 +2596,7 @@ static WS_HANDSHAKE_POOLS: OnceLock<Mutex<HashMap<i32, Arc<WsHandshakePool>>>> =
 /// mean (matched observed 466ms). On a 32+ vCPU box, the old hardcoded
 /// 32 would have been undersized; scaling with CPUs keeps the worker
 /// pool sized to the actual handshake-CPU throughput available.
+#[cfg(all(unix, feature = "tls"))]
 fn ws_handshake_thread_count() -> usize {
     if let Some(n) = std::env::var("KARAC_WS_ACCEPT_THREADS")
         .ok()
@@ -2597,6 +2613,7 @@ fn ws_handshake_thread_count() -> usize {
 
 /// Worker loop: pop a raw accepted fd, run the handshake + upgrade, push
 /// the ready fd onto the done queue (or drop it on failure).
+#[cfg(all(unix, feature = "tls"))]
 fn ws_handshake_worker(config_addr: usize, pool: Arc<WsHandshakePool>) {
     loop {
         let conn_fd = {
@@ -2651,7 +2668,7 @@ fn ws_handshake_worker(config_addr: usize, pool: Arc<WsHandshakePool>) {
 }
 
 /// Get (or lazily start) the handshake pool for `listener_fd`.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "tls"))]
 fn ws_handshake_pool_for(
     listener_fd: i32,
     config: *mut crate::tls::KaracTlsConfig,
@@ -2737,7 +2754,7 @@ fn ws_handshake_pool_for(
 ///
 /// `listener_fd` must be a valid TCP listener socket; `config` must be a
 /// non-null pointer obtained from `karac_runtime_tls_config_new`.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "tls"))]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
     listener_fd: i32,
@@ -2828,7 +2845,7 @@ pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
 /// Shared with [`karac_runtime_ws_accept_tls`]; the plain-TCP
 /// equivalent lives inline in [`karac_runtime_ws_accept`] above
 /// and predates the generic-transport refactor.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "tls"))]
 fn ws_drive_upgrade_handshake<S: std::io::Read + std::io::Write>(
     stream: &mut S,
 ) -> Result<(), String> {

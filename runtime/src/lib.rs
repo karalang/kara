@@ -38,6 +38,7 @@ pub mod event_loop;
 mod file;
 mod map;
 pub mod scheduler;
+#[cfg(feature = "tls")]
 pub mod tls;
 
 // LLJIT integration (phase-7 L560 W3, 2026-05-29): when this crate is
@@ -176,10 +177,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_http_request_query_key_at,
         karac_runtime_http_request_query_val_at,
         karac_runtime_parse_i64,
-        karac_runtime_http_client_get,
-        karac_runtime_http_client_post,
         karac_runtime_serve_http,
-        karac_runtime_serve_https,
         karac_runtime_serve_http_static,
     );
     // Scheduler + event loop + TCP + WS (pub modules).
@@ -217,10 +215,16 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         event_loop::karac_runtime_ws_recv_text,
         event_loop::karac_runtime_ws_recv_binary,
         event_loop::karac_runtime_ws_accept,
-        event_loop::karac_runtime_ws_accept_tls,
     );
-    // TLS (pub module).
+    // TLS surface (gated behind the `tls` feature — see Cargo.toml). The
+    // lean (`--no-default-features`) archive compiles these out entirely so
+    // the rustls/ring unwind machinery never reaches a compute binary.
+    #[cfg(feature = "tls")]
     keep!(
+        karac_runtime_http_client_get,
+        karac_runtime_http_client_post,
+        karac_runtime_serve_https,
+        event_loop::karac_runtime_ws_accept_tls,
         tls::karac_runtime_tls_config_new,
         tls::karac_runtime_tls_config_free,
         tls::karac_runtime_tls_listener_bind,
@@ -3322,6 +3326,7 @@ pub unsafe extern "C" fn karac_runtime_parse_i64(data: *const u8, len: usize, ou
 // `Result.Err(HttpError { message })` with the error message packed
 // into the same three slots.
 
+#[cfg(feature = "tls")]
 extern "C" {
     /// libc `malloc`. Backs the body / error-message buffers handed
     /// back to Kāra-side `String { data, len, cap }` values where
@@ -3336,6 +3341,7 @@ extern "C" {
 /// `{ data: null, len: 0, cap: 0 }` is the empty-string representation
 /// and is sound to `free(null)` on Drop (POSIX guarantees `free(null)`
 /// is a no-op).
+#[cfg(feature = "tls")]
 unsafe fn write_owned_bytes_into_out_params(
     bytes: &[u8],
     out_ptr: *mut *mut u8,
@@ -3368,6 +3374,7 @@ unsafe fn write_owned_bytes_into_out_params(
 /// otherwise (matching reqwest's lossy-`text` posture). A mid-stream
 /// read error yields whatever was read so far, mirroring
 /// `into_string().unwrap_or_default()`'s lenient stance.
+#[cfg(feature = "tls")]
 fn read_response_body_bytes(resp: ureq::Response) -> Vec<u8> {
     use std::io::Read;
     let mut buf = Vec::new();
@@ -3388,6 +3395,7 @@ fn read_response_body_bytes(resp: ureq::Response) -> Vec<u8> {
 // `rustls-native-certs` and lets `Client.get("https://...")` work on
 // stripped images (Alpine / scratch / distroless) without a system CA
 // bundle reachable to the process.
+#[cfg(feature = "tls")]
 fn http_client_agent() -> &'static ureq::Agent {
     static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
     AGENT.get_or_init(|| {
@@ -3437,6 +3445,7 @@ static HTTP_RESPONSE_HEADERS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<i64, CapturedResponseHeaders>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
+#[cfg(feature = "tls")]
 static HTTP_RESPONSE_HEADERS_NEXT_ID: std::sync::atomic::AtomicI64 =
     std::sync::atomic::AtomicI64::new(1);
 
@@ -3451,6 +3460,7 @@ static HTTP_RESPONSE_HEADERS_NEXT_ID: std::sync::atomic::AtomicI64 =
 /// `out_headers_handle` out-param on the Ok path; the Err path leaves it
 /// `0` so `Response.header(...)` on a (non-existent) error Response
 /// would resolve every lookup to `None`.
+#[cfg(feature = "tls")]
 fn capture_response_headers(resp: &ureq::Response) -> i64 {
     let mut pairs: CapturedResponseHeaders = Vec::new();
     for name in resp.headers_names() {
@@ -3604,6 +3614,7 @@ pub extern "C" fn karac_runtime_http_response_headers_free(handle: i64) {
 /// null with `url_len == 0`). `out_status`, `out_body_ptr`,
 /// `out_body_len`, `out_err_ptr`, `out_err_len` must each point at
 /// writable storage of the indicated type.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_http_client_get(
     url_ptr: *const u8,
@@ -3660,6 +3671,7 @@ pub unsafe extern "C" fn karac_runtime_http_client_get(
 /// Same caller obligations as `karac_runtime_http_client_get`, plus
 /// `body_ptr` must point at `body_len` initialized bytes (or be null
 /// with `body_len == 0`, which sends an empty entity).
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_http_client_post(
     url_ptr: *const u8,
@@ -3736,6 +3748,7 @@ pub struct KaracHttpHeaderPair {
     pub val: KaracStr,
 }
 
+#[cfg(feature = "tls")]
 unsafe fn kara_str_to_str(s: &KaracStr) -> Option<&str> {
     if s.data.is_null() || s.len <= 0 {
         return Some("");
@@ -3768,6 +3781,7 @@ unsafe fn kara_str_to_str(s: &KaracStr) -> Option<&str> {
 /// (or be null with the matching length `0`); `headers_ptr` must point
 /// at `headers_count` initialized `KaracHttpHeaderPair` entries (or be
 /// null with `headers_count == 0`).
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_http_client_send(
     method_ptr: *const u8,
@@ -3869,6 +3883,7 @@ pub unsafe extern "C" fn karac_runtime_http_client_send(
 // their entry until process exit — acceptable v1 trade-off, resolved
 // when `impl Drop for RequestBuilder` is wired through codegen.
 
+#[cfg(feature = "tls")]
 struct HttpBuilderState {
     method: String,
     url: String,
@@ -3877,12 +3892,15 @@ struct HttpBuilderState {
     timeout_ms: i64,
 }
 
+#[cfg(feature = "tls")]
 static HTTP_BUILDERS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<i64, HttpBuilderState>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
+#[cfg(feature = "tls")]
 static HTTP_BUILDER_NEXT_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
 
+#[cfg(feature = "tls")]
 unsafe fn slice_to_owned_string(ptr: *const u8, len: usize) -> String {
     if ptr.is_null() || len == 0 {
         return String::new();
@@ -3891,6 +3909,7 @@ unsafe fn slice_to_owned_string(ptr: *const u8, len: usize) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+#[cfg(feature = "tls")]
 unsafe fn slice_to_owned_bytes(ptr: *const u8, len: usize) -> Vec<u8> {
     if ptr.is_null() || len == 0 {
         return Vec::new();
@@ -3908,6 +3927,7 @@ unsafe fn slice_to_owned_bytes(ptr: *const u8, len: usize) -> Vec<u8> {
 ///
 /// `method_ptr` and `url_ptr` must each point at the indicated number
 /// of UTF-8 bytes (or be null with the matching length `0`).
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_http_builder_new(
     method_ptr: *const u8,
@@ -3948,6 +3968,7 @@ pub unsafe extern "C" fn karac_runtime_http_builder_new(
 ///
 /// `key_ptr` / `val_ptr` must each point at the indicated number of
 /// bytes (or be null with the matching length `0`).
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_http_builder_add_header(
     handle: i64,
@@ -3975,6 +3996,7 @@ pub unsafe extern "C" fn karac_runtime_http_builder_add_header(
 ///
 /// `body_ptr` must point at `body_len` initialized bytes (or be null
 /// with `body_len == 0`).
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_http_builder_set_body(
     handle: i64,
@@ -4000,6 +4022,7 @@ pub unsafe extern "C" fn karac_runtime_http_builder_set_body(
 /// callers have no additional obligation beyond providing a `handle`
 /// that was minted by `_builder_new` (which is the only correctness
 /// requirement — an unknown handle is a silent no-op).
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_http_builder_set_timeout(handle: i64, ms: i64) {
     if let Ok(mut map) = HTTP_BUILDERS.lock() {
@@ -4016,6 +4039,7 @@ pub unsafe extern "C" fn karac_runtime_http_builder_set_timeout(handle: i64, ms:
 /// paths, so for a sent builder this is a no-op. Idempotent and total:
 /// `handle == 0` (a move-suppressed / alloc-failed builder) and any
 /// unknown handle are no-ops, so a double-free is harmless.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub extern "C" fn karac_runtime_http_builder_free(handle: i64) {
     if handle == 0 {
@@ -4037,6 +4061,7 @@ pub extern "C" fn karac_runtime_http_builder_free(handle: i64) {
 /// # Safety
 ///
 /// Same as `karac_runtime_http_client_get` for the out-params.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_http_builder_send(
     handle: i64,
@@ -4213,6 +4238,7 @@ pub unsafe extern "C" fn karac_runtime_serve_http(
 /// `cert_pem` / `key_pem` must each point at `cert_len` / `key_len`
 /// initialized bytes (or be null with the matching length `<= 0`,
 /// in which case the rustls config build fails with return code 6).
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_serve_https(
     addr_cstr: *const std::os::raw::c_char,
@@ -6247,6 +6273,7 @@ mod tests {
     // `extern "C" { fn free(...); }` decl below so test cleanup
     // matches the production caller-side ownership contract.
 
+    #[cfg(feature = "tls")]
     extern "C" {
         fn free(ptr: *mut std::os::raw::c_void);
     }
@@ -6257,6 +6284,7 @@ mod tests {
     /// the single response is written. POST requests are recognized via
     /// the `Content-Length` header so the origin reads the full entity
     /// before responding.
+    #[cfg(feature = "tls")]
     fn spawn_oneshot_origin(canned_response: &'static [u8]) -> u16 {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -6309,6 +6337,7 @@ mod tests {
     /// Helper to read an out-param byte buffer (malloc'd by the runtime)
     /// into an owned Vec for assertions, then libc::free it to match the
     /// production caller-side ownership contract.
+    #[cfg(feature = "tls")]
     unsafe fn take_owned_buffer(ptr: *mut u8, len: i64) -> Vec<u8> {
         if ptr.is_null() || len <= 0 {
             return Vec::new();
@@ -6331,6 +6360,7 @@ mod tests {
     /// it means the TLS handshake or cert verification did not complete.
     #[test]
     #[ignore = "network HTTPS round-trip; runs in the stripped-image-https CI job via --include-ignored"]
+    #[cfg(feature = "tls")]
     fn test_https_round_trip_against_public_origin() {
         let url = "https://example.com/";
         let mut status: i64 = -1;
@@ -6386,6 +6416,7 @@ mod tests {
     /// what's serving every HTTPS request — single shared TLS config,
     /// not a fresh build per fetch).
     #[test]
+    #[cfg(feature = "tls")]
     fn test_http_client_agent_uses_explicit_webpki_roots_and_is_shared() {
         assert!(
             !webpki_roots::TLS_SERVER_ROOTS.is_empty(),
@@ -6402,6 +6433,7 @@ mod tests {
     /// GET happy path — origin returns 200 OK with `hello` body; FFI
     /// reports status = 200, body buffer carries `hello`, no error.
     #[test]
+    #[cfg(feature = "tls")]
     fn test_http_client_get_success_populates_status_and_body() {
         let canned = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
         let port = spawn_oneshot_origin(canned);
@@ -6442,6 +6474,7 @@ mod tests {
     /// carries the four bytes verbatim — which is what lets binary
     /// downloads (images / protobuf / file transfers) round-trip.
     #[test]
+    #[cfg(feature = "tls")]
     fn test_http_client_get_returns_raw_bytes_for_non_utf8_body() {
         let canned: &[u8] =
             b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\xff\xfe\x00\x41";
@@ -6484,6 +6517,7 @@ mod tests {
     /// an absent name, and returns null for the Err-path sentinel
     /// handle `0`.
     #[test]
+    #[cfg(feature = "tls")]
     fn test_http_client_get_captures_response_headers_for_lookup() {
         let canned = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-Custom: custom-value\r\nConnection: close\r\n\r\nok";
         let port = spawn_oneshot_origin(canned);
@@ -6545,6 +6579,7 @@ mod tests {
     /// through the indexed surface and that an out-of-range index / the
     /// Err-sentinel handle `0` resolve to null.
     #[test]
+    #[cfg(feature = "tls")]
     fn test_http_client_get_response_headers_iteration() {
         let canned = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-Custom: custom-value\r\nConnection: close\r\n\r\nok";
         let port = spawn_oneshot_origin(canned);
@@ -6611,6 +6646,7 @@ mod tests {
     /// calls at scope exit), and is idempotent/total: 0, unknown, and
     /// double-free are no-ops.
     #[test]
+    #[cfg(feature = "tls")]
     fn test_http_response_headers_free_removes_entry() {
         let handle = 990_001_i64;
         {
@@ -6645,6 +6681,7 @@ mod tests {
     /// releases an abandoned (never-sent) `HTTP_BUILDERS` entry, mirroring
     /// the response-headers free. Idempotent on 0 / unknown / already-sent.
     #[test]
+    #[cfg(feature = "tls")]
     fn test_http_builder_free_removes_entry() {
         let method = b"GET";
         let url = b"http://127.0.0.1:1/";
@@ -6674,6 +6711,7 @@ mod tests {
     /// codegen uses to build `Result.Err`), no body buffer, and an
     /// error-message buffer carrying ureq's display text.
     #[test]
+    #[cfg(feature = "tls")]
     fn test_http_client_get_transport_error_populates_err() {
         // Bind a port and immediately drop the listener; the OS keeps
         // the port unbound long enough for the connect attempt below to
@@ -6713,6 +6751,7 @@ mod tests {
     /// POST round-trip — entity body is forwarded to the origin, which
     /// echoes a fixed response. Pins the body-send code path.
     #[test]
+    #[cfg(feature = "tls")]
     fn test_http_client_post_sends_body_and_returns_response() {
         let canned =
             b"HTTP/1.1 201 Created\r\nContent-Length: 7\r\nConnection: close\r\n\r\ncreated";
@@ -6761,6 +6800,7 @@ mod tests {
     /// so the captured buffer contains the full request line + headers +
     /// body when the caller used either GET (no body) or a Content-Length-
     /// declaring verb.
+    #[cfg(feature = "tls")]
     fn spawn_capturing_origin(
         canned_response: &'static [u8],
         captured: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
@@ -6826,6 +6866,7 @@ mod tests {
     /// returned `KaracStr` is bound to `s` — callers must keep the source
     /// `String` alive for the duration of the FFI call. `cap` matches
     /// `len` since the runtime doesn't read it for input strings.
+    #[cfg(feature = "tls")]
     fn kara_str_for(s: &str) -> super::KaracStr {
         super::KaracStr {
             data: s.as_ptr(),
@@ -6839,6 +6880,7 @@ mod tests {
     /// bytes the origin sees, and the response status / body propagate
     /// back through the out-params identically to `_get`.
     #[test]
+    #[cfg(feature = "tls")]
     fn test_http_client_send_forwards_custom_headers_to_origin() {
         let canned = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
         let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
@@ -6901,6 +6943,7 @@ mod tests {
     /// Pins both knobs at once: the origin sees `POST /api` with the
     /// custom header AND the body in the request entity.
     #[test]
+    #[cfg(feature = "tls")]
     fn test_http_client_send_post_carries_body_and_headers() {
         let canned = b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
         let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
@@ -6969,6 +7012,7 @@ mod tests {
     /// custom header + body) and the entry-lifecycle invariant
     /// (HTTP_BUILDERS no longer contains the handle after `_send`).
     #[test]
+    #[cfg(feature = "tls")]
     fn test_http_builder_send_consumes_handle_and_round_trips_state() {
         let canned = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhi-fu";
         let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
@@ -7077,6 +7121,7 @@ mod tests {
     /// at the configured deadline and yields the transport-error
     /// out-params (status = 0, error-message buffer populated).
     #[test]
+    #[cfg(feature = "tls")]
     fn test_http_client_send_timeout_returns_transport_error() {
         use std::io::Read;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
