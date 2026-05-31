@@ -11197,3 +11197,59 @@ fn test_contract_ensures_pipe_syntax_still_works() {
     );
     assert_eq!(output, "10\n");
 }
+
+// ── Contracts — struct invariants at pub method exits ──────────────
+//
+// design.md § Contracts rule 3: a type with an `invariant` block re-checks
+// it at the exit of every pub method (private methods do not check). v1
+// covers pub instance methods.
+
+#[test]
+fn test_contract_invariant_holds_runs() {
+    // `inc` keeps `self.n >= 0`, so the pub-method-exit check passes.
+    let errors = runtime_errors(
+        "struct Counter { n: i64, invariant self.n >= 0 }\n\
+         impl Counter { pub fn inc(mut ref self) { self.n = self.n + 1; } }\n\
+         fn main() { let mut c = Counter { n: 0 }; c.inc(); }",
+    );
+    assert!(
+        errors.is_empty(),
+        "a satisfied invariant must not fault, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_contract_invariant_violation_faults() {
+    // `dec` drives `self.n` to -1, violating `self.n >= 0` at method exit.
+    let errors = runtime_errors(
+        "struct Counter { n: i64, invariant self.n >= 0 }\n\
+         impl Counter { pub fn dec(mut ref self) { self.n = self.n - 1; } }\n\
+         fn main() { let mut c = Counter { n: 0 }; c.dec(); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("contract violated")),
+        "expected a `contract violated` invariant fault, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_contract_invariant_private_method_not_checked() {
+    // A private method may transiently break the invariant; only the
+    // outer pub method's exit checks it. Here the pub method restores
+    // nothing but never lets a violated state reach a pub exit, so no
+    // fault fires (the private `break_priv` result is discarded).
+    let errors = runtime_errors(
+        "struct DateRange { start: i64, end: i64, invariant self.start <= self.end }\n\
+         impl DateRange {\n\
+             fn break_priv(self) -> DateRange { DateRange { start: 10, end: 0 } }\n\
+             pub fn via(self) -> i64 { let _b = self.break_priv(); 99 }\n\
+         }\n\
+         fn main() { let r = DateRange { start: 1, end: 5 }; let _ = r.via(); }",
+    );
+    assert!(
+        errors.is_empty(),
+        "a private method must not trigger the invariant check, got: {errors:?}"
+    );
+}

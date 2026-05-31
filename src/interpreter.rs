@@ -409,6 +409,36 @@ impl<'a> Interpreter<'a> {
         })
     }
 
+    /// The struct `invariant` predicates that must hold at the exit of pub
+    /// method `method` on `type_name` (design.md § Contracts rule 3 — plain
+    /// `invariant` is checked at every `pub` method exit). Returns `None`
+    /// when the type declares no invariant or the method is private. v1
+    /// covers pub *instance* methods; constructors (pub assoc fns returning
+    /// `Self`) and `impl invariant` (all-method scope) are follow-ons.
+    pub(crate) fn pub_method_invariants(&self, type_name: &str, method: &str) -> Option<Vec<Expr>> {
+        let invariants = self.program.items.iter().find_map(|item| match item {
+            Item::StructDef(s) if s.name == type_name && !s.invariants.is_empty() => {
+                Some(s.invariants.clone())
+            }
+            _ => None,
+        })?;
+        let is_pub_method = self.program.items.iter().any(|item| match item {
+            Item::ImplBlock(imp) => {
+                let target = match &imp.target_type.kind {
+                    TypeKind::Path(p) => p.segments.last().map(String::as_str),
+                    _ => None,
+                };
+                target == Some(type_name)
+                    && imp
+                        .items
+                        .iter()
+                        .any(|it| matches!(it, ImplItem::Method(m) if m.name == method && m.is_pub))
+            }
+            _ => false,
+        });
+        is_pub_method.then_some(invariants)
+    }
+
     /// The base type's name for a refinement (`type Email = String where …`
     /// → `"String"`), used to cast a refined value to its base
     /// representation before the predicate check. `None` for non-refinements.

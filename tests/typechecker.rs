@@ -21103,3 +21103,37 @@ fn test_contract_ensures_result_typed_in_predicate() {
         "expected a compare-mismatch for `result == \"x\"` with result: i64",
     );
 }
+
+// ── Contracts — struct invariant type-checking ─────────────────────
+
+#[test]
+fn test_contract_invariant_must_be_bool() {
+    // An invariant predicate must be `bool`; `self.x + 1` is `i64`.
+    let errors = typecheck_errors("struct Bad { x: i64, invariant self.x + 1 }");
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected a bool mismatch for a non-bool invariant, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_contract_invariant_valid_accepted() {
+    // A bool invariant over `self.field`s type-checks.
+    typecheck_ok("struct DateRange { start: i64, end: i64, invariant self.start <= self.end }");
+}
+
+#[test]
+fn test_contract_invariant_unknown_field_rejected() {
+    // `self.missing` is not a field — the invariant references an
+    // undefined field (confirms `self` is typed as the struct).
+    let errors = typecheck_errors("struct S { x: i64, invariant self.missing > 0 }");
+    assert!(
+        !errors.is_empty(),
+        "expected an error for an unknown field in an invariant",
+    );
+}

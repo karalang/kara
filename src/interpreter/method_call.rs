@@ -409,7 +409,32 @@ impl<'a> super::Interpreter<'a> {
                     self.bind_pattern(pat, val);
                 }
                 let result = self.eval_block_inner(&body);
+
+                // Struct-invariant check at pub method exit (design.md
+                // § Contracts rule 3). On a type with an `invariant` block,
+                // every pub method re-checks it at the return point with
+                // `self` bound to the (possibly mutated) receiver value. A
+                // false invariant faults `contract violated`.
+                let mut inv_fault: Option<String> = None;
+                if let Some(invariants) = self.pub_method_invariants(&type_name, method) {
+                    if let Some(self_val) = self.env.get("self") {
+                        for inv in &invariants {
+                            self.env.push_scope();
+                            self.env.define("self".to_string(), self_val.clone());
+                            let ok = self.eval_expr_inner(inv);
+                            self.env.pop_scope();
+                            if ok != Value::Bool(true) {
+                                inv_fault = Some("contract violated: invariant".to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 self.env.pop_scope();
+                if let Some(msg) = inv_fault {
+                    return self.record_runtime_error(msg, span);
+                }
                 return match result {
                     Ok(v) => v,
                     Err(ControlFlow::Return(v)) => v,

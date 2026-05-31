@@ -46,6 +46,7 @@ impl<'a> super::TypeChecker<'a> {
                 Item::StructDef(s) => {
                     let gp = Self::generic_param_names(&s.generic_params);
                     self.validate_all_bounds(&s.generic_params, &s.where_clause, &gp);
+                    self.check_struct_invariants(s, &gp);
                 }
                 Item::EnumDef(e) => {
                     let gp = Self::generic_param_names(&e.generic_params);
@@ -1128,6 +1129,28 @@ impl<'a> super::TypeChecker<'a> {
         self.enclosing_bounds = saved_bounds;
         self.current_fn_stdlib_origin = saved_fn_stdlib_origin;
         self.lint_override_stack.pop();
+    }
+
+    /// Type-check a struct's `invariant` predicates (design.md § Contracts).
+    /// Each invariant must be `bool`, evaluated with `self` bound to the
+    /// struct's own type so `self.field` references resolve. No-op for a
+    /// struct without invariants.
+    fn check_struct_invariants(&mut self, s: &StructDef, gp: &[String]) {
+        if s.invariants.is_empty() {
+            return;
+        }
+        let self_ty = Type::Named {
+            name: s.name.clone(),
+            args: gp.iter().map(|p| Type::TypeParam(p.clone())).collect(),
+        };
+        self.local_scope = LocalTypeScope::new();
+        self.local_scope.insert("self".to_string(), self_ty.clone());
+        let saved_self = self.current_self_type.take();
+        self.current_self_type = Some(self_ty);
+        for inv in &s.invariants {
+            self.check_expr(inv, &Type::Bool);
+        }
+        self.current_self_type = saved_self;
     }
 
     /// Type-check a function's contract clauses (design.md § Contracts).
