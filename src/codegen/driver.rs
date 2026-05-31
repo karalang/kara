@@ -498,6 +498,26 @@ pub(super) fn read_auto_par_env() -> bool {
     !matches!(std::env::var("KARAC_AUTO_PAR"), Ok(v) if v == "0")
 }
 
+/// Read the `KARAC_STRIP_CONTRACTS` env var to decide whether contract
+/// machinery (`requires` / `ensures` / `old(...)` capture / struct & impl
+/// `invariant` checks) is emitted into AOT binaries. design.md § Contracts:
+/// contracts are "checked at runtime in debug builds, stripped in release" —
+/// so a release build elides every contract assert, paying zero runtime cost
+/// (including the `old(...)` pre-state clone). This is the codegen trigger
+/// for that release behavior; a future `karac build --release` CLI flag sets
+/// the same env var (mirrors how `KARAC_OPT_LEVEL` / `KARAC_AUTO_PAR` are
+/// env-driven build knobs read fresh at `Codegen` construction).
+///
+/// - `Ok("1")` / `Ok("true")` → `true` (release — strip all contracts).
+/// - anything else (incl. unset) → `false` (debug default — contracts active).
+///
+/// Returns `true` iff contracts should be stripped. Read fresh per `Codegen`
+/// (no `OnceLock` cache) so a process compiling many programs can vary it,
+/// and stored in `Codegen::strip_contracts`.
+pub(super) fn read_strip_contracts_env() -> bool {
+    matches!(std::env::var("KARAC_STRIP_CONTRACTS"), Ok(v) if v == "1" || v == "true")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{default_cpu_and_features, symbol_listing_references_tls};

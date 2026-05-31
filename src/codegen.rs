@@ -73,7 +73,7 @@ mod vec_method;
 
 use driver::{
     apply_optimization_passes, create_target_machine, read_auto_par_env,
-    read_runtime_debug_metadata_env,
+    read_runtime_debug_metadata_env, read_strip_contracts_env,
 };
 pub use driver::{link_executable, link_executable_with_sanitizer};
 use helpers::{impl_target_name, make_impl_method_function, method_self_is_value};
@@ -330,6 +330,26 @@ pub fn compile_to_ir_with_hot_swap(
     Ok(cg.module.print_to_string().to_string())
 }
 
+/// Compile to textual LLVM IR with contract machinery **stripped** (design.md
+/// § Contracts: "stripped in release"). Equivalent to forcing
+/// `KARAC_STRIP_CONTRACTS=1` for this one compile, but via an explicit setter
+/// so the decision is race-free (no process-global env mutation) — used by the
+/// release-build path and by the IR-contrast tests. `requires` / `ensures` /
+/// `old(...)` / `invariant` asserts are not emitted.
+pub fn compile_to_ir_with_contracts_stripped(
+    program: &Program,
+    ownership: Option<&OwnershipCheckResult>,
+    concurrency: Option<&ConcurrencyAnalysis>,
+) -> Result<String, String> {
+    let context = Context::create();
+    let mut cg = Codegen::new(&context, "karac_module");
+    cg.load_rc_fallback(ownership);
+    cg.load_concurrency_analysis(concurrency);
+    cg.set_strip_contracts(true);
+    cg.compile_program(program)?;
+    Ok(cg.module.print_to_string().to_string())
+}
+
 /// Compile a Kāra program to a native object file.
 pub fn compile_to_object(
     program: &Program,
@@ -577,6 +597,18 @@ pub(super) struct Codegen<'ctx> {
     /// method's first parameter. Empty for free functions and non-pub methods
     /// of invariant-free structs.
     pub(crate) current_method_invariants: Vec<crate::ast::Expr>,
+    /// When `true`, all contract machinery is elided from the emitted module
+    /// (design.md § Contracts: "stripped in release"): `requires` / `ensures`
+    /// checks, `old(...)` pre-state capture, and struct/impl `invariant`
+    /// checks are not emitted, paying zero runtime cost. Defaults from
+    /// `read_strip_contracts_env` (`KARAC_STRIP_CONTRACTS`) at construction;
+    /// `set_strip_contracts` overrides it (used by the release-build path and
+    /// by IR tests that must force the decision without touching global env).
+    /// The gate lives at the three contract *setup* sites in
+    /// `compile_function` — suppressing setup makes every downstream emit site
+    /// a natural no-op, and `old(...)` (which lives only inside `ensures`
+    /// bodies) is never reached because those bodies aren't compiled.
+    pub(crate) strip_contracts: bool,
     /// Set of top-level Atomic[T]-typed bindings whose inner T is `bool`.
     /// The slot itself is widened to `i8` (LLVM atomics reject `i1`); this
     /// set drives the `.load` trunc-to-i1 and `.store` zext-to-i8 wrapping
@@ -3074,6 +3106,7 @@ impl<'ctx> Codegen<'ctx> {
             current_contract_ensures: Vec::new(),
             contract_old_snapshots: HashMap::new(),
             current_method_invariants: Vec::new(),
+            strip_contracts: read_strip_contracts_env(),
             atomic_var_inner_is_bool: HashSet::new(),
             current_fn: None,
             printf_fn,
@@ -3291,6 +3324,16 @@ impl<'ctx> Codegen<'ctx> {
     /// load + indirect call. See [`compile_to_object_with_hot_swap`].
     fn set_hot_swap_enabled(&mut self, enabled: bool) {
         self.hot_swap_enabled = enabled;
+    }
+
+    /// Override the contract-stripping decision (design.md § Contracts:
+    /// "stripped in release"). `true` elides all `requires` / `ensures` /
+    /// `old(...)` / `invariant` emission; `false` keeps them. The default
+    /// comes from `KARAC_STRIP_CONTRACTS` at construction; this setter lets
+    /// the release-build path and IR tests force the decision without relying
+    /// on the process-global env var.
+    pub(crate) fn set_strip_contracts(&mut self, strip: bool) {
+        self.strip_contracts = strip;
     }
 
     /// Mint a fresh `SpawnSiteId` and record a `SpawnSiteRecord` for the

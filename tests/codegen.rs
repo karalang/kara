@@ -78,6 +78,24 @@ mod codegen_tests {
         compile_to_ir(&parsed.program, None, None).expect("codegen failed")
     }
 
+    /// Like [`ir_for`] but compiles with contract machinery stripped
+    /// (design.md § Contracts: "stripped in release"). Race-free — forces the
+    /// decision via the explicit codegen entry, not the process-global
+    /// `KARAC_STRIP_CONTRACTS` env var.
+    fn ir_for_contracts_stripped(src: &str) -> String {
+        use karac::codegen::compile_to_ir_with_contracts_stripped;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        compile_to_ir_with_contracts_stripped(&parsed.program, None, None).expect("codegen failed")
+    }
+
     // ── Basic arithmetic ─────────────────────────────────────────
 
     #[test]
@@ -26808,5 +26826,93 @@ fn main() { let mut c = Counter { n: 0 }; c.dec(); println(7); }
         if let Some(out) = out {
             assert_eq!(out.trim(), "7");
         }
+    }
+
+    // ── Contracts — release-mode stripping (design.md § Contracts) ────
+    //
+    // "Checked at runtime in debug builds, stripped in release." With
+    // stripping on, no contract assert (`requires` / `ensures` / `old` /
+    // `invariant`) is emitted — the `contract violated` fault string, the
+    // marker of an emitted assert, disappears from the IR while the function
+    // body itself remains intact. `ir_for_contracts_stripped` forces the
+    // decision race-free (no global env mutation).
+
+    // A program exercising all four contract kinds in one module.
+    const ALL_CONTRACTS_SRC: &str = r#"
+struct Account { balance: i64, invariant self.balance >= 0 }
+impl Account {
+    pub fn withdraw(mut ref self, amount: i64) -> i64
+        requires amount > 0
+        ensures(result) self.balance == old(self.balance) - amount
+    { self.balance = self.balance - amount; amount }
+}
+fn checked(x: i64) -> i64 requires x > 0 ensures(result) result > x { x * 2 }
+fn main() {
+    let mut a = Account { balance: 100 };
+    println(a.withdraw(30));
+    println(checked(5));
+}
+"#;
+
+    #[test]
+    fn test_ir_contracts_present_in_debug_default() {
+        // Baseline: with the default (debug) settings, contract asserts ARE
+        // emitted — the `contract violated` fault string appears in the IR.
+        let ir = ir_for(ALL_CONTRACTS_SRC);
+        assert!(
+            ir.contains("contract violated"),
+            "debug build must emit contract asserts; IR had no `contract violated` marker"
+        );
+    }
+
+    #[test]
+    fn test_ir_strip_contracts_removes_all_asserts() {
+        // Release: every contract assert across all four kinds is gone.
+        let ir = ir_for_contracts_stripped(ALL_CONTRACTS_SRC);
+        assert!(
+            !ir.contains("contract violated"),
+            "release build must strip all contract asserts; IR still had a `contract violated` marker:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_strip_contracts_keeps_function_bodies() {
+        // Stripping removes only contracts, not the checked code: the bodies
+        // still compile (the module still defines `checked` and `main`, and
+        // the `x * 2` multiply survives).
+        let ir = ir_for_contracts_stripped(ALL_CONTRACTS_SRC);
+        assert!(
+            ir.contains("define") && ir.contains("@checked") && ir.contains("@main"),
+            "stripped module must still define the functions; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("mul"),
+            "stripped `checked` must still emit its `x * 2` body; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_strip_contracts_requires_only() {
+        // A `requires`-only function: the precondition assert is present by
+        // default and gone when stripped.
+        let src = r#"
+fn checked(x: i64) -> i64 requires x > 0 { x * 2 }
+fn main() { println(checked(5)); }
+"#;
+        assert!(ir_for(src).contains("contract violated"));
+        assert!(!ir_for_contracts_stripped(src).contains("contract violated"));
+    }
+
+    #[test]
+    fn test_ir_strip_contracts_invariant_only() {
+        // An `invariant`-only struct method: the invariant assert is present
+        // by default and gone when stripped.
+        let src = r#"
+struct Counter { n: i64, invariant self.n >= 0 }
+impl Counter { pub fn inc(mut ref self) -> i64 { self.n = self.n + 1; self.n } }
+fn main() { let mut c = Counter { n: 0 }; println(c.inc()); }
+"#;
+        assert!(ir_for(src).contains("contract violated"));
+        assert!(!ir_for_contracts_stripped(src).contains("contract violated"));
     }
 }

@@ -459,29 +459,37 @@ impl<'ctx> super::Codegen<'ctx> {
             .and_then(|te| self.option_inner_shared_type_for_type_expr(te))
             .map(|(_, info)| info.heap_type);
 
-        // Contract `requires` preconditions (design.md § Contracts): emit
-        // the entry-time predicate checks now that parameters are bound and
-        // before the body runs. A false predicate aborts with
-        // `contract violated`. (`ensures` / `invariant` / `old(...)` emission
-        // are follow-on slices; the interpreter path enforces them today.)
-        self.emit_requires_checks(&func.requires)?;
+        // Contract emission setup (design.md § Contracts). Gated on
+        // `!strip_contracts` so a release build (design: "stripped in
+        // release") emits none of it — zero runtime cost, including the
+        // `old(...)` pre-state clone. Suppressing the three setup statements
+        // here is sufficient: `emit_ensures_checks` / `emit_invariant_checks`
+        // both no-op on their now-empty state vectors at the return sites, no
+        // `requires` assert is built, and `old(...)` (which lives only inside
+        // `ensures` bodies) is never reached because those bodies aren't
+        // compiled. The gate is a single decision point for the whole feature.
+        if !self.strip_contracts {
+            // `requires` preconditions: emit the entry-time predicate checks
+            // now that parameters are bound and before the body runs. A false
+            // predicate aborts with `contract violated`.
+            self.emit_requires_checks(&func.requires)?;
 
-        // Contract `ensures` setup (design.md § Contracts): capture `old(...)`
-        // pre-state now (entry dominates every return point) and stash the
-        // clauses so `emit_ensures_checks` can fire them inline before each
-        // `ret` (the tail return below + every explicit `return`).
-        self.capture_contract_old_snapshots(&func.ensures)?;
-        self.current_contract_ensures = func.ensures.clone();
+            // `ensures` setup: capture `old(...)` pre-state now (entry
+            // dominates every return point) and stash the clauses so
+            // `emit_ensures_checks` can fire them inline before each `ret`
+            // (the tail return below + every explicit `return`).
+            self.capture_contract_old_snapshots(&func.ensures)?;
+            self.current_contract_ensures = func.ensures.clone();
 
-        // Contract struct/impl `invariant` setup (design.md § Contracts rule
-        // 3): resolve the receiver type's invariants for this method now and
-        // stash them so `emit_invariant_checks` can fire them inline before
-        // each `ret` (same exit points as `ensures`), with `self` bound. The
-        // synthetic method function carries `Type.method` as its name and the
-        // method's `is_pub` flag — both consumed by `method_invariants_for`.
-        // Free functions and invariant-free structs yield an empty list, so
-        // this is inert for everything but methods of structs with invariants.
-        self.current_method_invariants = self.method_invariants_for(&func.name, func.is_pub);
+            // Struct/impl `invariant` setup (rule 3): resolve the receiver
+            // type's invariants for this method and stash them so
+            // `emit_invariant_checks` can fire them inline before each `ret`
+            // (same exit points as `ensures`), with `self` bound. The synthetic
+            // method function carries `Type.method` as its name and the
+            // method's `is_pub` flag — both consumed by `method_invariants_for`.
+            // Free functions and invariant-free structs yield an empty list.
+            self.current_method_invariants = self.method_invariants_for(&func.name, func.is_pub);
+        }
 
         // Slice 2 (auto-par codegen MVP): route the function body through
         // `compile_function_body`, which dispatches inferred parallel
