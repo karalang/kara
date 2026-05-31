@@ -555,21 +555,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 });
                 if !has_self_param {
                     match func.name.split_once('.') {
-                        // Constructor of an *owned* struct: bind the return value
-                        // as `self` and enforce. Shared (RC) structs are skipped
-                        // for now — the return value is a heap pointer whose
-                        // `self.field` ABI differs from the owned-value binding
-                        // (constructor codegen for shared structs is a tracked
-                        // follow-on; the interpreter already enforces it). We
-                        // still CLEAR the name-resolved invariants so a shared
-                        // constructor doesn't abort codegen with the
-                        // `Undefined variable 'self'` it hit before this slice.
+                        // Constructor (returns `Self`/the type): bind the return
+                        // value as `self` and enforce the invariants against it.
+                        // Works for owned and shared (RC) structs alike — for a
+                        // shared struct the return value is the heap pointer, and
+                        // `self.field` resolves through the shared heap-GEP path
+                        // because `shared_type_for_expr` accepts the constructor's
+                        // `SelfValue` binding (gated to non-`ref`-param `self`).
                         Some((type_name, _))
-                            if returns_self_or_type(func.return_type.as_ref(), type_name)
-                                && !self.shared_types.contains_key(type_name) =>
+                            if returns_self_or_type(func.return_type.as_ref(), type_name) =>
                         {
                             self.constructor_invariant_self_type = Some(type_name.to_string());
                         }
+                        // Any other associated function (e.g. `Type.parse() -> i64`)
+                        // is NOT a constructor: clear the name-resolved invariants
+                        // so we don't evaluate `self.field` against a non-receiver
+                        // (which would abort codegen with `Undefined variable 'self'`).
                         _ => self.current_method_invariants.clear(),
                     }
                 }

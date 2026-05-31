@@ -26982,13 +26982,12 @@ fn main() { println(Counter.answer()); }
     }
 
     #[test]
-    fn test_e2e_shared_constructor_compiles_no_crash() {
-        // Shared-struct constructor invariants are NOT yet enforced in codegen
-        // (the RC-pointer `self.field` ABI differs — tracked follow-on), but
-        // the constructor must at least COMPILE and run: before this slice the
-        // name-resolved invariant aborted codegen with `Undefined variable
-        // 'self'`. The invariants are cleared for shared constructors, so this
-        // builds and prints the (unchecked) value.
+    fn test_e2e_shared_constructor_invariant_holds() {
+        // Shared (RC) struct constructor invariants are now enforced in codegen
+        // too: a valid instance runs and prints. The shared-receiver `self.field`
+        // resolves through the heap-GEP path because `shared_type_for_expr`
+        // accepts the constructor's `SelfValue` binding (gated to constructor
+        // emission via `constructor_invariant_self_type`).
         let out = run_program(
             r#"
 shared struct Scell { n: i64, invariant self.n >= 0 }
@@ -26998,6 +26997,34 @@ fn main() { let c = Scell.make(); println(c.n); }
         );
         if let Some(out) = out {
             assert_eq!(out.trim(), "3");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shared_constructor_invariant_violation_aborts() {
+        // A shared-struct constructor that builds `n = -1` violates
+        // `self.n >= 0` at its return point and aborts — the shared heap-GEP
+        // field read sees the real `-1` (the +1 refcount offset is handled by
+        // the shared path). Before this slice shared constructors were skipped
+        // (unenforced); now they enforce like owned ones.
+        let captured = run_program_capturing(
+            r#"
+shared struct Scell { n: i64, invariant self.n >= 0 }
+impl Scell { pub fn bad() -> Scell { Scell { n: 0 - 1 } } }
+fn main() { let c = Scell.bad(); println(c.n); println(42); }
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated"),
+                "a shared-struct constructor invariant must abort, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after the abort must not run"
+            );
         }
     }
 

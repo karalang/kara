@@ -1028,8 +1028,23 @@ impl<'ctx> super::Codegen<'ctx> {
         &self,
         expr: &Expr,
     ) -> Option<(String, SharedTypeInfo<'ctx>)> {
-        if let ExprKind::Identifier(var_name) = &expr.kind {
-            if let Some(type_name) = self.var_type_names.get(var_name.as_str()) {
+        // The receiver name. `self` parses as `ExprKind::SelfValue`, not
+        // `Identifier("self")`. Routing `SelfValue` to the shared heap-GEP
+        // field-access path is correct ONLY while emitting a *constructor's*
+        // invariant — there `emit_invariant_checks` binds `self` to the
+        // freshly-allocated heap pointer directly, so `compile_expr(self)`
+        // yields the pointer this path needs. A real shared *method* binds its
+        // receiver differently (its `compile_expr(self)` does not yield a bare
+        // heap pointer), so its `self.field` must stay on the existing path —
+        // hence the gate on `constructor_invariant_self_type`, which is set
+        // only during constructor invariant emission.
+        let var_name: Option<&str> = match &expr.kind {
+            ExprKind::Identifier(name) => Some(name.as_str()),
+            ExprKind::SelfValue if self.constructor_invariant_self_type.is_some() => Some("self"),
+            _ => None,
+        };
+        if let Some(var_name) = var_name {
+            if let Some(type_name) = self.var_type_names.get(var_name) {
                 if let Some(info) = self.shared_types.get(type_name.as_str()) {
                     return Some((type_name.clone(), info.clone()));
                 }
