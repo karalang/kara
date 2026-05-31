@@ -188,6 +188,12 @@ pub enum Command {
         /// is `--target=<triple>` > `[build].target` from the manifest
         /// > `build_cache::host_target_triple()`.
         target: Option<String>,
+        /// `--release` — see `Build.release` above. Same debug/release
+        /// semantics (strips debug-only runtime checks — contracts today —
+        /// not an optimizer toggle) and the same OR-composition with
+        /// `KARAC_STRIP_CONTRACTS`. Threaded through `cmd_build_project` →
+        /// `run_multi_file_codegen` → `compile_to_object_with_hot_swap`.
+        release: bool,
     },
     Query {
         kind: QueryKind,
@@ -558,12 +564,14 @@ pub fn execute(cmd: Command) {
             enable_hot_swap,
             no_proxy,
             target,
+            release,
         } => cmd_build_project(
             output,
             offline,
             enable_hot_swap,
             no_proxy,
             target.as_deref(),
+            release,
         ),
         Command::Query {
             kind,
@@ -4356,6 +4364,7 @@ fn cmd_build_project(
     enable_hot_swap: bool,
     no_proxy: bool,
     target: Option<&str>,
+    release: bool,
 ) {
     // --offline implies --no-proxy at the contract level (vendor-only walk
     // can't talk to the proxy). Suppress the redundant no-proxy note when
@@ -4528,7 +4537,7 @@ fn cmd_build_project(
         && resolve_errors.is_empty()
         && type_errors.is_empty()
     {
-        codegen_status = run_multi_file_codegen(&tree, &mf, &root, enable_hot_swap);
+        codegen_status = run_multi_file_codegen(&tree, &mf, &root, enable_hot_swap, release);
     }
 
     let failed = !parse_errors.is_empty()
@@ -4778,6 +4787,7 @@ fn run_multi_file_codegen(
     mf: &crate::manifest::Manifest,
     project_root: &std::path::Path,
     enable_hot_swap: bool,
+    release: bool,
 ) -> BuildCodegenStatus {
     // 1. Topological emission order — dependencies before dependents.
     let order = module::emission_order(tree);
@@ -4899,11 +4909,11 @@ fn run_multi_file_codegen(
         None,
         None,
         enable_hot_swap,
-        // Project-mode `--release` is a tracked follow-on (BuildProject has
-        // no `release` field yet); single-file build is the `--release`
-        // surface today. Pass `false` — env `KARAC_STRIP_CONTRACTS` still
-        // applies via the `Codegen::new` default for project builds.
-        false,
+        // `--release` strips debug-only contract machinery in project mode,
+        // same as single-file. OR-composes with `KARAC_STRIP_CONTRACTS`
+        // (which still applies via the `Codegen::new` default when `release`
+        // is false).
+        release,
     ) {
         let _ = std::fs::remove_file(&obj_path);
         return BuildCodegenStatus::Failed {
@@ -4933,6 +4943,7 @@ fn run_multi_file_codegen(
     _mf: &crate::manifest::Manifest,
     _project_root: &std::path::Path,
     _enable_hot_swap: bool,
+    _release: bool,
 ) -> BuildCodegenStatus {
     BuildCodegenStatus::NoLlvmFeature
 }

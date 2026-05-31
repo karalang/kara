@@ -306,8 +306,8 @@ fn parse_build_command(args: &[String]) -> Command {
             no_proxy = true;
         } else if arg == "--release" {
             // Strip debug-only runtime checks (contracts today) from the
-            // emitted binary. Single-file build only; project-mode `--release`
-            // is a tracked follow-on. See `Command::Build.release`.
+            // emitted binary, in both single-file and project mode. See
+            // `Command::Build.release` / `Command::BuildProject.release`.
             release = true;
         } else if let Some(rest) = arg.strip_prefix("--target=") {
             // `--target=<triple>` selects the active target for
@@ -384,22 +384,17 @@ fn parse_build_command(args: &[String]) -> Command {
                 );
                 process::exit(1);
             }
-            // `--release` strips contracts via codegen; project-mode wiring is
-            // a tracked follow-on. Reject rather than silently emit a
-            // debug binary (with contract checks) when the user asked for
-            // release — same discipline as the budget rejection above.
-            if release {
-                eprintln!(
-                    "error: --release is only supported in single-file build today; project-mode support is a follow-up. Set KARAC_STRIP_CONTRACTS=1 to strip contracts in a project build meanwhile."
-                );
-                process::exit(1);
-            }
+            // `--release` strips contracts via codegen and is now wired
+            // through project mode as well (threaded to `run_multi_file_codegen`
+            // → `compile_to_object_with_hot_swap`), so it forwards rather than
+            // being rejected. Composes with `KARAC_STRIP_CONTRACTS` (OR).
             Command::BuildProject {
                 output,
                 offline,
                 enable_hot_swap,
                 no_proxy,
                 target,
+                release,
             }
         }
     }

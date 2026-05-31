@@ -1229,9 +1229,8 @@ fn test_build_bare_file_hot_swap_accepted() {
 //
 // `--release` strips debug-only runtime checks (contracts today) from the
 // emitted binary, per design.md § Contracts ("checked at runtime in debug
-// builds, stripped in release"). Single-file build only; project-mode is a
-// tracked follow-on and rejected loudly rather than silently shipping a
-// debug binary.
+// builds, stripped in release"). Wired in both single-file and project mode;
+// OR-composes with the `KARAC_STRIP_CONTRACTS` env var.
 
 #[test]
 fn test_build_release_flag_accepted_single_file() {
@@ -1251,15 +1250,21 @@ fn test_build_release_flag_accepted_single_file() {
 }
 
 #[test]
-fn test_build_release_project_mode_rejected() {
-    // `--release` with no file argument is project mode, which isn't wired
-    // for stripping yet. The parser rejects loudly (before any manifest
-    // lookup) rather than silently emit a contract-checked binary.
+fn test_build_release_project_mode_accepted() {
+    // `--release` with no file argument is project mode, which is now wired
+    // for stripping. The parser must forward it (no "unknown flag", no the
+    // old "only supported in single-file" rejection); the build then fails
+    // only because there's no manifest in the test's CWD — which is fine, we
+    // assert solely that the flag parsed and forwarded.
     let out = karac_bin().args(["build", "--release"]).output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("--release is only supported in single-file build"),
-        "expected a loud project-mode rejection, got stderr={stderr}",
+        !stderr.contains("only supported in single-file"),
+        "project-mode --release must no longer be rejected, got stderr={stderr}",
+    );
+    assert!(
+        !stderr.contains("unknown flag"),
+        "expected --release to parse in project mode, got stderr={stderr}",
     );
 }
 
@@ -1330,6 +1335,79 @@ fn main() { println(checked(5)); }
     }
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_release_project_mode_strips_contracts_e2e() {
+    // Same debug-vs-release contrast as the single-file E2E, but through the
+    // project-mode path (`cmd_build_project` → `run_multi_file_codegen` →
+    // `compile_to_object_with_hot_swap`). A project with a `requires`-violating
+    // call aborts on a debug build and runs to completion (prints 5) under
+    // `--release`. Proves the flag is threaded all the way to codegen, not just
+    // parsed.
+    let src = "fn checked(x: i64) -> i64 requires x > 100 { x }\n\
+               fn main() { println(checked(5)); }\n";
+
+    // Build the project (with/without --release), then run the emitted binary.
+    // Soft-skip (None) on the no-llvm fallback or a missing exe so the test
+    // passes vacuously in those environments rather than failing on an
+    // unrelated cause — same discipline as the single-file E2E above.
+    let build_and_run = |release: bool| -> Option<(String, Option<i32>)> {
+        let tmp = scratch_project(if release {
+            "release-strip"
+        } else {
+            "release-debug"
+        });
+        write(&tmp.join("kara.toml"), "[package]\nname = \"relproj\"\n");
+        write(&tmp.join("src/main.kara"), src);
+
+        let mut args: Vec<&str> = vec!["build"];
+        if release {
+            args.push("--release");
+        }
+        let build = karac_bin().current_dir(&tmp).args(args).output().unwrap();
+        let berr = String::from_utf8_lossy(&build.stderr);
+        let exe = tmp.join("relproj");
+        if berr.contains("requires the llvm feature") || !exe.exists() {
+            let _ = std::fs::remove_dir_all(&tmp);
+            return None;
+        }
+        let run = common::output_with_hang_watchdog(
+            std::process::Command::new(&exe),
+            std::time::Duration::from_secs(15),
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        let run = run?;
+        Some((
+            String::from_utf8_lossy(&run.stdout).to_string(),
+            run.status.code(),
+        ))
+    };
+
+    if let Some((out, code)) = build_and_run(false) {
+        assert!(
+            out.contains("contract violated"),
+            "debug project build must abort on the requires violation, got stdout={out:?}",
+        );
+        assert_ne!(
+            code,
+            Some(0),
+            "debug project build must exit nonzero on the abort"
+        );
+    }
+    if let Some((out, code)) = build_and_run(true) {
+        assert!(
+            !out.contains("contract violated"),
+            "--release must strip the contract in project mode, got stdout={out:?}",
+        );
+        assert_eq!(
+            out.trim(),
+            "5",
+            "stripped project build runs the body to completion"
+        );
+        assert_eq!(code, Some(0), "stripped project build exits cleanly");
+    }
 }
 
 // ── Theme 4: multi-file project-mode codegen ────────────────────

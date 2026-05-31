@@ -214,8 +214,8 @@ OPTIONS:
                             builds, stripped in release. Optimization is
                             already -O2 by default (see KARAC_OPT_LEVEL), so
                             --release removes runtime checks rather than
-                            turning the optimizer on. Single-file build only
-                            (project-mode is a follow-up). Composes with the
+                            turning the optimizer on. Works in both single-file
+                            and project mode. Composes with the
                             KARAC_STRIP_CONTRACTS env var.
     --enable-hot-swap       Emit PLT-style indirection for extern-public
                             module symbols so the AOT artifact format stays
