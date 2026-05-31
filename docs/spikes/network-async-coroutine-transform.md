@@ -194,6 +194,73 @@ a coroutine (ramp/suspend/end) and (b) the leaf suspend swap; the drive,
 fd-registration, dispatcher, and syscalls are all reused. Drop-across-suspend
 (slice 4) remains the real correctness risk.
 
+## 6¾. Drive-model correction (the 2b.3 design, 2026-05-31)
+
+Designing the 2b.3 *drive* (how a call site runs a coroutine-compiled callee to
+completion) surfaced that the original sketch's **synchronous resume-loop**
+("`hdl = ramp(args); while !coro.done(hdl) { coro.resume(hdl); sched_yield }`")
+is **semantically wrong**, for one concrete reason:
+
+- **The connection fds are non-blocking.** The listener is
+  `set_nonblocking(true)` (event_loop.rs ~2692/3351) and accepted sockets
+  inherit `O_NONBLOCK` (macOS). `karac_runtime_tcp_read/accept/write` are
+  *pure-syscall, no parking* — a `read(2)` on a not-yet-ready fd returns
+  `-EWOULDBLOCK`. The FFI's own doc says so: *"EAGAIN/EWOULDBLOCK surface as
+  -EAGAIN here too (the readiness assumption was wrong); the parking
+  primitive's readiness check should normally prevent it."* So
+  **readiness-before-syscall is mandatory** — a caller that `coro.resume`s
+  *before the dispatcher has signalled fd-readiness* runs the post-park syscall
+  on an unready fd and gets `EWOULDBLOCK`, not data. The main thread must **not**
+  drive resume; the **dispatcher** must, exactly when the fd fires.
+
+**Corrected drive (design v2)** — dispatcher-driven, caller waits on a
+completion slot. No hidden params, the slice-2b.1 shim is unchanged:
+
+- **Ramp** (`compile_function` for a coroutine key): `coro.id`/`begin → hdl`;
+  `slot = karac_runtime_park_slot_new()` stashed **frame-resident**; run the
+  normal body; the **first** park's suspend-return edge returns `slot` (not
+  `hdl`) to the original caller.
+- **Each park** (`emit_state_machine_invocation_for_park_on_fd`, coro branch):
+  `start_dispatcher()` (idempotent) → `register_fd(fd, dir, &frame.parked={
+  poll_fn: @__kara_coro_resume, state: hdl })` → `coro.suspend(false)` →
+  `switch [0→resume, 1→cleanup] default→suspend-return`; the resume edge
+  deregisters and the existing post-park syscall lands there verbatim.
+- **Body completion**: `karac_runtime_park_slot_signal(slot)` then a **final**
+  `coro.suspend(true)`. The dispatcher's last `@__kara_coro_resume` sees
+  `coro.done` and `coro.destroy`s the frame; the signal has already woken the
+  caller.
+- **Call site** (both intercepts) for a coroutine callee: `slot = ramp(args);
+  karac_runtime_park_slot_wait(slot); karac_runtime_park_slot_free(slot)`. The
+  caller **never** resumes — the dispatcher does all resuming + the destroy.
+  Correct for non-blocking fds, and this is exactly 2b.4's spawn shape minus the
+  inline wait (spawn returns a handle wrapping `slot`; join waits on it).
+
+**Two consequences that reshape the slice's risk:**
+
+1. **The 2b.2a demo topology is split-correct but drive-INCOMPATIBLE.**
+   `build_demo_park_coroutine` runs `coro.free` on its *normal-completion* path
+   (resume → cleanup → free → end). That is fine for its only claim — CoroSplit
+   survival — but a coroutine that self-frees on completion **UAFs** when the
+   dispatcher's shim then calls `coro.done`/`coro.destroy` on the freed frame.
+   The production topology must `coro.free` **only on the destroy edge** (suspend
+   case 1), reached via `coro.destroy`; normal completion goes through a *final
+   suspend* and leaves the frame alive for the shim to destroy. Returning a
+   frame-resident value (`slot`) from a block shared with the freed-frame
+   cleanup edge is itself a UAF trap — the cleanup edge must `ret` a non-frame
+   value (e.g. `null`/`hdl`), only the live-frame suspend edges `ret slot`.
+2. **Drive-correctness is only provable by a runtime E2E under ASAN**, not by
+   CoroSplit-survival + IR grep. The topology has UAF traps (above) that pass
+   `module.verify()` and split cleanly yet fault at runtime. So 2b.3's
+   acceptance gate is a *linked, executed, ASAN-clean* handler servicing a real
+   connection — the bulk of the slice is iterating the topology against that
+   gate, not the emission scaffolding.
+
+Net effect on the estimate: 2b.3 is **not** the "drop into existing machinery
+almost verbatim" the §6½ map suggested for the drive. The fd-registration,
+dispatcher, slot primitives, and syscalls are still reused — but the
+coroutine-frame lifetime/return topology is new, correctness-sensitive, and
+runtime-gated. Re-rated below.
+
 ## 7. Effort estimate (honest)
 
 | Slice | Work | Size |
@@ -204,7 +271,7 @@ fd-registration, dispatcher, and syscalls are all reused. Drop-across-suspend
 | 2b.1 (done) | **Drive bridge.** `CoroIntrinsics` gains the drive intrinsics (`coro.resume`/`coro.done`/`coro.destroy`) + `emit_coro_resume_shim` → `i8 @__kara_coro_resume(ptr handle, ptr cancel)`, whose signature is *exactly* the runtime `KaracParkedTask.poll_fn` ABI. Test `resume_shim_lowers_alongside_coroutine`: the shim lowers cleanly through the coro pipeline (no leftover `@llvm.coro.*`) and re-verifies. This is the zero-runtime-change bridge — see § 6½ | ✅ small |
 | 2b.2a (done) | **Leaf suspend EMISSION de-risk.** `src/codegen/coro.rs::build_demo_park_coroutine` emits the production leaf shape — frame-resident parked slot `{poll_fn=@__kara_coro_resume, state=hdl, token}`, `register_fd(fd, dir, &parked)` before `coro.suspend`, deregister+syscall on the resume edge — and `park_shaped_coroutine_splits_with_frame_resident_slot` proves CoroSplit (i) lifts the parked slot into the coro frame so the pointer register_fd captures is a `%demo_park_coro.Frame` GEP (stable address the dispatcher can deref **while suspended**, not a dangling ramp stack alloca), (ii) keeps the registration in the ramp, and (iii) lands the post-park syscall in the `.resume` clone (not dropped — the bug-C failure mode). The resume-edge token reload is what forces frame-residency. Also closed the §8 self-borrow-across-suspend risk (see below) | ✅ small |
 | 2b.2b | **Wire the leaf suspend into `tcp.rs`.** When the enclosing fn is a coroutine, replace `emit_state_machine_invocation_for_park_on_fd`'s `park_slot_wait` thread-block with the 2b.2a-validated shape (`register_fd(fd, dir, &frame.parked)` + `coro.suspend`); keep the post-park syscall (`karac_runtime_tcp_read/write/accept`) unchanged on the resume edge. Needs the coroutine context (handle + cleanup/suspend dispatch blocks) threaded through `Codegen` — lands with 2b.3 | 1–2 |
-| 2b.3 | **Compile a network-boundary fn as a coroutine** (replace the degenerate `emit_state_machine_poll_fn_for_key`): normal body + `coro.id`/`begin` ramp + `coro.end`; sync call-site drives the ramp to completion. **Goal: a straight-line synchronous handler services a real connection E2E** | 2 |
+| 2b.3 | **Compile a network-boundary fn as a coroutine** (gate-skip the degenerate `emit_state_machine_poll_fn_for_key`; keep it as the default-off path so the ~60 existing poll-fn/drive tests stay green — flip the default + delete the degenerate path in a later slice): coroutine key gate (`Codegen.coro_enabled` setter, default off) → ramp (`coro.id`/`begin` + frame-resident `park_slot_new`) + normal body + **drive-correct topology** (`park_slot_signal` + final `coro.suspend(true)` on completion; `coro.free` **only** on the destroy edge — see §6¾) + `coro.end`; leaf-park coro branch in `tcp.rs`; `ptr`-return signature; call site = `slot=ramp(args); park_slot_wait(slot); park_slot_free(slot)` (dispatcher drives resume, NOT the caller). **Goal + acceptance gate: a straight-line handler services a real connection E2E, linked + executed + ASAN-clean** (CoroSplit-survival is necessary but NOT sufficient — the frame-lifetime topology has UAF traps that only a runtime+ASAN run catches, §6¾). Larger and more correctness-sensitive than first rated | 3–4 |
 | 2b.4 | **Spawn drive.** Spawn wrapper ramps the coroutine, hands `hdl` to the scheduler (frees the thread); dispatcher resumes via the shim. **Goal: a straight-line *spawned* echo handler services a real connection E2E** (the current no-op) | 1–2 |
 | 3 | Control flow (`loop`/`match` around suspends) — should "just work" via CoroSplit; validate against the demo handler shape | 1 (mostly testing) |
 | 4 | Drop-across-suspend correctness (heap locals freed on completion + on destroy/cancel) — ASAN-gated | 1–2 (trickiest) |
@@ -224,7 +291,18 @@ thesis B would surrender.
   pins this with a test.
 - **ABI bridge:** dispatcher switches from `poll_fn(state, cancel)` to
   `coro.resume(handle)` — moderate, localized to the dispatcher + parked
-  record.
+  record. **RESOLVED in principle (§6¾):** zero dispatcher change — the parked
+  record's `poll_fn` is the slice-2b.1 shim (`@__kara_coro_resume`), which the
+  dispatcher already drives unchanged.
+- **Drive model = dispatcher-driven, not caller-resumed (§6¾, 2026-05-31).**
+  Connection fds are non-blocking, so the caller must NOT `coro.resume` (it
+  would hit `EWOULDBLOCK`); the dispatcher resumes on fd-readiness and the
+  caller waits on a `park_slot`. The corrected drive is *simpler* at the call
+  site (no resume loop, no hidden param) but the **coroutine-frame
+  lifetime/return topology is new and runtime-gated**: `coro.free` only on the
+  destroy edge, final-suspend on completion, and no frame-resident value
+  returned from the freed-frame cleanup edge. CoroSplit-survival is necessary
+  but not sufficient — **the 2b.3 gate is a linked, executed, ASAN-clean run.**
 - **Drop ordering across suspends:** the real correctness risk (slice 4);
   ASAN is the gate.
 - **Self-borrows across suspend** (Pin-like aliasing): **RESOLVED (2b.2a) —
