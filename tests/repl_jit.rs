@@ -430,53 +430,103 @@ fn repl_jit_vec_mut_let_falls_through_to_passthrough() {
 }
 
 #[test]
-#[ignore = "B.5.3 — Map snapshot port pending; today: cell 2 stdout is \"called-1\" (RHS re-evaluated; the -1 is a separate suspected cross-cell-fn-returning-Map bug, see B.5.3 tracker entry), want \"100\""]
 fn repl_jit_map_let_rhs_is_not_re_evaluated() {
-    // Slice c-repl.B.5.3 friction probe (Map variant). Same pattern
-    // as the Vec probe above; the interpreter caches the bound Map
-    // value across cells, the JIT path re-evaluates the RHS until
-    // B.5.3 lands.
+    // Slice c-repl.B.5.3b — Map snapshot port. Cell 1 binds a Map
+    // via `Map.new()` and inserts an entry in the same cell. Cell 2
+    // reads the entry via `m.get(1)`. The persistent-let replay
+    // mechanism re-emits `let m = Map.new();` into cell 2's synth
+    // source (the insert / println in cell 1's body don't persist
+    // across cells — only top-level lets do). Pre-B.5.3b the JIT
+    // path re-evaluated the let RHS in cell 2, producing a fresh
+    // empty Map → `get(1)` returns None → prints -1. Post-B.5.3b
+    // the snapshot mechanism replays from a global holding cell 1's
+    // populated Map handle → `get(1)` returns Some(100) → prints 100.
     //
-    // Surfaced 2026-05-30: cell 2 today prints "called-1" rather
-    // than the expected "called100" — i.e. `make_map()` re-fires
-    // (confirming the B.5.3 gap) AND the re-evaluated `mp` somehow
-    // loses its inserted entry (cell 2's `mp.get(1)` returns None,
-    // hitting the `-1` arm). Standalone non-REPL JIT of the same
-    // `make_map()` pattern prints 100 correctly, so the
-    // entry-loss is a REPL-cell-mode-only divergence — likely tied
-    // to the cross-cell declare-only path for `make_map` interacting
-    // with Map's heap-backed storage somehow. Once B.5.3 lands,
-    // cell 2 won't re-call `make_map()` (it'll load the captured
-    // Map handle from the snapshot global), so the entry-loss bug
-    // becomes moot for this assertion — but the bug itself is
-    // tracked under B.5.3 because it's a pre-existing hazard for
-    // any future REPL workload that does mutate a Map across cells.
+    // Side-effect detection differs from the Vec / String / primitive
+    // probes (those rely on a `println("called")` in a fn body that
+    // returns a populated heap container). Map's fn-return path has
+    // a pre-existing codegen bug — `suppress_cleanup_for_tail_return`
+    // suppresses Vec/String track cleanup on tail-return Identifier
+    // expressions but NOT Map's `FreeMapHandle`, so a Map returned
+    // from a fn that allocated it via `Map.new()` gets freed at the
+    // fn's scope exit before the caller receives the handle. AOT
+    // happens to print correctly because LLVM's post-codegen O2
+    // passes elide the dead store-free; JIT runs pre-O2 IR. The
+    // tail-return suppression for Map is a separate codegen slice
+    // (filed under "Map tail-return cleanup suppression"); this test
+    // sidesteps it by using `Map.new()` in the binding RHS directly
+    // and inserting in cell 1's body — the populated Map lives in
+    // the snapshot global until the runner dies.
     let mut s = Session::new();
     enable_jit(&mut s);
     let r = s.evaluate_cell_captured(
-        "fn make_map() -> Map[i64, i64] { \
-            println(\"called\"); \
-            let m: Map[i64, i64] = Map.new(); \
-            m.insert(1, 100); \
-            m \
-         }",
+        "let m: Map[i64, i64] = Map.new(); m.insert(1, 100); println(\"called\");",
     );
-    assert!(r.errors.is_empty(), "fn def: {:?}", r.errors);
-    let r = s.evaluate_cell_captured("let mp: Map[i64, i64] = make_map();");
-    assert!(r.errors.is_empty(), "let cell: {:?}", r.errors);
+    assert!(r.errors.is_empty(), "cell 1: {:?}", r.errors);
     assert_eq!(
         r.stdout.trim(),
         "called",
-        "let cell should print the side effect once",
+        "cell 1 should print the side effect once"
     );
     let r =
-        s.evaluate_cell_captured("match mp.get(1) { Some(v) => println(v), None => println(-1), }");
-    assert!(r.errors.is_empty(), "use cell: {:?}", r.errors);
+        s.evaluate_cell_captured("match m.get(1) { Some(v) => println(v), None => println(-1), }");
+    assert!(r.errors.is_empty(), "cell 2: {:?}", r.errors);
     assert_eq!(
         r.stdout.trim(),
         "100",
-        "use cell should print only the looked-up value — `make_map()` must NOT re-run",
+        "cell 2 should see cell 1's inserted entry via the snapshot global",
     );
+}
+
+#[test]
+fn repl_jit_map_cross_cell_shadow_drops_runner() {
+    // Slice c-repl.B.5.3b — Map entries land in `jit_snapshotted_lets`
+    // the same way primitive/String/Vec entries do, so the cross-cell
+    // shadow detection in `prune_shadowed_lets` (B.5.1 follow-up)
+    // picks them up uniformly. Cell 1 binds a Map[i64, i64]; cell 2
+    // rebinds the same name to a different Map without `:reset`. The
+    // shadow detection drops the runner, the fresh runner re-captures
+    // cell 2's new value, and the use cell observes the new entry.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("let m: Map[i64, i64] = Map.new(); m.insert(1, 7);");
+    assert!(r.errors.is_empty(), "cell 1: {:?}", r.errors);
+    let r = s.evaluate_cell_captured(
+        "let m: Map[i64, i64] = Map.new(); m.insert(1, 42); \
+         match m.get(1) { Some(v) => println(v), None => println(-1), }",
+    );
+    assert!(r.errors.is_empty(), "cell 2: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "42",
+        "cross-cell Map shadow must re-capture, not replay cell 1's stale handle; stdout: {:?}",
+        r.stdout,
+    );
+}
+
+#[test]
+fn repl_jit_map_mut_let_falls_through_to_passthrough() {
+    // Slice c-repl.B.5.3b — `let mut m: Map[i64, i64] = …` must NOT
+    // take the snapshot path. The non-mut case already routes
+    // mutating calls through the live slot (`m.insert(...)` works
+    // post-capture because Map suppression skips `track_map_var`
+    // rather than nulling the slot), but the mut filter still kicks
+    // in for symmetry with the Vec/String mut treatment and protects
+    // against future capture-design changes that might add slot-side
+    // suppression. Exercise both insert and get in the same cell to
+    // confirm the pass-through path doesn't diverge.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured(
+        "let mut m: Map[i64, i64] = Map.new(); m.insert(1, 100); \
+         match m.get(1) { Some(v) => println(v), None => println(-1), }",
+    );
+    assert!(
+        r.errors.is_empty(),
+        "mut Map cell should run cleanly: {:?}",
+        r.errors,
+    );
+    assert_eq!(r.stdout.trim(), "100");
 }
 
 #[test]

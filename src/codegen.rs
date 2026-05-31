@@ -164,6 +164,28 @@ pub enum SnapshotPrimKind {
     /// global and the source cell's element drops; the design needs
     /// per-element retain/release or a deeper deferral story.
     Vec(VecElemKind),
+    /// Slice c-repl.B.5.3b: Kāra `Map[K, V]` for primitive K and V.
+    /// Storage is a single opaque handle pointer (i8*) — the Map's
+    /// state lives behind that pointer, managed by the `karac_map_*`
+    /// runtime fns. Capture transfers handle ownership to the global
+    /// by storing the loaded pointer + nulling the let slot's
+    /// pointer; `karac_map_free` and `karac_map_free_with_drop_vec`
+    /// are both null-safe (early-return on null), so the scope-exit
+    /// `FreeMapHandle` cleanup becomes a no-op for the captured
+    /// slot. Replay loads the handle into a fresh slot and re-
+    /// registers `map_key_types[name]` / `map_val_types[name]` /
+    /// `map_key_type_names[name]` so downstream method dispatch
+    /// (`m.get(k)`, `m.insert(k, v)`) routes through the Map
+    /// surface unchanged. Mut Map bindings fall through to pass-
+    /// through — same-cell `m.insert(…)` after capture would mutate
+    /// the now-snapshot-owned handle, and cell N+1 would observe
+    /// the post-mutation state, diverging from the interpreter's
+    /// snapshot semantic. Aggregate-key / aggregate-value /
+    /// shared-K / shared-V Map shapes are out of scope for v1 —
+    /// the runtime's per-entry buffer-drop walk + the codegen-side
+    /// shared rc-dec walk both need per-entry retain/release that
+    /// the shallow handle transfer can't carry.
+    Map { key: VecElemKind, val: VecElemKind },
 }
 
 /// Slice c-repl.B.5.3: Vec element kinds eligible for the v1 snapshot

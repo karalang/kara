@@ -2223,11 +2223,19 @@ impl Session {
                 // (no capture, no cap-zero) preserves correct (if
                 // slower) semantics. Primitive kinds keep the B.5.1
                 // unfiltered behavior — they have no alias hazard.
+                // Slice c-repl.B.5.3b extends the mut filter to Map.
+                // Same alias-hazard reasoning: a same-cell `m.insert(
+                // …)` after capture would load null from the slot
+                // (the suppression sentinel) and crash (or silently
+                // no-op via `karac_map_*`'s null guards). Pass-
+                // through (no capture, no null-slot) preserves
+                // correct re-evaluating semantics for mut Maps.
                 if *is_mut
                     && matches!(
                         kind,
                         crate::codegen::SnapshotPrimKind::String
                             | crate::codegen::SnapshotPrimKind::Vec(_)
+                            | crate::codegen::SnapshotPrimKind::Map { .. }
                     )
                 {
                     continue;

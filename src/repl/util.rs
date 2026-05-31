@@ -1013,6 +1013,27 @@ pub(super) fn snapshot_kind_for_type(
             Type::Char => Some(SnapshotPrimKind::Vec(VecElemKind::Char)),
             _ => None,
         },
+        // Slice c-repl.B.5.3b: Map[K, V] for primitive K and V. The
+        // primitive constraint on both sides keeps the plain
+        // `karac_map_free` (no recursive drop walk) cleanup path
+        // live — that helper's null-safe early-return is what makes
+        // capture's slot-null suppression correct. Aggregate-key /
+        // aggregate-value / shared-K / shared-V Map shapes need
+        // per-entry drop walks the shallow handle transfer can't
+        // carry; pass-through preserves correct (re-evaluating)
+        // semantics for those.
+        Type::Named { name, args } if name == "Map" && args.len() == 2 => {
+            let kind_for = |t: &Type| match t {
+                Type::Int(IntSize::I64) => Some(VecElemKind::I64),
+                Type::Float(FloatSize::F64) => Some(VecElemKind::F64),
+                Type::Bool => Some(VecElemKind::Bool),
+                Type::Char => Some(VecElemKind::Char),
+                _ => None,
+            };
+            let key = kind_for(&args[0])?;
+            let val = kind_for(&args[1])?;
+            Some(SnapshotPrimKind::Map { key, val })
+        }
         _ => None,
     }
 }

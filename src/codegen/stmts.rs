@@ -1013,7 +1013,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         && self.map_key_types.contains_key(var_name.as_str())
                     {
                         let name = var_name.clone();
-                        return self.compile_map_new_stmt(&name);
+                        self.compile_map_new_stmt(&name)?;
+                        // Slice c-repl.B.5.3b: the early-return path for
+                        // Map.new() bypasses the let-arm's snapshot
+                        // capture hook. Fire it here so REPL Map[K, V]
+                        // bindings get the cross-cell handle stash.
+                        // No-op outside REPL mode (snapshot_capture is
+                        // empty), no-op for non-primitive K/V (the
+                        // classifier skips them).
+                        self.try_emit_snapshot_capture(pattern);
+                        return Ok(());
                     }
                 }
                 // Set.new(): emit karac_map_new with val_size = 0. Set[T]
@@ -2363,6 +2372,26 @@ impl<'ctx> super::Codegen<'ctx> {
             let elem_ty = self.vec_elem_llvm_type(elem);
             self.vec_elem_types.insert(name.clone(), elem_ty);
         }
+        // Slice c-repl.B.5.3b: Map replay registers the binding under
+        // `map_key_types[name]` / `map_val_types[name]` /
+        // `map_key_type_names[name]` so downstream method dispatch
+        // (`m.get(k)`, `m.insert(k, v)`, etc.) routes through the
+        // Map surface unchanged. The key-name fallback through
+        // `vec_elem_kind_name` matches what `extract_map_key_name`
+        // would have produced from a `Map[K, V]` type annotation —
+        // letting `emit_hash_fn_for_type` find the right primitive
+        // hash/eq pair without needing a TypeExpr. No
+        // `track_map_var`: the handle is owned by the snapshot
+        // global, not this slot's alloca; scope-exit cleanup must
+        // skip the free entirely.
+        if let super::SnapshotPrimKind::Map { key, val } = kind {
+            let key_ty = self.vec_elem_llvm_type(key);
+            let val_ty = self.vec_elem_llvm_type(val);
+            self.map_key_types.insert(name.clone(), key_ty);
+            self.map_val_types.insert(name.clone(), val_ty);
+            self.map_key_type_names
+                .insert(name.clone(), Self::vec_elem_kind_name(key).to_string());
+        }
         Ok(true)
     }
 
@@ -2414,6 +2443,15 @@ impl<'ctx> super::Codegen<'ctx> {
         ) {
             self.zero_vec_alloca_cap(slot.ptr);
         }
+        // Slice c-repl.B.5.3b: no slot-suppression for Map. Unlike
+        // Vec/String which use a cap=0 sentinel in the slot's struct
+        // triple, Map's cleanup is queue-driven (`FreeMapHandle` is
+        // pushed to `scope_cleanup_actions` from a known set of
+        // sites). Suppression happens at the registration site
+        // instead — `compile_map_new_stmt` skips `track_map_var` when
+        // `snapshot_capture.contains_key(var_name)`. The slot keeps
+        // the live handle so same-cell `m.insert(...)` / `m.get(...)`
+        // still find the Map; no nulling required.
     }
 
     /// LLVM storage type for a snapshot global. Distinct from the
@@ -2434,6 +2472,9 @@ impl<'ctx> super::Codegen<'ctx> {
             super::SnapshotPrimKind::String | super::SnapshotPrimKind::Vec(_) => {
                 self.vec_struct_type().into()
             }
+            super::SnapshotPrimKind::Map { .. } => {
+                self.context.ptr_type(AddressSpace::default()).into()
+            }
         }
     }
 
@@ -2450,6 +2491,20 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Slice c-repl.B.5.3b: name string for a Vec elem variant — the
+    /// same mangled name `extract_map_key_name` produces for the same
+    /// primitive type. `map_key_type_names[name]` falls back through
+    /// this when reconstructing Map hash/eq dispatch for a snapshot-
+    /// replayed binding.
+    fn vec_elem_kind_name(elem: super::VecElemKind) -> &'static str {
+        match elem {
+            super::VecElemKind::I64 => "i64",
+            super::VecElemKind::F64 => "f64",
+            super::VecElemKind::Bool => "bool",
+            super::VecElemKind::Char => "char",
+        }
+    }
+
     /// Convert a value loaded from the snapshot global into the LLVM
     /// type the binding's slot expects. Identity for i64/f64/char;
     /// i8 → i1 for Bool.
@@ -2463,7 +2518,8 @@ impl<'ctx> super::Codegen<'ctx> {
             | super::SnapshotPrimKind::F64
             | super::SnapshotPrimKind::Char
             | super::SnapshotPrimKind::String
-            | super::SnapshotPrimKind::Vec(_) => Ok(loaded),
+            | super::SnapshotPrimKind::Vec(_)
+            | super::SnapshotPrimKind::Map { .. } => Ok(loaded),
             super::SnapshotPrimKind::Bool => {
                 let i8_val = loaded.into_int_value();
                 let zero = self.context.i8_type().const_zero();
@@ -2489,7 +2545,8 @@ impl<'ctx> super::Codegen<'ctx> {
             | super::SnapshotPrimKind::F64
             | super::SnapshotPrimKind::Char
             | super::SnapshotPrimKind::String
-            | super::SnapshotPrimKind::Vec(_) => Ok(loaded),
+            | super::SnapshotPrimKind::Vec(_)
+            | super::SnapshotPrimKind::Map { .. } => Ok(loaded),
             super::SnapshotPrimKind::Bool => {
                 let i1 = loaded.into_int_value();
                 let i8_ty = self.context.i8_type();
@@ -2560,6 +2617,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // path yet) won't free anything if accidentally
                 // treated as a String/Vec slot.
                 g.set_initializer(&self.vec_struct_type().const_zero());
+            }
+            super::SnapshotPrimKind::Map { .. } => {
+                // Slice c-repl.B.5.3b: zero-initialize the handle
+                // pointer. `karac_map_free` early-returns on a null
+                // map, so an uncaptured global accidentally treated
+                // as a Map slot is a safe no-op.
+                g.set_initializer(&self.context.ptr_type(AddressSpace::default()).const_null());
             }
         }
         g.set_linkage(Linkage::External);

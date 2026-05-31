@@ -99,13 +99,26 @@ impl<'ctx> super::Codegen<'ctx> {
         let val_is_vec = self.llvm_ty_is_vec_struct(val_ty);
         let val_shared_heap = self.map_val_shared_heap_type_for(var_name);
         let key_shared_heap = self.map_key_shared_heap_type_for(var_name);
-        self.track_map_var(
-            slot_ptr,
-            key_is_vec,
-            val_is_vec,
-            val_shared_heap,
-            key_shared_heap,
-        );
+        // Slice c-repl.B.5.3b: skip the scope-exit FreeMapHandle when
+        // the let binding is destined for the cross-cell snapshot
+        // global — the snapshot owns the handle's lifetime (until the
+        // runner dies via `:reset` / shadow / panic), and freeing it
+        // at end of the let's scope would leave the global pointing
+        // at reclaimed memory. The slot still gets the handle so
+        // same-cell ops (`m.insert(...)`, `m.get(...)`) work via
+        // direct slot reads — unlike Vec/String capture, we don't
+        // need a "null the slot" suppression because Map's cleanup
+        // is queue-driven (skip the queue push, no further action
+        // needed at scope exit).
+        if !self.snapshot_capture.contains_key(var_name) {
+            self.track_map_var(
+                slot_ptr,
+                key_is_vec,
+                val_is_vec,
+                val_shared_heap,
+                key_shared_heap,
+            );
+        }
         Ok(())
     }
 
