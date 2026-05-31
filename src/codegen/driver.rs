@@ -51,7 +51,18 @@ pub(super) fn link_executable_impl(
     exe_path: &str,
     extra_cc_args: &[&str],
 ) -> Result<(), String> {
-    let runtime_path = resolve_runtime_path()?;
+    // Binary-size phase 4 (Part B): pick the lean, rustls-free runtime
+    // archive (`libkarac_runtime_min.a`) for programs that reference none
+    // of the TLS-only runtime symbols. The lean archive omits the
+    // rustls/ring dependency tree, whose unwinding/backtrace-symbolizer
+    // machinery would otherwise survive `-dead_strip` onto the compute
+    // path (~65 KiB on every binary — see phase-7-codegen.md § "Phase 4").
+    // Detection reads the just-emitted object's referenced symbols
+    // directly (ground truth), so it stays decoupled from codegen
+    // internals. Any uncertainty falls back to the full archive, which is
+    // always correct.
+    let prefer_min = !object_references_tls(obj_path);
+    let runtime_path = resolve_runtime_path(prefer_min)?;
     let mut cmd = std::process::Command::new("cc");
     for arg in extra_cc_args {
         cmd.arg(arg);
@@ -143,28 +154,120 @@ pub(super) fn is_sanitizer_link(extra_cc_args: &[&str]) -> bool {
     extra_cc_args.iter().any(|a| a.starts_with("-fsanitize"))
 }
 
-pub(super) fn resolve_runtime_path() -> Result<String, String> {
-    if let Ok(p) = std::env::var("KARAC_RUNTIME") {
-        if std::path::Path::new(&p).exists() {
-            return Ok(p);
-        }
-        return Err(format!("KARAC_RUNTIME set to {p} but file does not exist"));
+/// Runtime symbols that exist ONLY in the full (`tls`-feature) archive.
+/// If a program's emitted object references any of these, it must link
+/// the full `libkarac_runtime.a`; otherwise the lean
+/// `libkarac_runtime_min.a` (rustls-free, ~65 KiB lighter on the linked
+/// binary — see phase-7-codegen.md § "Phase 4") is sufficient and
+/// preferred. Matched as substrings of `nm` symbol names (Mach-O prefixes
+/// each with `_`, so substring matching is prefix-agnostic). NOTE the
+/// `_https` discriminator: plain `karac_runtime_serve_http` /
+/// `_serve_http_static` and the server-side `_http_request_*` /
+/// `_http_response_*` getters stay in BOTH archives and must NOT match.
+const TLS_RUNTIME_SYMBOL_MARKERS: &[&str] = &[
+    "karac_runtime_tls_",
+    "karac_runtime_serve_https",
+    "karac_runtime_http_client_",
+    "karac_runtime_http_builder_",
+    "karac_runtime_ws_accept_tls",
+];
+
+/// Scan `obj_path`'s symbol table (via `nm`) for any reference to a
+/// TLS-only runtime symbol. A Kāra-emitted object never *defines*
+/// `karac_runtime_*` (those live in the archive), so any appearance is a
+/// reference. Conservative on failure: if `nm` is missing or errors, or
+/// `KARAC_FORCE_FULL_RUNTIME` is set, returns `true` so the caller links
+/// the full archive (always correct, just larger).
+fn object_references_tls(obj_path: &str) -> bool {
+    if std::env::var_os("KARAC_FORCE_FULL_RUNTIME").is_some() {
+        return true;
     }
+    let output = std::process::Command::new("nm").arg(obj_path).output();
+    match output {
+        Ok(o) if o.status.success() => {
+            symbol_listing_references_tls(&String::from_utf8_lossy(&o.stdout))
+        }
+        // nm absent / failed: can't prove the program is TLS-free, so be safe.
+        _ => true,
+    }
+}
+
+/// Pure predicate over `nm`-style symbol-listing text: true iff any line
+/// names a TLS-only runtime symbol. Split out from the `nm` shell-out so
+/// the marker matching — in particular the `serve_http` vs `serve_https`
+/// and `http_request`/`http_response` (server, both archives) vs
+/// `http_client`/`http_builder` (client, TLS-only) discrimination — is
+/// unit-testable without an object file.
+fn symbol_listing_references_tls(nm_output: &str) -> bool {
+    nm_output
+        .lines()
+        .any(|line| TLS_RUNTIME_SYMBOL_MARKERS.iter().any(|m| line.contains(m)))
+}
+
+/// Resolve the runtime archive to link. When `prefer_min` is true (the
+/// program referenced no TLS-only symbol), prefer the lean
+/// `libkarac_runtime_min.a` at each resolution tier, falling back to the
+/// full `libkarac_runtime.a` when no lean archive is present (so a
+/// distribution that ships only the full archive still links correctly).
+/// Resolution order: `KARAC_RUNTIME` override → installed `<bin>/../lib`
+/// → dev `target/release`.
+pub(super) fn resolve_runtime_path(prefer_min: bool) -> Result<String, String> {
+    const FULL: &str = "libkarac_runtime.a";
+    const MIN: &str = "libkarac_runtime_min.a";
+
+    // Pick the preferred archive name within a directory: lean first when
+    // `prefer_min`, else the full archive.
+    let pick = |dir: &std::path::Path| -> Option<String> {
+        if prefer_min {
+            let m = dir.join(MIN);
+            if m.exists() {
+                return Some(m.to_string_lossy().into_owned());
+            }
+        }
+        let f = dir.join(FULL);
+        if f.exists() {
+            return Some(f.to_string_lossy().into_owned());
+        }
+        None
+    };
+
+    // 1. Explicit override. Honor the given path, but when a lean archive
+    //    would do and a `libkarac_runtime_min.a` sits beside the override,
+    //    use that instead — so pointing `KARAC_RUNTIME` at a full archive
+    //    still gets the size win for compute-only programs.
+    if let Ok(p) = std::env::var("KARAC_RUNTIME") {
+        let path = std::path::Path::new(&p);
+        if !path.exists() {
+            return Err(format!("KARAC_RUNTIME set to {p} but file does not exist"));
+        }
+        if prefer_min {
+            if let Some(dir) = path.parent() {
+                let sib = dir.join(MIN);
+                if sib.exists() {
+                    return Ok(sib.to_string_lossy().into_owned());
+                }
+            }
+        }
+        return Ok(p);
+    }
+
+    // 2. Installed distribution: `<karac-binary-dir>/../lib/`.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(bin_dir) = exe.parent() {
-            let installed = bin_dir.join("../lib/libkarac_runtime.a");
-            if installed.exists() {
-                return Ok(installed.to_string_lossy().into_owned());
+            if let Some(found) = pick(&bin_dir.join("../lib")) {
+                return Ok(found);
             }
         }
     }
-    let dev =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/release/libkarac_runtime.a");
-    if dev.exists() {
-        return Ok(dev.to_string_lossy().into_owned());
+
+    // 3. Development fallback: `<workspace>/target/release/`.
+    let dev_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/release");
+    if let Some(found) = pick(&dev_dir) {
+        return Ok(found);
     }
+
     Err(
-        "libkarac_runtime.a not found; set KARAC_RUNTIME or build the runtime crate (`cargo rustc -p karac-runtime --release --crate-type staticlib` — NOT plain `cargo build`, which co-emits the rlib and defeats the staticlib's dead-strip; see runtime/Cargo.toml)".to_string(),
+        "libkarac_runtime.a not found; set KARAC_RUNTIME or build the runtime crate (`cargo rustc -p karac-runtime --release --crate-type staticlib` — NOT plain `cargo build`, which co-emits the rlib and defeats the staticlib's dead-strip; see runtime/Cargo.toml). For the lean compute-only archive also build `--no-default-features` and install it as `libkarac_runtime_min.a` alongside.".to_string(),
     )
 }
 
@@ -356,7 +459,58 @@ pub(super) fn read_auto_par_env() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::default_cpu_and_features;
+    use super::{default_cpu_and_features, symbol_listing_references_tls};
+
+    #[test]
+    fn tls_detection_flags_client_tls_https_ws_symbols() {
+        // Each TLS-only symbol (as `nm` would print it, Mach-O `_` prefix)
+        // must route a program to the full archive.
+        for sym in [
+            "0000000000000000 U _karac_runtime_tls_config_new",
+            "                 U _karac_runtime_tls_client_connect",
+            "                 U _karac_runtime_serve_https",
+            "                 U _karac_runtime_http_client_get",
+            "                 U _karac_runtime_http_client_post",
+            "                 U _karac_runtime_http_builder_send",
+            "                 U _karac_runtime_ws_accept_tls",
+        ] {
+            assert!(
+                symbol_listing_references_tls(sym),
+                "expected TLS detection for `{sym}`"
+            );
+        }
+    }
+
+    #[test]
+    fn tls_detection_does_not_flag_compute_or_plain_server_symbols() {
+        // The lean archive keeps plain HTTP serving, TCP, plain WS, JSON,
+        // par, map, string, and the server-side request/response getters —
+        // none of these may trip TLS detection (the discriminator is the
+        // `_https` suffix and the `_client_`/`_builder_` infixes).
+        let listing = "\
+                 U _karac_par_reduce\n\
+                 U _karac_par_run\n\
+                 U _karac_map_new\n\
+                 U _karac_string_clone\n\
+                 U _karac_runtime_serve_http\n\
+                 U _karac_runtime_serve_http_static\n\
+                 U _karac_runtime_http_request_path\n\
+                 U _karac_runtime_http_request_method\n\
+                 U _karac_runtime_http_response_set_body\n\
+                 U _karac_runtime_http_response_header\n\
+                 U _karac_runtime_ws_accept\n\
+                 U _karac_runtime_tcp_bind\n\
+                 U _karac_runtime_json_parse\n";
+        assert!(
+            !symbol_listing_references_tls(listing),
+            "compute / plain-server symbols must not trip TLS detection"
+        );
+    }
+
+    #[test]
+    fn tls_detection_empty_listing_is_tls_free() {
+        assert!(!symbol_listing_references_tls(""));
+    }
 
     #[test]
     fn aarch64_apple_darwin_defaults_to_apple_m1() {

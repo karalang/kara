@@ -24,8 +24,14 @@ cargo fmt --all -- --check             # Verify formatted (must be clean before 
 **Codegen E2E + memory_sanitizer require the runtime library.** One-time setup on a fresh checkout:
 
 ```bash
-cargo rustc -p karac-runtime --release --crate-type staticlib   # produces target/release/libkarac_runtime.a
+# Lean archive first (rustls-free) — built into the canonical name, then renamed.
+cargo rustc -p karac-runtime --release --no-default-features --crate-type staticlib
+cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
+# Full archive (TLS on) overwrites the canonical name — must run SECOND.
+cargo rustc -p karac-runtime --release --crate-type staticlib   # target/release/libkarac_runtime.a
 ```
+
+**Two archives, lean-then-full.** `karac` links the **lean** `libkarac_runtime_min.a` for any program that references no TLS-only runtime symbol (`karac_runtime_tls_*` / `_serve_https` / `_http_client_*` / `_http_builder_*` / `_ws_accept_tls`), and the **full** `libkarac_runtime.a` otherwise; it falls back to the full archive when the lean one is absent, so building only the full archive is always correct (just no size win). The lean archive omits the `rustls`/`ring` tree (gated behind the runtime's `tls` feature, `default = ["tls"]`), recovering ~65 KiB on every compute/auto-par binary — see phase-7-codegen.md § "Phase 4". Both commands must use `cargo rustc … --crate-type staticlib`, NOT `cargo build`. Build order matters: `--no-default-features` and the default build both emit `target/release/libkarac_runtime.a`, so build lean first and copy it to `libkarac_runtime_min.a` *before* the full build overwrites the canonical name. (`KARAC_FORCE_FULL_RUNTIME=1` forces the full archive for any program — an escape hatch if symbol detection ever misfires.)
 
 **Use `cargo rustc … --crate-type staticlib`, NOT `cargo build -p karac-runtime --release`.** The runtime's `[lib] crate-type` is `["staticlib", "rlib"]` (the `rlib` exists only for the opt-in `lljit_prototype` test path). Under `lto = "fat"`, emitting both artifacts in one `cargo build` defeats the staticlib's cross-module DCE — std's panic/alloc-error default hooks stay reachable and the ~57 KiB DWARF backtrace symbolizer survives `-dead_strip` into *every* AOT binary (measured: auto-par floor 295.7 KiB → 417.7 KiB, +41%). `cargo rustc --crate-type staticlib` builds only the staticlib, so LTO strips the symbolizer. See the comment at `runtime/Cargo.toml`'s `crate-type` line for the full rationale.
 
