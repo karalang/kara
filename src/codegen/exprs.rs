@@ -352,7 +352,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.build_return(Some(&v)).unwrap();
                 } else {
                     self.emit_scope_cleanup();
-                    self.builder.build_return(None).unwrap();
+                    // `main` lowers to a C-ABI `i32 main()` (the process exit
+                    // code), so a valueless `return;` reachable in `main` must
+                    // emit `ret i32 0`, not `ret void` — otherwise the return
+                    // instr's type mismatches the function signature and
+                    // module verification fails ("ret void / i32"). Mirrors
+                    // the implicit end-of-`main` return-zero in
+                    // `compile_function`. Non-`main` void fns keep `ret void`.
+                    // (phase-7-codegen.md — return-in-main fix.)
+                    if self.current_fn_name == "main" {
+                        let zero = self.context.i32_type().const_int(0, false);
+                        self.builder.build_return(Some(&zero)).unwrap();
+                    } else {
+                        self.builder.build_return(None).unwrap();
+                    }
                 }
                 Ok(self.context.i64_type().const_int(0, false).into())
             }

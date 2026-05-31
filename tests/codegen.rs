@@ -832,6 +832,53 @@ fn main() {
         }
     }
 
+    /// phase-7 — an explicit valueless `return;` reachable in `main` must
+    /// emit `ret i32 0` (main lowers to a C-ABI `i32 main()`), not
+    /// `ret void`. Before the fix this failed module verification
+    /// ("ret void / i32"); the implicit end-of-main already returned 0,
+    /// so only the *explicit* `return;` path was broken. Exercises the
+    /// nested (while + if) reachable case, and asserts the early return
+    /// actually stops execution.
+    #[test]
+    fn test_e2e_explicit_return_in_main_exits_zero() {
+        let out = run_program(
+            "fn main() {\n\
+             \x20   let mut i = 0;\n\
+             \x20   while i < 5 {\n\
+             \x20       if i == 2 { println(99); return; }\n\
+             \x20       println(i);\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   println(0 - 1);\n\
+             }",
+        );
+        if let Some(out) = out {
+            // i=0,1 printed; i=2 prints 99 then returns; the post-loop
+            // `println` never runs.
+            assert_eq!(out.trim(), "0\n1\n99");
+        }
+    }
+
+    /// IR pin for the same fix: the explicit `return;` in `main` lowers to
+    /// `ret i32 0`. A bare `fn main() { return; }` would otherwise verify-
+    /// fail, so reaching this assertion at all already proves the fix; the
+    /// grep pins the exact instruction.
+    #[test]
+    fn test_ir_explicit_return_in_main_is_ret_i32_zero() {
+        let ir = ir_for("fn main() { return; }");
+        let body = function_body(&ir, "main").expect("main body");
+        assert!(
+            body.contains("ret i32 0"),
+            "explicit return in main should emit `ret i32 0`; body was:\n{}",
+            body
+        );
+        assert!(
+            !body.contains("ret void"),
+            "main must not emit `ret void`; body was:\n{}",
+            body
+        );
+    }
+
     // ── println signedness round-trips ───────────────────────────
     //
     // Pre-fix `println(x: i32)` passed the raw i32 to printf "%lld";
