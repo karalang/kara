@@ -499,34 +499,49 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    /// The struct `invariant` predicates that must hold at the exit of pub
-    /// method `method` on `type_name` (design.md § Contracts rule 3 — plain
-    /// `invariant` is checked at every `pub` method exit). Returns `None`
-    /// when the type declares no invariant or the method is private. v1
-    /// covers pub *instance* methods; constructors (pub assoc fns returning
-    /// `Self`) and `impl invariant` (all-method scope) are follow-ons.
-    pub(crate) fn pub_method_invariants(&self, type_name: &str, method: &str) -> Option<Vec<Expr>> {
-        let invariants = self.program.items.iter().find_map(|item| match item {
-            Item::StructDef(s) if s.name == type_name && !s.invariants.is_empty() => {
-                Some(s.invariants.clone())
+    /// The struct invariant predicates to check at the exit of instance
+    /// method `method` on `type_name` (design.md § Contracts rule 3):
+    /// `impl invariant` predicates fire at *every* method exit (pub and
+    /// private); plain `invariant` predicates fire only at `pub` method
+    /// exits. Returns the combined list (empty when nothing applies). v1
+    /// covers instance methods; constructors (assoc fns returning `Self`)
+    /// and shared struct/enum receivers are follow-ons.
+    pub(crate) fn method_invariants_to_check(&self, type_name: &str, method: &str) -> Vec<Expr> {
+        let Some((invariants, impl_invariants)) =
+            self.program.items.iter().find_map(|item| match item {
+                Item::StructDef(s) if s.name == type_name => {
+                    Some((s.invariants.clone(), s.impl_invariants.clone()))
+                }
+                _ => None,
+            })
+        else {
+            return Vec::new();
+        };
+        if invariants.is_empty() && impl_invariants.is_empty() {
+            return Vec::new();
+        }
+        // `impl invariant` — every method exit.
+        let mut result = impl_invariants;
+        // plain `invariant` — only when `method` is a `pub` method of the type.
+        if !invariants.is_empty() {
+            let is_pub_method = self.program.items.iter().any(|item| match item {
+                Item::ImplBlock(imp) => {
+                    let target = match &imp.target_type.kind {
+                        TypeKind::Path(p) => p.segments.last().map(String::as_str),
+                        _ => None,
+                    };
+                    target == Some(type_name)
+                        && imp.items.iter().any(
+                            |it| matches!(it, ImplItem::Method(m) if m.name == method && m.is_pub),
+                        )
+                }
+                _ => false,
+            });
+            if is_pub_method {
+                result.extend(invariants);
             }
-            _ => None,
-        })?;
-        let is_pub_method = self.program.items.iter().any(|item| match item {
-            Item::ImplBlock(imp) => {
-                let target = match &imp.target_type.kind {
-                    TypeKind::Path(p) => p.segments.last().map(String::as_str),
-                    _ => None,
-                };
-                target == Some(type_name)
-                    && imp
-                        .items
-                        .iter()
-                        .any(|it| matches!(it, ImplItem::Method(m) if m.name == method && m.is_pub))
-            }
-            _ => false,
-        });
-        is_pub_method.then_some(invariants)
+        }
+        result
     }
 
     /// The base type's name for a refinement (`type Email = String where …`

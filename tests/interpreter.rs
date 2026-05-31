@@ -11324,3 +11324,57 @@ fn test_contract_old_free_function() {
     );
     assert_eq!(output, "6\n");
 }
+
+// ── Contracts — impl invariant (step 5b, all-method scope) ─────────
+//
+// design.md § Contracts — `impl invariant` fires at every method exit
+// (pub and private); plain `invariant` only at pub method exits.
+
+#[test]
+fn test_impl_invariant_fires_at_private_method_exit() {
+    let errors = runtime_errors(
+        "struct Counter { n: i64, impl invariant self.n >= 0 }\n\
+         impl Counter {\n\
+             fn dec_priv(mut ref self) { self.n = self.n - 1; }\n\
+             pub fn run(mut ref self) -> i64 { self.dec_priv(); 0 }\n\
+         }\n\
+         fn main() { let mut c = Counter { n: 0 }; let _ = c.run(); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("contract violated")),
+        "expected `impl invariant` to fault at the private method exit, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_plain_invariant_not_checked_at_private_method_exit() {
+    // The private helper transiently breaks the plain invariant; the pub
+    // method restores it before its own exit, so no fault fires.
+    let errors = runtime_errors(
+        "struct Counter { n: i64, invariant self.n >= 0 }\n\
+         impl Counter {\n\
+             fn dec_priv(mut ref self) { self.n = self.n - 1; }\n\
+             pub fn run(mut ref self) -> i64 { self.dec_priv(); self.n = self.n + 1; 0 }\n\
+         }\n\
+         fn main() { let mut c = Counter { n: 0 }; let _ = c.run(); }",
+    );
+    assert!(
+        errors.is_empty(),
+        "plain invariant must not fire at a private method exit, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_impl_invariant_holds_runs() {
+    let errors = runtime_errors(
+        "struct Counter { n: i64, impl invariant self.n >= 0 }\n\
+         impl Counter { fn inc_priv(mut ref self) { self.n = self.n + 1; } pub fn run(mut ref self) { self.inc_priv(); } }\n\
+         fn main() { let mut c = Counter { n: 0 }; c.run(); }",
+    );
+    assert!(
+        errors.is_empty(),
+        "a satisfied impl invariant must not fault, got: {errors:?}"
+    );
+}

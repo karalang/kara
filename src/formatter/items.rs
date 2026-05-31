@@ -341,6 +341,12 @@ impl super::Formatter {
             self.format_expr(inv);
             self.write_str("\n");
         }
+        for inv in &s.impl_invariants {
+            self.write_indent();
+            self.write_str("impl invariant ");
+            self.format_expr(inv);
+            self.write_str("\n");
+        }
         self.pop_indent();
         self.writeln("}");
     }

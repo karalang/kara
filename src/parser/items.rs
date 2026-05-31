@@ -1137,7 +1137,7 @@ impl super::Parser {
         let where_clause = self.parse_optional_where_clause();
 
         self.expect(&Token::LeftBrace)?;
-        let (fields, invariants) = self.parse_struct_body()?;
+        let (fields, invariants, impl_invariants) = self.parse_struct_body()?;
         self.expect(&Token::RightBrace)?;
 
         let no_rc = attributes.iter().any(|a| a.is_bare("no_rc"));
@@ -1168,6 +1168,7 @@ impl super::Parser {
             where_clause,
             fields,
             invariants,
+            impl_invariants,
             stdlib_origin: false,
             deprecation,
             unstable,

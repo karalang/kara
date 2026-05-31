@@ -21223,3 +21223,29 @@ fn test_contract_old_non_clone_rejected() {
             .join(" | ")
     );
 }
+
+// ── Contracts — impl invariant typecheck (step 5b) ─────────────────
+
+#[test]
+fn test_impl_invariant_accepted() {
+    typecheck_ok("struct Counter { n: i64, impl invariant self.n >= 0 }");
+}
+
+#[test]
+fn test_plain_and_impl_invariant_coexist() {
+    typecheck_ok("struct S { n: i64, invariant self.n >= 0 impl invariant self.n < 100 }");
+}
+
+#[test]
+fn test_impl_invariant_must_be_bool() {
+    let errors = typecheck_errors("struct Bad { x: i64, impl invariant self.x + 1 }");
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected a bool mismatch for a non-bool impl invariant, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}

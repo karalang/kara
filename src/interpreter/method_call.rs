@@ -472,12 +472,14 @@ impl<'a> super::Interpreter<'a> {
                     self.old_snapshots.pop();
                 }
 
-                // Struct-invariant check at pub method exit (design.md
-                // § Contracts rule 3). On a type with an `invariant` block,
-                // every pub method re-checks it at the return point with
-                // `self` bound to the (possibly mutated) receiver value.
+                // Struct-invariant check at method exit (design.md
+                // § Contracts rule 3): `impl invariant` fires at every method
+                // exit, plain `invariant` at `pub` method exits — both
+                // re-checked with `self` bound to the (possibly mutated)
+                // receiver value.
                 if contract_fault.is_none() {
-                    if let Some(invariants) = self.pub_method_invariants(&type_name, method) {
+                    let invariants = self.method_invariants_to_check(&type_name, method);
+                    if !invariants.is_empty() {
                         if let Some(self_val) = self.env.get("self") {
                             for inv in &invariants {
                                 self.env.push_scope();

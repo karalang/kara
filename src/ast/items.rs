@@ -337,6 +337,12 @@ pub struct StructDef {
     pub where_clause: Option<WhereClause>,
     pub fields: Vec<StructField>,
     pub invariants: Vec<Expr>,
+    /// `impl invariant <expr>` clauses (design.md § Contracts — `impl
+    /// invariant`). Unlike plain [`StructDef::invariants`] (checked only at
+    /// `pub` method exits), these are checked at the exit of *every* method
+    /// (pub and private). A parallel field rather than folding a scope into
+    /// `invariants` keeps the existing `.invariants` readers unchanged.
+    pub impl_invariants: Vec<Expr>,
     /// See [`Function::stdlib_origin`]. CR-202 slice 3b.
     pub stdlib_origin: bool,
     /// `#[deprecated]` payload — see [`Deprecation`] and design.md §

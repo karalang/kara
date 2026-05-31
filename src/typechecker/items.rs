@@ -1136,7 +1136,7 @@ impl<'a> super::TypeChecker<'a> {
     /// struct's own type so `self.field` references resolve. No-op for a
     /// struct without invariants.
     fn check_struct_invariants(&mut self, s: &StructDef, gp: &[String]) {
-        if s.invariants.is_empty() {
+        if s.invariants.is_empty() && s.impl_invariants.is_empty() {
             return;
         }
         let self_ty = Type::Named {
@@ -1147,7 +1147,7 @@ impl<'a> super::TypeChecker<'a> {
         self.local_scope.insert("self".to_string(), self_ty.clone());
         let saved_self = self.current_self_type.take();
         self.current_self_type = Some(self_ty);
-        for inv in &s.invariants {
+        for inv in s.invariants.iter().chain(s.impl_invariants.iter()) {
             self.check_expr(inv, &Type::Bool);
             self.reject_old_calls(inv, "invariant");
         }

@@ -40,7 +40,7 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
                 visit(&field.span);
                 visit_type(&field.ty, visit);
             }
-            for inv in &s.invariants {
+            for inv in s.invariants.iter().chain(s.impl_invariants.iter()) {
                 visit_expr(inv, visit);
             }
         }

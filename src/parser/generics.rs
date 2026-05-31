@@ -332,12 +332,25 @@ impl super::Parser {
         clauses
     }
 
-    pub(crate) fn parse_struct_body(&mut self) -> Option<(Vec<StructField>, Vec<Expr>)> {
+    pub(crate) fn parse_struct_body(&mut self) -> Option<(Vec<StructField>, Vec<Expr>, Vec<Expr>)> {
         let mut fields = Vec::new();
         let mut invariants = Vec::new();
+        let mut impl_invariants = Vec::new();
 
         while !self.check(&Token::RightBrace) && !self.is_at_end() {
             self.collect_leading_doc_comments();
+            // `impl invariant <expr>` — checked at *every* method exit (pub
+            // and private), unlike the plain `invariant` form below
+            // (design.md § Contracts — `impl invariant`).
+            if self.check(&Token::Impl) && self.peek_token_at(1) == Token::Invariant {
+                self.advance(); // impl
+                self.advance(); // invariant
+                let _ = self.take_pending_doc();
+                if let Some(expr) = self.parse_expression() {
+                    impl_invariants.push(expr);
+                }
+                continue;
+            }
             // Check for invariant
             if self.eat(&Token::Invariant) {
                 // Doc comments don't attach to invariants — drop any
@@ -410,7 +423,7 @@ impl super::Parser {
             }
         }
 
-        Some((fields, invariants))
+        Some((fields, invariants, impl_invariants))
     }
 
     pub(crate) fn parse_generic_type_args(&mut self) -> Option<Vec<GenericArg>> {

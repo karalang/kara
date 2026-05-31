@@ -5605,6 +5605,26 @@ fn test_struct_invariant_basic() {
 }
 
 #[test]
+fn test_struct_impl_invariant_parsed_separately() {
+    // `impl invariant` lands in `impl_invariants`; plain `invariant` stays
+    // in `invariants`. Both forms may coexist.
+    let src = r#"
+        struct Elevator {
+            stops: i64,
+            invariant self.stops >= 0
+            impl invariant self.stops < 100
+        }
+    "#;
+    let prog = parse_ok(src);
+    if let Item::StructDef(s) = &prog.items[0] {
+        assert_eq!(s.invariants.len(), 1, "plain invariant count");
+        assert_eq!(s.impl_invariants.len(), 1, "impl invariant count");
+    } else {
+        panic!("Expected StructDef");
+    }
+}
+
+#[test]
 fn test_struct_multiple_invariants() {
     let src = r#"
         struct BoundedRange {

@@ -369,6 +369,7 @@ impl<'a> super::EffectChecker<'a> {
                 }
                 Item::StructDef(s) => {
                     clauses.extend(s.invariants.iter().map(|e| (e.clone(), "invariant")));
+                    clauses.extend(s.impl_invariants.iter().map(|e| (e.clone(), "invariant")));
                 }
                 Item::ImplBlock(imp) => {
                     for it in &imp.items {
