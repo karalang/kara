@@ -21249,3 +21249,52 @@ fn test_impl_invariant_must_be_bool() {
             .join(" | ")
     );
 }
+
+// ── Contracts — consumed-parameter check in ensures (step 4) ───────
+//
+// design.md § Contracts rule 4: a bare-`self` (owned/consuming) receiver
+// is moved by the postcondition point, so an `ensures` clause must route
+// `self` references through `old(...)`.
+
+#[test]
+fn test_contract_consumed_self_in_ensures_rejected() {
+    let errors = typecheck_errors(
+        "struct Account { balance: i64 }
+         impl Account {
+             pub fn close(self) -> i64 ensures(result) result == self.balance { self.balance }
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("E_CONSUMED_SELF_IN_ENSURES")),
+        "expected E_CONSUMED_SELF_IN_ENSURES, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_contract_consumed_self_via_old_accepted() {
+    typecheck_ok(
+        "struct Account { balance: i64 }
+         impl Account {
+             pub fn close(self) -> i64 ensures(result) result == old(self.balance) { self.balance }
+         }",
+    );
+}
+
+#[test]
+fn test_contract_ref_self_in_ensures_accepted() {
+    // A borrowing receiver (`ref self`) is still in scope at the
+    // postcondition, so referencing `self` directly is fine.
+    typecheck_ok(
+        "struct Account { balance: i64 }
+         impl Account {
+             pub fn peek(ref self) -> i64 ensures(result) result == self.balance { self.balance }
+         }",
+    );
+}

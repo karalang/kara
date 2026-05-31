@@ -1089,7 +1089,8 @@ impl<'a> super::TypeChecker<'a> {
         // `result` as the function's return type. Checked with the params in
         // scope (`requires` references params; `ensures` references `result`
         // and non-consumed params).
-        self.check_contract_clauses(&f.requires, &f.ensures, &return_type);
+        let self_consumed = matches!(f.self_param, Some(SelfParam::Owned));
+        self.check_contract_clauses(&f.requires, &f.ensures, &return_type, self_consumed);
 
         // `#[non_exhaustive]` slice 4 — track the current function's
         // origin so struct-literal sites can detect the cross-package
@@ -1164,6 +1165,7 @@ impl<'a> super::TypeChecker<'a> {
         requires: &[Expr],
         ensures: &[EnsuresClause],
         return_type: &Type,
+        self_consumed: bool,
     ) {
         for req in requires {
             self.check_expr(req, &Type::Bool);
@@ -1209,6 +1211,21 @@ impl<'a> super::TypeChecker<'a> {
                         TypeErrorKind::TypeMismatch,
                     );
                 }
+            }
+            // Consumed-parameter check (design.md § Contracts rule 4): a
+            // bare-`self` (owned/consuming) receiver is moved by the time the
+            // postcondition runs, so referencing `self` directly — outside an
+            // `old(...)` capture — is an error.
+            if self_consumed && references_self_outside_old(&ens.body) {
+                self.type_error(
+                    "error[E_CONSUMED_SELF_IN_ENSURES]: cannot reference consumed parameter \
+                     `self` in an `ensures` clause — an owned (`self`) receiver is moved by the \
+                     time the postcondition runs; capture its pre-state with `old(self)` or \
+                     `old(self.field)`"
+                        .to_string(),
+                    ens.body.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
             }
             self.local_scope.pop();
         }
@@ -2400,5 +2417,39 @@ fn collect_old_calls(expr: &Expr, out: &mut Vec<(Span, Expr)>) {
             collect_old_calls(index, out);
         }
         _ => {}
+    }
+}
+
+/// Returns `true` if `expr` references `self` (the `ExprKind::SelfValue`
+/// keyword) anywhere *outside* an `old(...)` capture. Used to enforce the
+/// consumed-parameter rule (design.md § Contracts rule 4): a bare-`self`
+/// receiver is moved by the postcondition point, so the postcondition must
+/// route any `self` reference through `old(...)`.
+fn references_self_outside_old(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::SelfValue => true,
+        ExprKind::Call { callee, args } => {
+            // `old(self.field)` is the sanctioned form — its arg is fine.
+            if let ExprKind::Identifier(n) = &callee.kind {
+                if n == "old" && args.len() == 1 {
+                    return false;
+                }
+            }
+            references_self_outside_old(callee)
+                || args.iter().any(|a| references_self_outside_old(&a.value))
+        }
+        ExprKind::Binary { left, right, .. } => {
+            references_self_outside_old(left) || references_self_outside_old(right)
+        }
+        ExprKind::Unary { operand, .. } => references_self_outside_old(operand),
+        ExprKind::FieldAccess { object, .. } => references_self_outside_old(object),
+        ExprKind::MethodCall { object, args, .. } => {
+            references_self_outside_old(object)
+                || args.iter().any(|a| references_self_outside_old(&a.value))
+        }
+        ExprKind::Index { object, index } => {
+            references_self_outside_old(object) || references_self_outside_old(index)
+        }
+        _ => false,
     }
 }
