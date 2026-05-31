@@ -1083,6 +1083,13 @@ impl<'a> super::TypeChecker<'a> {
             .unwrap_or(Type::Unit);
         self.current_return_type = Some(return_type.clone());
 
+        // Contract clauses (design.md § Contracts): `requires` / `ensures`
+        // predicates must be `bool`; an `ensures(result) …` binding types
+        // `result` as the function's return type. Checked with the params in
+        // scope (`requires` references params; `ensures` references `result`
+        // and non-consumed params).
+        self.check_contract_clauses(&f.requires, &f.ensures, &return_type);
+
         // `#[non_exhaustive]` slice 4 — track the current function's
         // origin so struct-literal sites can detect the cross-package
         // case (stdlib-defined non-exhaustive struct constructed from
@@ -1121,6 +1128,30 @@ impl<'a> super::TypeChecker<'a> {
         self.enclosing_bounds = saved_bounds;
         self.current_fn_stdlib_origin = saved_fn_stdlib_origin;
         self.lint_override_stack.pop();
+    }
+
+    /// Type-check a function's contract clauses (design.md § Contracts).
+    /// Each `requires` predicate and each `ensures` body must have type
+    /// `bool`; an `ensures(result) …` clause binds `result` to the return
+    /// type for the duration of its body check. Callers invoke this with the
+    /// function's parameters already bound in `local_scope`.
+    fn check_contract_clauses(
+        &mut self,
+        requires: &[Expr],
+        ensures: &[EnsuresClause],
+        return_type: &Type,
+    ) {
+        for req in requires {
+            self.check_expr(req, &Type::Bool);
+        }
+        for ens in ensures {
+            self.local_scope.push();
+            if let Some(param) = &ens.param {
+                self.local_scope.insert(param.clone(), return_type.clone());
+            }
+            self.check_expr(&ens.body, &Type::Bool);
+            self.local_scope.pop();
+        }
     }
 
     /// Like `infer_block`, but type-checks the block's final expression

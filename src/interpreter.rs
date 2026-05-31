@@ -386,6 +386,29 @@ impl<'a> Interpreter<'a> {
             .any(|item| matches!(item, Item::DistinctType(d) if d.name == name))
     }
 
+    /// The `requires` / `ensures` contract clauses of the top-level free
+    /// function `name`, if it declares any (design.md § Contracts). Returns
+    /// `None` for a function with no contract. Looked up from the AST at the
+    /// call site (mirrors the refinement-predicate / distinct-type lookups);
+    /// the interpreter runs every clause in debug — `requires` at entry,
+    /// `ensures` at the return point — faulting `contract violated` on a
+    /// false predicate. v1 covers free functions; method contracts are a
+    /// follow-on (they dispatch through a separate path).
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn function_contract(
+        &self,
+        name: &str,
+    ) -> Option<(Vec<Expr>, Vec<crate::ast::EnsuresClause>)> {
+        self.program.items.iter().find_map(|item| match item {
+            Item::Function(f)
+                if f.name == name && (!f.requires.is_empty() || !f.ensures.is_empty()) =>
+            {
+                Some((f.requires.clone(), f.ensures.clone()))
+            }
+            _ => None,
+        })
+    }
+
     /// The base type's name for a refinement (`type Email = String where …`
     /// → `"String"`), used to cast a refined value to its base
     /// representation before the predicate check. `None` for non-refinements.

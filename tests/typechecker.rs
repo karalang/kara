@@ -21044,3 +21044,62 @@ fn refinement_lub_homogeneous_refinement_arms_keep_refinement() {
          }",
     );
 }
+
+// ── Contracts — requires / ensures type-checking ───────────────────
+//
+// design.md § Contracts: contract predicates must be `bool`; an
+// `ensures(result) …` clause binds `result` to the function's return type.
+
+#[test]
+fn test_contract_requires_must_be_bool() {
+    let errors = typecheck_errors("fn f(x: i64) -> i64 requires x + 1 { x }");
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected a bool mismatch for a non-bool requires, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_contract_ensures_must_be_bool() {
+    let errors = typecheck_errors("fn f(x: i64) -> i64 ensures(result) result + 1 { x }");
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected a bool mismatch for a non-bool ensures, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_contract_valid_requires_ensures_accepted() {
+    typecheck_ok(
+        "fn clamp_pos(x: i64) -> i64 requires x > 0 ensures(result) result >= x { x + 1 }",
+    );
+}
+
+#[test]
+fn test_contract_ensures_result_typed_as_return_type() {
+    // `result` is bound to the return type, so a String method on a
+    // String-returning function's `result` type-checks.
+    typecheck_ok("fn name() -> String ensures(result) result.len() > 0 { \"hi\" }");
+}
+
+#[test]
+fn test_contract_ensures_result_typed_in_predicate() {
+    // `result` is typed as the return type `i64`, so comparing it to a
+    // String in the predicate is a type error (confirms `result` is not
+    // `Type::Error`, which would swallow the mismatch).
+    let errors = typecheck_errors("fn num() -> i64 ensures(result) result == \"x\" { 5 }");
+    assert!(
+        !errors.is_empty(),
+        "expected a compare-mismatch for `result == \"x\"` with result: i64",
+    );
+}

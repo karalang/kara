@@ -298,8 +298,23 @@ impl super::Parser {
         let mut clauses = Vec::new();
         while self.eat(&Token::Ensures) {
             let start = self.current_span();
-            // Check for |param| closure-style syntax
-            let param = if self.eat(&Token::Pipe) {
+            // Result-binding syntax. Two accepted forms:
+            //   `ensures(result) <postcond>` — the design syntax (design.md
+            //     § Contracts). Recognized by `( IDENT )` immediately after
+            //     `ensures` that is NOT followed by `{` (which would mean the
+            //     parens are just grouping a bare-bool predicate before the
+            //     function body block).
+            //   `ensures |result| <postcond>` — closure-style pipes.
+            let param = if self.peek_token() == Token::LeftParen
+                && matches!(self.peek_token_at(1), Token::Identifier { .. })
+                && self.peek_token_at(2) == Token::RightParen
+                && self.peek_token_at(3) != Token::LeftBrace
+            {
+                self.eat(&Token::LeftParen);
+                let name = self.expect_identifier();
+                self.expect(&Token::RightParen);
+                name
+            } else if self.eat(&Token::Pipe) {
                 let name = self.expect_identifier();
                 self.expect(&Token::Pipe);
                 name

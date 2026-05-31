@@ -11124,3 +11124,76 @@ fn main() {
     );
     assert_eq!(output.trim(), "rejected-empty\nhi");
 }
+
+// ── Contracts — requires / ensures runtime enforcement ─────────────
+//
+// design.md § Contracts: `requires` predicates are checked at function
+// entry and `ensures(result) …` at the return point (debug builds); a
+// false predicate faults `contract violated`. v1 covers free functions.
+
+#[test]
+fn test_contract_requires_holds_runs_body() {
+    let output = run_no_errors(
+        "fn checked(x: i64) -> i64 requires x > 0 { x * 2 }\n\
+         fn main() { println(checked(5)); }",
+    );
+    assert_eq!(output, "10\n");
+}
+
+#[test]
+fn test_contract_requires_violation_faults() {
+    let errors = runtime_errors(
+        "fn checked(x: i64) -> i64 requires x > 0 { x * 2 }\n\
+         fn main() { println(checked(-3)); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("contract violated")),
+        "expected a `contract violated` fault for a failed requires, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_contract_ensures_holds_runs() {
+    // Both binding syntaxes are accepted; this uses the design `(result)`.
+    let output = run_no_errors(
+        "fn double(x: i64) -> i64 ensures(result) result > x { x * 2 }\n\
+         fn main() { println(double(5)); }",
+    );
+    assert_eq!(output, "10\n");
+}
+
+#[test]
+fn test_contract_ensures_violation_faults() {
+    let errors = runtime_errors(
+        "fn bad(x: i64) -> i64 ensures(result) result > 100 { x }\n\
+         fn main() { println(bad(5)); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("contract violated")),
+        "expected a `contract violated` fault for a failed ensures, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_contract_requires_and_ensures_combined() {
+    let output = run_no_errors(
+        "fn clamp_pos(x: i64) -> i64 requires x > 0 ensures(result) result >= x { x + 1 }\n\
+         fn main() { println(clamp_pos(10)); }",
+    );
+    assert_eq!(output, "11\n");
+}
+
+#[test]
+fn test_contract_ensures_pipe_syntax_still_works() {
+    // The `|result|` closure-style binding remains accepted alongside the
+    // `(result)` design form.
+    let output = run_no_errors(
+        "fn double(x: i64) -> i64 ensures |result| result > x { x * 2 }\n\
+         fn main() { println(double(5)); }",
+    );
+    assert_eq!(output, "10\n");
+}

@@ -683,6 +683,7 @@ impl<'a> super::Interpreter<'a> {
 
         match callee_val {
             Value::Function {
+                name: fn_name,
                 param_patterns,
                 param_defaults,
                 body,
@@ -706,7 +707,56 @@ impl<'a> super::Interpreter<'a> {
                     };
                     self.bind_pattern(pat, val);
                 }
-                let result = self.eval_block_inner(&body);
+
+                // Contract checking (design.md § Contracts): `requires`
+                // predicates run at entry (params in scope), `ensures` at the
+                // return point (with `result` bound). A false predicate
+                // faults `contract violated`; the body does not run if a
+                // `requires` fails. `None` for the no-contract common case.
+                let contract = self.function_contract(&fn_name);
+                let mut contract_fault: Option<String> = None;
+                if let Some((requires, _)) = &contract {
+                    for req in requires {
+                        if self.eval_expr_inner(req) != Value::Bool(true) {
+                            contract_fault = Some("contract violated: requires clause".to_string());
+                            break;
+                        }
+                    }
+                }
+
+                let result = if contract_fault.is_some() {
+                    Ok(Value::Unit)
+                } else {
+                    self.eval_block_inner(&body)
+                };
+
+                // `ensures` predicates run after the body, with `result`
+                // bound to the return value (skipped if the body itself
+                // already faulted).
+                if contract_fault.is_none() {
+                    if let Some((_, ensures)) = &contract {
+                        let ret_val = match &result {
+                            Ok(v) => Some(v.clone()),
+                            Err(ControlFlow::Return(v)) => Some(v.clone()),
+                            _ => None,
+                        };
+                        if let Some(rv) = ret_val {
+                            for ens in ensures {
+                                self.env.push_scope();
+                                if let Some(param) = &ens.param {
+                                    self.env.define(param.clone(), rv.clone());
+                                }
+                                let ok = self.eval_expr_inner(&ens.body);
+                                self.env.pop_scope();
+                                if ok != Value::Bool(true) {
+                                    contract_fault =
+                                        Some("contract violated: ensures clause".to_string());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // CICO write-back: for each `mut`-marked call arg whose
                 // value is a simple identifier, copy the callee's final
@@ -737,6 +787,10 @@ impl<'a> super::Interpreter<'a> {
 
                 for (caller_var, val) in writebacks {
                     self.env.set(&caller_var, val);
+                }
+
+                if let Some(msg) = contract_fault {
+                    return self.record_runtime_error(msg, span);
                 }
 
                 match result {
