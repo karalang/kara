@@ -113,6 +113,28 @@ the end of this doc as the seed for slice 2.
 > run it through the (now-wired) coro pipeline, and confirm CoroSplit emits
 > the `.resume` clone and it runs — the builder-path analogue of the IR-text
 > probe that's already green.
+>
+> **DONE (slice 2a) — the builder-path emission is validated.** New module
+> `src/codegen/coro.rs` carries `CoroIntrinsics` (declare-once raw-`llvm-sys`
+> intrinsic table) + `build_demo_coroutine` (the minimal switched-resume
+> coroutine emitted through the real codegen API). Its unit test
+> `builder_emitted_coroutine_splits` builds the coroutine, verifies the
+> module, runs `coro-early,coro-split,coro-cleanup`, and asserts CoroSplit
+> emitted `demo_coro.resume` + the post-split module re-verifies — green.
+> Two facts the validation pinned down, both load-bearing for slice 2b:
+>   1. **The interleave bridge is bidirectional with no memory round-trip.**
+>      inkwell value → llvm-sys via `Context::raw()` / `Module::as_mut_ptr()`
+>      / `Builder::as_mut_ptr()` / `AsValueRef::as_value_ref()`; llvm-sys
+>      result → inkwell via inkwell 0.9's `pub unsafe fn new(LLVMValueRef)` on
+>      `IntValue` / `PointerValue` / `FunctionValue`. So the i8 `coro.suspend`
+>      result crosses straight back into an inkwell `build_switch` (the resume
+>      dispatch) — the transform doesn't need to spill suspend results through
+>      memory to stay in inkwell-land.
+>   2. **`llvm-sys` had to move from the `lljit_prototype` feature onto the
+>      base `llvm` feature** (`llvm = ["inkwell", "dep:llvm-sys"]`) because the
+>      AOT codegen path itself now needs it. Same 18.1 pin + `prefer-dynamic`,
+>      so still a single LLVM copy; verified the default (no-llvm) build, full
+>      codegen (965) + ASAN (73) suites stay green.
 
 - **Pass pipeline** (`src/codegen/driver.rs::apply_optimization_passes`):
   CoroSplit is a *correctness* pass, not an optimization — it must run even
@@ -147,8 +169,9 @@ the end of this doc as the seed for slice 2.
 | Slice | Work | Size |
 |---|---|---|
 | 0 (done) | Toolchain de-risk — CoroSplit works in our LLVM/inkwell | ✅ proven |
-| 1 | Run coro passes unconditionally (incl. `-O0`); keep existing tests green | small |
-| 2 | Emit a coroutine for one fn with one network suspend; ramp + register-fd + dispatcher-`coro.resume`. **Goal: a straight-line spawned echo handler services a real connection E2E** (the current no-op) | 2–3 |
+| 1 (done) | Run coro passes unconditionally (incl. `-O0`); keep existing tests green | ✅ small |
+| 2a (done) | Validate the builder + llvm-sys coro-emission path: `src/codegen/coro.rs` (`CoroIntrinsics` + `build_demo_coroutine`) emits a coroutine through the real codegen API, survives CoroSplit (`.resume` clone), re-verifies. Bidirectional inkwell⇄llvm-sys bridge confirmed; `llvm-sys` promoted to the base `llvm` feature | ✅ small |
+| 2b | Wire it into real codegen: emit a network-boundary fn as a coroutine (one network suspend); ramp + register-fd + dispatcher-`coro.resume`. **Goal: a straight-line spawned echo handler services a real connection E2E** (the current no-op) | 2–3 |
 | 3 | Control flow (`loop`/`match` around suspends) — should "just work" via CoroSplit; validate against the demo handler shape | 1 (mostly testing) |
 | 4 | Drop-across-suspend correctness (heap locals freed on completion + on destroy/cancel) — ASAN-gated | 1–2 (trickiest) |
 | 5 | Spawn + TaskGroup + cancellation; retire the spin-loop / thread-block drive | 2 |

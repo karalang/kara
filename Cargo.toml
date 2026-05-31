@@ -33,7 +33,16 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = []
-llvm = ["inkwell"]
+# `dep:llvm-sys` is pulled in alongside inkwell because the AOT codegen path
+# itself now needs raw llvm-sys FFI: the LLVM coroutine intrinsics
+# (`llvm.coro.id/begin/save/suspend/end/free`) are token-typed, and inkwell
+# 0.9 *panics* on the LLVM `token` type (`LLVMTokenTypeKind => panic!` in its
+# `types/enums.rs`). So the coro scaffolding for the network-async transform
+# (phase-6 bug C / A2) is emitted via llvm-sys raw FFI interleaved with the
+# inkwell-built body. Same 18.1 pin + `prefer-dynamic` as inkwell, so there's
+# a single LLVM copy. (`lljit_prototype` separately re-lists `dep:llvm-sys`
+# for its orc2 use; cargo unions the activations.)
+llvm = ["inkwell", "dep:llvm-sys"]
 # Throwaway prototype gate for phase-7 L558 sub-step (a): inkwell-MCJIT
 # round-trip of representative Kāra modules. Off by default; not shipped
 # in the normal karac binary. Removed when the orc2 wrap (L560) lands.
