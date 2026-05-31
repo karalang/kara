@@ -26536,4 +26536,74 @@ fn main() {
             assert_eq!(out.trim(), "-1");
         }
     }
+
+    // ── Contracts — requires preconditions (codegen / AOT) ─────────
+
+    #[test]
+    fn test_e2e_contract_requires_holds() {
+        let out = run_program(
+            r#"
+fn checked(x: i64) -> i64 requires x > 0 { x * 2 }
+fn main() { println(checked(5)); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "10");
+        }
+    }
+
+    #[test]
+    fn test_e2e_contract_requires_violation_aborts() {
+        // A failed `requires` aborts with `contract violated`, and code after
+        // the call does not run.
+        let captured = run_program_capturing(
+            r#"
+fn checked(x: i64) -> i64 requires x > 0 { x * 2 }
+fn main() {
+    println(checked(-3));
+    println(42);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated"),
+                "expected a contract-violation abort, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after a violated requires must not run"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_contract_method_requires_aborts() {
+        // `requires` is emitted on the method-dispatch path too.
+        let captured = run_program_capturing(
+            r#"
+struct C { n: i64 }
+impl C { fn step(self, by: i64) -> i64 requires by > 0 { self.n + by } }
+fn main() {
+    let c = C { n: 5 };
+    println(c.step(-1));
+    println(42);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated"),
+                "expected a method-requires abort, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after the abort must not run"
+            );
+        }
+    }
 }

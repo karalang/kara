@@ -459,6 +459,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .and_then(|te| self.option_inner_shared_type_for_type_expr(te))
             .map(|(_, info)| info.heap_type);
 
+        // Contract `requires` preconditions (design.md § Contracts): emit
+        // the entry-time predicate checks now that parameters are bound and
+        // before the body runs. A false predicate aborts with
+        // `contract violated`. (`ensures` / `invariant` / `old(...)` emission
+        // are follow-on slices; the interpreter path enforces them today.)
+        self.emit_requires_checks(&func.requires)?;
+
         // Slice 2 (auto-par codegen MVP): route the function body through
         // `compile_function_body`, which dispatches inferred parallel
         // groups to `karac_par_run` when a `ConcurrencyAnalysis` was
