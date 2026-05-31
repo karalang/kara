@@ -473,6 +473,16 @@ impl<'ctx> super::Codegen<'ctx> {
         self.capture_contract_old_snapshots(&func.ensures)?;
         self.current_contract_ensures = func.ensures.clone();
 
+        // Contract struct/impl `invariant` setup (design.md § Contracts rule
+        // 3): resolve the receiver type's invariants for this method now and
+        // stash them so `emit_invariant_checks` can fire them inline before
+        // each `ret` (same exit points as `ensures`), with `self` bound. The
+        // synthetic method function carries `Type.method` as its name and the
+        // method's `is_pub` flag — both consumed by `method_invariants_for`.
+        // Free functions and invariant-free structs yield an empty list, so
+        // this is inert for everything but methods of structs with invariants.
+        self.current_method_invariants = self.method_invariants_for(&func.name, func.is_pub);
+
         // Slice 2 (auto-par codegen MVP): route the function body through
         // `compile_function_body`, which dispatches inferred parallel
         // groups to `karac_par_run` when a `ConcurrencyAnalysis` was
@@ -492,6 +502,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // § Contracts), with `result` bound to the tail value — before
             // scope cleanup, so the postcondition sees live params / result.
             self.emit_ensures_checks(result)?;
+            // Struct/impl `invariant` checks at the tail return (rule 3),
+            // with `self` bound to the (possibly mutated) receiver — same
+            // exit point as `ensures`, inert for non-method functions.
+            self.emit_invariant_checks()?;
 
             // Move-aware scope-exit cleanup for tail-expression
             // returns. When the function's final expression is an
@@ -631,6 +645,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.scope_cleanup_actions.clear();
         self.current_contract_ensures.clear();
         self.contract_old_snapshots.clear();
+        self.current_method_invariants.clear();
         Ok(())
     }
 }

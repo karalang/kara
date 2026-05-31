@@ -9,11 +9,11 @@
 //! point, so the predicate compiles through the normal expression path (no
 //! synthetic-`self` rebinding, unlike the refinement asserts).
 //!
-//! `ensures` (return-point interception), struct `invariant`s, and
-//! `old(...)` capture are follow-on slices — the interpreter path already
-//! enforces all of them.
+//! `ensures` (return-point interception), `old(...)` capture, and struct/impl
+//! `invariant`s are all emitted now — the AOT binary enforces the same
+//! contract surface as the interpreter path.
 
-use crate::ast::{Expr, ExprKind};
+use crate::ast::{Expr, ExprKind, Item};
 use crate::resolver::SpanKey;
 use inkwell::values::BasicValueEnum;
 
@@ -132,6 +132,55 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Compute the struct/impl `invariant` predicates that must hold at each
+    /// exit of the impl method whose synthetic name is `fn_name` (the
+    /// `Type.method` shape minted by `make_impl_method_function`). `impl
+    /// invariant`s fire at every method exit; plain `invariant`s only when the
+    /// method is `pub` (`is_pub`). Free functions (no `.` in `fn_name`) and
+    /// structs without invariants yield an empty list. Mirrors the
+    /// interpreter's `method_invariants_to_check`, but the receiver type and
+    /// pub-ness are already recoverable from the synthetic function — `self`'s
+    /// pub flag is preserved through the method clone, and the type name is the
+    /// `Type` segment of `Type.method`.
+    pub(super) fn method_invariants_for(&self, fn_name: &str, is_pub: bool) -> Vec<Expr> {
+        let Some((type_name, _method)) = fn_name.rsplit_once('.') else {
+            return Vec::new();
+        };
+        let Some(program) = self.program_snapshot.clone() else {
+            return Vec::new();
+        };
+        let Some((invariants, impl_invariants)) =
+            program.items.iter().find_map(|item| match item {
+                Item::StructDef(s) if s.name == type_name => {
+                    Some((s.invariants.clone(), s.impl_invariants.clone()))
+                }
+                _ => None,
+            })
+        else {
+            return Vec::new();
+        };
+        // `impl invariant` — every method exit; plain `invariant` — pub only.
+        let mut result = impl_invariants;
+        if is_pub {
+            result.extend(invariants);
+        }
+        result
+    }
+
+    /// Emit the struct/impl `invariant` checks for the method currently being
+    /// compiled. Called inline before each `ret` (same exit points as
+    /// `ensures`), with `self` already bound as the method's first parameter so
+    /// each predicate's `self.field` access resolves through the normal
+    /// expression path. A false predicate aborts with
+    /// `contract violated: invariant`.
+    pub(super) fn emit_invariant_checks(&mut self) -> Result<(), String> {
+        let invariants = self.current_method_invariants.clone();
+        for inv in &invariants {
+            self.emit_contract_assert(inv, "contract violated: invariant")?;
         }
         Ok(())
     }

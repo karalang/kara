@@ -567,6 +567,15 @@ pub(super) struct Codegen<'ctx> {
     /// `old(...)` interception in `compile_call` when emitting the
     /// postcondition (design.md § Contracts rule 4).
     pub(crate) contract_old_snapshots: HashMap<SpanKey, inkwell::values::BasicValueEnum<'ctx>>,
+    /// Struct/impl `invariant` predicates that must hold at every exit of the
+    /// method currently being compiled (design.md § Contracts rule 3). Set at
+    /// `compile_function` entry for impl-method functions — `impl invariant`
+    /// always, plain `invariant` only when the method is `pub` — and cleared at
+    /// exit. Consumed by `emit_invariant_checks`, emitted inline before each
+    /// `ret` (same exit points as `ensures`), with `self` already bound as the
+    /// method's first parameter. Empty for free functions and non-pub methods
+    /// of invariant-free structs.
+    pub(crate) current_method_invariants: Vec<crate::ast::Expr>,
     /// Set of top-level Atomic[T]-typed bindings whose inner T is `bool`.
     /// The slot itself is widened to `i8` (LLVM atomics reject `i1`); this
     /// set drives the `.load` trunc-to-i1 and `.store` zext-to-i8 wrapping
@@ -3063,6 +3072,7 @@ impl<'ctx> Codegen<'ctx> {
             refinement_predicates: HashMap::new(),
             current_contract_ensures: Vec::new(),
             contract_old_snapshots: HashMap::new(),
+            current_method_invariants: Vec::new(),
             atomic_var_inner_is_bool: HashSet::new(),
             current_fn: None,
             printf_fn,

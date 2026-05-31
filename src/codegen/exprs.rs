@@ -297,6 +297,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     // § Contracts), with `result` bound to the returned value —
                     // before the scope-exit cleanup below.
                     self.emit_ensures_checks(Some(v))?;
+                    // Struct/impl `invariant` checks at the explicit return
+                    // (rule 3), with `self` bound — same exit point as `ensures`.
+                    self.emit_invariant_checks()?;
                     if is_error_exit {
                         // Slice 4 (Phase 7 § *defer / errdefer codegen*):
                         // stage the Err payload for any in-scope

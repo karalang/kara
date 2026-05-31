@@ -26712,4 +26712,101 @@ fn main() { println(f(5)); println(42); }
             );
         }
     }
+
+    // ── Contracts — struct/impl invariants at method exits (codegen) ──
+    //
+    // design.md § Contracts rule 3: `impl invariant` fires at every method
+    // exit (pub and private); plain `invariant` only at `pub` method exits.
+    // These exercise the pub/private × plain/impl matrix in an AOT binary,
+    // mirroring the interpreter coverage in tests/interpreter.rs.
+
+    #[test]
+    fn test_e2e_contract_invariant_holds() {
+        // A pub method that keeps `self.n >= 0` true must not fault; the
+        // value prints normally.
+        let out = run_program(
+            r#"
+struct Counter { n: i64, invariant self.n >= 0 }
+impl Counter { pub fn inc(mut ref self) -> i64 { self.n = self.n + 1; self.n } }
+fn main() { let mut c = Counter { n: 0 }; println(c.inc()); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1");
+        }
+    }
+
+    #[test]
+    fn test_e2e_contract_invariant_violation_aborts() {
+        // `dec` drives `self.n` to -1, violating `self.n >= 0` at the pub
+        // method exit — the binary aborts with `contract violated`.
+        let captured = run_program_capturing(
+            r#"
+struct Counter { n: i64, invariant self.n >= 0 }
+impl Counter { pub fn dec(mut ref self) { self.n = self.n - 1; } }
+fn main() { let mut c = Counter { n: 0 }; c.dec(); println(42); }
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated"),
+                "expected an invariant abort, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after the abort must not run"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_contract_impl_invariant_fires_on_nonpub_exit() {
+        // `impl invariant` fires at *every* method exit, including non-pub
+        // methods. `dec` is non-pub and breaks `self.n >= 0` at its exit;
+        // the binary aborts. This is what distinguishes `impl invariant`
+        // from a plain `invariant` (next test). Calls the non-pub method
+        // directly from `main` (same module, identifier receiver) — the
+        // `self.method()` self-dispatch path is a separate codegen gap.
+        let captured = run_program_capturing(
+            r#"
+struct Counter { n: i64, impl invariant self.n >= 0 }
+impl Counter { fn dec(mut ref self) { self.n = self.n - 1; } }
+fn main() { let mut c = Counter { n: 0 }; c.dec(); println(42); }
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated"),
+                "expected impl-invariant abort at the non-pub exit, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after the abort must not run"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_contract_plain_invariant_not_at_nonpub_exit() {
+        // A plain `invariant` is checked only at `pub` method exits. `dec`
+        // is non-pub and drives `self.n` to -1, violating `self.n >= 0` —
+        // but because the method isn't `pub`, no check fires and the
+        // program completes normally (prints 7). Same plain-invariant
+        // struct as the abort test above; the *only* difference is the
+        // `pub` keyword, isolating the pub-gating logic.
+        let out = run_program(
+            r#"
+struct Counter { n: i64, invariant self.n >= 0 }
+impl Counter { fn dec(mut ref self) { self.n = self.n - 1; } }
+fn main() { let mut c = Counter { n: 0 }; c.dec(); println(7); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7");
+        }
+    }
 }
