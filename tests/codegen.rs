@@ -6484,6 +6484,137 @@ fn main() {
         }
     }
 
+    // ── Level 2 crash diagnostics (design.md § Crash diagnostics) ──────
+    // When a source filename is threaded into codegen (the CLI build/run
+    // path), panics report `panic at <file>:<line>:<col> in <fn>: <msg>`.
+    // The location operands are compile-time constants — no runtime DWARF
+    // walk / symbolizer (which would re-add the dead-stripped ~57 KiB
+    // gimli/addr2line tree). Without a filename (most `run_program` tests),
+    // the bare `panic: <msg>` form is preserved — see the existing
+    // `test_e2e_vec_indexed_write_oob_panics` above.
+
+    #[test]
+    fn test_e2e_panic_location_vec_oob() {
+        let captured = run_program_capturing_with_filename(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v[5] = 99;
+    println(42);
+}
+"#,
+            "oob_demo.kara",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("panic at "),
+                "expected rich `panic at` prefix, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                c.stdout.contains("oob_demo.kara:"),
+                "expected source filename in panic location, got stdout={:?}",
+                c.stdout
+            );
+            assert!(
+                c.stdout.contains(" in main:"),
+                "expected enclosing function name in panic location, got stdout={:?}",
+                c.stdout
+            );
+            assert!(
+                c.stdout.contains("vec index out of bounds"),
+                "expected the panic message, got stdout={:?}",
+                c.stdout
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after the panicking store must not run"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_panic_location_has_line_col() {
+        // Pin the line:col so this is a real regression guard for the span
+        // plumbing, not just a format check. With the leading newline in the
+        // raw string, `fn main()` is line 2 and the panicking `v[10]` read is
+        // on line 4. The column points within that indexing expression.
+        let captured = run_program_capturing_with_filename(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    let _x = v[10];
+    println(7);
+}
+"#,
+            "linecol.kara",
+        );
+        if let Some(c) = captured {
+            // Format: `panic at linecol.kara:<line>:<col> in main: <msg>`.
+            let marker = "linecol.kara:";
+            let idx = c.stdout.find(marker).unwrap_or_else(|| {
+                panic!("no panic location in stdout={:?} stderr={:?}", c.stdout, c.stderr)
+            });
+            let rest = &c.stdout[idx + marker.len()..];
+            // The two fields immediately after the filename must be numeric
+            // `<line>:<col>` — proves real span data, not a `0:0` placeholder.
+            let line: String = rest.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+            assert!(
+                !line.is_empty() && line != "0",
+                "expected a non-zero line number after the filename, got stdout={:?}",
+                c.stdout
+            );
+            let after_line = &rest[line.len()..];
+            assert!(
+                after_line.starts_with(':'),
+                "expected `:` between line and column, got stdout={:?}",
+                c.stdout
+            );
+            let col: String = after_line[1..]
+                .chars()
+                .take_while(|ch| ch.is_ascii_digit())
+                .collect();
+            assert!(
+                !col.is_empty() && col != "0",
+                "expected a non-zero column number, got stdout={:?}",
+                c.stdout
+            );
+            assert_eq!(line, "4", "panicking index is on source line 4; stdout={:?}", c.stdout);
+        }
+    }
+
+    #[test]
+    fn test_e2e_panic_bare_form_without_filename() {
+        // Regression guard for the gate: with NO filename threaded in, the
+        // original `panic: <msg>` form is preserved byte-for-byte (callers
+        // that don't supply a filename — bare-IR tests, ad-hoc dumps — must
+        // not see the rich form).
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    let _x = v[10];
+    println(7);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("panic: vec index out of bounds"),
+                "expected bare panic form without a filename, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("panic at "),
+                "must NOT use the rich `panic at` form when no filename is supplied, got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
     #[test]
     fn test_e2e_vec_indexed_write_after_push() {
         let out = run_program(

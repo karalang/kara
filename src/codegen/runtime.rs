@@ -42,25 +42,79 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic();
-        let fmt = self
-            .builder
-            .build_global_string_ptr("panic: %s%s\n\0", "panic_fmt")
-            .unwrap();
         let msg = self
             .builder
             .build_global_string_ptr(&format!("{}\0", message), "panic_msg")
             .unwrap();
-        self.builder
-            .build_call(
-                self.printf_fn,
-                &[
-                    fmt.as_pointer_value().into(),
-                    prefix.into(),
-                    msg.as_pointer_value().into(),
-                ],
-                "panic_print",
-            )
-            .unwrap();
+
+        // Level 2 crash diagnostics (design.md § Crash diagnostics): when a
+        // source location is available, emit
+        // `panic at <file>:<line>:<col> in <fn>: <msg>`. file/line/col/fn are
+        // all known at COMPILE time, so they go in as constant `printf`
+        // operands — there is deliberately NO runtime DWARF walk and NO
+        // runtime symbolizer (that would re-add the ~57 KiB gimli/addr2line
+        // tree the Phase 3 binary-size fix dead-strips from every binary; see
+        // phase-7-codegen.md "Phase 3"). Span carries 1-indexed line/col
+        // directly, so no source-text resolution is needed. The location is
+        // gated on `source_filename` being threaded in (the CLI build/run
+        // path supplies it; bare-IR tests and ad-hoc dumps don't), so callers
+        // without a filename keep the original `panic: <msg>` output — the
+        // same gating the sibling `?`-error-trace uses. DWARF emission for
+        // gdb/lldb symbolic backtraces (the design's stated *bonus*) is a
+        // separate concern handled by the DIBuilder pass.
+        let location = match (&self.source_filename, &self.current_span) {
+            (Some(file), Some(span)) => Some((file.clone(), span.line, span.column)),
+            _ => None,
+        };
+        let i32_ty = self.context.i32_type();
+        match location {
+            Some((file, line, col)) => {
+                let fmt = self
+                    .builder
+                    .build_global_string_ptr("panic at %s:%d:%d in %s: %s%s\n\0", "panic_fmt")
+                    .unwrap();
+                let file_ptr = self
+                    .builder
+                    .build_global_string_ptr(&format!("{}\0", file), "panic_file")
+                    .unwrap();
+                let fn_ptr = self
+                    .builder
+                    .build_global_string_ptr(&format!("{}\0", self.current_fn_name), "panic_fn")
+                    .unwrap();
+                self.builder
+                    .build_call(
+                        self.printf_fn,
+                        &[
+                            fmt.as_pointer_value().into(),
+                            file_ptr.as_pointer_value().into(),
+                            i32_ty.const_int(line as u64, false).into(),
+                            i32_ty.const_int(col as u64, false).into(),
+                            fn_ptr.as_pointer_value().into(),
+                            prefix.into(),
+                            msg.as_pointer_value().into(),
+                        ],
+                        "panic_print",
+                    )
+                    .unwrap();
+            }
+            None => {
+                let fmt = self
+                    .builder
+                    .build_global_string_ptr("panic: %s%s\n\0", "panic_fmt")
+                    .unwrap();
+                self.builder
+                    .build_call(
+                        self.printf_fn,
+                        &[
+                            fmt.as_pointer_value().into(),
+                            prefix.into(),
+                            msg.as_pointer_value().into(),
+                        ],
+                        "panic_print",
+                    )
+                    .unwrap();
+            }
+        }
         let exit_code = self.context.i32_type().const_int(1, false);
         self.builder
             .build_call(self.exit_fn, &[exit_code.into()], "")

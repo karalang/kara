@@ -18,6 +18,13 @@ use super::state::{SoaGroup, SoaLayout, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn compile_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+        // Level 2 crash diagnostics: record the span of the expression being
+        // compiled so `emit_panic` can report `panic at <file>:<line>:<col>`.
+        // The headline panic sites (index OOB, unwrap-None, divide-by-zero,
+        // Map missing key, slice range) emit their guard inside *this*
+        // `compile_expr` call, so the span is exact for them. Cheap: a Span is
+        // four `usize`s; this just stores a clone of the current node's span.
+        self.current_span = Some(expr.span.clone());
         match &expr.kind {
             ExprKind::Integer(n, sfx) => Ok(self.const_int_for_suffix(*n, *sfx).into()),
             ExprKind::Float(f, sfx) => Ok(self.const_float_for_suffix(*f, *sfx).into()),

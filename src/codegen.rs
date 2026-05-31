@@ -1427,6 +1427,14 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) concurrency_decisions: HashMap<String, FunctionConcurrency>,
     /// Name of the function currently being compiled (for rc_fallback_fns lookup).
     pub(crate) current_fn_name: String,
+    /// Source span of the expression currently being compiled. Set at the top
+    /// of `compile_expr`; read by `emit_panic` for Level 2 crash diagnostics
+    /// (design.md § Crash diagnostics) — `panic at <file>:<line>:<col> in
+    /// <fn>: <msg>`. `Span` already carries 1-indexed `line`/`column`, so no
+    /// byte-offset resolution is needed. `None` until the first expression is
+    /// compiled (synthetic panics with no originating expression fall back to
+    /// the bare `panic: <msg>` form).
+    pub(crate) current_span: Option<crate::token::Span>,
     // ── Par block runtime ─────────────────────────────────────────
     /// Monotonic counter used to generate unique par-branch function names.
     /// Also serves as the `SpawnSiteId` for each `par {}` block — the value
@@ -3425,6 +3433,7 @@ impl<'ctx> Codegen<'ctx> {
             par_capture_modes: HashMap::new(),
             concurrency_decisions: HashMap::new(),
             current_fn_name: String::new(),
+            current_span: None,
             par_counter: 0,
             karac_branch_ty,
             karac_par_run_fn,
