@@ -1,0 +1,72 @@
+{
+  "comment": "First Phoenix/Elixir bench run for the Parallax demo, captured 2026-05-30 on Apple M5 Pro (18-core), macOS 26.4.1, Elixir 1.19.5 + Erlang/OTP 29 [jit], Phoenix 1.8.7 with Bandit 1.11.1 adapter, wrk 4.2.0. Mirrors bench.sh's invocation shape exactly: cold-start = `wrk -t1 -c1 -d1s --latency`; steady-state per (impl, conn) = three rounds of `wrk -t4 -c<conn> -d10s --latency`. The req/s figures below are median across the three rounds with [min..max] range, matching the format used in the existing comparators' README.md.",
+  "machine": "Apple M5 Pro (10P + 8E cores, 18 logical CPUs), 64 GB RAM, macOS 26.4.1",
+  "elixir_version": "1.19.5",
+  "erlang_version": "Erlang/OTP 29 [erts-17.0.1] [jit]",
+  "phoenix_version": "1.8.7",
+  "bandit_version": "1.11.1",
+  "wrk_version": "wrk 4.2.0",
+  "date": "2026-05-30",
+  "cold_start": {
+    "wrk_args": "-t1 -c1 -d1s --latency",
+    "req_per_sec": 43.61,
+    "p50_ms": 21.99,
+    "p75_ms": 22.08,
+    "p90_ms": 22.26,
+    "p99_ms": 40.92,
+    "max_ms": 40.92
+  },
+  "steady_state": [
+    {
+      "connections": 100,
+      "wrk_args": "-t4 -c100 -d10s --latency",
+      "runs": [
+        {"req_per_sec": 293.94, "p50_ms": 332.30, "p75_ms": 394.22, "p90_ms": 452.67, "p99_ms": 532.84, "max_ms": 667.95},
+        {"req_per_sec": 274.07, "p50_ms": 352.61, "p75_ms": 423.49, "p90_ms": 479.34, "p99_ms": 587.57, "max_ms": 723.00},
+        {"req_per_sec": 258.62, "p50_ms": 375.01, "p75_ms": 467.13, "p90_ms": 526.57, "p99_ms": 606.50, "max_ms": 735.43}
+      ],
+      "aggregated": {
+        "req_per_sec_median": 274.07,
+        "req_per_sec_min": 258.62,
+        "req_per_sec_max": 293.94,
+        "p50_ms_median": 352.61,
+        "p75_ms_median": 423.49,
+        "p90_ms_median": 479.34,
+        "p99_ms_median": 587.57,
+        "max_ms_median": 723.00
+      }
+    },
+    {
+      "connections": 1000,
+      "wrk_args": "-t4 -c1000 -d10s --latency",
+      "notes": "Two of three rounds suppressed the latency distribution (wrk timeouts dominated — bandit accept queue can't keep up at -c1000); req/s reported across all three rounds.",
+      "runs": [
+        {"req_per_sec": 230.45, "p50_ms": null, "p75_ms": null, "p90_ms": null, "p99_ms": null, "max_ms": null, "timeouts": 2325},
+        {"req_per_sec": 198.16, "p50_ms": null, "p75_ms": null, "p90_ms": null, "p99_ms": null, "max_ms": null, "timeouts": 2000},
+        {"req_per_sec": 165.42, "p50_ms": 1170, "p75_ms": 1210, "p90_ms": 1260, "p99_ms": 1300, "max_ms": 1300, "timeouts": 1335}
+      ],
+      "aggregated": {
+        "req_per_sec_median": 198.16,
+        "req_per_sec_min": 165.42,
+        "req_per_sec_max": 230.45,
+        "note": "Only one round produced a full latency distribution (round 3, ~165 req/s under timeouts); p99 from that round was 1300 ms (wrk's default 2s timeout ceiling clips higher values)."
+      }
+    },
+    {
+      "connections": 5000,
+      "wrk_args": "-t4 -c5000 -d10s --latency",
+      "notes": "Bandit's listener can't accept 5000 concurrent inbound TCP connections within the 10s window; rounds 2-3 saw zero requests complete (read errors on the wrk side). One round limped through 33 requests. Phoenix is honest about its connection-acceptance ceiling at this conn count — same shape as Node at -c1000/5000 in the existing README. Tracked as a follow-up: tuning `:bandit_options.thousand_island_options.num_acceptors` (default ~10) might lift this.",
+      "runs": [
+        {"req_per_sec": 3.29, "p50_ms": 219.81, "p75_ms": 379.33, "p90_ms": 733.44, "p99_ms": 733.44, "max_ms": 733.44, "timeouts": 26},
+        {"req_per_sec": 0.00, "note": "wrk: 374 read errors, 0 requests completed"},
+        {"req_per_sec": 0.00, "note": "wrk: 712 read errors, 0 requests completed"}
+      ],
+      "aggregated": {
+        "req_per_sec_median": 0.00,
+        "req_per_sec_min": 0.00,
+        "req_per_sec_max": 3.29,
+        "note": "Two of three rounds produced zero completed requests."
+      }
+    }
+  ]
+}

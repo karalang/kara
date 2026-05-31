@@ -1,0 +1,36 @@
+#!/bin/sh
+# Convenience launcher for the Phoenix Parallax bench server.
+#
+# Mirrors the shape `bench.sh`'s other comparators use: a single
+# executable that prints `BOUND_PORT=<n>` on stdout once bound, then
+# stays in the foreground serving requests until killed.
+#
+# Build is incremental — `mix phx.server` re-runs `mix compile` as
+# needed. For a true cold-start measurement, run
+# `MIX_ENV=prod mix compile` once before invoking this script so the
+# `BEAM .beam` files are warm.
+#
+# Defaults:
+#   - MIX_ENV=prod (faster than dev, no code reloader)
+#   - PORT=0 (OS picks a free port; we print the actual port)
+#   - PHX_SERVER=true (config/runtime.exs gates the listener on this)
+#   - SECRET_KEY_BASE auto-generated if unset (cookie signing key; we
+#     don't use cookies but Phoenix's prod config validates it exists)
+
+set -eu
+
+cd "$(dirname "$0")/.."
+
+export MIX_ENV="${MIX_ENV:-prod}"
+export PORT="${PORT:-0}"
+export PHX_SERVER="${PHX_SERVER:-true}"
+
+if [ -z "${SECRET_KEY_BASE:-}" ]; then
+  # 64-byte URL-safe base64 — Phoenix requires >= 64 chars. We don't
+  # use cookies but the prod runtime config raises if the env var is
+  # unset.
+  SECRET_KEY_BASE=$(head -c 48 /dev/urandom | base64 | tr -d '\n=' | tr '/+' '_-')
+  export SECRET_KEY_BASE
+fi
+
+exec mix phx.server
