@@ -23341,6 +23341,45 @@ fn main() {
         assert_eq!(output, "true\nfalse\nfalse\n");
     }
 
+    /// phase-7 — nested enum-payload destructure through `Result` / `Option`.
+    /// `match r { Result.Err(E.A(c)) => … }` must (a) check the *inner*
+    /// variant's tag (so `Err(E.B)` does NOT take the `Err(E.A(c))` arm)
+    /// and (b) bind the inner payload `c`. Before the fix, the binding
+    /// dropped (`Undefined variable 'c'` — didn't compile); once binding
+    /// worked, the outer-tag-only condition wrongly matched any `Err(...)`.
+    /// Both halves are covered here, plus the fieldless inner variant
+    /// (`E.B`), a multi-payload inner variant (`E.A(c, d)`), and the
+    /// `Option.Some(E…)` / `Result.Ok(E…)` carriers.
+    #[test]
+    fn test_e2e_nested_enum_payload_bind_and_discriminate() {
+        let output = run_program(
+            "enum E { A(i64), B }\n\
+             enum P { Two(i64, i64), N }\n\
+             fn err_a() -> Result[i64, E] { Result.Err(E.A(42)) }\n\
+             fn err_b() -> Result[i64, E] { Result.Err(E.B) }\n\
+             fn opt(w: i64) -> Option[E] { if w == 0 { Option.Some(E.A(7)) } else { Option.Some(E.B) } }\n\
+             fn ok_p() -> Result[P, i64] { Result.Ok(P.Two(3, 4)) }\n\
+             fn show_e(r: Result[i64, E]) {\n\
+                 match r {\n\
+                     Result.Ok(_) => { println(0 - 1); }\n\
+                     Result.Err(E.A(c)) => { println(c); }\n\
+                     Result.Err(E.B) => { println(0 - 2); }\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 show_e(err_a());\n\
+                 show_e(err_b());\n\
+                 match opt(0) { Option.Some(E.A(c)) => { println(c); } Option.Some(E.B) => { println(0 - 3); } Option.None => { println(0 - 4); } }\n\
+                 match opt(1) { Option.Some(E.A(c)) => { println(c); } Option.Some(E.B) => { println(0 - 3); } Option.None => { println(0 - 4); } }\n\
+                 match ok_p() { Result.Ok(P.Two(a, b)) => { println(a + b); } Result.Ok(P.N) => { println(0 - 5); } Result.Err(_) => { println(0 - 6); } }\n\
+             }",
+        )
+        .expect("compile + run failed");
+        // err_a → 42 ; err_b → -2 (the E.B arm, NOT the E.A(c) arm) ;
+        // opt(0)=Some(E.A(7)) → 7 ; opt(1)=Some(E.B) → -3 ; ok_p → 3+4=7.
+        assert_eq!(output, "42\n-2\n7\n-3\n7\n");
+    }
+
     #[test]
     fn test_e2e_modbind_vec_indexed_read() {
         // Indexed read on a module-bound Vec — uses the slice-10

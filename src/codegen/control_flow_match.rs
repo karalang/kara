@@ -7,8 +7,9 @@
 //! - `scrutinee_is_borrow_call` — receiver-borrow recognizer
 //! - `compile_pattern_condition` — per-arm pattern→bool lowering
 //! - `extract_enum_tag` — load the discriminant from a tagged-enum value
-//! - `enum_tag_for_variant` / `enum_type_for_variant` — variant
-//!   metadata lookups
+//! - `enum_tag_for_variant` / `variant_pattern_enum_and_tag` — variant
+//!   metadata lookups (the latter qualified-path-disambiguated for the
+//!   nested-variant condition recursion)
 //! - `pattern_payload_word_count` / `pattern_payload_llvm_type` —
 //!   per-pattern payload shape
 //! - `reconstruct_payload_value` — rebuild the variant payload tuple
@@ -417,21 +418,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(result)
             }
-            // Tuple enum variant: check tag matches
-            PatternKind::TupleVariant { path, .. } => {
+            // Tuple enum variant: check the tag matches, then AND in the
+            // tag checks for any nested variant sub-pattern (`E.A(c)` of
+            // `Result.Err(E.A(c))`) — see `and_in_nested_variant_conditions`.
+            PatternKind::TupleVariant { path, patterns } => {
                 let variant_name = path.last().map(|s| s.as_str()).unwrap_or("");
                 if let Some(tag) = self.enum_tag_for_variant(variant_name) {
                     let actual_tag = self.extract_enum_tag(scrut, variant_name)?;
                     let expected_tag = self.context.i64_type().const_int(tag, false);
-                    return Ok(self
+                    let cond = self
                         .builder
                         .build_int_compare(IntPredicate::EQ, actual_tag, expected_tag, "tag_eq")
-                        .unwrap()
-                        .into());
+                        .unwrap();
+                    let cond =
+                        self.and_in_nested_variant_conditions(scrut, variant_name, patterns, cond)?;
+                    return Ok(cond.into());
                 }
                 Ok(tru.into())
             }
-            // Struct enum variant: check tag matches
+            // Struct enum variant: check tag matches (struct-variant
+            // nested-variant condition recursion is a follow-up — its
+            // field-by-name extraction differs from the positional
+            // tuple-variant path; binding still works via
+            // `bind_pattern_values`).
             PatternKind::Struct { path, .. }
                 if path.len() > 1
                     || self
@@ -532,22 +541,195 @@ impl<'ctx> super::Codegen<'ctx> {
         user_hit.or(seed_hit)
     }
 
-    /// Find the LLVM struct type for the enum containing a given variant.
-    /// Same user-vs-seed preference as `enum_tag_for_variant`.
-    #[allow(dead_code)]
-    pub(super) fn enum_type_for_variant(&self, variant_name: &str) -> Option<StructType<'ctx>> {
-        let mut user_hit: Option<StructType<'ctx>> = None;
-        let mut seed_hit: Option<StructType<'ctx>> = None;
-        for (en, layout) in &self.enum_layouts {
-            if layout.tags.contains_key(variant_name) {
+    /// Resolve the tagged-union LLVM struct type for a *variant* sub-
+    /// pattern (`E.A(c)` / `E.S { .. }`), or `None` if the pattern is not
+    /// an enum-variant pattern. Prefers the qualified enum segment in the
+    /// path (`E` in `E.A`) so a variant-name collision across enums
+    /// resolves deterministically; falls back to the user-vs-seed-preferred
+    /// variant-name lookup. Used by `reconstruct_payload_value` (and the
+    /// payload word-count / llvm-type helpers) to rebuild a nested inner
+    /// enum value from its payload words. A plain (non-enum) struct pattern
+    /// returns `None` here — its last path segment isn't a known variant —
+    /// so it falls through to the struct-reconstruction path.
+    pub(super) fn enum_layout_type_for_variant_pattern(
+        &self,
+        pat: &Pattern,
+    ) -> Option<StructType<'ctx>> {
+        self.variant_pattern_enum_and_tag(pat).map(|(ty, _)| ty)
+    }
+
+    /// Resolve `(enum llvm type, expected tag)` for a *variant* sub-pattern
+    /// (`E.A(c)` / `E.S { .. }` / a fieldless `Binding` variant `E.B`), or
+    /// `None` if the pattern is not an enum-variant pattern. **The tag and
+    /// type come from the SAME layout**, resolved by preferring the
+    /// qualified enum segment in the path (`E` in `E.A`). This is load-
+    /// bearing for correctness, not just determinism: `TcpError` and
+    /// `TlsError` share both the `{i64, i64}` LLVM shape *and* the variant
+    /// names `AddrInUse` / `ConnectionRefused` / `PermissionDenied`, so a
+    /// bare-name tag lookup (`enum_tag_for_variant`) is genuinely ambiguous
+    /// — it can return `TlsError`'s tag for a `TcpError` value and make the
+    /// wrong arm match. The qualified path (`TcpError.AddrInUse`) pins the
+    /// enum; the unqualified fallback keeps type and tag from one layout so
+    /// they at least agree. Used by the nested-variant condition recursion
+    /// and `reconstruct_payload_value`.
+    pub(super) fn variant_pattern_enum_and_tag(
+        &self,
+        pat: &Pattern,
+    ) -> Option<(StructType<'ctx>, u64)> {
+        let segments: Vec<&str> = match &pat.kind {
+            PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
+                path.iter().map(|s| s.as_str()).collect()
+            }
+            PatternKind::Binding(name) => name.split('.').collect(),
+            _ => return None,
+        };
+        let variant_name = *segments.last()?;
+        // Qualified `Enum.Variant`: take both type and tag from that enum.
+        if segments.len() >= 2 {
+            if let Some(layout) = self.enum_layouts.get(segments[segments.len() - 2]) {
+                if let Some(&tag) = layout.tags.get(variant_name) {
+                    return Some((layout.llvm_type, tag));
+                }
+            }
+        }
+        // Unqualified fallback: user-vs-seed preference, type + tag from the
+        // SAME layout (so a downstream tag compare stays self-consistent).
+        let mut user_hit: Option<(StructType<'ctx>, u64)> = None;
+        let mut seed_hit: Option<(StructType<'ctx>, u64)> = None;
+        for (en, l) in &self.enum_layouts {
+            if let Some(&tag) = l.tags.get(variant_name) {
                 if self.seeded_enum_names.contains(en) {
-                    seed_hit.get_or_insert(layout.llvm_type);
+                    seed_hit.get_or_insert((l.llvm_type, tag));
                 } else {
-                    user_hit.get_or_insert(layout.llvm_type);
+                    user_hit.get_or_insert((l.llvm_type, tag));
                 }
             }
         }
         user_hit.or(seed_hit)
+    }
+
+    /// Resolve the per-field `(start_word, num_words)` payload offsets for
+    /// `variant_name`, preferring the layout whose LLVM type matches the
+    /// scrutinee (disambiguates a variant name shared across enums), then
+    /// user-declared over seeded enums, falling back to "one word per
+    /// field at sequential offsets". Mirrors the inline resolution in
+    /// `bind_pattern_values`'s `TupleVariant` arm; shared by the
+    /// nested-variant condition recursion.
+    fn resolve_variant_field_offsets(
+        &self,
+        variant_name: &str,
+        scrut_struct_ty: Option<StructType<'ctx>>,
+        num_patterns: usize,
+    ) -> Vec<(usize, usize)> {
+        self.enum_layouts
+            .iter()
+            .find(|(_, l)| {
+                l.tags.contains_key(variant_name)
+                    && scrut_struct_ty
+                        .as_ref()
+                        .map(|t| &l.llvm_type == t)
+                        .unwrap_or(true)
+            })
+            .map(|(_, l)| l)
+            .or_else(|| {
+                let mut user_hit: Option<&super::state::EnumLayout<'ctx>> = None;
+                let mut seed_hit: Option<&super::state::EnumLayout<'ctx>> = None;
+                for (en, l) in &self.enum_layouts {
+                    if l.tags.contains_key(variant_name) {
+                        if self.seeded_enum_names.contains(en) {
+                            seed_hit.get_or_insert(l);
+                        } else {
+                            user_hit.get_or_insert(l);
+                        }
+                    }
+                }
+                user_hit.or(seed_hit)
+            })
+            .and_then(|l| l.field_word_offsets.get(variant_name).cloned())
+            .unwrap_or_else(|| (0..num_patterns).map(|i| (i, 1)).collect())
+    }
+
+    /// AND into `cond` the inner-tag checks for any *variant* sub-pattern
+    /// of an outer variant — e.g. the inner `E.A` of `Result.Err(E.A(c))`.
+    /// The outer-tag-only condition matches every `Result.Err(...)`
+    /// regardless of the inner variant, so without this a
+    /// `Result.Err(E.B)` value would wrongly take a `Result.Err(E.A(c))`
+    /// arm (and bind `c` to garbage). For each variant sub-pattern this
+    /// extracts its payload words from the (non-shared, struct-value)
+    /// scrutinee, rebuilds the inner enum value, and AND-s in
+    /// `inner.tag == expected`. The expected tag comes from
+    /// `variant_pattern_enum_and_tag` — the qualified-path-disambiguated
+    /// layout — NOT the bare-name `enum_tag_for_variant` (which is
+    /// ambiguous for `TcpError` / `TlsError`, identical shape + shared
+    /// variant names, and would mis-tag). Deeper nesting (a variant inside
+    /// this variant's payload) recurses against the rebuilt inner value.
+    /// Non-variant sub-patterns (bindings / wildcards / leaves) pass
+    /// through unchanged; shared (pointer) enum scrutinees pass through
+    /// (their nested-variant condition is a follow-up — the binding side
+    /// already handles them). (phase-7-codegen.md — nested enum-payload bind.)
+    fn and_in_nested_variant_conditions(
+        &mut self,
+        scrut: BasicValueEnum<'ctx>,
+        outer_variant_name: &str,
+        sub_patterns: &[Pattern],
+        mut cond: inkwell::values::IntValue<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let BasicValueEnum::StructValue(sv) = scrut else {
+            return Ok(cond);
+        };
+        if !sub_patterns
+            .iter()
+            .any(|p| self.variant_pattern_enum_and_tag(p).is_some())
+        {
+            return Ok(cond);
+        }
+        let offsets = self.resolve_variant_field_offsets(
+            outer_variant_name,
+            Some(sv.get_type()),
+            sub_patterns.len(),
+        );
+        for (i, sub) in sub_patterns.iter().enumerate() {
+            let Some((_inner_ty, expected_tag)) = self.variant_pattern_enum_and_tag(sub) else {
+                continue;
+            };
+            let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
+            let mut field_words: Vec<inkwell::values::IntValue<'ctx>> =
+                Vec::with_capacity(num_words);
+            for j in 0..num_words {
+                let w = self
+                    .builder
+                    .build_extract_value(sv, (start_word + j + 1) as u32, "ncond.w")
+                    .unwrap()
+                    .into_int_value();
+                field_words.push(w);
+            }
+            let inner = self.reconstruct_payload_value(sub, &field_words)?;
+            // The rebuilt inner value is the enum's `{ tag, payload... }`
+            // struct; its tag is field 0. Compare against the
+            // qualified-path-resolved expected tag.
+            let BasicValueEnum::StructValue(inner_sv) = inner else {
+                continue;
+            };
+            let actual_tag = self
+                .builder
+                .build_extract_value(inner_sv, 0, "ncond.tag")
+                .unwrap()
+                .into_int_value();
+            let expected = self.context.i64_type().const_int(expected_tag, false);
+            let tag_eq = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, actual_tag, expected, "ncond.tageq")
+                .unwrap();
+            cond = self.builder.build_and(cond, tag_eq, "ncond.and").unwrap();
+            // Deeper nesting: if this variant's own payload contains further
+            // variant sub-patterns, recurse against the rebuilt inner value.
+            if let PatternKind::TupleVariant { path, patterns } = &sub.kind {
+                let inner_variant = path.last().map(|s| s.as_str()).unwrap_or("");
+                cond =
+                    self.and_in_nested_variant_conditions(inner, inner_variant, patterns, cond)?;
+            }
+        }
+        Ok(cond)
     }
 
     /// Compound-payload enum codegen (tuple-destructure helper) —
@@ -720,6 +902,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_struct_value();
                 cursor = end;
+            }
+            return Ok(agg.into());
+        }
+        // Nested enum-variant sub-pattern (e.g. the inner `E.A(c)` of
+        // `Result.Err(E.A(c))`). Rebuild the inner enum's tagged-union
+        // aggregate `{ tag, payload... }` from the payload words so the
+        // recursive `bind_pattern_values` can descend into it and bind
+        // the inner payload (`c`). Without this the variant pattern falls
+        // to the single-word path below and binds the raw tag word,
+        // leaving the inner binding unset ("Undefined variable 'c'").
+        // (phase-7-codegen.md — nested enum-payload bind.)
+        if let Some(enum_ty) = self.enum_layout_type_for_variant_pattern(sub_pat) {
+            let n = enum_ty.count_fields() as usize;
+            let mut agg = enum_ty.get_undef();
+            for i in 0..n {
+                let w = field_words
+                    .get(i)
+                    .copied()
+                    .unwrap_or_else(|| i64_t.const_int(0, false));
+                agg = self
+                    .builder
+                    .build_insert_value(agg, w, i as u32, "nested.enum.iv")
+                    .unwrap()
+                    .into_struct_value();
             }
             return Ok(agg.into());
         }
