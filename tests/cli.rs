@@ -2422,6 +2422,94 @@ fn test_run_no_timeout_default_runs_to_completion() {
     assert!(stdout.contains("42"));
 }
 
+// `karac run` surfaces interpreter runtime faults: the fault MESSAGE is printed
+// (previously dropped — only the `?`-return trace location showed) and the
+// process exits nonzero (previously always 0, so scripts couldn't detect
+// interpreter-level failures). Covers contract violations and a non-contract
+// fault (index out of bounds) to show generality.
+
+fn write_run_temp(tag: &str, src: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-run-rterr-{}-{}-{}",
+        std::process::id(),
+        tag,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("prog.kara");
+    std::fs::write(&path, src).unwrap();
+    path
+}
+
+#[test]
+fn test_run_contract_violation_prints_message_and_exits_nonzero() {
+    let path = write_run_temp(
+        "contract",
+        "fn checked(x: i64) -> i64 requires x > 100 { x }\nfn main() { println(checked(5)); }\n",
+    );
+    let out = karac_bin()
+        .args(["run", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "a contract violation must exit nonzero; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("runtime error:") && stderr.contains("contract violated"),
+        "expected the fault message on stderr; got:\n{stderr}"
+    );
+}
+
+#[test]
+fn test_run_index_oob_prints_message_and_exits_nonzero() {
+    let path = write_run_temp(
+        "oob",
+        "fn main() { let v: Vec[i64] = Vec.new(); println(v[5]); }\n",
+    );
+    let out = karac_bin()
+        .args(["run", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "OOB must exit nonzero; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("runtime error:"),
+        "expected a `runtime error:` line; got:\n{stderr}"
+    );
+}
+
+#[test]
+fn test_run_runtime_error_json_envelope() {
+    let path = write_run_temp(
+        "json",
+        "fn checked(x: i64) -> i64 requires x > 100 { x }\nfn main() { println(checked(5)); }\n",
+    );
+    let out = karac_bin()
+        .args(["run", "--output=json", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "must exit nonzero; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("\"runtime_errors\"") && stdout.contains("contract violated"),
+        "expected a runtime_errors JSON object with the message; got:\n{stdout}"
+    );
+}
+
 #[test]
 fn test_run_timeout_rejects_zero_value() {
     // `--timeout=0` is meaningless (would fire immediately) — reject

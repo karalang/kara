@@ -3777,6 +3777,57 @@ fn cmd_run(
         process::exit(124);
     }
 
+    // Surface runtime faults. The interpreter records every fault — contract
+    // violations, index-out-of-bounds, divide-by-zero, `unwrap` of `None`,
+    // explicit aborts — in `runtime_errors` "for callers to inspect". `cmd_run`
+    // previously inspected only the `?`-return trace below, so the fault MESSAGE
+    // was dropped (the user saw a bare `Error return trace: file:line`) AND the
+    // process still exited 0. Print the message(s) with location, then exit
+    // nonzero, so a faulting program is both legible and detectable by scripts.
+    let runtime_errors: Vec<crate::interpreter::RuntimeError> = interp.runtime_errors.clone();
+    if !runtime_errors.is_empty() {
+        match output {
+            OutputMode::Json => {
+                let arr = runtime_errors
+                    .iter()
+                    .map(|e| {
+                        format!(
+                            "{{\"message\":{},\"location\":{{\"file\":{},\"line\":{},\"col\":{}}}}}",
+                            json_string(&e.message),
+                            json_string(filename),
+                            e.span.line,
+                            e.span.column,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                println!("{{\"runtime_errors\":[{arr}]}}");
+            }
+            OutputMode::Jsonl => {
+                for e in &runtime_errors {
+                    emit_jsonl_event(
+                        "runtime_error",
+                        &format!(
+                            "\"message\":{},\"location\":{{\"file\":{},\"line\":{},\"col\":{}}}",
+                            json_string(&e.message),
+                            json_string(filename),
+                            e.span.line,
+                            e.span.column,
+                        ),
+                    );
+                }
+            }
+            OutputMode::Text => {
+                for e in &runtime_errors {
+                    eprintln!(
+                        "runtime error: {}\n  at {}:{}:{}",
+                        e.message, filename, e.span.line, e.span.column,
+                    );
+                }
+            }
+        }
+    }
+
     // Emit error return trace if present
     if !interp.error_trace().is_empty() {
         let trace = format_error_trace_json(interp.error_trace(), interp.error_trace_truncated());
@@ -3809,6 +3860,13 @@ fn cmd_run(
                 }
             }
         }
+    }
+
+    // A faulting program exits nonzero (previously always 0 — scripts couldn't
+    // detect interpreter-level failures). Gated on `runtime_errors` so a clean
+    // run still exits 0.
+    if !runtime_errors.is_empty() {
+        process::exit(1);
     }
 }
 
