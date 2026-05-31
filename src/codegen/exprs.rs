@@ -293,6 +293,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.suppress_user_drop_for_var(name);
                     }
                     let v = self.compile_expr(e)?;
+                    // Contract `ensures` at an explicit `return expr` (design.md
+                    // § Contracts), with `result` bound to the returned value —
+                    // before the scope-exit cleanup below.
+                    self.emit_ensures_checks(Some(v))?;
                     if is_error_exit {
                         // Slice 4 (Phase 7 § *defer / errdefer codegen*):
                         // stage the Err payload for any in-scope

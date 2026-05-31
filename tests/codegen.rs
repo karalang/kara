@@ -26606,4 +26606,110 @@ fn main() {
             );
         }
     }
+
+    // ── Contracts — ensures + old() postconditions (codegen / AOT) ──
+
+    #[test]
+    fn test_e2e_contract_ensures_holds() {
+        let out = run_program(
+            r#"
+fn double(x: i64) -> i64 ensures(result) result > x { x * 2 }
+fn main() { println(double(5)); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "10");
+        }
+    }
+
+    #[test]
+    fn test_e2e_contract_ensures_violation_aborts() {
+        let captured = run_program_capturing(
+            r#"
+fn bad(x: i64) -> i64 ensures(result) result > 100 { x }
+fn main() { println(bad(5)); println(42); }
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated"),
+                "expected an ensures abort, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after the abort must not run"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_contract_ensures_old_holds() {
+        // The canonical `old()` postcondition runs in an AOT binary: the
+        // pre-state balance is captured at entry and read back at exit.
+        let out = run_program(
+            r#"
+struct Account { balance: i64 }
+impl Account {
+    pub fn withdraw(mut ref self, amount: i64) -> i64
+        ensures(result) self.balance == old(self.balance) - amount
+    { self.balance = self.balance - amount; amount }
+}
+fn main() { let mut a = Account { balance: 100 }; println(a.withdraw(30)); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "30");
+        }
+    }
+
+    #[test]
+    fn test_e2e_contract_ensures_old_violation_aborts() {
+        let captured = run_program_capturing(
+            r#"
+struct Account { balance: i64 }
+impl Account {
+    pub fn withdraw(mut ref self, amount: i64) -> i64
+        ensures(result) self.balance == old(self.balance) - amount
+    { self.balance = self.balance - 999; amount }
+}
+fn main() { let mut a = Account { balance: 100 }; println(a.withdraw(30)); println(42); }
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated"),
+                "expected an old() ensures abort, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after the abort must not run"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_contract_ensures_on_explicit_return() {
+        // The check fires on an explicit `return`, not just the tail.
+        let captured = run_program_capturing(
+            r#"
+fn f(x: i64) -> i64 ensures(result) result > 100 { if x > 0 { return x; } 999 }
+fn main() { println(f(5)); println(42); }
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated"),
+                "expected an ensures abort on the explicit-return path, got stdout={:?}",
+                c.stdout
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after the abort must not run"
+            );
+        }
+    }
 }

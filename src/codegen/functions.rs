@@ -466,6 +466,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // are follow-on slices; the interpreter path enforces them today.)
         self.emit_requires_checks(&func.requires)?;
 
+        // Contract `ensures` setup (design.md § Contracts): capture `old(...)`
+        // pre-state now (entry dominates every return point) and stash the
+        // clauses so `emit_ensures_checks` can fire them inline before each
+        // `ret` (the tail return below + every explicit `return`).
+        self.capture_contract_old_snapshots(&func.ensures)?;
+        self.current_contract_ensures = func.ensures.clone();
+
         // Slice 2 (auto-par codegen MVP): route the function body through
         // `compile_function_body`, which dispatches inferred parallel
         // groups to `karac_par_run` when a `ConcurrencyAnalysis` was
@@ -481,6 +488,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .get_terminator()
             .is_none()
         {
+            // Contract `ensures` checks at the tail return (design.md
+            // § Contracts), with `result` bound to the tail value — before
+            // scope cleanup, so the postcondition sees live params / result.
+            self.emit_ensures_checks(result)?;
+
             // Move-aware scope-exit cleanup for tail-expression
             // returns. When the function's final expression is an
             // Identifier that names a tracked Vec / String binding,
@@ -617,6 +629,8 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         self.scope_cleanup_actions.clear();
+        self.current_contract_ensures.clear();
+        self.contract_old_snapshots.clear();
         Ok(())
     }
 }

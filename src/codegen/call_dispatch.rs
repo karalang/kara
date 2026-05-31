@@ -87,6 +87,20 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         self.emit_branch_cancel_check("call", callee_key.as_deref());
 
+        // `old(expr)` inside an `ensures` postcondition reads the pre-state
+        // snapshot captured at function entry (design.md § Contracts rule 4),
+        // keyed by the arg's span. Falls back to compiling the arg directly
+        // when no snapshot is active (defensive — the typechecker restricts
+        // `old(...)` to `ensures` clauses).
+        if let ExprKind::Identifier(n) = &callee.kind {
+            if n == "old" && args.len() == 1 {
+                if let Some(v) = self.contract_old_lookup(&args[0].value) {
+                    return Ok(v);
+                }
+                return self.compile_expr(&args[0].value);
+            }
+        }
+
         // `Refined.try_from(x)` — emit a runtime predicate check producing a
         // `Result[Refined, String]` (phase-9 step 5c). Parses as a 2-segment
         // Path call (uppercase head roots a Path). The synthetic `try_from`

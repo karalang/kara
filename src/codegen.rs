@@ -557,6 +557,16 @@ pub(super) struct Codegen<'ctx> {
     /// `Refined.try_from(x)` calls (phase-9 step 5c): the predicate is
     /// compiled with `self` bound to the candidate value, then branched on.
     pub(crate) refinement_predicates: HashMap<String, crate::ast::Expr>,
+    /// The `ensures` clauses of the function currently being compiled
+    /// (design.md § Contracts). Set at `compile_function` entry, cleared at
+    /// exit; consumed by `emit_ensures_checks`, which is emitted inline
+    /// before each `ret` (the tail return + every explicit `return`).
+    pub(crate) current_contract_ensures: Vec<crate::ast::EnsuresClause>,
+    /// `old(arg)` pre-state snapshots for the current function, captured at
+    /// entry and keyed by the arg expression's span. Read back by the
+    /// `old(...)` interception in `compile_call` when emitting the
+    /// postcondition (design.md § Contracts rule 4).
+    pub(crate) contract_old_snapshots: HashMap<SpanKey, inkwell::values::BasicValueEnum<'ctx>>,
     /// Set of top-level Atomic[T]-typed bindings whose inner T is `bool`.
     /// The slot itself is widened to `i8` (LLVM atomics reject `i1`); this
     /// set drives the `.load` trunc-to-i1 and `.store` zext-to-i8 wrapping
@@ -3051,6 +3061,8 @@ impl<'ctx> Codegen<'ctx> {
             refinement_bases: HashMap::new(),
             distinct_bases: HashMap::new(),
             refinement_predicates: HashMap::new(),
+            current_contract_ensures: Vec::new(),
+            contract_old_snapshots: HashMap::new(),
             atomic_var_inner_is_bool: HashSet::new(),
             current_fn: None,
             printf_fn,
