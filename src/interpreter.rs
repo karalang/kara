@@ -295,6 +295,20 @@ pub(crate) fn pascal_to_snake(s: &str) -> String {
     result
 }
 
+/// True when `return_type` denotes `Self` or the named type `type_name` — the
+/// constructor return shape (a `-> Self` parses as `TypeKind::Path(["Self"])`;
+/// an explicit `-> Type` is `Path([… , "Type"])`). Used to distinguish a
+/// constructor (whose return value carries the type's invariants) from a static
+/// associated function returning some unrelated type.
+fn returns_self_or_type(return_type: Option<&TypeExpr>, type_name: &str) -> bool {
+    match return_type.map(|t| &t.kind) {
+        Some(TypeKind::Path(p)) => {
+            matches!(p.segments.last().map(String::as_str), Some(seg) if seg == "Self" || seg == type_name)
+        }
+        _ => false,
+    }
+}
+
 /// Seed the per-interpreter xorshift state from the system clock's
 /// sub-second nanoseconds, OR'd with `1` so the state can never be zero
 /// (xorshift's fixed point).
@@ -579,6 +593,49 @@ impl<'a> Interpreter<'a> {
             }
         }
         result
+    }
+
+    /// The struct/impl `invariant` predicates a constructor must satisfy at its
+    /// return point (design.md § Contracts: "Constructors (pub associated
+    /// functions that return `Self`) also check the invariant at their return
+    /// point"). `fn_name` is the `Type.method` key of the called function. The
+    /// list is non-empty only when `fn_name` names an associated function (no
+    /// receiver) of `Type` whose return type is `Self` or `Type` itself — i.e.
+    /// a constructor — so an ordinary static helper returning some other type
+    /// (`pub fn count() -> i64`) is not mistaken for one. When it is a
+    /// constructor, the same `impl invariant`-always / plain-`invariant`-if-pub
+    /// rule as method exits applies, reusing [`method_invariants_to_check`]
+    /// (a constructor is an `is_pub` `ImplItem::Method`, so the pub check there
+    /// resolves correctly). The caller binds the *return value* as `self` and
+    /// evaluates each predicate.
+    pub(crate) fn constructor_invariants_to_check(&self, fn_name: &str) -> Vec<Expr> {
+        let Some((type_name, method_name)) = fn_name.split_once('.') else {
+            return Vec::new();
+        };
+        let is_self_returning_ctor = self.program.items.iter().any(|item| match item {
+            Item::ImplBlock(imp) => {
+                let target = match &imp.target_type.kind {
+                    TypeKind::Path(p) => p.segments.last().map(String::as_str),
+                    _ => None,
+                };
+                if target != Some(type_name) {
+                    return false;
+                }
+                imp.items.iter().any(|it| match it {
+                    ImplItem::Method(m) => {
+                        m.name == method_name
+                            && m.self_param.is_none()
+                            && returns_self_or_type(m.return_type.as_ref(), type_name)
+                    }
+                    _ => false,
+                })
+            }
+            _ => false,
+        });
+        if !is_self_returning_ctor {
+            return Vec::new();
+        }
+        self.method_invariants_to_check(type_name, method_name)
     }
 
     /// The base type's name for a refinement (`type Email = String where …`

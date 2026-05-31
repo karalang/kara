@@ -816,6 +816,59 @@ impl<'a> super::Interpreter<'a> {
                     self.old_snapshots.pop();
                 }
 
+                // Constructor invariants (design.md § Contracts: "Constructors
+                // (pub associated functions that return `Self`) also check the
+                // invariant at their return point"). A constructor has no
+                // receiver, so the *return value* is bound as `self` and each of
+                // the type's invariants (impl-always / plain-if-pub) is checked
+                // — the construction boundary, mirroring the method-exit check in
+                // `eval_method_call`. The qualified `Type.method` key comes from
+                // the *callee* path (`Counter.bad`), not the `Value::Function`'s
+                // inner name, which is the bare `bad`. Inert for free functions,
+                // bare-identifier calls, and non-Self returns
+                // (`constructor_invariants_to_check` yields an empty list).
+                // Skipped if the body already faulted.
+                let qualified_callee = match &callee.kind {
+                    ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                        Some(segments.join("."))
+                    }
+                    _ => None,
+                };
+                if contract_fault.is_none() {
+                    let invariants = qualified_callee
+                        .as_deref()
+                        .map(|q| self.constructor_invariants_to_check(q))
+                        .unwrap_or_default();
+                    if !invariants.is_empty() {
+                        let ret_val = match &result {
+                            Ok(v) => Some(v.clone()),
+                            Err(ControlFlow::Return(v)) => Some(v.clone()),
+                            _ => None,
+                        };
+                        if let Some(rv) = ret_val {
+                            for inv in &invariants {
+                                self.env.push_scope();
+                                self.env.define("self".to_string(), rv.clone());
+                                let outcome = self.eval_contract_predicate(inv);
+                                self.env.pop_scope();
+                                match outcome {
+                                    super::ContractOutcome::Held => {}
+                                    super::ContractOutcome::Violated => {
+                                        contract_fault =
+                                            Some("contract violated: invariant".to_string());
+                                        break;
+                                    }
+                                    super::ContractOutcome::Panicked(msg) => {
+                                        contract_fault =
+                                            Some(format!("contract predicate panicked: {msg}"));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // CICO write-back: for each `mut`-marked call arg whose
                 // value is a simple identifier, copy the callee's final
                 // binding for the corresponding param back to the caller's

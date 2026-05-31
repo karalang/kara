@@ -11254,6 +11254,114 @@ fn test_contract_invariant_private_method_not_checked() {
     );
 }
 
+// ── Contracts — constructor invariants (pub assoc fn returning Self) ──
+//
+// design.md § Contracts: "Constructors (pub associated functions that return
+// `Self`) also check the invariant at their return point." The return value
+// is bound as `self` and the type's invariants are re-checked — the
+// construction boundary, alongside the pub-method-exit checks above.
+
+#[test]
+fn test_contract_constructor_invariant_holds() {
+    // A pub constructor that produces a valid instance must not fault.
+    let errors = runtime_errors(
+        "struct Counter { n: i64, invariant self.n >= 0 }\n\
+         impl Counter { pub fn make() -> Self { Counter { n: 7 } } }\n\
+         fn main() { let _c = Counter.make(); }",
+    );
+    assert!(
+        errors.is_empty(),
+        "a valid constructor must not fault, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_contract_constructor_invariant_violation_faults() {
+    // The constructor builds `n = -5`, violating `self.n >= 0` at its return
+    // point — the construction boundary aborts even though no method ran.
+    let errors = runtime_errors(
+        "struct Counter { n: i64, invariant self.n >= 0 }\n\
+         impl Counter { pub fn bad() -> Self { Counter { n: 0 - 5 } } }\n\
+         fn main() { let _c = Counter.bad(); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("contract violated")),
+        "expected a `contract violated` invariant fault at construction, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_contract_constructor_impl_invariant_faults() {
+    // `impl invariant` fires at the constructor return point too (it fires at
+    // every method exit, and a constructor is a return boundary). The explicit
+    // `-> Counter` return-type form (not `Self`) is also recognized.
+    let errors = runtime_errors(
+        "struct Counter { n: i64, impl invariant self.n >= 0 }\n\
+         impl Counter { pub fn bad() -> Counter { Counter { n: 0 - 1 } } }\n\
+         fn main() { let _c = Counter.bad(); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("contract violated")),
+        "an `impl invariant` must fire at the constructor return, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_contract_constructor_non_self_return_not_checked() {
+    // A static associated function returning some *other* type (`-> i64`) is
+    // not a constructor — its return value must NOT be invariant-checked,
+    // even though the type has an invariant and the value would violate it.
+    let errors = runtime_errors(
+        "struct Counter { n: i64, invariant self.n >= 0 }\n\
+         impl Counter { pub fn answer() -> i64 { 0 - 9 } }\n\
+         fn main() { let _x = Counter.answer(); }",
+    );
+    assert!(
+        errors.is_empty(),
+        "a non-Self-returning assoc fn must not be invariant-checked, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_contract_shared_constructor_invariant_faults() {
+    // Constructor invariants fire on shared (RC) structs too — construction
+    // doesn't involve the shared-mutation path, so this is a clean check.
+    let errors = runtime_errors(
+        "shared struct Scell { n: i64, invariant self.n >= 0 }\n\
+         impl Scell { pub fn bad() -> Self { Scell { n: 0 - 1 } } }\n\
+         fn main() { let _c = Scell.bad(); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("contract violated")),
+        "a shared-struct constructor must check its invariant, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_contract_shared_method_invariant_holds() {
+    // Shared-struct pub-method invariants are already plumbed (the check is
+    // receiver-kind-agnostic): a non-mutating pub method with a held invariant
+    // runs clean. (A *violating* shared method needs field mutation through
+    // `mut ref self`, which has an orthogonal constraint tracked separately;
+    // this pins that the invariant dispatch itself fires without spurious
+    // faults for a shared receiver.)
+    let errors = runtime_errors(
+        "shared struct Scell { n: i64, invariant self.n >= 0 }\n\
+         impl Scell { pub fn get(ref self) -> i64 { self.n } }\n\
+         fn main() { let c = Scell { n: 5 }; let _ = c.get(); }",
+    );
+    assert!(
+        errors.is_empty(),
+        "a held shared-method invariant must not fault, got: {errors:?}"
+    );
+}
+
 // ── Contracts — old(expr) pre-state + method contracts ─────────────
 //
 // design.md § Contracts rule 4: `old(expr)` in an `ensures` clause reads
