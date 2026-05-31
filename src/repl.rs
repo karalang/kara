@@ -680,11 +680,7 @@ impl Session {
             #[cfg(feature = "lljit_prototype")]
             jit_client: None,
             #[cfg(feature = "lljit_prototype")]
-            // JIT is the default execution path (L577 step (c), 2026-05-31):
-            // its hardening gates cleared (L581 W5 + L601 Level 2 DWARF), so
-            // `KARAC_REPL_JIT=0` is now the regression-bisect escape hatch
-            // rather than `=1` being the opt-in.
-            jit_enabled: std::env::var("KARAC_REPL_JIT").as_deref() != Ok("0"),
+            jit_enabled: std::env::var("KARAC_REPL_JIT").as_deref() == Ok("1"),
             #[cfg(feature = "lljit_prototype")]
             jit_next_cell_id: 0,
             #[cfg(feature = "lljit_prototype")]
