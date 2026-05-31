@@ -326,6 +326,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
 
+        // Level 2 crash diagnostics — Part 2: open this function's DWARF
+        // `DISubprogram` and make it the active scope (no-op unless debug info
+        // is enabled). `fn_val` is the real LLVM function; the DWARF display
+        // name is the user-facing `func.name`. `func.span.line` is 1-indexed.
+        self.di_enter_function(fn_val, &func.name, func.span.line as u32);
+
         // A2 slice 2b.3: for a coroutine-compiled network-boundary fn, emit the
         // coro ramp prologue (coro.id/begin + completion slot + shared exit
         // blocks) at the top of entry, before param allocas — this sets

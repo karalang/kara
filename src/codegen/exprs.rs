@@ -25,6 +25,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // `compile_expr` call, so the span is exact for them. Cheap: a Span is
         // four `usize`s; this just stores a clone of the current node's span.
         self.current_span = Some(expr.span.clone());
+        // Level 2 crash diagnostics — Part 2: stamp the DWARF source location
+        // for the instructions this expression is about to emit (no-op unless
+        // debug info is enabled, and self-guarded so it only attaches inside
+        // the active subprogram's own function). Span line/column are 1-indexed.
+        self.di_set_location(expr.span.line as u32, expr.span.column as u32);
         match &expr.kind {
             ExprKind::Integer(n, sfx) => Ok(self.const_int_for_suffix(*n, *sfx).into()),
             ExprKind::Float(f, sfx) => Ok(self.const_float_for_suffix(*f, *sfx).into()),

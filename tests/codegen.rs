@@ -6622,6 +6622,71 @@ fn main() {
         }
     }
 
+    // ── Level 2 crash diagnostics — Part 2: DWARF debug-info emission ──────
+    // Part 2 emits actual DWARF (DICompileUnit / DISubprogram / per-instruction
+    // !dbg) via DIBuilder when enabled, for gdb/lldb symbolic backtraces.
+    // `compile_to_ir_with_debug_info` forces it on race-free (no env mutation).
+
+    #[test]
+    fn test_dwarf_debug_info_present_when_enabled() {
+        // With debug info forced on, the emitted IR must carry the module-level
+        // debug-info scaffolding and a per-function DISubprogram. Positive proof
+        // that DWARF is actually emitted — not just that codegen doesn't crash.
+        let mut parsed = karac::parse(
+            r#"
+fn helper(x: i64) -> i64 { x + 1 }
+fn main() { let y = helper(5); println(y); }
+"#,
+        );
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ir = karac::codegen::compile_to_ir_with_debug_info(&parsed.program, None, None)
+            .expect("compile_to_ir_with_debug_info");
+        assert!(
+            ir.contains("DICompileUnit"),
+            "expected a DICompileUnit in debug IR, got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("DISubprogram"),
+            "expected at least one DISubprogram in debug IR"
+        );
+        assert!(
+            ir.contains("Debug Info Version"),
+            "expected the `Debug Info Version` module flag in debug IR"
+        );
+        // Per-instruction locations: at least one `!dbg` attachment in a body.
+        assert!(
+            ir.contains("!dbg"),
+            "expected per-instruction !dbg locations in debug IR"
+        );
+        // The function's DWARF display name should appear in a DISubprogram.
+        assert!(
+            ir.contains("name: \"helper\"") || ir.contains("\"helper\""),
+            "expected the `helper` function name in DWARF metadata"
+        );
+    }
+
+    #[test]
+    fn test_dwarf_debug_info_absent_by_default() {
+        // The default path (no force, no env) must emit NO debug metadata, so
+        // release AOT binaries keep the Phase 1-3 size floor. Guards the gate.
+        let mut parsed = karac::parse(r#"fn main() { println(1); }"#);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ir = karac::codegen::compile_to_ir(&parsed.program, None, None)
+            .expect("compile_to_ir");
+        assert!(
+            !ir.contains("DICompileUnit") && !ir.contains("DISubprogram"),
+            "default codegen must emit no DWARF debug metadata, got:\n{}",
+            ir
+        );
+    }
+
     #[test]
     fn test_e2e_vec_indexed_write_after_push() {
         let out = run_program(

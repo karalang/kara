@@ -34,6 +34,7 @@ mod control_flow_for;
 mod control_flow_match;
 mod control_flow_slice;
 mod coro;
+mod debug_info;
 mod declarations;
 mod driver;
 mod entry_chains;
@@ -346,6 +347,29 @@ pub fn compile_to_ir_with_contracts_stripped(
     cg.load_rc_fallback(ownership);
     cg.load_concurrency_analysis(concurrency);
     cg.set_strip_contracts(true);
+    cg.compile_program(program)?;
+    Ok(cg.module.print_to_string().to_string())
+}
+
+/// Compile to textual LLVM IR with Level 2 **DWARF debug info forced on**
+/// (crash-diagnostics Part 2), regardless of the `KARAC_DEBUG_INFO` env gate.
+/// Race-free counterpart used by tests + the `--debug-info` CLI path — mirrors
+/// `compile_to_ir_with_contracts_stripped` so enabling DWARF in one test does
+/// not perturb process-global env shared with parallel tests. The emitted IR
+/// carries `!llvm.dbg.cu` / `DICompileUnit` / per-function `DISubprogram` and
+/// per-instruction `!dbg` locations. Uses a fixed `debug.kara` source filename
+/// so debug info attaches to a `DIFile` (DWARF needs a file to anchor to).
+pub fn compile_to_ir_with_debug_info(
+    program: &Program,
+    ownership: Option<&OwnershipCheckResult>,
+    concurrency: Option<&ConcurrencyAnalysis>,
+) -> Result<String, String> {
+    let context = Context::create();
+    let mut cg = Codegen::new(&context, "karac_module");
+    cg.load_rc_fallback(ownership);
+    cg.load_concurrency_analysis(concurrency);
+    cg.set_source_filename(Some("debug.kara"));
+    cg.force_debug_info();
     cg.compile_program(program)?;
     Ok(cg.module.print_to_string().to_string())
 }
@@ -1435,6 +1459,11 @@ pub(super) struct Codegen<'ctx> {
     /// compiled (synthetic panics with no originating expression fall back to
     /// the bare `panic: <msg>` form).
     pub(crate) current_span: Option<crate::token::Span>,
+    /// Level 2 crash diagnostics — Part 2: DWARF debug-info state. `Some` only
+    /// when `KARAC_DEBUG_INFO` is on AND a source filename is threaded in;
+    /// `None` (the default) makes every `di_*` hook a cheap early-return so the
+    /// standard codegen path is byte-for-byte unchanged. See `debug_info.rs`.
+    pub(crate) debug_info: Option<debug_info::DebugInfo<'ctx>>,
     // ── Par block runtime ─────────────────────────────────────────
     /// Monotonic counter used to generate unique par-branch function names.
     /// Also serves as the `SpawnSiteId` for each `par {}` block — the value
@@ -3434,6 +3463,7 @@ impl<'ctx> Codegen<'ctx> {
             concurrency_decisions: HashMap::new(),
             current_fn_name: String::new(),
             current_span: None,
+            debug_info: None,
             par_counter: 0,
             karac_branch_ty,
             karac_par_run_fn,
@@ -3714,6 +3744,11 @@ impl<'ctx> Codegen<'ctx> {
     // ── Program / function compilation ───────────────────────────
 
     fn compile_program(&mut self, program: &Program) -> Result<(), String> {
+        // Level 2 crash diagnostics — Part 2: stand up DWARF debug-info state
+        // before any function compiles (no-op unless KARAC_DEBUG_INFO is set and
+        // a source filename was threaded in via set_source_filename, which runs
+        // before compile_program).
+        self.di_init();
         // Seed `Option` / `Result` layouts before walking struct fields so
         // a `shared struct N { mut left: Option[N] }` declaration's field-
         // type lowering finds the `{i64 tag, i64 payload}` layout via
@@ -4144,6 +4179,12 @@ impl<'ctx> Codegen<'ctx> {
             self.emit_spawn_sites_metadata();
         }
         self.finalize_hot_swap_table();
+
+        // Level 2 crash diagnostics — Part 2: finalize DWARF debug info BEFORE
+        // verify. The verifier validates debug metadata, and unresolved
+        // temporaries / a missing finalize would make it reject the module.
+        // No-op unless debug info is enabled.
+        self.di_finalize();
 
         self.module
             .verify()
