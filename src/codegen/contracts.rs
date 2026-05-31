@@ -197,14 +197,65 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Emit the struct/impl `invariant` checks for the method currently being
     /// compiled. Called inline before each `ret` (same exit points as
-    /// `ensures`), with `self` already bound as the method's first parameter so
-    /// each predicate's `self.field` access resolves through the normal
-    /// expression path. A false predicate aborts with
-    /// `contract violated: invariant`.
-    pub(super) fn emit_invariant_checks(&mut self) -> Result<(), String> {
+    /// `ensures`). For a method, `self` is already bound as the first parameter
+    /// so each predicate's `self.field` access resolves through the normal
+    /// expression path. For a *constructor* (`constructor_invariant_self_type`
+    /// is set — a `pub` associated function returning `Self`/the type, which has
+    /// no receiver), the `result_value` is bound as `self` for the duration of
+    /// the checks, mirroring how `emit_ensures_checks` binds `result`. A false
+    /// predicate aborts with `contract violated: invariant`.
+    pub(super) fn emit_invariant_checks(
+        &mut self,
+        result_value: Option<BasicValueEnum<'ctx>>,
+    ) -> Result<(), String> {
         let invariants = self.current_method_invariants.clone();
+        if invariants.is_empty() {
+            return Ok(());
+        }
+        // Constructor: bind the return value as `self` so `self.field` in each
+        // invariant resolves to the freshly-constructed instance. Saved/restored
+        // around the checks (defensive — a constructor has no real `self`
+        // binding to shadow, but this keeps the table clean).
+        let bound_self = match (&self.constructor_invariant_self_type, result_value) {
+            (Some(type_name), Some(rv)) => {
+                let type_name = type_name.clone();
+                let fn_val = self
+                    .current_fn
+                    .ok_or_else(|| "invariant emitted outside a function".to_string())?;
+                let alloca = self.create_entry_alloca(fn_val, "self", rv.get_type());
+                self.builder.build_store(alloca, rv).unwrap();
+                let prev_var = self.variables.insert(
+                    "self".to_string(),
+                    VarSlot {
+                        ptr: alloca,
+                        ty: rv.get_type(),
+                    },
+                );
+                let prev_ty = self.var_type_names.insert("self".to_string(), type_name);
+                Some((prev_var, prev_ty))
+            }
+            _ => None,
+        };
         for inv in &invariants {
             self.emit_contract_assert(inv, "contract violated: invariant")?;
+        }
+        if let Some((prev_var, prev_ty)) = bound_self {
+            match prev_var {
+                Some(p) => {
+                    self.variables.insert("self".to_string(), p);
+                }
+                None => {
+                    self.variables.remove("self");
+                }
+            }
+            match prev_ty {
+                Some(t) => {
+                    self.var_type_names.insert("self".to_string(), t);
+                }
+                None => {
+                    self.var_type_names.remove("self");
+                }
+            }
         }
         Ok(())
     }

@@ -26829,6 +26829,121 @@ fn main() { let mut c = Counter { n: 0 }; c.dec(); println(7); }
         }
     }
 
+    // ── Contracts — constructor invariants (pub assoc fn returning Self) ─
+    //
+    // design.md § Contracts: "Constructors (pub associated functions that
+    // return `Self`) also check the invariant at their return point." In
+    // codegen the constructor has no `self` parameter, so the RETURN value is
+    // bound as `self` before the invariant check (mirroring how `ensures`
+    // binds `result`). Before this slice, `method_invariants_for` resolved the
+    // invariants by the `Type.method` name but `emit_invariant_checks` aborted
+    // codegen with `Undefined variable 'self'` — so these tests are
+    // load-bearing (the harness panics on codegen failure). Owned structs
+    // only; shared (RC) constructors are a tracked follow-on.
+
+    #[test]
+    fn test_e2e_constructor_invariant_holds() {
+        // A constructor that produces a valid instance prints normally.
+        let out = run_program(
+            r#"
+struct Counter { n: i64, invariant self.n >= 0 }
+impl Counter { pub fn make() -> Counter { Counter { n: 7 } } }
+fn main() { let c = Counter.make(); println(c.n); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7");
+        }
+    }
+
+    #[test]
+    fn test_e2e_constructor_invariant_violation_aborts() {
+        // The constructor builds `n = -5`, violating `self.n >= 0` at its
+        // return point — the AOT binary aborts with `contract violated` even
+        // though no method ran.
+        let captured = run_program_capturing(
+            r#"
+struct Counter { n: i64, invariant self.n >= 0 }
+impl Counter { pub fn bad() -> Counter { Counter { n: 0 - 5 } } }
+fn main() { let c = Counter.bad(); println(c.n); println(42); }
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated"),
+                "constructor invariant must abort, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after the abort must not run"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_constructor_impl_invariant_aborts() {
+        // `impl invariant` fires at the constructor return too. (The constructor
+        // returns the explicit type name `-> Counter`; a `-> Self` return with a
+        // named struct literal is rejected by the typechecker before codegen, so
+        // `-> Type` is the buildable constructor form — `returns_self_or_type`
+        // also accepts a literal `Self` defensively.)
+        let captured = run_program_capturing(
+            r#"
+struct Counter { n: i64, impl invariant self.n >= 0 }
+impl Counter { pub fn bad() -> Counter { Counter { n: 0 - 1 } } }
+fn main() { let c = Counter.bad(); println(c.n); }
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated"),
+                "an `impl invariant` must fire at the constructor return, got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_constructor_non_self_return_not_checked() {
+        // A static associated function returning some other type (`-> i64`) is
+        // not a constructor — its return value is NOT bound as `self` and NOT
+        // invariant-checked, even though the type has an invariant. (Also a
+        // regression guard: before this slice this aborted codegen with
+        // `Undefined variable 'self'`.)
+        let out = run_program(
+            r#"
+struct Counter { n: i64, invariant self.n >= 0 }
+impl Counter { pub fn answer() -> i64 { 0 - 9 } }
+fn main() { println(Counter.answer()); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "-9");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shared_constructor_compiles_no_crash() {
+        // Shared-struct constructor invariants are NOT yet enforced in codegen
+        // (the RC-pointer `self.field` ABI differs — tracked follow-on), but
+        // the constructor must at least COMPILE and run: before this slice the
+        // name-resolved invariant aborted codegen with `Undefined variable
+        // 'self'`. The invariants are cleared for shared constructors, so this
+        // builds and prints the (unchecked) value.
+        let out = run_program(
+            r#"
+shared struct Scell { n: i64, invariant self.n >= 0 }
+impl Scell { pub fn make() -> Scell { Scell { n: 3 } } }
+fn main() { let c = Scell.make(); println(c.n); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3");
+        }
+    }
+
     // ── `self.method()` self-dispatch (codegen method dispatch) ───────
     //
     // Inside an impl body, `self` parses as `ExprKind::SelfValue`, not

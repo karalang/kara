@@ -14,6 +14,21 @@ use inkwell::AddressSpace;
 
 use super::state::VarSlot;
 
+/// True when `return_type` denotes `Self` or the named type `type_name` — the
+/// constructor return shape (a `-> Self` parses as `TypeKind::Path(["Self"])`;
+/// an explicit `-> Type` is `Path([…, "Type"])`). Distinguishes a constructor
+/// (whose return value carries the type's invariants) from a static associated
+/// function returning some unrelated type. Mirrors the interpreter's helper of
+/// the same name.
+fn returns_self_or_type(return_type: Option<&TypeExpr>, type_name: &str) -> bool {
+    match return_type.map(|t| &t.kind) {
+        Some(TypeKind::Path(p)) => {
+            matches!(p.segments.last().map(String::as_str), Some(seg) if seg == "Self" || seg == type_name)
+        }
+        _ => false,
+    }
+}
+
 impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn apply_linker_attrs(&mut self, fn_val: FunctionValue<'ctx>, attrs: &[Attribute]) {
         for attr in attrs {
@@ -523,6 +538,42 @@ impl<'ctx> super::Codegen<'ctx> {
             // method's `is_pub` flag — both consumed by `method_invariants_for`.
             // Free functions and invariant-free structs yield an empty list.
             self.current_method_invariants = self.method_invariants_for(&func.name, func.is_pub);
+            self.constructor_invariant_self_type = None;
+            // `method_invariants_for` keys purely off the `Type.method` name, so
+            // it also matches associated functions (which `make_impl_method_function`
+            // names `Type.method` but gives no `self` parameter). For those:
+            //   - A *constructor* — returns `Self`/the type — checks the invariants
+            //     against its RETURN value (the construction boundary). Record the
+            //     type so `emit_invariant_checks` binds the return value as `self`.
+            //   - Any other associated function (e.g. `Type.parse() -> i64`) is NOT
+            //     a constructor: clear the invariants so we don't try to evaluate
+            //     `self.field` against a non-receiver (which previously aborted
+            //     codegen with `Undefined variable 'self'`).
+            if !self.current_method_invariants.is_empty() {
+                let has_self_param = func.params.first().is_some_and(|p| {
+                    matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(n) if n == "self")
+                });
+                if !has_self_param {
+                    match func.name.split_once('.') {
+                        // Constructor of an *owned* struct: bind the return value
+                        // as `self` and enforce. Shared (RC) structs are skipped
+                        // for now — the return value is a heap pointer whose
+                        // `self.field` ABI differs from the owned-value binding
+                        // (constructor codegen for shared structs is a tracked
+                        // follow-on; the interpreter already enforces it). We
+                        // still CLEAR the name-resolved invariants so a shared
+                        // constructor doesn't abort codegen with the
+                        // `Undefined variable 'self'` it hit before this slice.
+                        Some((type_name, _))
+                            if returns_self_or_type(func.return_type.as_ref(), type_name)
+                                && !self.shared_types.contains_key(type_name) =>
+                        {
+                            self.constructor_invariant_self_type = Some(type_name.to_string());
+                        }
+                        _ => self.current_method_invariants.clear(),
+                    }
+                }
+            }
         }
 
         // Slice 2 (auto-par codegen MVP): route the function body through
@@ -546,8 +597,9 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_ensures_checks(result)?;
             // Struct/impl `invariant` checks at the tail return (rule 3),
             // with `self` bound to the (possibly mutated) receiver — same
-            // exit point as `ensures`, inert for non-method functions.
-            self.emit_invariant_checks()?;
+            // exit point as `ensures`, inert for non-method functions. For a
+            // constructor, `result` is bound as `self` (it has no receiver).
+            self.emit_invariant_checks(result)?;
 
             // Move-aware scope-exit cleanup for tail-expression
             // returns. When the function's final expression is an
@@ -706,6 +758,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_contract_ensures.clear();
         self.contract_old_snapshots.clear();
         self.current_method_invariants.clear();
+        self.constructor_invariant_self_type = None;
         Ok(())
     }
 }

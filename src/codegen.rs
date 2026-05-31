@@ -679,6 +679,16 @@ pub(super) struct Codegen<'ctx> {
     /// method's first parameter. Empty for free functions and non-pub methods
     /// of invariant-free structs.
     pub(crate) current_method_invariants: Vec<crate::ast::Expr>,
+    /// `Some(type_name)` when the function currently being compiled is a
+    /// *constructor* — a `pub` associated function returning `Self`/the type,
+    /// which has no `self` parameter (design.md § Contracts: "Constructors ...
+    /// also check the invariant at their return point"). When set,
+    /// `emit_invariant_checks` binds the *return value* as `self` before
+    /// evaluating `current_method_invariants`, since the construction boundary
+    /// has no receiver. `None` for methods (where `self` is parameter 0) and
+    /// for free / non-constructor associated functions. Set at
+    /// `compile_function` entry, cleared at exit.
+    pub(crate) constructor_invariant_self_type: Option<String>,
     /// When `true`, all contract machinery is elided from the emitted module
     /// (design.md § Contracts: "stripped in release"): `requires` / `ensures`
     /// checks, `old(...)` pre-state capture, and struct/impl `invariant`
@@ -3251,6 +3261,7 @@ impl<'ctx> Codegen<'ctx> {
             current_contract_ensures: Vec::new(),
             contract_old_snapshots: HashMap::new(),
             current_method_invariants: Vec::new(),
+            constructor_invariant_self_type: None,
             strip_contracts: read_strip_contracts_env(),
             karac_runtime_enter_predicate_fn,
             karac_runtime_exit_predicate_fn,
