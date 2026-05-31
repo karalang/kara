@@ -8338,6 +8338,16 @@ fn test_fail_fields(
     }
     let message = outcome.message.as_deref().unwrap_or("test failed");
     s.push_str(&format!(",\"message\":{}", json_string(message)));
+    // Typed fault category for contract failures (design.md § Contracts rule 2,
+    // phase-9 step 7): so a consumer (CI / LLM) filters on a stable field rather
+    // than string-matching the human message. Derived from the interpreter's
+    // canonical fault text — the single source of truth that already
+    // distinguishes the two categories (eval_call / method_call). Only emitted
+    // for contract faults; ordinary assertion / panic failures carry no
+    // `category`, same conditional-presence convention as `left`/`right`.
+    if let Some(category) = contract_fault_category(message) {
+        s.push_str(&format!(",\"category\":{}", json_string(category)));
+    }
     if let Some(left) = &outcome.left {
         s.push_str(&format!(",\"left\":{}", json_string(left)));
     }
@@ -8345,6 +8355,24 @@ fn test_fail_fields(
         s.push_str(&format!(",\"right\":{}", json_string(right)));
     }
     s
+}
+
+/// Classify a test-failure message into a typed contract-fault category, or
+/// `None` for a non-contract failure (assertion, plain panic, timeout, infra).
+/// `contract predicate panicked` is checked **first**: a nested fault message
+/// can read `contract predicate panicked: contract violated: …` (a contract
+/// violation surfaced from inside a predicate's evaluation), which is a
+/// predicate-panic, not a violation. The match strings are the canonical fault
+/// names from design.md, emitted by both the interpreter (`eval_call` /
+/// `method_call`) and codegen (`emit_panic`), so they don't drift.
+fn contract_fault_category(message: &str) -> Option<&'static str> {
+    if message.contains("contract predicate panicked") {
+        Some("contract_predicate_panicked")
+    } else if message.contains("contract violated") {
+        Some("contract_violated")
+    } else {
+        None
+    }
 }
 
 /// Like `test_fail_fields` but also emits a `providers` array listing

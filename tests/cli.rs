@@ -1884,6 +1884,75 @@ fn test_test_failure_emits_left_right_and_location() {
     assert!(summary.contains("\"failed\":1"));
 }
 
+#[test]
+fn test_test_failure_emits_contract_fault_category() {
+    // phase-9 step 7: a `test_fail` event carries a typed `category` field for
+    // contract faults — `contract_violated` (false predicate) vs
+    // `contract_predicate_panicked` (predicate evaluation faults) — so a
+    // consumer filters on a stable field, not the human message. A plain
+    // assertion failure carries NO `category` (conditional-presence, like
+    // left/right). Runs on the interpreter path, so no llvm needed.
+    let tmp = scratch_project("test-contract-category");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "fn main() {}\n\
+         fn checked(x: i64) -> i64 requires x > 100 { x }\n\
+         fn deref_at(v: ref Vec[i64], i: i64) -> bool { v[i] >= 0 }\n\
+         fn at(v: ref Vec[i64], i: i64) -> i64 requires deref_at(v, i) { 0 }\n",
+    );
+    write(
+        &tmp.join("src/main_test.kara"),
+        "test \"violated\" { let _ = checked(5); }\n\
+         test \"pred_panicked\" {\n\
+         \x20   let mut v: Vec[i64] = Vec.new();\n\
+         \x20   v.push(1);\n\
+         \x20   let _ = at(v, 99);\n\
+         }\n\
+         test \"plain_assert\" { assert_eq(1, 2); }\n",
+    );
+
+    let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit; stdout:\n{stdout}"
+    );
+    let lines = jsonl_lines(&stdout);
+    let fail_line = |name: &str| -> String {
+        lines
+            .iter()
+            .find(|l| {
+                event_kind(l) == Some("test_fail") && l.contains(&format!("\"test\":\"{name}\""))
+            })
+            .unwrap_or_else(|| panic!("expected a test_fail for `{name}` in:\n{lines:?}"))
+            .to_string()
+    };
+
+    let violated = fail_line("violated");
+    assert!(
+        violated.contains("\"category\":\"contract_violated\""),
+        "false predicate must tag `contract_violated`; got: {violated}"
+    );
+    assert!(
+        !violated.contains("predicate_panicked"),
+        "a violation must not tag panicked; got: {violated}"
+    );
+
+    let panicked = fail_line("pred_panicked");
+    assert!(
+        panicked.contains("\"category\":\"contract_predicate_panicked\""),
+        "a cross-call predicate panic must tag `contract_predicate_panicked`; got: {panicked}"
+    );
+
+    let plain = fail_line("plain_assert");
+    assert!(
+        !plain.contains("\"category\":"),
+        "a non-contract failure must carry no `category` field; got: {plain}"
+    );
+}
+
 // ── Slice c.3 — `karac test` JIT subprocess dispatch ──
 //
 // With `KARAC_TEST_JIT=1` set (and `--features lljit_prototype` built),
