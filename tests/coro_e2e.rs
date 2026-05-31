@@ -1229,4 +1229,276 @@ mod tests {
             "coroutine did not complete under ASAN; stdout lines: {lines:?}"
         );
     }
+
+    // ── A2 WS-over-TLS coroutine E2E ────────────────────────────────────
+    //
+    // The coro gate above covers only plain TCP. This pins the FLAGSHIP
+    // shape — a TLS WebSocket handler (`ws.recv_text` / `ws.send_text`,
+    // lowered via `lower_websocket_io`) spawned per-connection via
+    // `tg.spawn` — actually EXECUTING its recv/send body as a coroutine,
+    // not merely establishing the connection. A real `wss://` client
+    // (rustls + a hand-rolled WS frame) handshakes, sends a text frame, and
+    // asserts the echo round-trips through `recv_text` + `send_text`. That
+    // only happens if `lower_websocket_io`'s `karac_park_on_fd` lowers to a
+    // coroutine suspend/resume (register fd → `coro.suspend` → the
+    // `ws_recv_text`/`ws_send_text` syscall on the resume edge) — the exact
+    // wiring this gate guards.
+
+    /// rustls `ServerCertVerifier` that skips chain validation — the
+    /// checked-in fixture cert is a CA cert that webpki rejects as an
+    /// end-entity. We verify karac's WS-over-TLS coroutine wiring, not
+    /// rustls validation. (Same posture as `tests/http_server.rs`.)
+    #[derive(Debug)]
+    struct NoVerify;
+    impl rustls::client::danger::ServerCertVerifier for NoVerify {
+        fn verify_server_cert(
+            &self,
+            _e: &rustls::pki_types::CertificateDer<'_>,
+            _i: &[rustls::pki_types::CertificateDer<'_>],
+            _n: &rustls::pki_types::ServerName<'_>,
+            _o: &[u8],
+            _t: rustls::pki_types::UnixTime,
+        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        }
+        fn verify_tls12_signature(
+            &self,
+            _m: &[u8],
+            _c: &rustls::pki_types::CertificateDer<'_>,
+            _d: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+        fn verify_tls13_signature(
+            &self,
+            _m: &[u8],
+            _c: &rustls::pki_types::CertificateDer<'_>,
+            _d: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            vec![
+                rustls::SignatureScheme::RSA_PSS_SHA256,
+                rustls::SignatureScheme::RSA_PKCS1_SHA256,
+                rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+                rustls::SignatureScheme::ED25519,
+            ]
+        }
+    }
+
+    /// Open a `wss://` connection to `127.0.0.1:<port>` (rustls, NoVerify),
+    /// upgrade to WebSocket, send `payload` as one masked TEXT frame, and
+    /// return the server's echoed frame payload. The round-trip succeeds
+    /// only if the handler's `recv_text` + `send_text` executed.
+    fn wss_echo_roundtrip(port: u16, payload: &[u8]) -> Result<Vec<u8>, String> {
+        use std::io::{Read, Write};
+        use std::sync::Arc;
+
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let config = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| format!("client config: {e}"))?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoVerify))
+            .with_no_client_auth();
+        let server_name = rustls::pki_types::ServerName::try_from("localhost")
+            .map_err(|e| format!("server name: {e}"))?;
+        let mut conn = rustls::ClientConnection::new(Arc::new(config), server_name)
+            .map_err(|e| format!("client conn: {e}"))?;
+
+        // Retry the TCP connect briefly to absorb the race between the
+        // server's BOUND_PORT print and its accept-fd registration.
+        let mut sock = {
+            let started = Instant::now();
+            loop {
+                match std::net::TcpStream::connect(format!("127.0.0.1:{port}")) {
+                    Ok(s) => break s,
+                    Err(_) if started.elapsed() < Duration::from_secs(3) => {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(e) => return Err(format!("tcp connect: {e}")),
+                }
+            }
+        };
+        sock.set_read_timeout(Some(Duration::from_secs(8))).ok();
+        sock.set_write_timeout(Some(Duration::from_secs(8))).ok();
+        let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+
+        // WS upgrade handshake.
+        let req = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
+                   Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                   Sec-WebSocket-Version: 13\r\n\r\n";
+        tls.write_all(req.as_bytes())
+            .map_err(|e| format!("handshake write: {e}"))?;
+        let mut hdr = Vec::new();
+        let mut b = [0u8; 1];
+        loop {
+            let n = tls
+                .read(&mut b)
+                .map_err(|e| format!("handshake read: {e}"))?;
+            if n == 0 {
+                return Err("server closed during WS handshake".into());
+            }
+            hdr.push(b[0]);
+            if hdr.ends_with(b"\r\n\r\n") {
+                break;
+            }
+            if hdr.len() > 8192 {
+                return Err("handshake response too long".into());
+            }
+        }
+        let status = String::from_utf8_lossy(&hdr);
+        let line0 = status.lines().next().unwrap_or("");
+        if !line0.starts_with("HTTP/1.1 101") {
+            return Err(format!("no 101 upgrade: {line0:?}"));
+        }
+
+        // Send one masked TEXT frame.
+        let mask = [0x12u8, 0x34, 0x56, 0x78];
+        let mut frame = vec![0x81u8];
+        if payload.len() < 126 {
+            frame.push(0x80 | payload.len() as u8);
+        } else {
+            frame.push(0x80 | 126);
+            frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        }
+        frame.extend_from_slice(&mask);
+        for (i, &p) in payload.iter().enumerate() {
+            frame.push(p ^ mask[i % 4]);
+        }
+        tls.write_all(&frame)
+            .map_err(|e| format!("frame write: {e}"))?;
+
+        // Read the echoed (server→client, unmasked) frame.
+        let mut h2 = [0u8; 2];
+        tls.read_exact(&mut h2)
+            .map_err(|e| format!("echo header read: {e}"))?;
+        let mut len = (h2[1] & 0x7f) as usize;
+        if len == 126 {
+            let mut ext = [0u8; 2];
+            tls.read_exact(&mut ext)
+                .map_err(|e| format!("ext len: {e}"))?;
+            len = u16::from_be_bytes(ext) as usize;
+        } else if len == 127 {
+            let mut ext = [0u8; 8];
+            tls.read_exact(&mut ext)
+                .map_err(|e| format!("ext len: {e}"))?;
+            len = u64::from_be_bytes(ext) as usize;
+        }
+        let mut body = vec![0u8; len];
+        tls.read_exact(&mut body)
+            .map_err(|e| format!("echo body read: {e}"))?;
+        Ok(body)
+    }
+
+    #[test]
+    fn coroutine_ws_over_tls_handler_executes() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let cert_path = workspace_root().join("tests/fixtures/tls/cert.pem");
+        let key_path = workspace_root().join("tests/fixtures/tls/key.pem");
+        let (Ok(cert_pem), Ok(key_pem)) = (
+            std::fs::read_to_string(&cert_path),
+            std::fs::read_to_string(&key_path),
+        ) else {
+            eprintln!("skip: tls fixtures not present at tests/fixtures/tls/");
+            return;
+        };
+        fn kara_escape(s: &str) -> String {
+            s.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+        }
+        // The flagship handler shape: recv a text frame, echo it back, loop.
+        // `tg.spawn(|| handle_ws(ws))` is the non-blocking coroutine spawn.
+        let src = format!(
+            r#"
+            fn handle_ws(ws: WebSocket) {{
+                let mut buf: Array[u8, 4096] = [0u8; 4096];
+                loop {{
+                    let r = ws.recv_text(mut buf);
+                    match r {{
+                        Result.Ok(n) => {{
+                            if n == 0 {{ break; }}
+                            let _s = ws.send_text(buf);
+                        }}
+                        Result.Err(_) => {{ break; }}
+                    }}
+                }}
+            }}
+            fn main() {{
+                let cert: String = "{cert}";
+                let key: String = "{key}";
+                let listener: TlsListener =
+                    TlsListener.bind_tls("127.0.0.1:0", cert, key).unwrap();
+                let mut tg: TaskGroup = TaskGroup.new();
+                loop {{
+                    match WebSocket.accept_tls(listener) {{
+                        Result.Ok(ws) => {{ tg.spawn(|| handle_ws(ws)); }}
+                        Result.Err(_) => {{}}
+                    }}
+                }}
+            }}
+        "#,
+            cert = kara_escape(&cert_pem),
+            key = kara_escape(&key_pem),
+        );
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_wss_{pid}_{nanos}"));
+        if let Err(e) = compile_link_coro(&src, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        // The server runs an infinite accept loop, so we spawn + kill it
+        // (it never returns like the TCP tests' `main`).
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn wss coro server");
+        let stdout = child.stdout.take().expect("child stdout");
+        let (rx, _join) = spawn_stdout_reader(stdout);
+        let port = match rx.recv_timeout(Duration::from_secs(15)) {
+            Ok(p) => p,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("server did not emit BOUND_PORT within 15s");
+            }
+        };
+
+        let payload = b"PING-coro-ws-over-tls";
+        let result = wss_echo_roundtrip(port, payload);
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+
+        match result {
+            Ok(body) => assert!(
+                body.starts_with(payload),
+                "the WS-over-TLS handler must echo the recv'd bytes (recv_text + \
+                 send_text executed as a coroutine); got first {} bytes: {:?}",
+                body.len().min(payload.len()),
+                &body[..body.len().min(payload.len())]
+            ),
+            Err(e) => panic!(
+                "WSS echo round-trip failed — the spawned WS handler did not execute \
+                 its recv/send body (coroutine suspend/resume not driving the WS-over-TLS \
+                 path): {e}"
+            ),
+        }
+    }
 }
