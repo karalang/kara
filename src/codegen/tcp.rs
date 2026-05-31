@@ -69,6 +69,16 @@ impl<'ctx> super::Codegen<'ctx> {
         fd: inkwell::values::IntValue<'ctx>,
         direction: inkwell::values::IntValue<'ctx>,
     ) {
+        // A2 slice 2b.3: inside a coroutine-compiled network-boundary fn, the
+        // park lowers to `register_fd(&frame.parked={shim,hdl}) + coro.suspend`
+        // (dispatcher-driven), NOT the `park_slot_wait` thread-block below. On
+        // return the builder is positioned at this park's resume edge, so the
+        // caller's post-park syscall (`karac_runtime_tcp_read`/`accept`/`write`)
+        // lands there verbatim — same separation the thread-block path uses.
+        if let Some(ctx) = self.coro_ctx {
+            self.emit_coro_park_suspend(fd, direction, &ctx);
+            return;
+        }
         let ctor_fn = self
             .state_machine_state_constructors
             .get(KARAC_PARK_ON_FD)

@@ -356,7 +356,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         self.emit_scope_cleanup();
                     }
-                    self.builder.build_return(Some(&v)).unwrap();
+                    // A2 slice 2b.3: inside a coroutine, an explicit `return v`
+                    // routes to the signal + final-suspend block (the `ptr`
+                    // ramp return is emitted in the shared suspend-return
+                    // block); the Kāra value `v` is discarded (unit-only this
+                    // slice). A coroutine fn is never `main`.
+                    if let Some(ctx) = self.coro_ctx {
+                        self.builder
+                            .build_unconditional_branch(ctx.coro_return_bb)
+                            .unwrap();
+                    } else {
+                        self.builder.build_return(Some(&v)).unwrap();
+                    }
                 } else {
                     self.emit_scope_cleanup();
                     // `main` lowers to a C-ABI `i32 main()` (the process exit
@@ -367,7 +378,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the implicit end-of-`main` return-zero in
                     // `compile_function`. Non-`main` void fns keep `ret void`.
                     // (phase-7-codegen.md — return-in-main fix.)
-                    if self.current_fn_name == "main" {
+                    if let Some(ctx) = self.coro_ctx {
+                        // A2 2b.3: valueless `return;` inside a coroutine →
+                        // completion block (same as the value case).
+                        self.builder
+                            .build_unconditional_branch(ctx.coro_return_bb)
+                            .unwrap();
+                    } else if self.current_fn_name == "main" {
                         let zero = self.context.i32_type().const_int(0, false);
                         self.builder.build_return(Some(&zero)).unwrap();
                     } else {

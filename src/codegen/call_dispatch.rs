@@ -373,6 +373,91 @@ impl<'ctx> super::Codegen<'ctx> {
         // user-level return type for v1 network-boundary fns is unit;
         // when callees gain non-unit returns, the value lives in the
         // state struct's terminal field and is loaded after the loop.
+        // A2 slice 2b.3: a coroutine-compiled callee is driven by the
+        // *dispatcher*, not the caller — call the ramp (returns the completion-
+        // slot `ptr`), block on it (`park_slot_wait`; the dispatcher resumes the
+        // coroutine on fd-readiness and the body `park_slot_signal`s at
+        // completion), then free the slot. No poll-loop and no caller
+        // `coro.resume` (which would race the dispatcher / hit EWOULDBLOCK on
+        // the non-blocking fd — §6¾). Unit return for this slice. Args are
+        // compiled with the same ref/slice/owned mode dispatch as the
+        // state-struct path below, but passed as ramp call arguments.
+        if self.is_coroutine_compiled(&name) {
+            let ramp = self
+                .module
+                .get_function(&name)
+                .expect("coroutine ramp fn declared in declare_function");
+            // The completion slot the caller owns: allocate it, pass it as the
+            // ramp's hidden trailing param, block on it, free it.
+            let slot_new = self
+                .module
+                .get_function("karac_runtime_park_slot_new")
+                .expect("karac_runtime_park_slot_new declared in Codegen::new");
+            let slot = self
+                .builder
+                .build_call(slot_new, &[], "kara.coro.slot")
+                .expect("call karac_runtime_park_slot_new")
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            let ref_flags = self.fn_param_ref.get(&name).cloned().unwrap_or_default();
+            let slice_elems = self
+                .fn_param_slice_elem
+                .get(&name)
+                .cloned()
+                .unwrap_or_default();
+            let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(args.len());
+            for (i, arg) in args.iter().enumerate() {
+                let is_ref = ref_flags.get(i).copied().unwrap_or(false);
+                let slice_elem = slice_elems.get(i).copied().flatten();
+                let val: BasicValueEnum<'ctx> = if is_ref {
+                    if let ExprKind::Identifier(var_name) = &arg.value.kind {
+                        if let Some(ptr) = self.get_data_ptr(var_name) {
+                            ptr.into()
+                        } else {
+                            let v = self.compile_expr(&arg.value)?;
+                            self.materialize_rvalue_for_ref_arg(v, i)
+                        }
+                    } else if let Some(elem_ptr) = self.ref_arg_index_borrow_ptr(&arg.value)? {
+                        elem_ptr.into()
+                    } else {
+                        let v = self.compile_expr(&arg.value)?;
+                        self.materialize_rvalue_for_ref_arg(v, i)
+                    }
+                } else if let Some(elem_ty) = slice_elem {
+                    match self.coerce_to_slice(&arg.value, elem_ty)? {
+                        Some(slice_val) => slice_val,
+                        None => self.compile_expr(&arg.value)?,
+                    }
+                } else {
+                    self.compile_expr(&arg.value)?
+                };
+                call_args.push(val.into());
+            }
+            // Hidden trailing completion-slot param.
+            call_args.push(slot.into());
+            // Call the ramp (returns the coro handle — ignored; the dispatcher
+            // drives + destroys via the shim). Control returns here once the
+            // coroutine has parked at its first suspend.
+            self.builder
+                .build_call(ramp, &call_args, "kara.coro.drive")
+                .expect("call coroutine ramp");
+            let wait_fn = self
+                .module
+                .get_function("karac_runtime_park_slot_wait")
+                .expect("karac_runtime_park_slot_wait declared in Codegen::new");
+            self.builder
+                .build_call(wait_fn, &[slot.into()], "")
+                .expect("call karac_runtime_park_slot_wait");
+            let free_fn = self
+                .module
+                .get_function("karac_runtime_park_slot_free")
+                .expect("karac_runtime_park_slot_free declared in Codegen::new");
+            self.builder
+                .build_call(free_fn, &[slot.into()], "")
+                .expect("call karac_runtime_park_slot_free");
+            return Ok(self.context.i64_type().const_int(0, false).into());
+        }
         if let Some(ctor_fn) = self.state_machine_state_constructors.get(&name).copied() {
             let poll_fn = self
                 .state_machine_poll_fns

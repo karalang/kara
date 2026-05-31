@@ -261,6 +261,26 @@ dispatcher, slot primitives, and syscalls are still reused — but the
 coroutine-frame lifetime/return topology is new, correctness-sensitive, and
 runtime-gated. Re-rated below.
 
+**Implemented (2b.3, green E2E + ASAN).** The runtime gate did exactly what it
+was supposed to — the topology took **two corrections** against the real LLVM,
+neither of which CoroSplit-survival/IR-grep would have caught:
+
+1. The first emission used **two `coro.end`s** (one in cleanup, one in the
+   suspend-return). LLVM aborts: *"Only one coro.end can be marked as
+   fallthrough."* The canonical shape is a **single** `coro.end` that the
+   cleanup edge branches into after `coro.free`.
+2. But a single shared `coro.end` block returning the frame-resident `slot`
+   re-introduces the §6¾ UAF (the destroy clone loads `slot` after `coro.free`).
+   Fix: the **caller passes the completion slot in** as a hidden trailing `ptr`
+   param (no `park_slot_new` in the ramp), and the ramp returns **`hdl`** — a
+   value, never dereferenced, safe to return from the one `coro.end` on every
+   clone including the freed-frame destroy clone. The caller ignores the return
+   and waits on the slot it owns. (This is strictly simpler than the
+   self-allocate-and-return design and needs no extra runtime support.)
+
+Landed shape, gate, and file map are in the §7 table's "2b.2b + 2b.3 (done)"
+row. `tests/coro_e2e.rs` is the gate (functional + `-fsanitize=address`).
+
 ## 7. Effort estimate (honest)
 
 | Slice | Work | Size |
@@ -270,9 +290,8 @@ runtime-gated. Re-rated below.
 | 2a (done) | Validate the builder + llvm-sys coro-emission path: `src/codegen/coro.rs` (`CoroIntrinsics` + `build_demo_coroutine`) emits a coroutine through the real codegen API, survives CoroSplit (`.resume` clone), re-verifies. Bidirectional inkwell⇄llvm-sys bridge confirmed; `llvm-sys` promoted to the base `llvm` feature | ✅ small |
 | 2b.1 (done) | **Drive bridge.** `CoroIntrinsics` gains the drive intrinsics (`coro.resume`/`coro.done`/`coro.destroy`) + `emit_coro_resume_shim` → `i8 @__kara_coro_resume(ptr handle, ptr cancel)`, whose signature is *exactly* the runtime `KaracParkedTask.poll_fn` ABI. Test `resume_shim_lowers_alongside_coroutine`: the shim lowers cleanly through the coro pipeline (no leftover `@llvm.coro.*`) and re-verifies. This is the zero-runtime-change bridge — see § 6½ | ✅ small |
 | 2b.2a (done) | **Leaf suspend EMISSION de-risk.** `src/codegen/coro.rs::build_demo_park_coroutine` emits the production leaf shape — frame-resident parked slot `{poll_fn=@__kara_coro_resume, state=hdl, token}`, `register_fd(fd, dir, &parked)` before `coro.suspend`, deregister+syscall on the resume edge — and `park_shaped_coroutine_splits_with_frame_resident_slot` proves CoroSplit (i) lifts the parked slot into the coro frame so the pointer register_fd captures is a `%demo_park_coro.Frame` GEP (stable address the dispatcher can deref **while suspended**, not a dangling ramp stack alloca), (ii) keeps the registration in the ramp, and (iii) lands the post-park syscall in the `.resume` clone (not dropped — the bug-C failure mode). The resume-edge token reload is what forces frame-residency. Also closed the §8 self-borrow-across-suspend risk (see below) | ✅ small |
-| 2b.2b | **Wire the leaf suspend into `tcp.rs`.** When the enclosing fn is a coroutine, replace `emit_state_machine_invocation_for_park_on_fd`'s `park_slot_wait` thread-block with the 2b.2a-validated shape (`register_fd(fd, dir, &frame.parked)` + `coro.suspend`); keep the post-park syscall (`karac_runtime_tcp_read/write/accept`) unchanged on the resume edge. Needs the coroutine context (handle + cleanup/suspend dispatch blocks) threaded through `Codegen` — lands with 2b.3 | 1–2 |
-| 2b.3 | **Compile a network-boundary fn as a coroutine** (gate-skip the degenerate `emit_state_machine_poll_fn_for_key`; keep it as the default-off path so the ~60 existing poll-fn/drive tests stay green — flip the default + delete the degenerate path in a later slice): coroutine key gate (`Codegen.coro_enabled` setter, default off) → ramp (`coro.id`/`begin` + frame-resident `park_slot_new`) + normal body + **drive-correct topology** (`park_slot_signal` + final `coro.suspend(true)` on completion; `coro.free` **only** on the destroy edge — see §6¾) + `coro.end`; leaf-park coro branch in `tcp.rs`; `ptr`-return signature; call site = `slot=ramp(args); park_slot_wait(slot); park_slot_free(slot)` (dispatcher drives resume, NOT the caller). **Goal + acceptance gate: a straight-line handler services a real connection E2E, linked + executed + ASAN-clean** (CoroSplit-survival is necessary but NOT sufficient — the frame-lifetime topology has UAF traps that only a runtime+ASAN run catches, §6¾). Larger and more correctness-sensitive than first rated | 3–4 |
-| 2b.4 | **Spawn drive.** Spawn wrapper ramps the coroutine, hands `hdl` to the scheduler (frees the thread); dispatcher resumes via the shim. **Goal: a straight-line *spawned* echo handler services a real connection E2E** (the current no-op) | 1–2 |
+| 2b.2b + 2b.3 (done) | **Network-boundary free fn compiles + drives as a coroutine, E2E.** Landed together. Gate: `Codegen.set_coro_enabled` (default off — the ~60 poll-fn/drive tests + ASAN suite stay green; `compile_to_object_with_coro` is the opt-in entry). `coro_fn_keys` = non-generic, non-`main`, non-dotted `state_struct_layouts` keys (free fns this slice; method-handler coroutines are a follow-on). Three coupled toggles on `is_coroutine_compiled`: `declare_function` → `ptr` return + a hidden trailing `ptr` completion-slot param; `compile_function` → `emit_coro_ramp` (coro.id/begin) + normal body + `emit_coro_finish`, body returns routed to the completion block; `tcp.rs::emit_state_machine_invocation_for_park_on_fd` → `emit_coro_park_suspend` (register `{shim,hdl}` + `coro.suspend`, deregister + the existing syscall on the resume edge); call site (`call_dispatch.rs`) → `slot=park_slot_new(); ramp(args, slot); park_slot_wait(slot); park_slot_free(slot)` (dispatcher drives resume via the unchanged 2b.1 shim; caller never resumes). **Final topology** (corrected twice against the real LLVM — see §6¾): the caller passes the slot in (no `park_slot_new` in the ramp) and the ramp returns `hdl`, so the **single canonical `coro.end`** is UAF-safe (returns a value, not the frame-resident `slot`); cleanup (destroy edge) `coro.free`s then branches into that one `coro.end`; completion routes through `park_slot_signal` + a final `coro.suspend(true)`. Gate met: `tests/coro_e2e.rs` — a free-fn handler services a real connection, **linked + executed + ASAN-clean** (two tests; the ASAN one links `-fsanitize=address`). Bug C fixed E2E (the post-park `accept(2)` runs on the resume edge). The degenerate `emit_state_machine_poll_fn_for_key` is left emitted-but-dead for coro keys (DCE'd at -O); flip-default + delete-degenerate is a later slice | ✅ 3–4 |
+| 2b.4 | **Spawn drive + method-handler coroutines.** (a) Spawn wrapper ramps the coroutine, hands the completion slot to a `TaskHandle` instead of waiting inline (join = `park_slot_wait`); dispatcher resumes via the shim. (b) Extend the coroutine path to `Type.method` handlers (the method-call intercept's receiver-as-self ramp-drive). **Goal: a straight-line *spawned* echo handler services a real connection E2E** (the current no-op) | 1–2 |
 | 3 | Control flow (`loop`/`match` around suspends) — should "just work" via CoroSplit; validate against the demo handler shape | 1 (mostly testing) |
 | 4 | Drop-across-suspend correctness (heap locals freed on completion + on destroy/cancel) — ASAN-gated | 1–2 (trickiest) |
 | 5 | Spawn + TaskGroup + cancellation; retire the spin-loop / thread-block drive | 2 |

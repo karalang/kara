@@ -360,6 +360,36 @@ pub fn compile_to_object(
     compile_to_object_with_options(program, output_path, ownership, concurrency, None, None)
 }
 
+/// Compile to a native object with the A2 slice 2b.3 **coroutine path enabled**
+/// ([`Codegen::set_coro_enabled`]): network-boundary free functions compile as
+/// LLVM coroutines driven by the runtime dispatcher (register fd + `coro.suspend`
+/// per park; the caller waits on a `karac_runtime_park_slot`), instead of the
+/// degenerate `emit_state_machine_poll_fn_for_key` body-splitter. The program
+/// must already carry `state_struct_layouts` / `yield_points` /
+/// `callee_network_yield_effect` (populated by the effectcheck +
+/// `build_state_struct_layouts` pipeline). Opt-in until the flip-the-default
+/// slice; today only the E2E test reaches for it. See
+/// docs/spikes/network-async-coroutine-transform.md § 6¾.
+pub fn compile_to_object_with_coro(
+    program: &Program,
+    output_path: &str,
+    ownership: Option<&OwnershipCheckResult>,
+    concurrency: Option<&ConcurrencyAnalysis>,
+) -> Result<(), String> {
+    let context = Context::create();
+    let mut cg = Codegen::new(&context, "karac_module");
+    cg.load_rc_fallback(ownership);
+    cg.load_concurrency_analysis(concurrency);
+    cg.set_coro_enabled(true);
+    cg.compile_program(program)?;
+
+    let target_machine = create_target_machine()?;
+    apply_optimization_passes(&cg.module, &target_machine)?;
+    target_machine
+        .write_to_file(&cg.module, FileType::Object, Path::new(output_path))
+        .map_err(|e| format!("Failed to write object file: {}", e))
+}
+
 /// Like [`compile_to_object`] but accepts optional source-filename and
 /// source-text strings; see [`compile_to_ir_with_options`] for the
 /// rationale and how each is consumed.
@@ -653,6 +683,29 @@ pub(super) struct Codegen<'ctx> {
     /// fields always have full annotations recorded there, so no parallel
     /// table is needed for the struct case.
     pub(crate) atomic_var_inner_is_bool: HashSet<String>,
+    /// A2 slice 2b.3 gate. When `true`, network-boundary functions (keys in
+    /// `coro_fn_keys`) compile as LLVM coroutines (ramp + `coro.suspend` parks +
+    /// dispatcher-driven slot-wait drive) instead of the degenerate
+    /// `emit_state_machine_poll_fn_for_key` body-splitter. Default `false` (set
+    /// via [`Codegen::set_coro_enabled`]) so the existing poll-fn / drive tests
+    /// stay green; the new coroutine path is opt-in until the flip-the-default +
+    /// delete-degenerate-path slice. See
+    /// docs/spikes/network-async-coroutine-transform.md § 6¾.
+    pub(crate) coro_enabled: bool,
+    /// The network-boundary function keys compiled as coroutines this run
+    /// (populated from `program.state_struct_layouts`, minus generics, only when
+    /// `coro_enabled`). Read by `declare_function` (→ `ptr` return type),
+    /// `emit_state_machine_poll_fns` (→ skip the degenerate poll-fn), and the
+    /// call-site intercepts (→ slot-wait drive instead of the poll-loop).
+    pub(crate) coro_fn_keys: HashSet<String>,
+    /// Set by `emit_coro_ramp` for the duration of a coroutine-compiled
+    /// function's body emission; consulted by the tcp.rs leaf-park branch and
+    /// the body-return routing; drained (`None`) at the top of every
+    /// `compile_function`. `Some` ⇒ "currently emitting inside a coroutine".
+    pub(crate) coro_ctx: Option<coro::CoroContext<'ctx>>,
+    /// Per-coroutine-function counter for unique park resume-block names; reset
+    /// by `emit_coro_ramp`, bumped by each `emit_coro_park_suspend`.
+    pub(crate) coro_park_counter: u32,
     pub(crate) current_fn: Option<FunctionValue<'ctx>>,
     pub(crate) printf_fn: FunctionValue<'ctx>,
     /// `int snprintf(char* buf, size_t n, const char* fmt, ...)` — used by f-string
@@ -3285,6 +3338,10 @@ impl<'ctx> Codegen<'ctx> {
             snapshot_replay: HashMap::new(),
             hot_swap_slots: HashMap::new(),
             hot_swap_fns: Vec::new(),
+            coro_enabled: false,
+            coro_fn_keys: HashSet::new(),
+            coro_ctx: None,
+            coro_park_counter: 0,
         }
     }
 
@@ -3369,6 +3426,26 @@ impl<'ctx> Codegen<'ctx> {
     /// on the process-global env var.
     pub(crate) fn set_strip_contracts(&mut self, strip: bool) {
         self.strip_contracts = strip;
+    }
+
+    /// Enable the A2 slice 2b.3 coroutine compilation path (default off). When
+    /// set before `compile_program`, network-boundary functions compile as LLVM
+    /// coroutines with the dispatcher-driven slot-wait drive instead of the
+    /// degenerate `emit_state_machine_poll_fn_for_key` body-splitter. Race-free
+    /// (no process-global env), mirroring `set_strip_contracts`. See
+    /// docs/spikes/network-async-coroutine-transform.md § 6¾.
+    pub(crate) fn set_coro_enabled(&mut self, enabled: bool) {
+        self.coro_enabled = enabled;
+    }
+
+    /// Whether `fn_key` is compiled as a coroutine this run (A2 slice 2b.3) —
+    /// i.e. `coro_enabled` and the key is a non-generic network-boundary
+    /// function (`coro_fn_keys`, populated in `compile_program`). The single
+    /// predicate behind the three coupled coroutine toggles: `ptr` return type
+    /// in `declare_function`, poll-fn skip in `emit_state_machine_poll_fns`, and
+    /// the slot-wait call-site drive.
+    pub(crate) fn is_coroutine_compiled(&self, fn_key: &str) -> bool {
+        self.coro_enabled && self.coro_fn_keys.contains(fn_key)
     }
 
     /// Mint a fresh `SpawnSiteId` and record a `SpawnSiteRecord` for the
@@ -3496,6 +3573,36 @@ impl<'ctx> Codegen<'ctx> {
         // when computing primary-field alignment.
         self.declare_unions(program);
         self.declare_enums(program);
+        // A2 slice 2b.3: when the coroutine path is enabled, record which
+        // network-boundary keys compile as coroutines — every
+        // `state_struct_layouts` key that isn't generic (per-mono generic
+        // poll-fns are emitted at `compile_generic_call` time and stay on the
+        // degenerate path for this slice). `KARAC_PARK_ON_FD` is the leaf
+        // primitive and never lands in `state_struct_layouts`, so it's
+        // naturally excluded. This must run before `declare_function` so the
+        // `ptr`-return signature toggle sees the right set. Drives all three
+        // coupled toggles via `is_coroutine_compiled`.
+        if self.coro_enabled {
+            for key in program.state_struct_layouts.keys() {
+                // `main` is the C-ABI `i32 ()` entry point — it can't be a
+                // caller-driven coroutine ramp (and isn't called by anyone), so
+                // it stays on the existing thread-block park path even if it
+                // parks (e.g. a top-level `accept`).
+                //
+                // Free functions only this slice: a `Type.method` key (dotted)
+                // is driven by the method-call intercept (method_call.rs), whose
+                // receiver-as-self handling for the ramp-drive is a follow-on.
+                // Restricting here keeps the method intercept on the degenerate
+                // path (consistent) rather than emitting a coroutine ramp the
+                // method intercept wouldn't drive.
+                if key != "main"
+                    && !key.contains('.')
+                    && !declarations::is_generic_fn_key(program, key)
+                {
+                    self.coro_fn_keys.insert(key.clone());
+                }
+            }
+        }
         // Slice 8v Phase 2: snapshot the whole `Program` as `Rc<Program>`
         // so the per-mono state-machine emission path triggered from
         // `compile_generic_call` can access layouts / yield points /

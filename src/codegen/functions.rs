@@ -78,15 +78,28 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|p| self.llvm_param_type(p))
             .collect();
 
-        let fn_type = match self.llvm_return_type(&func.return_type) {
-            Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_types, false),
-            Some(BasicTypeEnum::FloatType(t)) => t.fn_type(&param_types, false),
-            Some(BasicTypeEnum::PointerType(t)) => t.fn_type(&param_types, false),
-            Some(BasicTypeEnum::StructType(t)) => t.fn_type(&param_types, false),
-            Some(BasicTypeEnum::ArrayType(t)) => t.fn_type(&param_types, false),
-            Some(BasicTypeEnum::VectorType(t)) => t.fn_type(&param_types, false),
-            Some(BasicTypeEnum::ScalableVectorType(_)) | None => {
-                self.context.void_type().fn_type(&param_types, false)
+        // A2 slice 2b.3: a coroutine-compiled network-boundary fn is a *ramp*.
+        // It takes a hidden trailing `ptr` completion-slot param (the caller
+        // `park_slot_new`s it and waits on it; the body signals it) and returns
+        // `ptr` (the coro handle — UAF-safe to return from the single canonical
+        // `coro.end`; the caller ignores it). The Kāra return value is plumbed
+        // through the frame; a non-unit coroutine return is a follow-on slice.
+        let fn_type = if self.is_coroutine_compiled(&func.name) {
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let mut coro_params = param_types.clone();
+            coro_params.push(ptr_ty.into());
+            ptr_ty.fn_type(&coro_params, false)
+        } else {
+            match self.llvm_return_type(&func.return_type) {
+                Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_types, false),
+                Some(BasicTypeEnum::FloatType(t)) => t.fn_type(&param_types, false),
+                Some(BasicTypeEnum::PointerType(t)) => t.fn_type(&param_types, false),
+                Some(BasicTypeEnum::StructType(t)) => t.fn_type(&param_types, false),
+                Some(BasicTypeEnum::ArrayType(t)) => t.fn_type(&param_types, false),
+                Some(BasicTypeEnum::VectorType(t)) => t.fn_type(&param_types, false),
+                Some(BasicTypeEnum::ScalableVectorType(_)) | None => {
+                    self.context.void_type().fn_type(&param_types, false)
+                }
             }
         };
 
@@ -215,6 +228,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.current_fn = Some(fn_val);
         self.current_fn_name = func.name.clone();
+        // A2 slice 2b.3: drain any prior function's coroutine context. A
+        // coroutine fn's `emit_coro_ramp` sets it; `emit_coro_finish` clears it
+        // — this reset is the belt-and-suspenders for an early-error exit.
+        self.coro_ctx = None;
+        self.coro_park_counter = 0;
         self.variables.clear();
         self.var_type_names.clear();
         self.var_option_shared_heap.clear();
@@ -292,6 +310,22 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
+
+        // A2 slice 2b.3: for a coroutine-compiled network-boundary fn, emit the
+        // coro ramp prologue (coro.id/begin + completion slot + shared exit
+        // blocks) at the top of entry, before param allocas — this sets
+        // `self.coro_ctx`, so the leaf parks in the body lower to `coro.suspend`
+        // and the body returns route to the completion block. `emit_coro_finish`
+        // closes it out after the body.
+        if self.is_coroutine_compiled(&func.name) {
+            // The hidden completion-slot param is the trailing `ptr`, after the
+            // Kāra params (declare_function appended it).
+            let slot = fn_val
+                .get_nth_param(func.params.len() as u32)
+                .expect("coroutine completion-slot param")
+                .into_pointer_value();
+            self.emit_coro_ramp(fn_val, slot);
+        }
 
         if func.name != "main" {
             for (i, param) in func.params.iter().enumerate() {
@@ -614,7 +648,15 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 self.emit_scope_cleanup();
             }
-            if func.name == "main" {
+            if let Some(ctx) = self.coro_ctx {
+                // A2 slice 2b.3: a coroutine body's normal completion routes to
+                // the signal + final-suspend block, not a `ret` (the ramp's
+                // `ptr` return is emitted in the shared suspend-return block).
+                // The Kāra tail value is discarded — unit-only for this slice.
+                self.builder
+                    .build_unconditional_branch(ctx.coro_return_bb)
+                    .unwrap();
+            } else if func.name == "main" {
                 let zero = self.context.i32_type().const_int(0, false);
                 self.builder.build_return(Some(&zero)).unwrap();
             } else if let Some(val) = result {
@@ -648,6 +690,16 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 self.builder.build_return(None).unwrap();
             }
+        }
+
+        // A2 slice 2b.3: close out the coroutine — fill the shared exit blocks
+        // (coro_return = signal + final suspend; cleanup = destroy-edge free;
+        // suspend_ret = end + ret slot) now that every park in the body has
+        // wired its suspend switch to them. Copy the context out (it's `Copy`)
+        // and drain it so it can't leak into the next function.
+        if let Some(ctx) = self.coro_ctx {
+            self.emit_coro_finish(&ctx);
+            self.coro_ctx = None;
         }
 
         self.scope_cleanup_actions.clear();

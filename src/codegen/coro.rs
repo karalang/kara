@@ -22,13 +22,15 @@
 //! `src/codegen/lljit.rs`; this is the second such interop site.
 
 #![cfg(feature = "llvm")]
-// Staged infrastructure: every item below is consumed by the slice-2b
-// network-boundary transform (the production caller — see
-// docs/spikes/network-async-coroutine-transform.md § 6 "The transform").
-// In this slice (2a) the surface is exercised end-to-end by the
-// `builder_emitted_coroutine_splits` de-risk test but not yet wired into the
-// AOT codegen path, so production cfg sees the `pub(super)` API as unused. The
-// `allow` is scoped to this one module and is retired when slice 2b calls it.
+// As of slice 2b.3 the production coroutine API (`CoroIntrinsics`,
+// `CoroContext`, `emit_coro_ramp`/`emit_coro_park_suspend`/`emit_coro_finish`,
+// the resume shim) is wired into the AOT codegen path (functions.rs / tcp.rs /
+// call_dispatch.rs). What remains `dead_code` in *production* cfg is the
+// slice-2a/2b.2a de-risk scaffolding — `build_demo_coroutine` /
+// `build_demo_park_coroutine` and a couple of `CoroIntrinsics` drive leaves —
+// which are exercised only by this module's `#[cfg(test)]` unit tests (they
+// prove CoroSplit survival in isolation). Those are kept as living regression
+// fixtures rather than deleted, so the module-scoped `allow` stays.
 #![allow(dead_code)]
 
 use std::ffi::CStr;
@@ -65,7 +67,8 @@ struct Declared {
 /// `unsafe` (they call into the C API), but the refs are valid for the
 /// lifetime of the owning `Module` — the same lifetime invariant inkwell
 /// itself relies on.
-pub(super) struct CoroIntrinsics {
+#[derive(Clone, Copy)]
+pub(crate) struct CoroIntrinsics {
     // Only the types referenced by the `emit_*` leaves are retained as fields;
     // `i8`/`i64`/`void` are needed solely to build the intrinsic signatures at
     // `declare` time and stay local there.
@@ -244,6 +247,59 @@ impl CoroIntrinsics {
     unsafe fn destroy(&self, builder: &Builder<'_>, hdl: LLVMValueRef) {
         self.call(builder, self.coro_destroy, &mut [hdl], c"");
     }
+}
+
+/// Per-coroutine-function emission context (A2 slice 2b.3). Built by
+/// [`Codegen::emit_coro_ramp`] at the top of a coroutine-compiled
+/// network-boundary function, stashed in `Codegen.coro_ctx` for the duration of
+/// that function's body emission, consulted by
+/// [`Codegen::emit_coro_park_suspend`] (the leaf-park coro branch) and the
+/// body-return routing, and drained by [`Codegen::emit_coro_finish`] after the
+/// body. Carries the live coroutine handle + the shared exit blocks so every
+/// park in the body wires its suspend switch to one cleanup / suspend-return /
+/// completion target.
+///
+/// All fields are `Copy` (raw refs + inkwell handle types), so the leaf can copy
+/// the whole context out of `self.coro_ctx` and emit through it without holding
+/// a borrow on `self`.
+#[derive(Clone, Copy)]
+pub(crate) struct CoroContext<'ctx> {
+    /// The coroutine handle `%hdl` (`coro.begin` result) — goes into each
+    /// park's `KaracParkedTask.state` field and drives every `coro.resume`.
+    pub hdl: PointerValue<'ctx>,
+    /// The `coro.id` token (raw — inkwell can't hold a token), needed by
+    /// `coro.free` on the destroy edge.
+    pub id: LLVMValueRef,
+    /// The per-module coro/libc intrinsic table (declared once, reused).
+    pub intr: CoroIntrinsics,
+    /// `@__kara_coro_resume` — the parked-task `poll_fn` the dispatcher drives.
+    pub shim: FunctionValue<'ctx>,
+    /// The frame-resident parked-task record type `{ ptr poll_fn, ptr state,
+    /// i64 token }` (first two words are the runtime `KaracParkedTask` ABI;
+    /// the third holds the registration token for the resume-edge deregister).
+    pub parked_ty: inkwell::types::StructType<'ctx>,
+    /// The caller-provided completion slot (the hidden trailing `ptr` param —
+    /// see `declare_function`). The caller `park_slot_new`s it, passes it in,
+    /// `park_slot_wait`s on it, then frees it; the body `park_slot_signal`s it
+    /// just before the final suspend. Spilled into the coro frame by CoroSplit
+    /// (live across suspends), but the caller owns the underlying object — the
+    /// frame holds only a copy of the pointer, so destroying the frame never
+    /// frees the slot.
+    pub slot: PointerValue<'ctx>,
+    /// Single completion target every body-return routes to: `park_slot_signal(
+    /// slot)` + final `coro.suspend(true)` (filled by `emit_coro_finish`).
+    pub coro_return_bb: BasicBlock<'ctx>,
+    /// Shared destroy edge (`coro.destroy` lands here): `coro.free` then a branch
+    /// into `suspend_ret_bb` (the canonical single-`coro.end` shape). The ONLY
+    /// place the frame is freed — never on the normal completion path (that
+    /// would UAF the dispatcher's post-completion `coro.done`/`coro.destroy`).
+    pub cleanup_bb: BasicBlock<'ctx>,
+    /// The single shared `coro.end` + `ret hdl`. Reached by every suspend's
+    /// `default` (still-suspended) edge AND by `cleanup_bb` (after the frame is
+    /// freed). Returns `hdl` — a value, never dereferenced by the caller — so it
+    /// is UAF-safe even on the destroy clone where the frame is already gone;
+    /// the caller ignores the ramp's return and waits on the slot it passed in.
+    pub suspend_ret_bb: BasicBlock<'ctx>,
 }
 
 /// Mark `func` `presplitcoroutine` so LLVM's CoroSplit pass rewrites it into
@@ -554,6 +610,273 @@ pub(super) unsafe fn build_demo_park_coroutine<'ctx>(
     builder.build_return(Some(&hdl_pv)).unwrap();
 
     func
+}
+
+// ── Production coroutine emission (A2 slice 2b.3) ─────────────────────────────
+//
+// Three Codegen methods turn a network-boundary function into a switched-resume
+// coroutine driven by the existing dispatcher (see
+// docs/spikes/network-async-coroutine-transform.md § 6¾ "Drive-model
+// correction"):
+//   * `emit_coro_ramp`    — entry prologue: coro.id/begin + completion slot +
+//                           the shared exit blocks; returns the CoroContext.
+//   * `emit_coro_park_suspend` — one park → suspend (called from the tcp.rs
+//                           leaf when self.coro_ctx is Some).
+//   * `emit_coro_finish`  — fills the shared exit blocks after the body.
+//
+// The frame-lifetime topology is the load-bearing, correctness-sensitive part:
+// the frame is freed ONLY on the destroy edge (`cleanup_bb`, reached via
+// `coro.destroy`), never on the normal-completion path — a coroutine that
+// self-frees on completion UAFs the dispatcher's post-completion
+// `coro.done`/`coro.destroy`. Normal completion routes through a *final*
+// `coro.suspend(true)` and leaves the frame alive for the shim to destroy.
+impl<'ctx> super::Codegen<'ctx> {
+    /// Emit the coroutine ramp prologue at the current builder position — the
+    /// function's `entry` block, before param allocas. Declares the coro
+    /// intrinsics + resume shim (both idempotent per module), marks `fn_val`
+    /// `presplitcoroutine`, emits `coro.id`/`coro.begin`, allocates the caller's
+    /// completion slot, and appends the three shared exit blocks (filled later
+    /// by [`Self::emit_coro_finish`]). Stores the populated context in
+    /// `self.coro_ctx` and resets the per-function park counter; also returns it.
+    pub(super) fn emit_coro_ramp(
+        &mut self,
+        fn_val: FunctionValue<'ctx>,
+        slot: PointerValue<'ctx>,
+    ) -> CoroContext<'ctx> {
+        let intr = unsafe { CoroIntrinsics::declare(self.context, &self.module) };
+        let shim = unsafe { emit_coro_resume_shim(self.context, &self.module) };
+        mark_presplit_coroutine(self.context, fn_val);
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let parked_ty = self
+            .context
+            .struct_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+
+        // coro.id / coro.begin at the top of entry — the frame allocation.
+        // `slot` is the caller-provided completion slot (the hidden trailing
+        // `ptr` param — see `declare_function`): the body signals it at
+        // completion and the caller `park_slot_wait`s on it. Passing it in
+        // (rather than the ramp `park_slot_new`-ing + returning it) keeps the
+        // single canonical `coro.end` UAF-safe — the ramp returns `hdl` (a value,
+        // safe to return even on the freed-frame destroy edge), never a
+        // frame-resident value.
+        let id = unsafe { intr.coro_id(&self.builder) };
+        let hdl = unsafe { intr.begin(&self.builder, id) };
+        let hdl_pv = unsafe { PointerValue::new(hdl) };
+
+        // Shared exit blocks — appended now (so parks can target them), filled
+        // by emit_coro_finish after the body.
+        let coro_return_bb = self.context.append_basic_block(fn_val, "kara.coro.return");
+        let cleanup_bb = self.context.append_basic_block(fn_val, "kara.coro.cleanup");
+        let suspend_ret_bb = self
+            .context
+            .append_basic_block(fn_val, "kara.coro.suspend_ret");
+
+        let ctx = CoroContext {
+            hdl: hdl_pv,
+            id,
+            intr,
+            shim,
+            parked_ty,
+            slot,
+            coro_return_bb,
+            cleanup_bb,
+            suspend_ret_bb,
+        };
+        self.coro_ctx = Some(ctx);
+        self.coro_park_counter = 0;
+        ctx
+    }
+
+    /// Emit one network park as a coroutine suspend at the current builder
+    /// position. Called from `tcp.rs`'s
+    /// `emit_state_machine_invocation_for_park_on_fd` when `self.coro_ctx` is
+    /// `Some`. Builds a frame-resident parked record `{ @__kara_coro_resume,
+    /// hdl, token }`, ensures the dispatcher is running, registers the fd,
+    /// `coro.suspend`s, and wires the suspend switch to the shared exit blocks
+    /// plus a fresh per-park resume block. On return the builder is positioned
+    /// at that resume block, *after* the deregister — so the caller's post-park
+    /// syscall (`karac_runtime_tcp_read`/`accept`/`write`) lands on the resume
+    /// edge verbatim (the bug-C fix).
+    pub(super) fn emit_coro_park_suspend(
+        &mut self,
+        fd: IntValue<'ctx>,
+        direction: IntValue<'ctx>,
+        ctx: &CoroContext<'ctx>,
+    ) {
+        let i8_ty = self.context.i8_type();
+        let i64_ty = self.context.i64_type();
+
+        let n = self.coro_park_counter;
+        self.coro_park_counter += 1;
+        let fn_val = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .expect("emit_coro_park_suspend inside a function context");
+
+        // Frame-resident parked record: { poll_fn = @__kara_coro_resume,
+        // state = hdl, token }. CoroSplit lifts it into the coro frame because
+        // of the cross-suspend token reload on the resume edge below.
+        let parked = self
+            .builder
+            .build_alloca(ctx.parked_ty, &format!("kara.coro.parked.{n}"))
+            .unwrap();
+        let poll_fn_field = self
+            .builder
+            .build_struct_gep(ctx.parked_ty, parked, 0, "kara.coro.parked.poll_fn")
+            .unwrap();
+        self.builder
+            .build_store(poll_fn_field, ctx.shim.as_global_value().as_pointer_value())
+            .unwrap();
+        let state_field = self
+            .builder
+            .build_struct_gep(ctx.parked_ty, parked, 1, "kara.coro.parked.state")
+            .unwrap();
+        self.builder.build_store(state_field, ctx.hdl).unwrap();
+
+        // Ensure the dispatcher is up before we register (idempotent bootstrap;
+        // the degenerate poll-fn path does the same in its state_0).
+        let start_disp = self
+            .module
+            .get_function("karac_runtime_scheduler_start_dispatcher")
+            .expect("karac_runtime_scheduler_start_dispatcher declared in Codegen::new");
+        self.builder.build_call(start_disp, &[], "").unwrap();
+
+        let register_fd = self
+            .module
+            .get_function("karac_runtime_event_loop_register_fd")
+            .expect("karac_runtime_event_loop_register_fd declared in Codegen::new");
+        let token = self
+            .builder
+            .build_call(
+                register_fd,
+                &[fd.into(), direction.into(), parked.into()],
+                "kara.coro.token",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let token_field = self
+            .builder
+            .build_struct_gep(ctx.parked_ty, parked, 2, "kara.coro.parked.token")
+            .unwrap();
+        self.builder.build_store(token_field, token).unwrap();
+
+        // Suspend; switch to the shared exit blocks + a fresh resume block.
+        let sp = unsafe { IntValue::new(ctx.intr.suspend(&self.builder, false)) };
+        let resume_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("kara.coro.resume.{n}"));
+        self.builder
+            .build_switch(
+                sp,
+                ctx.suspend_ret_bb,
+                &[
+                    (i8_ty.const_int(0, false), resume_bb),
+                    (i8_ty.const_int(1, false), ctx.cleanup_bb),
+                ],
+            )
+            .unwrap();
+
+        // Resume edge: reload the token (forces frame residency), deregister,
+        // then leave the builder here so the post-park syscall lands on it.
+        self.builder.position_at_end(resume_bb);
+        let token_field2 = self
+            .builder
+            .build_struct_gep(ctx.parked_ty, parked, 2, "kara.coro.parked.token.reload")
+            .unwrap();
+        let token2 = self
+            .builder
+            .build_load(i64_ty, token_field2, "kara.coro.token.val")
+            .unwrap()
+            .into_int_value();
+        let deregister_fd = self
+            .module
+            .get_function("karac_runtime_event_loop_deregister_fd")
+            .expect("karac_runtime_event_loop_deregister_fd declared in Codegen::new");
+        self.builder
+            .build_call(deregister_fd, &[fd.into(), token2.into()], "")
+            .unwrap();
+    }
+
+    /// Fill the three shared exit blocks after the function body is emitted
+    /// (the body's returns have all branched to `ctx.coro_return_bb`).
+    ///
+    /// Topology (see §6¾ for the lifetime rationale):
+    ///   * `coro_return`: `park_slot_signal(slot)` then the **final**
+    ///     `coro.suspend(true)`. The dispatcher's last resume sees `coro.done`
+    ///     and `coro.destroy`s (→ `cleanup`); `default` (still suspended) →
+    ///     `suspend_ret`; the post-final resume edge is unreachable.
+    ///   * `cleanup` (destroy edge): `coro.free` + `coro.end` + `ret null`. The
+    ///     ONLY free site, and it must NOT `ret slot` — the frame (and the
+    ///     frame-spilled `slot`) is gone by the return.
+    ///   * `suspend_ret` (suspend-return edge, frame alive): `coro.end` +
+    ///     `ret slot`. In the ramp this returns `slot` to the original caller;
+    ///     in resume clones it returns the frame-spilled `slot` (dispatcher
+    ///     ignores it).
+    pub(super) fn emit_coro_finish(&mut self, ctx: &CoroContext<'ctx>) {
+        let i8_ty = self.context.i8_type();
+        let fn_val = ctx
+            .coro_return_bb
+            .get_parent()
+            .expect("coro_return_bb has a parent function");
+
+        // coro_return: signal completion, then the final suspend.
+        self.builder.position_at_end(ctx.coro_return_bb);
+        let signal = self
+            .module
+            .get_function("karac_runtime_park_slot_signal")
+            .expect("karac_runtime_park_slot_signal declared in Codegen::new");
+        self.builder
+            .build_call(signal, &[ctx.slot.into()], "")
+            .unwrap();
+        let spf = unsafe { IntValue::new(ctx.intr.suspend(&self.builder, true)) };
+        let after_final = self
+            .context
+            .append_basic_block(fn_val, "kara.coro.after_final");
+        self.builder
+            .build_switch(
+                spf,
+                ctx.suspend_ret_bb,
+                &[
+                    (i8_ty.const_int(0, false), after_final),
+                    (i8_ty.const_int(1, false), ctx.cleanup_bb),
+                ],
+            )
+            .unwrap();
+        // A final suspend is never resumed (case 0) — only destroyed.
+        self.builder.position_at_end(after_final);
+        self.builder.build_unreachable().unwrap();
+
+        // cleanup (destroy edge): free the frame — the ONLY free site — then
+        // fall through to the single shared `coro.end` in suspend_ret (the
+        // canonical shape: exactly one fallthrough `coro.end`). `coro.end` after
+        // `coro.free` is a no-op marker on the being-destroyed frame.
+        self.builder.position_at_end(ctx.cleanup_bb);
+        unsafe {
+            ctx.intr
+                .free_frame(&self.builder, ctx.id, ctx.hdl.as_value_ref());
+        }
+        self.builder
+            .build_unconditional_branch(ctx.suspend_ret_bb)
+            .unwrap();
+
+        // suspend_ret: the single `coro.end`, then `ret hdl`. Returning `hdl`
+        // (the coro handle — a value, never dereferenced by the caller) is
+        // UAF-safe on every clone, including the destroy clone where the frame
+        // is already freed; the caller ignores the ramp's return and instead
+        // waits on the completion slot it passed in. (Earlier `ret slot` was a
+        // UAF: `slot` is frame-resident, loaded after `coro.free` on the destroy
+        // edge.)
+        self.builder.position_at_end(ctx.suspend_ret_bb);
+        unsafe {
+            ctx.intr.end(&self.builder, ctx.hdl.as_value_ref());
+        }
+        self.builder.build_return(Some(&ctx.hdl)).unwrap();
+    }
 }
 
 #[cfg(test)]
