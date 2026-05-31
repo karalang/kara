@@ -288,7 +288,21 @@ pub(super) fn create_target_machine() -> Result<TargetMachine, String> {
             cpu,
             features,
             backend_optimization_level(),
-            RelocMode::Default,
+            // PIC, not `Default`. The link step (`link_executable_impl`)
+            // invokes `cc` with no `-no-pie`, and every modern toolchain
+            // defaults `cc` to producing a PIE — so the object we emit must
+            // be position-independent. Under `RelocMode::Default`, LLVM picks
+            // a Static reloc model on `x86_64-*-linux`, which emits absolute
+            // 32-bit relocations (`R_X86_64_32`) against `.rodata` string
+            // literals; the default-PIE `ld` then rejects the link with
+            // "can not be used when making a PIE object". AArch64 dodged this
+            // because its ADRP/ADD addressing is PC-relative even under Static
+            // reloc, so the bug only surfaced on the first x86_64-Linux build.
+            // PIC matches what rustc/clang emit for all our Tier-1 targets and
+            // is a no-op on Darwin (which is PIC-only regardless), so setting
+            // it unconditionally fixes x86_64-Linux without regressing the
+            // arm64-Linux / macOS paths — and yields ASLR-enabled binaries.
+            RelocMode::PIC,
             CodeModel::Default,
         )
         .ok_or_else(|| "Failed to create target machine".to_string())
