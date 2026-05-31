@@ -37,6 +37,16 @@ use value::{
 };
 pub use value::{ErrorTraceFrame, RuntimeError, TestOutcome, Value};
 
+/// Outcome of evaluating one contract predicate (design.md § Contracts
+/// rule 2). The two failure modes are reported as distinct fault
+/// categories: `contract violated` (the checked code is wrong) vs
+/// `contract predicate panicked` (the predicate itself faulted).
+pub(crate) enum ContractOutcome {
+    Held,
+    Violated,
+    Panicked(String),
+}
+
 // ── Interpreter ─────────────────────────────────────────────────
 
 pub struct Interpreter<'a> {
@@ -496,6 +506,33 @@ impl<'a> Interpreter<'a> {
                 self.capture_old_in_expr(index, snap);
             }
             _ => {}
+        }
+    }
+
+    /// Evaluate one contract predicate and classify the outcome (design.md
+    /// § Contracts rule 2). A predicate that evaluates to `true` *holds*; one
+    /// that evaluates to anything else *is violated*; one whose evaluation
+    /// itself faults (indexing OOB, div-by-zero, `unwrap` of `None`, explicit
+    /// `panic()`) *panicked* — a distinct fault category. On a panic the raw
+    /// fault is removed from `runtime_errors` and `pending_cf` is cleared so
+    /// the caller can re-record the distinct `contract predicate panicked`
+    /// category.
+    pub(crate) fn eval_contract_predicate(&mut self, pred: &Expr) -> ContractOutcome {
+        let errs_before = self.runtime_errors.len();
+        let result = self.eval_expr_inner(pred);
+        if self.pending_cf.is_some() {
+            self.pending_cf = None;
+            let drained: Vec<_> = self.runtime_errors.drain(errs_before..).collect();
+            let msg = drained
+                .last()
+                .map(|e| e.message.clone())
+                .unwrap_or_else(|| "predicate evaluation faulted".to_string());
+            return ContractOutcome::Panicked(msg);
+        }
+        if result == Value::Bool(true) {
+            ContractOutcome::Held
+        } else {
+            ContractOutcome::Violated
         }
     }
 

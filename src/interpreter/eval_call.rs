@@ -735,9 +735,18 @@ impl<'a> super::Interpreter<'a> {
                 let mut contract_fault: Option<String> = None;
                 if let Some((requires, _)) = &contract {
                     for req in requires {
-                        if self.eval_expr_inner(req) != Value::Bool(true) {
-                            contract_fault = Some("contract violated: requires clause".to_string());
-                            break;
+                        match self.eval_contract_predicate(req) {
+                            super::ContractOutcome::Held => {}
+                            super::ContractOutcome::Violated => {
+                                contract_fault =
+                                    Some("contract violated: requires clause".to_string());
+                                break;
+                            }
+                            super::ContractOutcome::Panicked(msg) => {
+                                contract_fault =
+                                    Some(format!("contract predicate panicked: {msg}"));
+                                break;
+                            }
                         }
                     }
                 }
@@ -783,12 +792,20 @@ impl<'a> super::Interpreter<'a> {
                                 if let Some(param) = &ens.param {
                                     self.env.define(param.clone(), rv.clone());
                                 }
-                                let ok = self.eval_expr_inner(&ens.body);
+                                let outcome = self.eval_contract_predicate(&ens.body);
                                 self.env.pop_scope();
-                                if ok != Value::Bool(true) {
-                                    contract_fault =
-                                        Some("contract violated: ensures clause".to_string());
-                                    break;
+                                match outcome {
+                                    super::ContractOutcome::Held => {}
+                                    super::ContractOutcome::Violated => {
+                                        contract_fault =
+                                            Some("contract violated: ensures clause".to_string());
+                                        break;
+                                    }
+                                    super::ContractOutcome::Panicked(msg) => {
+                                        contract_fault =
+                                            Some(format!("contract predicate panicked: {msg}"));
+                                        break;
+                                    }
                                 }
                             }
                         }

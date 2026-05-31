@@ -59,11 +59,24 @@ impl<'a> super::Interpreter<'a> {
                     return self.eval_short_circuit(op, left, right, &expr.span);
                 }
                 let l = self.eval_expr_inner(left);
+                // A faulted operand (index OOB, div-by-zero, unwrap of None,
+                // …) sets `pending_cf` and yields a poison value; don't run
+                // the op on it (which would hit `eval_binary`'s unreachable
+                // for the wrong variant) — propagate the fault instead.
+                if self.pending_cf.is_some() {
+                    return l;
+                }
                 let r = self.eval_expr_inner(right);
+                if self.pending_cf.is_some() {
+                    return r;
+                }
                 self.eval_binary(op, l, r, &expr.span)
             }
             ExprKind::Unary { op, operand } => {
                 let val = self.eval_expr_inner(operand);
+                if self.pending_cf.is_some() {
+                    return val;
+                }
                 self.eval_unary(op, val, &expr.span)
             }
 

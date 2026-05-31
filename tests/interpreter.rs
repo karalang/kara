@@ -11378,3 +11378,63 @@ fn test_impl_invariant_holds_runs() {
         "a satisfied impl invariant must not fault, got: {errors:?}"
     );
 }
+
+// ── Contracts — distinct "predicate panicked" fault category (step 6) ──
+//
+// design.md § Contracts rule 2: a predicate that *returns false* is
+// `contract violated`; a predicate whose *evaluation faults* (index OOB,
+// div-by-zero, unwrap) is the distinct `contract predicate panicked`.
+
+#[test]
+fn test_contract_predicate_panicked_is_distinct() {
+    let errors = runtime_errors(
+        "fn at(v: Vec[i64], i: i64) -> i64 requires v[i] >= 0 { 0 }\n\
+         fn main() { let v: Vec[i64] = Vec[1, 2, 3]; let _ = at(v, 99); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("contract predicate panicked")),
+        "expected a `contract predicate panicked` fault, got: {errors:?}"
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("contract violated")),
+        "a panicking predicate must NOT be reported as `contract violated`, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_contract_violated_distinct_from_panicked() {
+    let errors = runtime_errors(
+        "fn pos(x: i64) -> i64 requires x > 0 { x }\n\
+         fn main() { let _ = pos(-5); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("contract violated")),
+        "expected `contract violated` for a false predicate, got: {errors:?}"
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("predicate panicked")),
+        "a false predicate must NOT be reported as panicked, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_contract_predicate_panicked_in_ensures() {
+    let errors = runtime_errors(
+        "fn f(v: Vec[i64]) -> i64 ensures(result) v[result] >= 0 { 99 }\n\
+         fn main() { let v: Vec[i64] = Vec[1, 2, 3]; let _ = f(v); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("contract predicate panicked")),
+        "expected `contract predicate panicked` in an ensures, got: {errors:?}"
+    );
+}
