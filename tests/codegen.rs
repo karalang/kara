@@ -2672,6 +2672,67 @@ fn read_x(p: Point) -> i64 { p.x }
         );
     }
 
+    // `self.field` inside a `ref self` / `mut ref self` method on a shared
+    // (RC) struct. Before this fix, `shared_type_for_expr` didn't resolve the
+    // `SelfValue` receiver, so `self.field` skipped the heap-GEP path and fell
+    // to a const-0 fallback — a *read* returned 0 and a *write* missed the heap
+    // object (didn't persist). The interpreter always handled these; these pin
+    // the AOT path.
+
+    #[test]
+    fn test_e2e_shared_method_field_read() {
+        // `get(ref self) -> i64 { self.n }` must return the stored field, not 0.
+        let out = run_program(
+            r#"
+shared struct Scell { n: i64 }
+impl Scell { pub fn get(ref self) -> i64 { self.n } }
+fn main() { let c = Scell { n: 5 }; println(c.get()); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shared_method_field_mutate_persists() {
+        // `inc(mut ref self) { self.n = self.n + 1 }` must persist to the heap
+        // object so a subsequent read observes it.
+        let out = run_program(
+            r#"
+shared struct Scell { mut n: i64 }
+impl Scell {
+    pub fn inc(mut ref self) { self.n = self.n + 1; }
+    pub fn get(ref self) -> i64 { self.n }
+}
+fn main() { let c = Scell { n: 5 }; c.inc(); println(c.get()); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "6");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shared_method_field_mutation_aliases() {
+        // RC reference semantics: a mutation through one binding is visible
+        // through an alias — confirms the write hits the shared heap object,
+        // not a per-binding copy.
+        let out = run_program(
+            r#"
+shared struct Scell { mut n: i64 }
+impl Scell {
+    pub fn inc(mut ref self) { self.n = self.n + 10; }
+    pub fn get(ref self) -> i64 { self.n }
+}
+fn main() { let a = Scell { n: 1 }; let b = a; a.inc(); println(b.get()); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "11");
+        }
+    }
+
     #[test]
     fn test_ir_shared_struct_rc_dec_free() {
         let ir = ir_for(

@@ -340,6 +340,13 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // Shared type: object compiles to a pointer; field access via GEP.
+        // `compile_expr(object)` yields the heap pointer for every receiver
+        // shape — `load_variable` applies the right number of loads (one for an
+        // owned local / the constructor binding, two for a `ref self` param via
+        // its ref-param deref). The fix for `self.field` in a shared method was
+        // purely making `shared_type_for_expr` resolve `SelfValue` (so this
+        // shared GEP path is taken at all); before that, `self.field` fell to
+        // the const-0 fallback below and returned 0 for every field.
         if let Some((type_name, info)) = self.shared_type_for_expr(object) {
             if !info.is_enum {
                 let ptr = self.compile_expr(object)?.into_pointer_value();
@@ -563,16 +570,15 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(type_name) = self.var_type_names.get(var_name).cloned() {
                 if let Some(info) = self.shared_types.get(&type_name).cloned() {
                     if !info.is_enum {
-                        if let Some(slot) = self.variables.get(var_name).copied() {
-                            let ptr = self
-                                .builder
-                                .build_load(
-                                    self.context.ptr_type(AddressSpace::default()),
-                                    slot.ptr,
-                                    var_name,
-                                )
-                                .unwrap()
-                                .into_pointer_value();
+                        if self.variables.contains_key(var_name) {
+                            // Heap pointer via `compile_expr` so a `ref self`
+                            // receiver gets its ref-param double-load — a single
+                            // load yields `&self` (a pointer to the heap-pointer
+                            // slot), not the heap pointer itself, so the GEP+store
+                            // would miss the heap object and the field write
+                            // wouldn't persist. Matches the read path; an owned
+                            // local / constructor binding still loads once.
+                            let ptr = self.compile_expr(object)?.into_pointer_value();
                             if let Some(names) = self.struct_field_names.get(&type_name) {
                                 if let Some(idx) = names.iter().position(|n| n == field) {
                                     let field_ptr = self
