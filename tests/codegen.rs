@@ -15810,6 +15810,7 @@ fn main() {
             None,
             true,  // enable_hot_swap
             false, // strip_contracts
+            false, // coro_enabled (this hot-swap test asserts the legacy path)
         );
         assert!(
             result.is_ok(),

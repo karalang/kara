@@ -4127,6 +4127,7 @@ fn cmd_build(
             Some(&source),
             enable_hot_swap,
             release,
+            true, // A2: coroutines on for `karac build` (bug-C fix reaches real builds)
         ) {
             eprintln!("error: codegen failed: {e}");
             process::exit(1);
@@ -4972,6 +4973,7 @@ fn run_multi_file_codegen(
         // (which still applies via the `Codegen::new` default when `release`
         // is false).
         release,
+        true, // A2: coroutines on for project builds (bug-C fix reaches real builds)
     ) {
         let _ = std::fs::remove_file(&obj_path);
         return BuildCodegenStatus::Failed {

@@ -178,6 +178,21 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_block(body);
         }
 
+        // A2: a coroutine-compiled function body must NOT be auto-parallelized.
+        // `coro_ctx` is `Some` exactly while emitting inside a coroutine (set by
+        // `emit_coro_ramp` at function entry). Auto-par lifts statement groups
+        // into separate `__par_branch_*` worker functions run via
+        // `karac_par_run`; a network park inside such a branch would emit its
+        // `coro.suspend` + frame-`%hdl` references into the branch function
+        // while `coro.begin` lives in the outer ramp — an invalid cross-function
+        // reference ("basic block in another function" / "does not dominate")
+        // that fails module verification. Semantically a coroutine owns its
+        // frame and suspends on the dispatcher; its body can't be sharded onto
+        // pool workers. Fall back to sequential `compile_block` for the body.
+        if self.coro_ctx.is_some() {
+            return self.compile_block(body);
+        }
+
         // Snapshot the analysis up front to release the borrow on `self`
         // before the loop calls `&mut self` methods (`compile_stmt`,
         // `emit_par_run`). The clone is cheap — `ParallelGroup` holds a

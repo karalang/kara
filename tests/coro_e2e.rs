@@ -913,7 +913,14 @@ mod tests {
             build_callee_purely_polymorphic_effects_set(&effects);
         let _ownership = karac::ownershipcheck(&parsed.program, &typed);
 
-        compile_to_ir_with_coro_split(&parsed.program, None, None)
+        // Load concurrency analysis — the CLI `karac build` path passes it, and
+        // it is what surfaced the coro+auto-par interaction (a coroutine body
+        // that auto-parallelizes would emit `coro.suspend` into a `__par_branch`
+        // worker fn referencing the outer ramp's frame `%hdl` — invalid IR). The
+        // coro_e2e harness historically passed `None`, so it could not catch
+        // this; thread it through to match the real build.
+        let concurrency = karac::concurrency_analyze(&parsed.program, &effects);
+        compile_to_ir_with_coro_split(&parsed.program, None, Some(&concurrency))
     }
 
     /// Extract one `define ... @<sig_marker>...{ ... }` function body from module
@@ -950,6 +957,46 @@ mod tests {
     /// structural assertion is the right gate until slice 5 wires a live cancel.
     /// The non-heap contrast handler proves the buffer free is tied to the live
     /// heap local, not emitted unconditionally.
+    /// Regression: a coroutine-compiled function body must NOT be
+    /// auto-parallelized. Surfaced flipping coroutines on by default for
+    /// `karac build` (which loads concurrency analysis): a coroutine whose body
+    /// is several independent statements would have its group lifted into a
+    /// `__par_branch_*` worker fn, emitting the `coro.suspend` + frame-`%hdl`
+    /// references there while `coro.begin` stayed in the outer ramp — "basic
+    /// block in another function" / "does not dominate", failing module
+    /// verification. Fix: `compile_function_body` falls back to sequential when
+    /// `coro_ctx` is set. `compile_coro_split_ir` now loads concurrency analysis,
+    /// so a regressed fix would fail this compile (verify) outright.
+    #[test]
+    fn coroutine_body_not_auto_parallelized() {
+        const SRC: &str = r#"
+            fn serve(l: TcpListener) {
+                let s = l.accept().unwrap();
+                println(1);
+                println(2);
+            }
+            fn main() {
+                let l = TcpListener.bind("127.0.0.1:0").unwrap();
+                serve(l);
+            }
+        "#;
+        let ir = match compile_coro_split_ir(SRC) {
+            Ok(ir) => ir,
+            Err(e) => panic!("coro body with auto-par-able statements failed to compile: {e}"),
+        };
+        // serve is a coroutine (parks) ...
+        assert!(
+            ir.contains("@serve.destroy(") || ir.contains("@serve.resume("),
+            "serve must be coroutine-compiled (CoroSplit clones present); IR:\n{ir}"
+        );
+        // ... and its body was NOT sharded onto par workers.
+        assert!(
+            !ir.contains("@__par_branch"),
+            "a coroutine body must not be auto-parallelized into par-branch \
+             worker fns; IR:\n{ir}"
+        );
+    }
+
     #[test]
     fn nonblocking_spawn_uses_spawn_coro_ffi() {
         let ir = match compile_coro_split_ir(SPAWN_NONBLOCK_SRC) {

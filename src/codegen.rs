@@ -461,6 +461,10 @@ pub fn compile_to_object_with_options(
         source_text,
         false,
         false,
+        // coro_enabled: the test-facing object path stays on the legacy
+        // degenerate state-machine path (its IR tests assert that shape);
+        // the CLI build/run paths pass `true`. Convergence is a later slice.
+        false,
     )
 }
 
@@ -482,6 +486,15 @@ pub fn compile_to_object_with_options(
 // struct would ripple through every call site for no readability win at this
 // thin public-API boundary; the `enable_hot_swap` / `release` names are
 // self-documenting at the (few) call sites. Matches `cmd_build`'s allow.
+///
+/// `coro_enabled` carries the A2 coroutine network-async transform: when `true`
+/// (the CLI `karac build` / `karac run` path), network-boundary fns compile as
+/// dispatcher-driven LLVM coroutines (`Codegen::set_coro_enabled`) — the bug-C
+/// fix, so a spawned per-connection handler actually executes + parks. The
+/// test-facing `compile_to_object` chain passes `false` to keep the legacy
+/// degenerate state-machine poll-fn path under test (the convergence — flip
+/// every object path on + retire the degenerate emitter + migrate its IR tests
+/// — is a follow-on slice). See docs/spikes/network-async-coroutine-transform.md.
 #[allow(clippy::too_many_arguments)]
 pub fn compile_to_object_with_hot_swap(
     program: &Program,
@@ -492,6 +505,7 @@ pub fn compile_to_object_with_hot_swap(
     source_text: Option<&str>,
     enable_hot_swap: bool,
     release: bool,
+    coro_enabled: bool,
 ) -> Result<(), String> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
@@ -504,6 +518,7 @@ pub fn compile_to_object_with_hot_swap(
         cg.set_strip_contracts(true);
         cg.set_strip_error_trace(true);
     }
+    cg.set_coro_enabled(coro_enabled);
     cg.compile_program(program)?;
 
     let target_machine = create_target_machine()?;

@@ -225,6 +225,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_var_types = std::mem::take(&mut self.var_type_names);
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
         let saved_subst = std::mem::take(&mut self.type_subst);
+        // The spawn wrapper is its own top-level function run on a pool worker —
+        // NOT a continuation of any enclosing `par {}` branch. If this spawn
+        // site sits inside an auto-parallelized statement group, `current_fn`
+        // is a `__par_branch_*` fn and `branch_cancel_ptr` points at that
+        // branch's cancel-flag argument; leaving it set would make the wrapper
+        // body's per-call cancel checks (`emit_branch_cancel_check`) load that
+        // arg from inside the wrapper — a cross-function reference that fails
+        // verification ("argument in another function"). Clear it for the
+        // wrapper body; restore below. (Surfaced flipping coroutines on by
+        // default — `tg.spawn(coro); stmt` in a straight-line fn.)
+        let saved_cancel = self.branch_cancel_ptr.take();
 
         // Build wrapper body.
         self.current_fn = Some(wrapper_fn);
@@ -329,6 +340,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
         self.current_fn = saved_fn;
+        self.branch_cancel_ptr = saved_cancel;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
