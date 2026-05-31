@@ -26915,4 +26915,103 @@ fn main() { let mut c = Counter { n: 0 }; println(c.inc()); }
         assert!(ir_for(src).contains("contract violated"));
         assert!(!ir_for_contracts_stripped(src).contains("contract violated"));
     }
+
+    // ── Contracts — `contract predicate panicked` fault category (AOT) ──
+    //
+    // design.md § Contracts rule 2: a predicate that *returns false* is
+    // `contract violated`; a predicate whose *evaluation* faults (index OOB,
+    // div-by-zero, unwrap) is the distinct `contract predicate panicked`.
+    // These mirror the interpreter coverage in tests/interpreter.rs for the
+    // AOT path: panics emitted while compiling the predicate carry the
+    // distinct prefix.
+
+    #[test]
+    fn test_e2e_contract_predicate_panicked_is_distinct() {
+        // `requires v[i] >= 0` with `i` out of range: the `v[i]` bounds check
+        // fires during predicate evaluation — the distinct
+        // `contract predicate panicked` fault, NOT `contract violated`.
+        let captured = run_program_capturing(
+            r#"
+fn at(v: ref Vec[i64], i: i64) -> i64 requires v[i] >= 0 { 0 }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1); v.push(2); v.push(3);
+    println(at(v, 99));
+    println(42);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract predicate panicked"),
+                "expected a `contract predicate panicked` fault, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("contract violated"),
+                "a panicking predicate must NOT report `contract violated`, got stdout={:?}",
+                c.stdout
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after the abort must not run"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_contract_violated_distinct_from_panicked() {
+        // A predicate that simply returns false is `contract violated`, NOT
+        // `contract predicate panicked` — the flag is cleared before the
+        // explicit false-branch.
+        let captured = run_program_capturing(
+            r#"
+fn pos(x: i64) -> i64 requires x > 0 { x }
+fn main() { println(pos(-5)); println(42); }
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated"),
+                "expected `contract violated` for a false predicate, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("predicate panicked"),
+                "a false predicate must NOT report panicked, got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_contract_predicate_panicked_in_ensures() {
+        // The distinct category fires for an `ensures` predicate too:
+        // `v[result]` with `result` out of range panics during evaluation.
+        let captured = run_program_capturing(
+            r#"
+fn f(v: ref Vec[i64]) -> i64 ensures(result) v[result] >= 0 { 99 }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1); v.push(2); v.push(3);
+    println(f(v));
+    println(42);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract predicate panicked"),
+                "expected `contract predicate panicked` in an ensures, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after the abort must not run"
+            );
+        }
+    }
 }

@@ -24,12 +24,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// on `false` the program aborts via `emit_panic(fault_msg)`. The builder
     /// is left positioned in a block where the predicate held. Reuses the
     /// same shape as `emit_refinement_assert`.
+    ///
+    /// The predicate's own compilation runs with `in_contract_predicate` set
+    /// (design.md § Contracts rule 2), so any inline panic site it emits — a
+    /// bounds check in `v[i]`, a divide-by-zero guard, an `unwrap` None-check —
+    /// aborts as the distinct `contract predicate panicked: <msg>` fault rather
+    /// than `contract violated`. The flag is cleared before the explicit
+    /// false-branch below, so a predicate that simply returns `false` still
+    /// reports `contract violated` (`fault_msg`).
     pub(super) fn emit_contract_assert(
         &mut self,
         pred: &Expr,
         fault_msg: &str,
     ) -> Result<(), String> {
-        let cond = self.compile_expr(pred)?.into_int_value();
+        let prev_in_pred = self.in_contract_predicate;
+        self.in_contract_predicate = true;
+        let cond = self.compile_expr(pred).map(|v| v.into_int_value());
+        self.in_contract_predicate = prev_in_pred;
+        let cond = cond?;
         let fn_val = self
             .current_fn
             .ok_or_else(|| "contract assertion emitted outside a function".to_string())?;

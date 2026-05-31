@@ -23,9 +23,22 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Allocate a new RC heap object: `malloc(sizeof(heap_type))`, store refcount = 1.
     /// Returns a pointer to the heap object.
     pub(super) fn emit_panic(&self, message: &str) {
+        // design.md § Contracts rule 2: a panic emitted while a contract
+        // predicate is being compiled (an inline bounds / div / unwrap check
+        // inside the predicate) is the distinct `contract predicate panicked`
+        // fault category, kept separate from `contract violated` (the
+        // predicate returning false). The `in_contract_predicate` flag is set
+        // by `emit_contract_assert` only around the predicate's compilation,
+        // so it cannot leak to the explicit false-branch or to ordinary
+        // (non-contract) panic sites.
+        let formatted = if self.in_contract_predicate {
+            format!("panic: contract predicate panicked: {}\n\0", message)
+        } else {
+            format!("panic: {}\n\0", message)
+        };
         let msg = self
             .builder
-            .build_global_string_ptr(&format!("panic: {}\n\0", message), "panic_msg")
+            .build_global_string_ptr(&formatted, "panic_msg")
             .unwrap();
         self.builder
             .build_call(

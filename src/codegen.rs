@@ -609,6 +609,20 @@ pub(super) struct Codegen<'ctx> {
     /// a natural no-op, and `old(...)` (which lives only inside `ensures`
     /// bodies) is never reached because those bodies aren't compiled.
     pub(crate) strip_contracts: bool,
+    /// `true` while a contract predicate expression is being compiled
+    /// (design.md § Contracts rule 2). Set by `emit_contract_assert` around
+    /// the predicate's `compile_expr` and cleared before the explicit
+    /// false-branch. `emit_panic` consults it: a panic emitted *during*
+    /// predicate compilation (an inline bounds / divide-by-zero / unwrap check
+    /// inside the predicate, e.g. `requires v[i] >= 0` with `i` out of range)
+    /// is the distinct `contract predicate panicked: <msg>` fault, NOT
+    /// `contract violated` — which is reserved for the predicate evaluating to
+    /// `false`. Matches the interpreter's `eval_contract_predicate`
+    /// classification for the inline-panic case. (A panic *inside a function
+    /// the predicate calls* compiles in that callee's own body with the flag
+    /// clear, so it surfaces as a plain panic — a follow-on would need a
+    /// runtime predicate-context flag to categorize it.)
+    pub(crate) in_contract_predicate: bool,
     /// Set of top-level Atomic[T]-typed bindings whose inner T is `bool`.
     /// The slot itself is widened to `i8` (LLVM atomics reject `i1`); this
     /// set drives the `.load` trunc-to-i1 and `.store` zext-to-i8 wrapping
@@ -3107,6 +3121,7 @@ impl<'ctx> Codegen<'ctx> {
             contract_old_snapshots: HashMap::new(),
             current_method_invariants: Vec::new(),
             strip_contracts: read_strip_contracts_env(),
+            in_contract_predicate: false,
             atomic_var_inner_is_bool: HashSet::new(),
             current_fn: None,
             printf_fn,
