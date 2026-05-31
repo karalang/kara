@@ -4558,6 +4558,122 @@ fn test_distinct_where_invalid_predicate_rejected() {
     );
 }
 
+// ── Distinct types — derive opt-in gates (Eq/Ord/Hash/Display) ─────
+//
+// design.md § Distinct Types: "No operations carry through by default —
+// no arithmetic, no comparison unless opted in via #[derive]." A distinct
+// type is opaque, so the comparison/hash/display surface requires the
+// explicit derive (the operations themselves run on the base layout, but
+// the typechecker gates them).
+
+#[test]
+fn test_distinct_eq_requires_derive() {
+    let errors = typecheck_errors(
+        "distinct type UserId = i64;
+         fn f(a: UserId, b: UserId) -> bool { a == b }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("does not implement Eq")),
+        "expected Eq gate on `==` for a non-derived distinct type, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_distinct_eq_with_derive_ok() {
+    typecheck_ok(
+        "#[derive(Eq)]
+         distinct type UserId = i64;
+         fn f(a: UserId, b: UserId) -> bool { a == b }",
+    );
+}
+
+#[test]
+fn test_distinct_ord_requires_derive() {
+    let errors = typecheck_errors(
+        "distinct type UserId = i64;
+         fn f(a: UserId, b: UserId) -> bool { a < b }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("does not implement Ord")),
+        "expected Ord gate on `<` for a non-derived distinct type, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_distinct_ord_with_derive_ok() {
+    typecheck_ok(
+        "#[derive(Eq, Ord)]
+         distinct type UserId = i64;
+         fn f(a: UserId, b: UserId) -> bool { a < b }",
+    );
+}
+
+#[test]
+fn test_distinct_hash_required_for_set_key() {
+    let errors = typecheck_errors(
+        "distinct type UserId = i64;
+         fn f() { let mut s: Set[UserId] = Set.new(); s.insert(UserId(1)); }",
+    );
+    assert!(
+        errors.iter().any(|e| e.to_string().contains("Hash")),
+        "expected Hash gate on a distinct Set element, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_distinct_hash_with_derive_ok() {
+    typecheck_ok(
+        "#[derive(Eq, Hash)]
+         distinct type UserId = i64;
+         fn f() { let mut s: Set[UserId] = Set.new(); s.insert(UserId(1)); }",
+    );
+}
+
+#[test]
+fn test_distinct_display_requires_derive() {
+    let errors = typecheck_errors(
+        "distinct type UserId = i64;
+         fn main() { let u = UserId(5); println(u) }",
+    );
+    assert!(
+        errors.iter().any(|e| e.to_string().contains("Display")),
+        "expected Display gate on `println` of a distinct type, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_distinct_display_with_derive_ok() {
+    typecheck_ok(
+        "#[derive(Display)]
+         distinct type UserId = i64;
+         fn main() { let u = UserId(5); println(u) }",
+    );
+}
+
 // ── defer / errdefer ───────────────────────────────────────────
 
 #[test]

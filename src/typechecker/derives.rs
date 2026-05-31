@@ -13,10 +13,31 @@ use super::types::{is_numeric, type_display, Type, VariantTypeInfo};
 use super::{extract_derived_traits, TypeErrorKind};
 
 impl<'a> super::TypeChecker<'a> {
+    /// If `ty` is a `distinct type`, return whether it derives ANY of
+    /// `wanted` (so the caller's trait gate is satisfied), wrapped in
+    /// `Some`; `None` when `ty` is not a distinct type (caller continues its
+    /// normal struct/enum/primitive logic). Distinct types are opaque — they
+    /// inherit NO operations from their base, so a derive-support query must
+    /// consult the explicit `#[derive(...)]` set, not the base's support
+    /// (design.md § Distinct Types — "No operations carry through by
+    /// default"). This is the gate that makes `a == b` / `a < b` / hashing /
+    /// `Display` require the corresponding derive on a distinct type.
+    fn distinct_derive_supported(&self, ty: &Type, wanted: &[&str]) -> Option<bool> {
+        if let Type::Named { name, .. } = ty {
+            if let Some(traits) = self.env.distinct_types.get(name) {
+                return Some(wanted.iter().any(|w| traits.contains(*w)));
+            }
+        }
+        None
+    }
+
     /// Check whether a type supports `==` / `!=` (PartialEq).
     /// All primitives including floats support PartialEq.
     /// Named types (structs/enums) require `#[derive(Eq)]` or `#[derive(PartialEq)]`.
     pub(super) fn type_supports_partial_eq(&self, ty: &Type) -> bool {
+        if let Some(ok) = self.distinct_derive_supported(ty, &["Eq", "PartialEq"]) {
+            return ok;
+        }
         match ty {
             // Refinement types are structurally transparent — derive
             // support follows the base type.
@@ -82,6 +103,9 @@ impl<'a> super::TypeChecker<'a> {
     /// Floats (f32/f64) do NOT support Eq due to IEEE 754 NaN != NaN.
     /// Named types require `#[derive(Eq)]`.
     pub(super) fn type_supports_eq(&self, ty: &Type) -> bool {
+        if let Some(ok) = self.distinct_derive_supported(ty, &["Eq"]) {
+            return ok;
+        }
         match ty {
             Type::Refinement { base, .. } => self.type_supports_eq(base),
             Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char | Type::Str | Type::Unit => true,
@@ -131,6 +155,9 @@ impl<'a> super::TypeChecker<'a> {
     /// Check whether a type supports `Hash`. Floats do not — NaN-as-key would
     /// break the hash/eq contract. Named types require `#[derive(Hash)]`.
     pub(super) fn type_supports_hash(&self, ty: &Type) -> bool {
+        if let Some(ok) = self.distinct_derive_supported(ty, &["Hash"]) {
+            return ok;
+        }
         match ty {
             Type::Refinement { base, .. } => self.type_supports_hash(base),
             Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char | Type::Str | Type::Unit => true,
@@ -193,6 +220,9 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Check whether a type supports total `Ord`. Floats do not (see Eq).
     pub(super) fn type_supports_ord(&self, ty: &Type) -> bool {
+        if let Some(ok) = self.distinct_derive_supported(ty, &["Ord"]) {
+            return ok;
+        }
         match ty {
             Type::Refinement { base, .. } => self.type_supports_ord(base),
             Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char | Type::Str | Type::Unit => true,
@@ -241,6 +271,9 @@ impl<'a> super::TypeChecker<'a> {
     /// Option, Result) support Display when their type arguments do.
     /// Named user types require `#[derive(Display)]`.
     pub(super) fn type_supports_display(&self, ty: &Type) -> bool {
+        if let Some(ok) = self.distinct_derive_supported(ty, &["Display"]) {
+            return ok;
+        }
         match ty {
             Type::Refinement { base, .. } => self.type_supports_display(base),
             Type::Int(_)
@@ -305,6 +338,9 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Check whether a type supports `PartialOrd` (admits NaN for floats).
     pub(super) fn type_supports_partial_ord(&self, ty: &Type) -> bool {
+        if let Some(ok) = self.distinct_derive_supported(ty, &["PartialOrd", "Ord"]) {
+            return ok;
+        }
         match ty {
             Type::Refinement { base, .. } => self.type_supports_partial_ord(base),
             Type::Int(_)

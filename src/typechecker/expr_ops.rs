@@ -599,6 +599,22 @@ impl<'a> super::TypeChecker<'a> {
                         span.clone(),
                         TypeErrorKind::InvalidBinaryOp,
                     );
+                } else if matches!(&left_ty, Type::Named { name, .. } if self.env.distinct_types.contains_key(name))
+                    && !self.type_supports_partial_ord(&left_ty)
+                {
+                    // Distinct types are opaque — ordering comparisons require
+                    // an explicit `#[derive(Ord)]` (design.md § Distinct Types:
+                    // "no comparison unless opted in"). Other named types keep
+                    // their pre-existing comparison behavior.
+                    self.type_error(
+                        format!(
+                            "type '{}' does not implement Ord; add #[derive(Ord)] to use \
+                             <, <=, >, or >=",
+                            type_display(&left_ty)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::InvalidBinaryOp,
+                    );
                 }
                 Type::Bool
             }

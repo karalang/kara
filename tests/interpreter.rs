@@ -5038,6 +5038,22 @@ fn test_distinct_where_constructor_runtime_fails() {
 }
 
 #[test]
+fn test_distinct_derived_comparison_runs() {
+    // With `#[derive(Eq, Ord)]` the comparison operators are admitted and
+    // run on the base layout — `UserId(3) < UserId(5)` is `true`,
+    // `UserId(5) == UserId(5)` is `true`.
+    let output = run_no_errors(
+        "#[derive(Eq, Ord)]\n\
+         distinct type UserId = i64;\n\
+         fn main() {\n\
+             println(UserId(3) < UserId(5));\n\
+             println(UserId(5) == UserId(5));\n\
+         }",
+    );
+    assert_eq!(output, "true\ntrue\n");
+}
+
+#[test]
 fn test_distinct_where_try_from_ok_and_err() {
     // `Even.try_from` returns `Ok` for an even value and `Err` for an odd.
     let ok = run_no_errors(
