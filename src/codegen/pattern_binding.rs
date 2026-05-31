@@ -493,6 +493,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(())
             }
+            // `name @ subpattern` — bind the outer alias to the whole
+            // scrutinee value, then recurse into the sub-pattern so any
+            // nested bindings (`whole @ Some(x)` → `x`) also materialize.
+            // The alias reuses the leaf-`Binding` machinery (alloca +
+            // surface-type plumbing) via a synthetic `Binding` at the
+            // AtBinding's own span — the span the typechecker recorded
+            // the alias against (`check_pattern_against`'s AtBinding arm).
+            // Without this arm, `@` bindings fell through to `_ => Ok(())`
+            // and were never bound in compiled code (the match-condition
+            // side had the same gap — see `compile_pattern_condition`).
+            PatternKind::AtBinding {
+                name,
+                pattern: inner,
+            } => {
+                let synthetic = Pattern {
+                    kind: PatternKind::Binding(name.clone()),
+                    span: pattern.span.clone(),
+                };
+                self.bind_pattern_values(&synthetic, scrut)?;
+                self.bind_pattern_values(inner, scrut)?;
+                Ok(())
+            }
             _ => Ok(()),
         }
     }

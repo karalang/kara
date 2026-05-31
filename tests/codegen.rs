@@ -1745,6 +1745,94 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_match_at_binding_range() {
+        // `@` bindings had no codegen arm: `bind_pattern_values` fell
+        // through to `_ => Ok(())` (alias never stored) and
+        // `compile_pattern_condition` fell through to `_ => true` (every
+        // `@` matched unconditionally). The interpreter was correct.
+        // This exercises both halves: the range condition must select the
+        // right arm AND the alias `c` must hold the real scrutinee value.
+        let out = run_program(
+            r#"
+fn classify(code: i64) -> i64 {
+    match code {
+        c @ 200..=299 => c + 1000,
+        c @ 400..=499 => c + 2000,
+        other => other,
+    }
+}
+fn main() {
+    println(classify(204));  // in 200..=299 → 204 + 1000 = 1204
+    println(classify(404));  // in 400..=499 → 404 + 2000 = 2404
+    println(classify(500));  // no range → catch-all alias → 500
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["1204", "2404", "500"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_match_at_binding_variant_inner() {
+        // `whole @ Some(x)` must bind BOTH the inner payload `x` and the
+        // outer alias `whole` (the entire Option), and the variant tag
+        // condition must still select Some vs None. `whole` is forwarded
+        // to a function taking `Option[i64]` to prove the alias holds the
+        // whole scrutinee value, not garbage.
+        let out = run_program(
+            r#"
+fn unwrap_or(o: Option[i64], d: i64) -> i64 {
+    match o {
+        Some(v) => v,
+        None => d,
+    }
+}
+fn describe(o: Option[i64]) -> i64 {
+    match o {
+        whole @ Some(x) => x + unwrap_or(whole, 0),
+        None => -1,
+    }
+}
+fn main() {
+    println(describe(Some(7)));  // x=7, whole=Some(7) → 7 + 7 = 14
+    println(describe(None));     // None arm → -1
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["14", "-1"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_match_at_binding_or() {
+        // `@` + or-pattern composition: the alias binds from the first
+        // alternative and the condition ORs each alternative's test.
+        let out = run_program(
+            r#"
+fn f(n: i64) -> i64 {
+    match n {
+        x @ 1 | x @ 2 => x * 100,
+        other => other,
+    }
+}
+fn main() {
+    println(f(1));  // matches → x=1 → 100
+    println(f(2));  // matches → x=2 → 200
+    println(f(9));  // catch-all → 9
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["100", "200", "9"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_match_byte_literal() {
         // Byte-literal patterns (`b'I'`) desugar to integer patterns with
         // a U8 suffix; previously the parser rejected them outright.

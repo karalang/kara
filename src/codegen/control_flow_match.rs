@@ -459,6 +459,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(tru.into())
             }
+            // `name @ subpattern` — the alias binding is irrefutable, so
+            // the match condition is exactly the sub-pattern's condition
+            // (`code @ 500..=599` tests the range; `whole @ Some(x)` tests
+            // the variant tag). Without this arm the pattern fell through
+            // to the catch-all `_ => true`, so every `@` binding matched
+            // unconditionally — the same codegen-only gap the binding side
+            // had (see `bind_pattern_values`).
+            PatternKind::AtBinding { pattern: inner, .. } => {
+                self.compile_pattern_condition(inner, scrut)
+            }
             // Plain struct pattern or anything else — always matches
             _ => Ok(tru.into()),
         }
