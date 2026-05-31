@@ -8,10 +8,17 @@
 # Usage:
 #   run_2m.sh <server-bin> [output.json]
 #
-# - server-bin: absolute path to the Kāra demo binary
-#   (examples/ws_idle_holder/ws_idle_holder, produced by `karac build`).
-#   Rust comparator is intentionally not run at 2M — 1M parity already
-#   established the per-conn-bytes ratio; 2M is a Kāra ceiling sweep.
+# - server-bin: absolute path to the server binary under test. Either
+#   the Kāra demo binary (examples/ws_idle_holder/ws_idle_holder,
+#   produced by `karac build`) or the Rust comparator
+#   (examples/ws_idle_holder/rust/target/release/ws-idle-holder-rust).
+#   The Rust comparator IS run at 2M as the credibility comparator
+#   (decision 2026-05-30): an empirical head-to-head at the 2M ceiling
+#   is rhetorically stronger than extrapolating the per-conn-bytes
+#   ratio from 1M, and it validates Rust per-conn-bytes linearity at
+#   scale (rustls session cache, tokio task accounting). Commercial
+#   comparators (Phoenix/Java/Go/.NET/Node) stay at 250K — only the
+#   credibility comparator tracks Kāra's full ceiling.
 # - output.json: optional, defaults to "<basename>-2m.json" in cwd.
 #
 # Prereq: scripts/ec2_setup.sh (sysctls + 50 loopback aliases + nofile
