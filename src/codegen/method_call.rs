@@ -1353,37 +1353,205 @@ impl<'ctx> super::Codegen<'ctx> {
         ))
     }
 
-    /// Lower an ambient built-in resource method (`env.set`, `clock.now`)
-    /// to its runtime FFI — the codegen counterpart of the interpreter's
-    /// `dispatch_builtin_resource_method_with_values`. Only the
-    /// resource/method pairs the runtime currently backs are lowered; any
-    /// other ambient method returns an error naming the gap rather than
-    /// miscompiling.
-    fn compile_ambient_resource_method(
+    /// Lower an ambient built-in resource method (`env.set`, `clock.now`).
+    ///
+    /// A `with_provider[R]` override of an ambient resource is pushed onto
+    /// the runtime provider stack (see `compile_with_provider_ambient`), so
+    /// the override is visible across function-call boundaries — including
+    /// the `karac test` synthesized-main path, which wraps a *call* to the
+    /// test fn. When an override vtable for this resource exists in the
+    /// module, emit a runtime branch: consult `karac_provider_lookup`, and
+    /// if an override frame is active, dispatch through its vtable;
+    /// otherwise fall to the builtin FFI default. When no override vtable
+    /// exists (no `with_provider[R]` in the module), no override can be
+    /// active, so skip the branch and emit the FFI default directly.
+    pub(super) fn compile_ambient_resource_method(
         &mut self,
         resource: &str,
         method: &str,
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // An active `with_provider[R]` ambient override wins over the
-        // builtin FFI: dispatch directly to the override's `@Type.method`.
-        if let Some(v) = self.try_compile_ambient_override(resource, method, args)? {
-            return Ok(v);
+        // Compile args ONCE — they must not be re-evaluated across the
+        // override / default branches (side effects would double-run).
+        let arg_vals: Vec<BasicValueEnum<'ctx>> = args
+            .iter()
+            .map(|a| self.compile_expr(&a.value))
+            .collect::<Result<_, _>>()?;
+
+        // Runtime override dispatch is possible only when (a) this method
+        // has a canonical vtable slot and (b) some override vtable for this
+        // resource was emitted in the module. Otherwise no override can be
+        // active at runtime — emit the FFI default directly.
+        if let Some(method_idx) = ambient_method_index(resource, method) {
+            if let Some(fn_type) = self.ambient_override_fn_type(resource, method) {
+                return self.compile_ambient_dispatch_branch(
+                    resource, method, method_idx, fn_type, &arg_vals,
+                );
+            }
         }
+        self.compile_ambient_ffi(resource, method, &arg_vals)
+    }
+
+    /// Emit the runtime override-vs-default branch for an ambient method
+    /// call whose resource has an override vtable in this module:
+    /// ```text
+    ///   {data, vt} = karac_provider_lookup(<resource_id>)
+    ///   br (data != null), %override, %default
+    /// override: fn = vt[<method_idx>]; r1 = call fn(self=data, args...)
+    /// default:  r2 = <ambient FFI default>
+    /// merge:    phi i64 [r1, override], [r2, default]
+    /// ```
+    /// All ambient methods codegen lowers today return an i64-shaped slot
+    /// (`Clock.now` real i64; `Env.set` the unit-return placeholder), so
+    /// the phi is uniformly i64. A null fn-ptr slot (override implements
+    /// only some methods) would null-deref in the override arm — but the
+    /// override arm is only taken when a frame is active, and a fixture
+    /// only overrides methods it implements, so the implemented slot is
+    /// non-null. (Generalizing the phi type for non-i64 ambient methods is
+    /// tracked with the remaining-ambient-methods lowering gap.)
+    fn compile_ambient_dispatch_branch(
+        &mut self,
+        resource: &str,
+        method: &str,
+        method_idx: usize,
+        fn_type: inkwell::types::FunctionType<'ctx>,
+        arg_vals: &[BasicValueEnum<'ctx>],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let resource_id = *self.provider_resource_ids.get(resource).ok_or_else(|| {
+            format!("codegen: ambient resource '{resource}' has no minted ID (codegen bug)")
+        })?;
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "ambient dispatch: no current function".to_string())?;
+
+        // Runtime lookup → {data, vtable}.
+        let id_v = i32_t.const_int(resource_id as u64, false);
+        let lookup_sv = self
+            .builder
+            .build_call(self.karac_provider_lookup_fn, &[id_v.into()], "amb.lookup")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_struct_value();
+        let data_ptr = self
+            .builder
+            .build_extract_value(lookup_sv, 0, "amb.data")
+            .unwrap()
+            .into_pointer_value();
+        let vtable_ptr = self
+            .builder
+            .build_extract_value(lookup_sv, 1, "amb.vt")
+            .unwrap()
+            .into_pointer_value();
+        let is_present = self
+            .builder
+            .build_is_not_null(data_ptr, "amb.present")
+            .unwrap();
+
+        let override_bb = self.context.append_basic_block(fn_val, "amb.override");
+        let default_bb = self.context.append_basic_block(fn_val, "amb.default");
+        let merge_bb = self.context.append_basic_block(fn_val, "amb.merge");
+        self.builder
+            .build_conditional_branch(is_present, override_bb, default_bb)
+            .unwrap();
+
+        // override arm: indirect call through the vtable slot.
+        self.builder.position_at_end(override_bb);
+        let idx_v = i32_t.const_int(method_idx as u64, false);
+        let fn_slot = unsafe {
+            self.builder
+                .build_gep(ptr_ty, vtable_ptr, &[idx_v], "amb.fn.slot")
+                .unwrap()
+        };
+        let fn_ptr = self
+            .builder
+            .build_load(ptr_ty, fn_slot, "amb.fn")
+            .unwrap()
+            .into_pointer_value();
+        // self-arg lowering mirrors `try_compile_provider_dispatch`: ptr
+        // for `ref/mut ref/shared self`, loaded struct for owned `self`.
+        let self_param_ty = fn_type
+            .get_param_types()
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                format!("ambient dispatch: override method `{resource}.{method}` has no self param")
+            })?;
+        let self_arg: BasicMetadataValueEnum<'ctx> = match self_param_ty {
+            inkwell::types::BasicMetadataTypeEnum::PointerType(_) => {
+                BasicMetadataValueEnum::from(data_ptr)
+            }
+            inkwell::types::BasicMetadataTypeEnum::StructType(st) => {
+                let loaded = self
+                    .builder
+                    .build_load(st, data_ptr, "amb.self.owned")
+                    .unwrap();
+                BasicMetadataValueEnum::from(loaded)
+            }
+            other => {
+                return Err(format!(
+                    "ambient dispatch: unexpected self-param lowering `{other:?}` for `{resource}.{method}`"
+                ));
+            }
+        };
+        let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![self_arg];
+        for v in arg_vals {
+            call_args.push(BasicMetadataValueEnum::from(*v));
+        }
+        let override_call = self
+            .builder
+            .build_indirect_call(fn_type, fn_ptr, &call_args, "amb.call")
+            .unwrap();
+        let override_val: BasicValueEnum<'ctx> =
+            if override_call.try_as_basic_value().is_instruction() {
+                i64_t.const_int(0, false).into()
+            } else {
+                override_call.try_as_basic_value().unwrap_basic()
+            };
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        let override_end = self.builder.get_insert_block().unwrap();
+
+        // default arm: the builtin FFI default.
+        self.builder.position_at_end(default_bb);
+        let default_val = self.compile_ambient_ffi(resource, method, arg_vals)?;
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        let default_end = self.builder.get_insert_block().unwrap();
+
+        // merge: phi the two i64 results.
+        self.builder.position_at_end(merge_bb);
+        let phi = self.builder.build_phi(i64_t, "amb.result").unwrap();
+        phi.add_incoming(&[(&override_val, override_end), (&default_val, default_end)]);
+        Ok(phi.as_basic_value())
+    }
+
+    /// The builtin-FFI default lowering for an ambient method (the codegen
+    /// counterpart of the interpreter's
+    /// `dispatch_builtin_resource_method_with_values`). Takes already-
+    /// compiled arg values so it can serve both the no-override fast path
+    /// and the default arm of `compile_ambient_dispatch_branch` without
+    /// re-evaluating args. Only the resource/method pairs the runtime backs
+    /// are lowered; others error naming the gap rather than miscompiling.
+    fn compile_ambient_ffi(
+        &mut self,
+        resource: &str,
+        method: &str,
+        arg_vals: &[BasicValueEnum<'ctx>],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
         let ptr_t = self.context.ptr_type(AddressSpace::default());
         match (resource, method) {
             ("Env", "set") => {
-                if args.len() != 2 {
+                if arg_vals.len() != 2 {
                     return Err(format!(
                         "codegen: env.set expects 2 arguments, found {}",
-                        args.len()
+                        arg_vals.len()
                     ));
                 }
-                let name_val = self.compile_expr(&args[0].value)?;
-                let val_val = self.compile_expr(&args[1].value)?;
-                let (name_ptr, name_len) = self.extract_string_ptr_len(name_val, "env.set.name");
-                let (val_ptr, val_len) = self.extract_string_ptr_len(val_val, "env.set.val");
+                let (name_ptr, name_len) = self.extract_string_ptr_len(arg_vals[0], "env.set.name");
+                let (val_ptr, val_len) = self.extract_string_ptr_len(arg_vals[1], "env.set.val");
                 let fn_val = match self.module.get_function("karac_runtime_env_set") {
                     Some(f) => f,
                     None => {
@@ -1407,15 +1575,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         "env.set",
                     )
                     .unwrap();
-                // `env.set` returns Unit → the i64-0 void-return placeholder
-                // used throughout this module.
+                // `env.set` returns Unit → the i64-0 void-return placeholder.
                 Ok(i64_t.const_int(0, false).into())
             }
             ("Clock", "now") => {
-                if !args.is_empty() {
+                if !arg_vals.is_empty() {
                     return Err(format!(
                         "codegen: clock.now expects 0 arguments, found {}",
-                        args.len()
+                        arg_vals.len()
                     ));
                 }
                 let fn_val = match self.module.get_function("karac_runtime_clock_now") {
@@ -1432,7 +1599,7 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => Err(format!(
                 "codegen: ambient resource method '{}.{}' is not yet lowered \
                  (interpreter-only); add a runtime FFI + an arm in \
-                 `compile_ambient_resource_method`",
+                 `compile_ambient_ffi`",
                 resource, method
             )),
         }
@@ -1965,4 +2132,15 @@ fn ambient_resource_for_alias(alias: &str) -> Option<&'static str> {
         "fs" => Some("FileSystem"),
         _ => None,
     }
+}
+
+/// Vtable slot index of `method` within `resource`'s canonical method
+/// order (`prelude::AMBIENT_RESOURCE_METHODS`), or `None` if the pair has
+/// no slot — in which case there's no runtime override dispatch for it
+/// and the call falls straight to the FFI default.
+pub(super) fn ambient_method_index(resource: &str, method: &str) -> Option<usize> {
+    crate::prelude::AMBIENT_RESOURCE_METHODS
+        .iter()
+        .find(|(r, _)| *r == resource)
+        .and_then(|(_, methods)| methods.iter().position(|m| *m == method))
 }

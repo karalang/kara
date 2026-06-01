@@ -232,16 +232,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return Ok(value);
                 }
-                // Capitalized ambient resource call (`Clock.now()`) under
-                // an active `with_provider[Clock]` ambient override: route
-                // to the override's `@Type.method` before the generic
-                // assoc-call path (which would otherwise miss the override
-                // and fall to a const-0 default — the historical latent
-                // bug for capitalized ambient calls).
-                if let Some(value) =
-                    self.try_compile_ambient_override(&segments[0], &segments[1], args)?
-                {
-                    return Ok(value);
+                // Capitalized ambient resource call whose method is one the
+                // ambient lowering backs (`Clock.now`, `Env.set`): route
+                // through `compile_ambient_resource_method`, which consults
+                // the runtime provider stack for an active `with_provider[R]`
+                // override (cross-boundary) and otherwise emits the builtin
+                // FFI default. Restricted to `ambient_method_index`-known
+                // pairs so OTHER ambient resource methods that already have a
+                // dedicated lowering reached via `compile_assoc_call` (e.g.
+                // `FileSystem.read_to_string`) keep their existing path — the
+                // ambient lowering only knows `Clock.now`/`Env.set` and would
+                // otherwise error "not yet lowered" for them.
+                if super::method_call::ambient_method_index(&segments[0], &segments[1]).is_some() {
+                    return self.compile_ambient_resource_method(&segments[0], &segments[1], args);
                 }
                 return self.compile_assoc_call(&segments[0], &segments[1], args);
             }

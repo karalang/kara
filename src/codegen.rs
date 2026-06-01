@@ -1588,21 +1588,6 @@ pub(super) struct Codegen<'ctx> {
     /// shape ever changes.
     #[allow(dead_code)]
     pub(crate) provider_lookup_result_ty: StructType<'ctx>,
-    /// Compile-time-scoped overrides of ambient prelude resources
-    /// (`Clock`, `Env`, …) by a statically-typed provider, pushed by
-    /// `compile_with_provider` for an ambient resource and popped on
-    /// body exit. Each entry maps the resource name (capitalized, e.g.
-    /// `"Clock"`) to `(concrete provider type name, provider data ptr)`.
-    /// Ambient method-call lowering consults the top-most frame: a hit
-    /// emits a direct call to the override's `@Type.method` symbol with
-    /// `data_ptr` as `self`, instead of the builtin runtime FFI. This is
-    /// the static-monomorphization path (no runtime vtable / lookup) —
-    /// it matches the expressiveness of the user-resource provider path,
-    /// which is itself static-shape-only (see `infer_provider_type_name`).
-    /// A `Vec` of frames gives correct LIFO nesting for nested
-    /// `with_provider` scopes over the same resource.
-    pub(crate) ambient_provider_overrides:
-        Vec<HashMap<String, (String, inkwell::values::PointerValue<'ctx>)>>,
     // ── Map runtime ───────────────────────────────────────────────
     /// Per-variable Map key LLVM type (variable name → K LLVM type).
     pub(crate) map_key_types: HashMap<String, BasicTypeEnum<'ctx>>,
@@ -3531,7 +3516,6 @@ impl<'ctx> Codegen<'ctx> {
             karac_provider_set_stack_head_fn,
             provider_frame_ty,
             provider_lookup_result_ty,
-            ambient_provider_overrides: Vec::new(),
             map_key_types: HashMap::new(),
             map_val_types: HashMap::new(),
             map_key_type_names: HashMap::new(),
@@ -4029,6 +4013,24 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
         }
+        // Mint stable IDs for ambient prelude resources (`Clock`, `Env`, …)
+        // so `with_provider`-ambient overrides push/lookup on the same
+        // runtime provider stack as user resources (cross-boundary
+        // dispatch — `compile_with_provider_ambient` /
+        // `try_compile_ambient_dispatch`). Most ambient resources have no
+        // `Item::EffectResource` declaration in any path (the prelude only
+        // registers them by name); `Network` / `ProcessTable` DO declare
+        // one and already have an ID — `or_insert_with` skips those. IDs
+        // continue past the user range so they never collide.
+        for (resource, _methods) in crate::prelude::AMBIENT_RESOURCE_METHODS {
+            self.provider_resource_ids
+                .entry(resource.to_string())
+                .or_insert_with(|| {
+                    let id = next_resource_id;
+                    next_resource_id += 1;
+                    id
+                });
+        }
         for item in &program.items {
             if let Item::TraitDef(t) = item {
                 let methods: Vec<String> = t
@@ -4111,6 +4113,12 @@ impl<'ctx> Codegen<'ctx> {
         // to be compiled yet because the vtable only references fn-ptr
         // symbols which were established by `declare_function`.
         self.emit_provider_vtables(program);
+        // Ambient analog: emit override vtables for `with_provider[Clock]`
+        // etc. eagerly too, so a cross-boundary ambient call (compiled
+        // before the `with_provider` site — e.g. the test fn vs the
+        // synthesized `main`) sees the vtable when deciding to emit its
+        // runtime-dispatch branch.
+        self.emit_ambient_provider_vtables(program);
 
         // Phase-7 line 5 sub-item 1 — emit the hot-swap indirection
         // table global so call-site lowering in the body pass can GEP

@@ -15,7 +15,7 @@ use inkwell::module::Linkage;
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
 use inkwell::AddressSpace;
 
-use super::helpers::impl_target_name;
+use super::helpers::{impl_target_name, match_with_provider_call};
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Emit a static vtable global per `impl T for U` where `T` was
@@ -111,17 +111,25 @@ impl<'ctx> super::Codegen<'ctx> {
         closure_expr: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // 0. Ambient prelude resources (`Clock`, `Env`, …) have no
-        //    `effect resource R: T` declaration, so no codegen resource
-        //    ID, no provider trait, and no vtable. They override via the
-        //    static-monomorphization path instead: record a compile-time
-        //    `resource → (provider type, data ptr)` scope frame, compile
-        //    the body (ambient method calls inside it dispatch directly
-        //    to the override's `@Type.method`), then pop. This matches
-        //    the interpreter's name-based ambient override and is exactly
-        //    as expressive as the user-resource vtable path, which is
-        //    itself static-shape-only (see `infer_provider_type_name`).
+        //    `effect resource R: T` declaration, so no provider trait and
+        //    no trait-keyed vtable. They override via the ambient path,
+        //    which (as of the runtime-dispatch slice) pushes the override
+        //    onto the SAME runtime provider stack as user resources —
+        //    using a synthesized vtable built from the ambient resource's
+        //    canonical method order — so the override is visible across
+        //    function-call boundaries, matching the interpreter.
+        //
+        //    The discriminator is trait-*absence*, NOT ID-absence: codegen
+        //    now mints a stable resource ID for every ambient resource
+        //    (see `compile_program`), and a few prelude resources
+        //    (`Network`, `ProcessTable`) carry an `Item::EffectResource`
+        //    declaration so they land in `provider_resource_ids` anyway —
+        //    but none has a `: T` provider trait, so keying on
+        //    `provider_resource_traits` routes all of them to the ambient
+        //    path while leaving user `effect resource R: T` on the vtable
+        //    path. (User resources are never in `PRELUDE_EFFECT_RESOURCES`.)
         if crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&resource)
-            && !self.provider_resource_ids.contains_key(resource)
+            && !self.provider_resource_traits.contains_key(resource)
         {
             return self.compile_with_provider_ambient(resource, provider_expr, closure_expr);
         }
@@ -226,22 +234,23 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// `with_provider[R]` lowering for an ambient prelude resource
     /// (`Clock`, `Env`, …) overridden by a statically-typed provider.
-    /// Static-monomorphization path: the override decision is entirely
-    /// compile-time, so no runtime provider stack push/pop and no vtable
-    /// are emitted. Instead the provider's concrete type + data pointer
-    /// are recorded on `ambient_provider_overrides`, the body is compiled
-    /// (ambient method calls inside dispatch directly to `@Type.method`
-    /// via `try_compile_ambient_override` — see `method_call.rs`), and
-    /// the frame is popped on every exit path.
+    /// Runtime-stack path (unified with the user-resource dispatch): push
+    /// the override onto the same `karac_provider_*` stack, keyed by the
+    /// ambient resource's minted ID, carrying a vtable synthesized from
+    /// the resource's canonical method order. The override is therefore
+    /// visible to ambient method calls *across function-call boundaries*
+    /// (the call sites consult the runtime stack — see
+    /// `try_compile_ambient_dispatch`), matching the interpreter and the
+    /// user-resource path. This is what makes `karac test` provider
+    /// fixtures work: `test_main_synth` wraps a *call* to the test fn, so
+    /// the body's `Clock.now()` is cross-boundary.
     ///
     /// The provider type must be statically inferable at this site
     /// (struct literal or typed identifier — the same shapes
     /// `infer_provider_type_name` accepts for user resources). A
     /// runtime-typed provider (e.g. a fn-return value) yields a precise
-    /// error rather than the historical misleading "unknown effect
-    /// resource" — runtime-typed ambient providers are a deliberate v1
-    /// non-goal (no test or design example exercises them; matches the
-    /// user-resource path's same restriction).
+    /// error — a deliberate v1 non-goal that matches the user-resource
+    /// path's same restriction.
     fn compile_with_provider_ambient(
         &mut self,
         resource: &str,
@@ -258,93 +267,205 @@ impl<'ctx> super::Codegen<'ctx> {
                     resource
                 )
             })?;
-        let data_ptr = self.compile_provider_data_ptr(provider_expr, &provider_type_name)?;
-
-        // Push a compile-time override frame, compile the body, then pop
-        // unconditionally. The `?` on the body must NOT leak the frame —
-        // codegen errors abort the whole compile, so a leaked frame is
-        // harmless, but popping keeps the invariant clean for the success
-        // path and any future error-recovery.
-        let mut frame = std::collections::HashMap::new();
-        frame.insert(resource.to_string(), (provider_type_name, data_ptr));
-        self.ambient_provider_overrides.push(frame);
-        let body_result = self.compile_with_provider_body(closure_expr, resource);
-        self.ambient_provider_overrides.pop();
-        body_result
-    }
-
-    /// If an ambient resource method call (`Clock.now()`, `Env.var(..)`)
-    /// is inside an active `with_provider`-ambient scope that overrides
-    /// `resource`, lower it as a direct static call to the override's
-    /// `@Type.method` symbol (`self` = the recorded provider data ptr),
-    /// returning `Some(value)`. Returns `None` when no override is in
-    /// scope, so the caller falls through to the builtin runtime-FFI
-    /// lowering. Innermost (last-pushed) frame wins, matching the
-    /// interpreter's LIFO provider stack.
-    pub(super) fn try_compile_ambient_override(
-        &mut self,
-        resource: &str,
-        method: &str,
-        args: &[CallArg],
-    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let Some((type_name, data_ptr)) = self
-            .ambient_provider_overrides
-            .iter()
-            .rev()
-            .find_map(|frame| frame.get(resource).cloned())
-        else {
-            return Ok(None);
-        };
-
-        let symbol = format!("{}.{}", type_name, method);
-        let fn_val = self.module.get_function(&symbol).ok_or_else(|| {
+        let resource_id = *self.provider_resource_ids.get(resource).ok_or_else(|| {
             format!(
-                "with_provider[{}]: override `{}` has no method `{}` compiled \
-                 (expected LLVM symbol `{}`)",
-                resource, type_name, method, symbol
+                "with_provider[{}]: ambient resource has no minted resource ID — add it to \
+                 `prelude::AMBIENT_RESOURCE_METHODS` (codegen bug)",
+                resource
             )
         })?;
+        let vtable_ptr = self.emit_ambient_vtable(&provider_type_name, resource)?;
+        let data_ptr = self.compile_provider_data_ptr(provider_expr, &provider_type_name)?;
 
-        // self first, then user args. The override's `self` lowering:
-        // `ref self` / `mut ref self` → ptr (pass data_ptr directly);
-        // owned `self` → by-value struct (load from data_ptr). Mirror the
-        // self-arg handling in `try_compile_provider_dispatch`.
-        let self_param_ty = fn_val.get_type().get_param_types().into_iter().next();
-        let self_arg: BasicMetadataValueEnum<'ctx> = match self_param_ty {
-            Some(inkwell::types::BasicMetadataTypeEnum::PointerType(_)) => {
-                BasicMetadataValueEnum::from(data_ptr)
-            }
-            Some(inkwell::types::BasicMetadataTypeEnum::StructType(st)) => {
-                let loaded = self
-                    .builder
-                    .build_load(st, data_ptr, "amb.self.owned")
-                    .unwrap();
-                BasicMetadataValueEnum::from(loaded)
-            }
-            other => {
-                return Err(format!(
-                    "with_provider[{}]: unexpected self-param lowering `{:?}` for `{}` — \
-                     expected ptr (ref/mut ref self) or struct (owned self)",
-                    resource, other, symbol
-                ));
-            }
-        };
-        let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![self_arg];
-        for a in args {
-            let v = self.compile_expr(&a.value)?;
-            call_args.push(BasicMetadataValueEnum::from(v));
-        }
-
-        let call = self
-            .builder
-            .build_call(fn_val, &call_args, "amb.override.call")
+        // Alloca the ProviderFrame on the entry block (one slot reused
+        // across loop iterations), then push / body / pop — identical to
+        // the user-resource path.
+        let fn_val = self.current_fn.ok_or_else(|| {
+            "with_provider: no current function (called from top-level?)".to_string()
+        })?;
+        let frame_ptr =
+            self.create_entry_alloca(fn_val, "wp.amb.frame", self.provider_frame_ty.into());
+        let id_v = self.context.i32_type().const_int(resource_id as u64, false);
+        self.builder
+            .build_call(
+                self.karac_provider_push_fn,
+                &[
+                    frame_ptr.into(),
+                    id_v.into(),
+                    data_ptr.into(),
+                    vtable_ptr.into(),
+                ],
+                "",
+            )
             .unwrap();
-        let basic = call.try_as_basic_value();
-        if basic.is_instruction() {
-            Ok(Some(self.context.i64_type().const_int(0, false).into()))
-        } else {
-            Ok(Some(basic.unwrap_basic()))
+        let body_result = self.compile_with_provider_body(closure_expr, resource)?;
+        self.builder
+            .build_call(self.karac_provider_pop_fn, &[], "")
+            .unwrap();
+        Ok(body_result)
+    }
+
+    /// Lazily emit (or fetch) the override vtable for an ambient resource:
+    /// a `[N x ptr]` global of the override type `U`'s `@U.<method>`
+    /// fn-pointers in the resource's canonical method order
+    /// (`AMBIENT_RESOURCE_METHODS`). Methods `U` doesn't implement get a
+    /// null slot — the call site null-checks the loaded fn-ptr and falls
+    /// to the ambient-default FFI for those. Keyed `(U, resource)` in the
+    /// shared `provider_vtables` map (the resource name plays the "trait"
+    /// role; no collision since ambient resource names aren't trait
+    /// names). Emitted at the `with_provider` site (after all impl methods
+    /// are declared, so `get_function` resolves), once per `(U, resource)`.
+    fn emit_ambient_vtable(
+        &mut self,
+        override_type: &str,
+        resource: &str,
+    ) -> Result<inkwell::values::PointerValue<'ctx>, String> {
+        let key = (override_type.to_string(), resource.to_string());
+        if let Some(g) = self.provider_vtables.get(&key) {
+            return Ok(g.as_pointer_value());
         }
+        let methods = crate::prelude::AMBIENT_RESOURCE_METHODS
+            .iter()
+            .find(|(r, _)| *r == resource)
+            .map(|(_, m)| *m)
+            .ok_or_else(|| {
+                format!(
+                    "with_provider[{}]: no canonical method order for ambient resource — add it \
+                     to `prelude::AMBIENT_RESOURCE_METHODS`",
+                    resource
+                )
+            })?;
+        let ptr_type = self.context.ptr_type(AddressSpace::default());
+        let mut entries: Vec<inkwell::values::PointerValue<'ctx>> = Vec::new();
+        for method_name in methods {
+            let symbol = format!("{}.{}", override_type, method_name);
+            let entry = match self.module.get_function(&symbol) {
+                Some(f) => f.as_global_value().as_pointer_value(),
+                None => ptr_type.const_null(),
+            };
+            entries.push(entry);
+        }
+        let vtable_array_ty = ptr_type.array_type(entries.len() as u32);
+        let vtable_init = ptr_type.const_array(&entries);
+        let vt_name = format!("VT_AMBIENT_{}_{}", override_type, resource);
+        let vt_global = self.module.add_global(vtable_array_ty, None, &vt_name);
+        vt_global.set_initializer(&vtable_init);
+        vt_global.set_linkage(Linkage::Internal);
+        vt_global.set_constant(true);
+        self.provider_vtables.insert(key, vt_global);
+        Ok(vt_global.as_pointer_value())
+    }
+
+    /// Eagerly emit ambient override vtables for every `with_provider[R]`
+    /// (ambient `R`) site in the program, BEFORE any function body is
+    /// compiled. This is the ambient analog of `emit_provider_vtables` and
+    /// is required for correctness: the call-site dispatch
+    /// (`ambient_override_fn_type` / `compile_ambient_dispatch_branch`)
+    /// decides whether to emit the runtime branch by checking whether a
+    /// `(U, R)` vtable exists — and the test fn (which contains the ambient
+    /// call) is compiled BEFORE the synthesized `main` (which holds the
+    /// `with_provider` site), so a lazily-emitted vtable would not yet
+    /// exist when the call site needs it. Walks function and impl-method
+    /// bodies for `with_provider[R]` calls, resolving the override type
+    /// from a struct literal or a `let`-bound struct literal (the shapes
+    /// `infer_provider_type_name` and `test_main_synth` produce).
+    pub(super) fn emit_ambient_provider_vtables(&mut self, program: &Program) {
+        for item in &program.items {
+            match item {
+                Item::Function(f) => self.scan_block_for_ambient_overrides(&f.body),
+                Item::ImplBlock(imp) => {
+                    for ii in &imp.items {
+                        if let ImplItem::Method(m) = ii {
+                            self.scan_block_for_ambient_overrides(&m.body);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn scan_block_for_ambient_overrides(&mut self, block: &Block) {
+        // `let p = StructLit` bindings let a provider passed by identifier
+        // resolve to its struct type (test_main_synth binds the fixture
+        // ctor to a `let` before the `with_provider`).
+        let mut bindings: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for stmt in &block.stmts {
+            match &stmt.kind {
+                StmtKind::Let { pattern, value, .. } => {
+                    if let (PatternKind::Binding(name), ExprKind::StructLiteral { path, .. }) =
+                        (&pattern.kind, &value.kind)
+                    {
+                        if let Some(ty) = path.last() {
+                            bindings.insert(name.clone(), ty.clone());
+                        }
+                    }
+                    self.scan_expr_for_ambient_overrides(value, &bindings);
+                }
+                StmtKind::Expr(e) => self.scan_expr_for_ambient_overrides(e, &bindings),
+                _ => {}
+            }
+        }
+        if let Some(tail) = &block.final_expr {
+            self.scan_expr_for_ambient_overrides(tail, &bindings);
+        }
+    }
+
+    fn scan_expr_for_ambient_overrides(
+        &mut self,
+        expr: &Expr,
+        bindings: &std::collections::HashMap<String, String>,
+    ) {
+        match &expr.kind {
+            ExprKind::Call { callee, args } => {
+                if let Some((resource, provider_expr, closure_expr)) =
+                    match_with_provider_call(callee, args)
+                {
+                    if crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&resource.as_str())
+                        && !self.provider_resource_traits.contains_key(&resource)
+                    {
+                        if let Some(ty) = ambient_provider_type(provider_expr, bindings) {
+                            // Idempotent: `emit_ambient_vtable` no-ops if the
+                            // `(U, R)` vtable already exists.
+                            let _ = self.emit_ambient_vtable(&ty, &resource);
+                        }
+                    }
+                    if let ExprKind::Closure { body, .. } = &closure_expr.kind {
+                        self.scan_expr_for_ambient_overrides(body, bindings);
+                    }
+                    return;
+                }
+                for a in args {
+                    self.scan_expr_for_ambient_overrides(&a.value, bindings);
+                }
+            }
+            ExprKind::Block(b) => self.scan_block_for_ambient_overrides(b),
+            ExprKind::Closure { body, .. } => self.scan_expr_for_ambient_overrides(body, bindings),
+            _ => {}
+        }
+    }
+
+    /// The LLVM `FunctionType` to use for an indirect call through an
+    /// ambient override vtable slot, recovered from any override type `U`
+    /// whose `(U, resource)` vtable was emitted in this module (all impls
+    /// of a given ambient method share the same lowered signature). Returns
+    /// `None` when no override vtable for `resource` exists — i.e. no
+    /// `with_provider[resource]` appears in the module, so no override can
+    /// be active and the call site skips the runtime branch entirely.
+    pub(super) fn ambient_override_fn_type(
+        &self,
+        resource: &str,
+        method: &str,
+    ) -> Option<inkwell::types::FunctionType<'ctx>> {
+        for (target, r) in self.provider_vtables.keys() {
+            if r == resource {
+                if let Some(f) = self.module.get_function(&format!("{}.{}", target, method)) {
+                    return Some(f.get_type());
+                }
+            }
+        }
+        None
     }
 
     /// Determine the concrete impl-target type name of a provider
@@ -645,5 +766,22 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         None
+    }
+}
+
+/// Resolve the concrete override type name of a `with_provider` provider
+/// argument during the eager ambient-vtable pre-pass: a struct literal
+/// gives its type directly; an identifier resolves through the in-scope
+/// `let p = StructLit` bindings. Other shapes (function returns, etc.) are
+/// unsupported on the codegen path and return `None` (the `with_provider`
+/// lowering then errors at the site with a precise message).
+fn ambient_provider_type(
+    expr: &Expr,
+    bindings: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    match &expr.kind {
+        ExprKind::StructLiteral { path, .. } => path.last().cloned(),
+        ExprKind::Identifier(n) => bindings.get(n).cloned(),
+        _ => None,
     }
 }

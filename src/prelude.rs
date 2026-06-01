@@ -338,6 +338,23 @@ pub const PRELUDE_EFFECT_RESOURCES: &[&str] = &[
     "ProcessTable",
 ];
 
+/// Canonical method order per ambient resource, used by codegen to index
+/// a synthesized vtable when a `with_provider[R]` override is pushed onto
+/// the runtime provider stack (`src/codegen/provider.rs`). The slot index
+/// of a method here is its vtable slot; both the override-vtable emission
+/// (at the `with_provider` site) and the call-site runtime dispatch read
+/// this table, so they stay in lockstep.
+///
+/// Scoped to the methods codegen currently lowers (`Clock.now`,
+/// `Env.set`); the remaining ambient methods (`Env.var`/`args`, `rand`,
+/// `stdin`, `fs.*`, explicit `stdout`/`stderr`) get entries here as their
+/// codegen lowering lands — tracked alongside that gap in
+/// `phase-7-codegen.md`. Ambient methods are otherwise hardcoded in two
+/// places this must stay aligned with: the interpreter's
+/// `dispatch_builtin_resource_method_with_values` and codegen's
+/// `compile_ambient_resource_method`.
+pub const AMBIENT_RESOURCE_METHODS: &[(&str, &[&str])] = &[("Clock", &["now"]), ("Env", &["set"])];
+
 // ── Baked stdlib source (CR-202 slice 3a) ───────────────────────────
 //
 // Real Kāra source for prelude types is authored under `runtime/stdlib/*.kara`
