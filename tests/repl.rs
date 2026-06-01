@@ -7,20 +7,10 @@
 
 use karac::repl::{DependencyKind, MagicOutput, ReplOptions, Session};
 
-/// Pin a session to the interpreter dispatch path. The
-/// `let_value_snapshot_*` tests below inspect `Session::let_snapshots()`,
-/// an interpreter-path value cache the JIT path deliberately replaces
-/// with runner-side globals (so the inspector is empty under JIT). The
-/// *behavior* those tests guard — caching, cross-cell shadow-drop on
-/// rebind (incl. cross-type), `:reset` clearing — is covered under JIT
-/// in `tests/repl_jit.rs` (`repl_jit_runs_let_bindings`,
-/// `repl_jit_cross_type_rebind_uses_new_value`,
-/// `repl_jit_reset_clears_snapshot_state`). Pinning these introspection
-/// tests to the interpreter path keeps that bookkeeping coverage intact
-/// without breaking when the JIT-default flip lands. This is a scoped,
-/// per-test pin — NOT a blanket suite-wide JIT disable. No-op without
+/// Pin a session to the interpreter dispatch path. No-op without
 /// `lljit_prototype` (the JIT dispatch path isn't compiled there, so a
-/// fresh `Session` already runs the interpreter).
+/// fresh `Session` already runs the interpreter); under `lljit_prototype`
+/// it flips the per-session JIT flag back off.
 fn pin_interpreter(session: &mut Session) {
     #[cfg(feature = "lljit_prototype")]
     session.set_jit_enabled_for_tests(false);
@@ -28,11 +18,37 @@ fn pin_interpreter(session: &mut Session) {
     let _ = session;
 }
 
+/// Standard `Session` constructor for this file, pinned to the
+/// interpreter path. After the JIT-default flip (L577 step (c)),
+/// `Session::new()` defaults to JIT under `lljit_prototype` — but
+/// `tests/repl.rs` is the **interpreter + session-bookkeeping baseline**
+/// (item accumulation, meta-commands, `%export`, effect footers,
+/// dependency tracking, interpreter execution); JIT *execution* is
+/// covered by the dedicated `tests/repl_jit.rs` suite, and these
+/// surfaces are backend-invariant (computed by interpreter-path static
+/// analysis). Pinning the baseline keeps it fast, deterministic, and
+/// free of the runner-build / `KARAC_JIT_RUNNER` / spawn-timing coupling
+/// that running it under JIT would impose. The escape-hatch semantics of
+/// the production default (`KARAC_REPL_JIT=0`) are unaffected — this is
+/// test infrastructure, not a behavior override.
+fn pinned_session() -> Session {
+    let mut s = karac::repl::Session::new();
+    pin_interpreter(&mut s);
+    s
+}
+
+/// `pinned_session` variant for the `--auto-clone` REPL flag tests.
+fn pinned_session_with_auto_clone() -> Session {
+    let mut s = karac::repl::Session::with_options(ReplOptions { auto_clone: true });
+    pin_interpreter(&mut s);
+    s
+}
+
 // ── Item accumulation ──────────────────────────────────────────────────────
 
 #[test]
 fn item_definition_persists_across_cells() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let r = s.evaluate_cell_captured("fn double(n: i64) -> i64 { n * 2 }");
     assert!(r.errors.is_empty(), "fn definition: {:?}", r.errors);
     assert!(s.items_source().contains("fn double"));
@@ -43,7 +59,7 @@ fn item_definition_persists_across_cells() {
 
 #[test]
 fn struct_definition_persists_across_cells() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let r = s.evaluate_cell_captured("struct Point { x: i64, y: i64 }");
     assert!(r.errors.is_empty(), "{:?}", r.errors);
     let r = s.evaluate_cell_captured("let p: Point = Point { x: 3, y: 4 }; println(p.x + p.y);");
@@ -56,7 +72,7 @@ fn redeclaring_item_within_cell_does_not_panic() {
     // Two `fn f` in the SAME cell is the resolver's call to make — the
     // REPL does not pre-prune intra-cell duplicates. Whether it accepts
     // or rejects, the surface must not panic.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let r = s.evaluate_cell_captured(
         "fn f() -> i64 { 1 }\n\
          fn f() -> i64 { 2 }",
@@ -66,7 +82,7 @@ fn redeclaring_item_within_cell_does_not_panic() {
 
 #[test]
 fn redeclaring_item_across_cells_shadows() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn f() -> i64 { 1 }");
     s.evaluate_cell_captured("fn f() -> i64 { 2 }");
     let r = s.evaluate_cell_captured("println(f());");
@@ -76,7 +92,7 @@ fn redeclaring_item_across_cells_shadows() {
 
 #[test]
 fn redeclaring_struct_across_cells_shadows() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("struct Point { x: i64 }");
     s.evaluate_cell_captured("struct Point { x: i64, y: i64 }");
     let r = s.evaluate_cell_captured("let p = Point { x: 3, y: 4 }; println(p.x + p.y);");
@@ -86,7 +102,7 @@ fn redeclaring_struct_across_cells_shadows() {
 
 #[test]
 fn redeclaring_enum_across_cells_shadows() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("enum Color { Red, Green }");
     s.evaluate_cell_captured("enum Color { Red, Green, Blue }");
     let r = s.evaluate_cell_captured(
@@ -99,7 +115,7 @@ fn redeclaring_enum_across_cells_shadows() {
 
 #[test]
 fn redeclaring_const_across_cells_shadows() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("const MAX_VALUE: i64 = 1;");
     s.evaluate_cell_captured("const MAX_VALUE: i64 = 99;");
     let r = s.evaluate_cell_captured("println(MAX_VALUE);");
@@ -109,7 +125,7 @@ fn redeclaring_const_across_cells_shadows() {
 
 #[test]
 fn redeclaring_distinct_type_across_cells_shadows() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("distinct type UserId = i64;");
     s.evaluate_cell_captured("distinct type UserId = i64;");
     // The second submission must not duplicate the prior decl in
@@ -129,7 +145,7 @@ fn redeclaring_distinct_type_across_cells_shadows() {
 fn redeclaring_only_strips_matching_items() {
     // Cell 1 introduces fn one + fn two; cell 2 redeclares only one.
     // After the prune, items_source must still contain `fn two`.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn one() -> i64 { 1 }\nfn two() -> i64 { 2 }");
     s.evaluate_cell_captured("fn one() -> i64 { 100 }");
     let r = s.evaluate_cell_captured("println(one() + two());");
@@ -141,7 +157,7 @@ fn redeclaring_only_strips_matching_items() {
 fn impl_blocks_are_not_shadowed_by_other_impl_blocks() {
     // Impl blocks are anonymous — multiple impls for the same target type
     // can coexist, and the prune must leave them all in place.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("struct P { x: i64 }");
     s.evaluate_cell_captured("impl P { fn get_x(ref self) -> i64 { self.x } }");
     s.evaluate_cell_captured("impl P { fn double_x(ref self) -> i64 { self.x * 2 } }");
@@ -154,7 +170,7 @@ fn impl_blocks_are_not_shadowed_by_other_impl_blocks() {
 fn redeclaring_keeps_items_source_parseable() {
     // After several rounds of shadowing, the buffer should still be a
     // syntactically valid sequence of items.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn f() -> i64 { 1 }");
     s.evaluate_cell_captured("struct S { v: i64 }");
     s.evaluate_cell_captured("fn f() -> i64 { 2 }");
@@ -168,7 +184,7 @@ fn redeclaring_keeps_items_source_parseable() {
 
 #[test]
 fn statement_cell_executes_and_prints() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let r = s.evaluate_cell_captured("println(1 + 2);");
     assert!(r.errors.is_empty(), "{:?}", r.errors);
     assert_eq!(r.stdout.trim(), "3");
@@ -176,7 +192,7 @@ fn statement_cell_executes_and_prints() {
 
 #[test]
 fn statement_cell_can_use_session_items() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn add(a: i64, b: i64) -> i64 { a + b }");
     let r = s.evaluate_cell_captured("println(add(5, 6));");
     assert!(r.errors.is_empty(), "{:?}", r.errors);
@@ -185,7 +201,7 @@ fn statement_cell_can_use_session_items() {
 
 #[test]
 fn statement_cell_with_user_main_shadows_synthetic() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn main() { println(99); }");
     let r = s.evaluate_cell_captured("println(42);");
     assert!(r.errors.is_empty(), "{:?}", r.errors);
@@ -200,7 +216,7 @@ fn statement_cell_supports_question_operator() {
     // cleanly rather than silently miscompiling — this is an explicit
     // limitation of the MVP cell shape, tracked as a follow-up to upgrade
     // the wrapper to `fn main() -> Result[Unit, Error]`.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured(
         "fn parse(flag: bool) -> Result[i64, i64] { if flag { Ok(1_i64) } else { Err(0_i64) } }",
     );
@@ -221,7 +237,7 @@ fn statement_cell_supports_question_operator() {
 
 #[test]
 fn meta_quit_returns_false() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     assert!(!s.dispatch_meta(":quit"));
     assert!(!s.dispatch_meta(":q"));
     assert!(!s.dispatch_meta(":exit"));
@@ -229,19 +245,19 @@ fn meta_quit_returns_false() {
 
 #[test]
 fn meta_help_does_not_quit() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     assert!(s.dispatch_meta(":help"));
 }
 
 #[test]
 fn meta_unknown_does_not_quit() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     assert!(s.dispatch_meta(":frobnicate"));
 }
 
 #[test]
 fn meta_save_writes_session_to_file() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn one() -> i64 { 1 }");
     s.evaluate_cell_captured("println(one());");
 
@@ -265,7 +281,7 @@ fn meta_save_writes_session_to_file() {
 
 #[test]
 fn cell_history_excludes_meta_commands() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn one() -> i64 { 1 }");
     s.dispatch_meta(":help");
     s.evaluate_cell_captured("println(one());");
@@ -276,7 +292,7 @@ fn cell_history_excludes_meta_commands() {
 
 #[test]
 fn parse_error_in_cell_does_not_corrupt_session() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn ok() -> i64 { 1 }");
     let r = s.evaluate_cell_captured("fn broken( {");
     assert!(
@@ -294,7 +310,7 @@ fn parse_error_in_cell_does_not_corrupt_session() {
 
 #[test]
 fn let_in_cell_n_visible_in_cell_n_plus_1() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let r = s.evaluate_cell_captured("let x = 5;");
     assert!(r.errors.is_empty(), "let cell errored: {:?}", r.errors);
     let r = s.evaluate_cell_captured("println(x);");
@@ -304,7 +320,7 @@ fn let_in_cell_n_visible_in_cell_n_plus_1() {
 
 #[test]
 fn let_persistence_chains_across_cells() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("let x = 5;");
     s.evaluate_cell_captured("let y = x + 10;");
     let r = s.evaluate_cell_captured("println(y);");
@@ -314,7 +330,7 @@ fn let_persistence_chains_across_cells() {
 
 #[test]
 fn let_persistence_rebinding_shadows_earlier_value() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("let x = 1;");
     s.evaluate_cell_captured("let x = 99;");
     let r = s.evaluate_cell_captured("println(x);");
@@ -325,7 +341,7 @@ fn let_persistence_rebinding_shadows_earlier_value() {
 #[test]
 fn let_persistence_carries_type_annotation() {
     // `let x: i64 = 5;` — the annotation is part of the captured slice.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("let x: i64 = 5;");
     assert_eq!(s.persistent_lets().len(), 1);
     assert!(
@@ -340,7 +356,7 @@ fn let_persistence_carries_type_annotation() {
 
 #[test]
 fn let_persistence_multiple_lets_in_one_cell() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("let a = 1; let b = 2; let c = 3;");
     assert_eq!(
         s.persistent_lets().len(),
@@ -357,7 +373,7 @@ fn let_persistence_multiple_lets_in_one_cell() {
 fn let_persistence_skips_non_let_statements() {
     // `println(1)` is a statement but not a `let` — it must not enter the
     // persistent buffer.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("let x = 7; println(x);");
     assert_eq!(
         s.persistent_lets().len(),
@@ -372,7 +388,7 @@ fn failed_cell_does_not_pollute_persistent_lets() {
     // The cell starts with a clean `let x = 1;` but the SECOND statement
     // is a type error. The whole cell must fail-and-rollback — neither
     // the good binding nor anything else may land in persistent_lets.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let r = s.evaluate_cell_captured("let x = 1; let y: bool = 5;");
     assert!(
         !r.errors.is_empty(),
@@ -388,7 +404,7 @@ fn failed_cell_does_not_pollute_persistent_lets() {
 
 #[test]
 fn meta_reset_clears_persistent_lets_only() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn helper() -> i64 { 7 }");
     s.evaluate_cell_captured("let x = helper();");
     assert_eq!(s.persistent_lets().len(), 1);
@@ -402,7 +418,7 @@ fn meta_reset_clears_persistent_lets_only() {
 
 #[test]
 fn let_persistence_let_mut_carries_mut_keyword() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("let mut counter = 0;");
     assert_eq!(s.persistent_lets().len(), 1);
     assert!(
@@ -415,7 +431,7 @@ fn let_persistence_let_mut_carries_mut_keyword() {
 #[test]
 fn let_persistence_works_with_session_items() {
     // Cross-paradigm: an item-defined helper plus a persistent let.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn double(n: i64) -> i64 { n * 2 }");
     s.evaluate_cell_captured("let x = double(21);");
     let r = s.evaluate_cell_captured("println(x);");
@@ -427,7 +443,7 @@ fn let_persistence_works_with_session_items() {
 
 #[test]
 fn dep_bare_semver_string_is_recorded() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     assert!(s.dispatch_meta(":dep http = \"1.2\""));
     let deps = s.pending_deps();
     assert_eq!(deps.len(), 1);
@@ -440,7 +456,7 @@ fn dep_bare_semver_string_is_recorded() {
 
 #[test]
 fn dep_inline_table_git_form_is_recorded() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     assert!(s.dispatch_meta(":dep myutil = { git = \"https://github.com/me/myutil-kara\" }"));
     let deps = s.pending_deps();
     assert_eq!(deps.len(), 1);
@@ -455,7 +471,7 @@ fn dep_inline_table_git_form_is_recorded() {
 
 #[test]
 fn dep_inline_table_path_form_is_recorded() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     assert!(s.dispatch_meta(":dep mylib = { path = \"./mylib\" }"));
     let stored = s.pending_deps().get("mylib").expect("mylib registered");
     assert!(stored.contains("path"));
@@ -464,7 +480,7 @@ fn dep_inline_table_path_form_is_recorded() {
 
 #[test]
 fn dep_repeated_name_overwrites_prior_spec() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":dep http = \"1.2\"");
     s.dispatch_meta(":dep http = \"2.0\"");
     let deps = s.pending_deps();
@@ -474,7 +490,7 @@ fn dep_repeated_name_overwrites_prior_spec() {
 
 #[test]
 fn dep_multiple_distinct_names_accumulate() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":dep http = \"1.2\"");
     s.dispatch_meta(":dep json = \"0.9\"");
     s.dispatch_meta(":dep regex = { version = \"1.10\" }");
@@ -486,7 +502,7 @@ fn dep_multiple_distinct_names_accumulate() {
 
 #[test]
 fn dep_invalid_syntax_does_not_corrupt_state() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":dep http = \"1.2\"");
     // No `=`; not a valid TOML key/value pair.
     assert!(s.dispatch_meta(":dep totally bogus"));
@@ -498,7 +514,7 @@ fn dep_invalid_syntax_does_not_corrupt_state() {
 
 #[test]
 fn dep_empty_argument_surfaces_usage() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     // Bare `:dep` with no rest must not panic and must not register
     // anything.
     assert!(s.dispatch_meta(":dep"));
@@ -510,7 +526,7 @@ fn dep_does_not_break_subsequent_cells() {
     // After a :dep registration, regular item / statement cells should
     // continue to evaluate normally — the meta-command is in-memory only
     // and does not touch the items / let / history buffers.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":dep http = \"1.2\"");
     s.evaluate_cell_captured("fn add(a: i64, b: i64) -> i64 { a + b }");
     let r = s.evaluate_cell_captured("println(add(2, 3));");
@@ -524,7 +540,7 @@ fn dep_does_not_break_subsequent_cells() {
 fn dep_excluded_from_cell_history() {
     // :dep is a meta-command; it must not enter cell_history (so :save
     // doesn't include it as a Kara source line).
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":dep http = \"1.2\"");
     s.evaluate_cell_captured("fn one() -> i64 { 1 }");
     assert_eq!(s.cell_history().len(), 1);
@@ -542,7 +558,7 @@ fn cross_cell_uam_names_consuming_cell() {
     // `persistent_lets` does). When cell 4 references `s` again, the
     // ownership checker fires UseAfterMove against the synthetic source —
     // and the REPL-aware diagnostic names cell 3 as the consumer.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn consume(s: String) {}");
     s.evaluate_cell_captured("let s = \"hello\";");
     s.evaluate_cell_captured("let _t = consume(s);");
@@ -562,7 +578,7 @@ fn cross_cell_uam_names_consuming_cell() {
 
 #[test]
 fn cross_cell_uam_suggests_clone() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn consume(s: String) {}");
     s.evaluate_cell_captured("let s = \"hello\";");
     s.evaluate_cell_captured("let _t = consume(s);");
@@ -579,7 +595,7 @@ fn same_cell_uam_uses_baseline_diagnostic() {
     // UAM contained within a single cell — no cross-cell phrasing should
     // be appended. The baseline ownership-checker rendering still surfaces
     // (we just don't decorate it with the notebook-aware tail).
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn consume(s: String) {}");
     let r = s.evaluate_cell_captured("let s = \"hi\"; consume(s); let _ = consume(s);");
     assert!(
@@ -602,7 +618,7 @@ fn same_cell_uam_uses_baseline_diagnostic() {
 fn cross_cell_uam_strictness_unchanged() {
     // The diagnostic enrichment must not change rejection behavior — the
     // program still errors and the failing cell does not enter history.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn consume(s: String) {}");
     s.evaluate_cell_captured("let s = \"hi\";");
     s.evaluate_cell_captured("let _t = consume(s);");
@@ -679,7 +695,7 @@ fn auto_clone_inserts_clone_at_consume_site() {
     // 3's stored source to `let _t = consume(s.clone());` so cell 4
     // succeeds, AND the rewrite lands in `cell_history[2]` so `:save`
     // sees the cloned form.
-    let mut s = Session::with_options(ReplOptions { auto_clone: true });
+    let mut s = pinned_session_with_auto_clone();
     s.evaluate_cell_captured("fn consume(s: String) {}");
     s.evaluate_cell_captured("let s = \"hello\";");
     s.evaluate_cell_captured("let _t = consume(s);");
@@ -702,7 +718,7 @@ fn auto_clone_emits_perf_note() {
     // insertion. The note carries a stable `perf[auto-clone-in-repl]`
     // code plus the binding name (`s`) so users can audit which sites
     // got rewritten.
-    let mut s = Session::with_options(ReplOptions { auto_clone: true });
+    let mut s = pinned_session_with_auto_clone();
     s.evaluate_cell_captured("fn consume(s: String) {}");
     s.evaluate_cell_captured("let s = \"hello\";");
     s.evaluate_cell_captured("let _t = consume(s);");
@@ -725,7 +741,7 @@ fn auto_clone_emits_perf_note() {
 fn auto_clone_off_keeps_uam_diagnostic() {
     // Without the flag the slice 5 cell-aware UAM diagnostic still
     // surfaces unchanged — auto-clone is opt-in, never the default.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     assert!(!s.auto_clone(), "default Session must keep auto_clone off");
     s.evaluate_cell_captured("fn consume(s: String) {}");
     s.evaluate_cell_captured("let s = \"hi\";");
@@ -760,7 +776,7 @@ fn auto_clone_export_preserves_inserted_clones() {
     // consume site survives export. We don't drive the actual file write
     // (that's covered elsewhere); instead we inspect cell_history
     // directly — `:save` is a thin formatter over the same buffer.
-    let mut s = Session::with_options(ReplOptions { auto_clone: true });
+    let mut s = pinned_session_with_auto_clone();
     s.evaluate_cell_captured("fn consume(s: String) {}");
     s.evaluate_cell_captured("let s = \"persist\";");
     s.evaluate_cell_captured("let _t = consume(s);");
@@ -819,7 +835,7 @@ fn compile_exported(src: &str) -> String {
 
 #[test]
 fn export_wraps_statements_in_synthetic_main() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn add(a: i64, b: i64) -> i64 { a + b }");
     s.evaluate_cell_captured("let x = add(2, 3);");
     s.evaluate_cell_captured("println(x);");
@@ -850,7 +866,7 @@ fn export_wraps_statements_in_synthetic_main() {
 #[test]
 fn export_compiles_with_karac_build() {
     // Fidelity guarantee #1: the exported file compiles cleanly.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn add(a: i64, b: i64) -> i64 { a + b }");
     s.evaluate_cell_captured("let x = add(2, 3);");
     s.evaluate_cell_captured("println(x);");
@@ -870,7 +886,7 @@ fn export_reproduces_observable_behavior() {
     // by re-evaluating the exported source through a fresh Session as a
     // single statement-style cell (the source IS already a `fn main()`,
     // so we feed it via items_source + a trivial trigger cell).
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn square(n: i64) -> i64 { n * n }");
     let r1 = s.evaluate_cell_captured("println(square(7));");
     let r2 = s.evaluate_cell_captured("let q = square(3); println(q);");
@@ -915,7 +931,7 @@ fn export_declares_effect_set_on_main() {
     // stdlib call — `println` is intentionally NOT effect-propagating
     // in the current design (matches the "fn main() {}" wrapper the
     // REPL itself uses for plain print sessions).
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("env.set(\"KARA_REPL_SAVE_TEST\", \"1\");");
 
     let exported = s.render_exported_session();
@@ -941,7 +957,7 @@ fn export_omits_item_cells_from_main_body() {
     // Items get hoisted to file scope; they must NOT appear duplicated
     // inside `fn main()`. Cells that are *pure items* are filtered out
     // of the main-body assembly walk.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn one() -> i64 { 1 }");
     s.evaluate_cell_captured("println(one());");
 
@@ -966,7 +982,7 @@ fn export_no_statement_cells_emits_empty_main() {
     // Item-only sessions still produce a valid main wrapper — empty
     // body, no effect annotations. This is the regression pin for the
     // "no statements" edge case.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn ten() -> i64 { 10 }");
 
     let exported = s.render_exported_session();
@@ -989,7 +1005,7 @@ fn export_preserves_auto_clone_insertions_in_main_body() {
     // them up from cell_history unchanged — fidelity guarantee from
     // the spec's "if auto-clone was enabled, the inserted clones
     // appear in the exported file unchanged."
-    let mut s = Session::with_options(ReplOptions { auto_clone: true });
+    let mut s = pinned_session_with_auto_clone();
     s.evaluate_cell_captured("fn consume(s: String) {}");
     s.evaluate_cell_captured("let s = \"persist\";");
     s.evaluate_cell_captured("let _t = consume(s);");
@@ -1021,8 +1037,7 @@ fn let_value_snapshot_records_cached_value() {
     // evaluating the RHS. Inspects `let_snapshots()` directly so the
     // test exercises the snapshot bookkeeping even before any cross-
     // cell reuse fires.
-    let mut s = Session::new();
-    pin_interpreter(&mut s);
+    let mut s = pinned_session();
     let r = s.evaluate_cell_captured("let x = 5;");
     assert!(r.errors.is_empty(), "cell 1 errors: {:?}", r.errors);
     let snap = s.let_snapshots();
@@ -1046,7 +1061,7 @@ fn let_value_snapshot_rhs_does_not_re_fire_across_cells() {
     // and emitting a duplicate println line. The value-snapshot path
     // pre-loads `x` from the snapshot store and skips the RHS — so
     // only ONE "compute" line should fire across the two cells.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("fn compute() -> i64 { println(\"compute fired\"); 42 }");
     let r1 = s.evaluate_cell_captured("let x = compute();");
     let r2 = s.evaluate_cell_captured("println(x);");
@@ -1080,7 +1095,7 @@ fn let_value_snapshot_chains_across_three_cells() {
     // Cell 1 binds x; cell 2 binds y from x; cell 3 reads both. The
     // side-effecting RHS on x must fire exactly once across all three
     // cells.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("fn once() -> i64 { println(\"once\"); 7 }");
     let _ = s.evaluate_cell_captured("let x = once();");
     let r2 = s.evaluate_cell_captured("let y = x + 1;");
@@ -1111,8 +1126,7 @@ fn let_value_snapshot_rebinding_drops_stale_entry() {
     // seeds a fresh snapshot. Without this guard, the override would
     // splice in the prior `i64` value where the typechecker expects a
     // `String` — type-confusion at runtime.
-    let mut s = Session::new();
-    pin_interpreter(&mut s);
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("let x = 5;");
     assert_eq!(
         s.let_snapshots()
@@ -1142,8 +1156,7 @@ fn let_value_snapshot_reset_clears_cache() {
     // buffer being empty after reset means no override would fire on
     // the next cell anyway, but the explicit clear keeps the two
     // stores in lockstep.
-    let mut s = Session::new();
-    pin_interpreter(&mut s);
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("let x = 99;");
     assert!(s.let_snapshots().contains_key("x"));
     let _ = s.dispatch_meta(":reset");
@@ -1160,8 +1173,7 @@ fn let_value_snapshot_unused_binding_still_visible() {
     // must still snapshot — future cells might pull it in. Edge
     // case: the watch set must include *every* persistent_lets
     // binding name, not just ones the current cell touches.
-    let mut s = Session::new();
-    pin_interpreter(&mut s);
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("let unused = 123;");
     assert!(
         s.let_snapshots().contains_key("unused"),
@@ -1177,7 +1189,7 @@ fn let_value_snapshot_unused_binding_still_visible() {
 
 #[test]
 fn magic_unknown_returns_structured_error() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%not-a-real-magic");
     assert!(!out.ok, "unknown magic must surface as an error reply");
     assert!(
@@ -1198,7 +1210,7 @@ fn magic_unknown_returns_structured_error() {
 
 #[test]
 fn magic_effects_renders_inferred_effect_set() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn touch_env() writes(Env) { env.set(\"X\", \"1\"); }");
     let out = s.dispatch_magic("%effects");
     assert!(out.ok, "expected %effects to succeed; got: {}", out.text);
@@ -1213,7 +1225,7 @@ fn magic_effects_renders_inferred_effect_set() {
 fn magic_effects_empty_when_session_pure() {
     // No items_source yet — the magic explains the state instead of
     // emitting a blank cell.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%effects");
     assert!(out.ok);
     assert!(
@@ -1225,7 +1237,7 @@ fn magic_effects_empty_when_session_pure() {
 
 #[test]
 fn magic_ownership_lists_binding_modes() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("let n = 7;");
     let out = s.dispatch_magic("%ownership");
     assert!(out.ok, "expected %ownership to succeed; got: {}", out.text);
@@ -1241,7 +1253,7 @@ fn magic_ownership_lists_binding_modes() {
 
 #[test]
 fn magic_ownership_empty_when_no_bindings() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn foo() {}");
     let out = s.dispatch_magic("%ownership");
     assert!(out.ok);
@@ -1254,7 +1266,7 @@ fn magic_ownership_empty_when_no_bindings() {
 
 #[test]
 fn magic_explain_concept_lookup() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%explain closures");
     assert!(
         out.ok,
@@ -1270,7 +1282,7 @@ fn magic_explain_concept_lookup() {
 
 #[test]
 fn magic_explain_class_lookup() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%explain TYPE_MISMATCH");
     assert!(
         out.ok,
@@ -1286,7 +1298,7 @@ fn magic_explain_class_lookup() {
 
 #[test]
 fn magic_explain_unknown_target() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%explain not-a-real-thing");
     assert!(!out.ok, "unknown explain target must surface as error");
     // The lookup tries concept then class; the final error should
@@ -1300,7 +1312,7 @@ fn magic_explain_unknown_target() {
 
 #[test]
 fn magic_explain_no_argument() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%explain");
     assert!(!out.ok);
     assert!(
@@ -1312,7 +1324,7 @@ fn magic_explain_no_argument() {
 
 #[test]
 fn magic_set_auto_clone_toggles_flag() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     assert!(!s.auto_clone(), "default off");
 
     let on = s.dispatch_magic("%set auto-clone on");
@@ -1328,7 +1340,7 @@ fn magic_set_auto_clone_toggles_flag() {
 
 #[test]
 fn magic_set_auto_clone_rejects_bad_value() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%set auto-clone maybe");
     assert!(!out.ok, "bad value must surface as error");
     assert!(
@@ -1341,7 +1353,7 @@ fn magic_set_auto_clone_rejects_bad_value() {
 
 #[test]
 fn magic_set_unknown_setting() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%set frobnicate true");
     assert!(!out.ok);
     assert!(
@@ -1359,7 +1371,7 @@ fn magic_provide_forwards_to_meta_handler() {
     // with the REPL surface. Construction failures surface as
     // MagicOutput::error; successful opens / closes surface as
     // MagicOutput::ok with the same text the meta handler returns.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     // Failed construction → error (the resolver hits `SomeProvider`,
     // which isn't defined in this session).
     let out = s.dispatch_magic("%provide MyResource = SomeProvider {}");
@@ -1413,7 +1425,7 @@ fn magic_provide_forwards_to_meta_handler() {
 fn magic_and_meta_provide_share_stack() {
     // Open via :provide (meta) and close via %end-provide (magic) —
     // both must touch the same Session.provider_stack.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":provide M = 7");
     assert_eq!(s.provider_stack().len(), 1);
     let out = s.dispatch_magic("%end-provide M");
@@ -1444,7 +1456,7 @@ fn cell_effect_footer_populates_after_run() {
     // A cell that triggers a tracked effect (env.set carries
     // `writes(Env)`) must surface the footer string the kernel will
     // render below the cell's stdout.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let r = s.evaluate_cell_captured("env.set(\"X\", \"y\");");
     assert!(r.errors.is_empty(), "errors: {:?}", r.errors);
     assert!(
@@ -1458,7 +1470,7 @@ fn cell_effect_footer_populates_after_run() {
 fn cell_effect_footer_empty_for_pure_cell() {
     // Pure cells (no tracked effect calls) emit an empty footer so
     // the kernel can suppress the annotation.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let r = s.evaluate_cell_captured("let _x = 1 + 2;");
     assert!(r.errors.is_empty());
     assert!(
@@ -1473,7 +1485,7 @@ fn cell_effect_footer_empty_for_pure_items_cell() {
     // Item-only cells use the early-return path of evaluate_cell_captured
     // (no synthetic main is built). The footer field is empty since
     // there's no statement-side run to summarize.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let r = s.evaluate_cell_captured("fn one() -> i64 { 1 }");
     assert!(r.errors.is_empty());
     assert!(
@@ -1490,7 +1502,7 @@ fn provide_meta_rejects_missing_equals() {
     // `:provide DB` (no `= expr`) must surface a usage hint and leave
     // the stack untouched. The dispatcher prints to stderr; we assert
     // via state inspection.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":provide DB");
     assert!(s.provider_stack().is_empty());
 }
@@ -1499,7 +1511,7 @@ fn provide_meta_rejects_missing_equals() {
 fn provide_meta_rejects_invalid_resource_ident() {
     // The resource ident must be a Kāra identifier — leading digit
     // rejected, no frame pushed.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":provide 123 = 42");
     assert!(s.provider_stack().is_empty());
 }
@@ -1508,7 +1520,7 @@ fn provide_meta_rejects_invalid_resource_ident() {
 fn provide_meta_rejects_empty_expression() {
     // `:provide DB =` (trailing `=` with empty RHS) must surface a
     // usage hint and leave the stack untouched.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":provide DB =");
     assert!(s.provider_stack().is_empty());
 }
@@ -1520,7 +1532,7 @@ fn provide_meta_pushes_frame_after_valid_construction() {
     // runs to completion, so the frame pushes. The resource-level
     // typecheck against the wrapping `with_provider` form lands in
     // slice 3; slice 2 just establishes the dispatching surface.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":provide MyR = 42");
     let stack = s.provider_stack();
     assert_eq!(stack.len(), 1, "expected one frame; got {stack:?}");
@@ -1536,7 +1548,7 @@ fn provide_meta_does_not_open_scope_on_type_error() {
     // design.md guarantee: "if construction panics, the scope is not
     // opened". Type-time failures are a strict superset of runtime
     // panics (caught earlier in the pipeline).
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":provide DB = no_such_function_anywhere()");
     assert!(
         s.provider_stack().is_empty(),
@@ -1546,7 +1558,7 @@ fn provide_meta_does_not_open_scope_on_type_error() {
 
 #[test]
 fn end_provide_pops_innermost_frame() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":provide A = 1");
     assert_eq!(s.provider_stack().len(), 1);
     s.dispatch_meta(":end-provide A");
@@ -1555,7 +1567,7 @@ fn end_provide_pops_innermost_frame() {
 
 #[test]
 fn end_provide_with_no_active_scope_errors() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":end-provide DB");
     assert!(s.provider_stack().is_empty());
 }
@@ -1570,7 +1582,7 @@ fn end_provide_wrong_name_errors_with_single_frame() {
     // in the active outer providers and that wrap requires a real
     // `effect resource` declaration to typecheck — slice 5 adds the
     // full end-to-end nested test with proper resource stubs).
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":provide A = 1");
     assert_eq!(s.provider_stack().len(), 1);
     s.dispatch_meta(":end-provide B");
@@ -1581,7 +1593,7 @@ fn end_provide_wrong_name_errors_with_single_frame() {
 
 #[test]
 fn end_provide_validates_resource_ident() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.dispatch_meta(":provide A = 1");
     s.dispatch_meta(":end-provide 123");
     // Stack untouched on invalid ident.
@@ -1597,7 +1609,7 @@ fn export_falls_back_to_flat_form_when_provider_history_empty() {
     // to emit the flat `render_main_body` shape unchanged — the
     // timeline-aware path only kicks in when provider_history is
     // non-empty, so existing 679-style export tests stay valid.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("println(\"hi\");");
     let exported = s.render_exported_session();
     assert!(
@@ -1612,7 +1624,7 @@ fn export_omits_empty_provider_scopes() {
     // `:provide A` immediately followed by `:end-provide A` with no
     // cells between is an empty scope — the export should drop it
     // entirely so the saved file stays minimal.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("println(\"before\");");
     s.dispatch_meta(":provide A = 1");
     s.dispatch_meta(":end-provide A");
@@ -1634,7 +1646,7 @@ fn export_wraps_cells_in_active_scope() {
     // Provider shape (see tests/snapshots/cost_summary_provider.kara
     // for the same construction in file form). Cells outside the
     // scope land at the top level of the body.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("struct FakeClock {}");
     let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 0 } }");
     let _ = s.evaluate_cell_captured("println(\"before scope\");");
@@ -1668,7 +1680,7 @@ fn run_time_wraps_cell_body_when_provider_active() {
     // `:provide Clock = FakeClock {}` open the wrap supplies it and
     // the cell runs. The stdout assertion proves the wrap actually
     // executed (not just that the typechecker accepted it).
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("struct FakeClock {}");
     let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 42 } }");
     s.dispatch_meta(":provide Clock = FakeClock {}");
@@ -1686,7 +1698,7 @@ fn reference_after_end_provide_surfaces_notebook_aware_tail() {
     // `:end-provide R` fires, and the resolver "undefined name 'X'"
     // error grows a tail naming the provider scope that closed and
     // the cell where the binding was declared.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("struct FakeClock {}");
     let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 0 } }");
     s.dispatch_meta(":provide Clock = FakeClock {}");
@@ -1720,7 +1732,7 @@ fn binding_outside_provider_scope_survives_end_provide() {
     // must remain visible after :end-provide. Only bindings whose
     // capture-time scope equals the just-closed-scope's pre-pop stack
     // are pruned.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("struct FakeClock {}");
     let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 0 } }");
     let r = s.evaluate_cell_captured("let outer = 7;");
@@ -1745,7 +1757,7 @@ fn rebinding_pruned_name_clears_diagnostic_entry() {
     // scope. Test by re-binding then deliberately referencing a
     // DIFFERENT undefined name and confirming no spurious provider
     // tail attaches.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("struct FakeClock {}");
     let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 0 } }");
     s.dispatch_meta(":provide Clock = FakeClock {}");
@@ -1772,7 +1784,7 @@ fn reset_clears_pruned_provider_lets() {
     // :reset is a clean slate for the persistent-let machinery — the
     // pruned-bindings record should clear too so future "undefined
     // name 'X'" errors don't carry stale provider-scope tails.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("struct FakeClock {}");
     let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 0 } }");
     s.dispatch_meta(":provide Clock = FakeClock {}");
@@ -1794,7 +1806,7 @@ fn nested_close_prunes_only_inner_scope_bindings() {
     // must prune `x` (declared under [A, B]) but leave any binding
     // declared under just [A] visible. Exercises the equality check
     // on capture-time scope vs. pre-pop active stack.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("struct FakeClock {}");
     let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 0 } }");
     let _ = s.evaluate_cell_captured("struct FakeRng {}");
@@ -1831,7 +1843,7 @@ fn export_handles_nested_provider_scopes() {
     // wraps the cell). Uses two distinct resources — RandomSource is
     // the other program-rooted resource with a default Provider
     // shape that an empty user struct can satisfy.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let _ = s.evaluate_cell_captured("struct FakeClock {}");
     let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 0 } }");
     let _ = s.evaluate_cell_captured("struct FakeRng {}");
@@ -1857,7 +1869,7 @@ fn export_handles_nested_provider_scopes() {
 
 #[test]
 fn show_magic_atom_yields_text_plain_only() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%show 1 + 2");
     assert!(out.ok, "expected ok; got: {}", out.text);
     let bundle = out.rich.expect("%show must populate rich bundle");
@@ -1871,7 +1883,7 @@ fn show_magic_atom_yields_text_plain_only() {
 
 #[test]
 fn show_magic_vec_struct_emits_html_table() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("struct Row { name: String, count: i64 }");
     s.evaluate_cell_captured(
         r#"let rows = [Row { name: "a", count: 1 }, Row { name: "b", count: 2 }];"#,
@@ -1893,7 +1905,7 @@ fn show_magic_vec_struct_emits_html_table() {
 
 #[test]
 fn show_magic_string_value_renders_inline() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured(r#"let greeting = "hello kara";"#);
     let out = s.dispatch_magic("%show greeting");
     assert!(out.ok, "expected ok; got: {}", out.text);
@@ -1902,7 +1914,7 @@ fn show_magic_string_value_renders_inline() {
 
 #[test]
 fn show_magic_undefined_name_surfaces_error() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%show does_not_exist");
     assert!(!out.ok, "expected error for undefined name");
     assert!(out.rich.is_none(), "errors carry no rich bundle");
@@ -1915,7 +1927,7 @@ fn show_magic_undefined_name_surfaces_error() {
 
 #[test]
 fn show_magic_empty_argument_usage_error() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%show");
     assert!(!out.ok, "empty arg must error");
     assert!(out.text.contains("usage:"), "usage hint: {}", out.text);
@@ -1924,7 +1936,7 @@ fn show_magic_empty_argument_usage_error() {
 
 #[test]
 fn show_magic_does_not_mutate_session_state() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("let x = 5;");
     let cells_before = s.cell_history().len();
     let lets_before = s.persistent_lets().len();
@@ -1948,7 +1960,7 @@ fn show_magic_does_not_mutate_session_state() {
 
 #[test]
 fn show_magic_listed_in_unknown_magic_help() {
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%not-a-real-magic");
     assert!(!out.ok);
     assert!(
@@ -1963,7 +1975,7 @@ fn show_magic_uses_session_items() {
     // `%show` must see top-level items the session has accumulated —
     // a struct defined in a prior cell can be constructed inline by
     // the expression.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("struct Point { x: i64, y: i64 }");
     let out = s.dispatch_magic("%show Point { x: 7, y: 8 }");
     assert!(out.ok, "expected ok; got: {}", out.text);
@@ -1976,7 +1988,7 @@ fn show_magic_uses_session_items() {
 fn show_magic_text_plain_pretty_prints_nested() {
     // A struct containing an array of structs should pretty-print
     // multi-line rather than collapsing to a single hard-to-read line.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("struct Row { id: i64 }");
     s.evaluate_cell_captured("struct Group { rows: Vec[Row] }");
     s.evaluate_cell_captured("let g = Group { rows: [Row { id: 1 }, Row { id: 2 }] };");
@@ -2010,7 +2022,7 @@ fn cell_effect_history_aligned_with_cell_history() {
     // one entry to both `cell_history` and `cell_effect_history`. The
     // line 773 timeline relies on this 1:1 alignment so the snapshot
     // at index `i` describes cell `i+1`.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn one() -> i64 { 1 }");
     s.evaluate_cell_captured("env.set(\"X\", \"y\");");
     s.evaluate_cell_captured("let _z = one() + 2;");
@@ -2023,7 +2035,7 @@ fn cell_effect_snapshot_records_writes_env() {
     // A statement cell that triggers `env.set` (declared `writes(Env)`
     // in the stdlib) lands one snapshot entry with the same verb/
     // resource pair the footer string renders.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("env.set(\"K\", \"v\");");
     let history = s.cell_effect_history();
     assert_eq!(history.len(), 1);
@@ -2045,7 +2057,7 @@ fn cell_effect_snapshot_empty_for_pure_cell() {
     // A pure statement cell records an empty snapshot — the timeline
     // index stays aligned with `cell_history` but the entry carries
     // no effects so it can't participate in cross-cell dependencies.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("let _x = 1 + 2;");
     let history = s.cell_effect_history();
     assert_eq!(history.len(), 1);
@@ -2061,7 +2073,7 @@ fn cell_effect_snapshot_empty_for_pure_items_cell() {
     // Item-only cells contribute to `items_source` but don't run a
     // synthetic main — they record an empty snapshot to keep the
     // 1:1 alignment with `cell_history`.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn add(a: i64, b: i64) -> i64 { a + b }");
     let history = s.cell_effect_history();
     assert_eq!(history.len(), 1);
@@ -2077,7 +2089,7 @@ fn cell_effect_snapshot_skipped_on_statement_error() {
     // Captured-path statement cells that fail diagnostic-side roll
     // back `cell_history`; the snapshot history is *not* pushed in
     // that arm so the alignment invariant survives the rollback.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let r = s.evaluate_cell_captured("undefined_function();");
     assert!(!r.errors.is_empty());
     assert_eq!(s.cell_history().len(), 0);
@@ -2090,7 +2102,7 @@ fn cell_effect_snapshot_records_distinct_resources() {
     // `writes(Env)` and `Vec.push` → `allocates(Heap)`) records
     // both entries — the snapshot deduplicates by `(verb, resource)`,
     // so two distinct effects produce two distinct entries.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let r = s.evaluate_cell_captured("env.set(\"A\", \"1\"); let mut v = Vec.new(); v.push(1);");
     assert!(r.errors.is_empty(), "errors: {:?}", r.errors);
     let history = s.cell_effect_history();
@@ -2119,7 +2131,7 @@ fn cell_effect_snapshot_dedupes_repeated_effect() {
     // Multiple call sites of the same writes(Env) effect collapse to
     // one snapshot entry — the timeline shouldn't double-count when a
     // cell mutates the same resource through several builtin calls.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let r = s.evaluate_cell_captured("env.set(\"A\", \"1\"); env.set(\"B\", \"2\");");
     assert!(r.errors.is_empty(), "errors: {:?}", r.errors);
     let history = s.cell_effect_history();
@@ -2143,7 +2155,7 @@ fn timeline_magic_empty_session_returns_hint() {
     // Empty session — no cells, no dependencies. Emit a friendly
     // hint via plain text; no rich bundle (there's no table to
     // render until the first cell lands).
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%timeline");
     assert!(out.ok, "expected ok; got: {}", out.text);
     assert!(
@@ -2158,7 +2170,7 @@ fn timeline_magic_renders_text_plain_and_html() {
     // Two cells: one pure, one writes(Env). Timeline must include
     // both cells in submission order. text/html mime present
     // alongside text/plain for rich-display surfaces.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("let _x = 1;");
     s.evaluate_cell_captured("env.set(\"A\", \"1\");");
     let out = s.dispatch_magic("%timeline");
@@ -2186,7 +2198,7 @@ fn timeline_magic_renders_text_plain_and_html() {
 fn timeline_magic_emits_write_after_write_arrow() {
     // Two cells both writing the same resource — the second cell
     // must surface a "writes Env already written by cell 1" arrow.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("env.set(\"A\", \"1\");");
     s.evaluate_cell_captured("env.set(\"B\", \"2\");");
     let out = s.dispatch_magic("%timeline");
@@ -2216,7 +2228,7 @@ fn timeline_magic_emits_read_after_write_arrow() {
     //
     // We declare a user fn with explicit `reads(Env)` and call it
     // from cell 2; cell 1 wrote Env via env.set.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let r = s.evaluate_cell_captured("fn observe_env() reads(Env) { let _x = 1; }");
     assert!(r.errors.is_empty(), "fn declaration: {:?}", r.errors);
     s.evaluate_cell_captured("env.set(\"K\", \"v\");");
@@ -2250,7 +2262,7 @@ fn timeline_magic_emits_read_after_write_arrow() {
 #[test]
 fn timeline_magic_pure_cell_marks_pure() {
     // Pure cells render as "cell N: (pure)" so the row isn't blank.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("let _x = 1;");
     let out = s.dispatch_magic("%timeline");
     let plain = out
@@ -2271,7 +2283,7 @@ fn timeline_magic_rejects_arguments() {
     // than silently ignoring extra input. The dispatcher trims
     // before testing, so `%timeline   ` (whitespace only) still
     // reaches the no-arg branch.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%timeline garbage");
     assert!(!out.ok, "expected error; got ok: {}", out.text);
     assert!(
@@ -2285,7 +2297,7 @@ fn timeline_magic_rejects_arguments() {
 fn timeline_magic_listed_in_unknown_magic_help() {
     // Unknown magics surface a help line listing supported magics;
     // %timeline must appear there so users discover it.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%bogus");
     assert!(!out.ok);
     assert!(
@@ -2305,7 +2317,7 @@ fn timeline_magic_html_escapes_resource_names() {
     // output indirectly: confirm the html bundle doesn't contain
     // raw resource text unescaped, by checking the table cell uses
     // the rendered `verb(resource)` shape.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("env.set(\"X\", \"y\");");
     let out = s.dispatch_magic("%timeline");
     let html = out
@@ -2329,7 +2341,7 @@ fn rc_magic_empty_session_returns_hint() {
     // Empty session — no items, no lets. The ownership pass runs
     // against an empty synthesized `fn main()` and records no RC
     // fallbacks; emit a friendly hint so the cell pane isn't blank.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%rc");
     assert!(out.ok, "expected ok; got: {}", out.text);
     assert!(
@@ -2360,7 +2372,7 @@ fn rc_magic_records_direct_reuse_after_consume() {
     // Trigger 1: a struct value consumed in a branch and used after
     // the branch falls back to Rc. The magic must surface a row
     // naming the binding, the trigger label, and the Rc kind.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     submit_items(
         &mut s,
         &[
@@ -2399,7 +2411,7 @@ fn rc_magic_records_closure_capture_with_outer_use() {
     // Trigger 2: closure body consumes the captured binding and the
     // outer scope re-uses it. The magic must surface the second
     // trigger label.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     submit_items(
         &mut s,
         &[
@@ -2427,7 +2439,7 @@ fn rc_magic_records_closure_capture_with_outer_use() {
 fn rc_magic_renders_text_plain_and_html_mimes() {
     // A successful render emits both mimes so kernel frontends can
     // pick the richest one they understand.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     submit_items(
         &mut s,
         &[
@@ -2469,7 +2481,7 @@ fn rc_magic_sorts_rows_by_fn_then_binding() {
     // them in `(fn_name, binding)` order so the textual output is
     // stable across runs (HashMap iteration is nondeterministic
     // without sorting).
-    let mut s = Session::new();
+    let mut s = pinned_session();
     submit_items(
         &mut s,
         &[
@@ -2494,7 +2506,7 @@ fn rc_magic_sorts_rows_by_fn_then_binding() {
 #[test]
 fn rc_magic_no_fallbacks_when_no_consume() {
     // Pure code with no consume-then-reuse pattern → no RC entries.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     s.evaluate_cell_captured("fn pure_fn() -> i64 { 42 }");
     let out = s.dispatch_magic("%rc");
     assert!(out.ok);
@@ -2509,7 +2521,7 @@ fn rc_magic_no_fallbacks_when_no_consume() {
 fn rc_magic_rejects_arguments() {
     // %rc takes no arguments — surface a usage hint rather than
     // silently ignoring extra input.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%rc verbose");
     assert!(!out.ok, "expected error; got ok: {}", out.text);
     assert!(
@@ -2523,7 +2535,7 @@ fn rc_magic_rejects_arguments() {
 fn rc_magic_listed_in_unknown_magic_help() {
     // Unknown magics surface a help line listing supported magics;
     // %rc must appear there so users discover it.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%bogus");
     assert!(!out.ok);
     assert!(
@@ -2536,7 +2548,7 @@ fn rc_magic_listed_in_unknown_magic_help() {
 #[test]
 fn rc_magic_listed_in_empty_magic_help() {
     // Empty `%` magic also surfaces the supported-set help line.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     let out = s.dispatch_magic("%");
     assert!(!out.ok);
     assert!(
@@ -2554,7 +2566,7 @@ fn rc_magic_html_escapes_qualified_binding_name() {
     // against a future widening) is HTML-encoded. Pin the escape
     // path by exercising it on a real row and checking the table
     // wraps the binding in escaped `<td>` content.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     submit_items(
         &mut s,
         &[
@@ -2582,7 +2594,7 @@ fn rc_magic_includes_consume_and_reuse_spans() {
     // Each row records both spans — consume site (where the
     // binding was moved) and reuse site (the later use that
     // forced fallback). Format is `(consume L:C, reuse L:C)`.
-    let mut s = Session::new();
+    let mut s = pinned_session();
     submit_items(
         &mut s,
         &[
