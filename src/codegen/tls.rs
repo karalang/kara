@@ -847,8 +847,10 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Helper: extract `{ptr, len}` from a Kāra `String` struct value
     /// (matches `{ptr, i64 len, i64 cap}` Vec-style layout). Used by
-    /// `lower_tls_listener_bind_tls` to unpack the three String args.
-    fn extract_string_ptr_len(
+    /// `lower_tls_listener_bind_tls` to unpack the three String args, and
+    /// by the ambient-resource lowering in `method_call.rs` (`env.set`)
+    /// for the same `String` ABI extraction — hence `pub(super)`.
+    pub(super) fn extract_string_ptr_len(
         &mut self,
         s_val: BasicValueEnum<'ctx>,
         name_hint: &str,

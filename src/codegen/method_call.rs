@@ -1321,6 +1321,26 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // ── Ambient built-in resource methods (BuiltinDefault) ─────
+        // Last resort before the dispatch-fail error: lower the ambient
+        // resource methods (`env.set`, `clock.now`, ...) the interpreter
+        // services via `dispatch_builtin_resource_method_with_values`
+        // (`src/interpreter/resource_method.rs`). The receiver is a bare
+        // lowercase alias (`env`, `clock`) — see the interpreter's alias
+        // table in `src/interpreter/method_call.rs` — that is NOT a bound
+        // local; a user variable named `env` shadows the ambient resource,
+        // so guard on `self.variables`. User `with_provider` overrides of
+        // overridable resources are dispatched earlier via
+        // `try_compile_provider_dispatch` (`call_dispatch.rs`), so reaching
+        // here means no provider claimed the call.
+        if let ExprKind::Identifier(recv) = &object.kind {
+            if !self.variables.contains_key(recv) {
+                if let Some(resource) = ambient_resource_for_alias(recv) {
+                    return self.compile_ambient_resource_method(resource, method, args);
+                }
+            }
+        }
+
         let receiver_desc = match &object.kind {
             ExprKind::Identifier(name) => format!("variable '{}'", name),
             _ => "non-identifier receiver".to_string(),
@@ -1331,6 +1351,86 @@ impl<'ctx> super::Codegen<'ctx> {
              or mark the test `#[ignore]` if the method is genuinely deferred)",
             method, receiver_desc
         ))
+    }
+
+    /// Lower an ambient built-in resource method (`env.set`, `clock.now`)
+    /// to its runtime FFI — the codegen counterpart of the interpreter's
+    /// `dispatch_builtin_resource_method_with_values`. Only the
+    /// resource/method pairs the runtime currently backs are lowered; any
+    /// other ambient method returns an error naming the gap rather than
+    /// miscompiling.
+    fn compile_ambient_resource_method(
+        &mut self,
+        resource: &str,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        match (resource, method) {
+            ("Env", "set") => {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "codegen: env.set expects 2 arguments, found {}",
+                        args.len()
+                    ));
+                }
+                let name_val = self.compile_expr(&args[0].value)?;
+                let val_val = self.compile_expr(&args[1].value)?;
+                let (name_ptr, name_len) = self.extract_string_ptr_len(name_val, "env.set.name");
+                let (val_ptr, val_len) = self.extract_string_ptr_len(val_val, "env.set.val");
+                let fn_val = match self.module.get_function("karac_runtime_env_set") {
+                    Some(f) => f,
+                    None => {
+                        let fn_ty = self.context.void_type().fn_type(
+                            &[ptr_t.into(), i64_t.into(), ptr_t.into(), i64_t.into()],
+                            false,
+                        );
+                        self.module
+                            .add_function("karac_runtime_env_set", fn_ty, None)
+                    }
+                };
+                self.builder
+                    .build_call(
+                        fn_val,
+                        &[
+                            name_ptr.into(),
+                            name_len.into(),
+                            val_ptr.into(),
+                            val_len.into(),
+                        ],
+                        "env.set",
+                    )
+                    .unwrap();
+                // `env.set` returns Unit → the i64-0 void-return placeholder
+                // used throughout this module.
+                Ok(i64_t.const_int(0, false).into())
+            }
+            ("Clock", "now") => {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "codegen: clock.now expects 0 arguments, found {}",
+                        args.len()
+                    ));
+                }
+                let fn_val = match self.module.get_function("karac_runtime_clock_now") {
+                    Some(f) => f,
+                    None => {
+                        let fn_ty = i64_t.fn_type(&[], false);
+                        self.module
+                            .add_function("karac_runtime_clock_now", fn_ty, None)
+                    }
+                };
+                let call = self.builder.build_call(fn_val, &[], "clock.now").unwrap();
+                Ok(call.try_as_basic_value().unwrap_basic())
+            }
+            _ => Err(format!(
+                "codegen: ambient resource method '{}.{}' is not yet lowered \
+                 (interpreter-only); add a runtime FFI + an arm in \
+                 `compile_ambient_resource_method`",
+                resource, method
+            )),
+        }
     }
 
     /// True iff `object` is a receiver shape whose static type is
@@ -1838,5 +1938,26 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => Ok(None),
         }
+    }
+}
+
+/// Map a bare lowercase ambient-resource alias (`env`, `clock`, ...) to
+/// its capitalized effect-resource name, mirroring the interpreter's
+/// alias table in `src/interpreter/method_call.rs`. Returns `None` for
+/// any identifier that is not an ambient resource alias. Codegen lowers
+/// only the subset the runtime currently backs (see
+/// `compile_ambient_resource_method`); the rest still resolve here so
+/// they get a precise "not yet lowered" error rather than the generic
+/// dispatch fall-through.
+fn ambient_resource_for_alias(alias: &str) -> Option<&'static str> {
+    match alias {
+        "clock" => Some("Clock"),
+        "env" => Some("Env"),
+        "rand" => Some("RandomSource"),
+        "stdin" => Some("Stdin"),
+        "stdout" => Some("Stdout"),
+        "stderr" => Some("Stderr"),
+        "fs" => Some("FileSystem"),
+        _ => None,
     }
 }

@@ -868,6 +868,29 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_ambient_resource_clock_now_and_env_set() {
+        // Ambient built-in resource methods lower to runtime FFIs
+        // (`karac_runtime_env_set` / `karac_runtime_clock_now`) — the
+        // codegen counterpart of the interpreter's BuiltinDefault
+        // dispatch. `clock.now()` returns a positive Unix timestamp;
+        // `env.set` runs without error. Regression guard for the
+        // dispatch fall-through that previously errored with
+        // "no handler for method 'set' on variable 'env'".
+        let out = run_program(
+            r#"
+fn main() writes(Env) reads(Clock) {
+    env.set("KARA_E2E_X", "y");
+    let t = clock.now();
+    if t > 0 { println("clock-ok"); } else { println("clock-bad"); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "clock-ok");
+        }
+    }
+
     /// phase-7 — an explicit valueless `return;` reachable in `main` must
     /// emit `ret i32 0` (main lowers to a C-ABI `i32 main()`), not
     /// `ret void`. Before the fix this failed module verification

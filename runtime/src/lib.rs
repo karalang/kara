@@ -107,6 +107,11 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_error_trace_clear,
         karac_test_record_failure,
     );
+    // Ambient built-in resource methods lowered by codegen
+    // (`src/codegen/method_call.rs::compile_ambient_resource_method`).
+    // Without these the LLJIT path's `dlsym` symbol-search generator
+    // can't resolve `env.set` / `clock.now` call sites.
+    keep!(karac_runtime_env_set, karac_runtime_clock_now);
     // Emulated-TLS dispatch (LLJIT path; see `runtime/src/emutls.rs`).
     // LLVM-emitted `#[thread_local]` lowering under LLJIT calls
     // `__emutls_get_address`, which compiler-rt provides on platforms
@@ -403,6 +408,44 @@ pub extern "C" fn karac_runtime_panic_prefix() -> *const std::os::raw::c_char {
     } else {
         NOT_IN_PREDICATE.as_ptr() as *const std::os::raw::c_char
     }
+}
+
+/// `env.set(name, value)` — POSIX `setenv` shape: overwrites if present,
+/// creates otherwise. Codegen counterpart to the interpreter's
+/// `("Env", "set")` arm (`src/interpreter/resource_method.rs`); the
+/// AOT/JIT path lowers `env.set(..)` to a call here. Args are (ptr, len)
+/// pairs for the two Kāra `String`s (UTF-8, never NUL-terminated).
+///
+/// # Safety
+///
+/// `name_ptr`/`val_ptr` must each point to `name_len`/`val_len` valid,
+/// initialized UTF-8 bytes (the codegen always passes a Kāra `String`'s
+/// `{ptr, len}`, which satisfies this). Additionally `std::env::set_var`
+/// is only sound when no other thread concurrently reads the environment
+/// block; the effect system upholds this by serializing `writes(Env)`
+/// against concurrent env reads.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_env_set(
+    name_ptr: *const u8,
+    name_len: usize,
+    val_ptr: *const u8,
+    val_len: usize,
+) {
+    let name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len));
+    let val = std::str::from_utf8_unchecked(std::slice::from_raw_parts(val_ptr, val_len));
+    std::env::set_var(name, val);
+}
+
+/// `clock.now()` — current Unix time in whole seconds. Codegen
+/// counterpart to the interpreter's `("Clock", "now")` arm; returns 0 if
+/// the system clock predates the Unix epoch (matching the interpreter's
+/// `unwrap_or(0)`).
+#[no_mangle]
+pub extern "C" fn karac_runtime_clock_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Newtype around `*const KaracFrame` that opts into `Send + Sync` for
