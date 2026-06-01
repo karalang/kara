@@ -13,44 +13,44 @@ Harness mechanics, flags, and CI-gate JSON shape live in `README.md`
 alongside; this file is **what we measured and what it means**, not
 **how the harness works**.
 
-> # ⚠️ PROVISIONAL — handler-execution blocker FIXED; EC2 re-measure now unblocked
+> # ✅ RE-MEASURED — working-handler 1M density landed (2026-06-01)
 >
-> **The blocker that made these figures provisional is resolved (A2,
-> 2026-05-31).** Every **Kāra per-connection density** number in this report —
-> 7.8 KB/conn, the **3.55× ratio vs Rust**, the 1M↔2M scale-invariance, the x86
-> cross-ISA confirmation, and the cost reframe derived from them — was measured
-> **before the per-connection handler executed**, on a build where
-> `__kara_poll_handle_connection` compiled to a body-less state machine (no
-> `recv_text`/`send_text`/parking emitted — "bug C" of the A2 track). The
-> connections were genuinely established + held (so "holds N connections" was
-> real), but the handler's per-conn state — the **4 KB recv buffer + frame +
-> parking** — was **freed, not held**, whereas Rust's 27.8 KB *includes* its
-> per-conn task state. **So these figures are not apples-to-apples and understate
-> a working server.**
+> **The provisional figures are replaced by a real working-server measurement.**
+> The earlier Kāra density numbers (7.8 KB/conn, the 3.55× ratio vs Rust) were
+> measured **before the per-connection handler executed** — on a build where
+> `handle_connection` compiled to a body-less state machine (no
+> `recv_text`/`send_text`/parking — "bug C" of the A2 track). Connections were
+> genuinely established + held, but the handler's per-conn state — the **4 KB
+> recv buffer + coroutine frame + parking** — was **freed, not held**, while
+> Rust's 27.9 KB *includes* its per-conn task state. Those figures understated a
+> working server, so they were retracted.
 >
 > **What changed (all landed on `main`):** the A2 LLVM-coroutine network-async
-> transform compiles network-boundary fns (incl. `handle_connection`) as
-> dispatcher-driven coroutines, flipped **on by default** for `karac build`; the
-> WS-over-TLS recv/send path executes as a coroutine suspend/resume; and the
-> concurrent accept-loop resume race (which wedged ~half of connections under
-> load) is fixed. The demo handler **now executes** `recv_text`/`send_text` and
-> holds its per-conn state.
+> transform compiles network-boundary fns as dispatcher-driven coroutines,
+> flipped **on by default**; the WS-over-TLS recv/send path executes as a
+> coroutine suspend/resume; the concurrent accept-loop resume race is fixed; and
+> two coroutine-frame heap-overflow bugs that corrupted the glibc heap at scale
+> are fixed — `fe6afd16` (the `Array[u8,4096]` recv-buffer frame slot was sized
+> as an 8-byte i64 instead of inline `[4096 x i8]`) and `eba48194` (the codegen
+> module carried no `target datalayout`, so `llvm.coro.size` under-allocated the
+> frame by the i64-alignment delta and the trailing suspend-index stored one
+> byte past the malloc). Both were glibc-only and silent on macOS even under
+> ASAN — caught only by running the real binary on the Linux/Graviton rig.
 >
-> **Local validation (M-series, loopback, post-fix):** the demo holds + services
-> real `wss://` connections with **0 wedges** under concurrency — established
-> 2000/2000 and 5000/5000 cleanly, per-conn settling at **~13.5–14 KB** (the
-> small-N figure is fixed-baseline-dominated and trends down with N). A sanity
-> baseline, **not** the headline — single-box loopback can't sustain ≥10K
-> connections (port/rig limits), which is exactly what the EC2 rig is for.
+> **Re-measure (the real headline), 1M on `r8g.4xlarge` arm64, build off `main`
+> ⊇ `eba48194`:** established **1,000,000 / 0 failed**, clean teardown, no heap
+> corruption. **Per-conn = 12,114 B (12.1 KB)** — server RSS 11.28 GiB holding
+> 1M idle `wss://` connections. The latency tail also improved sharply vs the
+> pre-fix run (p99 1856 ms → **255 ms**, max 2306 ms → **480 ms** — the
+> `ec2_setup.sh` sysctls removed the SYN-retransmit cliff). Raw JSON:
+> `docs/investigations/demo1_m3_1m_postfix_datalayout.json`.
 >
-> **Re-measure (the real headline) is now unblocked** — rebuild the demo with
-> current `karac`, then run `bench/scripts/run_1m.sh` / `run_2m.sh` on the EC2
-> rig. **Expected:** per-conn-bytes ~7.8 → **~12–13 KB** (the ~13.5–14 KB local
-> read already lands there), ratio 3.55× → **~2–2.5×** (partly tunable via the
-> demo's recv-buffer size). **Unaffected:** Rust's figures, established counts,
-> connect-latency percentiles. The headline table below still carries the
-> pre-fix `‡` figures — **do not quote the Kāra density / ratio externally until
-> the EC2 re-measure replaces them.**
+> **Corrected headline:** per-conn **7.8 → 12.1 KB**, ratio **3.55× → 2.30×** vs
+> Rust (27.9 KB, same-rig). Still **2.3× better per-connection density** — now a
+> real working-server number. **Rust's figures, established counts, and connect
+> percentiles are unaffected.** Outstanding: the **2M** Kāra re-measure (to
+> confirm 12.1 KB is scale-invariant post-fix) and the **x86 cross-ISA** re-read
+> are flagged `‡` below until re-run.
 
 > **Status:** _in progress_. Kāra 1M + 2M and Rust 1M + 2M numbers are
 > landed (credibility-comparator head-to-head at the ceiling is
@@ -69,8 +69,8 @@ alongside; this file is **what we measured and what it means**, not
 
 | Stack | role | per-conn bytes (idle) | ratio vs Kāra | scale tested | status | section |
 |---|---|---|---|---|---|---|
-| **Kāra** | self | **7.8 KB** ‡ | 1.00× (baseline) | 1M + 2M landed | landed @ 2M ‡ | [§Kāra](#kāra) |
-| Rust (rustls + tokio) | credibility | 27.9 KB | 3.55× ‡ | 1M + 2M landed | landed @ 2M | [§Rust](#rust-rustls--tokio) |
+| **Kāra** | self | **12.1 KB** | 1.00× (baseline) | 1M landed (post-fix); 2M ‡ | landed @ 1M | [§Kāra](#kāra) |
+| Rust (rustls + tokio) | credibility | 27.9 KB | **2.30×** | 1M + 2M landed | landed @ 2M | [§Rust](#rust-rustls--tokio) |
 | Phoenix Channels (Elixir) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #67) | pending | [§Phoenix](#phoenix-channels-elixir) |
 | Java / Netty | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #68) | pending | [§Java/Netty](#java--netty) |
 | Go (gorilla/websocket) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #69) | pending | [§Go](#go-gorillawebsocket) |
@@ -81,19 +81,22 @@ alongside; this file is **what we measured and what it means**, not
 | socket.io _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #75) | stretch | [§socket.io](#socketio-stretch) |
 | Python asyncio websockets _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #76) | stretch | [§Python](#python-asyncio-websockets-stretch) |
 
-> **‡ Provisional** — the Kāra per-conn-bytes (and therefore the 3.55×
-> ratio) are pre-line-17 figures measured with non-executing handlers; they
-> understate a working server and will rise to ~12–13 KB / ~2–2.5× after the
-> re-measure. See the ⚠️ banner at the top of this report. Rust's number is
-> unaffected.
+> **‡ 2M pending** — the Kāra **1M** per-conn (12.1 KB) and the **2.30×** ratio
+> are real working-handler figures (re-measured 2026-06-01 on `r8g.4xlarge`,
+> build ⊇ `eba48194`). The Kāra **2M** scale-invariance read and the **x86
+> cross-ISA** read in the §Kāra section are still pre-fix and carry `‡` until
+> re-run. See the ✅ banner at the top of this report. Rust's numbers are
+> unaffected throughout.
 
 > **About the `role` column and asymmetric scale:** comparators serve
 > different argumentative roles (credibility vs commercial vs stretch)
-> and are sized accordingly. Per-conn-bytes is linear (empirically
-> validated for Kāra end-to-end at 2M: 7,861 B vs 7,846 B at 1M
-> = 0.19 % drift), so the density ratio is scale-invariant — 250K
-> against 250K gives the same headline as 1M against 1M. Full
-> rationale in [§Scale per comparator](#scale-per-comparator).
+> and are sized accordingly. Per-conn-bytes is linear (the **pre-fix**
+> Kāra end-to-end run confirmed 0.19 % drift 1M→2M; **the post-fix 2M
+> read that re-confirms this at the 12.1 KB working-handler figure is
+> the outstanding `‡` item**), so the density ratio is scale-invariant —
+> 250K against 250K gives the same headline as 1M against 1M. Rust's own
+> 0.33 % 1M→2M drift is unaffected. Full rationale in
+> [§Scale per comparator](#scale-per-comparator).
 
 ### Commercial reframe — _populated as each row lands_
 
@@ -102,14 +105,16 @@ documented in the [commercial-reframe lens](#commercial-reframe-lens)
 section. Reframes are intentionally **not** written until a row's
 numbers land — see the discipline guards in that section.
 
-- **Kāra vs Rust** _(landed @ 1M and 2M)_: same fleet holds 3.55×
-  more concurrent WebSocket users — **scale-invariant from 1M to 2M
-  (the ratio is 3.548× at both endpoints)**, so the headline carries
-  through to production scale without an extrapolation caveat. For a
+- **Kāra vs Rust** _(Kāra 1M post-fix landed; Rust 1M + 2M landed)_:
+  same fleet holds **2.30×** more concurrent WebSocket users (Kāra
+  12,114 B/conn vs Rust 27,895 B/conn, same `r8g.4xlarge` rig). For a
   hypothetical $1M/yr EC2 spend serving N idle connections on
-  Rust+rustls, the equivalent Kāra fleet costs ~$282K/yr at matched
-  conn count. _Caveats inherited from the [Rust comparator
-  caveats](#rust-rustls--tokio)._
+  Rust+rustls, the equivalent Kāra fleet costs **~$434K/yr** at matched
+  conn count. The ratio's scale-invariance to 2M is expected (per-conn
+  state is fixed-size and the pre-fix run showed <0.2 % drift) but the
+  **post-fix 2M re-confirm is still outstanding** — until then the 2.30×
+  is anchored at 1M, not extrapolated. _Caveats inherited from the
+  [Rust comparator caveats](#rust-rustls--tokio)._
 
 ---
 
@@ -202,7 +207,7 @@ sized box for its real-world deployment shape:
 |---|---|---|---|---|---|
 | Kāra / Rust / Go / Phoenix / Java / .NET Linux / Node | `r8g.4xlarge` | 16 (Graviton4) | 128 GB | arm64 | matches the Kāra & Rust 1M/2M baseline rig; cheap RAM headroom for the 2M target |
 | .NET Windows | `m7i.4xlarge` | 16 (Intel x86) | 64 GB | x86_64 | SChannel is x86-default on Windows Server; matched vCPU; 64 GB is sufficient for 1M target |
-| Cross-platform confirmation _(landed 2026-05-31)_ | `c7i.8xlarge` | 32 (Intel x86) | 64 GB | x86_64 | Kāra 1M density confirmed not arm64-specific (7,725 B, −1.54 % vs arm64); wip task #62 closed. `c7i.8xlarge` over `.4xlarge` — co-located 1M client+server needs >32 GB |
+| Cross-platform confirmation _(pre-fix; density re-read pending)_ | `c7i.8xlarge` | 32 (Intel x86) | 64 GB | x86_64 | Kāra 1M run not arm64-specific — but the 7,725 B figure is **pre-fix** (non-executing handler) and superseded; the p50 floor reproduced cross-ISA (valid). Post-fix density re-read pending. `c7i.8xlarge` over `.4xlarge` — co-located 1M client+server needs >32 GB |
 
 **Each comparator gets a fresh box.** No co-tenancy between runs
 within a measurement session. Box is terminated after the run's
@@ -227,10 +232,12 @@ buffer, WebSocket framing buffers, socket-buffer reservation, task
 stack). Once N is large enough that fixed first-connection overhead
 (TLS context, RNG state, per-thread accept stacks, framework-level
 caches) is amortized below the noise floor, the per-conn delta is
-linear in N. This was empirically confirmed for Kāra end-to-end:
-at 1M the measurement is 7,846 B/conn; at 2M (settled, full ramp
-complete) the measurement is 7,861 B/conn — a drift of 0.19 %,
-well within measurement noise. Other stacks may have different curves at low
+linear in N. This linearity was empirically confirmed for Kāra
+end-to-end on the **pre-fix** build (1M = 7,846 B/conn, 2M = 7,861
+B/conn — 0.19 % drift); the post-fix working-handler 1M figure is
+12,114 B/conn and the 2M re-confirm is pending, but the per-conn
+allocation is fixed-size so the same linearity is expected. Other
+stacks may have different curves at low
 N (BEAM heap pre-allocation, JVM heap warm-up, V8 inline-cache
 warm-up) — that's exactly what the 50K linearity sub-curve detects.
 
@@ -247,7 +254,7 @@ a ratio that doesn't actually generalize to production scale.
 **Caveat carried into reframes.** Per the [commercial-reframe
 lens](#commercial-reframe-lens) discipline guards, any reframe that
 quotes a ratio inherits the scale at which that ratio was measured.
-A "$1M → $282K" reframe derived from a 250K-vs-250K comparator
+A "$1M → $434K" reframe derived from a 250K-vs-250K comparator
 measurement is honest as long as the linearity check passed; it
 becomes dishonest only if the linearity check failed and we
 publish it anyway.
@@ -303,15 +310,18 @@ _Filled in as each comparator lands. Each entry names the deviation
 from the apples-to-apples floor and explains why we shipped the
 number with the deviation rather than retuning to remove it._
 
-- **Kāra vs Rust (1M and 2M both landed):** Both stacks
-  run identical TLS config (TLS 1.3, X25519, AES-128-GCM, same cert
-  fixture, no resumption). Both run idle = truly idle (no
-  application-layer keepalive). The 3.55× ratio is straight
-  per-conn-RSS delta with no framework layer on either side, and is
-  empirically scale-invariant from 1M to 2M: Kāra drifts 0.19 %
-  (7,846 → 7,861 B/conn), Rust drifts 0.33 % (27,895 → 27,893 B/conn)
-  — both inside any defensible "linear" threshold. The same 3.55×
-  density advantage holds at the ceiling.
+- **Kāra vs Rust (Kāra 1M post-fix landed; Rust 1M + 2M landed):** Both
+  stacks run identical TLS config (TLS 1.3, X25519, AES-128-GCM, same
+  cert fixture, no resumption). Both run idle = truly idle (no
+  application-layer keepalive). The **2.30×** ratio is straight
+  per-conn-RSS delta with no framework layer on either side (Kāra
+  12,114 B vs Rust 27,895 B at 1M, same rig). Rust's own density is
+  scale-invariant 1M→2M (0.33 % drift, 27,895 → 27,893 B/conn); the
+  **post-fix Kāra 2M re-confirm of 12.1 KB is the outstanding item**
+  before claiming the ratio holds at the ceiling unconditionally. (The
+  pre-fix Kāra 1M→2M drift of 0.19 % showed the per-conn allocation is
+  linear, so the post-fix figure is expected to hold — but it is not yet
+  measured at 2M.)
 - **Phoenix Channels** _(pending — wip task #67):_ framework
   overhead expected for presence + pubsub broadcast tracking. We
   measure with presence **on** (production default) and **off** (raw
@@ -336,88 +346,85 @@ number with the deviation rather than retuning to remove it._
 
 ### Kāra
 
-- **Status:** `landed @ 1M and 2M` (2026-05-30).
-- **Build:** `karac build` against `examples/ws_idle_holder/main.kara`
-  at commit `a706a5b1`.
-- **Runtime:** auto-par enabled (`KARAC_AUTO_PAR=1`, default);
-  `KARAC_WS_ACCEPT_THREADS=32`.
+- **Status:** `landed @ 1M` (working-handler re-measure, 2026-06-01).
+  2M re-measure + x86 cross-ISA re-read **pending** (`‡` rows below
+  are pre-fix and superseded for the density headline).
+- **Build:** `karac build` against `examples/ws_idle_holder/src/main.kara`
+  off `main` ⊇ `eba48194` (both coro-frame heap-overflow fixes — the
+  `Array[u8,4096]` slot mis-size `fe6afd16` and the missing-datalayout
+  `coro.size` under-allocation `eba48194`).
+- **Runtime:** coroutine network-async transform on by default; TLS via
+  `karac-runtime` rustls integration (TLS 1.3 / X25519 / AES-128-GCM).
 - **Hardware:** `r8g.4xlarge` (16 vCPU Graviton4, 128 GB RAM,
   arm64, Ubuntu 24.04).
-- **TLS:** TLS 1.3 / X25519 / AES-128-GCM via `karac-runtime`
-  rustls integration.
 
-**Idle-hold @ 1M (landed, 2026-05-29):**
+**Idle-hold @ 1M (working handler, landed 2026-06-01) — THE HEADLINE:**
 
 | metric | value | notes |
 |---|---|---|
-| established | 1,000,000 / 1,000,000 | 0 failed |
-| per-conn bytes | **~7,846 B (7.8 KB)** | server-RSS delta / N, settled |
-| connect mean | 81.7 ms | `c=64`, single-point |
-| connect p99 | 256 ms | `c=64` |
+| established | 1,000,000 / 1,000,000 | 0 failed; clean teardown, no heap corruption |
+| **per-conn bytes** | **~12,114 B (12.1 KB)** | server-RSS delta / N; the working handler holds its 4 KB recv buffer + coro frame |
+| server RSS held | 11,832,444 KiB (~11.28 GiB) | RSS delta / N matches per-conn-bytes |
+| connect mean | 82.3 ms | `c=64`, full 1M ramp |
+| connect p50 | 45.9 ms | architectural floor (park/wake path) |
+| connect p95 | 214.1 ms | |
+| connect p99 | 254.8 ms | tail collapsed vs pre-fix 1856 ms — `ec2_setup.sh` sysctls removed the SYN-retransmit cliff |
+| connect max | 480.4 ms | vs pre-fix 2306 ms |
 | churn cliff_ratio | TBD | deferred to active-traffic stress run (#66) |
 
-**Idle-hold @ 2M (landed, 2026-05-30):**
+- Raw JSON: `docs/investigations/demo1_m3_1m_postfix_datalayout.json`.
+- Acceptance criteria (all met): `established == 1,000,000` AND
+  `failed == 0` ✓; clean teardown, no `corrupted size vs. prev_size`
+  (the pre-fix failure mode) ✓; `per_conn_bytes` includes live
+  per-conn handler state (recv buffer held, not freed) ✓.
+
+**What this proves end-to-end.** The working handler holds its
+per-connection state — the 4 KB recv buffer, the coroutine frame, the
+parking — across the idle hold, at **12.1 KB/conn** measured server-side.
+This is apples-to-apples with Rust's 27.9 KB (which has always included
+its per-conn task state): a real **2.30×** per-connection density edge.
+
+> **‡ Pre-fix rows below (2M scale-invariance, x86 cross-ISA) are
+> SUPERSEDED for the density headline.** They were measured with the
+> non-executing handler (7.8 KB/conn) and understate a working server.
+> They are retained only as historical record of the establishment /
+> latency / scale-linearity *shape* (which is handler-state-independent)
+> until re-run at the 12.1 KB working figure. **Do not quote their
+> per-conn-bytes externally.**
+
+**‡ Idle-hold @ 2M (PRE-FIX, superseded — 2026-05-30):**
 
 | metric | value | notes |
 |---|---|---|
 | established | 2,000,000 / 2,000,000 | 0 failed |
-| per-conn bytes | **~7,861 B (7.8 KB)** | 0.19 % drift vs 1M — scale-invariance confirmed |
-| server RSS held | 15,355,328 KiB (~14.65 GiB) | RSS delta / N matches per-conn-bytes |
+| per-conn bytes | ~7,861 B ‡ pre-fix | 0.19 % drift vs pre-fix 1M — confirms the *linearity shape*, not the headline number |
+| server RSS held | 15,355,328 KiB (~14.65 GiB) | pre-fix (non-executing handler) |
 | connect mean | 214.6 ms | `c=64`, full 6707 s ramp |
-| connect p50 | 41.0 ms | architectural floor, [§p50](#status--measurement-matrix) ref + task #65 |
-| connect p95 | 673.9 ms | tail expansion vs 1M (222.7 ms) tracks held-conn count |
+| connect p50 | 41.0 ms | architectural floor |
+| connect p95 | 673.9 ms | |
 | connect p99 | 798.2 ms | |
-| connect p99.9 | 932.6 ms | |
 | connect max | 1204.9 ms | |
-| ramp time | 6706.86 s (~1 h 51 min) | 298 conns/sec avg vs 783 @ 1M — superlinear degradation w/ held-conn count |
-| churn cliff_ratio | TBD | deferred to active-traffic stress run (#66) |
+| ramp time | 6706.86 s (~1 h 51 min) | 298 conns/sec avg vs 783 @ 1M |
 
-- Raw JSON: `kara-2m.json` on the bench rig (mirror to
-  `docs/investigations/demo1_m3_2m.json` on next sync).
-- Acceptance criteria (all met):
-  1. `established == 2,000,000` AND `failed == 0`. ✓
-  2. `per_conn_bytes` within ±5 % of the 1M value
-     (7,846 → 7,861 = 0.19 % drift). ✓
-  3. `dmesg` clean of SYN-flood messages on the successful run
-     (the visible `VFS: file-max limit 3000000 reached` entry is
-     from the *aborted* prior attempt — surfaced the tuning gap
-     fixed in `scripts/ec2_setup.sh` for `fs.file-max=8000000`,
-     this run completed with file-max raised). ✓
+- Raw JSON: `kara-2m.json` on the (terminated) bench rig.
+- **What the pre-fix 2M run still validates:** per-conn-bytes is
+  *linear* in held-conn count (0.19 % drift 1M→2M) — a property of the
+  fixed-size per-conn allocation, independent of whether the handler
+  executes. So the post-fix 12.1 KB is expected to hold at 2M; the
+  **post-fix 2M re-confirm is the outstanding `‡` item.**
 
-**What this proves end-to-end.** The density ratio (3.55× vs Rust)
-is empirically scale-invariant — Kāra's per-conn-bytes drift from
-1M to 2M is 0.19 %, comfortably inside any defensible "linear"
-threshold. The 250K-vs-250K comparator measurements scoped in
-[§Scale per comparator](#scale-per-comparator) will yield the
-same headline ratio as 1M-vs-1M would, with one chance of
-escalation (Phoenix BEAM) reserved by the linearity gate.
-
-**Cross-ISA confirmation (x86, landed 2026-05-31).** The 7.8 KB/conn
-density is **not** Graviton4-specific. A Kāra 1M run on `c7i.8xlarge`
-(Intel x86_64, 32 vCPU, 64 GB, Ubuntu 24.04) landed `per_conn_bytes
-= 7,725.3 B` — **−1.54 % vs the arm64 1M baseline of 7,846 B**, well
-inside the ±5 % gate:
-
-| metric | x86 (`c7i.8xlarge`) | arm64 1M (`r8g.4xlarge`) |
-|---|---|---|
-| established | 1,000,000 / 1,000,000 | 1,000,000 / 1,000,000 |
-| per-conn bytes | **7,725.3 B** | 7,846 B |
-| connect p50 | **41.02 ms** | 41.0 ms (floor) |
-| connect mean | 46.3 ms | 81.7 ms |
-| ramp | 722.8 s (1,384 c/s) | 1,311 s (763 c/s) |
-
-The **p50 reproduces the arm64 floor to the millisecond** (41.02 vs
-41.0 ms), confirming that floor is an architectural property of the
-runtime's park/wake path, not an ISA artifact. Mean/ramp look faster
-but are **not apples-to-apples** — `c7i.8xlarge` is 32 vCPU vs
-`r8g.4xlarge`'s 16, so establishment throughput is confounded by core
-count; only per-conn density (core-count-independent) is under test.
-x86 2M was deliberately skipped: 1M→2M scale-invariance is already
-locked on arm64 (0.19 %) and is a per-conn-allocation property
-orthogonal to ISA. Raw JSON: `docs/investigations/demo1_m3_1m_x86.json`.
-This was the first-ever x86_64-Linux karac build and surfaced + fixed
-two karac/rig gaps en route (PIC reloc model, commit `bda38682`;
-`fs.nr_open` + systemd nofile cap, commit `6437e765`).
+**‡ Cross-ISA confirmation (x86, PRE-FIX, superseded — 2026-05-31).**
+A Kāra 1M run on `c7i.8xlarge` (Intel x86_64) landed pre-fix
+`per_conn_bytes = 7,725.3 B` (−1.54 % vs the pre-fix arm64 1M baseline
+of 7,846 B). The **per-conn-bytes is superseded** (non-executing
+handler), but the **p50 floor reproducing the arm64 value to the
+millisecond** (41.02 vs 41.0 ms) remains a valid cross-ISA result — that
+floor is an architectural property of the runtime's park/wake path, not
+a handler-state artifact. The post-fix x86 density re-read is pending.
+Raw JSON: `docs/investigations/demo1_m3_1m_x86.json`. This was the
+first-ever x86_64-Linux karac build and surfaced + fixed two karac/rig
+gaps en route (PIC reloc model, `bda38682`; `fs.nr_open` + systemd
+nofile cap, `6437e765`).
 
 **Ramp-rate note.** The 298 conns/sec average ramp at 2M is
 ~38 % of the 1M ramp rate (783 conns/sec). This is the
@@ -479,8 +486,10 @@ which stays flat. Filed for the active-traffic stress slice
   1. `established == 2,000,000` AND `failed == 0`. ✓
   2. `per_conn_bytes` within ±5 % of the 1M value
      (27,895 → 27,893 = 0.33 % drift). ✓
-  3. `per_conn_bytes ≥ 3.0× Kāra's at matched N` (= ≥ 23,583 B
-     floor against Kāra's 7,861 B; observed 27,893 B = 3.55×). ✓
+  3. Rust `per_conn_bytes` ≥ 2× Kāra's working-handler density (Kāra
+     post-fix 1M = 12,114 B; observed Rust 27,893–27,895 B = 2.30×). ✓
+     _(The original ≥3.0× criterion was written against the pre-fix
+     non-executing Kāra figure and is superseded.)_
   4. `dmesg` clean on the measured run. The visible `VFS:
      file-max limit 3000000 reached` entry at uptime 8682 s
      is from a teardown-phase touch of the legacy sysctl cap
@@ -501,21 +510,26 @@ which stays flat. Filed for the active-traffic stress slice
 | `connect.p99_ms` | **798.2** | 872.1 | Kāra (−9 %) |
 | `connect.p99.9_ms` | **932.6** | 1014.9 | Kāra (−8 %) |
 | `connect.max_ms` | **1204.9** | 1336.4 | Kāra (−10 %) |
-| **`per_conn_bytes`** | **7,861** | **27,893** | **Kāra (3.55×)** |
+| **`per_conn_bytes`** | 7,861 ‡ pre-fix | **27,893** | _ratio superseded — see note_ |
 
-**What this proves end-to-end.** The same multi-dimensional
-tradeoff that landed at 1M holds at 2M: **Rust wins throughput
-and mean (~4 %) + p50 (~14× tighter handshake hop)**; **Kāra
-wins tail (~8–10 % at p95→max) and memory (3.55×,
-scale-invariant)**. For idle-heavy workloads where memory is
-the binding constraint (chat, IoT push, ISP gateways), Kāra's
-7.8 KB/conn means a single 128 GiB box holds ~16M conns where
-Rust OOMs at ~4.6M — same 3.55× headroom that holds at 1M and
-at every scale-test point in between. The 41 ms Kāra p50 vs
-Rust's 2.93 ms confirms the [line 287 follow-on
+> **‡ This 2M head-to-head predates the working-handler fix** (Kāra
+> column is the non-executing 7,861 B; the 3.55× it implied is
+> retracted). The **memory** row is superseded by the post-fix **1M**
+> result: Kāra **12,114 B** vs Rust **27,895 B** = **2.30×**. The
+> throughput / latency / tail rows are handler-state-independent and
+> stand. The post-fix Kāra **2M** run will refresh this whole table.
+
+**What this proves end-to-end.** The multi-dimensional tradeoff:
+**Rust wins throughput and mean (~4 %) + p50 (~14× tighter handshake
+hop)**; **Kāra wins tail (~8–10 % at p95→max) and memory (2.30× on the
+post-fix 1M density)**. For idle-heavy workloads where memory is the
+binding constraint (chat, IoT push, ISP gateways), Kāra's **12.1 KB/conn
+means a single 128 GiB box holds ~11.3M conns where Rust OOMs at
+~4.9M** — the same 2.30× headroom. The 46 ms Kāra p50 vs Rust's ~3 ms
+confirms the [line 287 follow-on
 entry](../../../docs/implementation_checklist/phase-6-runtime.md)'s
 architectural-floor finding is Kāra-side, **not** a workload
-artifact (Rust at the same N c=64 hits 2.93 ms — same kernel,
+artifact (Rust at the same N c=64 hits ~3 ms — same kernel,
 same network, same client driver).
 
 **Caveats:**
@@ -804,7 +818,7 @@ network, large enough to exercise framing.
 
 | axis | what it answers |
 |---|---|
-| per-conn-bytes under traffic | does the idle 7.8 KB hold up when 1% of conns are active? |
+| per-conn-bytes under traffic | does the idle 12.1 KB hold up when 1% of conns are active? |
 | message latency p50/p99/p99.9 | what does a real conversation look like at this density? |
 | CPU-per-message | how much headroom for traffic ramp before the box saturates? |
 | reconnect-storm survival | if 10% of the held conns drop and reconnect in a 1-second window, does the box survive? |
@@ -856,18 +870,18 @@ _From `feedback_commercial_reframe_lens` memory._
 
 ### Landed reframes
 
-- **Kāra vs Rust @ 1M and 2M (density):** _Technical:_ Kāra holds
-  the same N idle WebSocket connections in 7.8 KB/conn vs
-  Rust+rustls+tokio at 27.9 KB/conn — a 3.55× density advantage,
-  **empirically scale-invariant from 1M to 2M on the same rig**
-  (Kāra drifts 0.19 %, Rust drifts 0.33 % between the two
-  endpoints). _Buyer impact:_ same fleet serves 3.55× more
-  concurrent users for the same EC2 spend, at every scale the
-  buyer is likely to deploy at (the ratio holds at the ceiling,
-  not just the headline). For a fleet currently spending $1M/yr
-  on idle WebSocket capacity, the equivalent Kāra-served capacity
-  costs ~$282K/yr (rounded; caveats apply — see [Rust comparator
-  caveats](#rust-rustls--tokio)).
+- **Kāra vs Rust @ 1M (density, working handler):** _Technical:_ Kāra
+  holds the same N idle WebSocket connections in **12.1 KB/conn** vs
+  Rust+rustls+tokio at 27.9 KB/conn — a **2.30× density advantage**,
+  measured on the same `r8g.4xlarge` rig with the per-connection handler
+  executing (recv buffer + coroutine frame held, not freed). _Buyer
+  impact:_ same fleet serves **2.30× more** concurrent users for the
+  same EC2 spend. For a fleet currently spending $1M/yr on idle
+  WebSocket capacity, the equivalent Kāra-served capacity costs
+  **~$434K/yr** (rounded; caveats apply — see [Rust comparator
+  caveats](#rust-rustls--tokio)). _Scale note:_ the post-fix figure is
+  anchored at 1M; the 2M re-confirm is pending (per-conn allocation is
+  fixed-size, so it is expected to hold).
 
 ### Pending reframes (deferred — data not yet in this report)
 
@@ -931,6 +945,33 @@ their role's headline scale (`250K` or `100K`).
 
 ## Change log
 
+- **2026-06-01 (Kāra working-handler 1M re-measure — HEADLINE
+  CORRECTION):** all pre-this-date Kāra density figures (7.8 KB/conn,
+  3.55× ratio, 1M↔2M scale-invariance, x86 cross-ISA) were measured
+  with the per-connection handler **not executing** (compiled to a
+  body-less state machine — "bug C"), so the handler's per-conn state
+  (4 KB recv buffer + coro frame + parking) was freed, not held. The
+  handler now executes (A2 coroutine transform on by default), and two
+  coroutine-frame heap-overflow bugs that crashed the working binary on
+  glibc were fixed: `fe6afd16` (Array[u8,4096] frame slot mis-sized to
+  an 8-byte i64 instead of inline [4096 x i8]) and `eba48194` (codegen
+  module carried no `target datalayout`, so `llvm.coro.size`
+  under-allocated the frame by the i64-alignment delta and the trailing
+  suspend-index stored one byte past the malloc — both glibc-only,
+  silent on macOS even under ASAN). Re-measured 1M on `r8g.4xlarge`
+  (build ⊇ `eba48194`): 1,000,000 / 0 failed, clean teardown,
+  `per_conn_bytes = 12,114` (server RSS 11.28 GiB), connect p99 255 ms /
+  max 480 ms (tail collapsed vs pre-fix 1856 / 2306 ms — sysctls).
+  **Headline corrected: per-conn 7.8 → 12.1 KB, ratio 3.55× → 2.30×
+  vs Rust (27.9 KB, same rig), cost reframe $282K → $434K.** Rust's
+  figures, established counts, and connect percentiles are unaffected.
+  TL;DR table, Kāra section, head-to-head, caveats, commercial reframe
+  all updated; pre-fix Kāra 2M + x86 rows flagged `‡` superseded
+  (handler-state-dependent per-conn numbers retracted; handler-state-
+  independent shape/latency/linearity findings retained). Raw JSON:
+  `docs/investigations/demo1_m3_1m_postfix_datalayout.json`.
+  **Outstanding:** post-fix Kāra 2M re-confirm of 12.1 KB; post-fix x86
+  density re-read.
 - **2026-05-30:** initial skeleton; Kāra & Rust 1M results carried
   over from `docs/investigations/demo1_m1_verification.md`. All
   other comparators stubbed with `TBD` placeholders. Headline
