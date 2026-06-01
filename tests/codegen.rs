@@ -891,6 +891,35 @@ fn main() writes(Env) reads(Clock) {
         }
     }
 
+    #[test]
+    fn test_e2e_with_provider_ambient_override() {
+        // `with_provider[Clock](FakeClock {}, || ...)` overrides the
+        // ambient `Clock` resource with a statically-typed provider. The
+        // capitalized `Clock.now()` call inside the body must dispatch to
+        // the override's `FakeClock.now` (returning 42), NOT the builtin
+        // `karac_runtime_clock_now` FFI. Static-monomorphization path —
+        // the override decision is entirely compile-time (no runtime
+        // provider vtable). Mirrors the interpreter's ambient override
+        // (`karac run` of the same source prints 42) and the repl
+        // `:provide Clock = FakeClock {}` flow. Regression guard for the
+        // historical `with_provider: unknown effect resource 'Clock'`
+        // codegen error (and the capitalized-Clock.now()-returns-0 bug).
+        let out = run_program(
+            r#"
+struct FakeClock {}
+impl FakeClock { fn now(ref self) -> i64 { 42 } }
+fn main() reads(Clock) {
+    with_provider[Clock](FakeClock {}, || {
+        println(Clock.now());
+    });
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
     /// phase-7 — an explicit valueless `return;` reachable in `main` must
     /// emit `ret i32 0` (main lowers to a C-ABI `i32 main()`), not
     /// `ret void`. Before the fix this failed module verification

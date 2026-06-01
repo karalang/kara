@@ -1365,6 +1365,11 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // An active `with_provider[R]` ambient override wins over the
+        // builtin FFI: dispatch directly to the override's `@Type.method`.
+        if let Some(v) = self.try_compile_ambient_override(resource, method, args)? {
+            return Ok(v);
+        }
         let i64_t = self.context.i64_type();
         let ptr_t = self.context.ptr_type(AddressSpace::default());
         match (resource, method) {

@@ -1588,6 +1588,21 @@ pub(super) struct Codegen<'ctx> {
     /// shape ever changes.
     #[allow(dead_code)]
     pub(crate) provider_lookup_result_ty: StructType<'ctx>,
+    /// Compile-time-scoped overrides of ambient prelude resources
+    /// (`Clock`, `Env`, …) by a statically-typed provider, pushed by
+    /// `compile_with_provider` for an ambient resource and popped on
+    /// body exit. Each entry maps the resource name (capitalized, e.g.
+    /// `"Clock"`) to `(concrete provider type name, provider data ptr)`.
+    /// Ambient method-call lowering consults the top-most frame: a hit
+    /// emits a direct call to the override's `@Type.method` symbol with
+    /// `data_ptr` as `self`, instead of the builtin runtime FFI. This is
+    /// the static-monomorphization path (no runtime vtable / lookup) —
+    /// it matches the expressiveness of the user-resource provider path,
+    /// which is itself static-shape-only (see `infer_provider_type_name`).
+    /// A `Vec` of frames gives correct LIFO nesting for nested
+    /// `with_provider` scopes over the same resource.
+    pub(crate) ambient_provider_overrides:
+        Vec<HashMap<String, (String, inkwell::values::PointerValue<'ctx>)>>,
     // ── Map runtime ───────────────────────────────────────────────
     /// Per-variable Map key LLVM type (variable name → K LLVM type).
     pub(crate) map_key_types: HashMap<String, BasicTypeEnum<'ctx>>,
@@ -3516,6 +3531,7 @@ impl<'ctx> Codegen<'ctx> {
             karac_provider_set_stack_head_fn,
             provider_frame_ty,
             provider_lookup_result_ty,
+            ambient_provider_overrides: Vec::new(),
             map_key_types: HashMap::new(),
             map_val_types: HashMap::new(),
             map_key_type_names: HashMap::new(),

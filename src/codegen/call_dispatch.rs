@@ -232,6 +232,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return Ok(value);
                 }
+                // Capitalized ambient resource call (`Clock.now()`) under
+                // an active `with_provider[Clock]` ambient override: route
+                // to the override's `@Type.method` before the generic
+                // assoc-call path (which would otherwise miss the override
+                // and fall to a const-0 default — the historical latent
+                // bug for capitalized ambient calls).
+                if let Some(value) =
+                    self.try_compile_ambient_override(&segments[0], &segments[1], args)?
+                {
+                    return Ok(value);
+                }
                 return self.compile_assoc_call(&segments[0], &segments[1], args);
             }
         }

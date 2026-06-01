@@ -110,6 +110,22 @@ impl<'ctx> super::Codegen<'ctx> {
         provider_expr: &Expr,
         closure_expr: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // 0. Ambient prelude resources (`Clock`, `Env`, …) have no
+        //    `effect resource R: T` declaration, so no codegen resource
+        //    ID, no provider trait, and no vtable. They override via the
+        //    static-monomorphization path instead: record a compile-time
+        //    `resource → (provider type, data ptr)` scope frame, compile
+        //    the body (ambient method calls inside it dispatch directly
+        //    to the override's `@Type.method`), then pop. This matches
+        //    the interpreter's name-based ambient override and is exactly
+        //    as expressive as the user-resource vtable path, which is
+        //    itself static-shape-only (see `infer_provider_type_name`).
+        if crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&resource)
+            && !self.provider_resource_ids.contains_key(resource)
+        {
+            return self.compile_with_provider_ambient(resource, provider_expr, closure_expr);
+        }
+
         // 1. Resolve the resource ID and provider trait. Both must have
         //    been populated by the early walk over `Item::EffectResource`
         //    in `compile_program`; absence here means the resource
@@ -206,6 +222,129 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         Ok(body_result)
+    }
+
+    /// `with_provider[R]` lowering for an ambient prelude resource
+    /// (`Clock`, `Env`, …) overridden by a statically-typed provider.
+    /// Static-monomorphization path: the override decision is entirely
+    /// compile-time, so no runtime provider stack push/pop and no vtable
+    /// are emitted. Instead the provider's concrete type + data pointer
+    /// are recorded on `ambient_provider_overrides`, the body is compiled
+    /// (ambient method calls inside dispatch directly to `@Type.method`
+    /// via `try_compile_ambient_override` — see `method_call.rs`), and
+    /// the frame is popped on every exit path.
+    ///
+    /// The provider type must be statically inferable at this site
+    /// (struct literal or typed identifier — the same shapes
+    /// `infer_provider_type_name` accepts for user resources). A
+    /// runtime-typed provider (e.g. a fn-return value) yields a precise
+    /// error rather than the historical misleading "unknown effect
+    /// resource" — runtime-typed ambient providers are a deliberate v1
+    /// non-goal (no test or design example exercises them; matches the
+    /// user-resource path's same restriction).
+    fn compile_with_provider_ambient(
+        &mut self,
+        resource: &str,
+        provider_expr: &Expr,
+        closure_expr: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let provider_type_name = self
+            .infer_provider_type_name(provider_expr)
+            .ok_or_else(|| {
+                format!(
+                    "with_provider[{}]: ambient-resource override requires a statically-typed \
+                 provider (struct literal or typed binding); runtime-typed providers \
+                 (e.g. a function return) are not supported on the codegen path in v1",
+                    resource
+                )
+            })?;
+        let data_ptr = self.compile_provider_data_ptr(provider_expr, &provider_type_name)?;
+
+        // Push a compile-time override frame, compile the body, then pop
+        // unconditionally. The `?` on the body must NOT leak the frame —
+        // codegen errors abort the whole compile, so a leaked frame is
+        // harmless, but popping keeps the invariant clean for the success
+        // path and any future error-recovery.
+        let mut frame = std::collections::HashMap::new();
+        frame.insert(resource.to_string(), (provider_type_name, data_ptr));
+        self.ambient_provider_overrides.push(frame);
+        let body_result = self.compile_with_provider_body(closure_expr, resource);
+        self.ambient_provider_overrides.pop();
+        body_result
+    }
+
+    /// If an ambient resource method call (`Clock.now()`, `Env.var(..)`)
+    /// is inside an active `with_provider`-ambient scope that overrides
+    /// `resource`, lower it as a direct static call to the override's
+    /// `@Type.method` symbol (`self` = the recorded provider data ptr),
+    /// returning `Some(value)`. Returns `None` when no override is in
+    /// scope, so the caller falls through to the builtin runtime-FFI
+    /// lowering. Innermost (last-pushed) frame wins, matching the
+    /// interpreter's LIFO provider stack.
+    pub(super) fn try_compile_ambient_override(
+        &mut self,
+        resource: &str,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some((type_name, data_ptr)) = self
+            .ambient_provider_overrides
+            .iter()
+            .rev()
+            .find_map(|frame| frame.get(resource).cloned())
+        else {
+            return Ok(None);
+        };
+
+        let symbol = format!("{}.{}", type_name, method);
+        let fn_val = self.module.get_function(&symbol).ok_or_else(|| {
+            format!(
+                "with_provider[{}]: override `{}` has no method `{}` compiled \
+                 (expected LLVM symbol `{}`)",
+                resource, type_name, method, symbol
+            )
+        })?;
+
+        // self first, then user args. The override's `self` lowering:
+        // `ref self` / `mut ref self` → ptr (pass data_ptr directly);
+        // owned `self` → by-value struct (load from data_ptr). Mirror the
+        // self-arg handling in `try_compile_provider_dispatch`.
+        let self_param_ty = fn_val.get_type().get_param_types().into_iter().next();
+        let self_arg: BasicMetadataValueEnum<'ctx> = match self_param_ty {
+            Some(inkwell::types::BasicMetadataTypeEnum::PointerType(_)) => {
+                BasicMetadataValueEnum::from(data_ptr)
+            }
+            Some(inkwell::types::BasicMetadataTypeEnum::StructType(st)) => {
+                let loaded = self
+                    .builder
+                    .build_load(st, data_ptr, "amb.self.owned")
+                    .unwrap();
+                BasicMetadataValueEnum::from(loaded)
+            }
+            other => {
+                return Err(format!(
+                    "with_provider[{}]: unexpected self-param lowering `{:?}` for `{}` — \
+                     expected ptr (ref/mut ref self) or struct (owned self)",
+                    resource, other, symbol
+                ));
+            }
+        };
+        let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![self_arg];
+        for a in args {
+            let v = self.compile_expr(&a.value)?;
+            call_args.push(BasicMetadataValueEnum::from(v));
+        }
+
+        let call = self
+            .builder
+            .build_call(fn_val, &call_args, "amb.override.call")
+            .unwrap();
+        let basic = call.try_as_basic_value();
+        if basic.is_instruction() {
+            Ok(Some(self.context.i64_type().const_int(0, false).into()))
+        } else {
+            Ok(Some(basic.unwrap_basic()))
+        }
     }
 
     /// Determine the concrete impl-target type name of a provider
