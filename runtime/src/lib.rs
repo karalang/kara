@@ -112,6 +112,21 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // Without these the LLJIT path's `dlsym` symbol-search generator
     // can't resolve `env.set` / `clock.now` call sites.
     keep!(karac_runtime_env_set, karac_runtime_clock_now);
+    // Design-by-contract predicate runtime (`requires` / `ensures` /
+    // `invariant`). Codegen wraps each predicate evaluation in
+    // `karac_runtime_enter_predicate` / `_exit_predicate`, and a
+    // violated contract aborts through `emit_panic`, which reads
+    // `karac_runtime_panic_prefix` to categorize the fault. Without
+    // these in the keep-list the LLJIT `dlsym` generator can't resolve
+    // them, so any program with a contract (or one reaching the panic
+    // path) fails to materialize `main` under the runner — surfaced by
+    // the `KARAC_TEST_JIT` `karac test` audit (contract/invariant E2E
+    // programs failed with `Symbols not found: [_karac_runtime_*]`).
+    keep!(
+        karac_runtime_enter_predicate,
+        karac_runtime_exit_predicate,
+        karac_runtime_panic_prefix,
+    );
     // Emulated-TLS dispatch (LLJIT path; see `runtime/src/emutls.rs`).
     // LLVM-emitted `#[thread_local]` lowering under LLJIT calls
     // `__emutls_get_address`, which compiler-rt provides on platforms
