@@ -7,6 +7,27 @@
 
 use karac::repl::{DependencyKind, MagicOutput, ReplOptions, Session};
 
+/// Pin a session to the interpreter dispatch path. The
+/// `let_value_snapshot_*` tests below inspect `Session::let_snapshots()`,
+/// an interpreter-path value cache the JIT path deliberately replaces
+/// with runner-side globals (so the inspector is empty under JIT). The
+/// *behavior* those tests guard — caching, cross-cell shadow-drop on
+/// rebind (incl. cross-type), `:reset` clearing — is covered under JIT
+/// in `tests/repl_jit.rs` (`repl_jit_runs_let_bindings`,
+/// `repl_jit_cross_type_rebind_uses_new_value`,
+/// `repl_jit_reset_clears_snapshot_state`). Pinning these introspection
+/// tests to the interpreter path keeps that bookkeeping coverage intact
+/// without breaking when the JIT-default flip lands. This is a scoped,
+/// per-test pin — NOT a blanket suite-wide JIT disable. No-op without
+/// `lljit_prototype` (the JIT dispatch path isn't compiled there, so a
+/// fresh `Session` already runs the interpreter).
+fn pin_interpreter(session: &mut Session) {
+    #[cfg(feature = "lljit_prototype")]
+    session.set_jit_enabled_for_tests(false);
+    #[cfg(not(feature = "lljit_prototype"))]
+    let _ = session;
+}
+
 // ── Item accumulation ──────────────────────────────────────────────────────
 
 #[test]
@@ -1001,6 +1022,7 @@ fn let_value_snapshot_records_cached_value() {
     // test exercises the snapshot bookkeeping even before any cross-
     // cell reuse fires.
     let mut s = Session::new();
+    pin_interpreter(&mut s);
     let r = s.evaluate_cell_captured("let x = 5;");
     assert!(r.errors.is_empty(), "cell 1 errors: {:?}", r.errors);
     let snap = s.let_snapshots();
@@ -1090,6 +1112,7 @@ fn let_value_snapshot_rebinding_drops_stale_entry() {
     // splice in the prior `i64` value where the typechecker expects a
     // `String` — type-confusion at runtime.
     let mut s = Session::new();
+    pin_interpreter(&mut s);
     let _ = s.evaluate_cell_captured("let x = 5;");
     assert_eq!(
         s.let_snapshots()
@@ -1120,6 +1143,7 @@ fn let_value_snapshot_reset_clears_cache() {
     // the next cell anyway, but the explicit clear keeps the two
     // stores in lockstep.
     let mut s = Session::new();
+    pin_interpreter(&mut s);
     let _ = s.evaluate_cell_captured("let x = 99;");
     assert!(s.let_snapshots().contains_key("x"));
     let _ = s.dispatch_meta(":reset");
@@ -1137,6 +1161,7 @@ fn let_value_snapshot_unused_binding_still_visible() {
     // case: the watch set must include *every* persistent_lets
     // binding name, not just ones the current cell touches.
     let mut s = Session::new();
+    pin_interpreter(&mut s);
     let _ = s.evaluate_cell_captured("let unused = 123;");
     assert!(
         s.let_snapshots().contains_key("unused"),

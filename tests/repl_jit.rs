@@ -703,3 +703,36 @@ fn repl_jit_reset_clears_snapshot_state() {
         r.stdout,
     );
 }
+
+#[test]
+fn repl_jit_cross_type_rebind_uses_new_value() {
+    // Cross-TYPE cross-cell rebind — the JIT analog of the interpreter
+    // inspector test `let_value_snapshot_rebinding_drops_stale_entry`.
+    // The same-type shadow tests above (`..cross_cell_shadow_clears_
+    // snapshot` i64→i64, `..string_cross_cell_shadow_drops_runner`
+    // String→String) prove the snapshot global is dropped on rebind,
+    // but only within one type. This pins the *type-confusion* guard:
+    // cell 1 binds `x: i64`, cell 2 rebinds `x` to a `String`. If the
+    // shadow-drop failed to evict `@__karac_repl_snapshot_x`, cell 2's
+    // classifier would route the String rebind through REPLAY and load
+    // the stale i64 bit-pattern where a `(ptr, len, cap)` String is
+    // expected — a runtime type-confusion. Correct behavior: the rebind
+    // re-captures and prints the new String value.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("let x = 5;");
+    assert!(r.errors.is_empty(), "cell 1 (i64 bind): {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let x: String = \"hello\"; println(x);");
+    assert!(
+        r.errors.is_empty(),
+        "cell 2 (String rebind): {:?}",
+        r.errors
+    );
+    assert_eq!(
+        r.stdout.trim(),
+        "hello",
+        "cross-type rebind must drop the stale i64 snapshot and use the new \
+         String value, not replay; stdout: {:?}",
+        r.stdout,
+    );
+}
