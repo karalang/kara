@@ -48,18 +48,20 @@ mod util;
 
 /// Slice c-repl.B.B: split a runner-captured stdout byte slice into
 /// the `Vec<String>` shape `WrapperOutcome` expects. The interpreter
-/// populates `captured_output` one line at a time; the JIT runner
-/// returns the raw bytes from a tempfile, so we split on `\n` and
-/// drop the trailing empty string a `\n`-terminated buffer would
-/// produce.
+/// populates `captured_output` one line at a time, retaining each
+/// line's trailing `\n` (`write_stdout` pushes `format!("{s}\n")`),
+/// because the sole consumer reconstructs the raw stream with
+/// `stdout.join("")`. The JIT runner returns raw bytes from a
+/// tempfile, so we must split while KEEPING the newline on each line —
+/// `split_inclusive` does exactly that and round-trips through
+/// `join("")` for every case (`"7\n8\n"` → `["7\n", "8\n"]`,
+/// `"hi"` (no trailing newline) → `["hi"]`, `"7\n8"` → `["7\n", "8"]`).
+/// A plain `split('\n')` strips the newline and breaks the `join("")`
+/// contract — two `println`s collapse to `"78"` instead of `"7\n8\n"`.
 #[cfg(feature = "lljit_prototype")]
 fn bytes_to_stdout_lines(bytes: &[u8]) -> Vec<String> {
     let text = String::from_utf8_lossy(bytes);
-    let mut lines: Vec<String> = text.split('\n').map(|s| s.to_string()).collect();
-    if lines.last().map(|s| s.is_empty()).unwrap_or(false) {
-        lines.pop();
-    }
-    lines
+    text.split_inclusive('\n').map(|s| s.to_string()).collect()
 }
 pub use display::{render_display, render_text_plain, DisplayBundle};
 use util::*;
@@ -3262,5 +3264,30 @@ impl Session {
             );
         }
         wrapped
+    }
+}
+
+#[cfg(all(test, feature = "lljit_prototype"))]
+mod jit_stdout_tests {
+    use super::bytes_to_stdout_lines;
+
+    /// The JIT runner returns raw stdout bytes; the sole consumer
+    /// rebuilds the stream with `stdout.join("")`, so each line must
+    /// retain its trailing `\n` to match the interpreter's
+    /// `captured_output` convention. Joining the split result must
+    /// reproduce the original bytes verbatim for every shape.
+    fn round_trips(raw: &str) {
+        let joined = bytes_to_stdout_lines(raw.as_bytes()).join("");
+        assert_eq!(joined, raw, "round-trip must reproduce raw stdout");
+    }
+
+    #[test]
+    fn bytes_to_stdout_lines_round_trips_all_shapes() {
+        round_trips("7\n8\n"); // two newline-terminated lines → "7\n8\n", not "78"
+        round_trips("hi"); // no trailing newline (bare `print`) preserved
+        round_trips("7\n8"); // trailing line without newline preserved
+        round_trips(""); // empty output
+        round_trips("\n"); // lone blank line
+        round_trips("a\n\nb\n"); // interior blank line retained
     }
 }
