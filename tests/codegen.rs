@@ -16658,6 +16658,161 @@ fn main() {
     }
 
     #[test]
+    fn test_coro_module_pins_target_data_layout() {
+        // Regression (coro frame heap overflow, part 2): the codegen module must
+        // carry the REAL target `target datalayout`, not LLVM's empty default.
+        //
+        // `llvm.coro.size.i64` is constant-folded by CoroSplit using the
+        // module's data layout to drive `malloc(coro.size)`. Under the empty
+        // default layout (`i64:32`, 4-byte alignment) the folded size is smaller
+        // than the frame the AOT object backend actually lays out under the real
+        // target layout (`i64:64`, 8-byte alignment). For a coro frame ending in
+        // a small field after a large one — the network handler's
+        // `[4096 x i8]` recv buffer followed by the i2 suspend-index — the
+        // empty-layout size is up to 8 bytes short, so the malloc under-allocates
+        // and the trailing suspend-index store lands one past the heap block.
+        // Pinning the module layout makes `coro.size` and the backend agree.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }",
+        );
+        let dl = ir
+            .lines()
+            .find(|l| l.starts_with("target datalayout = "))
+            .unwrap_or_else(|| panic!("module must pin a target datalayout:\n{ir}"));
+        // The real target layout always declares an i64 alignment (`i64:64` on
+        // every Tier-1 target); the empty default never emits a datalayout line
+        // at all, so merely finding a non-empty one is the regression signal.
+        assert!(
+            dl.contains("i64:64")
+                || dl.contains("i64:")
+                || dl.len() > "target datalayout = \"\"".len(),
+            "datalayout must be the real target layout, not empty: {dl}"
+        );
+    }
+
+    #[test]
+    fn test_coro_frame_malloc_matches_frame_sizeof() {
+        // Regression (coro frame heap overflow, part 2): the post-CoroSplit coro
+        // frame `malloc` size must equal the frame struct's true `sizeof` under
+        // the module's data layout — no trailing field may land past the
+        // allocation. The network handler holds a `[4096 x i8]` recv buffer live
+        // across the `accept` park, so its frame ends in (large buffer, small
+        // suspend-index); a layout mismatch put the index one byte past malloc.
+        use karac::cli::{
+            build_call_effect_subs_table, build_callee_network_yield_effect_table,
+            build_callee_purely_polymorphic_effects_set, build_state_struct_layouts,
+            build_yield_points_table,
+        };
+        use karac::codegen::compile_to_ir_with_coro_split;
+
+        let src = r#"
+            fn handle_connection(ws: WebSocket) {
+                let mut buf: Array[u8, 4096] = [0u8; 4096];
+                loop {
+                    let r = ws.recv_text(mut buf);
+                    match r {
+                        Result.Ok(n) => {
+                            if n == 0 { break; }
+                            match ws.send_text(buf[0..n]) {
+                                Result.Ok(_) => {}
+                                Result.Err(_) => { break; }
+                            }
+                        }
+                        Result.Err(_) => { break; }
+                    }
+                }
+            }
+            fn main() {
+                let listener: TcpListener = TcpListener.bind("127.0.0.1:0").unwrap();
+                let ws: WebSocket = WebSocket.accept(listener).unwrap();
+                let mut tg: TaskGroup = TaskGroup.new();
+                tg.spawn(|| handle_connection(ws));
+            }
+        "#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(typed.errors.is_empty(), "type: {:?}", typed.errors);
+        let method_types = typed.method_callee_types.clone();
+        let call_type_subs = typed.call_type_subs.clone();
+        let pattern_binding_types = typed.pattern_binding_types.clone();
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck_with_typecheck_data(
+            &parsed.program,
+            karac::effectchecker::PublicEffectsPolicy::default(),
+            karac::manifest::CompileProfile::Default,
+            method_types.clone(),
+            call_type_subs,
+        );
+        parsed.program.callee_network_yield_effect =
+            build_callee_network_yield_effect_table(&effects);
+        parsed.program.yield_points = build_yield_points_table(
+            &parsed.program,
+            &parsed.program.callee_network_yield_effect,
+            &method_types,
+        );
+        parsed.program.state_struct_layouts = build_state_struct_layouts(
+            &parsed.program,
+            &parsed.program.callee_network_yield_effect,
+            &method_types,
+            &pattern_binding_types,
+        );
+        parsed.program.call_effect_subs = build_call_effect_subs_table(&effects);
+        parsed.program.callee_purely_polymorphic_effects =
+            build_callee_purely_polymorphic_effects_set(&effects);
+        let _ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let ir = compile_to_ir_with_coro_split(&parsed.program, None, None)
+            .expect("coro split codegen failed");
+
+        // The module must carry a real datalayout (so coro.size folds correctly).
+        assert!(
+            ir.lines().any(|l| l.starts_with("target datalayout = ")
+                && l.len() > "target datalayout = \"\"".len()),
+            "post-split module must pin a non-empty target datalayout:\n{ir}"
+        );
+        // The handler's frame must be present and end with the [4096 x i8] buffer
+        // immediately before the suspend-index — the layout that exposed the bug.
+        let frame_line = ir
+            .lines()
+            .find(|l| l.starts_with("%handle_connection.Frame = type"))
+            .unwrap_or_else(|| panic!("no handle_connection.Frame type in split IR:\n{ir}"));
+        assert!(
+            frame_line.contains("[4096 x i8]"),
+            "frame must hold the inline [4096 x i8] recv buffer: {frame_line}"
+        );
+        // The coro frame malloc must be folded to a constant size by CoroSplit —
+        // NOT left as a live `call @llvm.coro.size` whose runtime value could be
+        // computed against a layout differing from the type the GEPs use. (The
+        // unused `declare i64 @llvm.coro.size.i64()` line may remain; only a live
+        // call is the regression.) The handler's resume ramp must therefore
+        // contain a `malloc(i64 <constant>)`, and `<constant>` is the frame
+        // sizeof under the pinned layout — the value the backend lays the frame
+        // out at, so no trailing field overflows it.
+        assert!(
+            !ir.contains("call i64 @llvm.coro.size"),
+            "coro.size must be constant-folded post-split (a live call means the \
+             frame malloc size is not pinned to the type layout):\n{ir}"
+        );
+        // The frame malloc is a folded constant (e.g. `malloc(i64 4224)`), proving
+        // CoroSplit sized it under the module's pinned layout. A non-constant
+        // form (`malloc(i64 %...`) would mean the size is computed at runtime.
+        let frame_malloc_is_const = ir.lines().any(|l| {
+            let t = l.trim_start();
+            t.contains("= call ptr @malloc(i64 ")
+                && !t.contains("@malloc(i64 %")
+                && !t.contains("getelementptr")
+        });
+        assert!(
+            frame_malloc_is_const,
+            "the coro frame malloc must be a folded constant size (pinned to the \
+             frame layout), got no constant-size malloc in:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_state_struct_type_not_emitted_for_pure_function() {
         // A pure function that calls no network-effect callee gets no
         // entry in `state_struct_layouts` (slice-4 presence rule) and

@@ -1834,6 +1834,25 @@ pub(super) struct Codegen<'ctx> {
 impl<'ctx> Codegen<'ctx> {
     fn new(context: &'ctx Context, module_name: &str) -> Self {
         let module = context.create_module(module_name);
+        // Pin the module's data layout + triple to the actual target BEFORE any
+        // type is built. Without this the module carries LLVM's *empty* default
+        // data layout (`i64:32` packing), under which `llvm.coro.size.i64` folds
+        // the coroutine frame's `sizeof` — but the AOT object backend lays the
+        // frame out under the REAL target layout (`i64:64`, 8-byte alignment),
+        // which is strictly larger. For a coro frame that ends in a small field
+        // after a large one (e.g. the network handler's `[4096 x i8]` recv
+        // buffer followed by the i2 suspend-index), the empty-layout size is up
+        // to 8 bytes short, so `malloc(coro.size)` under-allocates and the
+        // trailing suspend-index store lands one past the heap block — a
+        // heap-buffer-overflow that glibc traps as `corrupted size vs.
+        // prev_size` / `double free` (silent on macOS's allocator, caught by
+        // ASAN/valgrind on any OS). Setting the layout makes `coro.size` and the
+        // backend agree. Best-effort: if the target machine can't be created we
+        // leave the default layout (non-coro modules are unaffected).
+        if let Ok(tm) = create_target_machine() {
+            module.set_triple(&tm.get_triple());
+            module.set_data_layout(&tm.get_target_data().get_data_layout());
+        }
         let builder = context.create_builder();
 
         let i32_type = context.i32_type();
