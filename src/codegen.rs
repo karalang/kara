@@ -303,6 +303,21 @@ pub fn compile_to_ir_for_repl_cell_with_snapshots(
     Ok(cg.module.print_to_string().to_string())
 }
 
+/// Resolve an `impl` block's target type to its bare type name (the
+/// last path segment), or `None` for non-path targets. Public wrapper
+/// over the codegen-internal `impl_target_name` so the REPL's
+/// declare-only bookkeeping (slice c-repl.B.4 impl-method extension)
+/// can compute the `Type.method` LLVM symbol keys exactly as
+/// `compile_program` does, keeping the two in lockstep.
+///
+/// Gated on `lljit_prototype` — its only caller is `run_cell_via_jit`,
+/// which lives behind the same feature; without the gate the function
+/// is dead code under a plain `--features llvm` build.
+#[cfg(feature = "lljit_prototype")]
+pub(crate) fn impl_target_name_for_repl(target: &crate::ast::TypeExpr) -> Option<String> {
+    helpers::impl_target_name(target)
+}
+
 /// Variant of [`compile_to_ir_with_options`] that accepts the
 /// phase-7 line-5 `--enable-hot-swap` flag. When `true`, the codegen
 /// emits PLT-style indirection through `@karac_hotswap_table` for every
@@ -4145,7 +4160,26 @@ impl<'ctx> Codegen<'ctx> {
                                     continue;
                                 }
                                 let qualified = format!("{}.{}", type_name, method.name);
-                                if !compiled_impl_methods.insert(qualified) {
+                                if !compiled_impl_methods.insert(qualified.clone()) {
+                                    continue;
+                                }
+                                // Slice c-repl.B.4 (impl-method extension):
+                                // a prior cell already installed this method
+                                // body in the runner's JITDylib. The synth
+                                // fn's LLVM symbol is exactly `qualified`
+                                // (`Type.method` — see
+                                // `make_impl_method_function`), so the same
+                                // declare-only set used for free functions
+                                // applies. Skip the body; the first-pass
+                                // `declare_function` already emitted the
+                                // body-less `declare`, and the JIT linker
+                                // resolves call sites against the earlier
+                                // install. Without this, re-running a cell
+                                // under an active provider re-emits
+                                // `FakeClock.now` and trips
+                                // `add_ir_module: Duplicate definition of
+                                // symbol`.
+                                if self.declare_only_fns.contains(&qualified) {
                                     continue;
                                 }
                                 let synth = make_impl_method_function(&type_name, method);

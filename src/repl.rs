@@ -2058,6 +2058,31 @@ impl Session {
                                 self.jit_installed_fns.insert(f.name.clone());
                             }
                         }
+                        // Slice c-repl.B.4 (impl-method extension): impl
+                        // method bodies install under the LLVM symbol
+                        // `Type.method` (see `make_impl_method_function`).
+                        // Record them under that same qualified key so the
+                        // next cell emits them declare-only — otherwise a
+                        // later cell that re-walks the impl (e.g. a
+                        // `with_provider`-wrapped cell that re-runs the
+                        // provider's impl) re-emits the body and trips a
+                        // duplicate-symbol install error. Mirrors the
+                        // codegen-side skip in `compile_program`.
+                        if let crate::ast::Item::ImplBlock(imp) = item {
+                            if let Some(type_name) =
+                                crate::codegen::impl_target_name_for_repl(&imp.target_type)
+                            {
+                                for impl_item in &imp.items {
+                                    if let crate::ast::ImplItem::Method(m) = impl_item {
+                                        if m.generic_params.is_some() {
+                                            continue;
+                                        }
+                                        let qualified = format!("{}.{}", type_name, m.name);
+                                        self.jit_installed_fns.insert(qualified);
+                                    }
+                                }
+                            }
+                        }
                     }
                     // Slice c-repl.B.5.1: every let in `snapshot_capture`
                     // has been materialized into a live global in the
