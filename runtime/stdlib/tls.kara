@@ -14,12 +14,11 @@
 //     `karac_runtime_tls_config_new(cert.bytes, key.bytes)`) for use at
 //     each accept. Prints `BOUND_PORT=<n>\n` on `:0` (same convention
 //     as `TcpListener.bind`).
-//   - `TlsListener.accept(ref self) -> TlsStream` — parks via
-//     `karac_park_on_fd(self.fd, 0u8)`, runs raw `accept(2)`, then
-//     synchronously drives the TLS handshake against the new
-//     connection. Returns a `TlsStream` wrapping the post-handshake
-//     fd. On failure (raw-accept or handshake) returns
-//     `TlsStream { fd: -1 }`.
+//   - `TlsListener.accept(ref self) -> Result[TlsStream, TlsError]` —
+//     parks via `karac_park_on_fd(self.fd, 0u8)`, runs raw `accept(2)`,
+//     then synchronously drives the TLS handshake against the new
+//     connection. `Ok(stream)` wraps the post-handshake fd; on failure
+//     (raw-accept or handshake) returns `Err(TlsError.Protocol(-1))`.
 //   - `TlsStream.read(ref self, buf: mut Slice[u8]) -> Result[i64, TlsError]`
 //     parks on read-readiness, then pumps `karac_runtime_tls_read`
 //     until at least one decrypted plaintext byte is available.
@@ -138,10 +137,10 @@ impl TlsListener {
     // Bind on `addr` (e.g. `"127.0.0.1:0"` for ephemeral, `"0.0.0.0:8443"`
     // for fixed) using `cert_pem` + `key_pem` as the server identity.
     // Both PEM strings are the raw textual PEM bytes — typically
-    // loaded from disk via `std.file.read_to_string`. Returns a
-    // `TlsListener` with the bound fd and the runtime-side config
-    // handle on success, or `TlsListener { fd: -1, config: 0 as *mut TlsConfig }`
-    // on parse / bind failure.
+    // loaded from disk via `std.file.read_to_string`. Returns
+    // `Ok(listener)` carrying the bound fd and the runtime-side config
+    // handle on success (see the `Result` contract two paragraphs
+    // below), or `Err(TlsError)` on parse / bind failure.
     //
     // **BOUND_PORT convention.** When the requested address ends in
     // `:0`, the runtime prints `BOUND_PORT=<port>\n` to stdout before
@@ -162,10 +161,10 @@ impl TlsListener {
 
     // Wait for the listener to become readable, then accept the next
     // pending connection, run the TLS handshake against it
-    // synchronously, and return a `TlsStream` wrapping the
-    // post-handshake fd. Returns `TlsStream { fd: -1 }` on raw-accept
-    // failure or handshake failure (peer sent invalid TLS, cert
-    // validation failed on the wire, etc.).
+    // synchronously, and return `Ok(stream)` wrapping the
+    // post-handshake fd. Returns `Err(TlsError.Protocol(-1))` on
+    // raw-accept failure or handshake failure (peer sent invalid TLS,
+    // cert validation failed on the wire, etc.).
     //
     // **Parking convention.** Codegen emits a `karac_park_on_fd(self.fd, 0u8)`
     // invocation BEFORE the raw `karac_runtime_tls_accept` so the
@@ -203,10 +202,12 @@ impl TlsStream {
     // must supply the relevant root CA PEM(s). Same minimal posture as
     // `TlsListener.bind_tls`'s "explicit PEM only".
     //
-    // Returns `TlsStream { fd: -1 }` on any failure (addr / name /
-    // PEM parse, TCP connect, rustls config build, handshake). Stub
-    // body never executes — codegen replaces via
-    // `lower_tls_stream_connect`.
+    // Returns `Err(TlsError)` on any failure (addr / name / PEM parse,
+    // TCP connect, rustls config build, handshake): the TCP-connect leg
+    // surfaces branchable causes (`ConnectionRefused` / `AddrInUse` /
+    // `PermissionDenied`, phase-8 line 74), handshake / protocol faults
+    // stay `Protocol(-1)`. Stub body never executes — codegen replaces
+    // via `lower_tls_stream_connect`.
     #[compiler_builtin]
     fn connect(addr: String, server_name: String, roots_pem: String) -> Result[TlsStream, TlsError]
         with sends(Network) receives(Network)
