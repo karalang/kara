@@ -136,8 +136,9 @@ pub fn run_test_via_jit(
     match sub_result {
         SubprocessResult::Completed(output) => {
             let exit_code = output.status.code().unwrap_or(-1);
+            let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let outcome = map_exit_to_outcome(exit_code, &stderr);
+            let outcome = map_exit_to_outcome(exit_code, &stdout, &stderr);
             JitTestResult::Completed {
                 outcome,
                 duration_ms,
@@ -241,7 +242,7 @@ fn locate_karac_jit_runner() -> Option<PathBuf> {
 /// marker → a synthetic outcome with a generic message (the subprocess
 /// died for some other reason — a runtime panic the assert lowering
 /// didn't emit a marker for, or a setup-side abort).
-fn map_exit_to_outcome(exit_code: i32, stderr: &str) -> TestOutcome {
+fn map_exit_to_outcome(exit_code: i32, stdout: &str, stderr: &str) -> TestOutcome {
     if exit_code == 0 {
         return TestOutcome {
             passed: true,
@@ -260,12 +261,100 @@ fn map_exit_to_outcome(exit_code: i32, stderr: &str) -> TestOutcome {
             right: parsed.right,
         };
     }
+    // Contract faults (`requires`/`ensures`/`invariant`) abort through
+    // `emit_panic` (a `printf` — i.e. to **stdout** — + `exit(1)`), NOT
+    // through the `assert` lowering's `KARAC_TEST_FAILURE` stderr marker,
+    // so they reach here with no marker. Recover the panic message off
+    // stdout so the shared `contract_fault_category` classifier (cli.rs)
+    // can tag the `test_fail` event `contract_violated` /
+    // `contract_predicate_panicked` exactly as the interpreter path does.
+    // Without this the category is lost and the outcome is a generic
+    // "exited with code N".
+    if let Some(parsed) = parse_panic_line(stdout) {
+        return TestOutcome {
+            passed: false,
+            message: Some(parsed.message),
+            span: Some(parsed.span),
+            left: None,
+            right: None,
+        };
+    }
     TestOutcome {
         passed: false,
         message: Some(format!("test subprocess exited with code {exit_code}")),
         span: None,
         left: None,
         right: None,
+    }
+}
+
+/// Recover a panic message + location from `emit_panic`'s stdout output
+/// (`emit_panic` uses `printf`, which writes to stdout, not stderr).
+/// `emit_panic` (src/codegen/runtime.rs) prints one of two fixed forms:
+///   `panic at <file>:<line>:<col> in <fn>: <msg>`  (filename threaded —
+///       the `karac test` codegen path always supplies one)
+///   `panic: <msg>`                                  (no filename)
+/// `<msg>` carries the canonical fault text (`contract violated: …`,
+/// `contract predicate panicked: …`) that `contract_fault_category`
+/// matches on. We scan for the `panic ` prefix specifically so the
+/// runtime's `?`-error-trace lines on stderr aren't misread as panics.
+fn parse_panic_line(stderr: &str) -> Option<ParsedFailure> {
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with("panic at ") || l.starts_with("panic: "))?;
+    if let Some(rest) = line.strip_prefix("panic at ") {
+        // rest = "<file>:<line>:<col> in <fn>: <msg>". Split the message
+        // off after the " in <fn>: " segment (fn names are identifiers,
+        // so the first ": " after " in " starts the message).
+        if let Some(in_idx) = rest.find(" in ") {
+            let loc = &rest[..in_idx];
+            let after_in = &rest[in_idx + 4..];
+            let message = after_in
+                .split_once(": ")
+                .map(|x| x.1)
+                .unwrap_or(after_in)
+                .to_string();
+            return Some(ParsedFailure {
+                message,
+                span: parse_panic_loc(loc),
+                left: None,
+                right: None,
+            });
+        }
+    }
+    // `panic: <msg>` form (or an unexpected `panic at` shape) — take the
+    // text after the first ": " as the message, no location.
+    let message = line
+        .split_once(": ")
+        .map(|x| x.1)
+        .unwrap_or(line)
+        .to_string();
+    Some(ParsedFailure {
+        message,
+        span: Span {
+            line: 0,
+            column: 0,
+            offset: 0,
+            length: 0,
+        },
+        left: None,
+        right: None,
+    })
+}
+
+/// Parse `<file>:<line>:<col>` into a `Span` (line/col only). Splits from
+/// the right so a file path is unaffected by the two trailing numeric
+/// fields; a path containing `:` would only blunt the location, never
+/// misclassify the fault.
+fn parse_panic_loc(loc: &str) -> Span {
+    let mut it = loc.rsplitn(3, ':');
+    let column = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let line = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    Span {
+        line,
+        column,
+        offset: 0,
+        length: 0,
     }
 }
 
@@ -427,17 +516,58 @@ mod tests {
 
     #[test]
     fn map_exit_zero_is_pass() {
-        let o = map_exit_to_outcome(0, "");
+        let o = map_exit_to_outcome(0, "", "");
         assert!(o.passed);
     }
 
     #[test]
     fn map_nonzero_no_marker_is_generic_fail() {
-        let o = map_exit_to_outcome(2, "");
+        let o = map_exit_to_outcome(2, "", "");
         assert!(!o.passed);
         assert_eq!(
             o.message.as_deref().unwrap(),
             "test subprocess exited with code 2"
         );
+    }
+
+    #[test]
+    fn contract_violation_panic_on_stdout_recovers_message() {
+        // A contract fault aborts via `emit_panic` (printf → stdout),
+        // not the `KARAC_TEST_FAILURE` stderr marker. The panic line must
+        // be recovered as the message + span so `contract_fault_category`
+        // (cli.rs) can tag the event `contract_violated`.
+        let stdout = "panic at /tmp/p/src/main_test.kara:2:40 in checked: contract violated: requires clause\n";
+        let o = map_exit_to_outcome(1, stdout, "");
+        assert!(!o.passed);
+        assert_eq!(
+            o.message.as_deref().unwrap(),
+            "contract violated: requires clause"
+        );
+        let span = o.span.expect("span recovered from panic location");
+        assert_eq!((span.line, span.column), (2, 40));
+    }
+
+    #[test]
+    fn predicate_panic_on_stdout_preserves_panicked_prefix() {
+        // Predicate-panic carries the `contract predicate panicked:`
+        // prefix (set at runtime by `karac_runtime_panic_prefix`); the
+        // recovered message must keep it so the category resolves to
+        // `contract_predicate_panicked`, not `contract_violated`.
+        let stdout = "panic at /tmp/p/src/main_test.kara:5:9 in at: contract predicate panicked: vec index out of bounds\n";
+        let o = map_exit_to_outcome(1, stdout, "");
+        assert_eq!(
+            o.message.as_deref().unwrap(),
+            "contract predicate panicked: vec index out of bounds"
+        );
+    }
+
+    #[test]
+    fn stderr_marker_wins_over_stdout_panic() {
+        // When both a `KARAC_TEST_FAILURE` stderr marker and stdout text
+        // are present, the marker (assert lowering) takes precedence.
+        let stderr = "KARAC_TEST_FAILURE {\"file\":\"f\",\"line\":1,\"column\":2,\"message\":\"assert_eq failed\",\"left\":\"1\",\"right\":\"2\"}\n";
+        let o = map_exit_to_outcome(1, "panic at f:1:2 in g: contract violated: x\n", stderr);
+        assert_eq!(o.message.as_deref().unwrap(), "assert_eq failed");
+        assert_eq!(o.left.as_deref(), Some("1"));
     }
 }
