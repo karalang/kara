@@ -1814,4 +1814,317 @@ mod tests {
              under ASAN; stdout lines: {lines:?}"
         );
     }
+
+    // ── Plain (non-TLS) WebSocket E2E round-trip (phase-8 line 128) ──────
+    //
+    // The WS-over-TLS echo round-trip above proves the framing surface
+    // through a real compiled binary on the TLS path; these cover the
+    // canonical plain-TCP path (`WebSocket.accept` + `recv_text` /
+    // `send_text`) end-to-end, plus the line-128 handshake-validation
+    // hardening reaching a real binary. Supersedes the IR-grep-only
+    // posture of `tests/ws_framing.rs` for the plain path.
+
+    /// Connect to a kara WS server on `port` (retrying briefly to absorb
+    /// the BOUND_PORT-print-vs-accept-registration race), perform the
+    /// RFC 6455 upgrade, send one masked TEXT frame carrying `payload`,
+    /// and return the server's echoed (unmasked) payload bytes.
+    fn ws_plain_echo_roundtrip(port: u16, payload: &[u8]) -> Result<Vec<u8>, String> {
+        use std::io::{Read, Write};
+        let mut sock = {
+            let started = Instant::now();
+            loop {
+                match std::net::TcpStream::connect(format!("127.0.0.1:{port}")) {
+                    Ok(s) => break s,
+                    Err(_) if started.elapsed() < Duration::from_secs(3) => {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(e) => return Err(format!("tcp connect: {e}")),
+                }
+            }
+        };
+        sock.set_read_timeout(Some(Duration::from_secs(8))).ok();
+        sock.set_write_timeout(Some(Duration::from_secs(8))).ok();
+
+        // RFC 6455 §4.2 upgrade handshake.
+        let req = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
+                   Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                   Sec-WebSocket-Version: 13\r\n\r\n";
+        sock.write_all(req.as_bytes())
+            .map_err(|e| format!("handshake write: {e}"))?;
+        let mut hdr = Vec::new();
+        let mut b = [0u8; 1];
+        loop {
+            let n = sock
+                .read(&mut b)
+                .map_err(|e| format!("handshake read: {e}"))?;
+            if n == 0 {
+                return Err("server closed during WS handshake".into());
+            }
+            hdr.push(b[0]);
+            if hdr.ends_with(b"\r\n\r\n") {
+                break;
+            }
+            if hdr.len() > 8192 {
+                return Err("handshake response too long".into());
+            }
+        }
+        let status = String::from_utf8_lossy(&hdr);
+        let line0 = status.lines().next().unwrap_or("");
+        if !line0.starts_with("HTTP/1.1 101") {
+            return Err(format!("no 101 upgrade: {line0:?}"));
+        }
+
+        // Send one masked client→server TEXT frame (RFC 6455 §5).
+        let mask = [0x12u8, 0x34, 0x56, 0x78];
+        let mut frame = vec![0x81u8]; // FIN=1, opcode=0x1 (text)
+        if payload.len() < 126 {
+            frame.push(0x80 | payload.len() as u8);
+        } else {
+            frame.push(0x80 | 126);
+            frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        }
+        frame.extend_from_slice(&mask);
+        for (i, &p) in payload.iter().enumerate() {
+            frame.push(p ^ mask[i % 4]);
+        }
+        sock.write_all(&frame)
+            .map_err(|e| format!("frame write: {e}"))?;
+
+        // Read the echoed (server→client, unmasked) frame.
+        let mut h2 = [0u8; 2];
+        sock.read_exact(&mut h2)
+            .map_err(|e| format!("echo header read: {e}"))?;
+        let mut len = (h2[1] & 0x7f) as usize;
+        if len == 126 {
+            let mut ext = [0u8; 2];
+            sock.read_exact(&mut ext)
+                .map_err(|e| format!("ext len: {e}"))?;
+            len = u16::from_be_bytes(ext) as usize;
+        } else if len == 127 {
+            let mut ext = [0u8; 8];
+            sock.read_exact(&mut ext)
+                .map_err(|e| format!("ext len: {e}"))?;
+            len = u64::from_be_bytes(ext) as usize;
+        }
+        let mut body = vec![0u8; len];
+        sock.read_exact(&mut body)
+            .map_err(|e| format!("echo body read: {e}"))?;
+        Ok(body)
+    }
+
+    /// Connect to a kara WS server on `port`, send the raw HTTP request
+    /// `request` verbatim, and return the response's HTTP status line.
+    /// Used to assert the §4.2.1 rejection statuses (400 / 426) emitted
+    /// by a real compiled binary.
+    fn ws_plain_handshake_status(port: u16, request: &str) -> Result<String, String> {
+        use std::io::{Read, Write};
+        let mut sock = {
+            let started = Instant::now();
+            loop {
+                match std::net::TcpStream::connect(format!("127.0.0.1:{port}")) {
+                    Ok(s) => break s,
+                    Err(_) if started.elapsed() < Duration::from_secs(3) => {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(e) => return Err(format!("tcp connect: {e}")),
+                }
+            }
+        };
+        sock.set_read_timeout(Some(Duration::from_secs(8))).ok();
+        sock.set_write_timeout(Some(Duration::from_secs(8))).ok();
+        sock.write_all(request.as_bytes())
+            .map_err(|e| format!("request write: {e}"))?;
+        let mut hdr = Vec::new();
+        let mut b = [0u8; 1];
+        loop {
+            let n = sock
+                .read(&mut b)
+                .map_err(|e| format!("response read: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            hdr.push(b[0]);
+            if hdr.ends_with(b"\r\n\r\n") {
+                break;
+            }
+            if hdr.len() > 8192 {
+                return Err("response too long".into());
+            }
+        }
+        let status = String::from_utf8_lossy(&hdr);
+        Ok(status.lines().next().unwrap_or("").to_string())
+    }
+
+    /// The canonical plain-TCP WebSocket echo path through a real
+    /// compiled kara binary: `WebSocket.accept(listener)` then a
+    /// `recv_text` → `send_text` echo loop, spawned per-connection on a
+    /// `TaskGroup`. Proves the runtime framing FFI + codegen wiring
+    /// round-trips end-to-end, not just at the IR-shape level.
+    #[test]
+    fn e2e_plain_websocket_text_echo_roundtrip() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let src = r#"
+            fn handle_ws(ws: WebSocket) {
+                let mut buf: Array[u8, 4096] = [0u8; 4096];
+                loop {
+                    let r = ws.recv_text(mut buf);
+                    match r {
+                        Result.Ok(n) => {
+                            if n == 0 { break; }
+                            let _s = ws.send_text(buf);
+                        }
+                        Result.Err(_) => { break; }
+                    }
+                }
+            }
+            fn main() {
+                let listener: TcpListener = TcpListener.bind("127.0.0.1:0").unwrap();
+                let mut tg: TaskGroup = TaskGroup.new();
+                loop {
+                    match WebSocket.accept(listener) {
+                        Result.Ok(ws) => { tg.spawn(|| handle_ws(ws)); }
+                        Result.Err(_) => {}
+                    }
+                }
+            }
+        "#;
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_plain_ws_{pid}_{nanos}"));
+        if let Err(e) = compile_link_coro(src, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn plain ws server");
+        let stdout = child.stdout.take().expect("child stdout");
+        let (rx, _join) = spawn_stdout_reader(stdout);
+        let port = match rx.recv_timeout(Duration::from_secs(15)) {
+            Ok(p) => p,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("server did not emit BOUND_PORT within 15s");
+            }
+        };
+
+        let payload = b"PING-plain-ws-echo";
+        let result = ws_plain_echo_roundtrip(port, payload);
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+
+        match result {
+            Ok(body) => assert!(
+                body.starts_with(payload),
+                "plain WS handler must echo the recv'd bytes (recv_text + send_text \
+                 through a real binary); got first {} bytes: {:?}",
+                body.len().min(payload.len()),
+                &body[..body.len().min(payload.len())]
+            ),
+            Err(e) => panic!("plain WS echo round-trip failed: {e}"),
+        }
+    }
+
+    /// The line-128 handshake hardening reaching a real compiled binary:
+    /// an otherwise-valid upgrade carrying an unsupported
+    /// `Sec-WebSocket-Version` must be answered with `426 Upgrade
+    /// Required` (RFC 6455 §4.4), and a request missing `Upgrade`/
+    /// `Connection` with `400 Bad Request` — never a spurious 101.
+    #[test]
+    fn e2e_plain_websocket_handshake_rejects_bad_request() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let src = r#"
+            fn handle_ws(ws: WebSocket) {
+                let mut buf: Array[u8, 1024] = [0u8; 1024];
+                let _r = ws.recv_text(mut buf);
+            }
+            fn main() {
+                let listener: TcpListener = TcpListener.bind("127.0.0.1:0").unwrap();
+                let mut tg: TaskGroup = TaskGroup.new();
+                loop {
+                    match WebSocket.accept(listener) {
+                        Result.Ok(ws) => { tg.spawn(|| handle_ws(ws)); }
+                        Result.Err(_) => {}
+                    }
+                }
+            }
+        "#;
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_plain_ws_reject_{pid}_{nanos}"));
+        if let Err(e) = compile_link_coro(src, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn plain ws server");
+        let stdout = child.stdout.take().expect("child stdout");
+        let (rx, _join) = spawn_stdout_reader(stdout);
+        let port = match rx.recv_timeout(Duration::from_secs(15)) {
+            Ok(p) => p,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("server did not emit BOUND_PORT within 15s");
+            }
+        };
+
+        // Bad version → 426 (each handshake gets its own accepted conn).
+        let bad_version = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
+                           Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                           Sec-WebSocket-Version: 7\r\n\r\n";
+        let bad_version_status = ws_plain_handshake_status(port, bad_version);
+
+        // Missing Upgrade/Connection → 400.
+        let not_ws = "GET / HTTP/1.1\r\nHost: localhost\r\n\
+                      Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                      Sec-WebSocket-Version: 13\r\n\r\n";
+        let not_ws_status = ws_plain_handshake_status(port, not_ws);
+
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+
+        let bad_version_status = bad_version_status.expect("bad-version handshake status");
+        assert!(
+            bad_version_status.starts_with("HTTP/1.1 426"),
+            "unsupported Sec-WebSocket-Version must get 426 from the real binary; got: {bad_version_status:?}"
+        );
+        let not_ws_status = not_ws_status.expect("non-ws handshake status");
+        assert!(
+            not_ws_status.starts_with("HTTP/1.1 400"),
+            "request missing Upgrade/Connection must get 400 from the real binary; got: {not_ws_status:?}"
+        );
+    }
 }
