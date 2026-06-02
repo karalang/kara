@@ -178,6 +178,20 @@ impl TlsListener {
     // round-trip — fine for Demo 1's correctness check; the M1
     // 100K-conn target will need a re-park-between-rounds variant if
     // measurement shows handshake throughput dominates.
+    //
+    // **Availability note — you own the accept loop.** Because the
+    // handshake is synchronous, a single stalled or malicious peer that
+    // completes the TCP connect but never finishes the TLS handshake
+    // will block THIS call — and therefore the entire accept loop you
+    // build around it — until that peer gives up. This is by-design for
+    // a low-level blocking primitive (it mirrors Go's
+    // `tls.Conn.Handshake()`); `accept` deliberately does not impose its
+    // own handshake timeout or concurrency cap, because the loop, and
+    // thus the accept policy, is yours. If you serve untrusted /
+    // internet-facing clients, spawn a task per accepted connection
+    // and/or apply your own handshake timeout so one slow peer cannot
+    // starve the rest. (The managed `Server.serve` / `serve_tls` paths
+    // do this hardening internally — see phase-8 line 124.)
     #[compiler_builtin]
     fn accept(ref self) -> Result[TlsStream, TlsError] with sends(Network) receives(Network) {
         Result.Err(TlsError.Protocol(-1))
