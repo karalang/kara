@@ -753,7 +753,15 @@ fn poller_thread_main(poller: Arc<EventLoopPoller>) {
             });
         }
         drop(q);
-        poller.notify.notify_all();
+        // Wake ONE consumer, not all. With multiple dispatcher threads a
+        // `notify_all` here is a thundering herd — every push wakes every
+        // thread, most find nothing and re-sleep, and the futex churn caps
+        // throughput (measured: more dispatcher threads made burst drain
+        // *slower* under notify_all). Instead wake one; that consumer wakes
+        // another whenever it drains a batch and still sees a backlog
+        // (the "wake-a-friend" ramp in `take_wakeups`), so consumers engage
+        // in proportion to the queue depth without the all-wake storm.
+        poller.notify.notify_one();
     }
 }
 
@@ -846,6 +854,15 @@ pub unsafe extern "C" fn karac_runtime_event_loop_take_wakeups(
             }
             None => break,
         }
+    }
+    // Wake-a-friend ramp: this consumer took a full batch and the queue
+    // still has work — wake one more sibling dispatcher to help drain it.
+    // Under a burst this engages consumers one-per-batch in a chain
+    // (each helper wakes the next), reaching full parallelism within a few
+    // batch times, without the poller having to wake everyone up front.
+    // No-op with a single dispatcher thread (nothing waiting to wake).
+    if !q.is_empty() {
+        poller.notify.notify_one();
     }
     n_out
 }
@@ -3308,7 +3325,15 @@ struct SchedulerDispatcher {
     ready_observations: std::sync::atomic::AtomicU64,
     err_observations: std::sync::atomic::AtomicU64,
     pending_observations: std::sync::atomic::AtomicU64,
-    handle: Mutex<Option<thread::JoinHandle<()>>>,
+    /// Join handles for the dispatcher worker threads. The dispatcher
+    /// runs `resolve_dispatcher_threads()` threads, each draining the
+    /// shared (herd-free) wakeup queue and invoking `poll_fn` on claimed
+    /// tasks — so concurrent connections are serviced across cores. The
+    /// loop body is concurrency-safe by construction (the one-shot
+    /// `take_registration` claim guarantees each wakeup's `poll_fn` runs
+    /// at most once, counters are atomic, per-conn TLS sessions are
+    /// independently locked).
+    handles: Mutex<Vec<thread::JoinHandle<()>>>,
 }
 
 static SCHEDULER_DISPATCHER: Mutex<Option<Arc<SchedulerDispatcher>>> = Mutex::new(None);
@@ -3404,16 +3429,40 @@ pub extern "C" fn karac_runtime_scheduler_start_dispatcher() -> i32 {
         ready_observations: std::sync::atomic::AtomicU64::new(0),
         err_observations: std::sync::atomic::AtomicU64::new(0),
         pending_observations: std::sync::atomic::AtomicU64::new(0),
-        handle: Mutex::new(None),
+        handles: Mutex::new(Vec::new()),
     });
-    let disp_for_thread = Arc::clone(&disp);
-    let join = thread::Builder::new()
-        .name("karac-scheduler-dispatcher".to_string())
-        .spawn(move || dispatcher_thread_main(disp_for_thread))
-        .expect("karac_runtime: failed to spawn scheduler dispatcher thread");
-    *disp.handle.lock().unwrap_or_else(|p| p.into_inner()) = Some(join);
+    let n_threads = resolve_dispatcher_threads();
+    let mut handles = Vec::with_capacity(n_threads);
+    for i in 0..n_threads {
+        let disp_for_thread = Arc::clone(&disp);
+        let join = thread::Builder::new()
+            .name(format!("karac-scheduler-dispatcher-{i}"))
+            .spawn(move || dispatcher_thread_main(disp_for_thread))
+            .expect("karac_runtime: failed to spawn scheduler dispatcher thread");
+        handles.push(join);
+    }
+    *disp.handles.lock().unwrap_or_else(|p| p.into_inner()) = handles;
     *slot = Some(disp);
     0
+}
+
+/// Number of dispatcher worker threads. Honors `KARAC_DISPATCHER_THREADS`
+/// (>= 1) when set; otherwise defaults to the machine's available
+/// parallelism (floor 1). Separate knob from `KARAC_PAR_WORKERS` (the
+/// compute pool): I/O dispatch and compute fan-out have different sizing
+/// pressures.
+fn resolve_dispatcher_threads() -> usize {
+    if let Ok(s) = std::env::var("KARAC_DISPATCHER_THREADS") {
+        if let Ok(n) = s.parse::<usize>() {
+            if n >= 1 {
+                return n;
+            }
+        }
+    }
+    thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .max(1)
 }
 
 /// Signal the dispatcher to stop, join the thread, clear the global
@@ -3431,11 +3480,12 @@ pub extern "C" fn karac_runtime_scheduler_shutdown_dispatcher() -> i32 {
         }
     };
     disp.shutdown.store(true, Ordering::Release);
-    // The dispatcher's `take_wakeups` call has a 100ms timeout, so
+    // Each dispatcher thread's `take_wakeups` call has a 100ms timeout, so
     // shutdown takes effect within one poll cycle without further
     // signaling. (No need to wake or notify here.)
-    let join = disp.handle.lock().unwrap_or_else(|p| p.into_inner()).take();
-    if let Some(h) = join {
+    let joins: Vec<_> =
+        std::mem::take(&mut *disp.handles.lock().unwrap_or_else(|p| p.into_inner()));
+    for h in joins {
         let _ = h.join();
     }
     0
@@ -4537,6 +4587,97 @@ mod tests {
         drop(s1);
         drop(l0);
         drop(l1);
+    }
+
+    /// Parallel-dispatch correctness: with the dispatcher running N worker
+    /// threads behind a herd-free (`notify_one` + wake-a-friend) handoff, a
+    /// batch of many independent parked tasks — registered concurrently,
+    /// fired concurrently — must ALL be driven to completion exactly once.
+    /// The one-shot `take_registration` claim has to route each wakeup to a
+    /// single dispatcher thread: no wakeup dropped, double-driven, or stolen
+    /// by a sibling. A fan-out/handoff regression fails here (a task never
+    /// completes) within the bounded timeout rather than hanging or
+    /// corrupting. Exercises the wake-a-friend ramp under real concurrency.
+    #[cfg(unix)]
+    #[test]
+    fn dispatcher_drives_many_concurrent_parked_tasks_across_threads() {
+        let _guard = start_scheduler_for_test();
+        use std::os::fd::AsRawFd;
+
+        const K: usize = 64;
+        let mut listeners = Vec::with_capacity(K);
+        let mut addrs = Vec::with_capacity(K);
+        let mut states: Vec<Box<SchedulerTestState>> = Vec::with_capacity(K);
+        let mut tasks: Vec<Box<KaracParkedTask>> = Vec::with_capacity(K);
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+
+        for _ in 0..K {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.set_nonblocking(true).unwrap();
+            let addr = l.local_addr().unwrap();
+            let fd = l.as_raw_fd();
+            let mut s = Box::new(SchedulerTestState {
+                tag: 0,
+                listener_fd: fd,
+                token: 0,
+                completed: std::sync::atomic::AtomicBool::new(false),
+            });
+            let task = Box::new(KaracParkedTask {
+                poll_fn: scheduler_test_poll_fn,
+                state: &mut *s as *mut SchedulerTestState as *mut c_void,
+            });
+            let task_ptr = &*task as *const KaracParkedTask as *mut c_void;
+            let tok = karac_runtime_event_loop_register_fd(fd, 0, task_ptr);
+            assert_ne!(tok, 0);
+            s.token = tok;
+            // Initial park (tag 0 -> 1, Pending) before any readiness fires —
+            // the fd is not readable until we connect below.
+            assert_eq!(
+                unsafe { (task.poll_fn)(task.state, &cancel) },
+                KaracPollResult::Pending as u8
+            );
+            listeners.push(l);
+            addrs.push(addr);
+            states.push(s);
+            tasks.push(task);
+        }
+
+        // Fire all K fds concurrently — maximizes the chance of multiple
+        // dispatcher threads claiming wakeups at the same instant.
+        let connectors: Vec<_> = addrs
+            .iter()
+            .map(|a| {
+                let a = *a;
+                thread::spawn(move || {
+                    let _s = std::net::TcpStream::connect(a).unwrap();
+                    thread::sleep(Duration::from_millis(100));
+                })
+            })
+            .collect();
+
+        let start = Instant::now();
+        loop {
+            let done = states
+                .iter()
+                .filter(|s| s.completed.load(Ordering::Acquire))
+                .count();
+            if done == K {
+                break;
+            }
+            if start.elapsed() > Duration::from_secs(5) {
+                panic!("dispatcher drove only {done}/{K} tasks to completion within 5s");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        for c in connectors {
+            c.join().unwrap();
+        }
+        // Keep registrations / states / listeners alive until completion is
+        // observed (the dispatcher derefs the parked pointers).
+        drop(tasks);
+        drop(states);
+        drop(listeners);
     }
 
     /// Parked-record poll-fn that mirrors the codegen leaf park's
