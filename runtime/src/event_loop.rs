@@ -1939,23 +1939,27 @@ pub unsafe extern "C" fn karac_runtime_ws_recv_binary(
 // `karac_park_on_fd(listener_fd, 0)` BEFORE invoking this — same
 // convention as `karac_runtime_tcp_accept`.
 //
+// Handshake validation (RFC 6455 §4.2.1, line-128 hardening):
+// `ws_validate_handshake` requires `Upgrade: websocket`,
+// `Connection: Upgrade` (token-in-list), and `Sec-WebSocket-Version`
+// offering `13` before the `Sec-WebSocket-Key`, and answers a
+// non-conforming request with `400 Bad Request` (missing
+// Upgrade/Connection/Key) or `426 Upgrade Required` +
+// `Sec-WebSocket-Version: 13` (bad version) rather than upgrading
+// anyway. Slowloris is bounded by the `KARAC_WS_HANDSHAKE_TIMEOUT_MS`
+// read-timeout (default 10 s, `0` disables), applied to the socket
+// for the pre-`101` phase only and cleared on success.
+//
 // v1 limitations (deferred to follow-on slices):
 //
-// - **No request validation beyond `Sec-WebSocket-Key` presence.**
-//   The RFC mandates `Upgrade: websocket`, `Connection: Upgrade`,
-//   `Sec-WebSocket-Version: 13`, and `Host:` headers; v1 accepts
-//   any request that contains a valid-shaped Sec-WebSocket-Key.
-//   A real production deployment behind a stricter handshake
-//   validator should add these checks (and respond with 400 on
-//   failure rather than upgrading anyway).
+// - **Request line / `Host` not enforced.** The method (`GET`),
+//   HTTP version, and `Host:` header are not checked — every real
+//   client sends them and rejecting buys no protocol safety. The
+//   three header checks above are what distinguish a WebSocket
+//   upgrade from arbitrary HTTP.
 // - **No subprotocol / extension negotiation.** The 101 response
-//   never echoes `Sec-WebSocket-Protocol` or `Sec-WebSocket-Extensions`.
-//   Slice 9e.3 may revisit if a use case surfaces.
-// - **Blocking reads with no timeout.** A malicious client that
-//   connects but never sends an HTTP request will hang the
-//   worker thread until the kernel times out the socket (typically
-//   minutes). Production deployments should set `SO_RCVTIMEO`
-//   or run the handshake on a dedicated tasked pool.
+//   never echoes `Sec-WebSocket-Protocol` or `Sec-WebSocket-Extensions`
+//   (tracked as a carved follow-on under phase-8 line 128).
 // - **8 KiB request size limit.** The hand-rolled header parser
 //   reads into a fixed buffer; requests larger than 8 KiB fail
 //   with `-1`. RFC 6455 doesn't mandate a size; real browsers
@@ -2155,6 +2159,208 @@ fn extract_sec_websocket_key(request: &[u8]) -> Option<&[u8]> {
     None
 }
 
+/// Find the raw (trimmed) value bytes of an HTTP header named
+/// `name_lower` (which MUST be supplied lowercase, e.g.
+/// `b"sec-websocket-version"`). Header-name lookup is
+/// case-insensitive per RFC 7230 §3.2; the returned value has
+/// leading/trailing linear whitespace stripped. Returns `None`
+/// if the header is absent or has an empty value.
+fn ws_header_value<'a>(request: &'a [u8], name_lower: &[u8]) -> Option<&'a [u8]> {
+    for line in request.split(|&b| b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        // The request line (`GET /ws HTTP/1.1`) and the terminating
+        // blank line carry no colon — skip them rather than aborting
+        // the whole search.
+        let colon = match line.iter().position(|&b| b == b':') {
+            Some(c) => c,
+            None => continue,
+        };
+        let (name, rest) = line.split_at(colon);
+        if name.len() != name_lower.len() {
+            continue;
+        }
+        if !name
+            .iter()
+            .zip(name_lower.iter())
+            .all(|(l, r)| l.to_ascii_lowercase() == *r)
+        {
+            continue;
+        }
+        // rest[0] is the ':'; trim LWS from both ends of the value.
+        let mut value = &rest[1..];
+        while let Some((b, tail)) = value.split_first() {
+            if *b == b' ' || *b == b'\t' {
+                value = tail;
+            } else {
+                break;
+            }
+        }
+        while let Some((b, head)) = value.split_last() {
+            if *b == b' ' || *b == b'\t' {
+                value = head;
+            } else {
+                break;
+            }
+        }
+        if value.is_empty() {
+            return None;
+        }
+        return Some(value);
+    }
+    None
+}
+
+/// True if the comma-separated header `name_lower` carries
+/// `token_lower` (supplied lowercase) as one of its tokens,
+/// matched case-insensitively. Used for the RFC 6455 §4.2.1
+/// `Upgrade: websocket` and `Connection: Upgrade` checks, where
+/// the value is a 1#token list (`Connection: keep-alive, Upgrade`
+/// is legal and must still match the `upgrade` token).
+fn ws_header_has_token(request: &[u8], name_lower: &[u8], token_lower: &[u8]) -> bool {
+    let value = match ws_header_value(request, name_lower) {
+        Some(v) => v,
+        None => return false,
+    };
+    value.split(|&b| b == b',').any(|tok| {
+        let tok = ws_trim_ascii(tok);
+        tok.len() == token_lower.len()
+            && tok
+                .iter()
+                .zip(token_lower.iter())
+                .all(|(l, r)| l.to_ascii_lowercase() == *r)
+    })
+}
+
+/// Strip leading/trailing ASCII spaces and tabs from a byte slice.
+fn ws_trim_ascii(mut s: &[u8]) -> &[u8] {
+    while let Some((b, tail)) = s.split_first() {
+        if *b == b' ' || *b == b'\t' {
+            s = tail;
+        } else {
+            break;
+        }
+    }
+    while let Some((b, head)) = s.split_last() {
+        if *b == b' ' || *b == b'\t' {
+            s = head;
+        } else {
+            break;
+        }
+    }
+    s
+}
+
+/// Why a WebSocket opening-handshake request was rejected. Maps
+/// to the HTTP status the server writes back before closing the
+/// connection (RFC 6455 §4.2.2 / §4.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WsHandshakeReject {
+    /// Missing/invalid `Upgrade`, `Connection`, or `Sec-WebSocket-Key`
+    /// header — the request is not a well-formed WebSocket upgrade.
+    /// Answered with `400 Bad Request`.
+    BadRequest(&'static str),
+    /// `Sec-WebSocket-Version` is absent or does not offer `13`.
+    /// RFC 6455 §4.4 requires a `426 Upgrade Required` carrying a
+    /// `Sec-WebSocket-Version: 13` header so the client can retry.
+    UnsupportedVersion,
+}
+
+impl WsHandshakeReject {
+    /// The complete HTTP response bytes to write back on rejection.
+    fn response_bytes(self) -> &'static [u8] {
+        match self {
+            WsHandshakeReject::BadRequest(_) => {
+                b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+            }
+            WsHandshakeReject::UnsupportedVersion => {
+                b"HTTP/1.1 426 Upgrade Required\r\n\
+                  Connection: close\r\n\
+                  Sec-WebSocket-Version: 13\r\n\
+                  Content-Length: 0\r\n\r\n"
+            }
+        }
+    }
+
+    /// Short diagnostic string for the runtime-side `Err(String)`
+    /// log path (never sent to the client).
+    fn log_reason(self) -> &'static str {
+        match self {
+            WsHandshakeReject::BadRequest(why) => why,
+            WsHandshakeReject::UnsupportedVersion => {
+                "Sec-WebSocket-Version missing or not 13 (RFC 6455 §4.4)"
+            }
+        }
+    }
+}
+
+/// Validate a client's RFC 6455 §4.2.1 opening-handshake request.
+/// On success returns the `Sec-WebSocket-Key` value (to be fed
+/// into the `Sec-WebSocket-Accept` digest); on failure returns the
+/// rejection class so the caller can write the matching HTTP
+/// status. Checked in RFC order: `Upgrade: websocket`, then
+/// `Connection: Upgrade`, then `Sec-WebSocket-Version: 13`, then
+/// `Sec-WebSocket-Key` presence.
+///
+/// The request line (method / HTTP version) and `Host` are NOT
+/// enforced: every real WebSocket client issues `GET ... HTTP/1.1`
+/// and a `Host`, and rejecting on them buys no protocol safety
+/// while risking false negatives against lenient proxies. The
+/// three header checks here are what actually distinguish a
+/// WebSocket upgrade from an arbitrary HTTP request.
+pub(crate) fn ws_validate_handshake(request: &[u8]) -> Result<&[u8], WsHandshakeReject> {
+    if !ws_header_has_token(request, b"upgrade", b"websocket") {
+        return Err(WsHandshakeReject::BadRequest(
+            "missing or invalid Upgrade: websocket header",
+        ));
+    }
+    if !ws_header_has_token(request, b"connection", b"upgrade") {
+        return Err(WsHandshakeReject::BadRequest(
+            "missing or invalid Connection: Upgrade header",
+        ));
+    }
+    if !ws_header_has_token(request, b"sec-websocket-version", b"13") {
+        return Err(WsHandshakeReject::UnsupportedVersion);
+    }
+    extract_sec_websocket_key(request).ok_or(WsHandshakeReject::BadRequest(
+        "missing Sec-WebSocket-Key header",
+    ))
+}
+
+/// Read `KARAC_WS_HANDSHAKE_TIMEOUT_MS` into a socket read-timeout
+/// for the opening handshake. Default 10 s; `0` disables (returns
+/// `None`); unparseable / negative values fall back to the
+/// default. Pure over the raw string so the parse matrix is
+/// unit-testable without touching the environment.
+///
+/// Unlike the connection-cap half of the line-124 serve-loop
+/// hardening, this timeout is **on by default**: it bounds only
+/// the pre-`101` handshake phase (the slowloris window) and is
+/// cleared on the socket the instant the upgrade completes, so it
+/// never reaps an established idle connection — the Demo 1
+/// 1M-idle-connection workload is structurally unaffected.
+fn ws_handshake_timeout_from_raw(raw: Option<&str>) -> Option<std::time::Duration> {
+    const DEFAULT_MS: u64 = 10_000;
+    let ms = match raw {
+        None => DEFAULT_MS,
+        Some(s) => match s.trim().parse::<u64>() {
+            Ok(0) => return None,
+            Ok(n) => n,
+            Err(_) => DEFAULT_MS,
+        },
+    };
+    Some(std::time::Duration::from_millis(ms))
+}
+
+/// Live read of `ws_handshake_timeout_from_raw` against the
+/// process environment.
+fn ws_handshake_timeout() -> Option<std::time::Duration> {
+    ws_handshake_timeout_from_raw(
+        std::env::var("KARAC_WS_HANDSHAKE_TIMEOUT_MS")
+            .ok()
+            .as_deref(),
+    )
+}
+
 /// Server-side WebSocket handshake. Mirrors
 /// `karac_runtime_tcp_accept` for the listener-side park-then-
 /// accept flow, but adds the HTTP upgrade exchange before
@@ -2170,7 +2376,6 @@ fn extract_sec_websocket_key(request: &[u8]) -> Option<&[u8]> {
 #[cfg(unix)]
 #[no_mangle]
 pub extern "C" fn karac_runtime_ws_accept(listener_fd: i32) -> i32 {
-    use std::io::Write;
     use std::os::unix::io::{FromRawFd, IntoRawFd};
 
     if listener_fd < 0 {
@@ -2188,44 +2393,31 @@ pub extern "C" fn karac_runtime_ws_accept(listener_fd: i32) -> i32 {
         Err(_) => return -1,
     };
 
-    // Read the HTTP request headers.
-    let request = match ws_read_http_request(&mut conn) {
-        Some(bytes) => bytes,
-        None => return -1,
-    };
+    // Bound the opening-handshake read so a client that completes
+    // the TCP connect but stalls (or dribbles) the HTTP upgrade
+    // request can't pin this accept indefinitely (slowloris). The
+    // timeout covers only the pre-`101` phase and is cleared the
+    // instant the handshake succeeds, so it never reaps an
+    // established idle connection. `set_read_timeout` failure is
+    // non-fatal — fall back to the kernel's default socket timeout.
+    let handshake_timeout = ws_handshake_timeout();
+    if handshake_timeout.is_some() {
+        let _ = conn.set_read_timeout(handshake_timeout);
+    }
 
-    // Extract Sec-WebSocket-Key.
-    let key = match extract_sec_websocket_key(&request) {
-        Some(k) => k,
-        None => {
-            // Best-effort 400 response so a misbehaving client
-            // sees a friendly error rather than a silent close.
-            let resp =
-                b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
-            let _ = conn.write_all(resp);
-            return -1;
-        }
-    };
-
-    // Compute Sec-WebSocket-Accept per RFC 6455 §4.2.2:
-    //   accept = base64(sha1(key + GUID))
-    let mut digest_input: Vec<u8> = Vec::with_capacity(key.len() + WS_HANDSHAKE_GUID.len());
-    digest_input.extend_from_slice(key);
-    digest_input.extend_from_slice(WS_HANDSHAKE_GUID);
-    let digest = sha1(&digest_input);
-    let accept = base64_encode(&digest);
-
-    // Write the 101 Switching Protocols response.
-    let response = format!(
-        "HTTP/1.1 101 Switching Protocols\r\n\
-         Upgrade: websocket\r\n\
-         Connection: Upgrade\r\n\
-         Sec-WebSocket-Accept: {}\r\n\
-         \r\n",
-        accept
-    );
-    if conn.write_all(response.as_bytes()).is_err() {
+    // Run the shared RFC 6455 §4.2 upgrade exchange (header
+    // validation + Sec-WebSocket-Accept + 101 response). Same code
+    // path the WS-over-TLS handshake drives, so both transports get
+    // identical validation and rejection-status behaviour.
+    if ws_drive_upgrade_handshake(&mut conn).is_err() {
         return -1;
+    }
+
+    // Clear the handshake read-timeout: subsequent framed I/O on
+    // this fd parks on read-readiness through the event loop and
+    // must not inherit the bounded handshake deadline.
+    if handshake_timeout.is_some() {
+        let _ = conn.set_read_timeout(None);
     }
 
     // Return the connection fd; ownership of close-on-drop
@@ -2352,6 +2544,18 @@ unsafe fn ws_handshake_conn_tls(
     // Take ownership of the accepted connection fd.
     let mut sock = std::net::TcpStream::from_raw_fd(conn_fd);
 
+    // Bound the handshake phase (TLS `complete_io` + the HTTP
+    // upgrade over `TlsConnIo`, both of which read through `sock`)
+    // so a peer that stalls the `ClientHello` or dribbles the
+    // upgrade request can't pin a worker thread indefinitely
+    // (slowloris). Cleared on success before the fd is handed to
+    // the kara `WebSocket`. Same `KARAC_WS_HANDSHAKE_TIMEOUT_MS`
+    // knob as the plain-TCP path.
+    let handshake_timeout = ws_handshake_timeout();
+    if handshake_timeout.is_some() {
+        let _ = sock.set_read_timeout(handshake_timeout);
+    }
+
     // Build a fresh ServerConnection using the borrowed config.
     let config_arc = crate::tls::clone_config_arc(config);
     let mut conn = match rustls::ServerConnection::new(config_arc) {
@@ -2407,6 +2611,13 @@ unsafe fn ws_handshake_conn_tls(
         let _ = sock.into_raw_fd();
         let _ = crate::tls::karac_runtime_tls_close(fd);
         return Err((HandshakeStep::WsUpgrade, reason));
+    }
+
+    // Clear the handshake read-timeout before handing the fd over:
+    // post-upgrade framed I/O parks on read-readiness through the
+    // event loop and must not inherit the bounded handshake deadline.
+    if handshake_timeout.is_some() {
+        let _ = sock.set_read_timeout(None);
     }
 
     // Success — relinquish the TcpStream's destructor so the fd
@@ -2842,10 +3053,12 @@ pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
 /// `HandshakeStats::first_errors` by the caller so the failure mode
 /// is inspectable from `KARAC_WS_STATS=1`.
 ///
-/// Shared with [`karac_runtime_ws_accept_tls`]; the plain-TCP
-/// equivalent lives inline in [`karac_runtime_ws_accept`] above
-/// and predates the generic-transport refactor.
-#[cfg(all(unix, feature = "tls"))]
+/// Shared by both [`karac_runtime_ws_accept`] (plain TCP) and
+/// [`karac_runtime_ws_accept_tls`] (TLS via `TlsConnIo`), so the
+/// two transports run identical RFC 6455 §4.2.1 validation and
+/// rejection-status behaviour. Generic over `Read + Write` with no
+/// TLS types, so it compiles without the `tls` feature.
+#[cfg(unix)]
 fn ws_drive_upgrade_handshake<S: std::io::Read + std::io::Write>(
     stream: &mut S,
 ) -> Result<(), String> {
@@ -2853,17 +3066,19 @@ fn ws_drive_upgrade_handshake<S: std::io::Read + std::io::Write>(
         Some(b) => b,
         None => return Err("ws_read_http_request: IO error or EOF before complete request".into()),
     };
-    let key = match extract_sec_websocket_key(&request) {
-        Some(k) => k,
-        None => {
-            let resp =
-                b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
-            let _ = stream.write_all(resp);
+    // RFC 6455 §4.2.1 validation: require Upgrade/Connection/Version
+    // before the key, and answer a bad request with the matching
+    // HTTP status (400 / 426) rather than upgrading anyway.
+    let key = match ws_validate_handshake(&request) {
+        Ok(k) => k,
+        Err(reject) => {
+            let _ = stream.write_all(reject.response_bytes());
             let preview = String::from_utf8_lossy(&request[..request.len().min(256)])
                 .replace('\r', "\\r")
                 .replace('\n', "\\n");
             return Err(format!(
-                "Sec-WebSocket-Key header not found in {}B request; preview={preview:?}",
+                "handshake rejected ({}) in {}B request; preview={preview:?}",
+                reject.log_reason(),
                 request.len()
             ));
         }
@@ -4830,6 +5045,247 @@ mod tests {
         );
 
         close_fd(listener_fd);
+    }
+
+    // ── line-128 handshake hardening (RFC 6455 §4.2.1 validation) ───────
+
+    const VALID_WS_REQUEST: &[u8] = b"GET /ws HTTP/1.1\r\n\
+        Host: 127.0.0.1\r\n\
+        Upgrade: websocket\r\n\
+        Connection: Upgrade\r\n\
+        Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+        Sec-WebSocket-Version: 13\r\n\
+        \r\n";
+
+    #[test]
+    fn test_ws_validate_handshake_accepts_complete_request() {
+        let key = super::ws_validate_handshake(VALID_WS_REQUEST).expect("valid request");
+        assert_eq!(key, b"dGhlIHNhbXBsZSBub25jZQ==");
+    }
+
+    #[test]
+    fn test_ws_validate_handshake_rejects_missing_upgrade() {
+        let req = b"GET /ws HTTP/1.1\r\n\
+            Host: 127.0.0.1\r\n\
+            Connection: Upgrade\r\n\
+            Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+            Sec-WebSocket-Version: 13\r\n\r\n";
+        assert!(matches!(
+            super::ws_validate_handshake(req),
+            Err(super::WsHandshakeReject::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn test_ws_validate_handshake_rejects_missing_connection() {
+        let req = b"GET /ws HTTP/1.1\r\n\
+            Host: 127.0.0.1\r\n\
+            Upgrade: websocket\r\n\
+            Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+            Sec-WebSocket-Version: 13\r\n\r\n";
+        assert!(matches!(
+            super::ws_validate_handshake(req),
+            Err(super::WsHandshakeReject::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn test_ws_validate_handshake_rejects_bad_version() {
+        let req = b"GET /ws HTTP/1.1\r\n\
+            Host: 127.0.0.1\r\n\
+            Upgrade: websocket\r\n\
+            Connection: Upgrade\r\n\
+            Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+            Sec-WebSocket-Version: 8\r\n\r\n";
+        assert_eq!(
+            super::ws_validate_handshake(req),
+            Err(super::WsHandshakeReject::UnsupportedVersion)
+        );
+    }
+
+    #[test]
+    fn test_ws_validate_handshake_rejects_missing_version() {
+        let req = b"GET /ws HTTP/1.1\r\n\
+            Host: 127.0.0.1\r\n\
+            Upgrade: websocket\r\n\
+            Connection: Upgrade\r\n\
+            Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+        assert_eq!(
+            super::ws_validate_handshake(req),
+            Err(super::WsHandshakeReject::UnsupportedVersion)
+        );
+    }
+
+    #[test]
+    fn test_ws_validate_handshake_rejects_missing_key() {
+        let req = b"GET /ws HTTP/1.1\r\n\
+            Host: 127.0.0.1\r\n\
+            Upgrade: websocket\r\n\
+            Connection: Upgrade\r\n\
+            Sec-WebSocket-Version: 13\r\n\r\n";
+        assert!(matches!(
+            super::ws_validate_handshake(req),
+            Err(super::WsHandshakeReject::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn test_ws_validate_handshake_connection_token_in_list() {
+        // `Connection: keep-alive, Upgrade` is legal — the Upgrade
+        // token must still be found inside the comma list (some
+        // proxies/clients add keep-alive). Header names are
+        // case-insensitive too.
+        let req = b"GET /ws HTTP/1.1\r\n\
+            host: 127.0.0.1\r\n\
+            UPGRADE: WebSocket\r\n\
+            Connection: keep-alive, Upgrade\r\n\
+            Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+            Sec-WebSocket-Version: 13\r\n\r\n";
+        assert!(super::ws_validate_handshake(req).is_ok());
+    }
+
+    #[test]
+    fn test_ws_validate_handshake_version_token_in_list() {
+        // A client may offer multiple versions; 13 in the list is a
+        // match.
+        let req = b"GET /ws HTTP/1.1\r\n\
+            Host: 127.0.0.1\r\n\
+            Upgrade: websocket\r\n\
+            Connection: Upgrade\r\n\
+            Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+            Sec-WebSocket-Version: 8, 13\r\n\r\n";
+        assert!(super::ws_validate_handshake(req).is_ok());
+    }
+
+    #[test]
+    fn test_ws_handshake_reject_response_status_lines() {
+        assert!(super::WsHandshakeReject::BadRequest("x")
+            .response_bytes()
+            .starts_with(b"HTTP/1.1 400 Bad Request\r\n"));
+        let v426 = super::WsHandshakeReject::UnsupportedVersion.response_bytes();
+        assert!(v426.starts_with(b"HTTP/1.1 426 Upgrade Required\r\n"));
+        // RFC 6455 §4.4 requires the supported version be advertised.
+        assert!(v426
+            .windows(b"Sec-WebSocket-Version: 13\r\n".len())
+            .any(|w| w == b"Sec-WebSocket-Version: 13\r\n"));
+    }
+
+    #[test]
+    fn test_ws_handshake_timeout_from_raw_parse_matrix() {
+        use std::time::Duration;
+        // Default when unset.
+        assert_eq!(
+            super::ws_handshake_timeout_from_raw(None),
+            Some(Duration::from_millis(10_000))
+        );
+        // Explicit value.
+        assert_eq!(
+            super::ws_handshake_timeout_from_raw(Some("2500")),
+            Some(Duration::from_millis(2500))
+        );
+        // `0` disables.
+        assert_eq!(super::ws_handshake_timeout_from_raw(Some("0")), None);
+        // Whitespace trimmed.
+        assert_eq!(
+            super::ws_handshake_timeout_from_raw(Some("  750  ")),
+            Some(Duration::from_millis(750))
+        );
+        // Garbage falls back to default.
+        assert_eq!(
+            super::ws_handshake_timeout_from_raw(Some("not-a-number")),
+            Some(Duration::from_millis(10_000))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_accept_rejects_bad_version_with_426() {
+        use std::io::{Read, Write};
+        use std::os::unix::io::IntoRawFd;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        let listener_fd = listener.into_raw_fd();
+
+        let client_handle = std::thread::spawn(move || {
+            let mut conn = std::net::TcpStream::connect(addr).expect("client connect");
+            conn.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            // Otherwise-valid upgrade, but an unsupported version.
+            let req = b"GET /ws HTTP/1.1\r\n\
+                Host: 127.0.0.1\r\n\
+                Upgrade: websocket\r\n\
+                Connection: Upgrade\r\n\
+                Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                Sec-WebSocket-Version: 7\r\n\r\n";
+            conn.write_all(req).expect("write request");
+            let mut resp = Vec::new();
+            let mut chunk = [0u8; 256];
+            for _ in 0..10 {
+                match conn.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => resp.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+                if resp.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            resp
+        });
+
+        let conn_fd = super::karac_runtime_ws_accept(listener_fd);
+        assert_eq!(conn_fd, -1, "bad version must not upgrade");
+
+        let resp = client_handle.join().expect("client thread");
+        let resp_str = String::from_utf8_lossy(&resp);
+        assert!(
+            resp_str.starts_with("HTTP/1.1 426 Upgrade Required\r\n"),
+            "expected 426 for unsupported version; got: {resp_str}"
+        );
+        assert!(
+            resp_str.contains("Sec-WebSocket-Version: 13\r\n"),
+            "426 must advertise the supported version; got: {resp_str}"
+        );
+        close_fd(listener_fd);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_read_http_request_times_out_on_stalled_peer() {
+        // Slowloris mechanism: a peer that connects but never sends
+        // the upgrade request must be reaped by the socket read-
+        // timeout, not block until the kernel default fires. This
+        // exercises the timeout path `karac_runtime_ws_accept` /
+        // `ws_handshake_conn_tls` apply via `set_read_timeout`
+        // without mutating the process-global env var.
+        use std::time::{Duration, Instant};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+
+        let client_handle = std::thread::spawn(move || {
+            let conn = std::net::TcpStream::connect(addr).expect("client connect");
+            // Hold the connection open but send nothing for a while.
+            std::thread::sleep(Duration::from_millis(800));
+            drop(conn);
+        });
+
+        let (mut server_conn, _) = listener.accept().expect("accept");
+        server_conn
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .expect("set_read_timeout");
+        let start = Instant::now();
+        let result = super::ws_read_http_request(&mut server_conn);
+        let elapsed = start.elapsed();
+
+        assert!(
+            result.is_none(),
+            "stalled handshake read must return None (reaped by timeout)"
+        );
+        assert!(
+            elapsed < Duration::from_millis(600),
+            "read should be reaped near the 100ms timeout, not wait for the peer; took {elapsed:?}"
+        );
+        client_handle.join().expect("client thread");
     }
 
     // ── Phase 6 line 17 slice 9e.3 — control frames + binary ────────────
