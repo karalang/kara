@@ -99,6 +99,15 @@ struct Args {
     /// full-TLS+WS handshakes/sec. Mutually exclusive with the idle-hold
     /// flow.
     handshake_qps_secs: u64,
+    /// Spread each active connection's send phase uniformly across the
+    /// `1/msg_rate` interval (by connection index) instead of all
+    /// connections firing on the same aligned tick. Default off
+    /// reproduces a synchronized burst every interval; on approximates
+    /// realistic (desynchronized) client arrival, which is what real
+    /// WebSocket fleets look like — clients are not phase-locked to a
+    /// global tick. Lets the active-traffic latency be read under
+    /// realistic arrival vs. a worst-case synchronized burst.
+    stagger_arrival: bool,
 }
 
 impl Default for Args {
@@ -121,6 +130,7 @@ impl Default for Args {
             msg_bytes: 128,
             msg_rate: 1.0,
             handshake_qps_secs: 0,
+            stagger_arrival: false,
         }
     }
 }
@@ -163,6 +173,9 @@ ACTIVE-TRAFFIC (after the idle hold; measures mixed-load density + latency):
   --active-secs <N>         duration of the active phase                (default 10)
   --msg-bytes <N>           payload bytes per message                   (default 128)
   --msg-rate <f>            messages/sec per active connection          (default 1.0)
+  --stagger-arrival         spread send phases across the interval (realistic,
+                            desynchronized arrival) instead of a synchronized
+                            burst every interval                        (default off)
 
 HANDSHAKE-QPS (reconnect-storm; mutually exclusive with the idle hold):
   --handshake-qps-secs <N>  open+close as fast as --concurrency allows for N
@@ -200,6 +213,7 @@ fn parse_args() -> Result<Args, BoxErr> {
             "--active-secs" => a.active_secs = next()?.parse()?,
             "--msg-bytes" => a.msg_bytes = next()?.parse()?,
             "--msg-rate" => a.msg_rate = next()?.parse()?,
+            "--stagger-arrival" => a.stagger_arrival = true,
             "--handshake-qps-secs" => a.handshake_qps_secs = next()?.parse()?,
             "-h" | "--help" => {
                 eprint!("{}", usage());
@@ -533,17 +547,34 @@ async fn run_active_traffic(
     msg_bytes: usize,
     msg_rate: f64,
     duration: Duration,
+    stagger_arrival: bool,
 ) -> ActiveOutcome {
     let payload: Arc<Vec<u8>> = Arc::new(vec![b'k'; msg_bytes]);
     let interval = Duration::from_secs_f64(1.0 / msg_rate);
     let deadline = Instant::now() + duration;
+    let n_active = active.len();
 
     let mut handles = Vec::with_capacity(active.len());
-    for mut stream in active.into_iter() {
+    for (idx, mut stream) in active.into_iter().enumerate() {
         let payload = payload.clone();
+        // Phase offset for this connection: with --stagger-arrival, spread
+        // the first send uniformly across [0, interval) by connection index
+        // so the aggregate arrival is smooth rather than a synchronized
+        // burst on every tick. Without it, all connections share a phase
+        // (tokio's interval fires its first tick immediately), so each
+        // interval is a thundering-herd burst — the worst case, not a
+        // realistic client population.
+        let phase = if stagger_arrival && n_active > 0 {
+            interval.mul_f64(idx as f64 / n_active as f64)
+        } else {
+            Duration::ZERO
+        };
         handles.push(tokio::spawn(async move {
             let mut lats: Vec<f64> = Vec::new();
             let (mut sent, mut echoed, mut failed) = (0usize, 0usize, 0usize);
+            if !phase.is_zero() {
+                tokio::time::sleep(phase).await;
+            }
             let mut tick = tokio::time::interval(interval);
             // Don't fire a burst to catch up if a tick is missed — pace it.
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1017,6 +1048,7 @@ async fn main() -> Result<(), BoxErr> {
             args.msg_bytes,
             args.msg_rate,
             Duration::from_secs(args.active_secs),
+            args.stagger_arrival,
         )
         .await;
         // RSS at the end of the active phase vs the idle baseline (rss_before).
