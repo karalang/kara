@@ -87,6 +87,17 @@ fn main() -> ExitCode {
         return repl_main();
     }
 
+    if first == "--test-batch" {
+        let prefix = match args.next() {
+            Some(s) => s,
+            None => {
+                eprintln!("karac_jit_runner: --test-batch requires a tempfile path prefix");
+                return ExitCode::from(2);
+            }
+        };
+        return test_batch_main(&prefix);
+    }
+
     oneshot_main(&first)
 }
 
@@ -322,6 +333,194 @@ fn run_one_cell<'a>(
         // the next cell installs (shadowing the `main` symbol).
         Some(tracker),
     )
+}
+
+/// Test-batch mode (cold-start amortization for `karac test`). A single
+/// persistent engine runs every test in the suite, paying LLVM target
+/// init + engine construction ONCE instead of per-test (the one-shot
+/// `karac test` JIT path spawns a fresh runner per test — ~15 ms each,
+/// dominated by that init). Protocol on stdin/stdout, one frame per test:
+///
+///   parent → `test <id> <ir_byte_count>\n<ir bytes>`
+///   runner → `done <id> <rc>\n`   (only on SURVIVAL — the test's `main`
+///                                  returned; rc is its return value)
+///
+/// The test's own stdout/stderr are redirected to parent-known tempfiles
+/// (`<prefix>.<id>.out` / `.err`) for the run's duration, so the parent
+/// reads them whether the runner survives or dies. **Death is the failure
+/// path:** a failing `assert` / contract fault / `unreachable()` lowers to
+/// `emit_panic` → `exit(1)`, which terminates the whole runner — there is
+/// no `done` frame. The parent detects the closed pipe, reads the `.err`
+/// file for the `KARAC_TEST_FAILURE` marker, reaps the real exit code, and
+/// re-spawns a fresh runner for the next test (mirroring the repl client's
+/// re-spawn-on-death). Each test's module is installed under its own
+/// resource tracker and REMOVED after the run (unlike repl mode, which
+/// keeps cells alive for cross-cell symbol resolution) so test N+1's
+/// module — which re-includes the same `main` + user items — installs
+/// without duplicate-symbol collisions.
+fn test_batch_main(prefix: &str) -> ExitCode {
+    let engine = match LLJITEngine::new() {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("karac_jit_runner: LLJITEngine::new: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    {
+        let stdout = std::io::stdout();
+        let mut lock = stdout.lock();
+        let _ = writeln!(lock, "ready");
+        let _ = lock.flush();
+    }
+
+    let stdin = std::io::stdin();
+    let mut stdin_lock = stdin.lock();
+    loop {
+        let mut header = String::new();
+        let n = match stdin_lock.read_line(&mut header) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("karac_jit_runner: stdin read: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        if n == 0 {
+            return ExitCode::from(0); // parent closed stdin — clean exit
+        }
+        let trimmed = header.trim_end_matches(['\r', '\n']);
+        if trimmed == "quit" {
+            return ExitCode::from(0);
+        }
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        if parts.len() != 3 || parts[0] != "test" {
+            write_protocol_error(&format!("unrecognized command: {trimmed:?}"));
+            continue;
+        }
+        let id: u64 = match parts[1].parse() {
+            Ok(v) => v,
+            Err(_) => {
+                write_protocol_error(&format!("bad test id: {:?}", parts[1]));
+                continue;
+            }
+        };
+        let ir_len: usize = match parts[2].parse() {
+            Ok(v) => v,
+            Err(_) => {
+                write_protocol_error(&format!("bad ir byte count: {:?}", parts[2]));
+                continue;
+            }
+        };
+        let mut ir_buf = vec![0u8; ir_len];
+        if let Err(e) = stdin_lock.read_exact(&mut ir_buf) {
+            eprintln!("karac_jit_runner: failed to read {ir_len} IR bytes: {e}");
+            return ExitCode::from(2);
+        }
+        let ir = match String::from_utf8(ir_buf) {
+            Ok(s) => s,
+            Err(_) => {
+                // Write a setup-error marker into the `.err` file so the
+                // parent's uniform "read err file" path surfaces it, then
+                // report a non-zero rc without dying.
+                let err_path = format!("{prefix}.{id}.err");
+                let _ = std::fs::write(&err_path, b"karac_jit_runner: IR not valid UTF-8\n");
+                write_test_done(id, 2);
+                continue;
+            }
+        };
+        let out_path = format!("{prefix}.{id}.out");
+        let err_path = format!("{prefix}.{id}.err");
+        let rc = run_one_test(&engine, &ir, &out_path, &err_path);
+        // Reached only on SURVIVAL (test `main` returned). A failing test
+        // exits the process inside `run_one_test`, so the parent sees the
+        // pipe close instead of this frame.
+        write_test_done(id, rc);
+    }
+}
+
+/// Install `ir` under a fresh tracker, redirect the test's stdout/stderr
+/// to `out_path` / `err_path`, run `main`, restore fds, drop the tracker
+/// (removing the module so the next test's identical symbols don't
+/// collide), and return `main`'s exit code. Does NOT return if the test
+/// faults — `emit_panic` → `exit(1)` tears down the process with the
+/// redirect still in place, leaving the marker in `err_path` for the
+/// parent. A setup failure (bad IR / missing `main`) writes a diagnostic
+/// to `err_path` and returns 2 without running anything.
+fn run_one_test(engine: &LLJITEngine, ir: &str, out_path: &str, err_path: &str) -> i32 {
+    let tracker = match engine.add_ir_module_with_tracker(ir) {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = std::fs::write(err_path, format!("karac_jit_runner: add_ir_module: {e}\n"));
+            return 2;
+        }
+    };
+    publish_spawn_sites(engine);
+    let addr = match engine.lookup_address("main") {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = std::fs::write(err_path, format!("karac_jit_runner: lookup main: {e}\n"));
+            let _ = tracker.remove();
+            return 2;
+        }
+    };
+
+    // SAFETY: dup/dup2/close/open are POSIX fd primitives used with valid
+    // arguments; saved fds are closed exactly once after restoration. The
+    // redirect is in place across `call_main`; if the test faults and
+    // `exit()`s, the OS flushes + closes the file fds, so the marker the
+    // test wrote to fd 2 lands in `err_path`.
+    unsafe {
+        libc::fflush(std::ptr::null_mut());
+    }
+    let _ = std::io::stdout().lock().flush();
+    let _ = std::io::stderr().lock().flush();
+
+    let saved_out = unsafe { libc::dup(1) };
+    let saved_err = unsafe { libc::dup(2) };
+    let out_fd = open_trunc_fd(out_path);
+    let err_fd = open_trunc_fd(err_path);
+    if out_fd >= 0 {
+        unsafe { libc::dup2(out_fd, 1) };
+        unsafe { libc::close(out_fd) };
+    }
+    if err_fd >= 0 {
+        unsafe { libc::dup2(err_fd, 2) };
+        unsafe { libc::close(err_fd) };
+    }
+
+    let rc = call_main(addr);
+
+    unsafe {
+        libc::fflush(std::ptr::null_mut());
+        libc::dup2(saved_out, 1);
+        libc::dup2(saved_err, 2);
+        libc::close(saved_out);
+        libc::close(saved_err);
+    }
+    let _ = tracker.remove();
+    rc
+}
+
+/// `open(path, O_WRONLY|O_CREAT|O_TRUNC)` returning the raw fd or -1.
+fn open_trunc_fd(path: &str) -> std::os::fd::RawFd {
+    use std::os::fd::IntoRawFd;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+    {
+        Ok(f) => f.into_raw_fd(),
+        Err(_) => -1,
+    }
+}
+
+/// Frame a `done <id> <rc>` response on stdout (the protocol channel,
+/// restored to the parent pipe by the time this runs).
+fn write_test_done(id: u64, rc: i32) {
+    let stdout = std::io::stdout();
+    let mut lock = stdout.lock();
+    let _ = writeln!(lock, "done {id} {rc}");
+    let _ = lock.flush();
 }
 
 struct CapturedRun {

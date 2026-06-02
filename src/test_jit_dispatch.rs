@@ -32,7 +32,6 @@
 #![cfg(feature = "lljit_prototype")]
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::ast::{Expr, Program};
@@ -59,32 +58,18 @@ pub enum JitTestResult {
     SpawnFailed { message: String },
 }
 
-/// Run one test via the JIT subprocess path.
-///
-/// `module_program` is the per-module `Program` built by the runner
-/// (matches what's passed to `Interpreter::new` in the interpreter path).
-/// `fixtures` mirrors the runner's `t.with_providers` after
-/// `extract_with_providers` has parsed the `#[with_provider(R, ctor)]`
-/// attribute payloads.
-pub fn run_test_via_jit(
+/// Build the per-test LLVM IR string: clone the module's items, append a
+/// synthesized `main` that installs the `#[with_provider]` fixtures and
+/// calls the test fn, re-run resolve/typecheck/lower (the synthesized
+/// fixture `let` bindings need typecheck to populate `var_type_names` for
+/// the `with_provider` codegen), then emit IR. Shared by the one-shot
+/// (`run_test_via_jit`) and persistent-batch (`TestBatchRunner`) paths.
+fn build_test_ir(
     module_program: &Program,
     test_fn_name: &str,
     fixtures: &[(String, Expr)],
     source_filename: &str,
-    timeout: Duration,
-) -> JitTestResult {
-    let runner_path = match locate_karac_jit_runner() {
-        Some(p) => p,
-        None => {
-            return JitTestResult::SpawnFailed {
-                message: "karac_jit_runner binary not found alongside karac executable — \
-                          rebuild karac with `--features lljit_prototype` so cargo emits \
-                          the runner alongside the main binary"
-                    .to_string(),
-            };
-        }
-    };
-
+) -> Result<String, String> {
     let fixtures_vec: Vec<ProviderFixture> = fixtures
         .iter()
         .map(|(rp, ctor)| ProviderFixture {
@@ -92,122 +77,287 @@ pub fn run_test_via_jit(
             constructor: ctor.clone(),
         })
         .collect();
-
     let mut per_test_program = clone_program_items(module_program);
     append_test_main(&mut per_test_program, test_fn_name, &fixtures_vec);
-
     let resolved = crate::resolver::Resolver::new(&per_test_program).resolve();
     let typed = crate::typechecker::TypeChecker::new(&per_test_program, &resolved).check();
     crate::lowering::lower_program(&mut per_test_program, &typed);
-
-    let ir = match crate::codegen::compile_to_ir_with_options(
+    crate::codegen::compile_to_ir_with_options(
         &per_test_program,
         None,
         None,
         Some(source_filename),
         None,
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            return JitTestResult::SpawnFailed {
-                message: format!("codegen failed for test '{test_fn_name}': {e}"),
-            };
-        }
-    };
+    )
+    .map_err(|e| format!("codegen failed for test '{test_fn_name}': {e}"))
+}
 
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let ir_path: PathBuf =
-        std::env::temp_dir().join(format!("karac_test_jit_{}_{}.ll", std::process::id(), id));
-    if let Err(e) = std::fs::write(&ir_path, ir) {
-        return JitTestResult::SpawnFailed {
-            message: format!("could not write IR tempfile {}: {e}", ir_path.display()),
-        };
+/// Persistent JIT test runner (cold-start amortization). Holds one
+/// `karac_jit_runner --test-batch` subprocess that runs every test in the
+/// suite, paying LLVM target init + engine construction ONCE instead of
+/// per-test (the one-shot path spawns a fresh runner per test — ~15 ms
+/// each, dominated by that init).
+///
+/// **Re-spawn on death.** A failing test (`assert` / contract fault /
+/// `unreachable()`) lowers to `emit_panic` → `exit(1)`, which kills the
+/// whole runner. The connection is then dropped (`conn = None`) and the
+/// next `run_test` lazily re-spawns. So the suite pays one engine init +
+/// one more per *failing* test — a mostly-passing suite (the common case)
+/// amortizes the init across all its passing tests. The failing test's
+/// stdout/stderr (incl. the `KARAC_TEST_FAILURE` marker) is redirected by
+/// the runner to parent-known tempfiles, so it survives the runner's death
+/// for the parent to read + map.
+pub struct TestBatchRunner {
+    /// `None` until the first test (lazy spawn) and after a death (lazy
+    /// re-spawn on the next test).
+    conn: Option<Conn>,
+    /// Tempfile path prefix passed to the runner; per-test stdout/stderr
+    /// land at `<prefix>.<id>.out` / `.err`.
+    prefix: PathBuf,
+    /// Monotonic per-test id — also the tempfile discriminator.
+    next_id: u64,
+}
+
+struct Conn {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+    pid: u32,
+}
+
+impl TestBatchRunner {
+    /// Create the runner handle. Does NOT spawn yet — the subprocess is
+    /// spawned lazily on the first `run_test` so a suite with zero JIT
+    /// tests pays nothing. `prefix` should be a unique path in the temp
+    /// dir (caller includes the karac pid).
+    pub fn new(prefix: PathBuf) -> Self {
+        Self {
+            conn: None,
+            prefix,
+            next_id: 0,
+        }
     }
 
-    let mut cmd = std::process::Command::new(&runner_path);
-    cmd.arg(&ir_path);
+    fn spawn_conn(&self) -> Result<Conn, String> {
+        use std::process::{Command, Stdio};
+        let runner_path = locate_karac_jit_runner().ok_or_else(|| {
+            "karac_jit_runner binary not found alongside karac executable — rebuild karac \
+             with `--features lljit_prototype`"
+                .to_string()
+        })?;
+        let mut child = Command::new(&runner_path)
+            .arg("--test-batch")
+            .arg(&self.prefix)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("spawn {}: {e}", runner_path.display()))?;
+        let pid = child.id();
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "runner has no stdin".to_string())?;
+        let mut stdout = std::io::BufReader::new(
+            child
+                .stdout
+                .take()
+                .ok_or_else(|| "runner has no stdout".to_string())?,
+        );
+        let mut ready = String::new();
+        use std::io::BufRead;
+        match stdout.read_line(&mut ready) {
+            Ok(n) if n > 0 && ready.trim() == "ready" => {}
+            Ok(_) => return Err(format!("expected 'ready' banner, got {ready:?}")),
+            Err(e) => return Err(format!("read ready banner: {e}")),
+        }
+        Ok(Conn {
+            child,
+            stdin,
+            stdout,
+            pid,
+        })
+    }
 
-    let started = std::time::Instant::now();
-    let sub_result = run_subprocess_with_timeout(cmd, timeout);
-    let duration_ms = started.elapsed().as_millis();
-    let _ = std::fs::remove_file(&ir_path);
+    /// Build the per-test IR and run it on the persistent runner. The
+    /// drop-in batch replacement for `run_test_via_jit` (same signature
+    /// minus the implicit per-call spawn) — `cmd_test` creates one
+    /// `TestBatchRunner` for the whole suite and calls this per test.
+    pub fn dispatch(
+        &mut self,
+        module_program: &Program,
+        test_fn_name: &str,
+        fixtures: &[(String, Expr)],
+        source_filename: &str,
+        timeout: Duration,
+    ) -> JitTestResult {
+        let ir = match build_test_ir(module_program, test_fn_name, fixtures, source_filename) {
+            Ok(s) => s,
+            Err(message) => return JitTestResult::SpawnFailed { message },
+        };
+        self.run_test(&ir, timeout)
+    }
 
-    match sub_result {
-        SubprocessResult::Completed(output) => {
-            let exit_code = output.status.code().unwrap_or(-1);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let outcome = map_exit_to_outcome(exit_code, &stdout, &stderr);
-            JitTestResult::Completed {
-                outcome,
-                duration_ms,
+    /// Run one test. Lazily (re-)spawns the runner, sends the test's IR,
+    /// and maps the outcome. On runner death (test faulted) or timeout the
+    /// connection is dropped so the next call re-spawns.
+    pub fn run_test(&mut self, ir: &str, timeout: Duration) -> JitTestResult {
+        let id = self.next_id;
+        self.next_id += 1;
+        if self.conn.is_none() {
+            match self.spawn_conn() {
+                Ok(c) => self.conn = Some(c),
+                Err(message) => return JitTestResult::SpawnFailed { message },
             }
         }
-        SubprocessResult::TimedOut => JitTestResult::TimedOut { duration_ms },
-        SubprocessResult::SpawnFailed(message) => JitTestResult::SpawnFailed { message },
+        // Build paths byte-identically to the runner's
+        // `format!("{prefix}.{id}.out")` — `with_extension` would *replace*
+        // a trailing extension, desyncing if the prefix contained a dot.
+        let pfx = self.prefix.display();
+        let out_path = PathBuf::from(format!("{pfx}.{id}.out"));
+        let err_path = PathBuf::from(format!("{pfx}.{id}.err"));
+        let started = std::time::Instant::now();
+        let result = self.exchange(id, ir, timeout);
+        let duration_ms = started.elapsed().as_millis();
+
+        let read_file = |p: &PathBuf| std::fs::read(p).unwrap_or_default();
+        let map = |rc: i32| {
+            let out = String::from_utf8_lossy(&read_file(&out_path)).into_owned();
+            let err = String::from_utf8_lossy(&read_file(&err_path)).into_owned();
+            map_exit_to_outcome(rc, &out, &err)
+        };
+        let outcome = match result {
+            Exchange::Survived(rc) => JitTestResult::Completed {
+                outcome: map(rc),
+                duration_ms,
+            },
+            Exchange::Died(rc) => {
+                self.conn = None; // force re-spawn next test
+                JitTestResult::Completed {
+                    outcome: map(rc),
+                    duration_ms,
+                }
+            }
+            Exchange::TimedOut => {
+                self.conn = None;
+                JitTestResult::TimedOut { duration_ms }
+            }
+            Exchange::Protocol(message) => {
+                self.conn = None;
+                JitTestResult::SpawnFailed { message }
+            }
+        };
+        let _ = std::fs::remove_file(&out_path);
+        let _ = std::fs::remove_file(&err_path);
+        outcome
     }
-}
 
-/// Internal subprocess-result shape — `run_subprocess_with_timeout`
-/// returns one of these; `run_test_via_jit` maps each variant to the
-/// equivalent `JitTestResult`.
-enum SubprocessResult {
-    Completed(std::process::Output),
-    TimedOut,
-    SpawnFailed(String),
-}
-
-/// Spawn a subprocess and wait for it with a hard timeout. Mirrors the
-/// `tests/common/mod.rs::output_with_hang_watchdog` shape but returns a
-/// structured result instead of panicking on timeout — the runner's
-/// `test_timeout` JSONL event captures the user-visible signal.
-///
-/// stdin is piped from /dev/null; stdout/stderr are captured. On
-/// timeout the watchdog kills the child via `kill -9` so the parent's
-/// `wait_with_output` returns immediately. The kill is observable as
-/// a non-zero status on the returned `Output` when `Completed` fires
-/// — but the `killed` flag is what disambiguates from a regular
-/// non-zero exit, so we return `TimedOut` specifically.
-fn run_subprocess_with_timeout(
-    mut cmd: std::process::Command,
-    timeout: Duration,
-) -> SubprocessResult {
-    use std::process::Stdio;
-    use std::sync::mpsc;
-
-    let child = match cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => return SubprocessResult::SpawnFailed(format!("could not spawn child: {e}")),
-    };
-    let pid = child.id();
-
-    let (tx, rx) = mpsc::channel::<()>();
-    let watchdog = std::thread::spawn(move || {
-        if rx.recv_timeout(timeout).is_err() {
-            let _ = std::process::Command::new("kill")
-                .args(["-9", &pid.to_string()])
-                .status();
-            true
-        } else {
-            false
+    /// Send `test <id> <ir_len>\n<ir>` and read the `done <id> <rc>`
+    /// response under a kill-on-timeout watchdog. EOF before a complete
+    /// frame means the runner died inside the test (the failure path).
+    fn exchange(&mut self, id: u64, ir: &str, timeout: Duration) -> Exchange {
+        use std::io::{BufRead, Write};
+        use std::sync::mpsc;
+        let conn = self.conn.as_mut().expect("conn spawned in run_test");
+        let header = format!("test {} {}\n", id, ir.len());
+        if conn.stdin.write_all(header.as_bytes()).is_err()
+            || conn.stdin.write_all(ir.as_bytes()).is_err()
+            || conn.stdin.flush().is_err()
+        {
+            // Pipe broke — runner already gone; reap for its exit code.
+            let rc = conn.child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
+            return Exchange::Died(rc);
         }
-    });
 
-    let output = child.wait_with_output();
-    let _ = tx.send(());
-    let killed = watchdog.join().unwrap_or(false);
+        // Arm a watchdog that hard-kills the runner if the test hangs.
+        // Killing closes the pipe, so the blocking `read_line` returns EOF.
+        let pid = conn.pid;
+        let (tx, rx) = mpsc::channel::<()>();
+        let watchdog = std::thread::spawn(move || {
+            if rx.recv_timeout(timeout).is_err() {
+                let _ = std::process::Command::new("kill")
+                    .args(["-9", &pid.to_string()])
+                    .status();
+                true
+            } else {
+                false
+            }
+        });
 
-    match output {
-        Ok(_) if killed => SubprocessResult::TimedOut,
-        Ok(o) => SubprocessResult::Completed(o),
-        Err(e) => SubprocessResult::SpawnFailed(format!("wait_with_output failed: {e}")),
+        let mut line = String::new();
+        let read = conn.stdout.read_line(&mut line);
+        let _ = tx.send(());
+        let killed = watchdog.join().unwrap_or(false);
+
+        match read {
+            Ok(0) | Err(_) => {
+                // Pipe closed before a `done` frame. Either the watchdog
+                // killed a hung test (timeout) or the test faulted and
+                // `exit()`d the runner (failure). Reap to drain the zombie
+                // + recover the real exit code for the failure case.
+                let rc = conn.child.wait().ok().and_then(|s| s.code()).unwrap_or(1);
+                if killed {
+                    Exchange::TimedOut
+                } else {
+                    Exchange::Died(rc)
+                }
+            }
+            Ok(_) => {
+                let trimmed = line.trim_end_matches(['\r', '\n']);
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() == 3 && parts[0] == "done" && parts[1].parse::<u64>() == Ok(id) {
+                    let rc = parts[2].parse::<i32>().unwrap_or(0);
+                    Exchange::Survived(rc)
+                } else {
+                    // Out-of-sync framing — discard the connection.
+                    Exchange::Protocol(format!("unexpected runner response: {trimmed:?}"))
+                }
+            }
+        }
     }
+}
+
+impl Drop for TestBatchRunner {
+    fn drop(&mut self) {
+        // Graceful shutdown: close stdin (runner reads EOF → exits) and
+        // reap. Best-effort; a hung runner is killed.
+        if let Some(mut conn) = self.conn.take() {
+            use std::io::Write;
+            let _ = conn.stdin.write_all(b"quit\n");
+            let _ = conn.stdin.flush();
+            drop(conn.stdin);
+            // The runner exits within ~1 ms of the stdin EOF above, so poll
+            // at fine granularity to keep `karac test`'s exit latency low
+            // (this Drop is on every run's critical path); the 2 s deadline
+            // is just a wedged-runner backstop.
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                match conn.child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if std::time::Instant::now() >= deadline => {
+                        let _ = conn.child.kill();
+                        let _ = conn.child.wait();
+                        break;
+                    }
+                    Ok(None) => std::thread::sleep(Duration::from_millis(1)),
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+}
+
+/// Result of one `exchange` round-trip with the batch runner.
+enum Exchange {
+    /// Runner survived; the test's `main` returned this code (0 = pass).
+    Survived(i32),
+    /// Runner died inside the test (the failure path) with this reaped
+    /// exit code.
+    Died(i32),
+    /// The watchdog killed a hung test.
+    TimedOut,
+    /// Framing desync — the connection is unusable.
+    Protocol(String),
 }
 
 /// Clone a `Program` by copying its items vector. Other fields use

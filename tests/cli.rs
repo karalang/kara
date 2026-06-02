@@ -2129,6 +2129,63 @@ fn test_test_jit_timeout_kills_hanging_test() {
 }
 
 #[test]
+fn test_jit_batch_runner_continues_after_failing_tests() {
+    // A failing/panicking test under JIT lowers to `exit(1)`, which kills
+    // the *persistent* batch runner (`TestBatchRunner`). The runner must
+    // re-spawn so every subsequent test still runs — a failure mid-suite
+    // must not silently drop the tests after it. This pins the re-spawn
+    // contract: interleaved fail / pass / panic / pass must all report.
+    // (Under a non-`lljit_prototype` build `KARAC_TEST_JIT` is a no-op and
+    // this runs the interpreter, which produces the same outcomes — so the
+    // assertion is the user-visible contract either way.)
+    let tmp = scratch_project("test-jit-batch-respawn");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() {}\n",
+    );
+    write(
+        &tmp.join("src/main_test.kara"),
+        "test \"p1\" { assert_eq(add(2, 3), 5) }\n\
+         test \"f1\" { assert_eq(add(2, 2), 5) }\n\
+         test \"p2\" { assert_eq(add(0, 0), 0) }\n\
+         test \"boom\" { unreachable() }\n\
+         test \"p3\" { assert_eq(add(1, 1), 2) }\n",
+    );
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env("KARAC_TEST_JIT", "1")
+        .arg("test")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines = jsonl_lines(&stdout);
+    // Every test reports an outcome — the two failures don't truncate the run.
+    for (name, kind) in [
+        ("p1", "test_pass"),
+        ("f1", "test_fail"),
+        ("p2", "test_pass"),
+        ("boom", "test_fail"),
+        ("p3", "test_pass"),
+    ] {
+        let line = lines
+            .iter()
+            .find(|l| l.contains(&format!("\"test\":\"{name}\"")))
+            .unwrap_or_else(|| panic!("missing event for test {name:?} in:\n{lines:?}"));
+        assert_eq!(
+            event_kind(line),
+            Some(kind),
+            "test {name} wrong outcome: {line}"
+        );
+    }
+    let summary = lines.last().unwrap();
+    assert!(summary.contains("\"passed\":3"), "summary: {summary}");
+    assert!(summary.contains("\"failed\":2"), "summary: {summary}");
+}
+
+#[test]
 fn test_test_filter_narrows_to_substring_match() {
     let tmp = scratch_project("test-filter");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");

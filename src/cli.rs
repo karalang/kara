@@ -8014,6 +8014,15 @@ fn cmd_test(filter: Option<String>, all: bool) {
     let mut current_program: Option<Program> = None;
     let mut current_typed: Option<TypeCheckResult> = None;
 
+    // One persistent JIT runner for the whole suite (amortizes LLVM init
+    // across tests; re-spawns on a faulting test). Lazily spawns on the
+    // first JIT-dispatched test, so a suite running under `KARAC_TEST_JIT=0`
+    // or built without the feature pays nothing.
+    #[cfg(feature = "lljit_prototype")]
+    let mut batch_runner = crate::test_jit_dispatch::TestBatchRunner::new(
+        std::env::temp_dir().join(format!("karac_test_batch_{}", std::process::id())),
+    );
+
     for t in &tests {
         // `#[test(requires = [X])]` and `#[with_provider(X, ...)]` for the
         // *same* resource are contradictory: one gates on an external
@@ -8122,13 +8131,12 @@ fn cmd_test(filter: Option<String>, all: bool) {
                 .iter()
                 .map(|fx| fx.resource_path.clone())
                 .collect();
-            let result = crate::test_jit_dispatch::run_test_via_jit(
-                program_ref,
-                &t.fn_name,
-                &fixtures,
-                &test_file_path,
-                timeout,
-            );
+            // Persistent batch runner: one `karac_jit_runner --test-batch`
+            // subprocess for the whole suite (LLVM init paid once, not
+            // per-test), re-spawned only when a faulting test exits it. See
+            // `test_jit_dispatch::TestBatchRunner`.
+            let result =
+                batch_runner.dispatch(program_ref, &t.fn_name, &fixtures, &test_file_path, timeout);
             match result {
                 crate::test_jit_dispatch::JitTestResult::Completed {
                     outcome,
