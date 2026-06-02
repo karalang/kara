@@ -2185,6 +2185,72 @@ fn test_jit_batch_runner_continues_after_failing_tests() {
     assert!(summary.contains("\"failed\":2"), "summary: {summary}");
 }
 
+#[cfg(feature = "lljit_prototype")]
+#[test]
+fn test_jit_skeleton_path_links_real_bodies_not_stubs() {
+    // Incremental-typecheck slice: a no-fixture test's per-test `main` module
+    // is built from the module's *signature-only skeleton* (helper bodies
+    // replaced by `unreachable()`), with the real bodies living declare-only
+    // in the persistent shared module. This pins that the declare-only linkage
+    // resolves to the REAL bodies: every assert below computes a value that
+    // only the real body produces. If a stubbed body were ever emitted into
+    // the per-test module instead of linked, the call would hit `unreachable()`
+    // and abort (a fault outcome) rather than return the value — so a passing
+    // `assert_eq` on a computed result is the regression guard. The module
+    // mixes a free fn, a struct method, and an enum/match fn so the skeleton's
+    // stub-and-link path is exercised across item kinds, plus an uncalled
+    // generic (must emit nothing). The trailing failing test confirms failure
+    // surfacing is unaffected by the skeleton path.
+    let tmp = scratch_project("test-jit-skeleton-link");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("src/main_test.kara"),
+        "struct Point { x: i64, y: i64 }\n\
+         impl Point {\n\
+         \x20   fn new(x: i64, y: i64) -> Point { Point { x: x, y: y } }\n\
+         \x20   fn sum(self) -> i64 { self.x + self.y }\n\
+         }\n\
+         enum Shape { Dot, Box(i64, i64) }\n\
+         fn area(s: Shape) -> i64 { match s { Shape.Dot => 0, Shape.Box(w, h) => w * h } }\n\
+         fn triple(n: i64) -> i64 { n * 3 }\n\
+         fn pick[T](a: T, b: T) -> T { a }\n\
+         test \"free fn body\" { assert_eq(triple(7), 21) }\n\
+         test \"method body\" { let p = Point.new(3, 4); assert_eq(p.sum(), 7) }\n\
+         test \"enum match body\" { assert_eq(area(Shape.Box(3, 4)), 12) }\n\
+         test \"this one fails\" { assert_eq(triple(1), 99) }\n",
+    );
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env("KARAC_TEST_JIT", "1")
+        .arg("test")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines = jsonl_lines(&stdout);
+    for (name, kind) in [
+        ("free fn body", "test_pass"),
+        ("method body", "test_pass"),
+        ("enum match body", "test_pass"),
+        ("this one fails", "test_fail"),
+    ] {
+        let line = lines
+            .iter()
+            .find(|l| l.contains(&format!("\"test\":\"{name}\"")))
+            .unwrap_or_else(|| panic!("missing event for test {name:?} in:\n{lines:?}"));
+        assert_eq!(
+            event_kind(line),
+            Some(kind),
+            "test {name} wrong outcome (skeleton stub leaked instead of real body?): {line}"
+        );
+    }
+    let summary = lines.last().unwrap();
+    assert!(summary.contains("\"passed\":3"), "summary: {summary}");
+    assert!(summary.contains("\"failed\":1"), "summary: {summary}");
+}
+
 #[test]
 fn test_test_filter_narrows_to_substring_match() {
     let tmp = scratch_project("test-filter");

@@ -107,7 +107,7 @@ fn compute_declare_only(p: &Program) -> std::collections::HashSet<String> {
     out
 }
 
-/// Build the per-test `main` IR: clone the module's items, append a
+/// Build the per-test `main` IR: clone `source_program`'s items, append a
 /// synthesized `main` that installs the `#[with_provider]` fixtures and
 /// calls the test fn, re-run resolve/typecheck/lower (the synthesized
 /// fixture `let` bindings need typecheck to populate `var_type_names` for
@@ -116,11 +116,16 @@ fn compute_declare_only(p: &Program) -> std::collections::HashSet<String> {
 /// Debugger-Contract globals are suppressed (they live in the persistent
 /// module). Only the tiny synth `main` carries a body — the module's
 /// functions are NOT re-emitted here.
+///
+/// `source_program` is the **signature-only skeleton** ([`build_skeleton`])
+/// for a no-fixture test, else the full module — see the body comment and the
+/// `dispatch` call site for why the skeleton is sound only for no-fixture
+/// tests. Either way it carries every module signature; only the bodies differ
+/// (stubs vs real), and module bodies are never emitted here.
 fn build_test_main_ir(
-    module_program: &Program,
+    source_program: &Program,
     test_fn_name: &str,
     fixtures: &[(String, Expr)],
-    _source_filename: &str,
     declare_only: &std::collections::HashSet<String>,
 ) -> Result<String, String> {
     let fixtures_vec: Vec<ProviderFixture> = fixtures
@@ -130,7 +135,16 @@ fn build_test_main_ir(
             constructor: ctor.clone(),
         })
         .collect();
-    let mut per_test_program = clone_program_items(module_program);
+    // `source_program` is the **signature-only skeleton** of the module when
+    // the runner has one cached for a no-fixture test (concrete fn/method
+    // bodies replaced by `unreachable()` — see `build_skeleton`), else the
+    // full module. Cloning + resolving + typechecking + lowering the skeleton
+    // is far cheaper than the real module because the 1-stmt stub bodies
+    // typecheck and lower trivially, while still carrying every signature the
+    // synth `main` needs in scope. The module fns are declare-only in the
+    // emitted IR (their real bodies live in the persistent module), so the
+    // stub bodies are never codegen'd.
+    let mut per_test_program = clone_program_items(source_program);
     append_test_main(&mut per_test_program, test_fn_name, &fixtures_vec);
     let resolved = crate::resolver::Resolver::new(&per_test_program).resolve();
     let typed = crate::typechecker::TypeChecker::new(&per_test_program, &resolved).check();
@@ -144,6 +158,82 @@ fn build_test_main_ir(
     // symbol, so it still fires.
     crate::codegen::compile_to_ir_for_repl_cell(&per_test_program, declare_only, TEST_MAIN_SYMBOL)
         .map_err(|e| format!("codegen failed for test '{test_fn_name}': {e}"))
+}
+
+/// Build a **signature-only skeleton** of `module_program`: a fresh clone in
+/// which every concrete (non-generic) free-fn and impl-method body is replaced
+/// by `{ unreachable() }`. The synth per-test `main` only references module
+/// items by *signature* (it calls the concrete test fn, which is declare-only),
+/// so the skeleton carries everything `main`'s resolve/typecheck/lower need
+/// while making those passes cheap — checking + lowering a 1-stmt stub is
+/// near-free next to the real body. Cached once per module by the runner and
+/// cloned per no-fixture test in place of the full module.
+///
+/// **Why no fixtures, why only concretes.** The skeleton is sound precisely
+/// because no stubbed body is ever emitted: concrete fns are declare-only
+/// (linked to the persistent module's real definitions), and generic fns are
+/// emitted only on instantiation. A no-fixture synth `main` is just
+/// `{ test_fn(); }` — one call to a concrete fn — so it triggers zero local
+/// generic instantiation. A *fixture* synth `main` evaluates arbitrary
+/// constructor expressions that could instantiate a generic into the per-test
+/// module, where it would be emitted from the stub → wrong IR; those tests use
+/// the full module instead (the caller gates on `fixtures.is_empty()`). For
+/// the same reason generic items keep their real bodies here (cheap — generics
+/// are rare; correctness over the last few µs).
+///
+/// `requires`/`ensures` are cleared on the stubbed items: declare-only fns
+/// emit no contract checks, and a divergent stub body would otherwise drag the
+/// (irrelevant) contract predicates through typecheck. The stub body reuses the
+/// original body's span so its span-keyed typecheck entries don't collide with
+/// the synth `main`'s all-`(0,0)` spans.
+fn build_skeleton(module_program: &Program) -> Program {
+    use crate::ast::{Block, ExprKind, ImplItem, Item, Stmt, StmtKind};
+    fn stub(body_span: Span) -> Block {
+        let call = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Identifier("unreachable".to_string()),
+                    span: body_span.clone(),
+                }),
+                args: Vec::new(),
+            },
+            span: body_span.clone(),
+        };
+        Block {
+            stmts: vec![Stmt {
+                kind: StmtKind::Expr(call),
+                span: body_span.clone(),
+            }],
+            final_expr: None,
+            span: body_span,
+        }
+    }
+    let mut p = clone_program_items(module_program);
+    for item in &mut p.items {
+        match item {
+            // `main` is removed from the per-test program by `append_test_main`
+            // anyway, but the module never carries one (`_test.kara`); the
+            // guard is defensive and keeps the skeleton faithful.
+            Item::Function(f) if f.name != "main" && f.generic_params.is_none() => {
+                f.body = stub(f.body.span.clone());
+                f.requires.clear();
+                f.ensures.clear();
+            }
+            Item::ImplBlock(imp) => {
+                for ii in &mut imp.items {
+                    if let ImplItem::Method(m) = ii {
+                        if m.generic_params.is_none() {
+                            m.body = stub(m.body.span.clone());
+                            m.requires.clear();
+                            m.ensures.clear();
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    p
 }
 
 /// LLVM symbol the synthesized per-test `main` is emitted under (and the
@@ -186,6 +276,15 @@ pub struct TestBatchRunner {
     /// `declare_only_fns` to per-test codegen so their bodies aren't
     /// re-emitted (they link to the persistent module's definitions).
     declare_only: std::collections::HashSet<String>,
+    /// The cached **signature-only skeleton** of the current module
+    /// ([`build_skeleton`]): the module's items with concrete fn/method bodies
+    /// stubbed to `unreachable()`. Built once per module (alongside
+    /// `module_ir`) and cloned per *no-fixture* test in place of the full
+    /// module — so each test's resolve/typecheck/lower runs over trivial stub
+    /// bodies instead of the real ones, the dominant parent-side per-test cost
+    /// (~54% of it is typechecking bodies that are identical across tests and
+    /// never emitted). `None` for full-mode modules (no cache).
+    skeleton_program: Option<Program>,
     /// Whether the cached `module_ir` has been installed in the *current*
     /// runner connection. Reset to false on (re-)spawn and on module change
     /// so the next test re-sends the `module` command first.
@@ -227,6 +326,7 @@ impl TestBatchRunner {
             current_module_id: None,
             module_ir: None,
             declare_only: std::collections::HashSet::new(),
+            skeleton_program: None,
             module_sent: false,
             cache_module: false,
         }
@@ -365,25 +465,37 @@ impl TestBatchRunner {
                     Err(message) => return JitTestResult::SpawnFailed { message },
                 }
                 self.declare_only = compute_declare_only(module_program);
+                // Cache the signature-only skeleton so each no-fixture test
+                // clones + resolves + typechecks + lowers stub bodies instead
+                // of the real module — the dominant parent-side per-test cost.
+                self.skeleton_program = Some(build_skeleton(module_program));
             } else {
                 self.module_ir = None;
                 self.declare_only = std::collections::HashSet::new();
+                self.skeleton_program = None;
             }
         }
         // Per-test `main`: module items declare-only, synth main with body,
         // Debugger-Contract globals suppressed (so they don't collide with
         // the persistent module's). Built fresh each test — only the tiny
         // main is codegen'd here; the module's bodies are not re-emitted.
-        let ir = match build_test_main_ir(
-            module_program,
-            test_fn_name,
-            fixtures,
-            source_filename,
-            &self.declare_only,
-        ) {
-            Ok(s) => s,
-            Err(message) => return JitTestResult::SpawnFailed { message },
+        //
+        // Source program for that build: the cached signature-only skeleton
+        // when this is a no-fixture test on a cached module, else the full
+        // module. The skeleton is sound ONLY for no-fixture tests — a
+        // fixture synth `main` evaluates arbitrary constructor exprs that
+        // could instantiate a generic locally (where a stubbed body would be
+        // emitted → wrong IR); no-fixture mains just call the concrete,
+        // declare-only test fn and instantiate nothing. See `build_skeleton`.
+        let source_program = match (fixtures.is_empty(), self.skeleton_program.as_ref()) {
+            (true, Some(skel)) => skel,
+            _ => module_program,
         };
+        let ir =
+            match build_test_main_ir(source_program, test_fn_name, fixtures, &self.declare_only) {
+                Ok(s) => s,
+                Err(message) => return JitTestResult::SpawnFailed { message },
+            };
         self.run_test(&ir, timeout)
     }
 
@@ -906,5 +1018,92 @@ mod tests {
         let o = map_exit_to_outcome(1, "panic at f:1:2 in g: contract violated: x\n", stderr);
         assert_eq!(o.message.as_deref().unwrap(), "assert_eq failed");
         assert_eq!(o.left.as_deref(), Some("1"));
+    }
+
+    /// `build_skeleton` stubs every concrete (non-generic) free-fn and
+    /// impl-method body to a single `unreachable()` call, clears its
+    /// `requires`/`ensures`, and preserves the original body span — while
+    /// leaving generic fns, type defs, and signatures untouched.
+    #[test]
+    fn build_skeleton_stubs_concrete_bodies_only() {
+        use crate::ast::{Block, ExprKind, ImplItem, Item, StmtKind};
+        let src = "\
+struct Point { x: i64, y: i64 }
+impl Point {
+    fn sum(self) -> i64 { self.x + self.y }
+    fn gen_method[T](self, v: T) -> T { v }
+}
+fn helper(n: i64) -> i64 requires n > 0 { n + 1 }
+fn generic[T](a: T) -> T { a }
+";
+        let prog = crate::parse(src).program;
+        let skel = build_skeleton(&prog);
+
+        // A 1-stmt `{ unreachable() }` block whose stmt span equals the
+        // original body span (so no collision with the synth main's (0,0)).
+        let is_stub = |body: &Block, orig_span: &Span| -> bool {
+            body.final_expr.is_none()
+                && body.stmts.len() == 1
+                && body.span.offset == orig_span.offset
+                && matches!(
+                    &body.stmts[0].kind,
+                    StmtKind::Expr(Expr { kind: ExprKind::Call { callee, args }, .. })
+                        if args.is_empty()
+                            && matches!(&callee.kind, ExprKind::Identifier(n) if n == "unreachable")
+                )
+        };
+
+        // Capture original body spans before comparing (clone of the parse).
+        let orig = crate::parse(src).program;
+        let orig_helper_span = match &orig.items[2] {
+            Item::Function(f) => f.body.span.clone(),
+            _ => panic!("expected helper fn at index 2"),
+        };
+
+        // Concrete free fn `helper` — stubbed, contracts cleared.
+        match &skel.items[2] {
+            Item::Function(f) => {
+                assert_eq!(f.name, "helper");
+                assert!(
+                    is_stub(&f.body, &orig_helper_span),
+                    "helper body not stubbed"
+                );
+                assert!(f.requires.is_empty(), "requires not cleared");
+                assert!(f.ensures.is_empty(), "ensures not cleared");
+            }
+            _ => panic!("expected helper fn"),
+        }
+        // Generic free fn `generic` — body untouched (kept real: emitted only
+        // on instantiation, which a no-fixture main never triggers).
+        match &skel.items[3] {
+            Item::Function(f) => {
+                assert_eq!(f.name, "generic");
+                assert!(
+                    !is_stub(&f.body, &f.body.span),
+                    "generic fn body must NOT be stubbed"
+                );
+            }
+            _ => panic!("expected generic fn"),
+        }
+        // Impl methods: concrete `sum` stubbed, generic `gen_method` untouched.
+        match &skel.items[1] {
+            Item::ImplBlock(imp) => {
+                for ii in &imp.items {
+                    if let ImplItem::Method(m) = ii {
+                        if m.name == "sum" {
+                            assert!(is_stub(&m.body, &m.body.span), "sum body not stubbed");
+                        } else if m.name == "gen_method" {
+                            assert!(
+                                !is_stub(&m.body, &m.body.span),
+                                "generic method body must NOT be stubbed"
+                            );
+                        }
+                    }
+                }
+            }
+            _ => panic!("expected impl block"),
+        }
+        // Struct def is structurally preserved (signatures untouched).
+        assert!(matches!(&skel.items[0], Item::StructDef(s) if s.name == "Point"));
     }
 }
