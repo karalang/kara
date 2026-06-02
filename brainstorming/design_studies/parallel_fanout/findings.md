@@ -18,6 +18,7 @@
 | Locality | High | High | High | High |
 | Composability | Medium | Medium | High | Highest |
 | Ceremony | Medium | Medium | Medium-high | Low–medium |
+| Determinism | Low | Low | Low | Highest |
 
 ### Robustness
 - **Java (virtual threads)** — `Future.get()` throws checked `ExecutionException` wrapping the real cause. Data-race freedom is the programmer's responsibility; JVM gives no help.
@@ -39,6 +40,13 @@ All four tie. The concurrency logic fits in one file; the pattern is visually si
 - **Python asyncio** needs `async def` + `await` + `asyncio.run` — three concepts for one task.
 - **Rust** needs `#[tokio::main]` + `async/.await` + one of several `join` variants — most concepts to hold in head.
 - **Kāra** needs `go { }` + channel (or `par { }`) — two concepts for the explicit shape. For the known-list case, **zero concepts** — the compiler does it.
+
+### Determinism
+The "do parallel fetches produce the same output on every run?" axis. Three forms of this matter: (a) result ordering — given input `[1, 2, 3, 4, 5]`, does the output list always preserve that order, or is it completion-order? (b) error reporting — when two requests fail, which error does the user see? (c) side-effect ordering — `println` interleaving, log lines, file writes that happen as part of the fetch.
+- **Java (virtual threads)** — `Future.get()` in a loop preserves *list* order at the cost of waiting on the earliest unfinished item (head-of-line blocking). `CompletableFuture.allOf` doesn't preserve order on its own; the programmer indexes manually. Error reporting reports whatever `get()` reached first in the loop. Side-effect ordering (println interleaving) is whatever the JVM scheduler does — no guarantee. The programmer who wants determinism writes it themselves.
+- **Python (asyncio)** — `asyncio.gather(*coros, return_exceptions=True)` preserves input order in the result list (one of the few language-level guarantees here). Error reporting in `gather()` without `return_exceptions` raises the first exception encountered by the *event loop*, not the first in input order. Side-effect ordering is single-threaded (GIL), so println interleaving is effectively deterministic *within one process* — but across runs the scheduler may pick coros in different orders. Partial deterministic-by-accident, not by design.
+- **Rust (tokio)** — `try_join_all` preserves input order on success; on error, returns the first error *the futures combinator polled*, not the first in input order. `FuturesUnordered` is explicitly completion-order. Side-effect ordering (println, tracing spans across `.await` points) is whatever the runtime schedules — no language-level guarantee. The programmer reaching for determinism uses explicit ordering primitives (mutex, sequence numbers, or a single-threaded runtime).
+- **Kāra** — **all three forms guaranteed by the language**. (a) `par { ... (a, b, c) }` block result is position-bound; `collect_all` returns a position-bound tuple; `collect_all_vec` returns an element-wise-ordered Vec. (b) When multiple branches fail with `Err`, the source-earliest one is what the scope returns regardless of completion order. (c) Side effects on conflicting resources (`writes(Stdout)`, `writes(Fs)`) are serialized in source order via the same effect-conflict mechanism that drives auto-parallelism. The programmer writes the natural shape and gets deterministic output — snapshot tests, golden-output diffs, and reproducible builds work without explicit synchronization. Full contract at [design.md § Determinism Contract](../../../docs/design.md#determinism-contract). This is the axis where Kāra's effect-system investment compounds most visibly into user-visible behavior — the property is structural, not a discipline the programmer maintains.
 
 ---
 

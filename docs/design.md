@@ -8334,10 +8334,55 @@ fn connect(a: GraphNode, b: GraphNode) {
 
 **`Arena[T]` vs `Pool[T]`.** Both are stdlib allocation primitives, but they serve different use cases. `Arena[T]` is a bulk allocator with a single lifetime — all items are freed together when the arena is dropped, making it ideal for cache-friendly batch processing (parse trees, frame-scoped game data). Individual items cannot be removed. `Pool[T]` is a generational-handle allocator with per-item lifetimes — items can be inserted and removed individually, and `pool.get(handle)` returns `Option[ref T]` (returning `None` if the handle is stale). Use `Pool[T]` when items have independent lifetimes and stale-handle detection matters (ECS entities, connection tables). See [Generational References](#generational-references) for `Pool[T]` usage examples.
 
+**Recursive type representations use `Pool[T]`, not `shared struct` + `weak`.** A natural shape for representing recursive user-defined data (typechecker types, GraphQL schemas, protobuf descriptors, anything that names itself in its own fields) is to reach for `shared struct` and put `weak` on the recursive field to break the cycle. This is wrong. `weak` models "this reference may have been freed" — but in a typechecker, types are held strongly through a symbol table for the lifetime of compilation; they are *deduplicated*, not lifecycle-managed. Threading `Option[T]` on every recursive lookup is the wrong API for "did we already see this type before?". The right shape is `Pool[Type]` with `Handle[Type]` for the recursive position — the symbol table holds the `Pool`, every recursive position carries a `Handle`, equality on types becomes equality on handles, and the cycle is broken structurally rather than through cycle-detection machinery. `shared struct` + `weak` remains the right answer for inherently shared data with bidirectional traversal where references really can become stale (observer patterns, parent-pointer trees built incrementally). The distinction: `weak` is for *lifetime cycles*; `Pool[T]` + `Handle[T]` is for *deduplication of self-referential data*.
+
 **Resolved semantics:**
 - **Immutable by default** — `shared struct` fields are immutable after construction unless declared `mut`. Aligns with the language's general immutability principle (`let` vs `let mut`). The struct definition is the canonical record of which fields can change. Attempting to assign to a non-`mut` field is a compile error.
 - **Interior mutability for `mut` fields** — because `shared struct` values may have multiple RC holders within a single task, `mut` field access uses **per-field runtime borrow tracking** inserted automatically by the compiler. Reads are shared (multiple simultaneous readers of the same field are allowed). A write is exclusive — if any other borrow (read or write) of the same field is active when a write begins, the runtime panics. Tracking is per-field, not per-struct: mutating `node.left` does not conflict with reading `node.right`. The programmer never writes a borrow-tracking type (`RefCell` or equivalent); the compiler inserts hidden borrow flags for each `mut` field on `shared struct` automatically. This runtime tracking is a v1 mechanism — Phase 7-8 will revisit whether the effect system can statically prove exclusive access for some fields, eliminating the runtime flags where the compiler can verify safety at compile time (see [Deferred Items](#deferred-items), "Interior mutability optimization"). Under `Arc` promotion, the per-field borrow flags continue to protect same-task aliasing conflicts. They are not a cross-task mechanism: the flag storage lives in the shared `Arc` allocation and is itself subject to data races if two tasks reach a `mut` field write site without `Mutex[T]` wrapping. In v1, the compiler does not statically reject this — the programmer is required to wrap any `mut` field accessed from multiple tasks in `Mutex[T]` and access it only via `lock` blocks. Compile-time enforcement is a planned follow-on.
   **Memory overhead:** Each `mut` field adds 1 byte of hidden borrow-flag storage per instance. Only `mut` fields carry flags — immutable fields have zero overhead. A `shared struct` with 20 `mut` fields pays 20 bytes per instance (plus alignment padding), which is small relative to the RC pointer (8–16 bytes) and the fields' own data. Bit-packing (1 bit per field) is a future optimization if real programs show structs with many `mut` fields. `karac explain` surfaces the total borrow-tracking overhead per type so programmers can see the cost.
+
+  **Tree-rewrite idiom — peek-then-mutate.** The natural shape for tree rewrites (AST constant folding, DOM transformations, ORM query rewriting, template AST passes) is "match on a `mut` field, then reassign that same field inside the match arm." This shape panics at runtime under per-field borrow tracking: the match arm holds a *read* borrow on the field for the duration of the arm's body, and the assignment inside the arm requires an *exclusive* borrow on the same field. The two cannot coexist.
+
+  ```kara
+  // PANICS at runtime — read borrow on parent.left is live throughout the arm body.
+  match parent.left {
+      AstNode.Lit { value: v, .. } => {
+          parent.left = AstNode.Lit { value: v * 2, .. };  // exclusive borrow conflicts with arm's read borrow
+      }
+      _ => {}
+  }
+  ```
+
+  The fix is **peek-and-drop**: extract the value needed for the decision, let the borrow expire at the statement boundary, *then* mutate.
+
+  ```kara
+  // OK — matches!() returns a bool; the underlying read borrow expires at the `;`.
+  let is_lit = matches!(parent.left, AstNode.Lit { .. });
+  if is_lit {
+      let v = match parent.left {
+          AstNode.Lit { value, .. } => value,  // bind and exit the match arm cleanly
+          _ => unreachable(),
+      };
+      parent.left = AstNode.Lit { value: v * 2, .. };  // borrow on parent.left is released; assignment OK
+  }
+  ```
+
+  Or, when the new value depends only on data from inside the match arm and can be constructed *before* the assignment is needed, build the replacement first and assign after:
+
+  ```kara
+  // OK — replacement is built inside the arm; assignment happens after the arm's borrow is released.
+  let replacement = match parent.left {
+      AstNode.Lit { value, .. } => Some(AstNode.Lit { value: value * 2, .. }),
+      _ => None,
+  };
+  if let Some(new_node) = replacement {
+      parent.left = new_node;   // arm has ended; borrow on parent.left is released
+  }
+  ```
+
+  Both shapes follow the same rule: any code that reads a `mut` field through pattern matching and writes to that same field must put a *statement boundary* between the read and the write. The match expression's read borrow expires at the end of the match expression (which is the end of the enclosing statement); the subsequent assignment then runs cleanly.
+
+  This is the most common per-field-borrow-flag footgun for tree-walking workloads. The compiler does not statically reject the panicking form in v1 — flagging it would require flow-sensitive borrow tracking that v1's per-field flags deliberately avoid. The error surfaces at runtime as `borrow conflict on <field>`, includes the source spans of both the conflicting access sites, and points to this idiom doc.
 - **Field visibility** — follows the same rules as regular structs: private by default, opt-in `pub` per field. See Struct Field Visibility above for `pub mut` semantics and concurrency safety.
 - **Rc only** — `shared struct` is always RC; Arc promotion is not available. Cross-task access is a compile error. For types that need concurrent access, use `par struct`.
 - **Concurrency synchronization** — `shared struct` is single-task only; cross-task access with multi-task reachability is a compile error. If a type needs to be shared across concurrent tasks, define it as `par struct` instead (see [Part 5b](#part-5b-concurrent-shared-types-par-struct)). `Mutex[T]` + `lock` block syntax remains available within `par struct` field types and for any single-task mutual exclusion need. The `lock` block acquires the lock on entry and releases on exit (including early return, break, or panic). No `.lock()` method or guard values — scope is always visible. An optional second identifier provides a positional alias for the locked variable within the block:
@@ -9613,6 +9658,8 @@ fn nested_concurrent() {
   ) -> Vec[Result[T, E]] with Eff
   ```
 
+  **Result ordering.** The output vector is element-wise ordered by input position: `output[i]` is the result of invoking `fs[i]`, regardless of completion order. Position-bound, not completion-bound — see [Determinism Contract — rule (3) Position-bound results](#determinism-contract).
+
   ```kara
   let urls: Vec[String] = get_urls();
   let fetchers: Vec[Fn() -> Result[Response, HttpError]] =
@@ -9622,6 +9669,30 @@ fn nested_concurrent() {
 
   **When to use `collect_all` vs. relying on auto-concurrency.** The compiler's auto-concurrency runs independent operations in parallel and cancels siblings on the first error — optimized for the common case where one failure means the whole operation fails. `collect_all` is for when you need *every* result, success or failure, before deciding what to do. Use it for multi-field form validation (report all invalid fields at once), parallel pre-flight checks (all must pass), or fan-out fetches where partial failures are actionable independently. If you only care about the first error, let the compiler handle parallelism automatically.
 - **Graceful degradation.** Sequential fallback on WASM/single-core targets.
+
+### Determinism Contract
+
+This section is the single reference for what determinism property Kāra's auto-concurrency and explicit `par {}` blocks guarantee. The rules are gathered from four places they would otherwise be scattered across ([Feature 5 — source-order serialization](#feature-5-auto-concurrency-via-effect-analysis), [Cost Model — compile-time graph determinism](#cost-model--v1-status), [Concurrency Semantics — deterministic by construction](#concurrency-semantics), and [Parallel Failure and Cleanup — source-order error precedence](#parallel-failure-and-cleanup)). Anywhere else in the spec that needs to reason about parallel determinism should link here rather than restating these rules.
+
+**The property.** Any user-observable behavior mediated by the effect system is deterministic across runs. "User-observable" means anything a future-running program (the same program, a downstream program, a test harness, a person reading output) can observe — values returned, stdout / stderr text, file contents, database state, log lines, panic messages. "Mediated by the effect system" means the side effect is declared as a resource interaction (`writes(Stdout)`, `writes(Fs)`, `writes(SomeUserResource)`) that the conflict-analysis pass can see. The two together give: snapshot tests are stable across runs, golden output diffs to bit-identical bytes, reproducible builds produce bit-identical binaries, log lines appear in the same order — without the programmer threading sequence numbers, locks, or explicit ordering.
+
+**The four guarantees that combine to give the property.**
+
+1. **Compile-time parallelization-graph determinism.** Same (source, compiler version, target profile) produces the same parallelization decisions. See [Cost Model — Determinism guarantee](#cost-model--v1-status). This is what makes `karac query concurrency` stable across runs.
+2. **Source-order serialization on conflict.** When two operations have either a data dependency or a conflicting effect on the same resource, they execute in source order, deterministically. See [Feature 5 — Serialization order is always source order](#feature-5-auto-concurrency-via-effect-analysis). The rule applies uniformly to auto-concurrency, `par {}`, and `spawn()` / `TaskGroup`.
+3. **Position-bound results.** `par {}` block returns the value of its tail expression, which is bound to source position (`(a, b, c)` is `(a, b, c)`, not "whichever finished first"). `collect_all` returns a fixed-arity tuple matching branch declaration order. `collect_all_vec` returns a `Vec[Result[T, E]]` element-wise ordered by input-vector position (`output[i]` is the result of `fs[i]`). See [Concurrency Semantics](#concurrency-semantics).
+4. **Source-order error precedence.** When multiple branches of a `par {}` region fail with `Err`, the scope returns the source-earliest one regardless of completion order. See [Parallel Failure and Cleanup — What the scope returns](#parallel-failure-and-cleanup). Panic dominates `Err` (any panic in any branch is what the scope returns); among `Err`s, source order wins.
+
+**What is NOT guaranteed.** The four rules above pin user-observable behavior mediated by the effect system. They do not pin:
+
+- **Wall-clock completion ordering of parallel branches.** A `par { a(); b(); c() }` with non-conflicting `a`/`b`/`c` may complete in any order. Source-order serialization is what runs only when the effect system sees a conflict; without one, the runtime is free to schedule the branches however.
+- **`HashMap[K, V]` and `Set[T]` iteration order.** Already non-deterministic per the seeded-hasher rule at [§ Map](#mapk-v-where-k-hash--eq) — varies *per process run* independent of parallelism. Code that needs stable iteration uses `TreeMap[K, V]` / `SortedSet[T]`.
+- **`Hash` ordering of un-interned strings, addresses of heap allocations, system entropy, wall-clock time.** None of these are effect-system-visible by default. A program that depends on any of them produces non-deterministic output regardless of parallelism — orthogonal concern, not a determinism-contract gap.
+- **Side effects on user-declared resources that the programmer forgot to declare in the effect signature.** If `f()` and `g()` both mutate some thread-local accumulator but neither declares `writes(SomeResource)`, the conflict analysis cannot see them and they may run in either order. This is a missing-effect-declaration *bug*, not a non-determinism contract gap — the fix is to declare the resource, which restores deterministic ordering via rule (2).
+
+**The `for`-loop case.** A `for i in 0..N { body }` with a side-effecting body — `println(i)`, file writes, accumulator updates — runs deterministically *because* every iteration shares the same effect resource (`writes(Stdout)`, `writes(Fs)`, etc.), and rule (2) serializes iterations in source order (which is iteration order). The cost model that decides whether *pure* `for` bodies fork (a v1.x deliverable per [Cost Model — v1 Status](#cost-model--v1-status)) does not change this property: pure bodies have no user-observable ordering to non-determinize, and side-effecting bodies serialize via the same conflict-analysis rule that applies everywhere else. The cost model is unspecified-but-deterministic, not unspecified-and-non-deterministic.
+
+**Practical consequence.** A test that asserts on stdout / file contents / log output is stable across runs and across machines (modulo target-profile / compiler-version differences explicitly excluded by rule (1)). A snapshot test in a `par {}` region survives parallelism without locks or sequence numbers. A reproducible-build CI check producing bit-identical binaries (per [Toolchain pinning — Reproducibility guarantee](#toolchain-pinning)) holds for user-program output as well as for compiler-emitted artifacts.
 
 ### Parallel Failure and Cleanup
 
