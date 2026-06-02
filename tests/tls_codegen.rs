@@ -373,11 +373,20 @@ fn main() {}
     }
 
     #[test]
-    fn test_ir_websocket_accept_tls_parks_then_calls_runtime_ffi() {
-        // Phase 6 line 236 slice 3 — `WebSocket.accept_tls(listener)`
-        // parks on listener-readability then calls into
-        // `karac_runtime_ws_accept_tls(fd, config)`. The result is
-        // a `WebSocket { fd }` struct value.
+    fn test_ir_websocket_accept_tls_inline_omits_park_then_calls_runtime_ffi() {
+        // Phase 6 line 236 slice 3, as amended by the A2 resume-race fix
+        // (commit c4c848bd). `WebSocket.accept_tls(listener)` lowered
+        // *inline* — here directly in `main`, where `coro_ctx` is None —
+        // does NOT park on listener-readability. `karac_runtime_ws_accept_tls`
+        // is self-waiting (it drains the accept backlog into an async
+        // handshake pool and loops until a completed handshake is ready),
+        // so an inline park was redundant AND harmful: a pending
+        // connection's *handshake completion* never makes the listener
+        // readable, so the park never resumed and the concurrent
+        // WS-over-TLS accept loop wedged. The park is kept only when accept
+        // is lowered inside a coroutine body (`coro_ctx.is_some()`).
+        // Behavioral guard for the underlying fix:
+        // tests/coro_e2e.rs::coroutine_ws_over_tls_concurrent_handlers_all_execute.
         let ir = ir_for(
             r#"
 fn main() {
@@ -387,12 +396,14 @@ fn main() {
 "#,
         );
         let main_body = function_body(&ir, "main").expect("main body");
+        // Inline accept_tls must NOT park — the runtime FFI self-waits.
         assert!(
-            main_body.contains("@__kara_poll_karac_park_on_fd")
-                || main_body.contains("kara.park.poll_wait"),
-            "accept_tls should park before the handshake; body was:\n{}",
+            !main_body.contains("@__kara_poll_karac_park_on_fd")
+                && !main_body.contains("kara.park.poll_wait"),
+            "inline accept_tls must not park (the FFI self-waits); body parked:\n{}",
             main_body
         );
+        // …but it must still call the TLS-aware WS accept FFI.
         assert!(
             main_body.contains("call i32 @karac_runtime_ws_accept_tls("),
             "accept_tls should call _ws_accept_tls; body was:\n{}",
