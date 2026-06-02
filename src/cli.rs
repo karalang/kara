@@ -8022,6 +8022,22 @@ fn cmd_test(filter: Option<String>, all: bool) {
     let mut batch_runner = crate::test_jit_dispatch::TestBatchRunner::new(
         std::env::temp_dir().join(format!("karac_test_batch_{}", std::process::id())),
     );
+    // Modules whose tests override an AMBIENT prelude resource (`Clock`/`Env`/…)
+    // via `#[with_provider]` can't use the persistent-module cache: ambient
+    // override dispatch is decided per module at compile time, so splitting
+    // the `with_provider` site from the `R.method()` call site drops the
+    // override. Such modules run each test self-contained (see
+    // `TestBatchRunner::cache_module`). User-resource fixtures are fine.
+    #[cfg(feature = "lljit_prototype")]
+    let ambient_fixture_modules: std::collections::HashSet<usize> = tests
+        .iter()
+        .filter(|t| {
+            t.with_providers.iter().any(|fx| {
+                crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&fx.resource_path.as_str())
+            })
+        })
+        .map(|t| t.module_id)
+        .collect();
 
     for t in &tests {
         // `#[test(requires = [X])]` and `#[with_provider(X, ...)]` for the
@@ -8135,8 +8151,16 @@ fn cmd_test(filter: Option<String>, all: bool) {
             // subprocess for the whole suite (LLVM init paid once, not
             // per-test), re-spawned only when a faulting test exits it. See
             // `test_jit_dispatch::TestBatchRunner`.
-            let result =
-                batch_runner.dispatch(program_ref, &t.fn_name, &fixtures, &test_file_path, timeout);
+            let use_cache = !ambient_fixture_modules.contains(&t.module_id);
+            let result = batch_runner.dispatch(
+                t.module_id,
+                use_cache,
+                program_ref,
+                &t.fn_name,
+                &fixtures,
+                &test_file_path,
+                timeout,
+            );
             match result {
                 crate::test_jit_dispatch::JitTestResult::Completed {
                     outcome,

@@ -58,17 +58,70 @@ pub enum JitTestResult {
     SpawnFailed { message: String },
 }
 
-/// Build the per-test LLVM IR string: clone the module's items, append a
+/// Build the **persistent shared-module** IR: the source module's items +
+/// test fns + Debugger-Contract globals, with the user `fn main` removed (it
+/// would collide with the per-test `main`; tests never call it). Installed
+/// once in the runner and referenced declare-only by every per-test `main`,
+/// so the suite's functions are JIT-compiled once instead of per test.
+fn build_module_ir(module_program: &Program, source_filename: &str) -> Result<String, String> {
+    let mut prog = clone_program_items(module_program);
+    prog.items
+        .retain(|it| !matches!(it, crate::ast::Item::Function(f) if f.name == "main"));
+    let resolved = crate::resolver::Resolver::new(&prog).resolve();
+    let typed = crate::typechecker::TypeChecker::new(&prog, &resolved).check();
+    crate::lowering::lower_program(&mut prog, &typed);
+    crate::codegen::compile_to_ir_for_test_module(&prog, Some(source_filename))
+        .map_err(|e| format!("shared-module codegen failed: {e}"))
+}
+
+/// The module's concrete (non-generic) free-fn names and `Type.method`
+/// symbol keys — passed as `declare_only_fns` so the per-test `main` codegen
+/// emits `declare`s (not bodies) for them, linking to the persistent
+/// module's definitions. Generic fns are excluded: they have no concrete
+/// body in the persistent module; a test that triggers an instantiation gets
+/// it defined locally in its own per-test module. The user `main` is
+/// excluded (removed from both modules). Mirrors the symbol keyspace
+/// `compile_program` declares impl methods under.
+fn compute_declare_only(p: &Program) -> std::collections::HashSet<String> {
+    use crate::ast::{ImplItem, Item};
+    let mut out = std::collections::HashSet::new();
+    for item in &p.items {
+        match item {
+            Item::Function(f) if f.generic_params.is_none() && f.name != "main" => {
+                out.insert(f.name.clone());
+            }
+            Item::ImplBlock(imp) => {
+                if let Some(target) = crate::codegen::impl_target_name_for_repl(&imp.target_type) {
+                    for ii in &imp.items {
+                        if let ImplItem::Method(m) = ii {
+                            if m.generic_params.is_none() {
+                                out.insert(format!("{target}.{}", m.name));
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Build the per-test `main` IR: clone the module's items, append a
 /// synthesized `main` that installs the `#[with_provider]` fixtures and
 /// calls the test fn, re-run resolve/typecheck/lower (the synthesized
 /// fixture `let` bindings need typecheck to populate `var_type_names` for
-/// the `with_provider` codegen), then emit IR. Shared by the one-shot
-/// (`run_test_via_jit`) and persistent-batch (`TestBatchRunner`) paths.
-fn build_test_ir(
+/// the `with_provider` codegen), then emit via the repl-cell codegen entry
+/// so `declare_only` module symbols emit as declares and the
+/// Debugger-Contract globals are suppressed (they live in the persistent
+/// module). Only the tiny synth `main` carries a body — the module's
+/// functions are NOT re-emitted here.
+fn build_test_main_ir(
     module_program: &Program,
     test_fn_name: &str,
     fixtures: &[(String, Expr)],
-    source_filename: &str,
+    _source_filename: &str,
+    declare_only: &std::collections::HashSet<String>,
 ) -> Result<String, String> {
     let fixtures_vec: Vec<ProviderFixture> = fixtures
         .iter()
@@ -82,15 +135,20 @@ fn build_test_ir(
     let resolved = crate::resolver::Resolver::new(&per_test_program).resolve();
     let typed = crate::typechecker::TypeChecker::new(&per_test_program, &resolved).check();
     crate::lowering::lower_program(&mut per_test_program, &typed);
-    crate::codegen::compile_to_ir_with_options(
-        &per_test_program,
-        None,
-        None,
-        Some(source_filename),
-        None,
-    )
-    .map_err(|e| format!("codegen failed for test '{test_fn_name}': {e}"))
+    // Emit the synth `main` under a NON-`main` symbol. A JIT entry literally
+    // named `main` collides with the C `_main` in the process symbol table
+    // (the runner's own `main`), so materialization fails — the same reason
+    // the repl names cell entries `cell_main_<id>`. The runner looks this
+    // symbol up by the matching name. `compile_program`'s `main`-special
+    // i32-return handling keys on the AST fn name (`"main"`), not the LLVM
+    // symbol, so it still fires.
+    crate::codegen::compile_to_ir_for_repl_cell(&per_test_program, declare_only, TEST_MAIN_SYMBOL)
+        .map_err(|e| format!("codegen failed for test '{test_fn_name}': {e}"))
 }
+
+/// LLVM symbol the synthesized per-test `main` is emitted under (and the
+/// runner looks up). NOT `main` — see `build_test_main_ir`.
+pub const TEST_MAIN_SYMBOL: &str = "__karac_test_entry";
 
 /// Persistent JIT test runner (cold-start amortization). Holds one
 /// `karac_jit_runner --test-batch` subprocess that runs every test in the
@@ -116,6 +174,37 @@ pub struct TestBatchRunner {
     prefix: PathBuf,
     /// Monotonic per-test id — also the tempfile discriminator.
     next_id: u64,
+    /// Source-module identity of the currently-cached module IR; when a
+    /// test from a different module arrives, the module is re-codegen'd
+    /// and re-installed in the runner.
+    current_module_id: Option<usize>,
+    /// The cached persistent-module IR (all the source module's items +
+    /// test fns + globals, user `main` removed) — JIT-compiled ONCE in the
+    /// runner and referenced declare-only by every per-test `main`.
+    module_ir: Option<String>,
+    /// The module's concrete fn / `Type.method` symbol names — passed as
+    /// `declare_only_fns` to per-test codegen so their bodies aren't
+    /// re-emitted (they link to the persistent module's definitions).
+    declare_only: std::collections::HashSet<String>,
+    /// Whether the cached `module_ir` has been installed in the *current*
+    /// runner connection. Reset to false on (re-)spawn and on module change
+    /// so the next test re-sends the `module` command first.
+    module_sent: bool,
+    /// Whether the current module uses the persistent-module cache (split
+    /// codegen). `false` for "full mode": modules whose tests override an
+    /// **ambient** prelude resource (`Clock`/`Env`/…) via `with_provider`.
+    /// Ambient override dispatch is decided at compile time per module (the
+    /// call site emits a runtime branch only if a `with_provider` vtable for
+    /// that resource exists *in the same module*); splitting the
+    /// `with_provider` site (per-test `main`) from the `R.method()` call site
+    /// (test fn, in the persistent module) would silently drop the override.
+    /// So those modules run each test as one self-contained module (empty
+    /// declare-only, no persistent install) — gap-a's cross-fn-boundary
+    /// dispatch works within a single module. User-resource overrides
+    /// (trait-ful / trait-less) are unaffected — their vtable comes from the
+    /// impl blocks, which live in the persistent module. NOTE: re-measure if
+    /// this is ever relaxed; full-mode modules forgo the cache win.
+    cache_module: bool,
 }
 
 struct Conn {
@@ -135,6 +224,11 @@ impl TestBatchRunner {
             conn: None,
             prefix,
             next_id: 0,
+            current_module_id: None,
+            module_ir: None,
+            declare_only: std::collections::HashSet::new(),
+            module_sent: false,
+            cache_module: false,
         }
     }
 
@@ -179,36 +273,129 @@ impl TestBatchRunner {
         })
     }
 
-    /// Build the per-test IR and run it on the persistent runner. The
-    /// drop-in batch replacement for `run_test_via_jit` (same signature
-    /// minus the implicit per-call spawn) — `cmd_test` creates one
-    /// `TestBatchRunner` for the whole suite and calls this per test.
+    /// Ensure there's a live connection with the current module installed.
+    /// Spawns the runner if needed (resetting `module_sent`), then installs
+    /// the cached module IR via the `module` command if not yet sent on this
+    /// connection. Idempotent across tests in the same module.
+    fn ensure_ready(&mut self) -> Result<(), String> {
+        if self.conn.is_none() {
+            self.conn = Some(self.spawn_conn()?);
+            self.module_sent = false;
+        }
+        // Full-mode modules (ambient-fixture) install nothing persistent —
+        // each per-test module is self-contained.
+        if self.cache_module && !self.module_sent {
+            let module_ir = self
+                .module_ir
+                .clone()
+                .ok_or_else(|| "no module IR cached (dispatch not called?)".to_string())?;
+            self.send_module(&module_ir)?;
+            self.module_sent = true;
+        }
+        Ok(())
+    }
+
+    /// Send the `module <ir_len>\n<ir>` command and await the `moduleok`
+    /// ack. A dead pipe / `moduleerr` drops the connection so the caller
+    /// re-spawns.
+    fn send_module(&mut self, ir: &str) -> Result<(), String> {
+        use std::io::{BufRead, Write};
+        let conn = self.conn.as_mut().expect("conn present in send_module");
+        let header = format!("module {}\n", ir.len());
+        if conn.stdin.write_all(header.as_bytes()).is_err()
+            || conn.stdin.write_all(ir.as_bytes()).is_err()
+            || conn.stdin.flush().is_err()
+        {
+            self.drop_conn();
+            return Err("module send: runner pipe closed".to_string());
+        }
+        let mut line = String::new();
+        match conn.stdout.read_line(&mut line) {
+            Ok(n) if n > 0 && line.trim() == "moduleok" => Ok(()),
+            other => {
+                self.drop_conn();
+                Err(format!(
+                    "module install failed (got {line:?}, read {other:?})"
+                ))
+            }
+        }
+    }
+
+    /// Drop the current connection and mark the module un-installed, so the
+    /// next test lazily re-spawns the runner and re-sends the `module`
+    /// command before running.
+    fn drop_conn(&mut self) {
+        self.conn = None;
+        self.module_sent = false;
+    }
+
+    /// Build the per-test `main` IR and run it on the persistent runner —
+    /// `cmd_test` creates one `TestBatchRunner` for the whole suite and
+    /// calls this per test. The source module (`module_id` / `module_program`)
+    /// is codegen'd + installed ONCE and referenced declare-only by every
+    /// per-test `main`, so the suite's functions are JIT-compiled once, not
+    /// per test (the cold-start amortization). A test from a different
+    /// source module triggers a module re-codegen + re-install.
+    // Genuinely distinct per-test inputs (per-module identity/program +
+    // per-test fn/fixtures + timeout); bundling them into a struct would
+    // just move the noise to the call site.
+    #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &mut self,
+        module_id: usize,
+        use_cache: bool,
         module_program: &Program,
         test_fn_name: &str,
         fixtures: &[(String, Expr)],
         source_filename: &str,
         timeout: Duration,
     ) -> JitTestResult {
-        let ir = match build_test_ir(module_program, test_fn_name, fixtures, source_filename) {
+        // On a source-module change, drop the connection (clear any prior
+        // module's persistent install — it would collide) and rebuild the
+        // cache state. `use_cache` is false for modules that override an
+        // ambient prelude resource (see `cache_module`): those run each test
+        // self-contained (empty declare-only, no persistent module).
+        if self.current_module_id != Some(module_id) {
+            self.drop_conn();
+            self.current_module_id = Some(module_id);
+            self.cache_module = use_cache;
+            if use_cache {
+                match build_module_ir(module_program, source_filename) {
+                    Ok(ir) => self.module_ir = Some(ir),
+                    Err(message) => return JitTestResult::SpawnFailed { message },
+                }
+                self.declare_only = compute_declare_only(module_program);
+            } else {
+                self.module_ir = None;
+                self.declare_only = std::collections::HashSet::new();
+            }
+        }
+        // Per-test `main`: module items declare-only, synth main with body,
+        // Debugger-Contract globals suppressed (so they don't collide with
+        // the persistent module's). Built fresh each test — only the tiny
+        // main is codegen'd here; the module's bodies are not re-emitted.
+        let ir = match build_test_main_ir(
+            module_program,
+            test_fn_name,
+            fixtures,
+            source_filename,
+            &self.declare_only,
+        ) {
             Ok(s) => s,
             Err(message) => return JitTestResult::SpawnFailed { message },
         };
         self.run_test(&ir, timeout)
     }
 
-    /// Run one test. Lazily (re-)spawns the runner, sends the test's IR,
-    /// and maps the outcome. On runner death (test faulted) or timeout the
-    /// connection is dropped so the next call re-spawns.
-    pub fn run_test(&mut self, ir: &str, timeout: Duration) -> JitTestResult {
+    /// Run one already-built per-test `main` IR. Lazily (re-)spawns the
+    /// runner + (re-)installs the persistent module, sends the test IR, and
+    /// maps the outcome. On runner death (test faulted) or timeout the
+    /// connection is dropped so the next call re-spawns + re-installs.
+    fn run_test(&mut self, ir: &str, timeout: Duration) -> JitTestResult {
         let id = self.next_id;
         self.next_id += 1;
-        if self.conn.is_none() {
-            match self.spawn_conn() {
-                Ok(c) => self.conn = Some(c),
-                Err(message) => return JitTestResult::SpawnFailed { message },
-            }
+        if let Err(message) = self.ensure_ready() {
+            return JitTestResult::SpawnFailed { message };
         }
         // Build paths byte-identically to the runner's
         // `format!("{prefix}.{id}.out")` — `with_extension` would *replace*
@@ -232,18 +419,18 @@ impl TestBatchRunner {
                 duration_ms,
             },
             Exchange::Died(rc) => {
-                self.conn = None; // force re-spawn next test
+                self.drop_conn(); // force re-spawn + module re-install next test
                 JitTestResult::Completed {
                     outcome: map(rc),
                     duration_ms,
                 }
             }
             Exchange::TimedOut => {
-                self.conn = None;
+                self.drop_conn();
                 JitTestResult::TimedOut { duration_ms }
             }
             Exchange::Protocol(message) => {
-                self.conn = None;
+                self.drop_conn();
                 JitTestResult::SpawnFailed { message }
             }
         };

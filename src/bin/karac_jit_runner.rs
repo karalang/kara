@@ -373,6 +373,19 @@ fn test_batch_main(prefix: &str) -> ExitCode {
         let _ = lock.flush();
     }
 
+    // The persistent shared module (all the suite's user items + test fns +
+    // the Debugger-Contract globals), installed once via the `module`
+    // command and kept alive for the session. Per-test `main` modules
+    // reference its symbols `declare`-only, so the suite's functions are
+    // JIT-compiled ONCE instead of per test — the cold-start amortization.
+    // Re-sent (and re-installed here, dropping the prior tracker) when the
+    // parent moves to a new source module.
+    // Held in a Vec (rather than `Option`) so `clear()` + `push()` read the
+    // binding — a write-only `Option` reassignment trips `unused_assignments`
+    // since the tracker is kept only for its `Drop`/remove side effect, never
+    // read. At most one element; `clear()` drops the prior module.
+    let mut module_trackers: Vec<karac::codegen::ResourceTracker<'_>> = Vec::new();
+
     let stdin = std::io::stdin();
     let mut stdin_lock = stdin.lock();
     loop {
@@ -392,24 +405,30 @@ fn test_batch_main(prefix: &str) -> ExitCode {
             return ExitCode::from(0);
         }
         let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        if parts.len() != 3 || parts[0] != "test" {
-            write_protocol_error(&format!("unrecognized command: {trimmed:?}"));
-            continue;
-        }
-        let id: u64 = match parts[1].parse() {
-            Ok(v) => v,
-            Err(_) => {
-                write_protocol_error(&format!("bad test id: {:?}", parts[1]));
+        // Two commands: `module <ir_len>` installs/replaces the persistent
+        // shared module; `test <id> <ir_len>` installs + runs one per-test
+        // `main` module that references the shared module declare-only.
+        let (kind, id, ir_len): (&str, u64, usize) = match parts.as_slice() {
+            ["module", len] => match len.parse() {
+                Ok(l) => ("module", 0, l),
+                Err(_) => {
+                    write_protocol_error(&format!("bad module ir byte count: {:?}", len));
+                    continue;
+                }
+            },
+            ["test", id, len] => match (id.parse(), len.parse()) {
+                (Ok(i), Ok(l)) => ("test", i, l),
+                _ => {
+                    write_protocol_error(&format!("bad test id/len: {:?}", &parts[1..]));
+                    continue;
+                }
+            },
+            _ => {
+                write_protocol_error(&format!("unrecognized command: {trimmed:?}"));
                 continue;
             }
         };
-        let ir_len: usize = match parts[2].parse() {
-            Ok(v) => v,
-            Err(_) => {
-                write_protocol_error(&format!("bad ir byte count: {:?}", parts[2]));
-                continue;
-            }
-        };
+
         let mut ir_buf = vec![0u8; ir_len];
         if let Err(e) = stdin_lock.read_exact(&mut ir_buf) {
             eprintln!("karac_jit_runner: failed to read {ir_len} IR bytes: {e}");
@@ -418,15 +437,42 @@ fn test_batch_main(prefix: &str) -> ExitCode {
         let ir = match String::from_utf8(ir_buf) {
             Ok(s) => s,
             Err(_) => {
-                // Write a setup-error marker into the `.err` file so the
-                // parent's uniform "read err file" path surfaces it, then
-                // report a non-zero rc without dying.
-                let err_path = format!("{prefix}.{id}.err");
-                let _ = std::fs::write(&err_path, b"karac_jit_runner: IR not valid UTF-8\n");
-                write_test_done(id, 2);
+                if kind == "module" {
+                    write_protocol_error("module IR not valid UTF-8");
+                } else {
+                    let err_path = format!("{prefix}.{id}.err");
+                    let _ = std::fs::write(&err_path, b"karac_jit_runner: IR not valid UTF-8\n");
+                    write_test_done(id, 2);
+                }
                 continue;
             }
         };
+
+        if kind == "module" {
+            // Drop the prior module first (its `Drop`/remove runs here) so
+            // its symbols/globals don't collide with the replacement on a
+            // source-module change.
+            module_trackers.clear();
+            match engine.add_ir_module_with_tracker(&ir) {
+                Ok(t) => {
+                    module_trackers.push(t);
+                    publish_spawn_sites(&engine);
+                    let stdout = std::io::stdout();
+                    let mut lock = stdout.lock();
+                    let _ = writeln!(lock, "moduleok");
+                    let _ = lock.flush();
+                }
+                Err(e) => {
+                    eprintln!("karac_jit_runner: install module: {e}");
+                    let stdout = std::io::stdout();
+                    let mut lock = stdout.lock();
+                    let _ = writeln!(lock, "moduleerr");
+                    let _ = lock.flush();
+                }
+            }
+            continue;
+        }
+
         let out_path = format!("{prefix}.{id}.out");
         let err_path = format!("{prefix}.{id}.err");
         let rc = run_one_test(&engine, &ir, &out_path, &err_path);
@@ -453,11 +499,17 @@ fn run_one_test(engine: &LLJITEngine, ir: &str, out_path: &str, err_path: &str) 
             return 2;
         }
     };
-    publish_spawn_sites(engine);
-    let addr = match engine.lookup_address("main") {
+    // Spawn-site metadata is published once when the persistent module is
+    // installed (the per-test `main` module suppresses those globals), so
+    // there's no per-test `publish_spawn_sites` here.
+    //
+    // The per-test `main` is emitted under `TEST_MAIN_SYMBOL` (not `main`,
+    // which would collide with the process's C `_main`).
+    let entry = karac::test_jit_dispatch::TEST_MAIN_SYMBOL;
+    let addr = match engine.lookup_address(entry) {
         Ok(a) => a,
         Err(e) => {
-            let _ = std::fs::write(err_path, format!("karac_jit_runner: lookup main: {e}\n"));
+            let _ = std::fs::write(err_path, format!("karac_jit_runner: lookup {entry}: {e}\n"));
             let _ = tracker.remove();
             return 2;
         }

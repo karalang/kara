@@ -194,6 +194,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // codepath because either the declare-only set was empty or
         // the cross-cell symbol resolution never fired.
         let linkage = if self.main_symbol_override.is_some()
+            || self.force_external_linkage
             || func.is_pub
             || func
                 .attributes

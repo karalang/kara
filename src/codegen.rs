@@ -303,6 +303,25 @@ pub fn compile_to_ir_for_repl_cell_with_snapshots(
     Ok(cg.module.print_to_string().to_string())
 }
 
+/// `karac test` persistent shared-module codegen. Emits all the source
+/// module's items + the Debugger-Contract globals (no `main_symbol_override`,
+/// so the globals are NOT suppressed — this module owns them for the
+/// session), but forces every top-level fn / impl method to `External`
+/// linkage so the per-test `main` modules' declare-only references resolve
+/// to them across the shared JITDylib. Installed once in the runner via the
+/// `module` command and referenced declare-only by every per-test `main`.
+pub fn compile_to_ir_for_test_module(
+    program: &Program,
+    source_filename: Option<&str>,
+) -> Result<String, String> {
+    let context = Context::create();
+    let mut cg = Codegen::new(&context, "karac_test_module");
+    cg.force_external_linkage = true;
+    cg.source_filename = source_filename.map(|s| s.to_string());
+    cg.compile_program(program)?;
+    Ok(cg.module.print_to_string().to_string())
+}
+
 /// Resolve an `impl` block's target type to its bare type name (the
 /// last path segment), or `None` for non-path targets. Public wrapper
 /// over the codegen-internal `impl_target_name` so the REPL's
@@ -1808,6 +1827,15 @@ pub(super) struct Codegen<'ctx> {
     /// `None` everywhere else preserves the standalone-binary
     /// `int main(void)` shape.
     pub(crate) main_symbol_override: Option<String>,
+    /// Force `External` linkage on every top-level user fn / impl method,
+    /// independent of `main_symbol_override`. Used by the `karac test`
+    /// persistent-module path: that module carries the Debugger-Contract
+    /// globals (so it must NOT set `main_symbol_override`, which suppresses
+    /// them) yet its functions must be cross-module-visible so the per-test
+    /// `main` modules' declare-only references resolve to them in the shared
+    /// JITDylib. `false` everywhere else preserves the pub/FFI-vs-Internal
+    /// split (so the inliner can elide private fns in AOT / one-shot builds).
+    pub(crate) force_external_linkage: bool,
     /// Slice c-repl.B.5.1: REPL value-snapshot capture set. Maps a
     /// top-level `let <name> = <expr>` binding name (where `<name>`
     /// is a single-binding pattern) to the primitive type its RHS
@@ -3569,6 +3597,7 @@ impl<'ctx> Codegen<'ctx> {
             hot_swap_enabled: false,
             declare_only_fns: std::collections::HashSet::new(),
             main_symbol_override: None,
+            force_external_linkage: false,
             snapshot_capture: HashMap::new(),
             snapshot_replay: HashMap::new(),
             hot_swap_slots: HashMap::new(),
