@@ -1946,9 +1946,19 @@ pub unsafe extern "C" fn karac_runtime_ws_recv_binary(
 // non-conforming request with `400 Bad Request` (missing
 // Upgrade/Connection/Key) or `426 Upgrade Required` +
 // `Sec-WebSocket-Version: 13` (bad version) rather than upgrading
-// anyway. Slowloris is bounded by the `KARAC_WS_HANDSHAKE_TIMEOUT_MS`
-// read-timeout (default 10 s, `0` disables), applied to the socket
-// for the pre-`101` phase only and cleared on success.
+// anyway. The `KARAC_WS_HANDSHAKE_TIMEOUT_MS` read-timeout
+// (default 10 s, `0` disables) is applied to the socket for the
+// pre-`101` phase only and cleared on success.
+//
+// **Slowloris caveat — per-read, not whole-request.** The timeout
+// is `SO_RCVTIMEO`: it re-arms on every successful `read(2)`, so it
+// reaps a *silently stalled* peer but NOT a peer that dribbles one
+// byte per interval (that resets the clock each read). Such a peer
+// is bounded only by the 8 KiB request cap below (≈ 8192 × timeout
+// worst case). A whole-request wall-clock deadline + a bound on the
+// TLS handshake pool's work queue is the carved pre-public-v1 P0
+// follow-on (phase-8 line 128, residual-slowloris entry); it does
+// NOT affect Demo 1 (completed-handshake idle connections).
 //
 // v1 limitations (deferred to follow-on slices):
 //
@@ -2333,11 +2343,14 @@ pub(crate) fn ws_validate_handshake(request: &[u8]) -> Result<&[u8], WsHandshake
 /// unit-testable without touching the environment.
 ///
 /// Unlike the connection-cap half of the line-124 serve-loop
-/// hardening, this timeout is **on by default**: it bounds only
-/// the pre-`101` handshake phase (the slowloris window) and is
-/// cleared on the socket the instant the upgrade completes, so it
-/// never reaps an established idle connection — the Demo 1
-/// 1M-idle-connection workload is structurally unaffected.
+/// hardening, this timeout is **on by default**: it governs only
+/// the pre-`101` handshake phase and is cleared on the socket the
+/// instant the upgrade completes, so it never reaps an established
+/// idle connection — the Demo 1 1M-idle-connection workload is
+/// structurally unaffected. Note it is a *per-read* inactivity
+/// deadline (`SO_RCVTIMEO`), not a whole-handshake wall-clock bound
+/// — see the dribble-slowloris caveat on the handshake FFI doc
+/// comment above.
 fn ws_handshake_timeout_from_raw(raw: Option<&str>) -> Option<std::time::Duration> {
     const DEFAULT_MS: u64 = 10_000;
     let ms = match raw {
