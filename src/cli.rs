@@ -8088,18 +8088,25 @@ fn cmd_test(filter: Option<String>, all: bool) {
             .map(|p| p.display().to_string())
             .unwrap_or_default();
 
-        // Slice c.3 — JIT subprocess dispatch when `KARAC_TEST_JIT=1`.
-        // Bypasses the per-test `Interpreter` and instead synthesizes
-        // a main calling `t.fn_name` (via `test_main_synth`), compiles
-        // to IR, spawns `karac_jit_runner`, and parses stderr for the
-        // `KARAC_TEST_FAILURE` JSONL marker emitted by c.1's runtime
-        // bridge. Same JSONL event emitters fire below — only the
-        // outcome source changes. Constructor-failure distinction is
-        // not preserved under JIT (a panicking fixture surfaces as a
-        // regular test_fail); restoring it is a c.3 follow-up that
-        // wraps the synthesized main in `errdefer`-style cleanup.
+        // Slice c.3 — JIT subprocess dispatch. Bypasses the per-test
+        // `Interpreter` and instead synthesizes a main calling `t.fn_name`
+        // (via `test_main_synth`), compiles to IR, spawns `karac_jit_runner`,
+        // and parses stderr for the `KARAC_TEST_FAILURE` JSONL marker emitted
+        // by c.1's runtime bridge. Same JSONL event emitters fire below —
+        // only the outcome source changes.
+        //
+        // JIT is the default execution path (L577 step (c), 2026-06-01),
+        // symmetric with the `karac repl` flip (`e06d877a`). All four
+        // codegen-path gaps that held this back are closed: (a) cross-boundary
+        // ambient `with_provider` (`acd63e65`), (b) contract-fault category
+        // (`a68e72b2`), (c) trait-less user-resource dispatch (`2cf859d8`), and
+        // (d) diverging-tail IR (`6307933e`) — the last of which restored the
+        // `provider_construction_failed` distinction (a panicking fixture ctor
+        // now *compiles* and surfaces its non-zero exit as that outcome).
+        // `KARAC_TEST_JIT=0` is now the regression-bisect escape hatch rather
+        // than `=1` being the opt-in.
         #[cfg(feature = "lljit_prototype")]
-        if std::env::var("KARAC_TEST_JIT").as_deref() == Ok("1") {
+        if std::env::var("KARAC_TEST_JIT").as_deref() != Ok("0") {
             let timeout = std::env::var("KARAC_TEST_TIMEOUT_SECS")
                 .ok()
                 .and_then(|s| s.parse::<u64>().ok())
