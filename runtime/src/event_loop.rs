@@ -2101,12 +2101,30 @@ fn base64_encode(input: &[u8]) -> String {
 /// fills up. Returns the accumulated bytes including the
 /// trailing `\r\n\r\n` on success; `None` on IO error, EOF
 /// before complete request, or oversize request.
+///
+/// `deadline` is a **whole-request wall-clock bound** checked
+/// before every read: it closes the dribble-slowloris hole that
+/// the per-read `SO_RCVTIMEO` alone leaves open (a peer feeding
+/// one byte per timeout interval re-arms the per-read clock
+/// forever, but cannot outlast the total deadline). With the
+/// caller's per-read timeout `t` and deadline `now + t`, total
+/// read time is bounded to ≈ `2t` (the in-flight read can run one
+/// extra `t` past the deadline before the next pre-read check
+/// fires). `None` disables the bound (handshake-timeout opt-out).
 #[cfg(unix)]
-fn ws_read_http_request<R: std::io::Read>(stream: &mut R) -> Option<Vec<u8>> {
+fn ws_read_http_request<R: std::io::Read>(
+    stream: &mut R,
+    deadline: Option<std::time::Instant>,
+) -> Option<Vec<u8>> {
     const MAX_REQUEST_SIZE: usize = 8 * 1024;
     let mut buf: Vec<u8> = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
     loop {
+        if let Some(d) = deadline {
+            if std::time::Instant::now() >= d {
+                return None;
+            }
+        }
         match stream.read(&mut chunk) {
             Ok(0) => return None,
             Ok(n) => {
@@ -2347,10 +2365,12 @@ pub(crate) fn ws_validate_handshake(request: &[u8]) -> Result<&[u8], WsHandshake
 /// the pre-`101` handshake phase and is cleared on the socket the
 /// instant the upgrade completes, so it never reaps an established
 /// idle connection — the Demo 1 1M-idle-connection workload is
-/// structurally unaffected. Note it is a *per-read* inactivity
-/// deadline (`SO_RCVTIMEO`), not a whole-handshake wall-clock bound
-/// — see the dribble-slowloris caveat on the handshake FFI doc
-/// comment above.
+/// structurally unaffected. The returned value serves a dual role:
+/// as the socket's per-read `SO_RCVTIMEO` (reaping a silent stall)
+/// *and* as the basis for the whole-request wall-clock deadline
+/// `now + t` threaded into `ws_read_http_request` / `DeadlineStream`
+/// (reaping a byte-per-interval dribbler). Total handshake-read
+/// time is therefore bounded to ≈ `2t`.
 fn ws_handshake_timeout_from_raw(raw: Option<&str>) -> Option<std::time::Duration> {
     const DEFAULT_MS: u64 = 10_000;
     let ms = match raw {
@@ -2369,6 +2389,34 @@ fn ws_handshake_timeout_from_raw(raw: Option<&str>) -> Option<std::time::Duratio
 fn ws_handshake_timeout() -> Option<std::time::Duration> {
     ws_handshake_timeout_from_raw(
         std::env::var("KARAC_WS_HANDSHAKE_TIMEOUT_MS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// Parse `KARAC_WS_MAX_PENDING_HANDSHAKES` into the TLS handshake
+/// pool's in-flight cap. **Off by default** (`None` = unbounded):
+/// unset, `0`, or unparseable/negative all yield `None`; a positive
+/// integer yields `Some(n)`. Off-by-default mirrors the line-124
+/// connection-cap posture — a silent cap must never throttle the
+/// 1M-idle Demo. Pure over the raw string for unit testing.
+#[cfg(all(unix, feature = "tls"))]
+fn ws_max_pending_from_raw(raw: Option<&str>) -> Option<usize> {
+    match raw {
+        Some(s) => match s.trim().parse::<usize>() {
+            Ok(0) => None,
+            Ok(n) => Some(n),
+            Err(_) => None,
+        },
+        None => None,
+    }
+}
+
+/// Live read of `ws_max_pending_from_raw` against the environment.
+#[cfg(all(unix, feature = "tls"))]
+fn ws_max_pending_handshakes() -> Option<usize> {
+    ws_max_pending_from_raw(
+        std::env::var("KARAC_WS_MAX_PENDING_HANDSHAKES")
             .ok()
             .as_deref(),
     )
@@ -2408,21 +2456,27 @@ pub extern "C" fn karac_runtime_ws_accept(listener_fd: i32) -> i32 {
 
     // Bound the opening-handshake read so a client that completes
     // the TCP connect but stalls (or dribbles) the HTTP upgrade
-    // request can't pin this accept indefinitely (slowloris). The
-    // timeout covers only the pre-`101` phase and is cleared the
-    // instant the handshake succeeds, so it never reaps an
-    // established idle connection. `set_read_timeout` failure is
-    // non-fatal — fall back to the kernel's default socket timeout.
+    // request can't pin this accept indefinitely (slowloris). Two
+    // layers: the per-read `set_read_timeout` reaps a silently-
+    // stalled peer, and `deadline` (a whole-request wall-clock
+    // bound passed into the read loop) reaps a byte-per-interval
+    // dribbler that would otherwise re-arm the per-read clock
+    // forever. Both cover only the pre-`101` phase and are dropped
+    // the instant the handshake succeeds, so an established idle
+    // connection never inherits either. `set_read_timeout` failure
+    // is non-fatal — fall back to the kernel's default socket
+    // timeout.
     let handshake_timeout = ws_handshake_timeout();
     if handshake_timeout.is_some() {
         let _ = conn.set_read_timeout(handshake_timeout);
     }
+    let deadline = handshake_timeout.map(|t| std::time::Instant::now() + t);
 
     // Run the shared RFC 6455 §4.2 upgrade exchange (header
     // validation + Sec-WebSocket-Accept + 101 response). Same code
     // path the WS-over-TLS handshake drives, so both transports get
     // identical validation and rejection-status behaviour.
-    if ws_drive_upgrade_handshake(&mut conn).is_err() {
+    if ws_drive_upgrade_handshake(&mut conn, deadline).is_err() {
         return -1;
     }
 
@@ -2536,6 +2590,54 @@ impl<'a> std::io::Write for TlsConnIo<'a> {
     }
 }
 
+/// A `Read + Write` adapter enforcing a whole-operation wall-clock
+/// `deadline` on top of a borrowed stream's per-read `SO_RCVTIMEO`.
+/// Checked before every `read`; once the deadline passes, reads
+/// fail with `TimedOut` so a caller looping on the inner stream
+/// (rustls `complete_io`) terminates instead of being held open by
+/// a peer dribbling its `ClientHello`. Writes/flushes pass straight
+/// through — the slowloris vector is read-side. (The HTTP-upgrade
+/// read enforces the same deadline directly inside
+/// `ws_read_http_request`, so the upgrade phase does not need this
+/// wrapper.)
+#[cfg(all(unix, feature = "tls"))]
+struct DeadlineStream<'a, S> {
+    inner: &'a mut S,
+    deadline: Option<std::time::Instant>,
+}
+
+#[cfg(all(unix, feature = "tls"))]
+impl<'a, S> DeadlineStream<'a, S> {
+    fn new(inner: &'a mut S, deadline: Option<std::time::Instant>) -> Self {
+        Self { inner, deadline }
+    }
+}
+
+#[cfg(all(unix, feature = "tls"))]
+impl<S: std::io::Read> std::io::Read for DeadlineStream<'_, S> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if let Some(d) = self.deadline {
+            if std::time::Instant::now() >= d {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "ws handshake deadline exceeded",
+                ));
+            }
+        }
+        self.inner.read(buf)
+    }
+}
+
+#[cfg(all(unix, feature = "tls"))]
+impl<S: std::io::Write> std::io::Write for DeadlineStream<'_, S> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// Run the rustls handshake + RFC 6455 HTTP upgrade on an
 /// already-accepted connection fd, registering the TLS session keyed by
 /// fd. Returns the ready connection fd on success, or -1 (closing the fd)
@@ -2561,13 +2663,20 @@ unsafe fn ws_handshake_conn_tls(
     // upgrade over `TlsConnIo`, both of which read through `sock`)
     // so a peer that stalls the `ClientHello` or dribbles the
     // upgrade request can't pin a worker thread indefinitely
-    // (slowloris). Cleared on success before the fd is handed to
-    // the kara `WebSocket`. Same `KARAC_WS_HANDSHAKE_TIMEOUT_MS`
-    // knob as the plain-TCP path.
+    // (slowloris). Two layers: the per-read `set_read_timeout`
+    // reaps a silent stall, and `deadline` (a whole-request
+    // wall-clock bound, enforced via `DeadlineStream` over the TLS
+    // handshake and inside `ws_read_http_request` over the upgrade)
+    // reaps a byte-per-interval dribbler that would re-arm the
+    // per-read clock forever. Both cover only the pre-`101` phase
+    // and are dropped on success before the fd is handed to the
+    // kara `WebSocket`. Same `KARAC_WS_HANDSHAKE_TIMEOUT_MS` knob as
+    // the plain-TCP path.
     let handshake_timeout = ws_handshake_timeout();
     if handshake_timeout.is_some() {
         let _ = sock.set_read_timeout(handshake_timeout);
     }
+    let deadline = handshake_timeout.map(|t| std::time::Instant::now() + t);
 
     // Build a fresh ServerConnection using the borrowed config.
     let config_arc = crate::tls::clone_config_arc(config);
@@ -2577,8 +2686,10 @@ unsafe fn ws_handshake_conn_tls(
     };
 
     // Drive the TLS handshake to completion against the blocking
-    // socket. complete_io loops until handshaking is done.
-    if let Err(e) = conn.complete_io(&mut sock) {
+    // socket, wrapped so the whole-request deadline also bounds a
+    // dribbled `ClientHello`. complete_io loops until handshaking
+    // is done.
+    if let Err(e) = conn.complete_io(&mut DeadlineStream::new(&mut sock, deadline)) {
         return Err((HandshakeStep::TlsHandshake, format!("{e}")));
     }
 
@@ -2614,7 +2725,7 @@ unsafe fn ws_handshake_conn_tls(
             conn: &mut sess.conn,
             sock: &mut sock,
         };
-        ws_drive_upgrade_handshake(&mut transport)
+        ws_drive_upgrade_handshake(&mut transport, deadline)
     };
 
     if let Err(reason) = upgrade_outcome {
@@ -2654,6 +2765,15 @@ struct WsHandshakePool {
     /// hypothesis behind the connect-tail at 1 M can be empirically
     /// verified without instrumenting the bench.
     stats: Option<Arc<HandshakeStats>>,
+    /// In-flight cap on the `work` queue (`KARAC_WS_MAX_PENDING_HANDSHAKES`,
+    /// **off by default**). When `Some(cap)`, the accept-drain stops
+    /// accepting once `work.len() >= cap`, leaving excess connections in
+    /// the OS accept backlog (backpressure) rather than growing the queue
+    /// unbounded — the line-128 residual-slowloris carve's defense against
+    /// a flood saturating the fixed worker pool. Off-by-default mirrors the
+    /// line-124 connection-cap disposition so the 1M-idle Demo never sees a
+    /// silent cap.
+    max_pending: Option<usize>,
 }
 
 /// Snapshot-able handshake-pool counters used by the once-per-second
@@ -2925,6 +3045,7 @@ fn ws_handshake_pool_for(
         done: Mutex::new(VecDeque::new()),
         cv_done: Condvar::new(),
         stats: stats.clone(),
+        max_pending: ws_max_pending_handshakes(),
     });
     let config_addr = config as usize;
     for _ in 0..workers {
@@ -3005,8 +3126,26 @@ pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
         {
             let listener = std::net::TcpListener::from_raw_fd(listener_fd);
             let mut submitted = 0usize;
-            // Drain the backlog: accept until WouldBlock (or a real error).
-            while let Ok((sock, _addr)) = listener.accept() {
+            // Drain the backlog: accept until WouldBlock (or a real error),
+            // or until the in-flight cap is reached.
+            loop {
+                // Backpressure (line-128 residual-slowloris carve): when a
+                // cap is configured, stop draining once the pending `work`
+                // queue is full so a connection flood can't grow it
+                // unbounded behind the fixed worker pool. Excess connections
+                // stay in the OS accept backlog and are picked up on a later
+                // tick as workers drain the queue. Off by default → this
+                // check is skipped and behaviour is unchanged.
+                if let Some(cap) = pool.max_pending {
+                    let pending = pool.work.lock().unwrap_or_else(|p| p.into_inner()).len();
+                    if pending >= cap {
+                        break;
+                    }
+                }
+                let (sock, _addr) = match listener.accept() {
+                    Ok(pair) => pair,
+                    Err(_) => break,
+                };
                 // Force the accepted connection into blocking mode. On
                 // Linux, `accept(2)` always returns a blocking socket
                 // regardless of the listener's flags. On macOS / BSD,
@@ -3074,8 +3213,9 @@ pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
 #[cfg(unix)]
 fn ws_drive_upgrade_handshake<S: std::io::Read + std::io::Write>(
     stream: &mut S,
+    deadline: Option<std::time::Instant>,
 ) -> Result<(), String> {
-    let request = match ws_read_http_request(stream) {
+    let request = match ws_read_http_request(stream, deadline) {
         Some(b) => b,
         None => return Err("ws_read_http_request: IO error or EOF before complete request".into()),
     };
@@ -5210,6 +5350,22 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "tls")]
+    #[test]
+    fn test_ws_max_pending_from_raw_parse_matrix() {
+        // Off by default (unset → unbounded).
+        assert_eq!(super::ws_max_pending_from_raw(None), None);
+        // `0` disables (explicit off).
+        assert_eq!(super::ws_max_pending_from_raw(Some("0")), None);
+        // Positive integer → cap.
+        assert_eq!(super::ws_max_pending_from_raw(Some("1024")), Some(1024));
+        // Whitespace trimmed.
+        assert_eq!(super::ws_max_pending_from_raw(Some("  64 ")), Some(64));
+        // Garbage / negative → off (never a silent partial cap).
+        assert_eq!(super::ws_max_pending_from_raw(Some("nope")), None);
+        assert_eq!(super::ws_max_pending_from_raw(Some("-5")), None);
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_ws_accept_rejects_bad_version_with_426() {
@@ -5287,7 +5443,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_millis(100)))
             .expect("set_read_timeout");
         let start = Instant::now();
-        let result = super::ws_read_http_request(&mut server_conn);
+        let result = super::ws_read_http_request(&mut server_conn, None);
         let elapsed = start.elapsed();
 
         assert!(
@@ -5297,6 +5453,61 @@ mod tests {
         assert!(
             elapsed < Duration::from_millis(600),
             "read should be reaped near the 100ms timeout, not wait for the peer; took {elapsed:?}"
+        );
+        client_handle.join().expect("client thread");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_read_http_request_deadline_reaps_dribbler() {
+        // Dribble slowloris (the residual the per-read SO_RCVTIMEO
+        // alone does NOT close): a peer sending one byte slightly
+        // faster than the per-read timeout re-arms that clock on
+        // every read and would otherwise be held open up to the
+        // 8 KiB cap. The whole-request `deadline` must reap it. Here
+        // the per-read timeout is 200ms and the client dribbles
+        // every 50ms (so each read succeeds, the per-read timeout
+        // never fires), while the 300ms wall-clock deadline forces
+        // termination.
+        use std::io::Write;
+        use std::time::{Duration, Instant};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+
+        let client_handle = std::thread::spawn(move || {
+            let mut conn = std::net::TcpStream::connect(addr).expect("client connect");
+            // Never send \r\n\r\n; dribble single bytes for ~2s or
+            // until the server hangs up (write error after the
+            // deadline reaps the read + drops the socket).
+            for _ in 0..40 {
+                if conn.write_all(b"x").is_err() {
+                    break;
+                }
+                let _ = conn.flush();
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+
+        let (mut server_conn, _) = listener.accept().expect("accept");
+        server_conn
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .expect("set_read_timeout");
+        let deadline = Some(Instant::now() + Duration::from_millis(300));
+        let start = Instant::now();
+        let result = super::ws_read_http_request(&mut server_conn, deadline);
+        let elapsed = start.elapsed();
+        drop(server_conn);
+
+        assert!(
+            result.is_none(),
+            "a dribbling peer must be reaped by the whole-request deadline"
+        );
+        // Bounded near the deadline (≤ deadline + one per-read
+        // timeout), NOT held until the 8 KiB cap (which at 50ms/byte
+        // would be ~6.8 minutes).
+        assert!(
+            elapsed < Duration::from_millis(900),
+            "deadline must bound total handshake-read time; took {elapsed:?}"
         );
         client_handle.join().expect("client thread");
     }
