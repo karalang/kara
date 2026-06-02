@@ -54,9 +54,17 @@ alongside; this file is **what we measured and what it means**, not
 > Rust (27.9 KB, same-rig), scale-invariant 1M↔2M. The **total-box** ratio
 > (counting the ~3.3 KB/conn stack-independent kernel socket buffer both stacks
 > pay) is **2.03×** — this is the figure the cost claim is anchored on. **Rust's
-> figures, established counts, and connect percentiles are unaffected.** Sole
-> remaining `‡` item: the **x86 cross-ISA** density re-read (pre-fix, superseded
-> for the density headline; the cross-ISA p50-floor finding still stands).
+> figures, established counts, and connect percentiles are unaffected.**
+>
+> **x86 cross-ISA re-read — DONE (2026-06-02, supersedes the pre-fix 7,725 B).**
+> The last `‡` item is closed. A working-handler Kāra **1M** run on
+> `c7i.8xlarge` (Intel x86_64, 32 vCPU, 64 GB) established **1,000,000 / 0
+> failed** with **per-conn = 12,112 B** — within **−0.02 %** of the arm64
+> 1M figure (12,114 B), server RSS 11.28 GiB, connect p50 44.2 ms
+> (reproduces the cross-ISA p50 floor). **Density at the working figure is
+> ISA-identical, not Graviton-specific.** Raw JSON:
+> `docs/investigations/demo1_m3_1m_x86_postfix.json`. There are no remaining
+> `‡` items.
 
 > **Status:** _in progress_. Kāra 1M + 2M and Rust 1M + 2M numbers are
 > landed (credibility-comparator head-to-head at the ceiling is
@@ -87,19 +95,19 @@ alongside; this file is **what we measured and what it means**, not
 | socket.io _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #75) | stretch | [§socket.io](#socketio-stretch) |
 | Python asyncio websockets _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #76) | stretch | [§Python](#python-asyncio-websockets-stretch) |
 
-> **‡ x86 re-read pending** — the Kāra **1M and 2M** per-conn (12.1 KB, −0.03 %
-> drift) and the **2.30×** ratio are real working-handler figures (re-measured
-> 2026-06-01 on `r8g.4xlarge`, build ⊇ `eba48194`). Only the **x86 cross-ISA**
-> density read in the §Kāra section is still pre-fix and carries `‡` until
-> re-run. See the ✅ banner at the top of this report. Rust's numbers are
-> unaffected throughout.
+> **All density figures are working-handler, post-fix.** The Kāra **1M and 2M**
+> per-conn (12.1 KB, −0.03 % drift) and the **2.30×** ratio were re-measured
+> 2026-06-01 on `r8g.4xlarge` (arm64, build ⊇ `eba48194`); the **x86 cross-ISA**
+> 1M re-read (12,112 B, −0.02 % vs arm64) landed 2026-06-02 on `c7i.8xlarge`,
+> closing the last `‡`. See the ✅ banner at the top of this report. Rust's
+> numbers are unaffected throughout.
 
 > **About the `role` column and asymmetric scale:** comparators serve
 > different argumentative roles (credibility vs commercial vs stretch)
-> and are sized accordingly. Per-conn-bytes is linear (the **pre-fix**
-> Kāra end-to-end run confirmed 0.19 % drift 1M→2M; **the post-fix 2M
-> read that re-confirms this at the 12.1 KB working-handler figure is
-> the outstanding `‡` item**), so the density ratio is scale-invariant —
+> and are sized accordingly. Per-conn-bytes is linear (the post-fix
+> working-handler runs confirm **−0.03 % drift 1M→2M** at the 12.1 KB
+> figure, and the x86 1M re-read lands within −0.02 % of arm64), so the
+> density ratio is scale-invariant *and* ISA-invariant —
 > 250K against 250K gives the same headline as 1M against 1M. Rust's own
 > 0.33 % 1M→2M drift is unaffected. Full rationale in
 > [§Scale per comparator](#scale-per-comparator).
@@ -222,7 +230,7 @@ sized box for its real-world deployment shape:
 |---|---|---|---|---|---|
 | Kāra / Rust / Go / Phoenix / Java / .NET Linux / Node | `r8g.4xlarge` | 16 (Graviton4) | 128 GB | arm64 | matches the Kāra & Rust 1M/2M baseline rig; cheap RAM headroom for the 2M target |
 | .NET Windows | `m7i.4xlarge` | 16 (Intel x86) | 64 GB | x86_64 | SChannel is x86-default on Windows Server; matched vCPU; 64 GB is sufficient for 1M target |
-| Cross-platform confirmation _(pre-fix; density re-read pending)_ | `c7i.8xlarge` | 32 (Intel x86) | 64 GB | x86_64 | Kāra 1M run not arm64-specific — but the 7,725 B figure is **pre-fix** (non-executing handler) and superseded; the p50 floor reproduced cross-ISA (valid). Post-fix density re-read pending. `c7i.8xlarge` over `.4xlarge` — co-located 1M client+server needs >32 GB |
+| Cross-platform confirmation _(x86, post-fix — landed 2026-06-02)_ | `c7i.8xlarge` | 32 (Intel x86) | 64 GB | x86_64 | Working-handler Kāra 1M: **12,112 B/conn**, within −0.02 % of arm64 — density is ISA-identical, not Graviton-specific. Reproduces the cross-ISA p50 floor (44.2 ms). Supersedes the pre-fix 7,725 B read. `c7i.8xlarge` over `.4xlarge` — co-located 1M client+server needs >32 GB |
 
 **Each comparator gets a fresh box.** No co-tenancy between runs
 within a measurement session. Box is terminated after the run's
@@ -362,9 +370,9 @@ number with the deviation rather than retuning to remove it._
 ### Kāra
 
 - **Status:** `landed @ 1M + 2M` (working-handler re-measure, 2026-06-01;
-  scale-invariant, −0.03 % drift). Only the x86 cross-ISA density re-read is
-  **pending** (the `‡` pre-fix x86 row below is superseded for the density
-  headline).
+  scale-invariant, −0.03 % drift). The **x86 cross-ISA 1M re-read landed
+  2026-06-02** (12,112 B, −0.02 % vs arm64), closing the last `‡` — see the
+  cross-ISA block below.
 - **Build:** `karac build` against `examples/ws_idle_holder/src/main.kara`
   off `main` ⊇ `eba48194` (both coro-frame heap-overflow fixes — the
   `Array[u8,4096]` slot mis-size `fe6afd16` and the missing-datalayout
@@ -422,12 +430,13 @@ parking — across the idle hold, at **12.1 KB/conn** measured server-side,
 with Rust's 27.9 KB (which has always included its per-conn task state): a real
 **2.30×** per-connection density edge that holds to the ceiling.
 
-> **‡ The pre-fix 2M row and x86 cross-ISA row below are SUPERSEDED for the
-> density headline.** They were measured with the non-executing handler
-> (7.8 KB/conn) and understate a working server. The post-fix 2M figure above
-> replaces the pre-fix 2M density; both are retained as historical record of
-> the establishment / latency / scale-linearity *shape* (handler-state-
-> independent). **Do not quote their per-conn-bytes externally.**
+> **‡ The pre-fix 2M row below is SUPERSEDED for the density headline.** It
+> was measured with the non-executing handler (7.8 KB/conn) and understates a
+> working server. The post-fix 2M figure above replaces the pre-fix 2M density;
+> it is retained as historical record of the establishment / latency /
+> scale-linearity *shape* (handler-state-independent). **Do not quote its
+> per-conn-bytes externally.** (The x86 cross-ISA row further below is now
+> **post-fix** — a real working-handler figure, not superseded.)
 
 **‡ Idle-hold @ 2M (PRE-FIX, superseded — 2026-05-30):**
 
@@ -451,18 +460,40 @@ with Rust's 27.9 KB (which has always included its per-conn task state): a real
   working 12.1 KB figure (−0.03 % drift), so this pre-fix row is now
   fully superseded.**
 
-**‡ Cross-ISA confirmation (x86, PRE-FIX, superseded — 2026-05-31).**
-A Kāra 1M run on `c7i.8xlarge` (Intel x86_64) landed pre-fix
-`per_conn_bytes = 7,725.3 B` (−1.54 % vs the pre-fix arm64 1M baseline
-of 7,846 B). The **per-conn-bytes is superseded** (non-executing
-handler), but the **p50 floor reproducing the arm64 value to the
-millisecond** (41.02 vs 41.0 ms) remains a valid cross-ISA result — that
-floor is an architectural property of the runtime's park/wake path, not
-a handler-state artifact. The post-fix x86 density re-read is pending.
-Raw JSON: `docs/investigations/demo1_m3_1m_x86.json`. This was the
-first-ever x86_64-Linux karac build and surfaced + fixed two karac/rig
-gaps en route (PIC reloc model, `bda38682`; `fs.nr_open` + systemd
-nofile cap, `6437e765`).
+**Cross-ISA confirmation (x86, POST-FIX — landed 2026-06-02).**
+A working-handler Kāra 1M run on `c7i.8xlarge` (Intel x86_64, 32 vCPU,
+64 GB, Ubuntu 24.04, build off `main` ⊇ `eba48194`):
+
+| metric | x86 1M (post-fix) | arm64 1M (post-fix) | delta |
+|---|---|---|---|
+| established | 1,000,000 / 0 failed | 1,000,000 / 0 failed | — |
+| **per-conn bytes** | **12,111.98 B** | 12,114 B | **−0.02 %** |
+| server RSS held | 11,830,856 KiB (~11.28 GiB) | ~11.28 GiB | flat |
+| connect p50 | 44.2 ms | ~41–46 ms | reproduces floor |
+| connect mean | 54.4 ms | — | core-count-confounded, not claimed |
+| connect max | 197.1 ms | — | |
+| ramp time | 849.7 s (~14.2 min) | — | 32 vCPU, not apples-to-apples |
+
+**Density at the working figure is ISA-identical (−0.02 %), not
+Graviton-specific** — and it supersedes the pre-fix x86 7,725 B read
+(non-executing handler). Only per-conn density is claimed cross-ISA;
+the mean/ramp are faster than arm64 but confounded by core count (32
+vs 16 vCPU), so they are *not* claimed apples-to-apples. The p50 floor
+(44.2 ms) reproduces the arm64 floor cross-ISA, consistent with the
+prior pre-fix reading (41 ms) — an architectural property of the
+park/wake path. Raw JSON:
+`docs/investigations/demo1_m3_1m_x86_postfix.json`. The validation
+correctness check (50K idle-hold on a `c7i.2xlarge`) landed
+12,131 B/conn (+0.14 % vs arm64) with deterministic echo before the
+1M run.
+
+**(Historical) The pre-fix x86 1M run (2026-05-31)** landed
+`per_conn_bytes = 7,725.3 B` on the non-executing-handler build —
+superseded for the density headline by the post-fix run above, retained
+only as the first-ever x86_64-Linux karac build, which surfaced + fixed
+two karac/rig gaps en route (PIC reloc model, `bda38682`; `fs.nr_open`
++ systemd nofile cap, `6437e765`). Raw JSON:
+`docs/investigations/demo1_m3_1m_x86.json`.
 
 **Ramp-rate note.** The 298 conns/sec average ramp at 2M is
 ~38 % of the 1M ramp rate (783 conns/sec). This is the
@@ -981,7 +1012,7 @@ their role's headline scale (`250K` or `100K`).
 
 | comparator | role | linearity (50K) | headline | 2M | active-traffic | reproduction script | raw JSON |
 |---|---|---|---|---|---|---|---|
-| Kāra | self | n/a (multi-scale ladder) | **1M landed (post-fix, 2026-06-01)** _(x86 1M re-read pending)_ | **2M landed (post-fix, 2026-06-01)** | pending (#66) | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `docs/investigations/demo1_m3_1m_postfix_datalayout.json`; 2M: `docs/investigations/demo1_m3_2m_postfix_datalayout.json`; x86 1M (pre-fix): `docs/investigations/demo1_m3_1m_x86.json` |
+| Kāra | self | n/a (multi-scale ladder) | **1M landed (post-fix, 2026-06-01)** _(x86 1M re-read landed post-fix 2026-06-02)_ | **2M landed (post-fix, 2026-06-01)** | pending (#66) | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `docs/investigations/demo1_m3_1m_postfix_datalayout.json`; 2M: `docs/investigations/demo1_m3_2m_postfix_datalayout.json`; x86 1M (post-fix): `docs/investigations/demo1_m3_1m_x86_postfix.json`; x86 1M (pre-fix, historical): `docs/investigations/demo1_m3_1m_x86.json` |
 | Rust | credibility | n/a (tracks Kāra) | 1M landed | **2M landed (2026-05-30)** | pending (#66) | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `rust-1m.json`; 2M: `rust-2m.json` (mirror pending) |
 | Phoenix Channels | commercial | pending (#67) | 250K pending (#67) | n/a unless gate escalates | pending | TBD | TBD |
 | Java / Netty | commercial | pending (#68) | 250K pending (#68) | n/a unless gate escalates | pending | TBD | TBD |
@@ -1002,6 +1033,21 @@ their role's headline scale (`250K` or `100K`).
 
 ## Change log
 
+- **2026-06-02 (x86 cross-ISA density re-read, POST-FIX — closes the last `‡`):**
+  re-ran the working-handler Kāra **1M** on a fresh `c7i.8xlarge` (Intel x86_64,
+  32 vCPU, 64 GB, Ubuntu 24.04; build off `main` ⊇ `eba48194`): 1,000,000 / 0
+  failed, clean teardown, **`per_conn_bytes = 12,111.98`** (server RSS 11.28
+  GiB) — **−0.02 % vs the arm64 1M figure of 12,114 B.** Density at the working
+  figure is **ISA-identical, not Graviton-specific**, superseding the pre-fix
+  x86 7,725 B read (non-executing handler). Connect p50 44.2 ms reproduces the
+  cross-ISA p50 floor; mean/ramp faster than arm64 but core-count-confounded
+  (32 vs 16 vCPU), so only density is claimed cross-ISA. A correctness check on
+  a `c7i.2xlarge` (50K idle-hold, 12,131 B / +0.14 %; 8/8 deterministic echo)
+  validated the post-fix coroutine + heap-overflow path on x86's ABI before the
+  1M run. Banner, TL;DR ‡-note, hardware table, §Kāra status + cross-ISA block
+  (now a post-fix table, pre-fix demoted to historical), role-column note, and
+  status matrix all updated. **No remaining `‡` items.** Raw JSON:
+  `docs/investigations/demo1_m3_1m_x86_postfix.json`.
 - **2026-06-01 (Kāra working-handler 2M re-confirm + production cost model):**
   the post-fix Kāra **2M** density run landed on `r8g.4xlarge` (build ⊇
   `eba48194`): 2,000,000 / 0 failed, `per_conn_bytes = 12,111` (server RSS
