@@ -4230,6 +4230,282 @@ pub unsafe extern "C" fn karac_runtime_http_builder_send(
     }
 }
 
+/// Default slow-header / slow-handshake window for the serve loops when
+/// `KARAC_HTTP_HEADER_TIMEOUT_MS` is unset (phase-8 line 124). 10 s is
+/// generous for a real client's first request line / TLS round-trip yet
+/// short enough to reap a slowloris connection promptly.
+const DEFAULT_HTTP_HEADER_TIMEOUT_MS: u64 = 10_000;
+
+/// Connection-level resource bounds shared by all three `karac_runtime_serve_*`
+/// accept loops — the phase-8 line 124 slowloris / unbounded-spawn fix.
+///
+/// - `header_timeout`: bounds the window before a connection produces its
+///   first request headers (plain HTTP) or completes its TLS handshake
+///   (HTTPS). **On by default** ([`DEFAULT_HTTP_HEADER_TIMEOUT_MS`]);
+///   `KARAC_HTTP_HEADER_TIMEOUT_MS=<ms>` overrides, `=0` disables. It only
+///   fires *before* the request line / handshake completes, so a long-idle
+///   *established* connection (e.g. a Demo-1 idle keep-alive) is never
+///   reaped by it.
+/// - `conn_permits`: optional cap on concurrently in-flight connections.
+///   **Off by default** (unbounded) so high-idle-connection workloads (the
+///   1M-conn Demo-1 target) need no tuning; `KARAC_HTTP_MAX_CONNS=<n>`
+///   bounds it for public-facing deployments. When set, the accept loop
+///   acquires a permit *before* accepting, so reaching the cap applies
+///   backpressure at the OS accept backlog rather than spawning unbounded
+///   tasks.
+struct ServeLimits {
+    header_timeout: Option<std::time::Duration>,
+    conn_permits: Option<Arc<tokio::sync::Semaphore>>,
+}
+
+impl ServeLimits {
+    /// Read the serve-loop bounds from the environment once per
+    /// `karac_runtime_serve_*` call. A thin reader over [`from_raw`], which
+    /// holds the (env-independent, unit-tested) parse logic.
+    ///
+    /// [`from_raw`]: ServeLimits::from_raw
+    fn from_env() -> ServeLimits {
+        ServeLimits::from_raw(
+            std::env::var("KARAC_HTTP_HEADER_TIMEOUT_MS")
+                .ok()
+                .as_deref(),
+            std::env::var("KARAC_HTTP_MAX_CONNS").ok().as_deref(),
+        )
+    }
+
+    /// Parse the two serve-loop tunables from their raw string values
+    /// (`None` = env var unset). Pure — no environment access — so the
+    /// parse matrix is unit-testable without racy `set_var`. Unparseable /
+    /// out-of-range values fall back to the safe default (timeout: 10 s on;
+    /// cap: off) rather than erroring — a malformed tunable must not take
+    /// the server down.
+    fn from_raw(timeout_ms: Option<&str>, max_conns: Option<&str>) -> ServeLimits {
+        let header_timeout = match timeout_ms.map(|s| s.trim().parse::<u64>()) {
+            // unset / non-numeric → default-on; explicit 0 → disabled.
+            None | Some(Err(_)) => Some(std::time::Duration::from_millis(
+                DEFAULT_HTTP_HEADER_TIMEOUT_MS,
+            )),
+            Some(Ok(0)) => None,
+            Some(Ok(ms)) => Some(std::time::Duration::from_millis(ms)),
+        };
+        let conn_permits = match max_conns.map(|s| s.trim().parse::<usize>()) {
+            // unset / non-numeric / 0 → no cap; n > 0 → bounded.
+            Some(Ok(n)) if n > 0 => Some(Arc::new(tokio::sync::Semaphore::new(n))),
+            _ => None,
+        };
+        ServeLimits {
+            header_timeout,
+            conn_permits,
+        }
+    }
+
+    /// Acquire one connection permit if a cap is configured, awaiting (i.e.
+    /// applying backpressure) when the cap is reached. Returns `None` when
+    /// no cap is set. The returned permit is held for the connection's
+    /// lifetime and releases its slot on drop.
+    async fn acquire_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        match &self.conn_permits {
+            // `acquire_owned` only errors if the semaphore is closed, which
+            // we never do — the `ok()` collapses that impossible case to a
+            // dropped permit (no cap enforced for this one connection).
+            Some(sem) => Arc::clone(sem).acquire_owned().await.ok(),
+            None => None,
+        }
+    }
+}
+
+/// Apply the configured header-read timeout to a hyper http1 connection
+/// builder (phase-8 line 124). hyper only enforces `header_read_timeout`
+/// when a `Timer` is installed, so the two are set together.
+fn apply_header_timeout(
+    builder: &mut hyper::server::conn::http1::Builder,
+    timeout: Option<std::time::Duration>,
+) {
+    if let Some(t) = timeout {
+        builder.timer(hyper_util::rt::TokioTimer::new());
+        builder.header_read_timeout(t);
+    }
+}
+
+#[cfg(test)]
+mod serve_limits_tests {
+    //! Phase-8 line 124 — serve-loop slowloris / resource-bound hardening:
+    //! the env-driven config matrix, semaphore backpressure, and the
+    //! header-timeout reaping a stalled (slowloris) connection while leaving
+    //! a healthy request untouched.
+    use super::ServeLimits;
+    use std::time::Duration;
+
+    // ── config parse matrix (pure, env-free via `from_raw`) ──────────────
+
+    #[test]
+    fn default_timeout_on_cap_off_when_unset() {
+        let l = ServeLimits::from_raw(None, None);
+        assert_eq!(l.header_timeout, Some(Duration::from_millis(10_000)));
+        assert!(l.conn_permits.is_none(), "cap must be off by default");
+    }
+
+    #[test]
+    fn explicit_timeout_is_honored_zero_disables() {
+        assert_eq!(
+            ServeLimits::from_raw(Some("500"), None).header_timeout,
+            Some(Duration::from_millis(500))
+        );
+        assert!(
+            ServeLimits::from_raw(Some("0"), None)
+                .header_timeout
+                .is_none(),
+            "0 ms must disable the timeout"
+        );
+    }
+
+    #[test]
+    fn garbage_timeout_falls_back_to_default() {
+        // A malformed tunable must not take the server down — it defaults on.
+        assert_eq!(
+            ServeLimits::from_raw(Some("not-a-number"), None).header_timeout,
+            Some(Duration::from_millis(10_000))
+        );
+    }
+
+    #[test]
+    fn cap_set_only_when_positive() {
+        let permits = |s| {
+            ServeLimits::from_raw(None, s)
+                .conn_permits
+                .as_ref()
+                .map(|sem| sem.available_permits())
+        };
+        assert_eq!(permits(Some("128")), Some(128));
+        assert_eq!(permits(Some("0")), None, "0 means unbounded");
+        assert_eq!(permits(Some("xyz")), None, "garbage means unbounded");
+        assert_eq!(permits(None), None, "unset means unbounded");
+    }
+
+    #[test]
+    fn whitespace_is_trimmed() {
+        let l = ServeLimits::from_raw(Some("  250  "), Some("  4  "));
+        assert_eq!(l.header_timeout, Some(Duration::from_millis(250)));
+        assert_eq!(
+            l.conn_permits.as_ref().map(|s| s.available_permits()),
+            Some(4)
+        );
+    }
+
+    // ── semaphore backpressure ───────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn permit_cap_applies_backpressure_until_released() {
+        let l = ServeLimits::from_raw(None, Some("1"));
+        let p1 = l.acquire_permit().await;
+        assert!(p1.is_some());
+        // At cap = 1 with the permit held, a second acquire must block.
+        let blocked = tokio::time::timeout(Duration::from_millis(100), l.acquire_permit()).await;
+        assert!(blocked.is_err(), "second permit should block at cap = 1");
+        // Releasing the first frees the slot.
+        drop(p1);
+        let p2 = tokio::time::timeout(Duration::from_millis(500), l.acquire_permit()).await;
+        assert!(
+            matches!(p2, Ok(Some(_))),
+            "permit should be available after release"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn no_cap_never_blocks() {
+        let l = ServeLimits::from_raw(None, None);
+        for _ in 0..1000 {
+            // No semaphore → no permit, immediate resolve, no blocking.
+            assert!(l.acquire_permit().await.is_none());
+        }
+    }
+
+    // ── slowloris: the header timeout reaps a stalled connection ─────────
+
+    /// The shared "always reply 200 / `ok`" hyper service used by the two
+    /// behavioral tests below. Inlined as a macro rather than a fn to dodge
+    /// the unnameable `service_fn` future type (stable Rust has no
+    /// `Future = impl Future` associated-type bound).
+    macro_rules! ok_service {
+        () => {
+            hyper::service::service_fn(|_req: hyper::Request<hyper::body::Incoming>| async {
+                Ok::<_, std::convert::Infallible>(hyper::Response::new(http_body_util::Full::new(
+                    bytes::Bytes::from_static(b"ok"),
+                )))
+            })
+        };
+    }
+
+    /// A connection that opens, dribbles a partial request, and never sends
+    /// the terminating blank line must be dropped once the header-read
+    /// timeout elapses — not held open indefinitely. This is the core
+    /// line-124 regression: before the fix the serve loop drove
+    /// `serve_connection` with no timer, so hyper waited forever.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slow_header_connection_is_reaped() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let io = hyper_util::rt::TokioIo::new(stream);
+            let mut builder = hyper::server::conn::http1::Builder::new();
+            super::apply_header_timeout(&mut builder, Some(Duration::from_millis(300)));
+            let _ = builder.serve_connection(io, ok_service!()).await;
+        });
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        // Partial request: headers started but never terminated (\r\n\r\n).
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\n")
+            .await
+            .unwrap();
+
+        // With the timeout wired, the server closes ~300 ms in, so
+        // read_to_end returns (EOF). Without it this hangs to the 5 s
+        // outer deadline and the test fails.
+        let mut buf = Vec::new();
+        let reaped =
+            tokio::time::timeout(Duration::from_secs(5), client.read_to_end(&mut buf)).await;
+        assert!(
+            reaped.is_ok(),
+            "slow-header connection was not reaped within 5s — header timeout not enforced"
+        );
+        let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
+    }
+
+    /// The header timeout must NOT break a well-behaved client: a complete
+    /// request still gets its 200 response with the timeout configured.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn healthy_request_succeeds_under_header_timeout() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let io = hyper_util::rt::TokioIo::new(stream);
+            let mut builder = hyper::server::conn::http1::Builder::new();
+            super::apply_header_timeout(&mut builder, Some(Duration::from_millis(300)));
+            let _ = builder.serve_connection(io, ok_service!()).await;
+        });
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = Vec::new();
+        let read = tokio::time::timeout(Duration::from_secs(5), client.read_to_end(&mut buf)).await;
+        assert!(read.is_ok(), "healthy request did not complete");
+        let text = String::from_utf8_lossy(&buf);
+        assert!(text.contains("200"), "expected 200 response, got: {text}");
+        assert!(text.ends_with("ok"), "expected body 'ok', got: {text}");
+        let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
+    }
+}
+
 /// Synchronously serve HTTP/1.1 traffic on `addr_cstr` until a fatal
 /// error breaks the accept loop. The Kāra-side handler is invoked
 /// through `tokio::task::block_in_place` per request so it can do
@@ -4303,21 +4579,28 @@ pub unsafe extern "C" fn karac_runtime_serve_http(
             let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
             let _ = stdout.flush();
         }
+        let limits = ServeLimits::from_env();
         loop {
+            // Reserve a connection slot before accepting so reaching the
+            // optional cap applies backpressure at the OS accept backlog
+            // rather than spawning unbounded tasks (phase-8 line 124).
+            let permit = limits.acquire_permit().await;
             let (stream, _peer) = match listener.accept().await {
                 Ok(pair) => pair,
                 Err(_) => continue,
             };
             let io = hyper_util::rt::TokioIo::new(stream);
+            let header_timeout = limits.header_timeout;
             tokio::spawn(async move {
+                let _permit = permit;
                 let svc = hyper::service::service_fn(
                     move |req: hyper::Request<hyper::body::Incoming>| async move {
                         serve_request(req, handler).await
                     },
                 );
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(io, svc)
-                    .await;
+                let mut builder = hyper::server::conn::http1::Builder::new();
+                apply_header_timeout(&mut builder, header_timeout);
+                let _ = builder.serve_connection(io, svc).await;
             });
         }
     })
@@ -4419,16 +4702,33 @@ pub unsafe extern "C" fn karac_runtime_serve_https(
             let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
             let _ = stdout.flush();
         }
+        let limits = ServeLimits::from_env();
         loop {
+            // Backpressure before accept (phase-8 line 124) — see the
+            // plain-HTTP loop for the rationale.
+            let permit = limits.acquire_permit().await;
             let (tcp_stream, _peer) = match listener.accept().await {
                 Ok(pair) => pair,
                 Err(_) => continue,
             };
             let acceptor = acceptor.clone();
+            let header_timeout = limits.header_timeout;
             tokio::spawn(async move {
-                let tls_stream = match acceptor.accept(tcp_stream).await {
-                    Ok(s) => s,
-                    Err(_) => return,
+                let _permit = permit;
+                // Bound the TLS handshake: a peer that completes the TCP
+                // connect but never finishes (or stalls) the ClientHello
+                // must not park this task indefinitely (phase-8 line 124,
+                // the primary HTTPS slowloris vector). On timeout or
+                // handshake error the connection is dropped.
+                let tls_stream = match header_timeout {
+                    Some(t) => match tokio::time::timeout(t, acceptor.accept(tcp_stream)).await {
+                        Ok(Ok(s)) => s,
+                        _ => return,
+                    },
+                    None => match acceptor.accept(tcp_stream).await {
+                        Ok(s) => s,
+                        Err(_) => return,
+                    },
                 };
                 let io = hyper_util::rt::TokioIo::new(tls_stream);
                 let svc = hyper::service::service_fn(
@@ -4436,9 +4736,9 @@ pub unsafe extern "C" fn karac_runtime_serve_https(
                         serve_request(req, handler).await
                     },
                 );
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(io, svc)
-                    .await;
+                let mut builder = hyper::server::conn::http1::Builder::new();
+                apply_header_timeout(&mut builder, header_timeout);
+                let _ = builder.serve_connection(io, svc).await;
             });
         }
     })
@@ -4514,14 +4814,20 @@ pub unsafe extern "C" fn karac_runtime_serve_http_static(
             let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
             let _ = stdout.flush();
         }
+        let limits = ServeLimits::from_env();
         loop {
+            // Backpressure before accept (phase-8 line 124) — see the
+            // plain-HTTP loop for the rationale.
+            let permit = limits.acquire_permit().await;
             let (stream, _peer) = match listener.accept().await {
                 Ok(pair) => pair,
                 Err(_) => continue,
             };
             let body_clone = body_owned.clone();
             let io = hyper_util::rt::TokioIo::new(stream);
+            let header_timeout = limits.header_timeout;
             tokio::spawn(async move {
+                let _permit = permit;
                 let svc = hyper::service::service_fn(
                     move |_req: hyper::Request<hyper::body::Incoming>| {
                         let body = body_clone.clone();
@@ -4535,9 +4841,9 @@ pub unsafe extern "C" fn karac_runtime_serve_http_static(
                         }
                     },
                 );
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(io, svc)
-                    .await;
+                let mut builder = hyper::server::conn::http1::Builder::new();
+                apply_header_timeout(&mut builder, header_timeout);
+                let _ = builder.serve_connection(io, svc).await;
             });
         }
     })

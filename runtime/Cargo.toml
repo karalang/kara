@@ -84,8 +84,12 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "http1"] }
 # Tokio multi-thread runtime — locked design (iv): per-request hyper
 # invokes the Kāra handler synchronously via `tokio::task::block_in_place`,
-# which requires the multi-thread flavor.
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+# which requires the multi-thread flavor. `time` powers the serve-loop
+# handshake/header-read timeout (`tokio::time::timeout` + hyper's
+# `TokioTimer`-backed `header_read_timeout`); `sync` powers the optional
+# connection-concurrency cap (`tokio::sync::Semaphore`) — both phase-8
+# line 124 (slowloris / unbounded-spawn hardening).
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "sync"] }
 # Adapter between the std `Future` type and hyper's Body trait — `http_body_util`
 # ships `Full<Bytes>`, the trivial body type used for fixed-size responses.
 http-body-util = "0.1"
