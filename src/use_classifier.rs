@@ -49,6 +49,35 @@ use crate::resolver::SpanKey;
 use crate::typechecker::{Type, TypeCheckResult};
 use std::collections::{HashMap, HashSet};
 
+/// Whole-program inputs the use-classifier consults but never mutates:
+/// method self-modes, free-fn / static-method parameter modes, and
+/// unit-variant names. Each is O(program) to build. The ownership pass
+/// and the RC predicate both classify *every* function's body, so
+/// building these inside `classify_function_body` made the
+/// classification step O(functions × program) — the dominant
+/// super-linear factor in `ownershipcheck`. Hoist them into a prelude
+/// built once per program (`ClassifierPrelude::new`) and borrowed by
+/// every per-function `classify_function_body_with` call, restoring an
+/// O(program) total over the whole module.
+pub struct ClassifierPrelude {
+    method_self_modes: HashMap<String, SelfParam>,
+    callee_param_modes: HashMap<String, Vec<OwnershipMode>>,
+    unit_variant_names: HashSet<String>,
+}
+
+impl ClassifierPrelude {
+    /// Collect the three whole-program tables once. Reuse the returned
+    /// value across every `classify_function_body_with` call for the
+    /// same `(program, tc)`.
+    pub fn new(program: &Program, tc: &TypeCheckResult) -> Self {
+        ClassifierPrelude {
+            method_self_modes: collect_method_self_modes(program),
+            callee_param_modes: collect_callee_param_modes(program),
+            unit_variant_names: collect_unit_variant_names(tc),
+        }
+    }
+}
+
 /// Classify every binding-use leaf within `body` as `Read` or `Consume`,
 /// and identify `mut ref self` method-call args whose value-expressions
 /// must be lowered into sibling sink blocks (round 12.12 trigger-3).
@@ -56,17 +85,36 @@ use std::collections::{HashMap, HashSet};
 /// Returns a `Classification` consumed by `build_cfg_with_classification`.
 /// Spans not present in `kinds` default to `Read`; spans not present in
 /// `sink_arg_spans` are lowered inline.
+///
+/// Convenience entry point that builds a fresh [`ClassifierPrelude`] for
+/// the single call. Hot paths that classify many functions of the same
+/// program should build the prelude once and call
+/// [`classify_function_body_with`] to avoid rebuilding the whole-program
+/// tables per function.
 pub fn classify_function_body(
     program: &Program,
     tc: &TypeCheckResult,
     body: &Block,
     param_types: HashMap<String, Type>,
 ) -> Classification {
+    let prelude = ClassifierPrelude::new(program, tc);
+    classify_function_body_with(&prelude, tc, body, param_types)
+}
+
+/// Classify `body` against a pre-built [`ClassifierPrelude`]. Identical
+/// to [`classify_function_body`] but reuses the caller's whole-program
+/// tables instead of recollecting them.
+pub fn classify_function_body_with(
+    prelude: &ClassifierPrelude,
+    tc: &TypeCheckResult,
+    body: &Block,
+    param_types: HashMap<String, Type>,
+) -> Classification {
     let mut classifier = UseClassifier {
         tc,
-        method_self_modes: collect_method_self_modes(program),
-        callee_param_modes: collect_callee_param_modes(program),
-        unit_variant_names: collect_unit_variant_names(tc),
+        method_self_modes: &prelude.method_self_modes,
+        callee_param_modes: &prelude.callee_param_modes,
+        unit_variant_names: &prelude.unit_variant_names,
         param_types,
         local_types: HashMap::new(),
         classification: Classification::default(),
@@ -86,9 +134,9 @@ enum Mode {
 
 struct UseClassifier<'a> {
     tc: &'a TypeCheckResult,
-    method_self_modes: HashMap<String, SelfParam>,
-    callee_param_modes: HashMap<String, Vec<OwnershipMode>>,
-    unit_variant_names: HashSet<String>,
+    method_self_modes: &'a HashMap<String, SelfParam>,
+    callee_param_modes: &'a HashMap<String, Vec<OwnershipMode>>,
+    unit_variant_names: &'a HashSet<String>,
     param_types: HashMap<String, Type>,
     /// Round 12.18: name-keyed types for `let`-bound locals,
     /// populated as the walker enters each `let pat = value;` and

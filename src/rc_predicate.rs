@@ -30,7 +30,9 @@ use crate::cfg::{build_cfg_with_classification, BlockId, Cfg, ConsumeOrigin, Use
 use crate::dominator::{compute_dominators, DominatorTree};
 use crate::token::Span;
 use crate::typechecker::TypeCheckResult;
-use crate::use_classifier::{classify_function_body, param_types_for_function};
+use crate::use_classifier::{
+    classify_function_body_with, param_types_for_function, ClassifierPrelude,
+};
 use std::collections::{HashMap, HashSet};
 
 /// Witness pair for a binding that satisfies the formal RC condition.
@@ -203,8 +205,21 @@ pub fn run_predicate_for_function(
     tc: &TypeCheckResult,
     f: &Function,
 ) -> (Cfg, DominatorTree, HashMap<String, RcWitness>) {
+    let prelude = ClassifierPrelude::new(program, tc);
+    run_predicate_for_function_with(&prelude, tc, f)
+}
+
+/// As [`run_predicate_for_function`] but against a pre-built
+/// [`ClassifierPrelude`]. Whole-program drivers build the prelude once
+/// and call this per function so the classifier's whole-program tables
+/// are not recollected for every body.
+pub fn run_predicate_for_function_with(
+    prelude: &ClassifierPrelude,
+    tc: &TypeCheckResult,
+    f: &Function,
+) -> (Cfg, DominatorTree, HashMap<String, RcWitness>) {
     let param_types = param_types_for_function(f, tc);
-    let classification = classify_function_body(program, tc, &f.body, param_types);
+    let classification = classify_function_body_with(prelude, tc, &f.body, param_types);
     let cfg = build_cfg_with_classification(&f.body, &classification);
     let dom = compute_dominators(&cfg);
     let mut witnesses = rc_candidates(&cfg, &dom);
@@ -227,11 +242,12 @@ pub fn predicate_rc_candidates_for_program(
     program: &Program,
     tc: &TypeCheckResult,
 ) -> HashMap<String, HashMap<String, RcWitness>> {
+    let prelude = ClassifierPrelude::new(program, tc);
     let mut out: HashMap<String, HashMap<String, RcWitness>> = HashMap::new();
     for item in &program.items {
         match item {
             Item::Function(f) => {
-                let (_, _, witnesses) = run_predicate_for_function(program, tc, f);
+                let (_, _, witnesses) = run_predicate_for_function_with(&prelude, tc, f);
                 if !witnesses.is_empty() {
                     out.insert(f.name.clone(), witnesses);
                 }
@@ -242,7 +258,8 @@ pub fn predicate_rc_candidates_for_program(
                 };
                 for impl_item in &impl_block.items {
                     if let ImplItem::Method(method) = impl_item {
-                        let (_, _, witnesses) = run_predicate_for_function(program, tc, method);
+                        let (_, _, witnesses) =
+                            run_predicate_for_function_with(&prelude, tc, method);
                         if !witnesses.is_empty() {
                             out.insert(format!("{target_name}.{}", method.name), witnesses);
                         }
@@ -504,12 +521,14 @@ pub fn predicate_uam_candidates_for_program(
     program: &Program,
     tc: &TypeCheckResult,
 ) -> HashMap<String, HashMap<String, UamWitness>> {
+    let prelude = ClassifierPrelude::new(program, tc);
     let mut out: HashMap<String, HashMap<String, UamWitness>> = HashMap::new();
     for item in &program.items {
         match item {
             Item::Function(f) => {
                 let param_types = param_types_for_function(f, tc);
-                let classification = classify_function_body(program, tc, &f.body, param_types);
+                let classification =
+                    classify_function_body_with(&prelude, tc, &f.body, param_types);
                 let cfg = build_cfg_with_classification(&f.body, &classification);
                 let dom = compute_dominators(&cfg);
                 let witnesses = direct_uam_candidates(&cfg, &dom);
@@ -525,7 +544,7 @@ pub fn predicate_uam_candidates_for_program(
                     if let ImplItem::Method(method) = impl_item {
                         let param_types = param_types_for_function(method, tc);
                         let classification =
-                            classify_function_body(program, tc, &method.body, param_types);
+                            classify_function_body_with(&prelude, tc, &method.body, param_types);
                         let cfg = build_cfg_with_classification(&method.body, &classification);
                         let dom = compute_dominators(&cfg);
                         let witnesses = direct_uam_candidates(&cfg, &dom);

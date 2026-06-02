@@ -7,10 +7,11 @@
 
 use crate::ast::*;
 use crate::cfg::ConsumeOrigin;
-use crate::rc_predicate::{direct_uam_candidates, run_predicate_for_function};
+use crate::rc_predicate::{direct_uam_candidates, run_predicate_for_function_with};
 use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::{FloatSize, IntSize, Type, TypeCheckResult, UIntSize};
+use crate::use_classifier::{classify_function_body_with, ClassifierPrelude};
 use std::collections::{HashMap, HashSet};
 
 mod block_stmt;
@@ -1232,10 +1233,17 @@ impl<'a> OwnershipChecker<'a> {
     // ── Per-Item Analysis ───────────────────────────────────────
 
     fn check_items(&mut self) {
+        // Build the use-classifier's whole-program tables once and share
+        // them across every function. `check_function` classifies each
+        // body twice (the RC-predicate pre-pass and the in-place
+        // classification), so rebuilding these per function made the pass
+        // O(functions × program) — the super-linear factor measured in the
+        // G8 front-end benchmark. See `ClassifierPrelude`.
+        let prelude = ClassifierPrelude::new(self.program, self.typecheck_result);
         let items: Vec<Item> = self.program.items.clone();
         for item in &items {
             match item {
-                Item::Function(f) => self.check_function(f, None),
+                Item::Function(f) => self.check_function(f, None, &prelude),
                 Item::ImplBlock(imp) => {
                     let type_name = match &imp.target_type.kind {
                         TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
@@ -1243,7 +1251,7 @@ impl<'a> OwnershipChecker<'a> {
                     };
                     for item in &imp.items {
                         if let ImplItem::Method(method) = item {
-                            self.check_function(method, Some(&type_name));
+                            self.check_function(method, Some(&type_name), &prelude);
                         }
                     }
                 }
@@ -1252,7 +1260,12 @@ impl<'a> OwnershipChecker<'a> {
         }
     }
 
-    fn check_function(&mut self, f: &Function, impl_type: Option<&str>) {
+    fn check_function(
+        &mut self,
+        f: &Function,
+        impl_type: Option<&str>,
+        prelude: &ClassifierPrelude,
+    ) {
         let fn_key = if let Some(t) = impl_type {
             format!("{}.{}", t, f.name)
         } else {
@@ -1346,7 +1359,7 @@ impl<'a> OwnershipChecker<'a> {
         // pipeline (`UseClassifier`'s `once_callable_closures` set,
         // populated at let-RHS-is-closure sites with a captured-owned
         // signal — see round 12.20).
-        self.populate_predicate_outputs(f, &fn_key);
+        self.populate_predicate_outputs(f, &fn_key, prelude);
 
         // Phase-7-codegen.md line 45 — compute the use-classifier's
         // `Classification` once per function and stash it on `self`
@@ -1358,8 +1371,8 @@ impl<'a> OwnershipChecker<'a> {
         // functions.
         let param_types_for_classifier =
             crate::use_classifier::param_types_for_function(f, self.typecheck_result);
-        self.current_classification = Some(crate::use_classifier::classify_function_body(
-            self.program,
+        self.current_classification = Some(classify_function_body_with(
+            prelude,
             self.typecheck_result,
             &f.body,
             param_types_for_classifier,
@@ -1417,9 +1430,14 @@ impl<'a> OwnershipChecker<'a> {
     /// and the `Direct` arm via the predicate's own emission — so the
     /// linear forward state machine no longer drives diagnostic
     /// output for these shapes.
-    fn populate_predicate_outputs(&mut self, f: &Function, fn_key: &str) {
+    fn populate_predicate_outputs(
+        &mut self,
+        f: &Function,
+        fn_key: &str,
+        prelude: &ClassifierPrelude,
+    ) {
         let (cfg, dom, rc_witnesses) =
-            run_predicate_for_function(self.program, self.typecheck_result, f);
+            run_predicate_for_function_with(prelude, self.typecheck_result, f);
         for (binding, w) in rc_witnesses {
             let trigger = match w.consume_origin {
                 ConsumeOrigin::Direct => RcTrigger::DirectReuseAfterConsume,

@@ -16,8 +16,8 @@ threshold.
 (~3 µs/private-fn, ~2× time for 2× functions, no blowup through 4000 fns) and
 costs single-digit milliseconds even on the largest synthetic modules. None of
 the three mitigations are warranted. A separate, unrelated finding surfaced:
-`ownershipcheck` is **super-linear** (~quadratic) and is the dominant front-end
-cost — tracked as its own checklist entry.
+`ownershipcheck` was **super-linear** (~quadratic) and the dominant front-end
+cost — root-caused and fixed 2026-06-02 (now linear; see "Resolution" below).
 
 ---
 
@@ -117,3 +117,50 @@ checklist entry under "Pre-existing Phase 6 work" in
 [`phase-6-runtime.md`](../implementation_checklist/phase-6-runtime.md)
 (per the "surfaced bugs get their own tracker entry" discipline); root-causing
 the quadratic factor is deferred to that entry, not this one.
+
+### Resolution (2026-06-02) — restored to linear
+
+Root-caused and fixed. The quadratic factor was **not** in the ownership
+analysis proper but in the use-classifier it drives. `classify_function_body`
+rebuilt three whole-program tables on every call:
+
+- `collect_method_self_modes(program)` — O(program), walks all impl/trait items
+- `collect_callee_param_modes(program)` — O(program), walks all free fns + static methods
+- `collect_unit_variant_names(tc)` — O(enums)
+
+…and the ownership pass classifies **each function's body twice** — once in the
+RC-predicate pre-pass (`run_predicate_for_function` → `classify_function_body`)
+and once in-place in `OwnershipChecker::check_function`. So for N functions the
+classifier rebuilt the whole-program tables 2N times: O(N × program) = **O(N²)**.
+
+**Fix:** a `ClassifierPrelude` (`src/use_classifier.rs`) holds the three tables,
+built once via `ClassifierPrelude::new(program, tc)` and borrowed by the new
+`classify_function_body_with` / `run_predicate_for_function_with` entry points.
+`OwnershipChecker::check_items` builds it once and threads it through
+`check_function` → `populate_predicate_outputs`. `UseClassifier` now borrows the
+tables (`&'a HashMap<…>`) instead of owning per-call copies. The classifier
+output is byte-identical — only the build *site* changed — so RC-fallback,
+use-after-move, ownership-mode and codegen decisions are all unchanged
+(verified: full `cargo test` and `cargo test --features llvm` pass with zero
+regressions). The two whole-program predicate drivers
+(`predicate_rc_candidates_for_program`, `predicate_uam_candidates_for_program`)
+build the prelude once as well, removing the same O(N²) from their loops.
+
+**Before → after (M5 Pro, release, `ownershipcheck` median ms):**
+
+| Case | private fns | before | after | speedup |
+|---|---:|---:|---:|---:|
+| chain depth=500 | 500 | 25.93 | 0.89 | 29× |
+| chain depth=1000 | 1000 | 104.20 | 1.41 | 74× |
+| mesh n=500 fanout=4 | 500 | 26.42 | 1.67 | 16× |
+| mesh n=1000 fanout=6 | 1000 | 109.30 | 4.65 | 24× |
+| recursive 100×5 | 500 | 25.41 | 0.79 | 32× |
+| recursive 50×10 | 500 | 25.28 | 0.72 | 35× |
+| wide n=500 res=16 | 500 | 26.09 | 1.23 | 21× |
+
+Scaling is now **linear**: chain 500 → 1000 goes 0.89 → 1.41 ms (~1.6× for 2×
+input — the residual is fixed per-program prelude/overhead, not per-function
+growth), versus the old 4.0×. Front-end **total** at chain-1000 fell from
+109.5 ms to 6.8 ms, so `ownershipcheck` is no longer the front-end's dominant
+cost. Acceptance criterion (i) of the checklist entry is met. Files:
+`src/use_classifier.rs`, `src/rc_predicate.rs`, `src/ownership.rs`.
