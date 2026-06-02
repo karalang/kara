@@ -286,6 +286,18 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_assert_eq(args, call_span, true);
         }
 
+        // Diverging prelude builtins `todo()` / `unreachable()` (type `!`).
+        // They print a panic message + `exit(1)`, then terminate the block
+        // with `unreachable` so no `ret` is emitted after them. Lowered here
+        // — before the generic-call / unknown-callee fallback that would
+        // otherwise hand back an `i64 0` placeholder and let the function
+        // tail emit `ret i64 0` against a non-i64 return type (the historical
+        // `fn boom() -> FakeClock { unreachable() }` module-verification
+        // failure). Mirrors the interpreter's `eval_builtin_diverge`.
+        if name == "todo" || name == "unreachable" {
+            return self.compile_diverge(&name, args);
+        }
+
         // Phase 6 line 218 slice 4: free `spawn(closure) -> TaskHandle[T]`
         // dispatch. Intercepted before the generic-fn path so the slice-1
         // stub body (`TaskHandle { task_id: 0 }`) never lowers. The
@@ -854,6 +866,44 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             Ok(basic_val.unwrap_basic())
         }
+    }
+
+    /// Lower a diverging prelude builtin (`todo()` / `unreachable()`, type
+    /// `!`). Prints a panic message and `exit(1)` via `emit_panic`, then
+    /// terminates the current block with an `unreachable` instruction so the
+    /// caller's terminator-guarded paths (`compile_block` between statements,
+    /// `if`/`match` branch merges, and the function-tail `ret` in
+    /// `compile_function`) all skip emitting a follow-on instruction. This is
+    /// what fixes `fn boom() -> T { unreachable() }`: without the terminator,
+    /// the tail logic emitted `ret i64 0` (the placeholder this used to
+    /// return) against `T`'s real LLVM type, failing module verification.
+    ///
+    /// Message parity with the interpreter's `eval_builtin_diverge`: default
+    /// `"not yet implemented"` (todo) / `"entered unreachable code"`
+    /// (unreachable), with a literal argument folded in as
+    /// `"<default>: <msg>"`. `emit_panic` takes a compile-time `&str`, so a
+    /// non-literal (runtime-valued) argument — rare for these builtins —
+    /// degrades to the bare default message rather than threading a runtime
+    /// string through the panic printf.
+    fn compile_diverge(
+        &mut self,
+        name: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let default_msg = if name == "todo" {
+            "not yet implemented"
+        } else {
+            "entered unreachable code"
+        };
+        let full_msg = match args.first().map(|a| &a.value.kind) {
+            Some(ExprKind::StringLit(s)) => format!("{}: {}", default_msg, s),
+            _ => default_msg.to_string(),
+        };
+        self.emit_panic(&full_msg);
+        self.builder.build_unreachable().unwrap();
+        // Placeholder value: the block is now terminated, so every value-
+        // consuming caller respects the terminator guard and never reads it.
+        Ok(self.context.i64_type().const_int(0, false).into())
     }
 
     /// Phase-7 line 5 sub-item 1 — lower a call to a hot-swap-slotted

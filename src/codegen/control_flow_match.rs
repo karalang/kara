@@ -235,16 +235,27 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(merge_bb);
         self.pattern_binding_is_borrow = saved_borrow_flag;
 
-        // Build phi if all arms produce a value of the same type
-        if !arm_results.is_empty() {
-            let first_ty = arm_results[0].0.get_type();
-            if arm_results.iter().all(|(v, _)| v.get_type() == first_ty) {
-                let phi = self.builder.build_phi(first_ty, "matchval").unwrap();
-                for (val, bb) in &arm_results {
-                    phi.add_incoming(&[(val, *bb)]);
-                }
-                return Ok(phi.as_basic_value());
+        // Every arm diverged (`return` / `unreachable()` / `todo()` in all of
+        // them): no arm branched to `merge_bb`, so it has no predecessors.
+        // Terminate it with `unreachable` so the enclosing fn-tail `ret` guard
+        // skips emitting `ret <i64 placeholder>` against a non-i64 return type
+        // (the gap-d failure class for an all-diverging `match` tail).
+        if arm_results.is_empty() {
+            self.builder.build_unreachable().unwrap();
+            return Ok(self.context.i64_type().const_int(0, false).into());
+        }
+
+        // Build phi if all (live) arms produce a value of the same type. A
+        // single live arm (the rest diverging) yields a one-incoming phi,
+        // which is valid and dominates the merge — so
+        // `match x { A => v, _ => unreachable() }` evaluates to `v`.
+        let first_ty = arm_results[0].0.get_type();
+        if arm_results.iter().all(|(v, _)| v.get_type() == first_ty) {
+            let phi = self.builder.build_phi(first_ty, "matchval").unwrap();
+            for (val, bb) in &arm_results {
+                phi.add_incoming(&[(val, *bb)]);
             }
+            return Ok(phi.as_basic_value());
         }
 
         Ok(self.context.i64_type().const_int(0, false).into())

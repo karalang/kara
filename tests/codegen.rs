@@ -1004,6 +1004,69 @@ fn main() reads(AuditLog) {
         );
     }
 
+    /// gap-d IR pin: `unreachable()` (type `!`) as the tail of a
+    /// value-returning fn must lower to an `unreachable` terminator, NOT a
+    /// `ret <i64 placeholder>`. Before the fix, `boom`'s body emitted
+    /// `ret i64 0` against the `{ i64 }` (FakeClock) return type and failed
+    /// module verification ("return type does not match operand type").
+    /// `boom` is private, so its `panics` effect is inferred — no annotation
+    /// needed.
+    #[test]
+    fn test_ir_diverge_unreachable_tail_emits_unreachable_not_ret() {
+        let ir = ir_for(
+            "struct FakeClock { t: i64 }\n\
+             fn boom() -> FakeClock { unreachable() }\n\
+             fn main() { let _c = boom(); }",
+        );
+        let body = function_body(&ir, "boom").expect("boom body");
+        assert!(
+            body.contains("unreachable"),
+            "diverging tail should emit an `unreachable` terminator; body was:\n{}",
+            body
+        );
+        assert!(
+            !body.contains("ret i64"),
+            "diverging tail must not emit `ret i64 <placeholder>` against the struct \
+             return type; body was:\n{}",
+            body
+        );
+    }
+
+    /// gap-d: a diverging arm (`unreachable()`) must not collapse an
+    /// `if`-expression's value to the const-0 placeholder — the live arm's
+    /// value is the result. Before the fix this printed `0`.
+    #[test]
+    fn test_e2e_diverge_if_branch_yields_live_value() {
+        let out = run_program(
+            "fn pick(n: i64) -> i64 { if n > 0 { n } else { unreachable() } }\n\
+             fn main() { println(pick(7)); }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7");
+        }
+    }
+
+    /// gap-d: same for a `match` with a diverging arm — the single live arm's
+    /// value flows through (one-incoming phi), and the struct-returning fn
+    /// compiles (proving the `unreachable()` arm emitted a terminator, not a
+    /// `ret` mismatch).
+    #[test]
+    fn test_e2e_diverge_match_arm_in_struct_returning_fn() {
+        let out = run_program(
+            "struct Point { x: i64 }\n\
+             fn make(n: i64) -> Point {\n\
+             \x20   match n {\n\
+             \x20       0 => Point { x: 42 },\n\
+             \x20       _ => unreachable(),\n\
+             \x20   }\n\
+             }\n\
+             fn main() { let p = make(0); println(p.x); }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
     // ── println signedness round-trips ───────────────────────────
     //
     // Pre-fix `println(x: i32)` passed the raw i32 to printf "%lld";

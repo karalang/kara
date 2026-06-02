@@ -87,14 +87,29 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         self.builder.position_at_end(merge_bb);
-        if let (Some(tv), Some(ev)) = (&then_val, &else_val) {
-            if !then_terminated && !else_terminated && tv.get_type() == ev.get_type() {
-                let phi = self.builder.build_phi(tv.get_type(), "ifletval").unwrap();
-                phi.add_incoming(&[(tv, then_end), (ev, else_end)]);
-                return Ok(phi.as_basic_value());
+        let placeholder = self.context.i64_type().const_int(0, false).into();
+        match (then_terminated, else_terminated) {
+            // Both arms diverge — terminate the unreachable merge block (see
+            // `compile_if` for the gap-d rationale).
+            (true, true) => {
+                self.builder.build_unreachable().unwrap();
+                Ok(placeholder)
+            }
+            // Exactly one arm diverges: the `if let` value is the live arm's
+            // value (single live predecessor dominates the merge).
+            (true, false) => Ok(else_val.unwrap_or(placeholder)),
+            (false, true) => Ok(then_val.unwrap_or(placeholder)),
+            (false, false) => {
+                if let (Some(tv), Some(ev)) = (&then_val, &else_val) {
+                    if tv.get_type() == ev.get_type() {
+                        let phi = self.builder.build_phi(tv.get_type(), "ifletval").unwrap();
+                        phi.add_incoming(&[(tv, then_end), (ev, else_end)]);
+                        return Ok(phi.as_basic_value());
+                    }
+                }
+                Ok(placeholder)
             }
         }
-        Ok(self.context.i64_type().const_int(0, false).into())
     }
 
     pub(super) fn compile_print(
@@ -460,15 +475,42 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(merge_bb);
 
-        if let (Some(tv), Some(ev)) = (&then_val, &else_val) {
-            if !then_terminated && !else_terminated && tv.get_type() == ev.get_type() {
-                let phi = self.builder.build_phi(tv.get_type(), "ifval").unwrap();
-                phi.add_incoming(&[(tv, then_end_bb), (ev, else_end_bb)]);
-                return Ok(phi.as_basic_value());
+        let placeholder = self.context.i64_type().const_int(0, false).into();
+        match (then_terminated, else_terminated) {
+            // Both arms diverge (`return` / `unreachable()` / `todo()` on each
+            // side): the merge block has no predecessors. Terminate it with
+            // `unreachable` so the enclosing terminator guards (the fn-tail
+            // `ret` in `compile_function`, `compile_block` between statements)
+            // skip emitting a follow-on instruction — otherwise a
+            // value-returning fn whose `if` both-diverges would emit
+            // `ret <i64 placeholder>` against its real return type and fail
+            // module verification (the gap-d failure class for branchy tails).
+            (true, true) => {
+                self.builder.build_unreachable().unwrap();
+                Ok(placeholder)
+            }
+            // Exactly one arm diverges: the merge has a single live
+            // predecessor, so the `if`-expression's value IS the live arm's
+            // value (it dominates the merge — no phi needed). This is what
+            // makes `if c { v } else { unreachable() }` evaluate to `v`
+            // rather than the const-0 placeholder. `unwrap_or` covers the
+            // value-less arm (e.g. a terminated `then` with no `else`).
+            (true, false) => Ok(else_val.unwrap_or(placeholder)),
+            (false, true) => Ok(then_val.unwrap_or(placeholder)),
+            // Neither arm diverges: phi over both when the value types agree;
+            // otherwise the `if` is in statement position (unit value) — fall
+            // back to the const-0 placeholder.
+            (false, false) => {
+                if let (Some(tv), Some(ev)) = (&then_val, &else_val) {
+                    if tv.get_type() == ev.get_type() {
+                        let phi = self.builder.build_phi(tv.get_type(), "ifval").unwrap();
+                        phi.add_incoming(&[(tv, then_end_bb), (ev, else_end_bb)]);
+                        return Ok(phi.as_basic_value());
+                    }
+                }
+                Ok(placeholder)
             }
         }
-
-        Ok(self.context.i64_type().const_int(0, false).into())
     }
 
     pub(super) fn compile_while(
