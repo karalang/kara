@@ -110,27 +110,31 @@ impl<'ctx> super::Codegen<'ctx> {
         provider_expr: &Expr,
         closure_expr: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // 0. Ambient prelude resources (`Clock`, `Env`, …) have no
-        //    `effect resource R: T` declaration, so no provider trait and
-        //    no trait-keyed vtable. They override via the ambient path,
-        //    which (as of the runtime-dispatch slice) pushes the override
-        //    onto the SAME runtime provider stack as user resources —
-        //    using a synthesized vtable built from the ambient resource's
-        //    canonical method order — so the override is visible across
-        //    function-call boundaries, matching the interpreter.
+        // 0. Trait-less resources have no `effect resource R: T` declaration,
+        //    so no provider trait and no trait-keyed vtable. They override via
+        //    the ambient runtime-stack path, which pushes the override onto
+        //    the SAME `karac_provider_*` stack as trait-ful resources — using
+        //    a vtable synthesized from the resource's method order — so the
+        //    override is visible across function-call boundaries, matching the
+        //    interpreter. Two flavours, both routed here:
+        //      - **Prelude ambient** (`Clock`, `Env`, …): method order from
+        //        `prelude::AMBIENT_RESOURCE_METHODS`; an unoverridden call
+        //        falls back to the builtin FFI default.
+        //      - **User trait-less** (`effect resource R;` with no `: T`):
+        //        method order from the override type's inherent impl, recorded
+        //        in `user_ambient_resource_methods` by the eager pre-pass;
+        //        there is no FFI default, so dispatch is always through the
+        //        active override (the effect checker guarantees R is in scope).
         //
         //    The discriminator is trait-*absence*, NOT ID-absence: codegen
-        //    now mints a stable resource ID for every ambient resource
-        //    (see `compile_program`), and a few prelude resources
-        //    (`Network`, `ProcessTable`) carry an `Item::EffectResource`
-        //    declaration so they land in `provider_resource_ids` anyway —
-        //    but none has a `: T` provider trait, so keying on
-        //    `provider_resource_traits` routes all of them to the ambient
-        //    path while leaving user `effect resource R: T` on the vtable
-        //    path. (User resources are never in `PRELUDE_EFFECT_RESOURCES`.)
-        if crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&resource)
-            && !self.provider_resource_traits.contains_key(resource)
-        {
+        //    mints a stable resource ID for every ambient resource (see
+        //    `compile_program`), and a few prelude resources (`Network`,
+        //    `ProcessTable`) carry an `Item::EffectResource` declaration so
+        //    they land in `provider_resource_ids` anyway — but none has a
+        //    `: T` provider trait, so keying on `provider_resource_traits`
+        //    routes all trait-less resources to the ambient path while leaving
+        //    user `effect resource R: T` on the trait-vtable path below.
+        if !self.provider_resource_traits.contains_key(resource) {
             return self.compile_with_provider_ambient(resource, provider_expr, closure_expr);
         }
 
@@ -232,18 +236,21 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(body_result)
     }
 
-    /// `with_provider[R]` lowering for an ambient prelude resource
-    /// (`Clock`, `Env`, …) overridden by a statically-typed provider.
-    /// Runtime-stack path (unified with the user-resource dispatch): push
-    /// the override onto the same `karac_provider_*` stack, keyed by the
-    /// ambient resource's minted ID, carrying a vtable synthesized from
-    /// the resource's canonical method order. The override is therefore
-    /// visible to ambient method calls *across function-call boundaries*
-    /// (the call sites consult the runtime stack — see
-    /// `try_compile_ambient_dispatch`), matching the interpreter and the
-    /// user-resource path. This is what makes `karac test` provider
-    /// fixtures work: `test_main_synth` wraps a *call* to the test fn, so
-    /// the body's `Clock.now()` is cross-boundary.
+    /// `with_provider[R]` lowering for a *trait-less* resource overridden by
+    /// a statically-typed provider — either a prelude ambient resource
+    /// (`Clock`, `Env`, …) or a user `effect resource R;` (no `: T`).
+    /// Runtime-stack path (unified with the trait-ful dispatch): push the
+    /// override onto the same `karac_provider_*` stack, keyed by the
+    /// resource's minted ID, carrying a vtable synthesized from the
+    /// resource's method order (prelude: `AMBIENT_RESOURCE_METHODS`; user:
+    /// the override type's inherent impl, recorded in
+    /// `user_ambient_resource_methods`). The override is therefore visible to
+    /// method calls *across function-call boundaries* (the call sites consult
+    /// the runtime stack — see `try_compile_provider_dispatch` /
+    /// `compile_ambient_resource_method`), matching the interpreter and the
+    /// trait-ful path. This is what makes `karac test` provider fixtures
+    /// work: `test_main_synth` wraps a *call* to the test fn, so the body's
+    /// `Clock.now()` / `AuditLog.count()` is cross-boundary.
     ///
     /// The provider type must be statically inferable at this site
     /// (struct literal or typed identifier — the same shapes
@@ -324,17 +331,26 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(g) = self.provider_vtables.get(&key) {
             return Ok(g.as_pointer_value());
         }
-        let methods = crate::prelude::AMBIENT_RESOURCE_METHODS
+        // Method order: prelude ambient resources have a hardcoded canonical
+        // order; trait-less *user* resources derive theirs from the override
+        // type's inherent impl, recorded in `user_ambient_resource_methods`
+        // by the eager pre-pass (`emit_ambient_provider_vtables`).
+        let methods: Vec<String> = if let Some(m) = crate::prelude::AMBIENT_RESOURCE_METHODS
             .iter()
             .find(|(r, _)| *r == resource)
             .map(|(_, m)| *m)
-            .ok_or_else(|| {
-                format!(
-                    "with_provider[{}]: no canonical method order for ambient resource — add it \
-                     to `prelude::AMBIENT_RESOURCE_METHODS`",
-                    resource
-                )
-            })?;
+        {
+            m.iter().map(|s| s.to_string()).collect()
+        } else if let Some(m) = self.user_ambient_resource_methods.get(resource) {
+            m.clone()
+        } else {
+            return Err(format!(
+                "with_provider[{}]: no method order for resource — prelude resources need an \
+                 entry in `prelude::AMBIENT_RESOURCE_METHODS`; a trait-less user resource needs \
+                 its override type's inherent-impl methods recorded by the eager vtable pre-pass",
+                resource
+            ));
+        };
         let ptr_type = self.context.ptr_type(AddressSpace::default());
         let mut entries: Vec<inkwell::values::PointerValue<'ctx>> = Vec::new();
         for method_name in methods {
@@ -370,13 +386,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// from a struct literal or a `let`-bound struct literal (the shapes
     /// `infer_provider_type_name` and `test_main_synth` produce).
     pub(super) fn emit_ambient_provider_vtables(&mut self, program: &Program) {
+        // A trait-less *user* resource has no trait to pin its method order,
+        // so derive it from the override type's inherent impl. Collect every
+        // type's inherent-impl method order once up front; the scan records
+        // `user_ambient_resource_methods[R]` from this when it meets a
+        // `with_provider[R]` whose override type is statically known.
+        let inherent_methods = collect_inherent_methods(program);
         for item in &program.items {
             match item {
-                Item::Function(f) => self.scan_block_for_ambient_overrides(&f.body),
+                Item::Function(f) => {
+                    self.scan_block_for_ambient_overrides(&f.body, &inherent_methods)
+                }
                 Item::ImplBlock(imp) => {
                     for ii in &imp.items {
                         if let ImplItem::Method(m) = ii {
-                            self.scan_block_for_ambient_overrides(&m.body);
+                            self.scan_block_for_ambient_overrides(&m.body, &inherent_methods);
                         }
                     }
                 }
@@ -385,7 +409,11 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    fn scan_block_for_ambient_overrides(&mut self, block: &Block) {
+    fn scan_block_for_ambient_overrides(
+        &mut self,
+        block: &Block,
+        inherent_methods: &std::collections::HashMap<String, Vec<String>>,
+    ) {
         // `let p = StructLit` bindings let a provider passed by identifier
         // resolve to its struct type (test_main_synth binds the fixture
         // ctor to a `let` before the `with_provider`).
@@ -401,14 +429,16 @@ impl<'ctx> super::Codegen<'ctx> {
                             bindings.insert(name.clone(), ty.clone());
                         }
                     }
-                    self.scan_expr_for_ambient_overrides(value, &bindings);
+                    self.scan_expr_for_ambient_overrides(value, &bindings, inherent_methods);
                 }
-                StmtKind::Expr(e) => self.scan_expr_for_ambient_overrides(e, &bindings),
+                StmtKind::Expr(e) => {
+                    self.scan_expr_for_ambient_overrides(e, &bindings, inherent_methods)
+                }
                 _ => {}
             }
         }
         if let Some(tail) = &block.final_expr {
-            self.scan_expr_for_ambient_overrides(tail, &bindings);
+            self.scan_expr_for_ambient_overrides(tail, &bindings, inherent_methods);
         }
     }
 
@@ -416,32 +446,60 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         expr: &Expr,
         bindings: &std::collections::HashMap<String, String>,
+        inherent_methods: &std::collections::HashMap<String, Vec<String>>,
     ) {
         match &expr.kind {
             ExprKind::Call { callee, args } => {
                 if let Some((resource, provider_expr, closure_expr)) =
                     match_with_provider_call(callee, args)
                 {
-                    if crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&resource.as_str())
+                    // Trait-less resources (prelude ambient OR user
+                    // `effect resource R;`) route through the runtime-stack
+                    // ambient path and need a `(U, R)` override vtable. Keyed
+                    // on `provider_resource_ids` (every valid resource has an
+                    // ID by now) to skip bogus names, and trait-absence to
+                    // leave trait-ful resources on `emit_provider_vtables`.
+                    if self.provider_resource_ids.contains_key(&resource)
                         && !self.provider_resource_traits.contains_key(&resource)
                     {
                         if let Some(ty) = ambient_provider_type(provider_expr, bindings) {
+                            // A trait-less *user* resource (not a prelude
+                            // ambient one) has no canonical method order, so
+                            // record it from the override type's inherent impl
+                            // — vtable emission and call-site dispatch then
+                            // index consistently. Prelude resources keep their
+                            // hardcoded `AMBIENT_RESOURCE_METHODS` order and an
+                            // FFI default, so they are NOT recorded here (that
+                            // membership is what `try_compile_provider_dispatch`
+                            // uses to route user resources through the
+                            // always-override, no-default path).
+                            if !crate::prelude::PRELUDE_EFFECT_RESOURCES
+                                .contains(&resource.as_str())
+                            {
+                                if let Some(methods) = inherent_methods.get(&ty) {
+                                    self.user_ambient_resource_methods
+                                        .entry(resource.clone())
+                                        .or_insert_with(|| methods.clone());
+                                }
+                            }
                             // Idempotent: `emit_ambient_vtable` no-ops if the
                             // `(U, R)` vtable already exists.
                             let _ = self.emit_ambient_vtable(&ty, &resource);
                         }
                     }
                     if let ExprKind::Closure { body, .. } = &closure_expr.kind {
-                        self.scan_expr_for_ambient_overrides(body, bindings);
+                        self.scan_expr_for_ambient_overrides(body, bindings, inherent_methods);
                     }
                     return;
                 }
                 for a in args {
-                    self.scan_expr_for_ambient_overrides(&a.value, bindings);
+                    self.scan_expr_for_ambient_overrides(&a.value, bindings, inherent_methods);
                 }
             }
-            ExprKind::Block(b) => self.scan_block_for_ambient_overrides(b),
-            ExprKind::Closure { body, .. } => self.scan_expr_for_ambient_overrides(body, bindings),
+            ExprKind::Block(b) => self.scan_block_for_ambient_overrides(b, inherent_methods),
+            ExprKind::Closure { body, .. } => {
+                self.scan_expr_for_ambient_overrides(body, bindings, inherent_methods)
+            }
             _ => {}
         }
     }
@@ -592,44 +650,76 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(&resource_id) = self.provider_resource_ids.get(name) else {
             return Ok(None);
         };
-        let Some(trait_name) = self.provider_resource_traits.get(name).cloned() else {
-            // `effect resource R;` (no `: T`) — no dispatch possible.
-            // Fall through to the regular assoc-call path so an
-            // upstream typechecker error or a future R-as-ID use stays
-            // observable.
-            return Ok(None);
-        };
 
-        let method_order = self
-            .provider_trait_methods
-            .get(&trait_name)
-            .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "R.method dispatch: provider trait '{}' has no recorded method order \
-                     (vtable emission and dispatch out of sync — codegen bug)",
-                    trait_name
-                )
-            })?;
+        // Determine the method order + indirect-call FunctionType. Two kinds
+        // of overridable resource reach here:
+        //   - **Trait-ful** (`effect resource R: T`): index into the trait's
+        //     declaration-order methods; the fn-type comes from any impl of
+        //     the trait method.
+        //   - **Trait-less *user*** (`effect resource R;`): no trait, so index
+        //     into the override type's inherent-impl order recorded in
+        //     `user_ambient_resource_methods` (eager vtable pre-pass), with the
+        //     resource name `R` itself playing the trait-key role in
+        //     `provider_vtables` (`(U, R)`). Both dispatch unconditionally
+        //     through the active override (no FFI default) — the effect
+        //     checker guarantees `R` is in scope at the call site.
+        // A prelude ambient resource (`Clock`, …) is trait-less too but is
+        // NOT recorded in `user_ambient_resource_methods`: it falls through
+        // to the ambient FFI-default path (`compile_ambient_resource_method`)
+        // via `Ok(None)` so an unoverridden call gets the builtin behaviour.
+        let (method_order, fn_type) =
+            if let Some(trait_name) = self.provider_resource_traits.get(name).cloned() {
+                let order = self
+                    .provider_trait_methods
+                    .get(&trait_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!(
+                            "R.method dispatch: provider trait '{}' has no recorded method order \
+                         (vtable emission and dispatch out of sync — codegen bug)",
+                            trait_name
+                        )
+                    })?;
+                // Borrow the FunctionType from any impl of this trait method.
+                // All impls of the same trait share the same lowered signature.
+                let ft = self
+                    .provider_method_fn_type(&trait_name, method)
+                    .ok_or_else(|| {
+                        format!(
+                            "R.method dispatch: no impl found for `{}::{}` — at least one \
+                     `impl {} for U` must exist to populate the vtable",
+                            trait_name, method, trait_name
+                        )
+                    })?;
+                (order, ft)
+            } else if let Some(order) = self.user_ambient_resource_methods.get(name).cloned() {
+                // Trait-less user resource. The `(U, R)` vtable uses the resource
+                // name as its "trait" key, so `provider_method_fn_type(R, method)`
+                // recovers the lowered signature from `@U.method`.
+                let ft = self.provider_method_fn_type(name, method).ok_or_else(|| {
+                    format!(
+                        "R.method dispatch: no override impl found for trait-less resource '{}' \
+                     method '{}' — a `with_provider[{}]` with a struct-typed provider must \
+                     supply an `impl U {{ fn {}(...) }}`",
+                        name, method, name, method
+                    )
+                })?;
+                (order, ft)
+            } else {
+                // `effect resource R;` with no recorded override in this module
+                // (never reached a scannable `with_provider[R]` site). Fall through
+                // to the regular assoc-call path so an upstream typechecker error
+                // or a future R-as-ID use stays observable.
+                return Ok(None);
+            };
         let method_idx = method_order
             .iter()
             .position(|m| m == method)
             .ok_or_else(|| {
                 format!(
-                "R.method dispatch: '{}' is not a method of provider trait '{}' for resource '{}'",
-                method, trait_name, name
-            )
-            })?;
-
-        // Borrow the FunctionType from any impl of this trait method.
-        // All impls of the same trait share the same lowered signature.
-        let fn_type = self
-            .provider_method_fn_type(&trait_name, method)
-            .ok_or_else(|| {
-                format!(
-                    "R.method dispatch: no impl found for `{}::{}` — at least one \
-                     `impl {} for U` must exist to populate the vtable",
-                    trait_name, method, trait_name
+                    "R.method dispatch: '{}' is not a method recorded for resource '{}' \
+                 (method order: {:?})",
+                    method, name, method_order
                 )
             })?;
 
@@ -701,9 +791,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .next()
             .ok_or_else(|| {
                 format!(
-                    "R.method dispatch: provider trait method `{}::{}` has no self parameter \
+                    "R.method dispatch: provider method `{}.{}` has no self parameter \
                      in its lowered signature — codegen bug",
-                    trait_name, method
+                    name, method
                 )
             })?;
         let self_arg: BasicMetadataValueEnum<'ctx> = match self_param_ty {
@@ -719,9 +809,9 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             other => {
                 return Err(format!(
-                    "R.method dispatch: unexpected self-param lowering `{:?}` for `{}::{}` — \
+                    "R.method dispatch: unexpected self-param lowering `{:?}` for `{}.{}` — \
                      expected ptr (ref self / mut ref self / shared) or struct (owned self)",
-                    other, trait_name, method
+                    other, name, method
                 ));
             }
         };
@@ -784,4 +874,32 @@ fn ambient_provider_type(
         ExprKind::Identifier(n) => bindings.get(n).cloned(),
         _ => None,
     }
+}
+
+/// Collect each type's inherent-impl (`impl T { ... }`, no trait) method
+/// names in source order. Used to derive the canonical method order for a
+/// trait-less *user* effect resource (`effect resource R;`) from its
+/// override type `U`, since `R` has no trait to pin the vtable layout.
+/// A type with multiple inherent impl blocks contributes its methods in
+/// block-then-declaration order; trait impls are excluded (a trait-less
+/// resource's override dispatches through the type's own inherent methods).
+fn collect_inherent_methods(program: &Program) -> std::collections::HashMap<String, Vec<String>> {
+    let mut out: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for item in &program.items {
+        if let Item::ImplBlock(imp) = item {
+            if imp.trait_name.is_some() {
+                continue;
+            }
+            let Some(target) = impl_target_name(&imp.target_type) else {
+                continue;
+            };
+            let entry = out.entry(target).or_default();
+            for ii in &imp.items {
+                if let ImplItem::Method(m) = ii {
+                    entry.push(m.name.clone());
+                }
+            }
+        }
+    }
+    out
 }

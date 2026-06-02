@@ -920,6 +920,43 @@ fn main() reads(Clock) {
         }
     }
 
+    #[test]
+    fn test_e2e_with_provider_trait_less_user_resource() {
+        // Gap (c): a *trait-less* user resource (`effect resource R;` with no
+        // `: T`) overridden by a statically-typed provider. Unlike a prelude
+        // ambient resource (`Clock`), a trait-less user resource has no
+        // canonical method order and no FFI default — its method order is
+        // derived from the override type's inherent impl, and every call
+        // dispatches through the active override. Two methods exercise the
+        // vtable-index path, and the call lives in a *separate function*
+        // (`tally`) so dispatch is cross-boundary (the runtime provider
+        // stack, not lexical scope). Before the fix this errored at codegen
+        // with "resource 'AuditLog' has no provider trait". `karac run` of
+        // the same source prints 12.
+        let out = run_program(
+            r#"
+effect resource AuditLog;
+struct FakeLog { n: i64 }
+impl FakeLog {
+    fn count(self) -> i64 { self.n }
+    fn bump(self) -> i64 { self.n + 7 }
+}
+fn tally() -> i64 reads(AuditLog) {
+    AuditLog.count() + AuditLog.bump()
+}
+fn main() reads(AuditLog) {
+    with_provider[AuditLog](FakeLog { n: 1 }, || {
+        println(tally());
+    });
+}
+"#,
+        );
+        if let Some(out) = out {
+            // count() = n = 1; bump() = n + 7 = 8; sum = 9.
+            assert_eq!(out.trim(), "9");
+        }
+    }
+
     /// phase-7 — an explicit valueless `return;` reachable in `main` must
     /// emit `ret i32 0` (main lowers to a C-ABI `i32 main()`), not
     /// `ret void`. Before the fix this failed module verification

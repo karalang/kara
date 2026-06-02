@@ -1550,6 +1550,20 @@ pub(super) struct Codegen<'ctx> {
     /// store fn ptrs in this same order; method dispatch resolves the
     /// vtable index by `position()` against this list.
     pub(crate) provider_trait_methods: HashMap<String, Vec<String>>,
+    /// Trait-less *user* effect resource (`effect resource R;`, no `: T`)
+    /// → ordered method-name list, derived from the override type's
+    /// inherent-impl method order during the eager ambient-vtable pre-pass
+    /// (`emit_ambient_provider_vtables`). A trait-less resource has no trait
+    /// to pin a canonical method order, so it is keyed by *resource* (the
+    /// call site `R.method(...)` knows R but not the override type U) and
+    /// plays the same role `provider_trait_methods` plays for trait-ful
+    /// resources: vtable layout + dispatch index. Distinct from
+    /// `prelude::AMBIENT_RESOURCE_METHODS` (prelude resources like `Clock`
+    /// keep their hardcoded order + FFI default); membership here is the
+    /// discriminator that routes a trait-less resource through the
+    /// always-override runtime dispatch (no FFI default) in
+    /// `try_compile_provider_dispatch`.
+    pub(crate) user_ambient_resource_methods: HashMap<String, Vec<String>>,
     /// (impl-target type name, trait name) → emitted vtable global.
     /// Populated after impl method declarations run in `compile_program`.
     pub(crate) provider_vtables: HashMap<(String, String), GlobalValue<'ctx>>,
@@ -3508,6 +3522,7 @@ impl<'ctx> Codegen<'ctx> {
             provider_resource_ids: HashMap::new(),
             provider_resource_traits: HashMap::new(),
             provider_trait_methods: HashMap::new(),
+            user_ambient_resource_methods: HashMap::new(),
             provider_vtables: HashMap::new(),
             karac_provider_push_fn,
             karac_provider_pop_fn,
