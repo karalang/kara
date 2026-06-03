@@ -8125,11 +8125,20 @@ fn cmd_test(filter: Option<String>, all: bool) {
         // codegen-path gaps that held this back are closed: (a) cross-boundary
         // ambient `with_provider` (`acd63e65`), (b) contract-fault category
         // (`a68e72b2`), (c) trait-less user-resource dispatch (`2cf859d8`), and
-        // (d) diverging-tail IR (`6307933e`) — the last of which restored the
-        // `provider_construction_failed` distinction (a panicking fixture ctor
-        // now *compiles* and surfaces its non-zero exit as that outcome).
+        // (d) diverging-tail IR (`6307933e`) — the last of which made a
+        // panicking fixture ctor *compile* and surface a non-zero exit.
         // `KARAC_TEST_JIT=0` is now the regression-bisect escape hatch rather
         // than `=1` being the opt-in.
+        //
+        // The `provider_construction_failed` outcome distinction (a faulting
+        // ctor reported separately from a faulting body, with the resource
+        // named and `duration_ms` 0 — the interpreter's behaviour) is
+        // preserved under JIT via the synth main's per-ctor `PROVIDER_CTOR_MARKER`
+        // checkpoints: `dispatch` counts them in the captured stdout and
+        // returns `provider_ctor_failed: Some(idx)` when a ctor faulted before
+        // the body ran (see `test_main_synth` / `test_jit_dispatch`). The
+        // `Completed` arm below maps that to the same event the interpreter
+        // path emits.
         #[cfg(feature = "lljit_prototype")]
         if std::env::var("KARAC_TEST_JIT").as_deref() != Ok("0") {
             let timeout = std::env::var("KARAC_TEST_TIMEOUT_SECS")
@@ -8165,6 +8174,7 @@ fn cmd_test(filter: Option<String>, all: bool) {
                 crate::test_jit_dispatch::JitTestResult::Completed {
                     outcome,
                     duration_ms,
+                    provider_ctor_failed,
                 } => {
                     if outcome.passed {
                         passed += 1;
@@ -8175,6 +8185,26 @@ fn cmd_test(filter: Option<String>, all: bool) {
                                 json_string(&t.qualified),
                                 duration_ms
                             ),
+                        );
+                    } else if let Some(idx) = provider_ctor_failed {
+                        // A fixture constructor faulted before the body ran:
+                        // report `provider_construction_failed` for the failing
+                        // resource with `duration_ms` 0, exactly as the
+                        // interpreter path does. `idx` is the source-order
+                        // index of the fixture whose ctor faulted.
+                        failed += 1;
+                        let resource = t
+                            .with_providers
+                            .get(idx)
+                            .map(|fx| fx.resource_path.as_str())
+                            .unwrap_or("");
+                        let message = outcome
+                            .message
+                            .as_deref()
+                            .unwrap_or("provider constructor failed");
+                        emit_test_event(
+                            "test_fail",
+                            &test_fail_provider_construction_fields(t, resource, message),
                         );
                     } else {
                         failed += 1;

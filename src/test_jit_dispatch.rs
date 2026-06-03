@@ -47,6 +47,14 @@ pub enum JitTestResult {
     Completed {
         outcome: TestOutcome,
         duration_ms: u128,
+        /// `Some(idx)` when the fault occurred while constructing fixture
+        /// `idx`'s provider (before the test body ran) — recovered by
+        /// counting `PROVIDER_CTOR_MARKER` lines in the captured stdout
+        /// against the fixture count. The caller maps this to the
+        /// interpreter's `provider_construction_failed` outcome (failing
+        /// resource named, `duration_ms` reported as 0). `None` for a clean
+        /// pass or a body fault (all ctors checkpointed).
+        provider_ctor_failed: Option<usize>,
     },
     /// The subprocess timed out (the c.4 watchdog will populate this;
     /// for c.3's initial form the variant exists but is never produced).
@@ -529,14 +537,18 @@ impl TestBatchRunner {
             Ok(s) => s,
             Err(message) => return JitTestResult::SpawnFailed { message },
         };
-        self.run_test(&ir, timeout)
+        self.run_test(&ir, timeout, fixtures.len())
     }
 
     /// Run one already-built per-test `main` IR. Lazily (re-)spawns the
     /// runner + (re-)installs the persistent module, sends the test IR, and
     /// maps the outcome. On runner death (test faulted) or timeout the
     /// connection is dropped so the next call re-spawns + re-installs.
-    fn run_test(&mut self, ir: &str, timeout: Duration) -> JitTestResult {
+    ///
+    /// `num_fixtures` is the count of `#[with_provider]` fixtures on this
+    /// test, used to recover the provider-ctor-fault distinction from the
+    /// `PROVIDER_CTOR_MARKER` checkpoints in the captured stdout.
+    fn run_test(&mut self, ir: &str, timeout: Duration, num_fixtures: usize) -> JitTestResult {
         let id = self.next_id;
         self.next_id += 1;
         if let Err(message) = self.ensure_ready() {
@@ -556,18 +568,27 @@ impl TestBatchRunner {
         let map = |rc: i32| {
             let out = String::from_utf8_lossy(&read_file(&out_path)).into_owned();
             let err = String::from_utf8_lossy(&read_file(&err_path)).into_owned();
-            map_exit_to_outcome(rc, &out, &err)
+            let outcome = map_exit_to_outcome(rc, &out, &err);
+            let provider_ctor_failed =
+                provider_ctor_fault_index(&out, num_fixtures, outcome.passed);
+            (outcome, provider_ctor_failed)
         };
         let outcome = match result {
-            Exchange::Survived(rc) => JitTestResult::Completed {
-                outcome: map(rc),
-                duration_ms,
-            },
+            Exchange::Survived(rc) => {
+                let (outcome, provider_ctor_failed) = map(rc);
+                JitTestResult::Completed {
+                    outcome,
+                    duration_ms,
+                    provider_ctor_failed,
+                }
+            }
             Exchange::Died(rc) => {
                 self.drop_conn(); // force re-spawn + module re-install next test
+                let (outcome, provider_ctor_failed) = map(rc);
                 JitTestResult::Completed {
-                    outcome: map(rc),
+                    outcome,
                     duration_ms,
+                    provider_ctor_failed,
                 }
             }
             Exchange::TimedOut => {
@@ -716,6 +737,27 @@ fn locate_karac_jit_runner() -> Option<PathBuf> {
     } else {
         None
     }
+}
+
+/// Index of the fixture whose constructor faulted, recovered from the
+/// per-ctor [`crate::test_main_synth::PROVIDER_CTOR_MARKER`] checkpoints
+/// in the test's captured stdout. Each fixture ctor prints exactly one
+/// marker line once it constructs cleanly, so the marker count is the
+/// number of constructors that ran to completion. On a fault with fewer
+/// markers than fixtures, that count is the source-order index of the
+/// failing fixture (the marker after its ctor never printed). Returns
+/// `None` for a clean pass, a no-fixture test, or a body fault where every
+/// ctor checkpointed (count == `num_fixtures`). Only exact-match lines
+/// count, so the test's own interleaved stdout never inflates the tally.
+fn provider_ctor_fault_index(stdout: &str, num_fixtures: usize, passed: bool) -> Option<usize> {
+    if passed || num_fixtures == 0 {
+        return None;
+    }
+    let constructed = stdout
+        .lines()
+        .filter(|l| *l == crate::test_main_synth::PROVIDER_CTOR_MARKER)
+        .count();
+    (constructed < num_fixtures).then_some(constructed)
 }
 
 /// Map exit code + stderr to a `TestOutcome`. Exit 0 → pass. Any
@@ -963,6 +1005,40 @@ fn _force_runtime_error_import() -> Option<RuntimeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_ctor_fault_index_maps_marker_count_to_fixture() {
+        let m = crate::test_main_synth::PROVIDER_CTOR_MARKER;
+        // A clean pass never reports a ctor fault, regardless of markers.
+        assert_eq!(
+            provider_ctor_fault_index(&format!("{m}\n{m}\n"), 2, true),
+            None
+        );
+        // No fixtures → never a ctor fault.
+        assert_eq!(provider_ctor_fault_index("panic: x\n", 0, false), None);
+        // First ctor faulted: 0 markers, 1 fixture → fixture 0.
+        assert_eq!(
+            provider_ctor_fault_index("panic: boom\n", 1, false),
+            Some(0)
+        );
+        // Second ctor faulted: 1 marker, 2 fixtures → fixture 1.
+        assert_eq!(
+            provider_ctor_fault_index(&format!("{m}\npanic: boom\n"), 2, false),
+            Some(1)
+        );
+        // Body fault: every ctor checkpointed (2 markers, 2 fixtures) → None
+        // (the body, not a ctor, faulted).
+        assert_eq!(
+            provider_ctor_fault_index(&format!("{m}\n{m}\n"), 2, false),
+            None
+        );
+        // The test's own stdout interleaved with markers doesn't inflate the
+        // count — only exact-match marker lines are tallied.
+        assert_eq!(
+            provider_ctor_fault_index(&format!("hello\n{m}\nworld\n"), 2, false),
+            Some(1)
+        );
+    }
 
     #[test]
     fn parses_basic_failure_marker() {

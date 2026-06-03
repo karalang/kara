@@ -3380,31 +3380,24 @@ fn test_with_provider_fixture_pushes_frame_for_test() {
 #[test]
 fn test_with_provider_constructor_failure_emits_structured_fail() {
     // Constructor calls `boom()` which hits `unreachable()` — a runtime
-    // error surfaces before the frame is pushed, and the interpreter emits
+    // error surfaces before the frame is pushed, and the runner emits
     // `provider_construction_failed` instead of running the test body.
     //
-    // Pinned to the interpreter (`KARAC_TEST_JIT=0`): under JIT the
-    // synthesized main calls the ctor inline, so a panicking fixture is
-    // indistinguishable from a panicking test body — the runner surfaces a
-    // generic `test_fail` with the panic message, not the
-    // `provider_construction_failed` *reason* this test asserts. That
-    // distinction is a documented JIT limitation (the c.3 dispatch comment
-    // in `src/cli.rs`); preserving it under JIT would mean wrapping the
-    // synthesized main in `errdefer`-style ctor/body fault separation, its
-    // own follow-up slice. Until then this is one of the few cli tests that
-    // genuinely needs the interpreter path post-flip.
+    // Runs under whatever the default execution path is for the build (JIT
+    // when compiled `--features lljit_prototype`, interpreter otherwise) —
+    // NOT pinned. Under JIT the distinction is recovered by the synth main's
+    // per-ctor `PROVIDER_CTOR_MARKER` checkpoints: the failing ctor never
+    // prints its marker, so the runner sees fewer markers than fixtures and
+    // reports `provider_construction_failed` for the un-constructed resource
+    // (with `duration_ms` 0), matching the interpreter path. Both lanes must
+    // produce identical fields.
     let body = "fn boom() -> FakeClock { unreachable() }\n\
                 #[with_provider(Clock, boom())]\n\
                 test \"broken fixture\" {\n\
                     assert_eq(1, 1);\n\
                 }\n";
     let tmp = with_provider_project("test-with-provider-ctor-fail", body);
-    let out = karac_bin()
-        .current_dir(&tmp)
-        .env("KARAC_TEST_JIT", "0")
-        .arg("test")
-        .output()
-        .unwrap();
+    let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(

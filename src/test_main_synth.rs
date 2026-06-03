@@ -27,6 +27,25 @@ use crate::ast::{
 };
 use crate::token::Span;
 
+/// Sentinel `println`'d to stdout by the synthesized `main` immediately
+/// *after* each fixture constructor's `let` binding succeeds — a "ctor N
+/// constructed" checkpoint. The JIT test runner ([`crate::test_jit_dispatch`])
+/// counts these in the test's captured stdout: on a fault, fewer markers than
+/// fixtures means a *constructor* faulted (the marker after it never printed),
+/// and the count is the index of the failing fixture — letting the parent
+/// recover the interpreter's `provider_construction_failed` outcome distinction
+/// (a faulting ctor is reported separately from a faulting body, with the
+/// failing resource named and `duration_ms` 0).
+///
+/// Why stdout via `println` rather than a stderr marker: `eprintln` / explicit
+/// `stderr.*` do not lower in codegen yet (interpreter-only — tracked under the
+/// "remaining ambient built-in resource methods" entry), whereas `println`
+/// does. The runner redirects each test's stdout to a parent-known tempfile
+/// that the parent reads for panic parsing and then deletes, so these markers
+/// are never surfaced to the user — and only fixture tests (which run the full
+/// codegen path, not the no-fixture skeleton fast-path) ever emit them.
+pub const PROVIDER_CTOR_MARKER: &str = "__KARAC_TEST_PROVIDER_CTOR_OK__";
+
 /// One `#[with_provider(R, ctor)]` fixture to wrap around the test fn.
 /// Iterated source-order; the synthesizer nests `with_provider[R](ctor,
 /// || ...)` calls so the first fixture is the *outermost* push (matches
@@ -78,11 +97,17 @@ pub fn append_test_main(program: &mut Program, test_fn_name: &str, fixtures: &[P
     // `let` first, then reference the binding by name. Mirrors the
     // parallax_lite source pattern (`let pa = InMemoryMetrics.new();
     // with_provider[MetricsA](pa, || ...)`).
-    let mut let_stmts: Vec<Stmt> = Vec::with_capacity(fixtures.len());
+    let mut let_stmts: Vec<Stmt> = Vec::with_capacity(fixtures.len() * 2);
     let mut provider_idents: Vec<String> = Vec::with_capacity(fixtures.len());
     for (i, fx) in fixtures.iter().enumerate() {
         let binding = format!("__karac_test_provider_{i}");
         let_stmts.push(synth_let_binding(&binding, fx.constructor.clone()));
+        // Checkpoint: ctor `i` constructed. Printed only if the `let` above
+        // did not fault, so the count of these markers in the test's captured
+        // stdout is exactly the number of fixtures that constructed cleanly —
+        // the JIT runner uses it to recover `provider_construction_failed`.
+        // See `PROVIDER_CTOR_MARKER`.
+        let_stmts.push(synth_provider_ctor_marker());
         provider_idents.push(binding);
     }
 
@@ -102,6 +127,36 @@ pub fn append_test_main(program: &mut Program, test_fn_name: &str, fixtures: &[P
 
 fn is_main_function(item: &Item) -> bool {
     matches!(item, Item::Function(f) if f.name == "main")
+}
+
+/// `println("<PROVIDER_CTOR_MARKER>");` — a ctor-checkpoint statement. A
+/// bare `println` free call with a single string-literal arg, which
+/// `compile_print` (codegen) lowers to a `printf` to stdout. Placed after
+/// each fixture's `let` so it executes only when that constructor succeeded.
+fn synth_provider_ctor_marker() -> Stmt {
+    let zero = Span::default();
+    let call = Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Identifier("println".to_string()),
+                span: zero.clone(),
+            }),
+            args: vec![CallArg {
+                label: None,
+                mut_marker: false,
+                value: Expr {
+                    kind: ExprKind::StringLit(PROVIDER_CTOR_MARKER.to_string()),
+                    span: zero.clone(),
+                },
+                span: zero.clone(),
+            }],
+        },
+        span: zero.clone(),
+    };
+    Stmt {
+        kind: StmtKind::Expr(call),
+        span: zero,
+    }
 }
 
 /// Bare-identifier call: `<test_fn_name>()`.
