@@ -8434,6 +8434,40 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_fstring_in_loop_no_double_free() {
+        // Regression: an f-string built inside a `for`-loop body that
+        // reassigns the accumulator (`line = line + f"..."`) gave that
+        // accumulator a function-entry alloca but emitted its `{null,0,0}`
+        // init *inside* the loop body. When the loop never ran, the
+        // unconditional scope-exit cleanup read the uninitialized alloca's
+        // `cap` — fresh-0 on the first call (skips), but a non-zero leftover
+        // from the first call on the second, so the second call freed a
+        // garbage/literal pointer → `pointer being freed was not allocated`
+        // SIGABRT. The trigger needs a 2+-interpolation first f-string over
+        // owned-struct String fields + the loop + the fn called >=2x.
+        // Surfaced by std.tracing's StdoutExporter bodies; fixed by
+        // zero-initializing the accumulator at the entry block.
+        let out = run_program(
+            r#"
+struct E { level: String, message: String, items: Vec[i64] }
+fn ev(e: E) {
+    let mut line = f"[{e.level}] {e.message}";
+    for x in e.items { line = line + f" {x}"; }
+    println(line);
+}
+fn main() {
+    ev(E { level: "info", message: "one", items: Vec.new() });
+    println("between");
+    ev(E { level: "warn", message: "two", items: Vec.new() });
+}
+"#,
+        );
+        // Before the fix the second `ev` aborted, so stdout stopped after
+        // "[info] one"; a clean run prints all three lines in order.
+        assert_eq!(out.as_deref(), Some("[info] one\nbetween\n[warn] two\n"));
+    }
+
     // ── RC-fallback codegen E2E ──────────────────────────────────
 
     #[test]
@@ -28123,10 +28157,11 @@ fn main() {
             }"#,
         );
         // Two sequential exports + an owned-event temporary dropped after
-        // each: this is exactly the shape that the carried codegen cleanup
-        // bug (see tracing.kara's implementation note) crashes on when the
-        // exporter bodies use multi-interpolation f-strings, so a green run
-        // here also pins the concat-form workaround.
+        // each: this is the shape the f-string-in-a-loop double-free
+        // (`test_e2e_fstring_in_loop_no_double_free`) used to crash on. The
+        // exporter bodies now use the natural multi-interpolation f-string
+        // form again (the underlying codegen bug is fixed), so a green run
+        // here also guards against that regression returning.
         assert_eq!(
             out.as_deref(),
             Some("[info] plain\n[info] started user_id=42 ip=127.0.0.1 span_id=5\n"),

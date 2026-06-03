@@ -4986,6 +4986,49 @@ impl<'ctx> Codegen<'ctx> {
         b.build_alloca(ty, name).unwrap()
     }
 
+    /// Zero-initialize a `{ptr, len, cap}` String/Vec alloca to `{null, 0, 0}`
+    /// **at the entry block**, right after its alloca instruction — not at the
+    /// current builder position.
+    ///
+    /// Used for f-string accumulators (and any String/Vec temporary whose
+    /// alloca is hoisted to entry but whose value-initializing stores are
+    /// emitted at the expression site). If that expression sits inside a
+    /// conditionally-executed block (a `for` body, an `if` arm) that never
+    /// runs, the alloca is left holding uninitialized stack — and the
+    /// unconditional scope-exit cleanup then reads a garbage `cap`, frees a
+    /// garbage pointer, and corrupts the heap (the f-string-in-a-loop
+    /// double-free, surfaced by `std.tracing`'s exporter bodies). Emitting the
+    /// `{null, 0, 0}` store at entry guarantees the cap is `0` on the
+    /// never-executed path, so the `cap > 0` free guard skips it. The
+    /// expression site keeps its own re-init (a loop body re-evaluates the
+    /// f-string each iteration and must start from empty).
+    fn zero_init_str_acc_at_entry(&self, acc: PointerValue<'ctx>) {
+        let vec_ty = self.vec_struct_type();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let acc_inst = match acc.as_instruction() {
+            Some(inst) => inst,
+            None => return,
+        };
+        let b = self.context.create_builder();
+        // The alloca was inserted as the entry block's first instruction
+        // (`create_entry_alloca` positions before the prior first instruction),
+        // so its next instruction is a safe, dominating insertion point that
+        // precedes the block's terminator.
+        match acc_inst.get_next_instruction() {
+            Some(next) => b.position_before(&next),
+            None => b.position_at_end(acc_inst.get_parent().unwrap()),
+        }
+        let data_pp = b
+            .build_struct_gep(vec_ty, acc, 0, "fstr.init.data")
+            .unwrap();
+        let len_p = b.build_struct_gep(vec_ty, acc, 1, "fstr.init.len").unwrap();
+        let cap_p = b.build_struct_gep(vec_ty, acc, 2, "fstr.init.cap").unwrap();
+        b.build_store(data_pp, ptr_ty.const_null()).unwrap();
+        b.build_store(len_p, i64_t.const_int(0, false)).unwrap();
+        b.build_store(cap_p, i64_t.const_int(0, false)).unwrap();
+    }
+
     fn param_name(&self, param: &Param) -> String {
         match &param.pattern.kind {
             PatternKind::Binding(name) => name.clone(),

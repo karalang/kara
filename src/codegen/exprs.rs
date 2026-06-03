@@ -89,6 +89,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 let fn_val = self.current_fn.unwrap();
 
                 let acc = self.create_entry_alloca(fn_val, "fstr.acc", vec_ty.into());
+                // Entry-block zero-init so a never-executed f-string (this
+                // expr inside a `for`/`if` body that doesn't run) leaves the
+                // accumulator `{null, 0, 0}`, not uninitialized stack — the
+                // scope-exit cleanup's `cap > 0` guard then skips it instead
+                // of freeing garbage. The eval-site init below stays for the
+                // re-evaluated case (a loop body builds the f-string fresh
+                // each iteration). See `zero_init_str_acc_at_entry`.
+                self.zero_init_str_acc_at_entry(acc);
                 // Initialize: {null, 0, 0} — empty heap string.
                 let null = ptr_ty.const_null();
                 let zero = i64_t.const_int(0, false);
