@@ -392,15 +392,32 @@ impl<'ctx> super::Codegen<'ctx> {
         // `user_ambient_resource_methods[R]` from this when it meets a
         // `with_provider[R]` whose override type is statically known.
         let inherent_methods = collect_inherent_methods(program);
+        // Map of constructor-call key → concrete return-type name, so a
+        // provider bound to a *call* (`let p = makeFoo();` or an inline
+        // `with_provider[R](makeFoo(), ...)`) resolves to its struct type
+        // here exactly as the real `with_provider` lowering does via
+        // `var_type_names`. Without this the pre-pass only recognized
+        // `StructLiteral` providers, so a trait-less user resource whose
+        // ctor is a function/assoc-fn call errored "no method order".
+        let ctor_returns = collect_ctor_return_types(program);
+        let empty = std::collections::HashMap::new();
         for item in &program.items {
             match item {
-                Item::Function(f) => {
-                    self.scan_block_for_ambient_overrides(&f.body, &inherent_methods)
-                }
+                Item::Function(f) => self.scan_block_for_ambient_overrides(
+                    &f.body,
+                    &inherent_methods,
+                    &ctor_returns,
+                    &empty,
+                ),
                 Item::ImplBlock(imp) => {
                     for ii in &imp.items {
                         if let ImplItem::Method(m) = ii {
-                            self.scan_block_for_ambient_overrides(&m.body, &inherent_methods);
+                            self.scan_block_for_ambient_overrides(
+                                &m.body,
+                                &inherent_methods,
+                                &ctor_returns,
+                                &empty,
+                            );
                         }
                     }
                 }
@@ -413,32 +430,46 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         block: &Block,
         inherent_methods: &std::collections::HashMap<String, Vec<String>>,
+        ctor_returns: &std::collections::HashMap<String, String>,
+        inherited: &std::collections::HashMap<String, String>,
     ) {
-        // `let p = StructLit` bindings let a provider passed by identifier
-        // resolve to its struct type (test_main_synth binds the fixture
-        // ctor to a `let` before the `with_provider`).
-        let mut bindings: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
+        // `let p = <provider>` bindings let a provider passed by identifier
+        // resolve to its struct type (test_main_synth binds the fixture ctor
+        // to a `let` before the `with_provider`). The RHS may be a struct
+        // literal OR a constructor call (`makeFoo()` / `Type.new()`) — both
+        // resolve through `ambient_provider_type`. `inherited` seeds the map
+        // with provider bindings from enclosing scopes so a nested
+        // `with_provider` inside a block-bodied closure
+        // (`with_provider[A](pa, || { with_provider[B](pb, ...) })`, where
+        // `pb` is bound in the outer block) still resolves `pb` — without it
+        // the inner block started empty and dropped the override.
+        let mut bindings: std::collections::HashMap<String, String> = inherited.clone();
         for stmt in &block.stmts {
             match &stmt.kind {
                 StmtKind::Let { pattern, value, .. } => {
-                    if let (PatternKind::Binding(name), ExprKind::StructLiteral { path, .. }) =
-                        (&pattern.kind, &value.kind)
-                    {
-                        if let Some(ty) = path.last() {
-                            bindings.insert(name.clone(), ty.clone());
+                    if let PatternKind::Binding(name) = &pattern.kind {
+                        if let Some(ty) = ambient_provider_type(value, &bindings, ctor_returns) {
+                            bindings.insert(name.clone(), ty);
                         }
                     }
-                    self.scan_expr_for_ambient_overrides(value, &bindings, inherent_methods);
+                    self.scan_expr_for_ambient_overrides(
+                        value,
+                        &bindings,
+                        inherent_methods,
+                        ctor_returns,
+                    );
                 }
-                StmtKind::Expr(e) => {
-                    self.scan_expr_for_ambient_overrides(e, &bindings, inherent_methods)
-                }
+                StmtKind::Expr(e) => self.scan_expr_for_ambient_overrides(
+                    e,
+                    &bindings,
+                    inherent_methods,
+                    ctor_returns,
+                ),
                 _ => {}
             }
         }
         if let Some(tail) = &block.final_expr {
-            self.scan_expr_for_ambient_overrides(tail, &bindings, inherent_methods);
+            self.scan_expr_for_ambient_overrides(tail, &bindings, inherent_methods, ctor_returns);
         }
     }
 
@@ -447,6 +478,7 @@ impl<'ctx> super::Codegen<'ctx> {
         expr: &Expr,
         bindings: &std::collections::HashMap<String, String>,
         inherent_methods: &std::collections::HashMap<String, Vec<String>>,
+        ctor_returns: &std::collections::HashMap<String, String>,
     ) {
         match &expr.kind {
             ExprKind::Call { callee, args } => {
@@ -462,7 +494,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.provider_resource_ids.contains_key(&resource)
                         && !self.provider_resource_traits.contains_key(&resource)
                     {
-                        if let Some(ty) = ambient_provider_type(provider_expr, bindings) {
+                        if let Some(ty) =
+                            ambient_provider_type(provider_expr, bindings, ctor_returns)
+                        {
                             // A trait-less *user* resource (not a prelude
                             // ambient one) has no canonical method order, so
                             // record it from the override type's inherent impl
@@ -488,17 +522,29 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                     if let ExprKind::Closure { body, .. } = &closure_expr.kind {
-                        self.scan_expr_for_ambient_overrides(body, bindings, inherent_methods);
+                        self.scan_expr_for_ambient_overrides(
+                            body,
+                            bindings,
+                            inherent_methods,
+                            ctor_returns,
+                        );
                     }
                     return;
                 }
                 for a in args {
-                    self.scan_expr_for_ambient_overrides(&a.value, bindings, inherent_methods);
+                    self.scan_expr_for_ambient_overrides(
+                        &a.value,
+                        bindings,
+                        inherent_methods,
+                        ctor_returns,
+                    );
                 }
             }
-            ExprKind::Block(b) => self.scan_block_for_ambient_overrides(b, inherent_methods),
+            ExprKind::Block(b) => {
+                self.scan_block_for_ambient_overrides(b, inherent_methods, ctor_returns, bindings)
+            }
             ExprKind::Closure { body, .. } => {
-                self.scan_expr_for_ambient_overrides(body, bindings, inherent_methods)
+                self.scan_expr_for_ambient_overrides(body, bindings, inherent_methods, ctor_returns)
             }
             _ => {}
         }
@@ -868,12 +914,69 @@ impl<'ctx> super::Codegen<'ctx> {
 fn ambient_provider_type(
     expr: &Expr,
     bindings: &std::collections::HashMap<String, String>,
+    ctor_returns: &std::collections::HashMap<String, String>,
 ) -> Option<String> {
     match &expr.kind {
         ExprKind::StructLiteral { path, .. } => path.last().cloned(),
         ExprKind::Identifier(n) => bindings.get(n).cloned(),
+        // Constructor calls: `makeFoo()` (free fn) or `Type.new()` (assoc
+        // fn) — resolve to the callee's declared return type. Mirrors what
+        // the real `with_provider` lowering recovers from `var_type_names`
+        // for a `let p = makeFoo(); with_provider[R](p, ...)` binding.
+        ExprKind::Call { callee, .. } => {
+            ctor_call_key(callee).and_then(|k| ctor_returns.get(&k).cloned())
+        }
         _ => None,
     }
+}
+
+/// Callee → constructor key for [`ambient_provider_type`]'s call arm:
+/// a bare `Identifier(name)` keys as `"name"` (free fn); a two-segment
+/// `Path([Type, method])` keys as `"Type.method"` (associated fn /
+/// `Type.new()`). Other shapes have no constructor key.
+fn ctor_call_key(callee: &Expr) -> Option<String> {
+    match &callee.kind {
+        ExprKind::Identifier(n) => Some(n.clone()),
+        ExprKind::Path { segments, .. } if segments.len() == 2 => {
+            Some(format!("{}.{}", segments[0], segments[1]))
+        }
+        _ => None,
+    }
+}
+
+/// Map every free function and inherent (non-trait) impl method to the
+/// concrete name of its return type, when that return type is a plain
+/// named type. Keyed `"name"` for free fns and `"Type.method"` for impl
+/// methods — the same keyspace [`ctor_call_key`] produces — so a provider
+/// bound to a constructor call resolves to its struct type in the eager
+/// ambient-vtable pre-pass (matching the real lowering's `var_type_names`
+/// path). Trait-method impls are skipped: a trait-less resource's override
+/// is constructed via an inherent ctor or struct literal, not a trait fn.
+fn collect_ctor_return_types(program: &Program) -> std::collections::HashMap<String, String> {
+    let mut out: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for item in &program.items {
+        match item {
+            Item::Function(f) => {
+                if let Some(ret) = f.return_type.as_ref().and_then(impl_target_name) {
+                    out.insert(f.name.clone(), ret);
+                }
+            }
+            Item::ImplBlock(imp) if imp.trait_name.is_none() => {
+                let Some(target) = impl_target_name(&imp.target_type) else {
+                    continue;
+                };
+                for ii in &imp.items {
+                    if let ImplItem::Method(m) = ii {
+                        if let Some(ret) = m.return_type.as_ref().and_then(impl_target_name) {
+                            out.insert(format!("{target}.{}", m.name), ret);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Collect each type's inherent-impl (`impl T { ... }`, no trait) method

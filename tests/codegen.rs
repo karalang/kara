@@ -957,6 +957,66 @@ fn main() reads(AuditLog) {
         }
     }
 
+    #[test]
+    fn test_e2e_with_provider_trait_less_call_ctor() {
+        // Sibling to the gap-(c) test above, but the provider is bound to a
+        // *constructor call* (`let p = make_log();`) rather than an inline
+        // struct literal. The eager ambient-vtable pre-pass must resolve `p`'s
+        // type from `make_log`'s declared return type — it used to recognize
+        // only struct-literal providers, so this errored at codegen with "no
+        // method order for resource". `karac run` prints 9.
+        let out = run_program(
+            r#"
+effect resource AuditLog;
+struct FakeLog { n: i64 }
+impl FakeLog { fn count(self) -> i64 { self.n } }
+fn make_log() -> FakeLog { FakeLog { n: 9 } }
+fn tally() -> i64 reads(AuditLog) { AuditLog.count() }
+fn main() reads(AuditLog) {
+    let p = make_log();
+    with_provider[AuditLog](p, || { println(tally()); });
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "9");
+        }
+    }
+
+    #[test]
+    fn test_e2e_with_provider_nested_block_closures_two_resources() {
+        // Two trait-less user resources via NESTED `with_provider`, where each
+        // provider is bound in the OUTER block and the closures are
+        // block-bodied. The eager pre-pass must inherit the outer-block
+        // provider bindings into the nested-block scan — it used to reset the
+        // binding map per block, so the inner `with_provider[ResB](pb, ...)`
+        // couldn't resolve `pb` and dropped the override ("no method order for
+        // ResB"). `karac run` prints 1 then 2.
+        let out = run_program(
+            r#"
+effect resource ResA;
+effect resource ResB;
+struct A { t: i64 }
+impl A { fn now(self) -> i64 { self.t } }
+struct B { t: i64 }
+impl B { fn now(self) -> i64 { self.t } }
+fn main() reads(ResA) reads(ResB) {
+    let pa = A { t: 1 };
+    let pb = B { t: 2 };
+    with_provider[ResA](pa, || {
+        with_provider[ResB](pb, || {
+            println(ResA.now());
+            println(ResB.now());
+        });
+    });
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\n2");
+        }
+    }
+
     /// phase-7 — an explicit valueless `return;` reachable in `main` must
     /// emit `ret i32 0` (main lowers to a C-ABI `i32 main()`), not
     /// `ret void`. Before the fix this failed module verification

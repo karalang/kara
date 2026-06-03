@@ -8022,19 +8022,45 @@ fn cmd_test(filter: Option<String>, all: bool) {
     let mut batch_runner = crate::test_jit_dispatch::TestBatchRunner::new(
         std::env::temp_dir().join(format!("karac_test_batch_{}", std::process::id())),
     );
-    // Modules whose tests override an AMBIENT prelude resource (`Clock`/`Env`/…)
-    // via `#[with_provider]` can't use the persistent-module cache: ambient
-    // override dispatch is decided per module at compile time, so splitting
-    // the `with_provider` site from the `R.method()` call site drops the
-    // override. Such modules run each test self-contained (see
-    // `TestBatchRunner::cache_module`). User-resource fixtures are fine.
+    // Modules whose tests override a TRAIT-LESS resource via `#[with_provider]`
+    // can't use the persistent-module cache. A trait-less resource — a prelude
+    // ambient one (`Clock`/`Env`/…) OR a user `effect resource R;` with no
+    // provider trait — has no canonical method order: codegen derives the order
+    // per module from the override type's inherent impl at the `with_provider`
+    // site, so the `R.method()` call site can only dispatch correctly when the
+    // `with_provider` lives in the SAME module. The cache splits the two (the
+    // `with_provider` lands in the per-test `main`, the call site in the shared
+    // persistent module), silently dropping the override — `R.method()` falls
+    // through to the const-0 / FFI default, or a faulting ctor errors with "no
+    // method order for resource". So any test with a trait-less fixture runs
+    // each test self-contained (full mode — see `TestBatchRunner::cache_module`).
+    //
+    // TRAIT-FUL user resources (`effect resource R: T;`) are exempt: their
+    // vtable comes from the impl blocks that live in the persistent module, and
+    // the trait pins a canonical method order the call site shares — so the
+    // split is sound and they keep the cache. Build the set of trait-ful
+    // resource names from the whole tree; a fixture forces full mode unless its
+    // resource is in that set (an unrecognized / qualified name falls to full
+    // mode, which is always correct, just uncached).
     #[cfg(feature = "lljit_prototype")]
-    let ambient_fixture_modules: std::collections::HashSet<usize> = tests
+    let traitful_resources: std::collections::HashSet<&str> = tree
+        .modules
+        .iter()
+        .flat_map(|m| m.items.iter())
+        .filter_map(|it| match it {
+            crate::ast::Item::EffectResource(d) if d.provider_trait.is_some() => {
+                Some(d.name.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    #[cfg(feature = "lljit_prototype")]
+    let full_mode_fixture_modules: std::collections::HashSet<usize> = tests
         .iter()
         .filter(|t| {
-            t.with_providers.iter().any(|fx| {
-                crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&fx.resource_path.as_str())
-            })
+            t.with_providers
+                .iter()
+                .any(|fx| !traitful_resources.contains(fx.resource_path.as_str()))
         })
         .map(|t| t.module_id)
         .collect();
@@ -8160,7 +8186,7 @@ fn cmd_test(filter: Option<String>, all: bool) {
             // subprocess for the whole suite (LLVM init paid once, not
             // per-test), re-spawned only when a faulting test exits it. See
             // `test_jit_dispatch::TestBatchRunner`.
-            let use_cache = !ambient_fixture_modules.contains(&t.module_id);
+            let use_cache = !full_mode_fixture_modules.contains(&t.module_id);
             let result = batch_runner.dispatch(
                 t.module_id,
                 use_cache,

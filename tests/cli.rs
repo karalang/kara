@@ -3424,6 +3424,106 @@ fn test_with_provider_constructor_failure_emits_structured_fail() {
 }
 
 #[test]
+fn test_with_provider_trait_less_user_resource_fixture_dispatches() {
+    // A *trait-less* user resource (`effect resource Foo;`, no provider trait)
+    // used as a fixture. Its dispatch is module-local (no canonical method
+    // order — derived per module from the override type's inherent impl), so
+    // the per-test JIT path must run this module in FULL mode (the persistent-
+    // module cache would split the `with_provider` site from the `Foo.val()`
+    // call site and drop the override → `Foo.val()` returned 0). Two fixtures
+    // exercise the multi-resource path. Both lanes (JIT-default under
+    // lljit_prototype, interpreter under plain --features llvm) must pass.
+    let tmp = scratch_project("test-with-provider-traitless-user");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "effect resource FooA;\n\
+         effect resource FooB;\n\
+         struct ProvA { v: i64 }\n\
+         impl ProvA { fn val(self) -> i64 { self.v } }\n\
+         struct ProvB { v: i64 }\n\
+         impl ProvB { fn val(self) -> i64 { self.v } }\n\
+         fn make_b() -> ProvB { ProvB { v: 20 } }\n\
+         fn main() {}\n",
+    );
+    write(
+        &tmp.join("src/main_test.kara"),
+        // First fixture is a struct literal, second is a constructor *call*
+        // (exercises the pre-pass return-type inference).
+        "#[with_provider(FooA, ProvA { v: 10 })]\n\
+         #[with_provider(FooB, make_b())]\n\
+         test \"trait-less user resources dispatch\" {\n\
+             assert_eq(FooA.val(), 10);\n\
+             assert_eq(FooB.val(), 20);\n\
+         }\n",
+    );
+    let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "expected pass; stdout:\n{stdout}");
+    let lines = jsonl_lines(&stdout);
+    assert!(
+        lines.iter().any(|l| event_kind(l) == Some("test_pass")),
+        "expected test_pass; got:\n{lines:?}"
+    );
+}
+
+#[test]
+fn test_with_provider_second_constructor_failure_names_that_resource() {
+    // Two trait-less user-resource fixtures: the FIRST ctor succeeds, the
+    // SECOND faults. The fail event must name the *second* resource (FooB) in
+    // `provider_construction_failed` — proving (a) multi-fixture trait-less
+    // dispatch codegens at all (full mode + call-ctor type inference), and
+    // (b) the marker-count → fixture-index recovery picks the right resource.
+    // Both lanes agree (the interpreter stops at the first failing ctor).
+    let tmp = scratch_project("test-with-provider-2nd-ctor-fail");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "effect resource FooA;\n\
+         effect resource FooB;\n\
+         struct ProvA { v: i64 }\n\
+         impl ProvA { fn val(self) -> i64 { self.v } }\n\
+         struct ProvB { v: i64 }\n\
+         impl ProvB { fn val(self) -> i64 { self.v } }\n\
+         fn boom_b() -> ProvB { unreachable() }\n\
+         fn main() {}\n",
+    );
+    write(
+        &tmp.join("src/main_test.kara"),
+        "#[with_provider(FooA, ProvA { v: 10 })]\n\
+         #[with_provider(FooB, boom_b())]\n\
+         test \"second fixture broken\" {\n\
+             assert_eq(1, 1);\n\
+         }\n",
+    );
+    let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit; stdout:\n{stdout}"
+    );
+    let lines = jsonl_lines(&stdout);
+    let fail = lines
+        .iter()
+        .find(|l| event_kind(l) == Some("test_fail"))
+        .unwrap_or_else(|| panic!("expected test_fail; got:\n{lines:?}"));
+    assert!(
+        fail.contains("\"reason\":\"provider_construction_failed\""),
+        "missing reason in fail event: {fail}"
+    );
+    assert!(
+        fail.contains("\"resource\":\"FooB\""),
+        "should name the SECOND resource whose ctor faulted: {fail}"
+    );
+    assert!(
+        fail.contains("\"duration_ms\":0"),
+        "duration_ms should be 0 when test body never ran: {fail}"
+    );
+}
+
+#[test]
 fn test_with_provider_and_requires_conflict_rejected_at_discovery() {
     // Same resource in both `requires` and `with_provider` — design.md
     // rejects with `requires_and_with_provider_conflict`.
