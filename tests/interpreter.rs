@@ -6246,6 +6246,46 @@ fn test_process_wait_on_unknown_child_returns_not_found() {
     assert_eq!(output, "not_found\n");
 }
 
+#[test]
+fn test_process_stdio_builder_records_redirection() {
+    // The stdin/stdout/stderr builders thread the `Stdio` setting onto
+    // the Command (default `Inherit`). Read the fields back to confirm
+    // the chain records what was set without dropping the others.
+    let output = run(r#"fn main() {
+         let cmd = Command.new("ls").stdout(Stdio.Null).stderr(Stdio.Null);
+         match cmd.cmd_stdin { Stdio.Inherit => println("in:inherit"), Stdio.Null => println("in:null") }
+         match cmd.cmd_stdout { Stdio.Inherit => println("out:inherit"), Stdio.Null => println("out:null") }
+         match cmd.cmd_stderr { Stdio.Inherit => println("err:inherit"), Stdio.Null => println("err:null") }
+     }"#);
+    assert_eq!(output, "in:inherit\nout:null\nerr:null\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_process_spawn_with_null_redirection_waits_clean() {
+    // Real spawn with redirection applied: `/bin/echo` would otherwise
+    // inherit-print to the test runner's terminal (the noise the
+    // zero-exit test's comment calls out). Redirecting stdout to
+    // `Stdio.Null` discards the child's output — the runner stays quiet
+    // and the child still exits 0, which is what we assert. This is the
+    // operational point of `Stdio.Null`.
+    let output = run(r#"fn main() {
+         let cmd = Command.new("/bin/echo")
+             .arg("this-output-is-discarded")
+             .stdout(Stdio.Null);
+         match cmd.spawn() {
+             Ok(child) => {
+                 match child.wait() {
+                     Ok(status) => println(status.success),
+                     Err(_) => println("wait_err"),
+                 }
+             }
+             Err(_) => println("spawn_err"),
+         }
+     }"#);
+    assert_eq!(output, "true\n");
+}
+
 // ── Pool[T] — connection-pool primitive surface ────────────────────
 
 #[test]

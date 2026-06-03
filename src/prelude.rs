@@ -213,6 +213,8 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Child",
     "ExitStatus",
     "EnvVar",
+    // `Stdio` (stdin/stdout/stderr redirection setting for `Command`).
+    "Stdio",
     // `Pool[T]` (v64 backend-platform lift): connection-pool
     // primitive. `Pool[T]` / `PooledConnection[T]` / `PoolError`
     // are the user-facing surface. See `runtime/stdlib/pool.kara`.

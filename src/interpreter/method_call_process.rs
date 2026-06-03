@@ -54,6 +54,18 @@ impl<'a> super::Interpreter<'a> {
         for (k, v) in &cmd_env {
             std_cmd.env(k, v);
         }
+        // Stdio redirection (phase-8 std.process). Each field is a
+        // `Stdio` enum; only `Stdio.Null` changes behavior — `Inherit`
+        // is `std::process`'s own default, so leave it unset.
+        if stdio_field_is_null(fields, "cmd_stdin") {
+            std_cmd.stdin(std::process::Stdio::null());
+        }
+        if stdio_field_is_null(fields, "cmd_stdout") {
+            std_cmd.stdout(std::process::Stdio::null());
+        }
+        if stdio_field_is_null(fields, "cmd_stderr") {
+            std_cmd.stderr(std::process::Stdio::null());
+        }
         match std_cmd.spawn() {
             Ok(child) => {
                 let pid = child.id() as i64;
@@ -129,6 +141,18 @@ fn read_string_field(fields: &HashMap<String, Value>, key: &str) -> String {
         Some(Value::String(s)) => s.clone(),
         _ => String::new(),
     }
+}
+
+/// True when a `Command` redirection field holds `Stdio.Null`. Any other
+/// shape (the `Stdio.Inherit` default, or an absent field) reads as
+/// "inherit", which is `std::process`'s own default — so the spawn path
+/// only acts on an explicit `Null`.
+fn stdio_field_is_null(fields: &HashMap<String, Value>, key: &str) -> bool {
+    matches!(
+        fields.get(key),
+        Some(Value::EnumVariant { enum_name, variant, .. })
+            if enum_name == "Stdio" && variant == "Null"
+    )
 }
 
 fn read_string_vec_field(fields: &HashMap<String, Value>, key: &str) -> Vec<String> {

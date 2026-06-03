@@ -42,10 +42,29 @@ struct EnvVar {
     value: String,
 }
 
+// Redirection setting for a child's stdin / stdout / stderr.
+// `Inherit` (the default) shares the parent process's stream — the
+// child reads/writes the same terminal or pipe the parent has. `Null`
+// connects the stream to the platform's null device (`/dev/null`), so
+// the child's output is discarded and its input reads EOF.
+//
+// `Piped` (capture the stream so the parent can read it) is deferred:
+// it requires `Child` to carry the read/write handles and accessor
+// methods, and an *unread* pipe deadlocks a child that fills the pipe
+// buffer — so shipping it without the read side would be a footgun.
+// Tracked as a follow-on under the phase-8 `std.process` entry.
+enum Stdio {
+    Inherit,
+    Null,
+}
+
 struct Command {
     program: String,
     cmd_args: Vec[String],
     cmd_env: Vec[EnvVar],
+    cmd_stdin: Stdio,
+    cmd_stdout: Stdio,
+    cmd_stderr: Stdio,
 }
 
 // `Child` is a handle to a running (or recently-finished) process.
@@ -71,6 +90,9 @@ impl Command {
             program: program,
             cmd_args: Vec.new(),
             cmd_env: Vec.new(),
+            cmd_stdin: Stdio.Inherit,
+            cmd_stdout: Stdio.Inherit,
+            cmd_stderr: Stdio.Inherit,
         }
     }
 
@@ -81,6 +103,9 @@ impl Command {
             program: self.program,
             cmd_args: new_args,
             cmd_env: self.cmd_env,
+            cmd_stdin: self.cmd_stdin,
+            cmd_stdout: self.cmd_stdout,
+            cmd_stderr: self.cmd_stderr,
         }
     }
 
@@ -91,6 +116,46 @@ impl Command {
             program: self.program,
             cmd_args: self.cmd_args,
             cmd_env: new_env,
+            cmd_stdin: self.cmd_stdin,
+            cmd_stdout: self.cmd_stdout,
+            cmd_stderr: self.cmd_stderr,
+        }
+    }
+
+    // Redirect the child's standard input. Default `Stdio.Inherit`.
+    fn stdin(self, cfg: Stdio) -> Command {
+        Command {
+            program: self.program,
+            cmd_args: self.cmd_args,
+            cmd_env: self.cmd_env,
+            cmd_stdin: cfg,
+            cmd_stdout: self.cmd_stdout,
+            cmd_stderr: self.cmd_stderr,
+        }
+    }
+
+    // Redirect the child's standard output. Default `Stdio.Inherit`;
+    // `Stdio.Null` discards it (no terminal noise from the child).
+    fn stdout(self, cfg: Stdio) -> Command {
+        Command {
+            program: self.program,
+            cmd_args: self.cmd_args,
+            cmd_env: self.cmd_env,
+            cmd_stdin: self.cmd_stdin,
+            cmd_stdout: cfg,
+            cmd_stderr: self.cmd_stderr,
+        }
+    }
+
+    // Redirect the child's standard error. Default `Stdio.Inherit`.
+    fn stderr(self, cfg: Stdio) -> Command {
+        Command {
+            program: self.program,
+            cmd_args: self.cmd_args,
+            cmd_env: self.cmd_env,
+            cmd_stdin: self.cmd_stdin,
+            cmd_stdout: self.cmd_stdout,
+            cmd_stderr: cfg,
         }
     }
 
