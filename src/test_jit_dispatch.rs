@@ -109,9 +109,7 @@ fn compute_declare_only(p: &Program) -> std::collections::HashSet<String> {
 
 /// Build the per-test `main` IR: clone `source_program`'s items, append a
 /// synthesized `main` that installs the `#[with_provider]` fixtures and
-/// calls the test fn, re-run resolve/typecheck/lower (the synthesized
-/// fixture `let` bindings need typecheck to populate `var_type_names` for
-/// the `with_provider` codegen), then emit via the repl-cell codegen entry
+/// calls the test fn, lower it, then emit via the repl-cell codegen entry
 /// so `declare_only` module symbols emit as declares and the
 /// Debugger-Contract globals are suppressed (they live in the persistent
 /// module). Only the tiny synth `main` carries a body — the module's
@@ -122,11 +120,28 @@ fn compute_declare_only(p: &Program) -> std::collections::HashSet<String> {
 /// `dispatch` call site for why the skeleton is sound only for no-fixture
 /// tests. Either way it carries every module signature; only the bodies differ
 /// (stubs vs real), and module bodies are never emitted here.
+///
+/// **`skip_typecheck`** — set for the no-fixture skeleton path, where the
+/// per-test resolve + typecheck are *entirely elided* (the parent-side floor
+/// the third skeleton follow-on left behind). Lowering is the only consumer of
+/// the typecheck result in this path (`compile_to_ir_for_repl_cell` takes just
+/// `&Program`; codegen does its own inference), and a no-fixture synth `main`
+/// is mechanically `{ test_fn(); }` — one call to the concrete, declare-only
+/// test fn, with no operators / method calls / patterns / `?` for the lowerer's
+/// `try_rewrite` to touch and no span-keyed side-tables it needs. So lowering
+/// it against a `TypeCheckResult::default()` is identical to lowering it against
+/// the full module's result, minus the ~1 ms/test (200-fn module) of building
+/// the module env that the result was carrying. A *fixture* main has `let`
+/// bindings + `with_provider` calls whose lowering genuinely needs typecheck
+/// (`var_type_names` for `infer_provider_type_name`), so it keeps the full pass
+/// (`skip_typecheck` false — the caller gates on the same `fixtures.is_empty()`
+/// + skeleton condition that selects the skeleton source).
 fn build_test_main_ir(
     source_program: &Program,
     test_fn_name: &str,
     fixtures: &[(String, Expr)],
     declare_only: &std::collections::HashSet<String>,
+    skip_typecheck: bool,
 ) -> Result<String, String> {
     let fixtures_vec: Vec<ProviderFixture> = fixtures
         .iter()
@@ -138,16 +153,24 @@ fn build_test_main_ir(
     // `source_program` is the **signature-only skeleton** of the module when
     // the runner has one cached for a no-fixture test (concrete fn/method
     // bodies replaced by `unreachable()` — see `build_skeleton`), else the
-    // full module. Cloning + resolving + typechecking + lowering the skeleton
-    // is far cheaper than the real module because the 1-stmt stub bodies
-    // typecheck and lower trivially, while still carrying every signature the
-    // synth `main` needs in scope. The module fns are declare-only in the
-    // emitted IR (their real bodies live in the persistent module), so the
-    // stub bodies are never codegen'd.
+    // full module. Cloning + lowering the skeleton is far cheaper than the real
+    // module because the 1-stmt stub bodies lower trivially, while it still
+    // carries every signature the synth `main` needs in scope. The module fns
+    // are declare-only in the emitted IR (their real bodies live in the
+    // persistent module), so the stub bodies are never codegen'd.
     let mut per_test_program = clone_program_items(source_program);
     append_test_main(&mut per_test_program, test_fn_name, &fixtures_vec);
-    let resolved = crate::resolver::Resolver::new(&per_test_program).resolve();
-    let typed = crate::typechecker::TypeChecker::new(&per_test_program, &resolved).check();
+    // No-fixture skeleton path: elide the per-test resolve + typecheck — the
+    // synth `main` is `{ test_fn(); }` and lowers to nothing, so an empty
+    // result lowers it identically (see the `skip_typecheck` doc above). The
+    // fixture / full-module path runs the real pass (its `let`-bound providers
+    // need the typecheck side-tables for lowering).
+    let typed = if skip_typecheck {
+        crate::typechecker::TypeCheckResult::default()
+    } else {
+        let resolved = crate::resolver::Resolver::new(&per_test_program).resolve();
+        crate::typechecker::TypeChecker::new(&per_test_program, &resolved).check()
+    };
     crate::lowering::lower_program(&mut per_test_program, &typed);
     // Emit the synth `main` under a NON-`main` symbol. A JIT entry literally
     // named `main` collides with the C `_main` in the process symbol table
@@ -487,15 +510,25 @@ impl TestBatchRunner {
         // could instantiate a generic locally (where a stubbed body would be
         // emitted → wrong IR); no-fixture mains just call the concrete,
         // declare-only test fn and instantiate nothing. See `build_skeleton`.
-        let source_program = match (fixtures.is_empty(), self.skeleton_program.as_ref()) {
-            (true, Some(skel)) => skel,
-            _ => module_program,
-        };
-        let ir =
-            match build_test_main_ir(source_program, test_fn_name, fixtures, &self.declare_only) {
-                Ok(s) => s,
-                Err(message) => return JitTestResult::SpawnFailed { message },
+        // `skip_typecheck` rides along with the skeleton selection: the same
+        // no-fixture-on-a-cached-module condition that makes the skeleton a
+        // sound source also makes the per-test resolve + typecheck elidable
+        // (the synth `main` lowers to nothing). See `build_test_main_ir`.
+        let (source_program, skip_typecheck) =
+            match (fixtures.is_empty(), self.skeleton_program.as_ref()) {
+                (true, Some(skel)) => (skel, true),
+                _ => (module_program, false),
             };
+        let ir = match build_test_main_ir(
+            source_program,
+            test_fn_name,
+            fixtures,
+            &self.declare_only,
+            skip_typecheck,
+        ) {
+            Ok(s) => s,
+            Err(message) => return JitTestResult::SpawnFailed { message },
+        };
         self.run_test(&ir, timeout)
     }
 

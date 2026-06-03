@@ -696,6 +696,12 @@ pub struct ImplTraitCaptures {
     pub input_borrows: Vec<String>,
 }
 
+/// `Default` yields an all-empty result — every field is a `HashMap` /
+/// `Vec` / `HashSet`, each `Default` regardless of its element types. The
+/// `karac test` JIT path uses it to lower a no-fixture synth `main` (which
+/// needs no typecheck side-tables) without running the typechecker at all;
+/// see `test_jit_dispatch::build_test_main_ir`'s `skip_typecheck` arm.
+#[derive(Default)]
 pub struct TypeCheckResult {
     pub errors: Vec<TypeError>,
     /// Non-fatal diagnostics: typecheck-time signals that don't block
