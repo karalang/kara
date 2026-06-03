@@ -5990,6 +5990,44 @@ fn test_tracing_noop_exporter_implements_trait() {
     assert_eq!(output, "ok\n");
 }
 
+#[test]
+fn test_tracing_stdout_exporter_emits_event_line() {
+    // StdoutExporter is the v1 emission surface: it renders a LogEvent
+    // as one structured line — `[level] message key=value … span_id=N`,
+    // with the span_id suffix only when the event is in a span.
+    let output = run(r#"fn main() {
+         let tracer = StdoutExporter {};
+         tracer.export_event(LogEvent.info("plain"));
+         tracer.export_event(
+             LogEvent.info("started")
+                 .with_field("user_id", "42")
+                 .with_field("ip", "127.0.0.1")
+                 .in_span(5));
+     }"#);
+    assert_eq!(
+        output,
+        "[info] plain\n[info] started user_id=42 ip=127.0.0.1 span_id=5\n"
+    );
+}
+
+#[test]
+fn test_tracing_stdout_exporter_emits_span_line() {
+    // Spans render as `[span] name span_id=N parent_id=M key=value …`,
+    // with the parent_id suffix suppressed for a root span (parent 0).
+    let output = run(r#"fn main() {
+         let tracer = StdoutExporter {};
+         tracer.export_span(Span.root("request", 7));
+         tracer.export_span(
+             Span.root("outer", 1)
+                 .child("inner", 2)
+                 .with_field("route", "/health"));
+     }"#);
+    assert_eq!(
+        output,
+        "[span] request span_id=7\n[span] inner span_id=2 parent_id=1 route=/health\n"
+    );
+}
+
 // ── std.process — Command / Child surface ──────────────────────────
 
 #[test]

@@ -28036,4 +28036,98 @@ fn main() {
             );
         }
     }
+
+    // ── std.tracing — emission surface (StdoutExporter) E2E ──────────
+    //
+    // Proves the baked `std.tracing` surface compiles + links + runs as a
+    // real binary, not just IR-shape: the struct layouts, the builder
+    // methods (`LogEvent.info` / `Span.root` / `.child` / `.with_field` /
+    // `.in_span`), and the `StdoutExporter` trait-impl bodies all lower
+    // through codegen and round-trip the expected structured lines. This
+    // is the codegen counterpart to the interpreter coverage in
+    // `tests/interpreter.rs` (`test_tracing_stdout_exporter_*`). Before
+    // the tracing-codegen slice the whole surface was interpreter-only —
+    // a compiled `LogEvent { ... }.message` read `0`.
+
+    #[test]
+    fn e2e_tracing_stdout_exporter_emits_events() {
+        let out = run_program(
+            r#"fn main() {
+                let tracer = StdoutExporter {};
+                tracer.export_event(LogEvent.info("plain"));
+                tracer.export_event(
+                    LogEvent.info("started")
+                        .with_field("user_id", "42")
+                        .with_field("ip", "127.0.0.1")
+                        .in_span(5));
+            }"#,
+        );
+        // Two sequential exports + an owned-event temporary dropped after
+        // each: this is exactly the shape that the carried codegen cleanup
+        // bug (see tracing.kara's implementation note) crashes on when the
+        // exporter bodies use multi-interpolation f-strings, so a green run
+        // here also pins the concat-form workaround.
+        assert_eq!(
+            out.as_deref(),
+            Some("[info] plain\n[info] started user_id=42 ip=127.0.0.1 span_id=5\n"),
+        );
+    }
+
+    #[test]
+    fn e2e_tracing_stdout_exporter_emits_spans() {
+        let out = run_program(
+            r#"fn main() {
+                let tracer = StdoutExporter {};
+                tracer.export_span(Span.root("request", 7));
+                tracer.export_span(
+                    Span.root("outer", 1)
+                        .child("inner", 2)
+                        .with_field("route", "/health"));
+            }"#,
+        );
+        assert_eq!(
+            out.as_deref(),
+            Some("[span] request span_id=7\n[span] inner span_id=2 parent_id=1 route=/health\n"),
+        );
+    }
+
+    #[test]
+    fn e2e_tracing_noop_exporter_is_silent() {
+        // The default exporter compiles + runs and emits nothing — the
+        // `NoOpExporter` impl bodies lower through the same path.
+        let out = run_program(
+            r#"fn main() {
+                let drop_all = NoOpExporter {};
+                drop_all.export_event(LogEvent.warn("ignored"));
+                drop_all.export_span(Span.root("ignored", 9));
+                println("done");
+            }"#,
+        );
+        assert_eq!(out.as_deref(), Some("done\n"));
+    }
+
+    #[test]
+    fn e2e_tracing_unused_in_program_emits_no_tracing_bodies() {
+        // The usage gate: a program that never touches std.tracing must
+        // not carry any tracing impl-method body. Pins that the unused-
+        // declaration deletion in `compile_tracing_stdlib_method_bodies`
+        // keeps tracing-free binaries lean (and is what lets the IR-shape
+        // tests above stay valid).
+        let ir = ir_for(
+            r#"
+fn main() {
+    let buf: Array[i64, 8] = [42; 8];
+    let _ = buf[0];
+}
+"#,
+        );
+        assert!(
+            !ir.contains("@LogEvent.")
+                && !ir.contains("@Span.")
+                && !ir.contains("@StdoutExporter.")
+                && !ir.contains("@NoOpExporter."),
+            "a tracing-free program must emit no tracing impl methods; got IR:\n{}",
+            ir
+        );
+    }
 }

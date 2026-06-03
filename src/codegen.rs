@@ -337,6 +337,48 @@ pub(crate) fn impl_target_name_for_repl(target: &crate::ast::TypeExpr) -> Option
     helpers::impl_target_name(target)
 }
 
+/// The fully-lowered `std.tracing` baked-stdlib program — parsed,
+/// desugared, resolved, type-checked, and lowered, so it carries the
+/// span-keyed side tables (`pattern_binding_types`,
+/// `method_callee_types`, …) that codegen's body lowering consumes.
+///
+/// **Why a dedicated lowered copy.** Unlike the rest of the stdlib (whose
+/// codegen-reachable methods are `#[compiler_builtin]` + hand-rolled
+/// lowerings), the tracing methods are real Kāra source, so the
+/// maintainable codegen is to compile that source. But codegen body
+/// lowering is driven by typechecker side tables keyed by source span,
+/// and the baked stdlib is only ever *signature*-registered — its bodies
+/// are never type-checked, so those tables are empty for it (a
+/// `let mut x = self.fields; x.push(..)` body can't find that `x` is a
+/// `Vec`). Running the normal pipeline over `tracing.kara` in isolation
+/// populates them (verified: the source type-checks clean standalone).
+/// [`Codegen::compile_tracing_stdlib_methods`] swaps these tables in
+/// while it emits the bodies; since the tracing AST carries `tracing.kara`
+/// spans and the user program is never active during that window, the
+/// swap is collision-free (no span re-basing needed).
+static TRACING_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
+    let src = include_str!("../runtime/stdlib/tracing.kara");
+    let mut parsed = crate::parse(src);
+    debug_assert!(
+        parsed.errors.is_empty(),
+        "tracing.kara failed to parse for codegen lowering: {:?}",
+        parsed.errors
+    );
+    crate::desugar_program(&mut parsed.program);
+    let resolve = crate::resolve(&parsed.program);
+    let tc = crate::typecheck(&parsed.program, &resolve);
+    let mut program = parsed.program;
+    crate::lower(&mut program, &tc);
+    program
+});
+
+/// The lowered `std.tracing` program codegen compiles its impl bodies
+/// from. See [`TRACING_LOWERED_PROGRAM`] and
+/// [`Codegen::declare_tracing_stdlib_methods`].
+fn tracing_stdlib_program() -> &'static Program {
+    &TRACING_LOWERED_PROGRAM
+}
+
 /// Variant of [`compile_to_ir_with_options`] that accepts the
 /// phase-7 line-5 `--enable-hot-swap` flag. When `true`, the codegen
 /// emits PLT-style indirection through `@karac_hotswap_table` for every
@@ -4148,6 +4190,14 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
+        // Bring the baked `std.tracing` surface into codegen (struct
+        // layouts + impl-method *declarations*). Must run after the user
+        // impl-declaration loop above and before user bodies compile, so
+        // a `tracer.export_event(...)` / `LogEvent.info(...)` call site in
+        // a user body resolves its `Type.method` symbol. Bodies are
+        // compiled by the sibling pass after the user impl-body loop.
+        self.declare_tracing_stdlib_methods()?;
+
         // Theme 6: emit static vtables for impls of provider traits.
         // Runs after impl methods are *declared* (their fn-ptrs become
         // vtable entries) but BEFORE function bodies are compiled — body
@@ -4278,6 +4328,11 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
+        // Compile the baked `std.tracing` impl-method bodies whose
+        // signatures were declared above. Mirrors the user impl-body
+        // pass; the bodies use only general lowerings.
+        self.compile_tracing_stdlib_methods()?;
+
         // Slice c-repl.B.4: when this codegen pass is producing a
         // REPL cell module (signaled by `main_symbol_override`),
         // suppress the Debugger-Contract globals
@@ -4310,6 +4365,200 @@ impl<'ctx> Codegen<'ctx> {
         self.module
             .verify()
             .map_err(|e| format!("Module verification failed: {}", e))
+    }
+
+    /// Bring the baked `std.tracing` surface into codegen — struct
+    /// layouts + impl-method *declarations*.
+    ///
+    /// `std.tracing`'s types (`Span` / `LogEvent` / `SpanField`) and its
+    /// `Exporter` impls (`StdoutExporter` / `NoOpExporter`) live in
+    /// `STDLIB_PROGRAMS`, which codegen does NOT walk (`declarations.rs`
+    /// § "items reach the typechecker via `STDLIB_PROGRAMS` but do NOT
+    /// reach codegen"). Before this pass a compiled binary saw their
+    /// struct layouts as the i64 default (`e.message` loaded `0`) and any
+    /// `tracer.export_event(...)` / `LogEvent.info(...)` dispatch fell
+    /// through with "no handler for method". Unlike the TCP/TLS/WS stdlib
+    /// (whose methods are `#[compiler_builtin]` + hand-rolled lowerings),
+    /// the tracing methods are real Kāra bodies, so the maintainable path
+    /// is to compile that real source rather than hand-write inkwell for a
+    /// format loop: declare the layouts through the normal `declare_structs`
+    /// side-table populator (emits no IR), then declare every concrete impl
+    /// method so dispatch's `module.get_function("Type.method")` lookup
+    /// resolves. Bodies land in `compile_tracing_stdlib_methods`.
+    ///
+    /// Mirrors the value-self-first two-pass dedup of the user impl
+    /// declaration loop in `compile_program`, kept identical so the two
+    /// stay in lockstep.
+    fn declare_tracing_stdlib_methods(&mut self) -> Result<(), String> {
+        let tp = tracing_stdlib_program();
+        // Layouts + field side tables (struct_types / struct_field_*),
+        // no IR — so literals, field access, and the `Vec[SpanField]`
+        // field all lower at the right shape.
+        self.declare_structs(tp);
+        let mut declared: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for value_self_pass in [true, false] {
+            for item in &tp.items {
+                if let Item::ImplBlock(imp) = item {
+                    if let Some(type_name) = impl_target_name(&imp.target_type) {
+                        for impl_item in &imp.items {
+                            if let ImplItem::Method(method) = impl_item {
+                                if method.generic_params.is_some() {
+                                    continue;
+                                }
+                                if method_self_is_value(method) != value_self_pass {
+                                    continue;
+                                }
+                                let qualified = format!("{}.{}", type_name, method.name);
+                                if !declared.insert(qualified) {
+                                    continue;
+                                }
+                                let synth = make_impl_method_function(&type_name, method);
+                                self.declare_function(&synth)?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Compile the baked `std.tracing` impl-method bodies declared by
+    /// [`Self::declare_tracing_stdlib_methods`]. Runs after the user
+    /// impl-body pass; the bodies use only general lowerings (struct
+    /// construction, `Vec.new` / `push`, f-strings, `for` over
+    /// `Vec[SpanField]`, String `+`, `println`), so no tracing-specific
+    /// codegen is needed. The `declare_only_fns` guard mirrors the user
+    /// loop's REPL-cell de-dup.
+    fn compile_tracing_stdlib_methods(&mut self) -> Result<(), String> {
+        let tp = tracing_stdlib_program();
+
+        // Swap in the tracing program's span-keyed side tables for the
+        // duration of body emission. The bodies carry `tracing.kara`
+        // spans, so they only hit these tables; the user program's tables
+        // are restored before this returns. Name-keyed state
+        // (`struct_types`, `vec_elem_types`, …) is shared and stays put —
+        // tracing struct layouts were already merged by the declaration
+        // pass. Swap ALL program-derived span tables (not just the few the
+        // current bodies touch) so a future tracing-body edit that leans
+        // on, say, `method_unwrap_inner_types` doesn't silently miscompile.
+        //
+        // `std::mem::swap` needs an lvalue on both sides; stage the
+        // tracing-side clones into owned locals, `swap_all!` to install
+        // them, emit the bodies, then `swap_all!` again to restore.
+        let mut t_question_conversions = tp.question_conversions.clone();
+        let mut t_callee_effectful = tp.callee_effectful.clone();
+        let mut t_method_callee_types = tp.method_callee_types.clone();
+        let mut t_string_typed_exprs = tp.string_typed_exprs.clone();
+        let mut t_expr_struct_type_names = tp.expr_struct_type_names.clone();
+        let mut t_user_ord_typed_exprs = tp.user_ord_typed_exprs.clone();
+        let mut t_call_effect_subs = tp.call_effect_subs.clone();
+        let mut t_method_unwrap_inner_types = tp.method_unwrap_inner_types.clone();
+        let mut t_pattern_binding_types = tp.pattern_binding_types.clone();
+        let mut t_pattern_binding_inner_types = tp.pattern_binding_inner_types.clone();
+        let mut t_pattern_binding_borrow_modes = tp.pattern_binding_borrow_modes.clone();
+        macro_rules! swap_all {
+            () => {{
+                std::mem::swap(&mut self.question_conversions, &mut t_question_conversions);
+                std::mem::swap(&mut self.callee_effectful, &mut t_callee_effectful);
+                std::mem::swap(&mut self.method_callee_types, &mut t_method_callee_types);
+                std::mem::swap(&mut self.string_typed_exprs, &mut t_string_typed_exprs);
+                std::mem::swap(
+                    &mut self.expr_struct_type_names,
+                    &mut t_expr_struct_type_names,
+                );
+                std::mem::swap(&mut self.user_ord_typed_exprs, &mut t_user_ord_typed_exprs);
+                std::mem::swap(&mut self.call_effect_subs, &mut t_call_effect_subs);
+                std::mem::swap(
+                    &mut self.method_unwrap_inner_types,
+                    &mut t_method_unwrap_inner_types,
+                );
+                std::mem::swap(
+                    &mut self.pattern_binding_types,
+                    &mut t_pattern_binding_types,
+                );
+                std::mem::swap(
+                    &mut self.pattern_binding_inner_types,
+                    &mut t_pattern_binding_inner_types,
+                );
+                std::mem::swap(
+                    &mut self.pattern_binding_borrow_modes,
+                    &mut t_pattern_binding_borrow_modes,
+                );
+            }};
+        }
+        swap_all!();
+        let result = self.compile_tracing_stdlib_method_bodies(tp);
+        swap_all!(); // restore the user program's tables
+        result
+    }
+
+    /// Inner body-emission loop for [`Self::compile_tracing_stdlib_methods`],
+    /// run with the tracing program's span tables swapped in.
+    fn compile_tracing_stdlib_method_bodies(&mut self, tp: &Program) -> Result<(), String> {
+        let mut compiled: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for value_self_pass in [true, false] {
+            for item in &tp.items {
+                if let Item::ImplBlock(imp) = item {
+                    if let Some(type_name) = impl_target_name(&imp.target_type) {
+                        for impl_item in &imp.items {
+                            if let ImplItem::Method(method) = impl_item {
+                                if method.generic_params.is_some() {
+                                    continue;
+                                }
+                                if method_self_is_value(method) != value_self_pass {
+                                    continue;
+                                }
+                                let qualified = format!("{}.{}", type_name, method.name);
+                                if !compiled.insert(qualified.clone()) {
+                                    continue;
+                                }
+                                if self.declare_only_fns.contains(&qualified) {
+                                    continue;
+                                }
+                                // Usage gate. The declaration pass declared
+                                // EVERY tracing method up front (so a user
+                                // call site could resolve its symbol), but
+                                // emitting a body for a method the program
+                                // never calls would bloat every binary with
+                                // dead `Vec`/f-string machinery — against
+                                // this project's binary-size discipline, and
+                                // it breaks IR tests that assert the absence
+                                // of `insertvalue` etc. in tracing-free
+                                // programs. User bodies are already compiled
+                                // by the time this runs, so a tracing method
+                                // with no call site has zero uses: drop the
+                                // bare declaration instead of giving it a
+                                // body. Tracing methods never call each other,
+                                // so no deletion can orphan a live reference.
+                                let fv = match self.module.get_function(&qualified) {
+                                    Some(fv) => fv,
+                                    None => continue,
+                                };
+                                // `get_first_use` lives on the `BasicValue`
+                                // trait, which `FunctionValue` doesn't impl —
+                                // route through the function's global-value
+                                // pointer, which does.
+                                if inkwell::values::BasicValue::get_first_use(
+                                    &fv.as_global_value().as_pointer_value(),
+                                )
+                                .is_none()
+                                {
+                                    // SAFETY: the function has no uses (checked
+                                    // above) and no body yet, so removing it
+                                    // cannot dangle a call site.
+                                    unsafe { fv.delete() };
+                                    continue;
+                                }
+                                let synth = make_impl_method_function(&type_name, method);
+                                self.compile_function(&synth)?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Phase-7 line 5 sub-item 1 — emit the hot-swap table global with

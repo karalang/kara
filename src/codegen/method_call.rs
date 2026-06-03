@@ -1321,6 +1321,57 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `std.tracing` builder-chain non-identifier receiver dispatch.
+        // `LogEvent.info(msg).with_field(k, v).in_span(id)` and
+        // `Span.root(n, id).child(c, id).with_field(k, v)` chain owned-self
+        // builders, so each call's receiver is the prior call's return
+        // value (a `Call` / `MethodCall` expr, not an Identifier). Same
+        // shape as the `RequestBuilder` block above: compile the receiver,
+        // match its LLVM struct type against the seeded `Span` / `LogEvent`
+        // layouts (`with_field` lives on both, so the type — not the method
+        // name — disambiguates), stash it in a synthesized alloca, and
+        // re-dispatch through the identifier path so the compiled
+        // `Type.method` body fires. Gated on the tracing builder method
+        // names so an unrelated non-identifier `.with_field(...)` on a user
+        // type whose value isn't a tracing struct falls through untouched.
+        if !matches!(&object.kind, ExprKind::Identifier(_))
+            && matches!(method, "with_field" | "child" | "in_span")
+        {
+            let recv_val = self.compile_expr(object)?;
+            if let BasicValueEnum::StructValue(sv) = recv_val {
+                let sv_ty = sv.get_type();
+                let matched = ["LogEvent", "Span"]
+                    .into_iter()
+                    .find(|name| self.struct_types.get(*name) == Some(&sv_ty));
+                if let Some(type_name) = matched {
+                    let fn_val = self
+                        .current_fn
+                        .ok_or_else(|| "tracing builder chain outside fn".to_string())?;
+                    let synth = format!("__trace_tmp_{}", self.indexed_elem_counter);
+                    self.indexed_elem_counter += 1;
+                    let slot_ptr = self.create_entry_alloca(fn_val, &synth, sv_ty.into());
+                    self.builder.build_store(slot_ptr, sv).unwrap();
+                    self.variables.insert(
+                        synth.clone(),
+                        super::VarSlot {
+                            ptr: slot_ptr,
+                            ty: sv_ty.into(),
+                        },
+                    );
+                    self.var_type_names
+                        .insert(synth.clone(), type_name.to_string());
+                    let synth_expr = Expr {
+                        kind: ExprKind::Identifier(synth.clone()),
+                        span: object.span.clone(),
+                    };
+                    let result = self.compile_method_call(&synth_expr, method, args, call_span);
+                    self.variables.remove(&synth);
+                    self.var_type_names.remove(&synth);
+                    return result;
+                }
+            }
+        }
+
         // ── Ambient built-in resource methods (BuiltinDefault) ─────
         // Last resort before the dispatch-fail error: lower the ambient
         // resource methods (`env.set`, `clock.now`, ...) the interpreter

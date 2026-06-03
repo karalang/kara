@@ -195,12 +195,15 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // `std.tracing` (v64 backend-platform lift, 2026-05-09): structured
     // logging + span context, OTel-export-ready. `Span` / `LogEvent` /
     // `SpanField` are the user-visible data shapes; `NoOpExporter` is
-    // the default exporter so user code can swap implementations on the
-    // `Exporter` trait. See `runtime/stdlib/tracing.kara`.
+    // the default (drop-everything) exporter and `StdoutExporter` is the
+    // emission surface (renders spans/events to stdout) — both on the
+    // `Exporter` trait, which user code can also implement. See
+    // `runtime/stdlib/tracing.kara`.
     "Span",
     "LogEvent",
     "SpanField",
     "NoOpExporter",
+    "StdoutExporter",
     // `std.process` (v64 backend-platform lift): Command-builder /
     // Child handle / ExitStatus shapes. `EnvVar` is an internal row
     // type that backs `Command.cmd_env` and surfaces at scope-0

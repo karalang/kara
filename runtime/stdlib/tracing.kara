@@ -189,3 +189,62 @@ impl Exporter for NoOpExporter {
     fn export_span(ref self, span: Span) { }
     fn export_event(ref self, event: LogEvent) { }
 }
+
+// The first output-producing exporter — the v1 emission surface.
+// `NoOpExporter` drops everything; `StdoutExporter` renders each span
+// and event as one structured line on stdout, so a program can see its
+// tracing output the moment it constructs one and calls `export_*`.
+//
+// Format is logfmt-adjacent, chosen to stay unambiguous without
+// value-quoting: a `[level]` / `[span]` tag, the human-readable subject
+// (event message / span name), then ` key=value` structured fields,
+// then the trace-context id suffix (`span_id` / `parent_id`) emitted
+// only when non-zero (a zero id is "no span" / "root", per the field
+// docs above, and carries no information worth printing).
+//
+// Caller-plumbed, matching the rest of this surface: the program holds
+// the exporter value and drives `export_span` / `export_event`
+// explicitly. An ambient/registered exporter (so `info("...")` routes
+// to a process-global sink without threading a value) is the natural
+// next step once the network event loop lands — tracked as a separate
+// `[ ]` item in the phase-8 floor.
+//
+// IMPLEMENTATION NOTE — string building uses `+` concat, NOT f-strings,
+// on purpose. The natural form of `export_event`'s first line is
+// `f"[{event.level}] {event.message}"`, but a *two-interpolation*
+// f-string over owned-struct String fields, when the enclosing fn also
+// runs a `for` loop that reassigns the accumulator and is then called
+// more than once, trips a codegen cleanup/move miscompile that frees a
+// string literal (heap corruption → SIGABRT on the second call). It
+// reproduces in pure user code with no tracing involved, so it is a
+// general compiler bug carved separately under the phase-8 std.tracing
+// entry — when it is fixed, these bodies can fold back to the clearer
+// f-string form. The concat form is exactly equivalent and codegen-safe
+// today. (The lone surviving f-string, `f"{...span_id}"`, is a *single*
+// i64 interpolation — outside the triggering shape — and is the only way
+// to stringify an i64 here.)
+struct StdoutExporter { }
+
+impl Exporter for StdoutExporter {
+    fn export_span(ref self, span: Span) {
+        let mut line = "[span] " + span.name + " span_id=" + f"{span.span_id}";
+        if span.parent_id != 0 {
+            line = line + " parent_id=" + f"{span.parent_id}";
+        }
+        for field in span.fields {
+            line = line + " " + field.key + "=" + field.value;
+        }
+        println(line);
+    }
+
+    fn export_event(ref self, event: LogEvent) {
+        let mut line = "[" + event.level + "] " + event.message;
+        for field in event.fields {
+            line = line + " " + field.key + "=" + field.value;
+        }
+        if event.span_id != 0 {
+            line = line + " span_id=" + f"{event.span_id}";
+        }
+        println(line);
+    }
+}
