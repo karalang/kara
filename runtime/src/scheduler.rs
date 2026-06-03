@@ -1052,4 +1052,283 @@ mod tests {
             }
         }
     }
+
+    // ── G13 — task-scheduling overhead microbenchmark ──────────────
+    //
+    // Phase 6 checklist "G13 — Work-stealing overhead on fine-grained
+    // tasks". Measures the raw scheduling cost of the spawn/join and
+    // par_run primitives at the runtime layer (no codegen / Kāra source
+    // in the loop), and locates the task-granularity crossover where
+    // parallel dispatch beats running the branches in-thread. Validates
+    // the pinned cost-model constants (`DISPATCH_OVERHEAD_PER_CALL_UNITS`
+    // = 10_000 ns in `src/codegen/reduce.rs`, mirrored at runtime) and
+    // the <1µs spawn+join target in the checklist against measured
+    // reality.
+    //
+    //   cargo test -p karac-runtime --release bench_g13_scheduling_overhead \
+    //       -- --ignored --nocapture
+    //
+    // `--release` is mandatory: the busy-work kernel and dispatch path
+    // are meaningless under a debug build.
+
+    use crate::{karac_par_run, KaracBranch};
+
+    /// Opaque-to-the-optimizer integer busy-loop. `#[inline(never)]` so
+    /// the work can't be folded into the caller, `black_box` so the
+    /// accumulator can't be dropped. Returns the accumulator to keep the
+    /// loop live. ~1 cheap arithmetic op per iteration.
+    #[inline(never)]
+    fn busy_work(iters: u64) -> u64 {
+        let mut acc: u64 = 0;
+        let mut i: u64 = 0;
+        while i < iters {
+            acc = acc.wrapping_add(std::hint::black_box(i).wrapping_mul(2_654_435_761));
+            i += 1;
+        }
+        std::hint::black_box(acc)
+    }
+
+    /// Spawn-side wrapper: `env` points to a `u64` iteration count; runs
+    /// `busy_work` and writes the result so the result-transport path is
+    /// exercised exactly as a real `-> u64` task would be.
+    unsafe extern "C" fn busy_spawn(
+        env: *mut c_void,
+        result_out: *mut u8,
+        _cancel: *const AtomicBool,
+    ) {
+        let iters = *(env as *const u64);
+        let v = busy_work(iters);
+        if !result_out.is_null() {
+            *(result_out as *mut u64) = v;
+        }
+    }
+
+    /// par_run-side branch wrapper: `ctx` points to a `u64` iteration
+    /// count; runs `busy_work` and discards the result (par branches in
+    /// the write-only fan-out shape don't return a value).
+    unsafe extern "C" fn busy_branch(ctx: *mut c_void, _cancel: *const AtomicBool) {
+        let iters = *(ctx as *const u64);
+        let _ = busy_work(iters);
+    }
+
+    /// Median of `f` over `iters` measured runs after `warmup` discarded
+    /// runs. Returns nanoseconds. Median (not mean) so a scheduler hiccup
+    /// or a stray context switch doesn't skew the figure.
+    fn median_ns(warmup: usize, iters: usize, mut f: impl FnMut() -> Duration) -> f64 {
+        for _ in 0..warmup {
+            let _ = f();
+        }
+        let mut v: Vec<u128> = (0..iters).map(|_| f().as_nanos()).collect();
+        v.sort_unstable();
+        v[v.len() / 2] as f64
+    }
+
+    /// Calibrate `busy_work`: nanoseconds per iteration on this machine,
+    /// so the crossover sweep can target real wall-clock durations.
+    fn ns_per_busy_iter() -> f64 {
+        const CAL_ITERS: u64 = 50_000_000;
+        let ns = median_ns(2, 5, || {
+            let start = Instant::now();
+            let _ = busy_work(CAL_ITERS);
+            start.elapsed()
+        });
+        ns / CAL_ITERS as f64
+    }
+
+    /// Iteration count for a target busy-work duration in nanoseconds.
+    fn iters_for_ns(target_ns: f64, ns_per_iter: f64) -> u64 {
+        (target_ns / ns_per_iter).max(0.0) as u64
+    }
+
+    #[test]
+    #[ignore = "perf benchmark; run with --release --ignored --nocapture"]
+    fn bench_g13_scheduling_overhead() {
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0);
+        let workers = crate::resolve_pool_workers();
+        println!("\n=== G13: task-scheduling overhead ===");
+        println!("  cores(available_parallelism) = {cores}; pool workers = {workers}");
+
+        let ns_iter = ns_per_busy_iter();
+        println!("  busy_work calibration: {ns_iter:.4} ns/iter");
+
+        // ── 1. spawn+join round-trip latency (one task in flight) ──
+        // Spawn a trivial task, immediately block on its join, repeat.
+        // No overlap — this is the full one-task lifecycle latency the
+        // checklist's "<1µs for spawn + join" target refers to:
+        // heap alloc of the handle + result buffer, ParCall + Task build,
+        // queue push under the pool mutex, one notify_all, the worker's
+        // wake + run + terminal store + notify, and our condvar wake.
+        {
+            let zero: u64 = 0;
+            const N: u64 = 200_000;
+            let per_ns = median_ns(1, 5, || {
+                let start = Instant::now();
+                for _ in 0..N {
+                    unsafe {
+                        let h = karac_runtime_spawn(
+                            busy_spawn,
+                            &zero as *const u64 as *mut c_void,
+                            std::mem::size_of::<u64>(),
+                            std::mem::align_of::<u64>(),
+                        );
+                        let mut out: u64 = 0;
+                        let _ = karac_runtime_task_join(h, &mut out as *mut u64 as *mut u8);
+                    }
+                }
+                start.elapsed()
+            }) / N as f64;
+            println!("\n── 1. spawn+join round-trip (1 in flight) ──");
+            println!(
+                "  {:.3} µs/task  ({:.0} ns)  [target: <1µs]",
+                per_ns / 1000.0,
+                per_ns
+            );
+        }
+
+        // ── 2. spawn throughput, pipelined (B in flight, then join) ──
+        // Amortized per-task cost when many tasks are outstanding — the
+        // realistic shape for a TaskGroup fan-out. Spawn B handles, then
+        // join all B; the workers run them concurrently while we collect.
+        {
+            let zero: u64 = 0;
+            const B: usize = 4_096;
+            let per_ns = median_ns(1, 5, || {
+                let mut handles: Vec<*mut KaracTaskHandle> = Vec::with_capacity(B);
+                let start = Instant::now();
+                unsafe {
+                    for _ in 0..B {
+                        handles.push(karac_runtime_spawn(
+                            busy_spawn,
+                            &zero as *const u64 as *mut c_void,
+                            std::mem::size_of::<u64>(),
+                            std::mem::align_of::<u64>(),
+                        ));
+                    }
+                    let mut out: u64 = 0;
+                    for h in handles {
+                        let _ = karac_runtime_task_join(h, &mut out as *mut u64 as *mut u8);
+                    }
+                }
+                start.elapsed()
+            }) / B as f64;
+            println!("\n── 2. spawn+join pipelined ({B} in flight) ──");
+            println!("  {:.3} µs/task amortized", per_ns / 1000.0);
+        }
+
+        // ── 3. par_run dispatch overhead (N trivial branches) ──
+        // One karac_par_run call over N zero-work branches, repeated.
+        // Per-call cost = build N Tasks + push under the mutex + one
+        // notify_all + the work-helping join loop draining N branches +
+        // N decrement/signals. This is the number the codegen
+        // PAR_RUN_DISPATCH_THRESHOLD / runtime DISPATCH_OVERHEAD_PER_CALL
+        // constants are meant to model.
+        {
+            println!("\n── 3. par_run dispatch overhead (trivial branches) ──");
+            let zero: u64 = 0;
+            for &n in &[2usize, 4, 8, 16] {
+                let branches: Vec<KaracBranch> = (0..n)
+                    .map(|_| KaracBranch {
+                        func: busy_branch,
+                        ctx: &zero as *const u64 as *mut c_void,
+                    })
+                    .collect();
+                const CALLS: u64 = 50_000;
+                let per_ns = median_ns(1, 5, || {
+                    let start = Instant::now();
+                    for _ in 0..CALLS {
+                        unsafe {
+                            karac_par_run(branches.as_ptr(), n, 0);
+                        }
+                    }
+                    start.elapsed()
+                }) / CALLS as f64;
+                println!(
+                    "  N={n:2}  {:.3} µs/call  ({:.3} µs/branch)",
+                    per_ns / 1000.0,
+                    per_ns / 1000.0 / n as f64
+                );
+            }
+        }
+
+        // ── 4. granularity crossover ──
+        // For N=4 branches each doing W ns of work, compare par_run
+        // dispatch against running the four branch fns in-thread (the
+        // sequential fallback the compiler emits below threshold). The
+        // smallest W where parallel total < sequential total is the
+        // empirical minimum task duration above which parallelizing
+        // pays — i.e. the value the compiler's threshold must clear.
+        {
+            println!("\n── 4. granularity crossover (N=4 disjoint branches) ──");
+            println!("  per-branch W   sequential   parallel   speedup   verdict");
+            const N: usize = 4;
+            let targets_us = [0.5f64, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0];
+            let mut crossover_us: Option<f64> = None;
+            for &w_us in &targets_us {
+                let iters = iters_for_ns(w_us * 1000.0, ns_iter);
+                let ctxs: Vec<u64> = vec![iters; N];
+                let branches: Vec<KaracBranch> = (0..N)
+                    .map(|i| KaracBranch {
+                        func: busy_branch,
+                        ctx: &ctxs[i] as *const u64 as *mut c_void,
+                    })
+                    .collect();
+                // Sequential: run all N branch fns in this thread.
+                let seq_ns = median_ns(1, 9, || {
+                    let start = Instant::now();
+                    unsafe {
+                        let no_cancel = AtomicBool::new(false);
+                        for b in &branches {
+                            (b.func)(b.ctx, &no_cancel as *const AtomicBool);
+                        }
+                    }
+                    start.elapsed()
+                });
+                // Parallel: one par_run over the N branches.
+                let par_ns = median_ns(1, 9, || {
+                    let start = Instant::now();
+                    unsafe {
+                        karac_par_run(branches.as_ptr(), N, 0);
+                    }
+                    start.elapsed()
+                });
+                let speedup = seq_ns / par_ns;
+                let wins = par_ns < seq_ns;
+                if wins && crossover_us.is_none() {
+                    crossover_us = Some(w_us);
+                }
+                println!(
+                    "  {:7.1} µs    {:8.2} µs   {:8.2} µs   {:5.2}×    {}",
+                    w_us,
+                    seq_ns / 1000.0,
+                    par_ns / 1000.0,
+                    speedup,
+                    if wins {
+                        "parallel wins"
+                    } else {
+                        "sequential wins"
+                    },
+                );
+            }
+            match crossover_us {
+                Some(w) => println!(
+                    "\n  crossover: parallel first wins at per-branch W ≈ {w} µs \
+                     (total group work ≈ {:.0} µs across N={N})",
+                    w * N as f64
+                ),
+                None => println!(
+                    "\n  crossover: parallel never won in the swept range \
+                     (≤100 µs/branch) — dispatch overhead dominates"
+                ),
+            }
+        }
+
+        println!("\n── interpretation ──");
+        println!("  The codegen gate models dispatch at 10_000 units (10µs) and");
+        println!("  parallelizes a par_run group only above PAR_RUN_DISPATCH_");
+        println!("  THRESHOLD_UNITS=500 (≈ measurement 3 per-call) with every");
+        println!("  branch above 50 units; reduce loops gate at workers × 10µs.");
+        println!("  Compare the crossover in measurement 4 to those constants.");
+    }
 }
