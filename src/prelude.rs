@@ -221,6 +221,10 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Pool",
     "PooledConnection",
     "PoolError",
+    // `Semaphore` application-layer backpressure primitive (phase-8 P1).
+    // See `runtime/stdlib/semaphore.kara`.
+    "Semaphore",
+    "SemaphoreError",
     // Phase 6 line 186 slice 1 — `TaskGroup` / `TaskHandle[T]` from
     // `runtime/stdlib/task_group.kara`. `TaskGroup` is the
     // scope-local fan-out container per design.md § Explicit
@@ -635,6 +639,13 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     // Surface only — acquire returns placeholder Err pending the
     // follow-up bounded-waiters intrinsic.
     ("pool.kara", include_str!("../runtime/stdlib/pool.kara")),
+    // `Semaphore` application-layer backpressure primitive (phase-8 P1).
+    // Surface + collapsed single-threaded intrinsic (immediate-serve-or-
+    // timeout); the parking-with-timeout backend lands with the event loop.
+    (
+        "semaphore.kara",
+        include_str!("../runtime/stdlib/semaphore.kara"),
+    ),
     // Compile-time layout introspection — `size_of[T]()` / `align_of[T]()`
     // (the `offset_of[T](field)` arm is a parser special-form, not a
     // stdlib function — see `runtime/stdlib/intrinsics.kara`).

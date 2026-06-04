@@ -6286,6 +6286,61 @@ fn test_process_spawn_with_null_redirection_waits_clean() {
     assert_eq!(output, "true\n");
 }
 
+// ── Semaphore — application-layer backpressure primitive ───────────
+
+#[test]
+fn test_semaphore_acquire_grants_up_to_permit_count_then_times_out() {
+    // new(2): two acquires succeed (permits 2 -> 1 -> 0), the third
+    // finds the semaphore exhausted and (single-threaded) fails closed.
+    let output = run(r#"fn main() {
+         let sem = Semaphore.new(2);
+         match sem.acquire(1000) { Ok(_) => println("a1ok"), Err(_) => println("a1timeout") }
+         match sem.acquire(1000) { Ok(_) => println("a2ok"), Err(_) => println("a2timeout") }
+         match sem.acquire(1000) { Ok(_) => println("a3ok"), Err(SemaphoreError.Timeout) => println("a3timeout") }
+     }"#);
+    assert_eq!(output, "a1ok\na2ok\na3timeout\n");
+}
+
+#[test]
+fn test_semaphore_release_returns_a_permit() {
+    // Exhaust a 1-permit semaphore, release, then re-acquire — the
+    // released permit is available again.
+    let output = run(r#"fn main() {
+         let sem = Semaphore.new(1);
+         match sem.acquire(1000) { Ok(_) => println("ok"), Err(_) => println("timeout") }
+         match sem.acquire(1000) { Ok(_) => println("ok"), Err(_) => println("timeout") }
+         sem.release();
+         match sem.acquire(1000) { Ok(_) => println("ok"), Err(_) => println("timeout") }
+     }"#);
+    assert_eq!(output, "ok\ntimeout\nok\n");
+}
+
+#[test]
+fn test_semaphore_release_saturates_at_initial_budget() {
+    // Releasing more than were taken must not inflate the budget past
+    // `new`'s count: new(1), one stray release, then only ONE acquire
+    // succeeds (not two).
+    let output = run(r#"fn main() {
+         let sem = Semaphore.new(1);
+         sem.release();
+         sem.release();
+         match sem.acquire(1000) { Ok(_) => println("ok"), Err(_) => println("timeout") }
+         match sem.acquire(1000) { Ok(_) => println("ok"), Err(_) => println("timeout") }
+     }"#);
+    assert_eq!(output, "ok\ntimeout\n");
+}
+
+#[test]
+fn test_semaphore_hand_rolled_zero_handle_fails_closed() {
+    // A `Semaphore { handle_id: 0 }` literal that bypassed `new` has no
+    // table entry; acquire fails closed with Timeout rather than panic.
+    let output = run(r#"fn main() {
+         let fake = Semaphore { handle_id: 0 };
+         match fake.acquire(1000) { Ok(_) => println("ok??"), Err(SemaphoreError.Timeout) => println("timeout") }
+     }"#);
+    assert_eq!(output, "timeout\n");
+}
+
 // ── Pool[T] — connection-pool primitive surface ────────────────────
 
 #[test]

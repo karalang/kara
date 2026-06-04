@@ -24,6 +24,7 @@ mod method_call_optres;
 mod method_call_pool;
 mod method_call_process;
 mod method_call_regex;
+mod method_call_semaphore;
 mod method_call_seq;
 mod method_call_set;
 mod pattern_match;
@@ -175,6 +176,15 @@ pub struct Interpreter<'a> {
     /// hand-rolled struct literal that bypassed `Pool.new`) can be
     /// distinguished from a legitimate pool.
     pub(crate) pool_handle_counter: i64,
+    /// `Semaphore` backpressure primitive — permit counter keyed by
+    /// `Semaphore.handle_id`. `Semaphore.new` populates an entry;
+    /// `acquire` / `release` adjust `available`. See
+    /// `src/interpreter/method_call_semaphore.rs`.
+    pub(crate) semaphore_table: HashMap<i64, SemEntry>,
+    /// Monotonic counter for `Semaphore.handle_id`, starting at 1 so a
+    /// hand-rolled `Semaphore { handle_id: 0 }` (bypassing
+    /// `Semaphore.new`) is distinguishable from a real semaphore.
+    pub(crate) semaphore_handle_counter: i64,
     /// REPL value-snapshot replay. When a `StmtKind::Let { pattern:
     /// PatternKind::Binding(name), .. }` evaluates and `name` is a key
     /// here, the RHS is **not** evaluated — the binding is created from
@@ -243,6 +253,15 @@ pub struct PoolEntry {
     pub max_waiters: i64,
     pub slots: Vec<Value>,
     pub active_count: i64,
+}
+
+/// Per-semaphore permit state. `available` is the live count an
+/// `acquire` decrements and a `release` increments; `max` is the
+/// initial budget `release` saturates at. See
+/// `src/interpreter/method_call_semaphore.rs`.
+pub struct SemEntry {
+    pub available: i64,
+    pub max: i64,
 }
 
 /// Format mode for [`Interpreter`]'s `dbg()` output. See design.md §
@@ -349,6 +368,8 @@ impl<'a> Interpreter<'a> {
             child_table: HashMap::new(),
             pool_table: HashMap::new(),
             pool_handle_counter: 0,
+            semaphore_table: HashMap::new(),
+            semaphore_handle_counter: 0,
             let_value_overrides: HashMap::new(),
             let_snapshot_watch: HashSet::new(),
             captured_let_values: HashMap::new(),

@@ -1,0 +1,69 @@
+// runtime/stdlib/semaphore.kara
+//
+// `std` application-layer backpressure — `Semaphore`. Phase 8 floor
+// (P1 backpressure primitives). Spec at `phase-8-stdlib-floor.md §
+// Application-layer backpressure primitives`.
+//
+// A counting semaphore bounds how many units of work may proceed
+// concurrently: `acquire` takes a permit (blocking up to `timeout`
+// when none is free), `release` returns one. The canonical use is
+// gating a fan-out — acquire before launching work, release when it
+// finishes — so a burst can't exceed a fixed in-flight budget.
+//
+// **v1 single-threaded semantics (collapsed).** Like `Pool[T]`, the
+// tree-walk interpreter has no peer that could free a permit while a
+// caller waits, so an `acquire` against an exhausted semaphore fails
+// immediately with `SemaphoreError.Timeout` rather than parking for
+// `timeout` ms — there is nothing to wait for. The real
+// parking-with-timeout machinery (and the `suspends` execution verb
+// the spec assigns this surface) becomes load-bearing on the
+// codegen/runtime path once the network event loop lands; the
+// permit-counting contract here is forward-compatible with it.
+//
+// `release` saturates at the initial permit count: returning more
+// permits than were taken is a bookkeeping bug, and capping keeps the
+// in-flight budget from inflating past what `new` declared.
+
+enum SemaphoreError {
+    // No permit was available and none freed before `timeout`. In the
+    // v1 single-threaded interpreter this fires immediately on an
+    // exhausted semaphore (see the file note).
+    Timeout,
+}
+
+// Opaque semaphore handle. `handle_id` keys into the interpreter's
+// `semaphore_table` side-table; `0` is reserved for a hand-rolled
+// `Semaphore { handle_id: 0 }` literal that bypassed `Semaphore.new`
+// — `acquire` on such a value fails closed with `Timeout`.
+struct Semaphore {
+    handle_id: i64,
+}
+
+impl Semaphore {
+    // Create a semaphore with `permits` units available. Dispatched
+    // through `eval_call.rs`'s `"Semaphore.new"` path-string arm,
+    // which records the permit budget in `semaphore_table` and returns
+    // a `Semaphore { handle_id }` carrying the fresh handle.
+    #[compiler_builtin]
+    fn new(permits: i64) -> Semaphore {
+        Semaphore { handle_id: 0 }
+    }
+
+    // Take a permit. `Ok(Unit)` when one was available (the count is
+    // decremented); `Err(SemaphoreError.Timeout)` when the semaphore
+    // is exhausted. `timeout` is the millisecond budget to wait for a
+    // permit — honored once the event-loop backend lands; in the v1
+    // interpreter an exhausted semaphore returns immediately (no peer
+    // can free a permit mid-call).
+    #[compiler_builtin]
+    fn acquire(ref self, timeout: i64) -> Result[Unit, SemaphoreError] {
+        Err(SemaphoreError.Timeout)
+    }
+
+    // Return a permit, making it available to the next `acquire`.
+    // Saturates at the initial permit count.
+    #[compiler_builtin]
+    fn release(ref self) -> Unit {
+        Unit
+    }
+}
