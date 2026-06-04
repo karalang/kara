@@ -28625,6 +28625,83 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_atomic_fetch_add_emits_atomicrmw() {
+        let ir = ir_for(
+            r#"
+par struct Counter { count: Atomic[i64] }
+impl Counter { fn inc(ref self) -> i64 { self.count.fetch_add(1, MemoryOrdering.SeqCst) } }
+fn main() { let c = Counter { count: Atomic.new(0) }; let _ = c.inc(); }
+"#,
+        );
+        assert!(
+            ir.contains("atomicrmw add"),
+            "fetch_add must lower to `atomicrmw add`; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_atomic_fetch_add_sub_returns_old_and_accumulates() {
+        // fetch_add / fetch_sub return the PREVIOUS value and mutate in place.
+        let out = run_program(
+            r#"
+par struct Counter { count: Atomic[i64] }
+impl Counter {
+    fn inc(ref self) -> i64 { self.count.fetch_add(1, MemoryOrdering.SeqCst) }
+    fn dec(ref self) -> i64 { self.count.fetch_sub(1, MemoryOrdering.SeqCst) }
+    fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }
+}
+fn main() {
+    let c = Counter { count: Atomic.new(0) };
+    println(c.inc());   // 0 (old)
+    println(c.inc());   // 1
+    println(c.get());   // 2
+    println(c.dec());   // 2 (old)
+    println(c.get());   // 1
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["0", "1", "2", "2", "1"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_concurrent_atomic_counter_no_lost_updates() {
+        // The headline lock-free-counter shape: two sibling `par {}` branches
+        // each fetch_add 50_000 times on the SAME par struct's Atomic field.
+        // Atomicity guarantees exactly 100_000 — a non-atomic load+store would
+        // lose updates under contention and print < 100_000.
+        let out = run_program(
+            r#"
+par struct Counter { count: Atomic[i64] }
+impl Counter {
+    fn inc(ref self) { let _ = self.count.fetch_add(1, MemoryOrdering.SeqCst); }
+    fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }
+}
+fn bump_many(c: Counter, n: i64) {
+    let mut i = 0;
+    while i < n {
+        c.inc();
+        i = i + 1;
+    }
+}
+fn main() {
+    let c = Counter { count: Atomic.new(0) };
+    par {
+        bump_many(c, 50000);
+        bump_many(c, 50000);
+    }
+    println(c.get());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "100000");
+        }
+    }
+
+    #[test]
     fn test_e2e_shared_struct_atomic_field_load() {
         // Regression: the atomic-field-receiver fix is shared-wide, not
         // par-only — a `shared struct` Atomic field load worked never before

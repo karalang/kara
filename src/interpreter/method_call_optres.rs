@@ -110,6 +110,29 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Unit);
                 }
             }
+            // `fetch_add(v, ord)` / `fetch_sub(v, ord)` — atomic read-modify-
+            // write, returns the PREVIOUS value (matching the codegen / Rust
+            // semantics). The tree-walk interpreter is single-threaded so the
+            // op is a plain read-update-write; the ordering arg is accepted and
+            // ignored. Like `store`, the in-place update only lands for an
+            // `Identifier` receiver (the interpreter's existing field-receiver
+            // limitation); the returned old value is correct regardless.
+            "fetch_add" | "fetch_sub" => {
+                if let Value::Atomic(inner) = &obj {
+                    let old = (**inner).clone();
+                    let delta = args
+                        .first()
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    if let (Value::Int(o), Value::Int(d)) = (&old, &delta) {
+                        let new = if method == "fetch_add" { o + d } else { o - d };
+                        if let ExprKind::Identifier(name) = &object.kind {
+                            self.env.set(name, Value::Atomic(Box::new(Value::Int(new))));
+                        }
+                    }
+                    return Some(old);
+                }
+            }
             _ => return None,
         }
         None

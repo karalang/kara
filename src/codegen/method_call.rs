@@ -16,6 +16,7 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
 use inkwell::values::{BasicMetadataValueEnum, BasicValue, BasicValueEnum};
 use inkwell::AddressSpace;
 use inkwell::AtomicOrdering;
+use inkwell::AtomicRMWBinOp;
 use inkwell::IntPredicate;
 
 /// Natural alignment (bytes) for an Atomic primitive lowering. LLVM's
@@ -1168,7 +1169,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // pattern-matches the trailing `MemoryOrdering.X` qualified-
         // variant arg into an `inkwell::AtomicOrdering`, and emits
         // `load atomic` / `store atomic`.
-        if (method == "load" || method == "store") && self.is_atomic_receiver(object) {
+        if matches!(method, "load" | "store" | "fetch_add" | "fetch_sub")
+            && self.is_atomic_receiver(object)
+        {
             return self.compile_atomic_method(object, method, args);
         }
 
@@ -1827,7 +1830,53 @@ impl<'ctx> super::Codegen<'ctx> {
                 // i64-0 placeholder used elsewhere for void returns.
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
-            _ => unreachable!("compile_atomic_method gated on method in {{load, store}}"),
+            // `fetch_add(v, ord)` / `fetch_sub(v, ord)` — atomic read-modify-
+            // write. Returns the PREVIOUS value (LLVM `atomicrmw` semantics,
+            // matching Rust's `Atomic::fetch_*`), so `count.fetch_add(1, ..)`
+            // is a race-free increment that yields the pre-increment count.
+            // `atomicrmw` accepts any memory ordering (unlike load/store), so
+            // no ordering rejection. Integer-only — `Atomic[bool]` has no
+            // arithmetic RMW. (swap / compare_exchange / fetch_and|or|xor are
+            // a tracked follow-on.)
+            "fetch_add" | "fetch_sub" => {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "codegen: Atomic.{} takes (value, MemoryOrdering), got {} args",
+                        method,
+                        args.len()
+                    ));
+                }
+                if inner_is_bool {
+                    return Err(format!(
+                        "codegen: Atomic[bool] does not support {} (no arithmetic RMW on a bool)",
+                        method
+                    ));
+                }
+                let value = self.compile_expr(&args[0].value)?;
+                let ordering = self.parse_memory_ordering(&args[1].value)?;
+                let val_int = match value {
+                    BasicValueEnum::IntValue(iv) => iv,
+                    _ => {
+                        return Err(format!(
+                            "codegen: Atomic.{} requires an integer value argument",
+                            method
+                        ))
+                    }
+                };
+                let op = if method == "fetch_add" {
+                    AtomicRMWBinOp::Add
+                } else {
+                    AtomicRMWBinOp::Sub
+                };
+                let old = self
+                    .builder
+                    .build_atomicrmw(op, storage_ptr, val_int, ordering)
+                    .map_err(|e| format!("codegen: build_atomicrmw failed: {:?}", e))?;
+                Ok(old.into())
+            }
+            _ => unreachable!(
+                "compile_atomic_method gated on method in {{load, store, fetch_add, fetch_sub}}"
+            ),
         }
     }
 
