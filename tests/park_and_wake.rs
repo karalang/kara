@@ -32,8 +32,12 @@
 //! **Test-helper FFI gate.** `karac_runtime_test_bind_and_print_port`
 //! is gated behind the `test-helpers` cargo feature on the runtime
 //! crate — `runtime_path()` below builds with `--features
-//! test-helpers` so the symbol is in `libkarac_runtime.a`. Production
-//! binaries never see this symbol.
+//! test-helpers` so the symbol is in `libkarac_runtime.a`. It builds
+//! via `cargo rustc --crate-type staticlib`, not `cargo build`,
+//! because fat-LTO strips this caller-less `#[no_mangle]` symbol out of
+//! the archive when both staticlib + rlib are emitted in one build (see
+//! `runtime_path`'s doc for the full mechanism). Production binaries
+//! never see this symbol.
 
 #[cfg(all(unix, feature = "llvm"))]
 mod park_and_wake_tests {
@@ -63,17 +67,33 @@ mod park_and_wake_tests {
     /// its path. Returns None if the build fails — caller soft-skips.
     /// Mirrors `tests/http_server.rs::runtime_path` plus the
     /// `--features test-helpers` flag.
+    ///
+    /// **Must use `cargo rustc --crate-type staticlib`, NOT `cargo
+    /// build`.** The runtime's `[lib] crate-type` is `["staticlib",
+    /// "rlib"]`; under the workspace's `lto = "fat"`, emitting both
+    /// artifacts in one `cargo build` defeats the staticlib's
+    /// cross-module DCE — and in doing so strips the only
+    /// `karac_runtime_test_bind_and_print_port` caller-less
+    /// `#[no_mangle]` export right out of the archive (it has zero
+    /// internal references, so fat-LTO's reachability pass drops it).
+    /// The kara test binary then fails to link with an undefined
+    /// `_karac_runtime_test_bind_and_print_port`. `cargo rustc
+    /// --crate-type staticlib` builds ONLY the staticlib, so the symbol
+    /// survives. Same rule CLAUDE.md mandates for the production
+    /// archive — see the comment on `runtime/Cargo.toml`'s `crate-type`.
     #[allow(static_mut_refs)]
     fn runtime_path() -> Option<PathBuf> {
         RUNTIME_BUILT.call_once(|| {
             let output = Command::new("cargo")
                 .args([
-                    "build",
+                    "rustc",
                     "-p",
                     "karac-runtime",
                     "--release",
                     "--features",
                     "test-helpers",
+                    "--crate-type",
+                    "staticlib",
                 ])
                 .output();
             if let Ok(out) = output {
@@ -168,7 +188,7 @@ mod park_and_wake_tests {
         let Some(rt) = runtime_path() else {
             eprintln!(
                 "skip: libkarac_runtime.a not built with --features test-helpers \
-                 (run `cargo build -p karac-runtime --release --features test-helpers`)"
+                 (run `cargo rustc -p karac-runtime --release --features test-helpers --crate-type staticlib`)"
             );
             return;
         };
@@ -328,7 +348,7 @@ mod park_and_wake_tests {
         let Some(rt) = runtime_path() else {
             eprintln!(
                 "skip: libkarac_runtime.a not built with --features test-helpers \
-                 (run `cargo build -p karac-runtime --release --features test-helpers`)"
+                 (run `cargo rustc -p karac-runtime --release --features test-helpers --crate-type staticlib`)"
             );
             return;
         };
