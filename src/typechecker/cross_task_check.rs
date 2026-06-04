@@ -200,22 +200,13 @@ impl<'a> super::TypeChecker<'a> {
         call_span: &Span,
         site_label: &str,
     ) {
-        let path_suffix = if path.path.is_empty() {
-            String::new()
-        } else {
-            format!(" at {}", path.path.join(" -> "))
-        };
-        let help = path.fix_it.help_text(&path.unsafe_leaf);
-        let msg = format!(
-            "error[E_NOT_CROSS_TASK]: capture of `{name}` (type `{ty}`) cannot cross a {site} \
-             task boundary -- type `{ty}` reaches `{unsafe_leaf}`{path_suffix}; help: {help}",
+        let lead = format!(
+            "capture of `{name}` (type `{ty}`) cannot cross a {site} task boundary",
             name = capture_name,
             ty = type_display(capture_ty),
             site = site_label,
-            unsafe_leaf = path.unsafe_leaf,
-            path_suffix = path_suffix,
-            help = help,
         );
+        let msg = format_cross_task_diagnostic(&lead, capture_ty, path);
         let span = if anchor_span.line == 0 && anchor_span.column == 0 {
             call_span.clone()
         } else {
@@ -247,23 +238,48 @@ impl<'a> super::TypeChecker<'a> {
         path: &CrossTaskUnsafePath,
         span: &Span,
     ) {
-        let path_suffix = if path.path.is_empty() {
-            String::new()
-        } else {
-            format!(" at {}", path.path.join(" -> "))
-        };
-        let help = path.fix_it.help_text(&path.unsafe_leaf);
-        let msg = format!(
-            "error[E_NOT_CROSS_TASK]: {descr} (type `{ty}`) cannot cross a task boundary -- \
-             type `{ty}` reaches `{unsafe_leaf}`{path_suffix}; help: {help}",
+        let lead = format!(
+            "{descr} (type `{ty}`) cannot cross a task boundary",
             descr = descr,
             ty = type_display(value_ty),
-            unsafe_leaf = path.unsafe_leaf,
-            path_suffix = path_suffix,
-            help = help,
         );
+        let msg = format_cross_task_diagnostic(&lead, value_ty, path);
         self.type_error(msg, span.clone(), TypeErrorKind::CrossTaskUnsafeCapture);
     }
+}
+
+/// Slice 4 — render the `E_NOT_CROSS_TASK` diagnostic in the design.md
+/// three-line shape: an `error` line carrying the site-specific lead
+/// clause, a `note` line carrying the type-path location (which subfield
+/// of the captured/transferred type reaches the unsafe leaf), and a
+/// `help` line carrying the type-swap fix-it. `lead` is the error-line
+/// body after the `error[E_NOT_CROSS_TASK]: ` code prefix (the spawn/par
+/// capture sites and the channel/provider value sites build different
+/// lead clauses; everything from the type path down is shared).
+///
+/// The lines are newline-joined into the single `TypeError.message`
+/// string — the cli text renderer prints embedded newlines as-is, and
+/// the JSON renderer escapes them, so no diagnostic-carrier refactor is
+/// needed (the slice-3a single-line shape carried the same tokens; this
+/// only reflows them onto labelled lines). Downstream consumers still
+/// pivot on the `E0254` code and the fix-it text.
+fn format_cross_task_diagnostic(lead: &str, value_ty: &Type, path: &CrossTaskUnsafePath) -> String {
+    let path_suffix = if path.path.is_empty() {
+        String::new()
+    } else {
+        format!(" at {}", path.path.join(" -> "))
+    };
+    let help = path.fix_it.help_text(&path.unsafe_leaf);
+    format!(
+        "error[E_NOT_CROSS_TASK]: {lead}\n\
+         note: type `{ty}` reaches `{unsafe_leaf}`{path_suffix}\n\
+         help: {help}",
+        lead = lead,
+        ty = type_display(value_ty),
+        unsafe_leaf = path.unsafe_leaf,
+        path_suffix = path_suffix,
+        help = help,
+    )
 }
 
 // ── Capture walker ──────────────────────────────────────────────

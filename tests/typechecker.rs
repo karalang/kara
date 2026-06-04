@@ -21089,6 +21089,101 @@ fn with_provider_provider_with_raw_pointer_field_rejected() {
     );
 }
 
+// ── Phase 6 line 170 slice 4: E_NOT_CROSS_TASK multi-line shape ────
+//
+// design.md § Structured Concurrency Lifetime Guarantees specifies the
+// diagnostic as three labelled lines: an `error` line (site-specific
+// lead), a `note` line (the type-path location of the unsafe leaf), and
+// a `help` line (the type-swap fix-it). Slice 3a shipped a single-line
+// minimum carrying the same tokens; slice 4 reflows them onto labelled
+// lines via `format_cross_task_diagnostic` in `cross_task_check.rs`. The
+// lines are newline-joined into `TypeError.message` (no carrier refactor
+// — the cli text renderer prints embedded newlines, JSON escapes them).
+
+#[test]
+fn cross_task_diagnostic_renders_error_note_help_lines() {
+    // Transitive struct-field case so the note line carries a non-empty
+    // type path (`at field 'cache'`).
+    let errors = typecheck_errors(
+        "shared struct Cache { value: i64 }
+         struct Holder { cache: Cache, count: i64 }
+         fn use_holder(holder: Holder) {
+             let h: TaskHandle[i64] = spawn(|| holder.count);
+             let _v: i64 = h.join();
+         }
+         fn main() {}",
+    );
+    let msg = &errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture)
+        .unwrap_or_else(|| {
+            panic!(
+                "expected CrossTaskUnsafeCapture, got: {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+            )
+        })
+        .message;
+    let lines: Vec<&str> = msg.lines().collect();
+    assert_eq!(
+        lines.len(),
+        3,
+        "diagnostic should render on exactly three lines (error/note/help), got:\n{}",
+        msg
+    );
+    // Line 1 — error line with the code + capture lead clause.
+    assert!(
+        lines[0].starts_with("error[E_NOT_CROSS_TASK]: ")
+            && lines[0].contains("capture of `holder`")
+            && lines[0].contains("cannot cross a spawn task boundary"),
+        "error line malformed: {}",
+        lines[0]
+    );
+    // Line 2 — note line with the type-path location of the unsafe leaf.
+    assert!(
+        lines[1].starts_with("note: ")
+            && lines[1].contains("Cache")
+            && lines[1].contains("field 'cache'"),
+        "note line malformed: {}",
+        lines[1]
+    );
+    // Line 3 — help line with the fix-it.
+    assert!(
+        lines[2].starts_with("help: ") && lines[2].contains("`par`"),
+        "help line malformed: {}",
+        lines[2]
+    );
+}
+
+#[test]
+fn cross_task_diagnostic_value_site_renders_three_lines() {
+    // Value-transfer site (channel send) also uses the three-line shape;
+    // its lead clause names the site rather than a captured binding.
+    let errors = typecheck_errors(
+        "shared struct Counter { n: i64 }
+         fn leak(tx: Sender[Counter]) { tx.send(Counter { n: 0 }); }",
+    );
+    let msg = &errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture)
+        .expect("expected CrossTaskUnsafeCapture on channel send")
+        .message;
+    let lines: Vec<&str> = msg.lines().collect();
+    assert_eq!(
+        lines.len(),
+        3,
+        "value-site diagnostic should be three lines, got:\n{}",
+        msg
+    );
+    assert!(
+        lines[0].starts_with("error[E_NOT_CROSS_TASK]: ")
+            && lines[0].contains("value sent across a channel"),
+        "error line malformed: {}",
+        lines[0]
+    );
+    assert!(lines[1].starts_with("note: ") && lines[1].contains("Counter"));
+    assert!(lines[2].starts_with("help: "));
+}
+
 // ── Refinement types (phase-9 line 25, step 1) ──────────────────
 //
 // Step 1 lands the `Type::Refinement` representation, predicate
