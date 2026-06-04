@@ -536,7 +536,16 @@ impl<'a> super::TypeChecker<'a> {
         // method-resolution deref step (sub-item 3a) sees a consistent
         // receiver type. Sub-item 2's `lower_path_type` intercept handles
         // the annotation side; this is its construction-site twin.
-        if struct_info.is_shared {
+        //
+        // `par struct` literals lower to `Type::Shared` for the same reason:
+        // both `shared` and `par` are reference-semantics handle types (no
+        // exclusive ownership — passing clones the handle). The Rc-vs-Arc and
+        // cross-task distinctions are made via `StructInfo.is_par` in later
+        // phases (codegen, cross-task-safe), not at the bare-`Type` level — so
+        // no `Type::Par` variant is needed. See design.md § Part 5b ("Passing
+        // to functions"). The cross-task-safe pass keys off `Type::Shared` to
+        // reject; Slice B teaches it to exempt `is_par` types.
+        if struct_info.is_shared || struct_info.is_par {
             Type::Shared(struct_name)
         } else {
             Type::Named {

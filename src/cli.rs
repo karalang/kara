@@ -2598,6 +2598,16 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // predicate uses a construct outside the allowed
                 // constraint language (design.md § Refinement Types).
                 crate::typechecker::TypeErrorKind::InvalidRefinementPredicate => "E0256",
+                // Phase 6 `par struct` slice A — a `mut` field of a
+                // `par struct` / `par enum` is not `Atomic[T]` / `Mutex[T]`
+                // (design.md § Part 5b > Field constraints).
+                crate::typechecker::TypeErrorKind::ParFieldNotConcurrent => "E0257",
+                // Phase 6 `par struct` slice A — a `par struct` / `par enum`
+                // method declares a `mut self` receiver; only `ref self` (and
+                // consuming `self`) are permitted because `par` values are
+                // always Arc with potential multiple holders (design.md
+                // § Part 5b > `ref self` receivers only).
+                crate::typechecker::TypeErrorKind::ParMutSelfReceiver => "E0258",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),

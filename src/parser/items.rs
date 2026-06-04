@@ -58,13 +58,13 @@ impl super::Parser {
                 self.parse_function(attributes, is_pub, is_private, false)?,
             )),
             Token::Struct => Some(Item::StructDef(
-                self.parse_struct_def(attributes, is_pub, is_private, false, None)?,
+                self.parse_struct_def(attributes, is_pub, is_private, false, false, None)?,
             )),
             Token::Union => Some(Item::UnionDef(
                 self.parse_union_def(attributes, is_pub, is_private)?,
             )),
             Token::Enum => Some(Item::EnumDef(
-                self.parse_enum_def(attributes, is_pub, is_private, false)?,
+                self.parse_enum_def(attributes, is_pub, is_private, false, false)?,
             )),
             Token::Shared => {
                 let shared_kw_span = self.current_span();
@@ -75,10 +75,11 @@ impl super::Parser {
                         is_pub,
                         is_private,
                         true,
+                        false,
                         Some(shared_kw_span),
                     )?)),
                     Token::Enum => Some(Item::EnumDef(
-                        self.parse_enum_def(attributes, is_pub, is_private, true)?,
+                        self.parse_enum_def(attributes, is_pub, is_private, true, false)?,
                     )),
                     _ => {
                         self.error("Expected 'struct' or 'enum' after 'shared'");
@@ -87,47 +88,30 @@ impl super::Parser {
                 }
             }
             // `par struct` / `par enum` — the design's mechanism for
-            // *intentional* concurrent struct sharing (Arc + `Atomic`/`Mutex`
-            // fields, cross-task-safe by definition per design.md § 9498) — is
-            // NOT implemented at v1. Emit a loud not-yet-supported error rather
-            // than silently dropping the `par` keyword: without this arm a
-            // leading `par` falls through to `_ => None`, and the item loop
-            // re-dispatches on the trailing `struct`/`enum`, so `par struct Foo`
-            // parses as a plain `struct Foo` with no diagnostic (the footgun
-            // tracked in docs/implementation_checklist/phase-6-runtime.md). For
-            // recovery we still parse the body as a plain definition so the rest
-            // of the file parses — the `par`-specific semantics are simply
-            // absent, which is the conservative outcome (a plain struct is
-            // rejected from 2+ concurrent `par {}` branches anyway).
+            // *intentional* concurrent struct sharing (always Arc; every `mut`
+            // field constrained to `Atomic[T]` / `Mutex[T]`; cross-task-safe by
+            // definition per design.md § "Part 5b: Concurrent Shared Types").
+            // Mirrors the `Token::Shared` arm: consume `par`, then parse the
+            // following `struct` / `enum` with `is_par = true`. The `par`
+            // keyword span is threaded into `kind_keyword_span` (struct only)
+            // for fix-it rewrites. Field-constraint validation (`mut` fields
+            // must be `Atomic[T]` / `Mutex[T]`) and `mut self` rejection run in
+            // the typechecker at the definition site, not here.
             Token::Par => {
                 let par_kw_span = self.current_span();
                 self.advance(); // consume `par`
                 match self.peek_token() {
-                    Token::Struct => {
-                        self.error_at(
-                            par_kw_span,
-                            "`par struct` is not supported yet — intentional \
-                             concurrent struct sharing via `par struct` is \
-                             planned but not implemented in v1; use a plain \
-                             `struct` or `shared struct` for RC reference \
-                             semantics",
-                        );
-                        Some(Item::StructDef(self.parse_struct_def(
-                            attributes, is_pub, is_private, false, None,
-                        )?))
-                    }
-                    Token::Enum => {
-                        self.error_at(
-                            par_kw_span,
-                            "`par enum` is not supported yet — intentional \
-                             concurrent enum sharing via `par enum` is planned \
-                             but not implemented in v1; use a plain `enum` or \
-                             `shared enum` for RC reference semantics",
-                        );
-                        Some(Item::EnumDef(
-                            self.parse_enum_def(attributes, is_pub, is_private, false)?,
-                        ))
-                    }
+                    Token::Struct => Some(Item::StructDef(self.parse_struct_def(
+                        attributes,
+                        is_pub,
+                        is_private,
+                        false,
+                        true,
+                        Some(par_kw_span),
+                    )?)),
+                    Token::Enum => Some(Item::EnumDef(
+                        self.parse_enum_def(attributes, is_pub, is_private, false, true)?,
+                    )),
                     _ => {
                         self.error("Expected 'struct' or 'enum' after 'par'");
                         None
@@ -1169,6 +1153,7 @@ impl super::Parser {
         is_pub: bool,
         is_private: bool,
         is_shared: bool,
+        is_par: bool,
         kind_keyword_span: Option<Span>,
     ) -> Option<StructDef> {
         let start = self.current_span();
@@ -1208,6 +1193,7 @@ impl super::Parser {
             is_pub,
             is_private,
             is_shared,
+            is_par,
             struct_keyword_span,
             kind_keyword_span,
             no_rc,
@@ -1398,6 +1384,7 @@ impl super::Parser {
         is_pub: bool,
         is_private: bool,
         is_shared: bool,
+        is_par: bool,
     ) -> Option<EnumDef> {
         let start = self.current_span();
         self.expect(&Token::Enum)?;
@@ -1434,6 +1421,7 @@ impl super::Parser {
             is_pub,
             is_private,
             is_shared,
+            is_par,
             name,
             generic_params,
             where_clause,

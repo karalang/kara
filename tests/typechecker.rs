@@ -21904,3 +21904,128 @@ fn test_contract_ref_self_in_ensures_accepted() {
          }",
     );
 }
+
+// ── Phase 6 `par struct` slice A: definition-site guarantee ──────
+// `par struct` / `par enum` (design.md § Part 5b: Concurrent Shared Types).
+// Slice A is the typechecker landing: every `mut` field must be `Atomic[T]`
+// or `Mutex[T]` (bare `mut` rejected at the definition site), and methods
+// may not declare a `mut ref self` receiver (par values are always Arc with
+// potential multiple holders). No codegen — these are definition-site checks.
+
+#[test]
+fn par_struct_immutable_and_atomic_fields_accepted() {
+    // The canonical design.md § Part 5b example: immutable fields (freely
+    // readable across tasks) + an `Atomic` field (lock-free interior mutation,
+    // no `mut` keyword needed).
+    typecheck_ok(
+        "par struct Counter {
+             name: String,
+             count: Atomic[i64],
+         }",
+    );
+}
+
+#[test]
+fn par_struct_mut_atomic_and_mut_mutex_fields_accepted() {
+    // A `mut` field is permitted as long as it is a concurrency primitive.
+    typecheck_ok(
+        "par struct Counter {
+             mut count: Atomic[i64],
+             mut state: Mutex[i64],
+         }",
+    );
+}
+
+#[test]
+fn par_struct_bare_mut_field_rejected() {
+    let errors = typecheck_errors("par struct Bad { mut val: i64 }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::ParFieldNotConcurrent
+                && e.message.contains("`val`")
+                && e.message.contains("`Atomic[T]` or `Mutex[T]`")),
+        "expected ParFieldNotConcurrent for bare `mut val`, got: {errors:?}"
+    );
+}
+
+#[test]
+fn par_struct_plain_immutable_field_accepted() {
+    // Immutable fields are unrestricted — only `mut` fields are constrained.
+    typecheck_ok("par struct Config { retries: i64, host: String }");
+}
+
+#[test]
+fn par_enum_atomic_and_mutex_variant_fields_accepted() {
+    typecheck_ok(
+        "par enum WorkItem {
+             Task { payload: Mutex[i64] },
+             Control { cmd: Atomic[u32] },
+             Poison,
+         }",
+    );
+}
+
+#[test]
+fn par_enum_bare_mut_variant_field_rejected() {
+    let errors = typecheck_errors("par enum Bad { Task { mut payload: i64 } }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::ParFieldNotConcurrent
+                && e.message.contains("`payload`")
+                && e.message.contains("par enum")),
+        "expected ParFieldNotConcurrent for bare `mut payload` variant field, got: {errors:?}"
+    );
+}
+
+#[test]
+fn par_struct_mut_ref_self_receiver_rejected() {
+    let errors = typecheck_errors(
+        "par struct Counter { count: Atomic[i64] }
+         impl Counter {
+             fn reset(mut ref self) { }
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::ParMutSelfReceiver
+                && e.message.contains("`reset`")
+                && e.message.contains("mut ref self")),
+        "expected ParMutSelfReceiver for `mut ref self` method, got: {errors:?}"
+    );
+}
+
+#[test]
+fn par_struct_ref_self_and_consuming_self_receivers_accepted() {
+    // `ref self` (shared read) and consuming `self` (drop one Arc handle) are
+    // both legal — only the exclusive `mut ref self` borrow is rejected.
+    typecheck_ok(
+        "par struct Counter { count: Atomic[i64] }
+         impl Counter {
+             fn get(ref self) -> i64 { 0 }
+             fn into_name(self) -> i64 { 0 }
+         }",
+    );
+}
+
+#[test]
+fn shared_struct_and_plain_struct_mut_fields_unaffected() {
+    // Regression: the par field-constraint check fires ONLY for `par` types.
+    // `shared struct` and plain `struct` keep accepting bare `mut` fields.
+    typecheck_ok("shared struct Node { mut next: i64 }");
+    typecheck_ok("struct Point { mut x: i64 }");
+}
+
+#[test]
+fn shared_struct_mut_ref_self_receiver_still_accepted() {
+    // Regression: the `mut ref self` rejection is par-only; shared/plain types
+    // keep their full receiver-mode surface.
+    typecheck_ok(
+        "shared struct Counter { mut count: i64 }
+         impl Counter {
+             fn bump(mut ref self) { }
+         }",
+    );
+}

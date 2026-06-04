@@ -47,10 +47,20 @@ impl<'a> super::TypeChecker<'a> {
                     let gp = Self::generic_param_names(&s.generic_params);
                     self.validate_all_bounds(&s.generic_params, &s.where_clause, &gp);
                     self.check_struct_invariants(s, &gp);
+                    if s.is_par {
+                        self.check_par_field_constraints("struct", &s.name, &s.fields);
+                    }
                 }
                 Item::EnumDef(e) => {
                     let gp = Self::generic_param_names(&e.generic_params);
                     self.validate_all_bounds(&e.generic_params, &e.where_clause, &gp);
+                    if e.is_par {
+                        for v in &e.variants {
+                            if let VariantKind::Struct(fields) = &v.kind {
+                                self.check_par_field_constraints("enum", &e.name, fields);
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -1155,6 +1165,63 @@ impl<'a> super::TypeChecker<'a> {
         self.current_self_type = saved_self;
     }
 
+    /// `par struct` / `par enum` definition-site field-constraint check
+    /// (design.md § "Part 5b: Concurrent Shared Types" > Field constraints).
+    ///
+    /// A `par` type enforces concurrent safety structurally: immutable fields
+    /// (`field: T`) are freely readable across tasks, but every `mut` field
+    /// must be a concurrency primitive — `Atomic[T]` (lock-free) or `Mutex[T]`
+    /// (locked, for compound mutation). A bare `mut val: i64` is a compile
+    /// error here, at the definition site, unconditionally — the guarantee
+    /// does not depend on any usage site or parallel-region boundary.
+    ///
+    /// `kind` is `"struct"` / `"enum"`; for `par enum` this runs once per
+    /// struct-shaped variant. Plain / `shared` types are skipped by the
+    /// caller (it only invokes this for `is_par` definitions).
+    fn check_par_field_constraints(&mut self, kind: &str, type_name: &str, fields: &[StructField]) {
+        for f in fields {
+            if !f.is_mut || Self::is_concurrent_field_type(&f.ty) {
+                continue;
+            }
+            // Anchor at the `mut` keyword when the parser captured its span
+            // (always present for `mut` fields), else the field type.
+            let span = f
+                .mut_keyword_span
+                .clone()
+                .unwrap_or_else(|| f.ty.span.clone());
+            self.type_error(
+                format!(
+                    "`mut` field `{field}` of `par {kind} {type_name}` must be \
+                     `Atomic[T]` or `Mutex[T]`: a `par {kind}`'s concurrent-safety \
+                     guarantee is structural, so plain mutable fields are not \
+                     permitted. Wrap the field type in `Atomic[...]` for lock-free \
+                     access or `Mutex[...]` for locked compound mutation, or drop \
+                     `mut` to make the field immutable (immutable fields are freely \
+                     readable across tasks)",
+                    field = f.name,
+                ),
+                span,
+                TypeErrorKind::ParFieldNotConcurrent,
+            );
+        }
+    }
+
+    /// True when `ty` is a `par`-field-legal concurrency primitive —
+    /// `Atomic[...]` or `Mutex[...]` (matched on the final path segment, so
+    /// `core.sync.Atomic[T]` qualifies too). Generic args are not inspected:
+    /// the *wrapper* is what provides the synchronization, regardless of the
+    /// inner type.
+    fn is_concurrent_field_type(ty: &TypeExpr) -> bool {
+        matches!(
+            &ty.kind,
+            TypeKind::Path(p)
+                if matches!(
+                    p.segments.last().map(String::as_str),
+                    Some("Atomic") | Some("Mutex")
+                )
+        )
+    }
+
     /// Type-check a function's contract clauses (design.md § Contracts).
     /// Each `requires` predicate and each `ensures` body must have type
     /// `bool`; an `ensures(result) …` clause binds `result` to the return
@@ -1434,9 +1501,40 @@ impl<'a> super::TypeChecker<'a> {
             .map(|(name, decl)| (name.clone(), decl.bounds.clone()))
             .collect();
 
+        // `par struct` / `par enum` methods may not declare a `mut ref self`
+        // receiver (design.md § Part 5b > "`ref self` receivers only"): `par`
+        // values are always Arc with potential multiple holders, so the
+        // exclusive mutable borrow `mut ref self` is never available.
+        // Consuming `self` (drop one Arc handle) and `ref self` (shared read)
+        // remain legal; exclusive mutation goes through `lock` blocks on
+        // `Mutex[T]` fields. Inherent impls only — a trait impl's receiver
+        // shape is fixed by the trait declaration, so rejecting it here would
+        // misattribute the error to the impl site.
+        let target_is_par = imp.trait_name.is_none()
+            && (self.env.structs.get(&type_name).is_some_and(|i| i.is_par)
+                || self.env.enums.get(&type_name).is_some_and(|i| i.is_par));
+
         for item in &imp.items {
             match item {
-                ImplItem::Method(method) => self.check_function(method, Some(&self_type), &[]),
+                ImplItem::Method(method) => {
+                    if target_is_par && method.self_param == Some(SelfParam::MutRef) {
+                        self.type_error(
+                            format!(
+                                "method `{m}` on `par {tn}` cannot take a `mut ref self` \
+                                 receiver: a `par` value is always Arc-allocated and may \
+                                 have multiple holders, so exclusive mutable access is \
+                                 never available. Use `ref self` and mutate `Atomic[T]` \
+                                 fields via their atomic operations or `Mutex[T]` fields \
+                                 inside a `lock` block",
+                                m = method.name,
+                                tn = type_name,
+                            ),
+                            method.span.clone(),
+                            TypeErrorKind::ParMutSelfReceiver,
+                        );
+                    }
+                    self.check_function(method, Some(&self_type), &[]);
+                }
                 ImplItem::AssocType(binding) => {
                     // GAT slice 5: extend the generic scope with the GAT's
                     // own params so the binding RHS like `Wrapper[U]` lowers

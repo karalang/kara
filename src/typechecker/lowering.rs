@@ -342,11 +342,13 @@ impl<'a> super::TypeChecker<'a> {
             if name == "Arc" && args.len() == 1 {
                 return Type::Arc(Box::new(args.into_iter().next().unwrap()));
             }
-            // Intercept shared structs — bare struct name `S` lowers to
-            // Type::Shared(S) when `S` was declared as `shared struct S`.
-            // Non-shared structs continue through Type::Named.
+            // Intercept shared / par structs — bare struct name `S` lowers to
+            // Type::Shared(S) when `S` was declared as `shared struct S` or
+            // `par struct S` (both are reference-semantics handle types; see
+            // the construction-site twin in `fields.rs` and design.md § Part 5b).
+            // Plain structs continue through Type::Named.
             if let Some(info) = self.env.structs.get(name) {
-                if info.is_shared {
+                if info.is_shared || info.is_par {
                     return Type::Shared(name.clone());
                 }
             }

@@ -382,6 +382,22 @@ pub enum TypeErrorKind {
     /// across a channel. See design.md § ScopeLocal. (Phase 6 line 218
     /// slice 2.)
     ScopeLocalEscape,
+    /// A `mut` field of a `par struct` / `par enum` is declared with a type
+    /// other than `Atomic[T]` or `Mutex[T]`. `par struct` enforces concurrent
+    /// safety structurally at the definition site: immutable fields are freely
+    /// readable across tasks, but every `mut` field must be a concurrency
+    /// primitive (`Atomic[T]` for lock-free, `Mutex[T]` for locked compound
+    /// mutation). A bare `mut val: i64` is rejected. See design.md § Part 5b:
+    /// Concurrent Shared Types (`par struct`) > Field constraints. (Phase 6
+    /// `par struct` slice A.)
+    ParFieldNotConcurrent,
+    /// A method on a `par struct` / `par enum` declares a `mut self` receiver.
+    /// `par` values are always Arc-allocated and may have multiple holders, so
+    /// exclusive ownership (`mut self`) is never available — only `ref self`
+    /// (and consuming `self`) are permitted. Exclusive mutation goes through
+    /// `lock` blocks on `Mutex[T]` fields. See design.md § Part 5b > `ref self`
+    /// receivers only. (Phase 6 `par struct` slice A.)
+    ParMutSelfReceiver,
     /// A refutable pattern (one that may not match all values) appears where
     /// only irrefutable patterns are allowed — function parameters, closure
     /// parameters, `let` bindings. Use `if let` or `match` for refutable cases.
@@ -655,6 +671,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ModuleBindingHeapType
         | TypeErrorKind::ReassignToImmutableModuleBinding
         | TypeErrorKind::ScopeLocalEscape
+        | TypeErrorKind::ParFieldNotConcurrent
+        | TypeErrorKind::ParMutSelfReceiver
         | TypeErrorKind::InvalidRefinementPredicate
         | TypeErrorKind::CrossTaskUnsafeCapture => None,
     }

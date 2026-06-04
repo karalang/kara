@@ -1746,78 +1746,72 @@ fn test_non_shared_struct_is_not_shared() {
     }
 }
 
-// ── 2.4b: `par struct` / `par enum` — not-yet-supported error ─────
-// `par` at item scope is a planned-but-unimplemented v1 construct. The
-// parser must emit a loud not-yet-supported error rather than silently
-// dropping the `par` keyword and parsing the definition as a plain
-// `struct`/`enum` (the footgun tracked in
-// docs/implementation_checklist/phase-6-runtime.md `par struct` entry).
+// ── 2.4b: `par struct` / `par enum` parse to real definitions ────
+// `par struct` / `par enum` are concurrent shared-type definitions
+// (design.md § Part 5b). The parser sets `is_par` (mutually exclusive with
+// `is_shared`) and threads the `par` keyword span into `kind_keyword_span`,
+// mirroring the `shared` arm. Field-constraint / `mut self` validation runs
+// in the typechecker, not here (see tests/typechecker.rs § par struct).
 
 #[test]
-fn test_par_struct_emits_not_supported_error() {
-    let (prog, errors) = parse_with_errors("par struct Counter { count: i64 }");
-    // Loud diagnostic anchored at the `par` keyword.
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("`par struct` is not supported yet")),
-        "expected a `par struct` not-supported diagnostic, got: {errors:?}"
-    );
-    let par_err = errors
-        .iter()
-        .find(|e| e.message.contains("`par struct` is not supported yet"))
-        .unwrap();
-    assert_eq!(
-        par_err.span.line, 1,
-        "error should anchor at the `par` keyword line"
-    );
-    // Recovery: the body still parses as a (plain) struct so the rest of the
-    // file is reachable — the `par` keyword is NOT silently honored.
+fn test_par_struct_parses_with_is_par_flag() {
+    let prog = parse_ok("par struct Counter { count: Atomic[i64] }");
     if let Item::StructDef(s) = &prog.items[0] {
         assert_eq!(s.name, "Counter");
+        assert!(s.is_par, "`par struct` must set is_par");
         assert!(
             !s.is_shared,
-            "`par struct` must NOT parse as a shared struct"
+            "`par struct` is not `shared` (mutually exclusive)"
+        );
+        assert!(
+            s.kind_keyword_span.is_some(),
+            "the `par` keyword span must be captured for fix-it rewrites"
         );
     } else {
-        panic!("Expected a recovered StructDef, got: {:?}", prog.items);
+        panic!("Expected a StructDef, got: {:?}", prog.items);
     }
 }
 
 #[test]
-fn test_par_enum_emits_not_supported_error() {
-    let (prog, errors) = parse_with_errors("par enum State { Idle, Running(i64) }");
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("`par enum` is not supported yet")),
-        "expected a `par enum` not-supported diagnostic, got: {errors:?}"
-    );
+fn test_par_enum_parses_with_is_par_flag() {
+    let prog = parse_ok("par enum State { Idle, Running(i64) }");
     if let Item::EnumDef(e) = &prog.items[0] {
         assert_eq!(e.name, "State");
-        assert!(!e.is_shared, "`par enum` must NOT parse as a shared enum");
+        assert!(e.is_par, "`par enum` must set is_par");
+        assert!(!e.is_shared);
         assert_eq!(e.variants.len(), 2);
     } else {
-        panic!("Expected a recovered EnumDef, got: {:?}", prog.items);
+        panic!("Expected an EnumDef, got: {:?}", prog.items);
     }
 }
 
 #[test]
-fn test_pub_par_struct_emits_not_supported_error() {
-    // Visibility flows through the recovery path — `pub` is not lost (the
-    // historical silent-drop re-dispatch would have dropped it).
-    let (prog, errors) = parse_with_errors("pub par struct Counter { count: i64 }");
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("`par struct` is not supported yet")),
-        "expected a `par struct` not-supported diagnostic, got: {errors:?}"
-    );
+fn test_pub_par_struct_parses_with_visibility() {
+    // Visibility flows through — `pub par struct` sets both flags.
+    let prog = parse_ok("pub par struct Counter { count: Atomic[i64] }");
     if let Item::StructDef(s) = &prog.items[0] {
-        assert!(s.is_pub, "`pub` must survive the par-recovery path");
+        assert!(s.is_pub, "`pub` must survive");
+        assert!(s.is_par);
         assert!(!s.is_shared);
     } else {
-        panic!("Expected a recovered StructDef, got: {:?}", prog.items);
+        panic!("Expected a StructDef, got: {:?}", prog.items);
+    }
+}
+
+#[test]
+fn test_plain_and_shared_structs_are_not_par() {
+    // Regression guard: only the `par` keyword sets is_par.
+    let plain = parse_ok("struct Point { x: i64 }");
+    let shared = parse_ok("shared struct Node { value: i64 }");
+    if let Item::StructDef(s) = &plain.items[0] {
+        assert!(!s.is_par && !s.is_shared);
+    } else {
+        panic!("Expected a StructDef");
+    }
+    if let Item::StructDef(s) = &shared.items[0] {
+        assert!(!s.is_par && s.is_shared);
+    } else {
+        panic!("Expected a StructDef");
     }
 }
 

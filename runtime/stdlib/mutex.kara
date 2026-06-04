@@ -1,0 +1,20 @@
+// runtime/stdlib/mutex.kara
+//
+// `Mutex[T]` — concurrency primitive for exclusive, blocking access to a
+// value. The companion to `Atomic[T]` (lock-free) for `par struct` / `par
+// enum` `mut` fields that need compound mutation: a `par struct`'s `mut`
+// fields must be declared `Atomic[T]` or `Mutex[T]` (enforced at the
+// definition site — see design.md § "Part 5b: Concurrent Shared Types
+// (`par struct`)"). Exclusive access goes through a `lock` block:
+//
+//     par struct Counter { state: Mutex[CounterState] }
+//     lock self.state s { s.total += 1 }   // `s: mut ref CounterState`
+//
+// Slice A (par struct definition-site guarantee) bakes only the type shape
+// so `Mutex[T]` is a nameable field type and the field-constraint check can
+// accept it. The `lock`-block typecheck + codegen and `Mutex.new` /
+// poisoning semantics land in a later slice; this is the type-shape twin of
+// `atomic.kara`, which likewise registers only the shape and keeps method
+// dispatch in the hardcoded path.
+
+struct Mutex[T] { }

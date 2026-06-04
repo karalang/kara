@@ -27,6 +27,12 @@ pub struct StructInfo {
     pub derived_traits: HashSet<String>,
     pub no_rc: bool,
     pub is_shared: bool,
+    /// `par struct` — concurrent shared type (always Arc; every `mut` field is
+    /// `Atomic[T]` / `Mutex[T]`; cross-task-safe by definition). Mutually
+    /// exclusive with `is_shared`. Copied from `StructDef.is_par`. Read by the
+    /// definition-site field-constraint check, the `mut self` receiver check,
+    /// and (later slices) the concurrency / cross-task-safe / codegen passes.
+    pub is_par: bool,
     /// `#[must_use]` annotation carried on the struct declaration
     /// (slice 4 of the `#[must_use]` mandate — see
     /// `docs/implementation_checklist/phase-5-diagnostics.md` §
@@ -59,6 +65,9 @@ pub struct EnumInfo {
     pub variants: Vec<(String, VariantTypeInfo)>,
     pub derived_traits: HashSet<String>,
     pub is_shared: bool,
+    /// `par enum` — concurrent shared enum. See [`StructInfo::is_par`].
+    /// Mutually exclusive with `is_shared`; copied from `EnumDef.is_par`.
+    pub is_par: bool,
     /// See [`StructInfo::must_use_message`]. Same role on enum
     /// declarations; slice 4 of the `#[must_use]` mandate.
     pub must_use_message: Option<String>,

@@ -82,6 +82,7 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "F32",
     "F64",
     "Atomic",
+    "Mutex",
     "Ordering",
     "MemoryOrdering",
     "IoError",
@@ -525,6 +526,7 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
         include_str!("../runtime/stdlib/peekable.kara"),
     ),
     ("atomic.kara", include_str!("../runtime/stdlib/atomic.kara")),
+    ("mutex.kara", include_str!("../runtime/stdlib/mutex.kara")),
     ("f32.kara", include_str!("../runtime/stdlib/f32.kara")),
     ("f64.kara", include_str!("../runtime/stdlib/f64.kara")),
     ("stats.kara", include_str!("../runtime/stdlib/stats.kara")),
@@ -907,6 +909,7 @@ fn stub_struct(name: &str, span: &Span) -> Item {
         is_pub: true,
         is_private: false,
         is_shared: false,
+        is_par: false,
         // Synthetic prelude stub — no real source position for the
         // `struct` keyword. Carries the item's full span as a benign
         // placeholder; fix_diff edit emission only consults this when
@@ -938,8 +941,8 @@ fn stub_struct(name: &str, span: &Span) -> Item {
 /// participates in type inference.
 fn stub_generics(name: &str, span: &Span) -> Option<GenericParams> {
     let params: &[&str] = match name {
-        "Option" | "Vec" | "VecDeque" | "Slice" | "Array" | "Set" | "Atomic" | "SortedSet"
-        | "Channel" | "Sender" | "Receiver" => &["T"],
+        "Option" | "Vec" | "VecDeque" | "Slice" | "Array" | "Set" | "Atomic" | "Mutex"
+        | "SortedSet" | "Channel" | "Sender" | "Receiver" => &["T"],
         "Result" => &["T", "E"],
         "Map" | "Entry" => &["K", "V"],
         _ => return None,
