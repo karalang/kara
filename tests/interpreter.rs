@@ -6384,6 +6384,51 @@ fn test_rate_limiter_hand_rolled_zero_handle_fails_closed() {
     assert_eq!(output, "false\n");
 }
 
+// ── BoundedChannel[T] — capacity-bounded backpressure queue ────────
+
+#[test]
+fn test_bounded_channel_send_bounds_then_recv_is_fifo() {
+    // Capacity 2: two sends succeed, the third hits the bound and
+    // fails fast; recv drains in FIFO order, then reports empty.
+    let output = run(r#"fn main() {
+         let ch = BoundedChannel.new(2, OnFull.FailFast);
+         match ch.send(10) { Ok(_) => println("ok"), Err(_) => println("full") }
+         match ch.send(20) { Ok(_) => println("ok"), Err(_) => println("full") }
+         match ch.send(30) { Ok(_) => println("ok"), Err(ChannelError.Full) => println("full") }
+         match ch.recv() { Some(v) => println(v), None => println("none") }
+         match ch.recv() { Some(v) => println(v), None => println("none") }
+         match ch.recv() { Some(v) => println(v), None => println("none") }
+     }"#);
+    assert_eq!(output, "ok\nok\nfull\n10\n20\nnone\n");
+}
+
+#[test]
+fn test_bounded_channel_block_collapses_to_fail_fast_in_v1() {
+    // The single-threaded interpreter has no peer to drain the buffer,
+    // so `OnFull.Block` cannot park — a full send errors just like
+    // FailFast. A freed slot (via recv) then accepts the next send.
+    let output = run(r#"fn main() {
+         let ch = BoundedChannel.new(1, OnFull.Block);
+         match ch.send(1) { Ok(_) => println("ok"), Err(_) => println("full") }
+         match ch.send(2) { Ok(_) => println("ok"), Err(_) => println("full") }
+         match ch.recv() { Some(v) => println(v), None => println("none") }
+         match ch.send(3) { Ok(_) => println("ok"), Err(_) => println("full") }
+     }"#);
+    assert_eq!(output, "ok\nfull\n1\nok\n");
+}
+
+#[test]
+fn test_bounded_channel_hand_rolled_zero_handle_fails_closed() {
+    // A `BoundedChannel { handle_id: 0 }` literal that bypassed `new`
+    // has no buffer: send fails closed (Full), recv yields None.
+    let output = run(r#"fn main() {
+         let fake = BoundedChannel { handle_id: 0 };
+         match fake.send(1) { Ok(_) => println("ok"), Err(_) => println("full") }
+         match fake.recv() { Some(_) => println("some"), None => println("none") }
+     }"#);
+    assert_eq!(output, "full\nnone\n");
+}
+
 // ── Pool[T] — connection-pool primitive surface ────────────────────
 
 #[test]

@@ -309,6 +309,9 @@ impl<'a> super::Interpreter<'a> {
         if let Some(v) = self.try_eval_rate_limiter_method(method, obj.clone(), args, span) {
             return v;
         }
+        if let Some(v) = self.try_eval_bounded_channel_method(method, obj.clone(), args, span) {
+            return v;
+        }
         if let Some(v) = self.try_eval_set_method(method, object, obj.clone(), args, span) {
             return v;
         }

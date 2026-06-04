@@ -1,0 +1,70 @@
+// runtime/stdlib/bounded_channel.kara
+//
+// `std` application-layer backpressure — `BoundedChannel[T]`. Phase 8
+// floor (P1 backpressure primitives). Spec at `phase-8-stdlib-floor.md §
+// Application-layer backpressure primitives`.
+//
+// A capacity-bounded queue: `send` enqueues a value, `recv` dequeues one.
+// The bound is the backpressure — when the buffer is full, `OnFull`
+// decides what `send` does: `FailFast` returns `Err(ChannelError.Full)`
+// immediately, `Block` waits for a slot to free.
+//
+// **v1 single-threaded semantics (collapsed).** The tree-walk
+// interpreter has no peer that could drain the buffer while a sender
+// waits, so `Block` cannot actually park — in v1 it behaves like
+// `FailFast` (a full `send` returns `Err(Full)` rather than blocking).
+// The real parking-on-full (the `suspends` execution verb, and the
+// `Channel[T]` effect surface plus `suspends`) becomes load-bearing on
+// the codegen/runtime path once the network event loop lands; the
+// bounded-queue contract here is forward-compatible with it. `recv`
+// likewise returns `None` on an empty buffer instead of blocking.
+
+// What a `send` does when the buffer is full.
+enum OnFull {
+    // Wait for a slot to free (parks — event-loop dependent; in the v1
+    // interpreter this collapses to `FailFast`, see the file note).
+    Block,
+    // Return `Err(ChannelError.Full)` immediately without enqueuing.
+    FailFast,
+}
+
+enum ChannelError {
+    // `send` found the buffer at capacity (and the channel is
+    // `FailFast`, or `Block` under the collapsed v1 semantics).
+    Full,
+}
+
+// Opaque bounded-channel handle. `handle_id` keys into the interpreter's
+// `bounded_channel_table` side-table; `0` is reserved for a hand-rolled
+// `BoundedChannel { handle_id: 0 }` literal that bypassed `new` — `send`
+// on such a value fails closed with `ChannelError.Full` and `recv`
+// returns `None`.
+struct BoundedChannel[T] {
+    handle_id: i64,
+}
+
+impl[T] BoundedChannel[T] {
+    // Create a channel buffering up to `capacity` values, with `on_full`
+    // governing a `send` that hits the bound. Dispatched through
+    // `eval_call.rs`'s `"BoundedChannel.new"` path-string arm.
+    #[compiler_builtin]
+    fn new(capacity: i64, on_full: OnFull) -> BoundedChannel[T] {
+        BoundedChannel { handle_id: 0 }
+    }
+
+    // Enqueue `value`. `Ok(Unit)` when there was room; `Err(Full)` when
+    // the buffer is at capacity (immediately for `FailFast`; also for
+    // `Block` under v1's collapsed single-threaded semantics).
+    #[compiler_builtin]
+    fn send(ref self, value: T) -> Result[Unit, ChannelError] {
+        Err(ChannelError.Full)
+    }
+
+    // Dequeue the oldest value: `Some(v)` when the buffer is non-empty,
+    // `None` when it is empty. (A real runtime's `recv` would block on
+    // empty; v1 returns `None`.)
+    #[compiler_builtin]
+    fn recv(ref self) -> Option[T] {
+        Option.None
+    }
+}

@@ -15,6 +15,7 @@ mod exec;
 mod helpers;
 mod iter_eval;
 mod method_call;
+mod method_call_bounded_channel;
 mod method_call_channel;
 mod method_call_file;
 mod method_call_http;
@@ -195,6 +196,14 @@ pub struct Interpreter<'a> {
     /// hand-rolled `RateLimiter { handle_id: 0 }` is distinguishable
     /// from a real limiter.
     pub(crate) rate_limiter_handle_counter: i64,
+    /// `BoundedChannel[T]` buffers keyed by `BoundedChannel.handle_id`.
+    /// `new` populates an entry; `send` enqueues (or fails on a full
+    /// `FailFast` buffer), `recv` dequeues. T erases at runtime — the
+    /// buffer is a `VecDeque<Value>`. See
+    /// `src/interpreter/method_call_bounded_channel.rs`.
+    pub(crate) bounded_channel_table: HashMap<i64, BoundedChannelEntry>,
+    /// Monotonic counter for `BoundedChannel.handle_id`, starting at 1.
+    pub(crate) bounded_channel_handle_counter: i64,
     /// REPL value-snapshot replay. When a `StmtKind::Let { pattern:
     /// PatternKind::Binding(name), .. }` evaluates and `name` is a key
     /// here, the RHS is **not** evaluated — the binding is created from
@@ -290,6 +299,16 @@ pub struct RateLimiterEntry {
 pub struct TokenBucket {
     pub tokens: f64,
     pub last: std::time::Instant,
+}
+
+/// A `BoundedChannel[T]` buffer. `capacity` bounds `queue`'s length;
+/// `fail_fast` records whether a full `send` errors (`OnFull::FailFast`,
+/// and `Block` too under v1's collapsed semantics). See
+/// `src/interpreter/method_call_bounded_channel.rs`.
+pub struct BoundedChannelEntry {
+    pub capacity: i64,
+    pub fail_fast: bool,
+    pub queue: std::collections::VecDeque<Value>,
 }
 
 /// Format mode for [`Interpreter`]'s `dbg()` output. See design.md §
@@ -400,6 +419,8 @@ impl<'a> Interpreter<'a> {
             semaphore_handle_counter: 0,
             rate_limiter_table: HashMap::new(),
             rate_limiter_handle_counter: 0,
+            bounded_channel_table: HashMap::new(),
+            bounded_channel_handle_counter: 0,
             let_value_overrides: HashMap::new(),
             let_snapshot_watch: HashSet::new(),
             captured_let_values: HashMap::new(),

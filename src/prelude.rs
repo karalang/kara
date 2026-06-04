@@ -228,6 +228,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // `RateLimiter` token-bucket backpressure primitive (phase-8 P1).
     // See `runtime/stdlib/rate_limiter.kara`.
     "RateLimiter",
+    // `BoundedChannel[T]` capacity-bounded backpressure queue (phase-8
+    // P1). `OnFull` / `ChannelError` are its companion enums. See
+    // `runtime/stdlib/bounded_channel.kara`.
+    "BoundedChannel",
+    "OnFull",
+    "ChannelError",
     // Phase 6 line 186 slice 1 — `TaskGroup` / `TaskHandle[T]` from
     // `runtime/stdlib/task_group.kara`. `TaskGroup` is the
     // scope-local fan-out container per design.md § Explicit
@@ -655,6 +661,13 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     (
         "rate_limiter.kara",
         include_str!("../runtime/stdlib/rate_limiter.kara"),
+    ),
+    // `BoundedChannel[T]` capacity-bounded backpressure queue (phase-8
+    // P1). FailFast send + non-blocking recv in v1; Block's park lands
+    // with the event loop.
+    (
+        "bounded_channel.kara",
+        include_str!("../runtime/stdlib/bounded_channel.kara"),
     ),
     // Compile-time layout introspection — `size_of[T]()` / `align_of[T]()`
     // (the `offset_of[T](field)` arm is a parser special-form, not a
