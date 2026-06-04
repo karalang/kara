@@ -223,6 +223,47 @@ impl<'a> super::TypeChecker<'a> {
         };
         self.type_error(msg, span, TypeErrorKind::CrossTaskUnsafeCapture);
     }
+
+    /// Emit `E_NOT_CROSS_TASK` for a cross-task boundary site that
+    /// transfers a *value* rather than capturing a named binding —
+    /// `Channel.send(value)` and `with_provider[R](provider, …)` (Phase 6
+    /// line 170 slice 3c). Unlike the spawn/par capture sites there is no
+    /// captured binding name to anchor on, so `descr` carries the leading
+    /// clause naming the site (e.g. `"value sent across a channel"` or
+    /// `"provider for resource \`Clock\`"`). Shares the type-path /
+    /// fix-it rendering with [`Self::emit_cross_task_unsafe`].
+    ///
+    /// Neither site has a sole-ownership carve-out: a channel transfers
+    /// its value to an unknown receiving task (possibly many sends), and a
+    /// provider is shared with a closure body that may run across spawned
+    /// tasks. So this rejects the *full* cross-task-unsafe set including
+    /// `shared struct` / `shared enum` — it does NOT apply the
+    /// `SharedToPar` deferral that the par-block check uses (design.md
+    /// line 1407 for `Channel`, line 7213 for `with_provider`).
+    pub(super) fn emit_cross_task_unsafe_value(
+        &mut self,
+        descr: &str,
+        value_ty: &Type,
+        path: &CrossTaskUnsafePath,
+        span: &Span,
+    ) {
+        let path_suffix = if path.path.is_empty() {
+            String::new()
+        } else {
+            format!(" at {}", path.path.join(" -> "))
+        };
+        let help = path.fix_it.help_text(&path.unsafe_leaf);
+        let msg = format!(
+            "error[E_NOT_CROSS_TASK]: {descr} (type `{ty}`) cannot cross a task boundary -- \
+             type `{ty}` reaches `{unsafe_leaf}`{path_suffix}; help: {help}",
+            descr = descr,
+            ty = type_display(value_ty),
+            unsafe_leaf = path.unsafe_leaf,
+            path_suffix = path_suffix,
+            help = help,
+        );
+        self.type_error(msg, span.clone(), TypeErrorKind::CrossTaskUnsafeCapture);
+    }
 }
 
 // ── Capture walker ──────────────────────────────────────────────

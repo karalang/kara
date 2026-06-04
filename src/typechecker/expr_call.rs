@@ -10,6 +10,7 @@
 //! Lives in a sibling `impl<'a> super::TypeChecker<'a>` block.
 
 use crate::ast::*;
+use crate::cross_task_safe::is_cross_task_safe_with;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
@@ -153,6 +154,50 @@ impl<'a> super::TypeChecker<'a> {
         if let ExprKind::Identifier(name) = &callee.kind {
             if name == "spawn" && args.len() == 1 && self.local_scope.lookup("spawn").is_none() {
                 self.check_cross_task_safe_captures(&args[0].value, span, "spawn");
+            }
+        }
+
+        // Phase 6 line 170 slice 3c — cross-task-safe boundary check at
+        // `with_provider[R](provider, closure)` call sites. The surface
+        // parses as `Call(Index(Ident|Path("with_provider"), R), [provider,
+        // closure])` (mirrors the interpreter's `match_with_provider`). The
+        // provider value is shared with the closure body, which may run
+        // across spawned tasks, so a provider whose concrete type reaches a
+        // not-cross-task-safe leaf is rejected at the call site (design.md
+        // line 7213). Unlike a `par {}` branch there is no sole-ownership
+        // carve-out — the full unsafe set is rejected, shared struct/enum
+        // included. Regular call dispatch follows unchanged. (The
+        // `providers { R => p } in { body }` block form is checked at the
+        // `ExprKind::Providers` arm in `exprs.rs`.)
+        if let ExprKind::Index { object, index } = &callee.kind {
+            let is_with_provider = match &object.kind {
+                ExprKind::Identifier(n) => n == "with_provider",
+                ExprKind::Path { segments, .. } => segments.as_slice() == ["with_provider"],
+                _ => false,
+            };
+            let resource = if is_with_provider && args.len() == 2 {
+                match &index.kind {
+                    ExprKind::Identifier(n) => Some(n.clone()),
+                    ExprKind::Path { segments, .. } => segments.last().cloned(),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if let Some(resource) = resource {
+                let provider_expr = &args[0].value;
+                let provider_ty = self.infer_expr(provider_expr);
+                if let Err(path) =
+                    is_cross_task_safe_with(&provider_ty, &self.env.structs, &self.env.enums)
+                {
+                    let descr = format!("provider for resource `{resource}`");
+                    self.emit_cross_task_unsafe_value(
+                        &descr,
+                        &provider_ty,
+                        &path,
+                        &provider_expr.span,
+                    );
+                }
             }
         }
 

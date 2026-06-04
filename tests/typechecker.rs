@@ -20926,6 +20926,169 @@ fn par_block_local_let_shadows_outer_capture() {
     );
 }
 
+// ── Phase 6 line 170 slice 3c: Channel.send + with_provider ───────
+//
+// The final two of the five cross-task-safe boundary sites. Both
+// transfer a *value* across a task boundary rather than capturing a
+// named binding, and — unlike a `par {}` branch — neither has a
+// sole-ownership carve-out: a channel hands its value to an unknown
+// receiving task (possibly many sends), and a provider is shared with a
+// closure body that may run across spawned tasks. So both reject the
+// FULL cross-task-unsafe set, shared struct/enum included (no
+// `SharedToPar` deferral). design.md line 1407 (Channel) / 7213
+// (with_provider) / § Structured Concurrency Lifetime Guarantees.
+// `Channel.send`: src/typechecker/stdlib_io.rs::infer_channel_method.
+// `with_provider`: the `ExprKind::Providers` arm in exprs.rs.
+
+#[test]
+fn channel_send_safe_element_accepted() {
+    // Positive: a primitive channel element is cross-task-safe.
+    typecheck_ok("fn f(s: Sender[i64]) { s.send(1_i64); }");
+}
+
+#[test]
+fn channel_send_shared_struct_element_rejected() {
+    // Negative: a `shared struct` channel element cannot be sent — no
+    // sole-ownership carve-out at a channel boundary (the receiving task
+    // is unknown and the sender may send repeatedly). SharedToPar fix-it.
+    let errors = typecheck_errors(
+        "shared struct Counter { value: i64 }
+         fn f(s: Sender[Counter], c: Counter) { s.send(c); }
+         fn main() {}",
+    );
+    let cross_task = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture)
+        .unwrap_or_else(|| {
+            panic!(
+                "expected CrossTaskUnsafeCapture on shared-struct channel element, got: {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+            )
+        });
+    assert!(
+        cross_task.message.contains("E_NOT_CROSS_TASK"),
+        "diagnostic should carry E_NOT_CROSS_TASK, got: {}",
+        cross_task.message,
+    );
+    assert!(
+        cross_task.message.contains("channel") && cross_task.message.contains("Counter"),
+        "diagnostic should name the channel site and `Counter`, got: {}",
+        cross_task.message,
+    );
+    assert!(
+        cross_task.message.contains("`par`"),
+        "shared-struct fix-it should suggest the `par` form, got: {}",
+        cross_task.message,
+    );
+}
+
+#[test]
+fn channel_send_vec_of_shared_struct_rejected_transitively() {
+    // Negative (transitive): `Vec[Counter]` reaches a shared-struct leaf
+    // through the element-type recursion in `is_cross_task_safe_with`.
+    let errors = typecheck_errors(
+        "shared struct Counter { value: i64 }
+         fn f(s: Sender[Vec[Counter]], v: Vec[Counter]) { s.send(v); }
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture
+                && e.message.contains("E_NOT_CROSS_TASK")
+                && e.message.contains("channel")),
+        "expected transitive CrossTaskUnsafeCapture on Vec[shared struct] channel element, \
+         got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn with_provider_plain_struct_provider_accepted() {
+    // Positive: a plain-struct provider is cross-task-safe (the common
+    // case — providers are plain structs implementing a resource trait).
+    typecheck_ok(
+        "effect resource UserDB;
+         struct FakeDB { data: i64 }
+         impl FakeDB { fn query(self, n: i64) -> i64 { self.data + n } }
+         fn main() {
+             with_provider[UserDB](FakeDB { data: 100 }, || {
+                 println(UserDB.query(5));
+             });
+         }",
+    );
+}
+
+#[test]
+fn with_provider_shared_struct_provider_rejected() {
+    // Negative: a `shared struct` provider is shared with the closure
+    // body across a potential task boundary — rejected at the call site
+    // (design.md line 7213). Diagnostic names the resource.
+    let errors = typecheck_errors(
+        "effect resource UserDB;
+         shared struct SharedDB { data: i64 }
+         impl SharedDB { fn query(ref self, n: i64) -> i64 { self.data + n } }
+         fn main() {
+             with_provider[UserDB](SharedDB { data: 100 }, || {
+                 println(UserDB.query(5));
+             });
+         }",
+    );
+    let cross_task = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture)
+        .unwrap_or_else(|| {
+            panic!(
+                "expected CrossTaskUnsafeCapture on shared-struct provider, got: {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+            )
+        });
+    assert!(
+        cross_task.message.contains("E_NOT_CROSS_TASK"),
+        "diagnostic should carry E_NOT_CROSS_TASK, got: {}",
+        cross_task.message,
+    );
+    assert!(
+        cross_task
+            .message
+            .contains("provider for resource `UserDB`"),
+        "diagnostic should name the provider site and resource `UserDB`, got: {}",
+        cross_task.message,
+    );
+    assert!(
+        cross_task.message.contains("`par`"),
+        "shared-struct fix-it should suggest the `par` form, got: {}",
+        cross_task.message,
+    );
+}
+
+#[test]
+fn with_provider_provider_with_raw_pointer_field_rejected() {
+    // Negative (transitive): a plain-struct provider that contains a raw
+    // pointer field reaches a raw-pointer leaf through the struct-field
+    // recursion. Raw pointers have no carve-out at any boundary.
+    let errors = typecheck_errors(
+        "effect resource UserDB;
+         struct Holder { p: *mut u8 }
+         fn build(p: *mut u8) {
+             with_provider[UserDB](Holder { p: p }, || {
+                 let _x: i64 = 1;
+             });
+         }
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture
+                && e.message.contains("E_NOT_CROSS_TASK")
+                && e.message.contains("provider for resource `UserDB`")
+                && (e.message.contains("Atomic") || e.message.contains("channel"))),
+        "expected transitive CrossTaskUnsafeCapture (raw-ptr field) on provider, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
 // ── Refinement types (phase-9 line 25, step 1) ──────────────────
 //
 // Step 1 lands the `Type::Refinement` representation, predicate

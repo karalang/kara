@@ -11,6 +11,7 @@
 //! fire as part of call-site inference.
 
 use crate::ast::*;
+use crate::cross_task_safe::is_cross_task_safe_with;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 use std::collections::HashMap;
@@ -2343,12 +2344,33 @@ impl<'a> super::TypeChecker<'a> {
                 // for side effects (diagnostics, subexpression typing). The
                 // block's type is the body's type. Full provider-trait
                 // conformance — verifying each provider implements the
-                // resource's declared `ProviderTrait` — is deferred along
-                // with the `Send + Sync` auto-trait enforcement tracked at
-                // `docs/deferred.md § Send + Sync Enforcement on
-                // with_provider Concrete Provider Type`.
+                // resource's declared `ProviderTrait` — remains deferred.
+                //
+                // Phase 6 line 170 slice 3c — cross-task-safe check on the
+                // concrete provider type. A `with_provider[R](p, || …)`
+                // provider is shared with the closure body, which may run
+                // across spawned tasks, so a provider whose type reaches a
+                // not-cross-task-safe leaf is rejected at the call site
+                // (design.md line 7213 + § Structured Concurrency Lifetime
+                // Guarantees: with_provider is one of the five boundary
+                // sites). No sole-ownership carve-out — the full unsafe set
+                // is rejected, shared struct/enum included. This replaces
+                // the historical "Send + Sync on the provider type" deferral
+                // (the closed enumeration is the v1 mechanism, no auto-trait
+                // infrastructure to wait on).
                 for b in bindings {
-                    self.infer_expr(&b.value);
+                    let provider_ty = self.infer_expr(&b.value);
+                    if let Err(path) =
+                        is_cross_task_safe_with(&provider_ty, &self.env.structs, &self.env.enums)
+                    {
+                        let descr = format!("provider for resource `{}`", b.resource);
+                        self.emit_cross_task_unsafe_value(
+                            &descr,
+                            &provider_ty,
+                            &path,
+                            &b.resource_span,
+                        );
+                    }
                 }
                 self.infer_block(body)
             }

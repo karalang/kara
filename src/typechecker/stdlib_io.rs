@@ -5,6 +5,7 @@
 //! `Sender[T]` / `Receiver[T]` channel ends.
 
 use crate::ast::*;
+use crate::cross_task_safe::is_cross_task_safe_with;
 use crate::token::Span;
 
 use super::types::{IntSize, Type, UIntSize};
@@ -416,6 +417,26 @@ impl<'a> super::TypeChecker<'a> {
                                 TypeErrorKind::ScopeLocalEscape,
                             );
                         }
+                    }
+                    // Phase 6 line 170 slice 3c — cross-task-safe check on
+                    // the channel element type. A channel exists to transfer
+                    // values to another task, so a not-cross-task-safe
+                    // element type can never be sent safely — there is no
+                    // sole-ownership carve-out (unlike a par-block branch),
+                    // so the full unsafe set is rejected, shared struct/enum
+                    // included. design.md line 1407 (`OnceCell` via
+                    // `Channel[OnceCell[T]]`) + § Structured Concurrency
+                    // Lifetime Guarantees (Channel.send is one of the five
+                    // boundary sites).
+                    if let Err(path) =
+                        is_cross_task_safe_with(&elem, &self.env.structs, &self.env.enums)
+                    {
+                        self.emit_cross_task_unsafe_value(
+                            "value sent across a channel",
+                            &elem,
+                            &path,
+                            span,
+                        );
                     }
                     for arg in args {
                         let at = self.infer_expr(&arg.value);
