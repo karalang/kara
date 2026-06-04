@@ -323,30 +323,79 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(done_bb);
     }
 
-    /// Dispatch an inc on `name`'s refcount: atomic path when `name` is in
-    /// `arc_fallback_fns` for the current function, plain non-atomic otherwise.
-    pub(super) fn emit_refcount_inc(
+    /// True when `heap_type` is the heap layout of a `par struct` / `par enum`
+    /// (always Arc, registered in `shared_types` with `is_par = true`). Its
+    /// refcount header must be mutated atomically because `par` values cross
+    /// task boundaries. Looked up by heap-type identity — each registered
+    /// reference-semantic type has a unique `heap_type`.
+    pub(super) fn heap_type_is_par(&self, heap_type: StructType<'ctx>) -> bool {
+        self.shared_types
+            .values()
+            .any(|info| info.is_par && info.heap_type == heap_type)
+    }
+
+    /// Dispatch an inc on a refcount keyed purely on the heap type: atomic
+    /// (`emit_arc_inc`) when `heap_type` is a `par` type, plain otherwise. Use
+    /// at sites that hold a heap pointer but no source binding name (e.g. an
+    /// inner handle reached through a field / `Option` / collection element) —
+    /// the inner value may still be shared with another task, so a `par` inner
+    /// must be incremented atomically.
+    pub(super) fn emit_refcount_inc_by_type(
         &self,
-        name: &str,
         heap_type: StructType<'ctx>,
         ptr: PointerValue<'ctx>,
     ) {
-        if self.is_arc_binding(name) {
+        if self.heap_type_is_par(heap_type) {
             self.emit_arc_inc(heap_type, ptr);
         } else {
             self.emit_rc_inc(heap_type, ptr);
         }
     }
 
-    /// Dispatch a dec on `name`'s refcount: atomic path when `name` is in
-    /// `arc_fallback_fns` for the current function, plain non-atomic otherwise.
+    /// Dispatch a dec on a refcount keyed purely on the heap type: atomic
+    /// (`emit_arc_dec`) when `heap_type` is a `par` type, plain otherwise. See
+    /// [`Self::emit_refcount_inc_by_type`]. Critically, the drop-walk of a
+    /// reference-semantic object decrements the INNER handles it owns — and a
+    /// `par` inner handle may still be live in another task even when the outer
+    /// object hit refcount 0, so that inner dec must be atomic.
+    pub(super) fn emit_refcount_dec_by_type(
+        &self,
+        heap_type: StructType<'ctx>,
+        ptr: PointerValue<'ctx>,
+    ) {
+        if self.heap_type_is_par(heap_type) {
+            self.emit_arc_dec(heap_type, ptr);
+        } else {
+            self.emit_rc_dec(heap_type, ptr);
+        }
+    }
+
+    /// Dispatch an inc on `name`'s refcount. The atomic path (`emit_arc_inc`)
+    /// fires when the type is a `par struct` / `par enum` (always Arc) OR the
+    /// binding was Arc-promoted by the ownership pass (`arc_fallback_fns` for
+    /// the current function); plain non-atomic otherwise.
+    pub(super) fn emit_refcount_inc(
+        &self,
+        name: &str,
+        heap_type: StructType<'ctx>,
+        ptr: PointerValue<'ctx>,
+    ) {
+        if self.heap_type_is_par(heap_type) || self.is_arc_binding(name) {
+            self.emit_arc_inc(heap_type, ptr);
+        } else {
+            self.emit_rc_inc(heap_type, ptr);
+        }
+    }
+
+    /// Dispatch a dec on `name`'s refcount. Atomic for `par` types (always Arc)
+    /// or Arc-promoted bindings (`arc_fallback_fns`); plain non-atomic otherwise.
     pub(super) fn emit_refcount_dec(
         &self,
         name: &str,
         heap_type: StructType<'ctx>,
         ptr: PointerValue<'ctx>,
     ) {
-        if self.is_arc_binding(name) {
+        if self.heap_type_is_par(heap_type) || self.is_arc_binding(name) {
             self.emit_arc_dec(heap_type, ptr);
         } else {
             self.emit_rc_dec(heap_type, ptr);
@@ -1990,7 +2039,9 @@ impl<'ctx> super::Codegen<'ctx> {
             )
             .unwrap()
             .into_pointer_value();
-        self.emit_rc_dec(heap_type, half_ptr);
+        // by-type: a `Map[K, par V]` value half holds a `par` handle that may
+        // still be live in another task, so its dec must be atomic.
+        self.emit_refcount_dec_by_type(heap_type, half_ptr);
         self.builder.build_unconditional_branch(next_bb).unwrap();
 
         // ── loop.next: i++, branch back to cond ──────────────────

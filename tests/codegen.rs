@@ -28476,4 +28476,214 @@ fn main() {
             ir
         );
     }
+
+    // ── Phase 6 `par struct` slice C: always-Arc codegen ─────────
+    // A `par struct` / `par enum` reuses the entire shared-struct codegen
+    // (same `{ i64 refcount, … }` heap layout, malloc, field access, method
+    // dispatch, drop). The ONLY difference is that the refcount header is
+    // mutated atomically (`atomicrmw`, via emit_arc_inc / emit_arc_dec)
+    // because `par` values cross task boundaries. design.md § Part 5b.
+
+    #[test]
+    fn test_ir_par_struct_rc_inc_is_atomic() {
+        // The clone pattern `let b = a` increments the refcount. For a `par
+        // struct` that inc must be an `atomicrmw add`, NOT the plain
+        // `add i64 %rc` a `shared struct` emits.
+        let ir = ir_for(
+            r#"
+par struct Obj { data: i64 }
+fn copy_par() {
+    let a = Obj { data: 10 };
+    let b = a;
+    let _x = a.data + b.data;
+}
+"#,
+        );
+        assert!(
+            ir.contains("atomicrmw add"),
+            "par struct copy must emit an atomic refcount increment (atomicrmw add); got IR:\n{ir}"
+        );
+        assert!(
+            !ir.contains("add i64 %rc"),
+            "par struct refcount inc must NOT use the non-atomic `add i64 %rc` shared path; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_par_struct_rc_dec_is_atomic_and_frees() {
+        // Scope exit decrements the refcount and conditionally frees. For a
+        // `par struct` the decrement must be an `atomicrmw sub`.
+        let ir = ir_for(
+            r#"
+par struct Token { id: i64 }
+fn use_token() {
+    let t = Token { id: 1 };
+    let _x = t.id;
+}
+"#,
+        );
+        assert!(
+            ir.contains("atomicrmw sub"),
+            "par struct scope exit must emit an atomic refcount decrement (atomicrmw sub); got IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("@free"),
+            "par struct scope exit must conditionally free the heap allocation; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_shared_struct_rc_stays_non_atomic_regression() {
+        // Regression: the par atomic routing must NOT leak into `shared
+        // struct` — a shared struct keeps the plain non-atomic refcount.
+        let ir = ir_for(
+            r#"
+shared struct Obj { data: i64 }
+fn copy_shared() {
+    let a = Obj { data: 10 };
+    let b = a;
+    let _x = a.data + b.data;
+}
+"#,
+        );
+        assert!(
+            ir.contains("add i64 %rc"),
+            "shared struct must keep the non-atomic `add i64 %rc` refcount inc; got IR:\n{ir}"
+        );
+        assert!(
+            !ir.contains("atomicrmw"),
+            "shared struct must emit NO atomic refcount ops; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_par_struct_basic() {
+        let out = run_program(
+            r#"
+par struct Counter { val: i64 }
+fn main() {
+    let c = Counter { val: 42 };
+    println(c.val);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
+    #[test]
+    fn test_e2e_par_struct_passed_to_fn_and_aliased() {
+        // Construct, alias (refcount inc), pass to a fn, read fields — the
+        // whole atomic-refcount lifecycle in one binary.
+        let out = run_program(
+            r#"
+par struct Data { x: i64 }
+fn read(d: Data) -> i64 { d.x }
+fn main() {
+    let a = Data { x: 100 };
+    let b = a;
+    println(read(a));
+    println(b.x);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["100", "100"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_recursive_par_struct_drops_inner_handles() {
+        // A `par struct` holding an inner `par` handle (`Option[Node]`). On
+        // drop, the synthesized `__karac_rc_drop_Node` walk decrements the
+        // inner handle — routed through the by-type dispatcher so a `par`
+        // inner is decremented ATOMICALLY (it could still be live in another
+        // task). Must construct, print, and exit cleanly (no double-free).
+        let out = run_program(
+            r#"
+par struct Node { val: i64, next: Option[Node] }
+fn main() {
+    let leaf = Node { val: 2, next: Option.None };
+    let head = Node { val: 1, next: Option.Some(leaf) };
+    println(head.val);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1");
+        }
+    }
+
+    #[test]
+    fn test_e2e_par_enum_tuple_variant() {
+        // `par enum` reuses the shared-enum heap layout; only its refcount is
+        // atomic. Mirrors test_e2e_shared_enum_tuple_variant (bare variant
+        // names — the qualified `Enum.Variant(..)` form is a pre-existing
+        // construction gap shared by all enum kinds).
+        let out = run_program(
+            r#"
+par enum Value { Num(i64), Nothing }
+fn extract(v: Value) -> i64 {
+    match v {
+        Num(n) => n,
+        Nothing => 0,
+    }
+}
+fn main() {
+    let v = Num(42);
+    println(extract(v));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
+    #[test]
+    fn test_ir_par_enum_rc_is_atomic() {
+        // A `par enum`'s refcount header must also be mutated atomically.
+        let ir = ir_for(
+            r#"
+par enum Value { Num(i64), Nothing }
+fn make() {
+    let a = Num(10);
+    let b = a;
+    let _ = match a { Num(n) => n, Nothing => 0 };
+    let _ = match b { Num(n) => n, Nothing => 0 };
+}
+"#,
+        );
+        assert!(
+            ir.contains("atomicrmw"),
+            "par enum must emit atomic refcount ops; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_par_struct_across_par_block() {
+        // The reason `par struct` exists: the same value used from two
+        // sibling `par {}` branches (each pass atomically bumps the count),
+        // then read after the join. Must produce correct output and exit 0
+        // (clean atomic refcount → no double-free / leak crash).
+        let out = run_program(
+            r#"
+par struct Counter { val: i64 }
+fn read(c: Counter) -> i64 { c.val }
+fn main() {
+    let c = Counter { val: 7 };
+    par {
+        let _a = read(c);
+        let _b = read(c);
+    }
+    println(c.val);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7");
+        }
+    }
 }

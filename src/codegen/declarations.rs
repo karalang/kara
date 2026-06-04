@@ -300,8 +300,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.struct_field_type_exprs
                     .insert(s.name.clone(), field_type_exprs);
 
-                if s.is_shared {
-                    // Shared struct: heap layout is { i64 refcount, field0, field1, … }
+                if s.is_shared || s.is_par {
+                    // Shared / par struct: identical heap layout
+                    // `{ i64 refcount, field0, field1, … }`. A `par struct`
+                    // (always Arc) registers here too — the only difference is
+                    // that its refcount header is mutated atomically; every
+                    // other path (layout, field access, method dispatch, drop)
+                    // is shared with the `shared` case. `par` structs get
+                    // conventional Option layout (no niche) — niche is a
+                    // `shared`-only optimization at v1; widening it to `par`
+                    // is a Slice D follow-up, and conventional layout is
+                    // always correct.
                     let mut heap_fields: Vec<BasicTypeEnum<'ctx>> =
                         vec![self.context.i64_type().into()]; // refcount
                     heap_fields.extend_from_slice(&field_types);
@@ -314,6 +323,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             field_names: names.clone(),
                             is_enum: false,
                             niche_option_fields,
+                            is_par: s.is_par,
                         },
                     );
                     // Also register field names for field-index lookups.
@@ -2731,8 +2741,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     field_counts.insert(v.name.clone(), fc);
                 }
 
-                if e.is_shared {
-                    // Shared enum: heap layout is { i64 refcount, i64 tag, i64 w0, … }
+                if e.is_shared || e.is_par {
+                    // Shared / par enum: identical heap layout
+                    // `{ i64 refcount, i64 tag, i64 w0, … }`. A `par enum`
+                    // (always Arc) registers here too; only its refcount ops
+                    // are atomic (see `SharedTypeInfo::is_par`).
                     let mut heap_fields: Vec<BasicTypeEnum<'ctx>> = vec![i64_t]; // refcount
                     heap_fields.extend_from_slice(&field_types); // tag + payload words
                     let heap_type = self.context.struct_type(&heap_fields, false);
@@ -2749,11 +2762,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             // typed. Niche-opt applies to shared-struct
                             // Option fields only; leave empty for enums.
                             niche_option_fields: Vec::new(),
+                            is_par: e.is_par,
                         },
                     );
                 }
 
                 // Always register in enum_layouts for tag/variant resolution.
+                // `is_shared` here means "reference-semantic heap pointer"
+                // (the read sites use it to choose pointer handling over inline
+                // values + the refcount cleanup path); a `par enum` is also a
+                // heap pointer, so it sets the same flag. The Rc-vs-Arc atomic
+                // distinction is made separately via `shared_types`'s `is_par`.
                 self.enum_layouts.insert(
                     e.name.clone(),
                     EnumLayout {
@@ -2762,7 +2781,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         field_counts,
                         field_word_offsets,
                         field_drop_kinds,
-                        is_shared: e.is_shared,
+                        is_shared: e.is_shared || e.is_par,
                     },
                 );
             }

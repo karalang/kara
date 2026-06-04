@@ -41,7 +41,11 @@ pub(crate) struct SliceSource<'ctx> {
 
 // ── Shared type (RC) layout ────────────────────────────────────
 
-/// Metadata for a `shared struct` or `shared enum` that is heap-allocated with RC.
+/// Metadata for a `shared struct` / `shared enum` (RC) or a `par struct` /
+/// `par enum` (Arc) — both are heap-allocated reference-semantic types with an
+/// identical `{ i64 refcount, … }` layout. The single distinction is whether
+/// the refcount header is mutated atomically (`par`/Arc) or not (`shared`/Rc);
+/// see `is_par` below.
 /// Heap layout for structs: `{ i64 refcount, field0, field1, … }`
 /// Heap layout for enums:   `{ i64 refcount, i64 tag, i64 word0, … }`
 #[derive(Clone)]
@@ -53,6 +57,15 @@ pub(crate) struct SharedTypeInfo<'ctx> {
     pub(crate) field_names: Vec<String>,
     /// true if this is a shared enum (vs shared struct).
     pub(crate) is_enum: bool,
+    /// `par struct` / `par enum` (always Arc) rather than `shared struct` /
+    /// `shared enum` (Rc). When set, every refcount increment / decrement on
+    /// this type's header is emitted as an `atomicrmw` (via `emit_arc_inc` /
+    /// `emit_arc_dec`) instead of a plain load/add/store — the values cross
+    /// task boundaries, so the count must be race-free. Every other codegen
+    /// path (layout, niche, field access, method dispatch, construction, drop)
+    /// is identical to the `shared` case, which is why `par` types register in
+    /// this same `shared_types` map. See design.md § Part 5b "Always Arc".
+    pub(crate) is_par: bool,
     /// Niche optimization for `Option[shared T]` fields. Indexed by user-field
     /// index (0-based; the heap-field index is `user_idx + 1` because index 0
     /// is the refcount). For each entry `Some(inner_name)`, the field at that

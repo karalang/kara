@@ -861,7 +861,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_conditional_branch(inner_is_null, skip_bb, do_bb)
                         .unwrap();
                     self.builder.position_at_end(do_bb);
-                    self.emit_rc_dec(inner_info.heap_type, inner);
+                    self.emit_refcount_dec_by_type(inner_info.heap_type, inner);
                     self.builder.build_unconditional_branch(skip_bb).unwrap();
                     self.builder.position_at_end(skip_bb);
                 }
@@ -949,7 +949,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_conditional_branch(inner_is_null, inner_skip_bb, inner_do_bb)
                         .unwrap();
                     self.builder.position_at_end(inner_do_bb);
-                    self.emit_rc_dec(inner_info.heap_type, inner);
+                    self.emit_refcount_dec_by_type(inner_info.heap_type, inner);
                     self.builder
                         .build_unconditional_branch(inner_skip_bb)
                         .unwrap();
@@ -994,7 +994,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_conditional_branch(inner_is_null, skip_bb, do_bb)
                         .unwrap();
                     self.builder.position_at_end(do_bb);
-                    self.emit_rc_dec(inner_info.heap_type, inner);
+                    self.emit_refcount_dec_by_type(inner_info.heap_type, inner);
                     self.builder.build_unconditional_branch(skip_bb).unwrap();
                     self.builder.position_at_end(skip_bb);
                 }

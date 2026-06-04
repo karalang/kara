@@ -332,7 +332,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // #7). Release it now — the field value has been
                         // read into a register and no longer depends on
                         // the heap object.
-                        self.emit_rc_dec(info.heap_type, ptr);
+                        self.emit_refcount_dec_by_type(info.heap_type, ptr);
                         return Ok(loaded);
                     }
                 }
@@ -778,7 +778,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(inner_is_null, skip_bb, real_do_bb)
             .unwrap();
         self.builder.position_at_end(real_do_bb);
-        self.emit_rc_inc(inner_heap_type, inner);
+        self.emit_refcount_inc_by_type(inner_heap_type, inner);
         self.builder.build_unconditional_branch(skip_bb).unwrap();
         self.builder.position_at_end(skip_bb);
     }
@@ -941,7 +941,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_conditional_branch(new_is_null, new_skip_bb, new_real_do_bb)
                 .unwrap();
             self.builder.position_at_end(new_real_do_bb);
-            self.emit_rc_inc(inner_heap_type, new_inner);
+            self.emit_refcount_inc_by_type(inner_heap_type, new_inner);
             self.builder
                 .build_unconditional_branch(new_skip_bb)
                 .unwrap();
@@ -974,7 +974,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(old_is_null, old_skip_bb, old_real_do_bb)
             .unwrap();
         self.builder.position_at_end(old_real_do_bb);
-        self.emit_rc_dec(inner_heap_type, old_inner);
+        self.emit_refcount_dec_by_type(inner_heap_type, old_inner);
         self.builder
             .build_unconditional_branch(old_skip_bb)
             .unwrap();
@@ -1091,7 +1091,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_conditional_branch(new_is_null, new_skip_bb, new_do_bb)
                 .unwrap();
             self.builder.position_at_end(new_do_bb);
-            self.emit_rc_inc(inner_heap_type, new_inner);
+            self.emit_refcount_inc_by_type(inner_heap_type, new_inner);
             self.builder
                 .build_unconditional_branch(new_skip_bb)
                 .unwrap();
@@ -1114,7 +1114,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(old_is_null, old_skip_bb, old_do_bb)
             .unwrap();
         self.builder.position_at_end(old_do_bb);
-        self.emit_rc_dec(inner_heap_type, old_inner);
+        self.emit_refcount_dec_by_type(inner_heap_type, old_inner);
         self.builder
             .build_unconditional_branch(old_skip_bb)
             .unwrap();
@@ -1191,7 +1191,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(is_null, skip_bb, real_bb)
             .unwrap();
         self.builder.position_at_end(real_bb);
-        self.emit_rc_inc(inner_heap_type, inner);
+        self.emit_refcount_inc_by_type(inner_heap_type, inner);
         self.builder.build_unconditional_branch(skip_bb).unwrap();
         self.builder.position_at_end(skip_bb);
     }
