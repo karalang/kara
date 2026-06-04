@@ -502,6 +502,7 @@ mod tests {
             edition: "2026".to_string(),
             profile: manifest::CompileProfile::Default,
             test_resources: BTreeMap::new(),
+            test_timeout_seconds: None,
             kara_version: None,
             dependencies: BTreeMap::new(),
             dev_dependencies: BTreeMap::new(),

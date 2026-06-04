@@ -2797,6 +2797,109 @@ fn test_test_normal_completion_under_timeout_passes() {
 }
 
 #[test]
+fn test_test_kara_toml_timeout_applies() {
+    // Sub-step 2: `[test] timeout_seconds = 1` in kara.toml caps each test
+    // at 1 s with NO env var set — proves the manifest value is read and
+    // beats the 30 s default.
+    let tmp = scratch_project("test-timeout-kara-toml");
+    write(
+        &tmp.join("kara.toml"),
+        "[package]\nname = \"demo\"\n\n[test]\ntimeout_seconds = 1\n",
+    );
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("src/main_test.kara"),
+        "test \"hangs\" {\n  \
+             let mut i: i64 = 0;\n  \
+             while true { i = i + 1; }\n  \
+             assert(i > 0);\n\
+         }\n",
+    );
+
+    let started = std::time::Instant::now();
+    // Deliberately NO KARAC_TEST_TIMEOUT_SECS — the kara.toml value is the
+    // only timeout source.
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env_remove("KARAC_TEST_TIMEOUT_SECS")
+        .arg("test")
+        .output()
+        .unwrap();
+    let wall = started.elapsed();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        wall < std::time::Duration::from_secs(12),
+        "expected kara.toml timeout to kill runaway in ~1s; took {:?}",
+        wall
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit when a test times out; stdout:\n{stdout}"
+    );
+    let lines = jsonl_lines(&stdout);
+    let timeout_line = lines
+        .iter()
+        .find(|l| event_kind(l) == Some("test_timeout"))
+        .unwrap_or_else(|| panic!("expected a test_timeout event in:\n{lines:?}"));
+    assert!(
+        timeout_line.contains("\"timeout_s\":1"),
+        "kara.toml timeout should drive the event's timeout_s: {timeout_line}"
+    );
+}
+
+#[test]
+fn test_test_per_test_attribute_timeout_overrides_manifest() {
+    // Sub-step 3: a per-test `#[test(timeout_seconds = 1)]` attribute wins
+    // over a generous kara.toml `[test] timeout_seconds = 30` — proves the
+    // attribute is the highest-precedence layer.
+    let tmp = scratch_project("test-timeout-attr");
+    write(
+        &tmp.join("kara.toml"),
+        "[package]\nname = \"demo\"\n\n[test]\ntimeout_seconds = 30\n",
+    );
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("src/main_test.kara"),
+        "#[test(timeout_seconds = 1)]\n\
+         test \"hangs\" {\n  \
+             let mut i: i64 = 0;\n  \
+             while true { i = i + 1; }\n  \
+             assert(i > 0);\n\
+         }\n",
+    );
+
+    let started = std::time::Instant::now();
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env_remove("KARAC_TEST_TIMEOUT_SECS")
+        .arg("test")
+        .output()
+        .unwrap();
+    let wall = started.elapsed();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    // If the attribute didn't win, the kara.toml 30 s would let the runaway
+    // run past our 12 s ceiling.
+    assert!(
+        wall < std::time::Duration::from_secs(12),
+        "expected per-test attribute (1s) to beat kara.toml (30s); took {:?}",
+        wall
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines = jsonl_lines(&stdout);
+    let timeout_line = lines
+        .iter()
+        .find(|l| event_kind(l) == Some("test_timeout"))
+        .unwrap_or_else(|| panic!("expected a test_timeout event in:\n{lines:?}"));
+    assert!(
+        timeout_line.contains("\"timeout_s\":1"),
+        "per-test attribute timeout should drive the event's timeout_s: {timeout_line}"
+    );
+}
+
+#[test]
 fn test_test_test_outside_project_emits_manifest_error() {
     let tmp = scratch_project("test-no-manifest");
     // No kara.toml at all — manifest discovery should fail.

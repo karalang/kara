@@ -106,6 +106,14 @@ pub struct Manifest {
     /// `BTreeMap` so iteration order is stable across runs (only matters
     /// when surfaced in diagnostics, but cheap to guarantee).
     pub test_resources: BTreeMap<String, String>,
+    /// `[test].timeout_seconds` — package-wide per-test timeout default
+    /// for `karac test`, in seconds (numeric, no unit suffix). `None`
+    /// when absent, in which case the runner falls back to the
+    /// `KARAC_TEST_TIMEOUT_SECS` env var and then the built-in 30 s
+    /// default. Precedence (phase-7 line 847 sub-steps 2+3): a per-test
+    /// `#[test(timeout_seconds = N)]` attribute > this manifest value >
+    /// the env var > 30 s.
+    pub test_timeout_seconds: Option<u64>,
     /// `[package].kara-version` — the minimum compiler version this
     /// package requires (MSRV in Rust parlance). Lifted at parse time
     /// from the raw string into a `semver::VersionReq` (Cargo-style
@@ -573,6 +581,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     };
 
     let test_resources = parse_test_resources(path, &table)?;
+    let test_timeout_seconds = parse_test_timeout_seconds(path, &table)?;
     let dependencies = parse_dependencies_table(path, &table, "dependencies", &mut warnings)?;
     let dev_dependencies =
         parse_dependencies_table(path, &table, "dev-dependencies", &mut warnings)?;
@@ -593,6 +602,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         edition,
         profile,
         test_resources,
+        test_timeout_seconds,
         kara_version,
         dependencies,
         dev_dependencies,
@@ -1160,6 +1170,42 @@ fn parse_test_resources(
     Ok(out)
 }
 
+/// Parse the optional `[test].timeout_seconds = N` key — `karac test` uses it
+/// as the package-wide per-test timeout default (phase-7 line 847 sub-step 2).
+/// Numeric, no unit suffix (seconds); must be a positive integer. Wrong
+/// shapes (the `[test]` parent isn't a table, the value isn't an integer, or
+/// the integer is `<= 0`) are hard errors so a manifest typo surfaces
+/// immediately rather than silently falling back to the env-var / 30 s
+/// default. Returns `None` when the key (or the `[test]` table) is absent.
+fn parse_test_timeout_seconds(
+    path: &Path,
+    table: &toml::Table,
+) -> Result<Option<u64>, ManifestError> {
+    let Some(test_value) = table.get("test") else {
+        return Ok(None);
+    };
+    let test_table = test_value
+        .as_table()
+        .ok_or_else(|| ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "test".to_string(),
+            expected: "a table (e.g. `[test]`)",
+        })?;
+    let Some(value) = test_table.get("timeout_seconds") else {
+        return Ok(None);
+    };
+    let n =
+        value
+            .as_integer()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| ManifestError::InvalidFieldType {
+                path: path.to_path_buf(),
+                key: "test.timeout_seconds".to_string(),
+                expected: "a positive integer (seconds)",
+            })?;
+    Ok(Some(n as u64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1359,6 +1405,84 @@ name = "hello"
         match err {
             ManifestError::InvalidTestResource { key, .. } => assert_eq!(key, "db.UserDB"),
             other => panic!("expected InvalidTestResource, got {other:?}"),
+        }
+    }
+
+    // ── [test].timeout_seconds (phase-7 line 847 sub-step 2) ───────
+
+    #[test]
+    fn no_test_timeout_seconds_is_none() {
+        let src = r#"[package]
+name = "hello"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.test_timeout_seconds, None);
+    }
+
+    #[test]
+    fn test_timeout_seconds_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[test]
+timeout_seconds = 5
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.test_timeout_seconds, Some(5));
+    }
+
+    #[test]
+    fn test_timeout_seconds_coexists_with_test_resources() {
+        // Both live under the same `[test]` table — parsing one must not
+        // disturb the other.
+        let src = r#"[package]
+name = "hello"
+
+[test]
+timeout_seconds = 12
+
+[test.resources]
+"db.UserDB" = "pg_isready"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.test_timeout_seconds, Some(12));
+        assert_eq!(
+            m.test_resources.get("db.UserDB").map(String::as_str),
+            Some("pg_isready"),
+        );
+    }
+
+    #[test]
+    fn test_timeout_seconds_rejects_non_integer() {
+        let src = r#"[package]
+name = "hello"
+
+[test]
+timeout_seconds = "5"
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => {
+                assert_eq!(key, "test.timeout_seconds")
+            }
+            other => panic!("expected InvalidFieldType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_timeout_seconds_rejects_zero() {
+        let src = r#"[package]
+name = "hello"
+
+[test]
+timeout_seconds = 0
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => {
+                assert_eq!(key, "test.timeout_seconds")
+            }
+            other => panic!("expected InvalidFieldType, got {other:?}"),
         }
     }
 

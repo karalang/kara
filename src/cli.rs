@@ -7533,6 +7533,11 @@ struct DiscoveredTest {
     /// matching provider frame so resource-method calls inside the test
     /// resolve against the fixture. See design.md § Testing.
     with_providers: Vec<WithProviderFixture>,
+    /// Per-test timeout in seconds from `#[test(timeout_seconds = N)]`.
+    /// `None` when the attribute is absent; the runner then falls back to
+    /// the kara.toml `[test].timeout_seconds`, the `KARAC_TEST_TIMEOUT_SECS`
+    /// env var, and finally the 30 s default (phase-7 line 847 sub-step 3).
+    timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -7666,6 +7671,7 @@ fn lower_and_discover_test_cases(tree: &mut ProgramTree) -> Vec<DiscoveredTest> 
                         qualified: tc.name.clone(),
                         requires: extract_requires(&tc.attributes),
                         with_providers: extract_with_providers(&tc.attributes),
+                        timeout_seconds: extract_timeout_seconds(&tc.attributes),
                     });
                     new_items.push(Item::Function(lower_test_case_to_function(&tc, mangled)));
                 }
@@ -7707,6 +7713,49 @@ fn extract_requires(attributes: &[crate::ast::Attribute]) -> Vec<String> {
         }
     }
     out
+}
+
+/// Pull the per-test timeout from a `#[test(timeout_seconds = N)]` attribute
+/// (phase-7 line 847 sub-step 3). Returns the first positive integer value
+/// found across the test's attributes; `None` when absent. A non-positive or
+/// non-integer value is ignored (it simply doesn't set a per-test override, so
+/// the kara.toml / env / 30 s chain applies) — the parser already accepts any
+/// expression in attribute args, and silently dropping a malformed value
+/// matches `extract_requires`' tolerant stance toward unknown `#[test(...)]`
+/// arg shapes.
+fn extract_timeout_seconds(attributes: &[crate::ast::Attribute]) -> Option<u64> {
+    for attr in attributes {
+        if !attr.is_bare("test") {
+            continue;
+        }
+        for arg in &attr.args {
+            if arg.name.as_deref() != Some("timeout_seconds") {
+                continue;
+            }
+            if let Some(value) = arg.value.as_ref() {
+                if let crate::ast::ExprKind::Integer(n, _) = &value.kind {
+                    if *n > 0 {
+                        return Some(*n as u64);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Resolve the effective per-test timeout from the precedence chain
+/// (phase-7 line 847): a per-test `#[test(timeout_seconds = N)]` attribute >
+/// the kara.toml `[test].timeout_seconds` > the `KARAC_TEST_TIMEOUT_SECS` env
+/// var > the built-in 30 s default. Each layer is an `Option<u64>` of seconds;
+/// the first present wins.
+fn resolve_test_timeout(
+    per_test: Option<u64>,
+    manifest_default: Option<u64>,
+    env_default: Option<u64>,
+) -> std::time::Duration {
+    let secs = per_test.or(manifest_default).or(env_default).unwrap_or(30);
+    std::time::Duration::from_secs(secs)
 }
 
 /// Pull `#[with_provider(resource_path, constructor_expr)]` fixtures out
@@ -8065,6 +8114,16 @@ fn cmd_test(filter: Option<String>, all: bool) {
         .map(|t| t.module_id)
         .collect();
 
+    // Per-test timeout precedence inputs (phase-7 line 847 sub-steps 2+3),
+    // computed once: the kara.toml `[test].timeout_seconds` and the
+    // `KARAC_TEST_TIMEOUT_SECS` env var. The per-test attribute layer is read
+    // from each `DiscoveredTest` inside the loop, and `resolve_test_timeout`
+    // applies the full chain (per-test attr > kara.toml > env var > 30 s).
+    let manifest_test_timeout: Option<u64> = mf.test_timeout_seconds;
+    let env_test_timeout: Option<u64> = std::env::var("KARAC_TEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok());
+
     for t in &tests {
         // `#[test(requires = [X])]` and `#[with_provider(X, ...)]` for the
         // *same* resource are contradictory: one gates on an external
@@ -8167,11 +8226,8 @@ fn cmd_test(filter: Option<String>, all: bool) {
         // path emits.
         #[cfg(feature = "lljit_prototype")]
         if std::env::var("KARAC_TEST_JIT").as_deref() != Ok("0") {
-            let timeout = std::env::var("KARAC_TEST_TIMEOUT_SECS")
-                .ok()
-                .and_then(|s| s.parse::<u64>().ok())
-                .map(std::time::Duration::from_secs)
-                .unwrap_or_else(|| std::time::Duration::from_secs(30));
+            let timeout =
+                resolve_test_timeout(t.timeout_seconds, manifest_test_timeout, env_test_timeout);
             let fixtures: Vec<(String, crate::ast::Expr)> = t
                 .with_providers
                 .iter()
@@ -8327,24 +8383,17 @@ fn cmd_test(filter: Option<String>, all: bool) {
             .map(|fx| fx.resource_path.clone())
             .collect();
 
-        // Per-test timeout (line 847 sub-step 1). 30 s default — generous
-        // enough for slow integration tests, tight enough that a runaway
-        // loop surfaces in seconds rather than hours. `KARAC_TEST_TIMEOUT_SECS`
-        // env var overrides the default suite-wide (useful for CI and
-        // for the runner's own test fixtures that exercise the timeout
-        // path with a short value like `1`). Sub-step 2
-        // (kara.toml `[test] timeout_seconds = N`) and sub-step 3
-        // (`#[test(timeout_seconds = N)]` per-test attribute) layer on
-        // top in follow-on slices; precedence will be per-test attr >
-        // kara.toml > env var > default. Interpreter polls the deadline
-        // at every statement boundary and raises `ControlFlow::TimedOut`
-        // on the first observation past it, unified with the existing
-        // par-cancel check point.
-        let timeout = std::env::var("KARAC_TEST_TIMEOUT_SECS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .map(std::time::Duration::from_secs)
-            .unwrap_or_else(|| std::time::Duration::from_secs(30));
+        // Per-test timeout (line 847). 30 s default — generous enough for
+        // slow integration tests, tight enough that a runaway loop surfaces
+        // in seconds rather than hours. Precedence (sub-steps 2+3, now live):
+        // a per-test `#[test(timeout_seconds = N)]` attribute > the kara.toml
+        // `[test].timeout_seconds` > the `KARAC_TEST_TIMEOUT_SECS` env var >
+        // the 30 s default — resolved by `resolve_test_timeout`. Interpreter
+        // polls the deadline at every statement boundary and raises
+        // `ControlFlow::TimedOut` on the first observation past it, unified
+        // with the existing par-cancel check point.
+        let timeout =
+            resolve_test_timeout(t.timeout_seconds, manifest_test_timeout, env_test_timeout);
         let deadline = std::time::Instant::now() + timeout;
         interp.set_test_deadline(Some(deadline));
 
