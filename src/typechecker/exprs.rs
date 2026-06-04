@@ -2326,7 +2326,15 @@ impl<'a> super::TypeChecker<'a> {
             }
 
             ExprKind::Seq(block) => self.infer_block(block),
-            ExprKind::Par(block) => self.infer_block(block),
+            ExprKind::Par(block) => {
+                // Phase 6 line 170 slice 3b — cross-task-safe boundary
+                // check: every binding the parallel branches read from the
+                // enclosing scope crosses a task boundary. Run before
+                // `infer_block` pushes the par block's own scope so the
+                // snapshot is the enclosing scope.
+                self.check_cross_task_safe_par_block(block, &expr.span);
+                self.infer_block(block)
+            }
 
             ExprKind::Lock { body, .. } => self.infer_block(body),
 

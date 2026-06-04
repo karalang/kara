@@ -48,7 +48,7 @@
 //! the call's regular typecheck without a second AST walk.
 
 use crate::ast::*;
-use crate::cross_task_safe::{is_cross_task_safe_with, CrossTaskUnsafePath};
+use crate::cross_task_safe::{is_cross_task_safe_with, CrossTaskUnsafeFixIt, CrossTaskUnsafePath};
 use crate::token::Span;
 use std::collections::{HashMap, HashSet};
 
@@ -112,6 +112,80 @@ impl<'a> super::TypeChecker<'a> {
                     &anchor_span,
                     call_span,
                     site_label,
+                );
+            }
+        }
+    }
+
+    /// Boundary-site cross-task-safe check for a `par { ... }` block
+    /// (Phase 6 line 170 slice 3b).
+    ///
+    /// Unlike `spawn(closure)` / `tg.spawn(closure)`, a `par {}` block has
+    /// no closure wrapper — each top-level statement becomes a parallel
+    /// branch that reads directly from the enclosing scope. So every
+    /// outer-scope binding the block references is a cross-boundary
+    /// capture. We snapshot the enclosing local scope *before*
+    /// `infer_block` pushes the par block's own scope, then run the same
+    /// capture walker (`collect_captures_block`) and `is_cross_task_safe_with`
+    /// predicate the spawn sites use. Bindings introduced *inside* the par
+    /// block (`let` in a branch) are shadow-tracked by the walker, so they
+    /// are correctly excluded — only values flowing in from the outside
+    /// cross the boundary.
+    ///
+    /// ## Division of labor with the ownership phase
+    ///
+    /// `shared struct` / `shared enum` captures get the **sole-ownership
+    /// carve-out** (design.md § Rc vs Arc — Two-Phase Algorithm, the
+    /// "Rule for `shared struct`"): a value moved into *exactly one*
+    /// branch is safe; only when it is reachable from two-or-more branches
+    /// is it an error. That branch-precise determination is the ownership
+    /// phase's `E_CONCURRENT_SHARED_STRUCT` / `E_CONCURRENT_PLAIN_STRUCT`
+    /// pass (`src/ownership/concurrent_shared.rs`), which counts per-branch
+    /// uses. This type-only pass cannot see branch aliasing, so it would
+    /// falsely reject the sole-ownership case — therefore it **defers** any
+    /// unsafe path rooted at a shared struct/enum leaf (`SharedToPar`
+    /// fix-it) to that pass.
+    ///
+    /// The remaining cross-task-unsafe leaves — `Rc[T]`, `OnceCell[T]`,
+    /// raw pointers — have **no** sole-ownership carve-out at a par-block
+    /// boundary (design.md line 1407 for `OnceCell`, line 8197 for the
+    /// `Rc` / par-region-escape pass), so the categorical type-only
+    /// rejection here is correct for them. This is the par-block half of
+    /// the "check fires at five sites" commitment in design.md § Structured
+    /// Concurrency Lifetime Guarantees.
+    pub(super) fn check_cross_task_safe_par_block(&mut self, block: &Block, par_span: &Span) {
+        let outer_snapshot = self.flatten_local_scope_snapshot();
+
+        let mut captures: Vec<(String, Span)> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut shadow_stack: Vec<HashSet<String>> = vec![HashSet::new()];
+        collect_captures_block(
+            block,
+            &outer_snapshot,
+            &mut shadow_stack,
+            &mut captures,
+            &mut seen,
+        );
+
+        for (name, anchor_span) in captures {
+            let Some(ty) = outer_snapshot.get(&name) else {
+                continue;
+            };
+            if let Err(path) = is_cross_task_safe_with(ty, &self.env.structs, &self.env.enums) {
+                // Sole-ownership carve-out: shared struct/enum leaves are
+                // the branch-precise ownership phase's territory (see the
+                // doc comment above). Deferring here avoids both double-
+                // reporting and a false rejection of the sole-branch case.
+                if path.fix_it == CrossTaskUnsafeFixIt::SharedToPar {
+                    continue;
+                }
+                self.emit_cross_task_unsafe(
+                    name.as_str(),
+                    ty,
+                    &path,
+                    &anchor_span,
+                    par_span,
+                    "par {}",
                 );
             }
         }

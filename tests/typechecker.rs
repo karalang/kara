@@ -20787,6 +20787,145 @@ fn local_binding_shadowing_captured_outer_skips_check() {
     );
 }
 
+// ── Phase 6 line 170 slice 3b: par-block boundary check ───────────
+//
+// A `par { ... }` block has no closure wrapper — each top-level
+// statement becomes a parallel branch reading directly from the
+// enclosing scope, so every outer-scope binding the block references
+// crosses a task boundary. The check reuses the slice-3a capture
+// walker + `is_cross_task_safe_with` predicate; boundary hook lives at
+// the `ExprKind::Par` arm in `src/typechecker/exprs.rs`. Diagnostic
+// site label is `par {}` (vs `spawn` / `TaskGroup.spawn` for 3a).
+//
+// Division of labor (design.md § Rc vs Arc — Two-Phase Algorithm):
+// `shared struct` / `shared enum` get the sole-ownership carve-out at a
+// par-block boundary (one-branch use is fine; only multi-branch sharing
+// is an error), which the branch-precise ownership phase owns via
+// `E_CONCURRENT_SHARED_STRUCT` (see tests/ownership.rs). This type-only
+// pass therefore DEFERS shared struct/enum and catches the leaves with
+// no carve-out — `Rc[T]`, `OnceCell[T]`, raw pointers. Rc/OnceCell are
+// not directly nameable in user kara at v1 (per the slice-3a note), so
+// the user-nameable negative here is a raw pointer.
+
+#[test]
+fn par_block_capturing_primitive_only_accepted() {
+    // Positive: two parallel branches read a Copy primitive — every
+    // reachable leaf is safe, no diagnostic fires.
+    typecheck_ok(
+        "fn main() {
+             let x: i64 = 42;
+             par {
+                 let _a: i64 = x + 1;
+                 let _b: i64 = x + 2;
+             }
+         }",
+    );
+}
+
+#[test]
+fn par_block_two_readers_of_vec_capture_accepted() {
+    // Positive: two branches read the same `Vec[i64]` capture. Vec[i64]
+    // is cross-task-safe (every leaf through the Named-arg recursion is
+    // a primitive), so concurrent readers are accepted.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             par {
+                 let _a: i64 = v.len() as i64;
+                 let _b: i64 = v.len() as i64;
+             }
+         }",
+    );
+}
+
+#[test]
+fn par_block_capturing_raw_pointer_rejected() {
+    // Negative: a raw pointer captured into a par branch crosses the
+    // boundary unsafely. Raw pointers have no sole-ownership carve-out
+    // (unlike shared struct), so the type-only rejection here is correct
+    // even for a single-branch use.
+    let errors = typecheck_errors(
+        "fn use_ptr(p: *mut u8) {
+             par {
+                 let _a: i64 = p as i64;
+                 do_work();
+             }
+         }
+         fn do_work() {}
+         fn main() {}",
+    );
+    let cross_task = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture)
+        .unwrap_or_else(|| {
+            panic!(
+                "expected CrossTaskUnsafeCapture on raw-pointer capture in par block, got: {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+            )
+        });
+    assert!(
+        cross_task.message.contains("E_NOT_CROSS_TASK"),
+        "diagnostic message should carry E_NOT_CROSS_TASK code, got: {}",
+        cross_task.message,
+    );
+    assert!(
+        cross_task.message.contains("par {}"),
+        "diagnostic should name the `par {{}}` boundary site, got: {}",
+        cross_task.message,
+    );
+    assert!(
+        cross_task.message.contains("`p`"),
+        "diagnostic should name the captured binding `p`, got: {}",
+        cross_task.message,
+    );
+    assert!(
+        cross_task.message.contains("Atomic") || cross_task.message.contains("channel"),
+        "raw-ptr fix-it should mention Atomic[*mut T] or channel transfer, got: {}",
+        cross_task.message,
+    );
+}
+
+#[test]
+fn par_block_sole_branch_shared_struct_deferred_to_ownership_phase() {
+    // Layering guard: a `shared struct` used in a single par branch must
+    // NOT be rejected by this type-only typechecker pass — the sole-
+    // ownership carve-out (design.md § Rc vs Arc Two-Phase) makes it
+    // safe, and the branch-precise multi-branch case is the ownership
+    // phase's E_CONCURRENT_SHARED_STRUCT (tests/ownership.rs). Pins the
+    // deferral so the over-broad type-only rejection can't creep back:
+    // the program type-checks clean (no CrossTaskUnsafeCapture, no other
+    // type error) — the multi-branch case is enforced one phase later.
+    typecheck_ok(
+        "shared struct Counter { value: i64 }
+         impl Counter { fn get(ref self) -> i64 { self.value } }
+         fn main() {
+             let c: Counter = Counter { value: 0 };
+             par {
+                 let _v: i64 = c.get();
+             }
+         }",
+    );
+}
+
+#[test]
+fn par_block_local_let_shadows_outer_capture() {
+    // Regression guard: a binding introduced *inside* the par block
+    // shadows an outer name of the same identifier, so the outer
+    // (unsafe) raw pointer is NOT captured across the boundary — the
+    // inner `p` is `i64`, and the walker's shadow-stack discipline drops
+    // the outer name once the inner `let` binds it. If shadowing broke,
+    // the outer `*mut u8` would surface as a CrossTaskUnsafeCapture.
+    typecheck_ok(
+        "fn f(p: *mut u8) {
+             par {
+                 let p: i64 = 1;
+                 let _a: i64 = p + 1;
+             }
+         }
+         fn main() {}",
+    );
+}
+
 // ── Refinement types (phase-9 line 25, step 1) ──────────────────
 //
 // Step 1 lands the `Type::Refinement` representation, predicate
