@@ -8,7 +8,10 @@
 //
 // **Slice B locked design choices (2026-05-09):**
 //   (i)   B1 server-only minimal — `Server`, `Request`, `Response`,
-//         `serve()`. No middleware / TLS / HTTP/2 / WebSocket.
+//         `serve()`. No middleware at this slice. (TLS, WebSocket, and
+//         — as of phase-8 line 145 — HTTP/2 have since shipped: the
+//         serve loops negotiate h2 via ALPN / h2c through hyper-util's
+//         `auto::Builder`. Middleware remains out of v1 scope.)
 //   (ii)  B2 hyper backing through `karac-runtime` FFI; mirrors Slice
 //         F's `serde_json` pattern.
 //   (iii) B3 fallback (b) — non-polymorphic `serve()`. Free-fn

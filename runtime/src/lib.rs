@@ -4314,16 +4314,27 @@ impl ServeLimits {
     }
 }
 
-/// Apply the configured header-read timeout to a hyper http1 connection
-/// builder (phase-8 line 124). hyper only enforces `header_read_timeout`
-/// when a `Timer` is installed, so the two are set together.
-fn apply_header_timeout(
-    builder: &mut hyper::server::conn::http1::Builder,
+/// Apply the configured serve-loop tuning to a hyper-util `auto::Builder`
+/// (the protocol-negotiating connection builder used by all three serve
+/// loops since phase-8 line 145).
+///
+/// The header-read timeout (phase-8 line 124) is the **HTTP/1**
+/// slowloris guard — a peer that opens a connection then dribbles
+/// request-header bytes. It is applied through the `auto::Builder`'s
+/// `.http1()` sub-builder; hyper only enforces `header_read_timeout`
+/// when a `Timer` is installed, so the two are set together. The
+/// HTTP/2 path needs no equivalent: `h2`'s connection/stream flow
+/// control plus its frame-size limits bound header buffering structurally
+/// (there is no unbounded per-stream header accumulation to stall on),
+/// so the line-124 vector does not apply. The h2 keep-alive knobs are
+/// left at hyper defaults — a future tuning surface, not a v1 gate.
+fn apply_serve_tuning(
+    builder: &mut hyper_util::server::conn::auto::Builder<hyper_util::rt::TokioExecutor>,
     timeout: Option<std::time::Duration>,
 ) {
     if let Some(t) = timeout {
-        builder.timer(hyper_util::rt::TokioTimer::new());
-        builder.header_read_timeout(t);
+        builder.http1().timer(hyper_util::rt::TokioTimer::new());
+        builder.http1().header_read_timeout(t);
     }
 }
 
@@ -4450,8 +4461,9 @@ mod serve_limits_tests {
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let io = hyper_util::rt::TokioIo::new(stream);
-            let mut builder = hyper::server::conn::http1::Builder::new();
-            super::apply_header_timeout(&mut builder, Some(Duration::from_millis(300)));
+            let mut builder =
+                hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+            super::apply_serve_tuning(&mut builder, Some(Duration::from_millis(300)));
             let _ = builder.serve_connection(io, ok_service!()).await;
         });
 
@@ -4486,8 +4498,9 @@ mod serve_limits_tests {
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let io = hyper_util::rt::TokioIo::new(stream);
-            let mut builder = hyper::server::conn::http1::Builder::new();
-            super::apply_header_timeout(&mut builder, Some(Duration::from_millis(300)));
+            let mut builder =
+                hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+            super::apply_serve_tuning(&mut builder, Some(Duration::from_millis(300)));
             let _ = builder.serve_connection(io, ok_service!()).await;
         });
 
@@ -4598,8 +4611,15 @@ pub unsafe extern "C" fn karac_runtime_serve_http(
                         serve_request(req, handler).await
                     },
                 );
-                let mut builder = hyper::server::conn::http1::Builder::new();
-                apply_header_timeout(&mut builder, header_timeout);
+                // phase-8 line 145: `auto::Builder` negotiates the protocol
+                // per-connection — an h2 preface (h2c prior-knowledge over
+                // this plain TCP socket) drives HTTP/2; anything else is
+                // served as HTTP/1.1. The Kāra handler bridge is identical
+                // for both (see `serve_request`).
+                let mut builder = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                );
+                apply_serve_tuning(&mut builder, header_timeout);
                 let _ = builder.serve_connection(io, svc).await;
             });
         }
@@ -4670,10 +4690,19 @@ pub unsafe extern "C" fn karac_runtime_serve_https(
     } else {
         std::slice::from_raw_parts(key_pem, key_len as usize)
     };
-    let server_config = match crate::tls::build_server_config(cert_bytes, key_bytes) {
+    let mut server_config = match crate::tls::build_server_config(cert_bytes, key_bytes) {
         Ok(c) => c,
         Err(_) => return 6,
     };
+    // phase-8 line 145: advertise HTTP/2 (then HTTP/1.1) via ALPN so a
+    // capable client negotiates `h2` during the TLS handshake; the
+    // `auto::Builder` below then drives the matching protocol. ALPN is
+    // set *here*, at the HTTPS serve site, rather than in the shared
+    // `tls::build_server_config` — that helper also backs the raw
+    // `std.tls` listener (`karac_runtime_tls_config_new`), a generic
+    // TLS socket that is not an HTTP server, so it must stay ALPN-free.
+    // Order is preference order: `h2` first, `http/1.1` as fallback.
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -4736,8 +4765,13 @@ pub unsafe extern "C" fn karac_runtime_serve_https(
                         serve_request(req, handler).await
                     },
                 );
-                let mut builder = hyper::server::conn::http1::Builder::new();
-                apply_header_timeout(&mut builder, header_timeout);
+                // phase-8 line 145: `auto::Builder` serves HTTP/2 when the
+                // TLS handshake negotiated `h2` via ALPN (advertised on the
+                // `ServerConfig` below), falling back to HTTP/1.1 otherwise.
+                let mut builder = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                );
+                apply_serve_tuning(&mut builder, header_timeout);
                 let _ = builder.serve_connection(io, svc).await;
             });
         }
@@ -4841,8 +4875,13 @@ pub unsafe extern "C" fn karac_runtime_serve_http_static(
                         }
                     },
                 );
-                let mut builder = hyper::server::conn::http1::Builder::new();
-                apply_header_timeout(&mut builder, header_timeout);
+                // phase-8 line 145: same protocol-negotiating `auto::Builder`
+                // as the handler path — the static smoke surface serves h2c
+                // (plain HTTP/2 prior-knowledge) as well as HTTP/1.1.
+                let mut builder = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                );
+                apply_serve_tuning(&mut builder, header_timeout);
                 let _ = builder.serve_connection(io, svc).await;
             });
         }
@@ -4930,6 +4969,17 @@ fn parse_query_pairs(query: &str) -> Vec<(String, String)> {
 /// `tokio::spawn`. The body is drained synchronously inside
 /// `block_in_place` via `Handle::current().block_on(...)` on the body
 /// stream's `collect().await`.
+///
+/// **HTTP/2 multiplexing note (phase-8 line 145).** Under HTTP/2 a
+/// single connection carries many concurrent streams, each driving one
+/// `serve_request` call. Because the handler runs under
+/// `block_in_place`, sibling streams on the *same* connection cannot be
+/// polled while one handler is executing — streams within a connection
+/// are effectively serialized (tokio's worker-replacement keeps *other*
+/// connections progressing in parallel). This matches the per-connection
+/// behavior HTTP/1.1 keep-alive already had and is correct for v1; a
+/// fully-async handler ABI that would let streams on one connection run
+/// concurrently is a separate, larger slice.
 async fn serve_request(
     req: hyper::Request<hyper::body::Incoming>,
     handler: extern "C" fn(*const KaracHttpRequest, *mut KaracHttpResponse),

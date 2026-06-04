@@ -2470,4 +2470,406 @@ fn main() with sends(Network) receives(Network) {{
              wire was:\n{wire_text}"
         );
     }
+
+    // ── phase-8 line 145: HTTP/2 ──────────────────────────────────────────
+    //
+    // The serve loops now negotiate the protocol per-connection through
+    // hyper-util's `auto::Builder` (h2c prior-knowledge over plain TCP,
+    // ALPN `h2` over TLS), so the same `Server.serve` / `serve_tls`
+    // handler bridge serves HTTP/2 and HTTP/1.1 alike. These E2E tests
+    // drive a real multiplexing h2 client against the karac-built server.
+
+    /// Compile + link + spawn a Kāra server binary; return the live
+    /// child, its bound port, and the exe path (caller owns
+    /// kill/wait/remove). Soft-skips (returns `None`) when the runtime
+    /// archive isn't built — same contract as `run_handler_smoke`.
+    fn spawn_kara_server(src: &str, prefix: &str) -> Option<(std::process::Child, u16, PathBuf)> {
+        let rt = runtime_path()?;
+        std::env::set_var("KARAC_RUNTIME", &rt);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/{prefix}_{pid}_{nanos}"));
+        if let Err(e) = compile_and_link(src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn server binary");
+        let stdout = child.stdout.take().expect("child stdout missing");
+        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        match port_opt {
+            Some(p) => {
+                assert!(p > 0, "BOUND_PORT must be a non-zero ephemeral port");
+                Some((child, p, exe_path))
+            }
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("server did not emit BOUND_PORT line within timeout");
+            }
+        }
+    }
+
+    /// Retry `f` with 50 ms backoff for up to ~10 s — covers the
+    /// listener-warm-up race (BOUND_PORT is printed immediately before
+    /// the accept loop is entered, so the first connect can lose the
+    /// race). Mirrors the inline retry loop the HTTP/1.1 tests use.
+    fn retry_until_ok<T>(mut f: impl FnMut() -> Result<T, String>) -> Result<T, String> {
+        let started = Instant::now();
+        let mut last = String::from("never attempted");
+        for _ in 0..10 {
+            match f() {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    last = e;
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                break;
+            }
+        }
+        Err(last)
+    }
+
+    /// Open an HTTP/2 cleartext (h2c) connection to `127.0.0.1:<port>`
+    /// using **prior knowledge** (the client sends the HTTP/2 connection
+    /// preface directly, no `Upgrade:` dance), issue a single GET, and
+    /// return `(status, body)`. A successful response proves the server's
+    /// `auto::Builder` detected the preface and spoke HTTP/2 — an
+    /// HTTP/1.1-only server would mis-parse the preface and the handshake
+    /// would fail. h2 is async-only, so a private current-thread tokio
+    /// runtime drives the exchange.
+    fn h2c_get(port: u16, path: &str) -> Result<(u16, String), String> {
+        use http_body_util::BodyExt;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("tokio rt build: {e}"))?;
+        rt.block_on(async move {
+            let stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+                .await
+                .map_err(|e| format!("tcp connect: {e}"))?;
+            let io = hyper_util::rt::TokioIo::new(stream);
+            let (mut sender, conn) = hyper::client::conn::http2::handshake::<
+                _,
+                _,
+                http_body_util::Full<bytes::Bytes>,
+            >(hyper_util::rt::TokioExecutor::new(), io)
+            .await
+            .map_err(|e| format!("h2 handshake: {e}"))?;
+            // The connection task drives the h2 framing in the background.
+            tokio::spawn(async move {
+                let _ = conn.await;
+            });
+            sender
+                .ready()
+                .await
+                .map_err(|e| format!("sender ready: {e}"))?;
+            let req = hyper::Request::builder()
+                .uri(format!("http://127.0.0.1:{port}{path}"))
+                .body(http_body_util::Full::new(bytes::Bytes::new()))
+                .map_err(|e| format!("build request: {e}"))?;
+            let resp = sender
+                .send_request(req)
+                .await
+                .map_err(|e| format!("send_request: {e}"))?;
+            // The low-level http2 client only ever produces HTTP/2
+            // responses, but assert it so the test's intent is explicit.
+            if resp.version() != hyper::Version::HTTP_2 {
+                return Err(format!(
+                    "expected HTTP/2 response, got {:?}",
+                    resp.version()
+                ));
+            }
+            let status = resp.status().as_u16();
+            let body = resp
+                .into_body()
+                .collect()
+                .await
+                .map_err(|e| format!("body collect: {e}"))?
+                .to_bytes();
+            Ok((status, String::from_utf8_lossy(&body).into_owned()))
+        })
+    }
+
+    /// Issue two GETs concurrently over a **single** h2c connection,
+    /// returning both `(status, body)` pairs. Exercises real stream
+    /// multiplexing — two `serve_request` calls dispatched off one TCP
+    /// connection — through the karac handler bridge.
+    #[allow(clippy::type_complexity)]
+    fn h2c_two_streams(
+        port: u16,
+        p1: &str,
+        p2: &str,
+    ) -> Result<((u16, String), (u16, String)), String> {
+        use http_body_util::BodyExt;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("tokio rt build: {e}"))?;
+        let p1 = p1.to_string();
+        let p2 = p2.to_string();
+        rt.block_on(async move {
+            let stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+                .await
+                .map_err(|e| format!("tcp connect: {e}"))?;
+            let io = hyper_util::rt::TokioIo::new(stream);
+            let (sender, conn) = hyper::client::conn::http2::handshake::<
+                _,
+                _,
+                http_body_util::Full<bytes::Bytes>,
+            >(hyper_util::rt::TokioExecutor::new(), io)
+            .await
+            .map_err(|e| format!("h2 handshake: {e}"))?;
+            tokio::spawn(async move {
+                let _ = conn.await;
+            });
+            // One stream per cloned sender; both share the one connection,
+            // so the two requests are genuinely multiplexed.
+            let one = |mut s: hyper::client::conn::http2::SendRequest<
+                http_body_util::Full<bytes::Bytes>,
+            >,
+                       path: String| async move {
+                s.ready().await.map_err(|e| format!("ready: {e}"))?;
+                let req = hyper::Request::builder()
+                    .uri(format!("http://127.0.0.1:{port}{path}"))
+                    .body(http_body_util::Full::new(bytes::Bytes::new()))
+                    .map_err(|e| format!("build: {e}"))?;
+                let resp = s
+                    .send_request(req)
+                    .await
+                    .map_err(|e| format!("send: {e}"))?;
+                let status = resp.status().as_u16();
+                let body = resp
+                    .into_body()
+                    .collect()
+                    .await
+                    .map_err(|e| format!("collect: {e}"))?
+                    .to_bytes();
+                Ok::<(u16, String), String>((status, String::from_utf8_lossy(&body).into_owned()))
+            };
+            tokio::try_join!(one(sender.clone(), p1), one(sender, p2))
+        })
+    }
+
+    /// Complete a TLS handshake to `127.0.0.1:<port>` advertising the
+    /// given ALPN protocol list, and return the protocol the server
+    /// selected (`None` if no ALPN was negotiated). Synchronous rustls —
+    /// reuses the `NoVerify` verifier (the fixture cert is `CA:TRUE`,
+    /// see its definition). Only the TLS handshake runs; no HTTP bytes
+    /// are exchanged, so no async stack is needed to read the negotiated
+    /// protocol.
+    fn tls_alpn_protocol(port: u16, offered: &[&[u8]]) -> Result<Option<Vec<u8>>, String> {
+        use std::sync::Arc;
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let mut config = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| format!("client config protocol setup: {e}"))?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoVerify))
+            .with_no_client_auth();
+        config.alpn_protocols = offered.iter().map(|p| p.to_vec()).collect();
+        let server_name = rustls::pki_types::ServerName::try_from("localhost")
+            .map_err(|e| format!("server name: {e}"))?;
+        let mut conn = rustls::ClientConnection::new(Arc::new(config), server_name)
+            .map_err(|e| format!("client conn: {e}"))?;
+        let mut sock = std::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+            .map_err(|e| format!("tcp connect: {e}"))?;
+        sock.set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("set_read_timeout: {e}"))?;
+        sock.set_write_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("set_write_timeout: {e}"))?;
+        // Drive only the handshake — once it's done, ALPN is settled.
+        while conn.is_handshaking() {
+            conn.complete_io(&mut sock)
+                .map_err(|e| format!("handshake io: {e}"))?;
+        }
+        Ok(conn.alpn_protocol().map(|p| p.to_vec()))
+    }
+
+    /// h2c (cleartext HTTP/2 prior-knowledge) round-trips through the
+    /// `Server.serve` handler: the path is echoed back over a real
+    /// HTTP/2 connection. Proves `auto::Builder` negotiates h2 on the
+    /// plain-TCP path and the handler bridge is protocol-agnostic.
+    #[test]
+    fn test_http2_h2c_prior_knowledge_handler() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                Response { status: 200, body: req.path() }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some((mut child, port, exe_path)) = spawn_kara_server(src, "karac_http2_h2c") else {
+            return;
+        };
+        let result = retry_until_ok(|| h2c_get(port, "/h2c/echo/42"));
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+        let (status, body) = result.expect("h2c GET never succeeded");
+        assert_eq!(status, 200, "expected 200 over h2c; body={body:?}");
+        assert!(
+            body.contains("/h2c/echo/42"),
+            "h2c handler should echo the request path; got: {body:?}"
+        );
+    }
+
+    /// Two concurrent requests on one h2c connection both succeed,
+    /// exercising HTTP/2 stream multiplexing through the karac handler.
+    #[test]
+    fn test_http2_multiplexed_streams() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                Response { status: 200, body: req.path() }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some((mut child, port, exe_path)) = spawn_kara_server(src, "karac_http2_mux") else {
+            return;
+        };
+        let result = retry_until_ok(|| h2c_two_streams(port, "/stream/one", "/stream/two"));
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+        let ((s1, b1), (s2, b2)) = result.expect("multiplexed h2c requests never succeeded");
+        assert_eq!(s1, 200, "stream 1 status; body={b1:?}");
+        assert_eq!(s2, 200, "stream 2 status; body={b2:?}");
+        assert!(
+            b1.contains("/stream/one"),
+            "stream 1 should echo its path; got: {b1:?}"
+        );
+        assert!(
+            b2.contains("/stream/two"),
+            "stream 2 should echo its path; got: {b2:?}"
+        );
+    }
+
+    /// HTTP/1.1 is still served under the protocol-negotiating
+    /// `auto::Builder` — the plain-HTTP fallback is intact (no
+    /// regression from the line-145 swap). Drives the existing sync
+    /// HTTP/1.1 client against a `Server.serve` handler.
+    #[test]
+    fn test_http1_still_served_under_auto_builder() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                Response { status: 200, body: req.path() }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some((status, body)) = run_handler_smoke(src, "/h1-fallback") else {
+            return;
+        };
+        assert_eq!(status, 200, "HTTP/1.1 must still be served; body={body:?}");
+        assert!(
+            body.contains("/h1-fallback"),
+            "HTTP/1.1 handler should echo the path; got: {body:?}"
+        );
+    }
+
+    /// ALPN over TLS negotiates `h2`: the HTTPS server advertises
+    /// `[h2, http/1.1]`, and a client offering `[h2, http/1.1]` settles
+    /// on `h2` during the TLS handshake. Proves the `serve_https`
+    /// ALPN wiring end-to-end (the actual h2 request machinery is
+    /// covered by the h2c tests, which share the same `auto::Builder` +
+    /// `serve_request` path). Also asserts a client offering only
+    /// `http/1.1` still negotiates `http/1.1` (fallback intact).
+    #[test]
+    fn test_http2_alpn_over_tls() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let cert_path = workspace_root().join("tests/fixtures/tls/cert.pem");
+        let key_path = workspace_root().join("tests/fixtures/tls/key.pem");
+        let (Ok(cert_pem), Ok(key_pem)) = (
+            std::fs::read_to_string(&cert_path),
+            std::fs::read_to_string(&key_path),
+        ) else {
+            eprintln!(
+                "skip: {} / {} not present (Phase-6 line 236 slice 4 fixtures)",
+                cert_path.display(),
+                key_path.display()
+            );
+            return;
+        };
+
+        fn kara_escape(s: &str) -> String {
+            s.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+        }
+        let cert_lit = kara_escape(&cert_pem);
+        let key_lit = kara_escape(&key_pem);
+
+        let src = format!(
+            r#"
+            struct Response {{ status: i64, body: String }}
+
+            fn handle(req: Request) -> Response {{
+                Response {{ status: 200, body: req.path() }}
+            }}
+
+            fn main() {{
+                let cert = "{cert_lit}";
+                let key = "{key_lit}";
+                let _result = Server.serve_tls("127.0.0.1:0", cert, key, handle);
+                println("server exited unexpectedly");
+            }}
+            "#
+        );
+
+        let Some((mut child, port, exe_path)) = spawn_kara_server(&src, "karac_http2_alpn") else {
+            return;
+        };
+
+        let h2_result =
+            retry_until_ok(|| tls_alpn_protocol(port, &[b"h2", b"http/1.1"]).map(|p| (p,)));
+        // A client offering only http/1.1 must fall back to it.
+        let h1_result = tls_alpn_protocol(port, &[b"http/1.1"]);
+
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+
+        let (negotiated,) = h2_result.expect("TLS ALPN handshake never succeeded");
+        assert_eq!(
+            negotiated.as_deref(),
+            Some(&b"h2"[..]),
+            "server should negotiate h2 via ALPN when the client offers it"
+        );
+        assert_eq!(
+            h1_result
+                .expect("http/1.1-only ALPN handshake failed")
+                .as_deref(),
+            Some(&b"http/1.1"[..]),
+            "server should fall back to http/1.1 when the client offers only that"
+        );
+    }
 }

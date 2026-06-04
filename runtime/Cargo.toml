@@ -75,13 +75,21 @@ serde_json = { version = "1", features = ["preserve_order"] }
 
 # Slice B (`std.http` server, minimal): backing impl for
 # `karac_runtime_serve_http`. Per locked design choice (ii) — hyper
-# behind an FFI boundary, mirroring Slice F's serde_json pattern. HTTP/1
-# only (locked design (i): no HTTP/2 negotiation tuning); `server`
-# feature is what wires up the connection-acceptor + service driver.
-hyper = { version = "1", features = ["server", "http1"] }
+# behind an FFI boundary, mirroring Slice F's serde_json pattern. As of
+# phase-8 line 145, both `http1` and `http2` are enabled: the serve
+# loops negotiate the protocol per-connection through `hyper-util`'s
+# `auto::Builder` (ALPN `h2` over TLS, h2c prior-knowledge over plain
+# TCP), falling back to HTTP/1.1. hyper/`h2` carry multiplexing, HPACK,
+# flow control, and stream prioritization internally — the per-request
+# `serve_request` bridge is protocol-agnostic, so the same handler path
+# serves both. `server` wires up the connection-acceptor + service
+# driver.
+hyper = { version = "1", features = ["server", "http1", "http2"] }
 # `hyper-util` ships hyper 1's reusable server harness (`auto::Builder`,
 # `TokioExecutor`, `TokioIo`); hyper 1 itself is just the protocol core.
-hyper-util = { version = "0.1", features = ["server-auto", "tokio", "http1"] }
+# `http2` is required for `auto::Builder` to drive the HTTP/2 path it
+# negotiates.
+hyper-util = { version = "0.1", features = ["server-auto", "tokio", "http1", "http2"] }
 # Tokio multi-thread runtime — locked design (iv): per-request hyper
 # invokes the Kāra handler synchronously via `tokio::task::block_in_place`,
 # which requires the multi-thread flavor. `time` powers the serve-loop

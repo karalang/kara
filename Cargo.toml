@@ -149,6 +149,22 @@ libc = "0.2"
 # verification — see the test comment.
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring", "logging"] }
 
+# Phase-8 line 145 (HTTP/2): the `tests/http_server.rs` E2E harness drives
+# the karac-built server binary with a real multiplexing h2 client. The
+# `auto::Builder` server negotiates HTTP/2, so the test client must speak
+# it: `hyper::client::conn::http2::handshake` opens an h2c (prior-knowledge)
+# connection over plain TCP and can fan out concurrent streams to exercise
+# multiplexing. h2 is async-only, so a private current-thread tokio runtime
+# drives it inside the otherwise-synchronous test. The ALPN-over-TLS test
+# reuses the existing sync rustls client (just sets `alpn_protocols`), so it
+# needs none of this. All dev-only — the compiler crate's production build
+# is unaffected. (`h2` itself is already in the lockfile transitively.)
+tokio = { version = "1", features = ["rt", "net", "io-util", "time", "macros"] }
+hyper = { version = "1", features = ["client", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+
 # Binary-size phase 1: drop `__eh_frame` + `__unwind_info` from emitted
 # binaries by removing unwind tables from the runtime's release build.
 # `karac_par_run` uses `std::panic::catch_unwind`; with `panic = "abort"`
