@@ -1861,6 +1861,52 @@ impl<'ctx> super::Codegen<'ctx> {
                 object: inner,
                 field,
             } => {
+                // `shared`/`par` struct field receiver — e.g. `self.count.load(..)`
+                // on a `par struct Counter { count: Atomic[i64] }`. These live in
+                // `shared_types` (heap layout `{ i64 refcount, fields... }`), NOT
+                // `struct_types`, so the plain path below would error with "no LLVM
+                // type". Reuse the proven shared field-read deref: `compile_expr(inner)`
+                // yields the heap pointer (handling the `ref self` ptr-to-heap-ptr
+                // load), then GEP at `idx + 1` (index 0 is the refcount) into the
+                // heap type. The field slot IS the transparent `Atomic[T]` = `T`
+                // storage the atomic load/store operates on. Mirrors the shared
+                // field-read path in `expr_ops.rs::compile_field_access`.
+                if let Some((type_name, info)) = self.shared_type_for_expr(inner) {
+                    if !info.is_enum {
+                        if let Some(idx) = self
+                            .struct_field_names
+                            .get(&type_name)
+                            .and_then(|names| names.iter().position(|n| n == field))
+                        {
+                            let heap_ptr = self.compile_expr(inner)?.into_pointer_value();
+                            let field_ptr = self
+                                .builder
+                                .build_struct_gep(
+                                    info.heap_type,
+                                    heap_ptr,
+                                    (idx + 1) as u32,
+                                    "atomic.sh_field.ptr",
+                                )
+                                .map_err(|e| format!("codegen: struct_gep failed: {:?}", e))?;
+                            let elem_ty = info
+                                .heap_type
+                                .get_field_type_at_index((idx + 1) as u32)
+                                .ok_or_else(|| {
+                                    format!(
+                                        "codegen: shared/par struct '{}' field {} out of range",
+                                        type_name, idx
+                                    )
+                                })?;
+                            let inner_is_bool = self
+                                .struct_field_type_exprs
+                                .get(&type_name)
+                                .and_then(|fields| fields.get(idx))
+                                .map(super::types_lowering::is_atomic_bool_type_expr)
+                                .unwrap_or(false);
+                            return Ok((field_ptr, elem_ty, inner_is_bool));
+                        }
+                    }
+                }
                 let obj_ty_name = self.type_name_of_expr(inner).ok_or_else(|| {
                     format!(
                         "codegen: Atomic field receiver '.{}' has unknown object type",

@@ -28597,6 +28597,83 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_par_struct_atomic_field_set_get() {
+        // The canonical concurrent shape: a `par struct` with an `Atomic`
+        // field, mutated + read via atomic store/load on a `ref self` method.
+        // Exercises atomic method dispatch on a par-struct FIELD receiver
+        // (resolve_atomic_storage's shared/par branch — GEP idx+1 into the
+        // heap layout). Round-trips 10 -> 42.
+        let out = run_program(
+            r#"
+par struct Counter { count: Atomic[i64] }
+impl Counter {
+    fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }
+    fn set(ref self, v: i64) { self.count.store(v, MemoryOrdering.SeqCst) }
+}
+fn main() {
+    let c = Counter { count: Atomic.new(10) };
+    println(c.get());
+    c.set(42);
+    println(c.get());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["10", "42"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_shared_struct_atomic_field_load() {
+        // Regression: the atomic-field-receiver fix is shared-wide, not
+        // par-only — a `shared struct` Atomic field load worked never before
+        // (same "no LLVM type" codegen error) and now does.
+        let out = run_program(
+            r#"
+shared struct Counter { count: Atomic[i64] }
+impl Counter {
+    fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }
+}
+fn main() {
+    let c = Counter { count: Atomic.new(99) };
+    println(c.get());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "99");
+        }
+    }
+
+    #[test]
+    fn test_e2e_par_struct_atomic_field_read_across_par_block() {
+        // Concurrent read: the same par struct's Atomic field is read from two
+        // sibling par branches, then after the join. Atomic load on the heap
+        // field slot, clean exit (no race on the refcount or the field).
+        let out = run_program(
+            r#"
+par struct Counter { count: Atomic[i64] }
+impl Counter {
+    fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }
+}
+fn read(c: Counter) -> i64 { c.get() }
+fn main() {
+    let c = Counter { count: Atomic.new(5) };
+    par {
+        let _a = read(c);
+        let _b = read(c);
+    }
+    println(c.get());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5");
+        }
+    }
+
+    #[test]
     fn test_e2e_par_struct_passed_to_fn_and_aliased() {
         // Construct, alias (refcount inc), pass to a fn, read fields — the
         // whole atomic-refcount lifecycle in one binary.
