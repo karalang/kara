@@ -50,6 +50,28 @@ impl<'a> super::Interpreter<'a> {
             return self.eval_with_provider(&resource, provider_expr, closure_expr, span);
         }
 
+        // Phase-8 line 153: `with_span(span, ||body)` runs the body with
+        // `span` installed as the ambient active span, restoring the prior
+        // one on exit. Mirrors `with_provider`'s closure-scoped shape.
+        if let Some((span_expr, closure_expr)) = Self::match_with_span(callee, args) {
+            return self.eval_with_span(span_expr, closure_expr, span);
+        }
+
+        // Phase-8 line 153: `tracing_active_span()` reads the ambient
+        // active span id (0 = none). Intercept rather than run the
+        // `#[compiler_builtin]` placeholder body (which returns 0) so the
+        // active span installed by `with_span` is observed.
+        if args.is_empty() {
+            let is_active_span = match &callee.kind {
+                ExprKind::Identifier(n) => n == "tracing_active_span",
+                ExprKind::Path { segments, .. } => segments.as_slice() == ["tracing_active_span"],
+                _ => false,
+            };
+            if is_active_span {
+                return Value::Int(self.active_span_stack.last().copied().unwrap_or(0));
+            }
+        }
+
         // Effect-resource method call — `UserDB.query(...)` parses as
         // `Call(Path(["UserDB", "query"]), args)` because `starts_upper(&name)`
         // roots a Path in `parse_primary`. Dispatch through the provider
@@ -979,6 +1001,49 @@ impl<'a> super::Interpreter<'a> {
             return None;
         }
         Some((resource, &args[0].value, &args[1].value))
+    }
+
+    /// Recognize `with_span(span, ||body)` (phase-8 line 153). Plain
+    /// `Call` with an `Ident("with_span") | Path(["with_span"])` callee and
+    /// two unlabeled args. Mirror of `codegen::helpers::match_with_span_call`.
+    fn match_with_span<'e>(callee: &'e Expr, args: &'e [CallArg]) -> Option<(&'e Expr, &'e Expr)> {
+        let is_with_span = match &callee.kind {
+            ExprKind::Identifier(n) => n == "with_span",
+            ExprKind::Path { segments, .. } => segments.as_slice() == ["with_span"],
+            _ => false,
+        };
+        if !is_with_span || args.len() != 2 {
+            return None;
+        }
+        Some((&args[0].value, &args[1].value))
+    }
+
+    /// Execute `with_span(span, ||body)`: read `span.span_id`, push it onto
+    /// the active-span stack, invoke the body closure, pop on every exit
+    /// path (cf / `?` / panic / normal), and return the body's value.
+    /// Parallels `eval_with_provider`.
+    fn eval_with_span(&mut self, span_expr: &Expr, closure_expr: &Expr, span: &Span) -> Value {
+        let span_val = self.eval_expr_inner(span_expr);
+        if self.check_cf() {
+            return Value::Unit;
+        }
+        let span_id = match &span_val {
+            Value::Struct { fields, .. } => match fields.get("span_id") {
+                Some(Value::Int(id)) => *id,
+                _ => 0,
+            },
+            _ => 0,
+        };
+
+        let closure = self.eval_expr_inner(closure_expr);
+        if self.check_cf() {
+            return Value::Unit;
+        }
+
+        self.active_span_stack.push(span_id);
+        let result = self.invoke_zero_arg_closure(closure, span);
+        self.active_span_stack.pop();
+        result
     }
 
     /// Execute `with_provider[R](provider, closure)`. Evaluates `provider`,

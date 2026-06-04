@@ -18,7 +18,7 @@ use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, Fun
 use inkwell::{AddressSpace, IntPredicate};
 
 use super::declarations::KARAC_PARK_ON_FD;
-use super::helpers::{expr_as_type_expr_codegen, match_with_provider_call};
+use super::helpers::{expr_as_type_expr_codegen, match_with_provider_call, match_with_span_call};
 
 impl<'ctx> super::Codegen<'ctx> {
     // ── Call ──────────────────────────────────────────────────────
@@ -129,6 +129,34 @@ impl<'ctx> super::Codegen<'ctx> {
             match_with_provider_call(callee, args)
         {
             return self.compile_with_provider(&resource, provider_expr, closure_expr);
+        }
+
+        // Phase-8 line 153: `with_span(span, ||body)` installs `span`'s id
+        // as the ambient active span for the body's dynamic extent and
+        // restores the prior one on exit (mirrors `with_provider`'s
+        // push/inline-body/pop shape, but with the per-thread active-span
+        // register instead of the provider stack).
+        if let Some((span_expr, closure_expr)) = match_with_span_call(callee, args) {
+            return self.compile_with_span(span_expr, closure_expr);
+        }
+
+        // Phase-8 line 153: `tracing_active_span()` reads the ambient
+        // active span id (the `#[compiler_builtin]` `Log.*` / `LogEvent`
+        // bodies call it to auto-stamp events). Lower to the runtime getter
+        // rather than the placeholder Kāra body (which returns 0).
+        let is_tracing_active_span = match &callee.kind {
+            ExprKind::Identifier(n) => n == "tracing_active_span",
+            ExprKind::Path { segments, .. } => segments.as_slice() == ["tracing_active_span"],
+            _ => false,
+        };
+        if args.is_empty() && is_tracing_active_span {
+            let v = self
+                .builder
+                .build_call(self.karac_tracing_get_active_span_fn, &[], "active_span")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic();
+            return Ok(v);
         }
 
         // Const generics slice 1c: `f[8]()` parses as

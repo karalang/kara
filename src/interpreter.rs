@@ -89,6 +89,14 @@ pub struct Interpreter<'a> {
     /// resources (planted by a later CR); the tree-walk interpreter is
     /// single-threaded so all frames live on one stack.
     pub(crate) provider_stack: Vec<HashMap<String, Arc<Value>>>,
+    /// Stack of active span ids for `std.tracing` (phase-8 line 153).
+    /// `with_span(span, || body)` pushes `span.span_id` for the body's
+    /// dynamic extent and pops on exit; `tracing_active_span()` reads the
+    /// top (0 = no active span), which the `LogEvent` constructors use to
+    /// auto-stamp events. The tree-walk interpreter is synchronous (no
+    /// real suspend), so unlike codegen there is no cross-suspend frame to
+    /// preserve — the stack is the whole story here.
+    pub(crate) active_span_stack: Vec<i64>,
     /// Names of `effect resource` declarations in the program, collected
     /// at [`register_items`] time. Used by [`eval_method_call`] to detect
     /// receivers of the form `UserDB.query(...)` — where `UserDB` is not
@@ -402,6 +410,7 @@ impl<'a> Interpreter<'a> {
             sequential_mode: false,
             runtime_errors: Vec::new(),
             provider_stack: vec![HashMap::new()],
+            active_span_stack: Vec::new(),
             effect_resources: HashSet::new(),
             rand_state: seed_rand_state(),
             type_subs_stack: Vec::new(),

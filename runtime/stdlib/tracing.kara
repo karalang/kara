@@ -10,13 +10,19 @@
 // caller-supplied (typically from a monotonic counter) so the surface
 // is testable in isolation without thread-locals.
 //
-// **Deferred to a follow-up slice (requires compiler integration):**
+// **Active-span context (phase-8 line 153, Phase 1 — shipped).**
+// `with_span(span, || body)` installs an ambient active span for the
+// body's dynamic extent; `LogEvent` / `Log.*` auto-stamp the active span
+// id (see `tracing_active_span()` at the bottom of this file). par/spawn
+// children inherit the parent's active span. **Phase 2 (not yet):** a
+// coroutine preserving the active span across a real `suspends`
+// park/resume — the literal "state-machine transform preserves the
+// active span" — is the remaining codegen work; until it lands, an event
+// logged *after* a suspend in a coroutine sees the resuming worker's
+// active span, not the pre-suspend one. Explicit `.in_span(id)` always
+// overrides the ambient span.
 //
-//   - **Active-span context propagation across async boundaries.** The
-//     spec calls out "state-machine transform preserves the active
-//     span" — that's codegen + ownership-pass plumbing, not pure-Kāra,
-//     and lives outside this Agent A slice. Users of v1 thread `Span`
-//     values through their function signatures manually for now.
+// **Deferred to a follow-up slice (requires compiler integration):**
 //
 //   - **Comptime-driven trace-context plumbing.** The Kāra-native
 //     alternative to Rust's `tracing` proc-macro indirection — also
@@ -108,7 +114,7 @@ impl LogEvent {
             level: "trace",
             message: message,
             fields: Vec.new(),
-            span_id: 0,
+            span_id: tracing_active_span(),
         }
     }
 
@@ -117,7 +123,7 @@ impl LogEvent {
             level: "debug",
             message: message,
             fields: Vec.new(),
-            span_id: 0,
+            span_id: tracing_active_span(),
         }
     }
 
@@ -126,7 +132,7 @@ impl LogEvent {
             level: "info",
             message: message,
             fields: Vec.new(),
-            span_id: 0,
+            span_id: tracing_active_span(),
         }
     }
 
@@ -135,7 +141,7 @@ impl LogEvent {
             level: "warn",
             message: message,
             fields: Vec.new(),
-            span_id: 0,
+            span_id: tracing_active_span(),
         }
     }
 
@@ -144,7 +150,7 @@ impl LogEvent {
             level: "error",
             message: message,
             fields: Vec.new(),
-            span_id: 0,
+            span_id: tracing_active_span(),
         }
     }
 
@@ -278,4 +284,35 @@ impl Log {
         let sink = StdoutExporter {};
         sink.export_event(LogEvent.error(message));
     }
+}
+
+// ── Ambient active span (phase-8 line 153, Phase 1) ──────────────────
+//
+// The active span is the span that log events attach to without the
+// caller threading a `Span` value by hand. It is a per-task ambient
+// value (design.md "the runtime maintains a span context per logical
+// task"). `with_span(span, || body)` installs `span` as the active span
+// for the dynamic extent of `body` and restores the prior active span on
+// exit; `tracing_active_span()` reads the current active span id (0 =
+// none), which the `LogEvent` constructors use to auto-stamp events.
+//
+// Both are `#[compiler_builtin]`: the compiler intercepts the call sites
+// (codegen → the `karac_tracing_*` per-thread register; interpreter →
+// an active-span stack), so these placeholder bodies are never executed.
+// `with_span` is declared the closure-scoped way — mirroring the
+// `with_provider(p, || body)` ambient idiom — rather than as an
+// `enter()`-returns-guard, because a guard held across a suspend point
+// collides with the RAII-across-yield rule and the interpreter has no
+// observable user-`Drop`. Propagation: par/spawn children inherit the
+// parent's active span (Phase 1); a coroutine preserves it across a
+// suspend/resume (Phase 2).
+
+#[compiler_builtin]
+fn tracing_active_span() -> i64 {
+    0
+}
+
+#[compiler_builtin]
+fn with_span[T](span: ref Span, body: OnceFn() -> T) -> T {
+    body()
 }

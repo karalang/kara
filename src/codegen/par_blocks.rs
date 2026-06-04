@@ -518,6 +518,16 @@ impl<'ctx> super::Codegen<'ctx> {
             captures.iter().map(|n| self.variables[n].ty).collect();
         let provider_head_idx = env_field_types.len();
         env_field_types.push(ptr_ty.into());
+        // phase-8 line 153: i64 snapshot of the parent thread's active
+        // span id, so each spawned worker inherits it (mirrors the
+        // provider-head snapshot above). Placed immediately after the
+        // provider head — the worker reads it at `captures.len() + 1`, the
+        // same hardcoded-offset convention the provider head uses
+        // (`captures.len()`); the trailing pointer slots below shift by one
+        // automatically because their indices are recomputed here and
+        // passed to the branch-fn emitter.
+        let active_span_idx = env_field_types.len();
+        env_field_types.push(self.context.i64_type().into());
         let par_returns_idx = env_field_types.len();
         env_field_types.push(ptr_ty.into());
         let par_result_slots_idx = env_field_types.len();
@@ -566,6 +576,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 head_val,
                 provider_head_idx as u32,
                 "__par_env_head",
+            )
+            .unwrap()
+            .into_struct_value();
+        // phase-8 line 153: snapshot the active span id alongside the
+        // provider head, so workers inherit the parent's active span.
+        let active_span_snap = self
+            .builder
+            .build_call(
+                self.karac_tracing_get_active_span_fn,
+                &[],
+                "__par_env_active_span_snap",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+        env_agg = self
+            .builder
+            .build_insert_value(
+                env_agg,
+                active_span_snap,
+                active_span_idx as u32,
+                "__par_env_active_span",
             )
             .unwrap()
             .into_struct_value();
@@ -945,6 +977,26 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_call(
                 self.karac_provider_set_stack_head_fn,
                 &[head_val.into()],
+                "",
+            )
+            .unwrap();
+
+        // phase-8 line 153: inherit the parent's active span. The i64
+        // snapshot sits immediately after the provider head, so it's at
+        // `captures.len() + 1` (same hardcoded-offset convention as the
+        // provider head's `captures.len()` above).
+        let active_span_val = self
+            .builder
+            .build_extract_value(
+                env_val_for_head.into_struct_value(),
+                captures.len() as u32 + 1,
+                "__par_branch_active_span",
+            )
+            .unwrap();
+        self.builder
+            .build_call(
+                self.karac_tracing_set_active_span_fn,
+                &[active_span_val.into()],
                 "",
             )
             .unwrap();

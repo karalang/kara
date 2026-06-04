@@ -6080,6 +6080,52 @@ fn test_tracing_stdout_exporter_emits_span_line() {
     );
 }
 
+#[test]
+fn test_tracing_with_span_stamps_active_span() {
+    // phase-8 line 153: `with_span(s, ||body)` installs `s` as the ambient
+    // active span, so a `Log.*` inside the body is auto-stamped with its
+    // span id without the caller threading it.
+    let output = run(r#"fn main() {
+         let s = Span.root("req", 7);
+         with_span(s, || { Log.info("inside") });
+         Log.info("outside");
+     }"#);
+    // Inside the span → span_id=7; outside → no active span → no suffix.
+    assert_eq!(output, "[info] inside span_id=7\n[info] outside\n");
+}
+
+#[test]
+fn test_tracing_with_span_nesting_restores_outer() {
+    // A nested `with_span` restores the outer active span on exit.
+    let output = run(r#"fn main() {
+         let outer = Span.root("o", 1);
+         let inner = Span.root("i", 2);
+         with_span(outer, || {
+             Log.info("a");
+             with_span(inner, || { Log.info("b") });
+             Log.info("c");
+         });
+         Log.info("d");
+     }"#);
+    assert_eq!(
+        output,
+        "[info] a span_id=1\n[info] b span_id=2\n[info] c span_id=1\n[info] d\n"
+    );
+}
+
+#[test]
+fn test_tracing_explicit_in_span_overrides_active() {
+    // An explicit `.in_span(id)` always wins over the ambient active span.
+    let output = run(r#"fn main() {
+         let s = Span.root("s", 7);
+         with_span(s, || {
+             let tracer = StdoutExporter {};
+             tracer.export_event(LogEvent.info("x").in_span(99));
+         });
+     }"#);
+    assert_eq!(output, "[info] x span_id=99\n");
+}
+
 // ── std.process — Command / Child surface ──────────────────────────
 
 #[test]

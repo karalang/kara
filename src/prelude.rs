@@ -809,6 +809,17 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // call from "boundary-detected unknown callee" to a real
     // stdlib item without changing the boundary-detection behavior.
     "spawn",
+    // Phase 8 line 153 (active-span propagation) — `std.tracing`.
+    // `with_span(span, || body)` installs an ambient active span for the
+    // body; the interpreter and codegen intercept the call shape (see
+    // `Interpreter::match_with_span` / `match_with_span_call`) like
+    // `with_provider`. `tracing_active_span()` reads the active span id
+    // (0 = none); the `LogEvent` constructors call it to auto-stamp
+    // events, and it's intercepted to the per-thread register rather than
+    // running its `#[compiler_builtin]` placeholder body. Registering the
+    // names here makes the resolver accept the bare identifiers.
+    "with_span",
+    "tracing_active_span",
 ];
 
 /// Synthetic span used for every stub item the prelude module emits. The

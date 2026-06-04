@@ -28385,6 +28385,59 @@ fn main() {
     }
 
     #[test]
+    fn e2e_tracing_with_span_stamps_active_span() {
+        // phase-8 line 153: `with_span(s, ||body)` installs `s` as the
+        // ambient active span in a compiled binary — a `Log.*` inside the
+        // body is auto-stamped with the span id (via the per-thread
+        // `karac_tracing_*` register), and the active span is restored on
+        // exit. Proves the codegen `with_span` lowering + the
+        // `tracing_active_span()`-fed auto-stamp round-trip through a real
+        // executable, and that a nested span restores the outer one.
+        let out = run_program(
+            r#"fn main() {
+                let outer = Span.root("o", 1);
+                let inner = Span.root("i", 2);
+                with_span(outer, || {
+                    Log.info("a");
+                    with_span(inner, || { Log.info("b") });
+                    Log.info("c");
+                });
+                Log.info("d");
+            }"#,
+        );
+        assert_eq!(
+            out.as_deref(),
+            Some("[info] a span_id=1\n[info] b span_id=2\n[info] c span_id=1\n[info] d\n"),
+        );
+    }
+
+    #[test]
+    fn e2e_tracing_par_branch_inherits_active_span() {
+        // phase-8 line 153: a child task (par branch) inherits the
+        // parent's active span. The branch runs on a worker thread (fresh
+        // TLS), but the env-struct snapshot taken at par-block entry seeds
+        // the worker's active-span register, so a `Log.*` inside the
+        // branch is stamped with the enclosing `with_span`'s id. Single
+        // branch → deterministic output. After `with_span` exits, the
+        // active span is restored (the trailing `Log.info` has no suffix).
+        let out = run_program(
+            r#"fn main() {
+                let s = Span.root("req", 5);
+                with_span(s, || {
+                    par {
+                        Log.info("in-branch");
+                    }
+                });
+                Log.info("after");
+            }"#,
+        );
+        assert_eq!(
+            out.as_deref(),
+            Some("[info] in-branch span_id=5\n[info] after\n"),
+        );
+    }
+
+    #[test]
     fn e2e_tracing_noop_exporter_is_silent() {
         // The default exporter compiles + runs and emits nothing — the
         // `NoOpExporter` impl bodies lower through the same path.

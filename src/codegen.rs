@@ -1647,6 +1647,16 @@ pub(super) struct Codegen<'ctx> {
     /// thread's TLS from the env-struct snapshot, so providers in
     /// scope at the par-block site stay visible inside spawned branches.
     pub(crate) karac_provider_set_stack_head_fn: FunctionValue<'ctx>,
+    /// Runtime extern: `karac_tracing_get_active_span() -> i64` (phase-8
+    /// line 153). Consumed by the `tracing_active_span()` builtin (which
+    /// `Log.*` / `LogEvent` use to auto-stamp the ambient span) and by
+    /// the `with_span` lowering to snapshot the prior active span.
+    pub(crate) karac_tracing_get_active_span_fn: FunctionValue<'ctx>,
+    /// Runtime extern: `karac_tracing_set_active_span(i64)` (phase-8 line
+    /// 153). Consumed by the `with_span(span, ||body)` lowering to install
+    /// the body's active span and restore the prior one on exit, and by
+    /// par-branch prologues to inherit the parent's active span.
+    pub(crate) karac_tracing_set_active_span_fn: FunctionValue<'ctx>,
     /// LLVM struct type for `ProviderFrame { prev, resource_id, data, vtable }`
     /// — `#[repr(C)]` matches `runtime/src/lib.rs::ProviderFrame`. Consumed
     /// at `with_provider[R]` lowering sites for the alloca'd frame storage
@@ -2118,6 +2128,23 @@ impl<'ctx> Codegen<'ctx> {
         let karac_provider_set_stack_head_fn = module.add_function(
             "karac_provider_set_stack_head",
             karac_provider_set_stack_head_type,
+            Some(Linkage::External),
+        );
+        // Phase-8 line 153 (active-span propagation): get/set the
+        // per-thread active span id. `with_span` snapshots+installs+restores
+        // it; `tracing_active_span()` reads it for `Log.*` auto-stamping;
+        // par-branch prologues set it from the env-struct snapshot.
+        let karac_tracing_get_active_span_type = i64_type.fn_type(&[], false);
+        let karac_tracing_get_active_span_fn = module.add_function(
+            "karac_tracing_get_active_span",
+            karac_tracing_get_active_span_type,
+            Some(Linkage::External),
+        );
+        let karac_tracing_set_active_span_type =
+            context.void_type().fn_type(&[i64_type.into()], false);
+        let karac_tracing_set_active_span_fn = module.add_function(
+            "karac_tracing_set_active_span",
+            karac_tracing_set_active_span_type,
             Some(Linkage::External),
         );
 
@@ -3599,6 +3626,8 @@ impl<'ctx> Codegen<'ctx> {
             karac_provider_lookup_fn,
             karac_provider_get_stack_head_fn,
             karac_provider_set_stack_head_fn,
+            karac_tracing_get_active_span_fn,
+            karac_tracing_set_active_span_fn,
             provider_frame_ty,
             provider_lookup_result_ty,
             map_key_types: HashMap::new(),

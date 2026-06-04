@@ -40,6 +40,7 @@ mod map;
 pub mod scheduler;
 #[cfg(feature = "tls")]
 pub mod tls;
+pub mod tracing;
 
 // LLJIT integration (phase-7 L560 W3, 2026-05-29): when this crate is
 // consumed as an rlib (test-binary `[dev-dependencies]` path under

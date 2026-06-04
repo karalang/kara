@@ -244,6 +244,27 @@ pub(super) fn match_with_provider_call<'e>(
     Some((resource, &args[0].value, &args[1].value))
 }
 
+/// Recognize the `with_span(span, ||body)` call shape at AST level
+/// (phase-8 line 153). Returns `(span_expr, closure_expr)` when the
+/// callee is `Ident("with_span") | Path(["with_span"])` with exactly two
+/// unlabeled args, else `None`. Unlike `with_provider`, the callee is a
+/// plain identifier (no `[R]` generic index), so the shape is a bare
+/// `Call`. Mirrored by `Interpreter::match_with_span`.
+pub(super) fn match_with_span_call<'e>(
+    callee: &'e Expr,
+    args: &'e [CallArg],
+) -> Option<(&'e Expr, &'e Expr)> {
+    let is_with_span = match &callee.kind {
+        ExprKind::Identifier(n) => n == "with_span",
+        ExprKind::Path { segments, .. } => segments.as_slice() == ["with_span"],
+        _ => false,
+    };
+    if !is_with_span || args.len() != 2 {
+        return None;
+    }
+    Some((&args[0].value, &args[1].value))
+}
+
 /// `true` when the method has no `ref T` / `mut ref T` parameters, so its
 /// signature matches what the operator-lowering pass emits — every binop
 /// rewrite at `lowering.rs` passes operands by value through

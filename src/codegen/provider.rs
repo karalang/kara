@@ -236,6 +236,74 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(body_result)
     }
 
+    /// Phase-8 line 153: lower `with_span(span, ||body)`.
+    ///
+    /// Generates:
+    /// ```text
+    ///   %prev = call i64 @karac_tracing_get_active_span()
+    ///   %sid  = <span_expr>.span_id                  ; i64 field read
+    ///   call void @karac_tracing_set_active_span(%sid)
+    ///   <body>                                        ; inlined closure body
+    ///   call void @karac_tracing_set_active_span(%prev)
+    ///   ; result = body's value
+    /// ```
+    ///
+    /// Mirrors `compile_with_provider`'s push/inline-body/pop shape, but
+    /// over the per-thread active-span register instead of the provider
+    /// stack: snapshot the prior active span, install `span.span_id` for
+    /// the body, restore the snapshot after. As with `with_provider`, the
+    /// body must be an inline `||body` literal (its free variables resolve
+    /// against the outer scope) and the restore-after-body sequencing
+    /// matches `with_provider`'s — an early `return` *inside* the body
+    /// returns from the enclosing function and bypasses the inline
+    /// restore, exactly as `with_provider`'s pop does; the common
+    /// fall-through and closure-local `return` cases restore correctly.
+    pub(super) fn compile_with_span(
+        &mut self,
+        span_expr: &Expr,
+        closure_expr: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // 1. Snapshot the prior active span id.
+        let prev = self
+            .builder
+            .build_call(self.karac_tracing_get_active_span_fn, &[], "ws.prev")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+
+        // 2. Read `span.span_id` (i64, field index 1 of `Span`) by
+        //    compiling a field access on the span expression — handles
+        //    identifier / literal / builder-chain receivers uniformly.
+        let span_id = self.compile_field_access(span_expr, "span_id")?;
+
+        // 3. Install the body's active span.
+        self.builder
+            .build_call(self.karac_tracing_set_active_span_fn, &[span_id.into()], "")
+            .unwrap();
+
+        // 4. Inline the closure body (only `||body` literals; mirrors
+        //    `compile_with_provider_body`).
+        let ExprKind::Closure { params, body, .. } = &closure_expr.kind else {
+            return Err(
+                "with_span: second argument must be an inline `||body` literal".to_string(),
+            );
+        };
+        if !params.is_empty() {
+            return Err(format!(
+                "with_span: closure must take zero arguments, got {}",
+                params.len()
+            ));
+        }
+        let body_result = self.compile_expr(body)?;
+
+        // 5. Restore the prior active span.
+        self.builder
+            .build_call(self.karac_tracing_set_active_span_fn, &[prev.into()], "")
+            .unwrap();
+
+        Ok(body_result)
+    }
+
     /// `with_provider[R]` lowering for a *trait-less* resource overridden by
     /// a statically-typed provider — either a prelude ambient resource
     /// (`Clock`, `Env`, …) or a user `effect resource R;` (no `: T`).
