@@ -544,22 +544,42 @@ impl<'a> super::Interpreter<'a> {
             Some(t) => t,
             None => return,
         };
+        let has_user_drop = self.program.drop_method_keys.contains_key(&type_name);
         // Shared struct: fire the user body at refcount→0, mirroring
         // codegen's `emit_rc_dec` free branch. `drop_target` reports the
         // live count; `== 1` means this binding holds the sole reference
-        // and is therefore the last drop. A return-value clone (tail
-        // escape) or an alias still in scope keeps the count > 1, so the
-        // body fires exactly once, when the final holder drops. Recursive
-        // / field-held shared references are out of scope for this slice
-        // (cross-backend recursive-drop parity is tracked separately).
+        // and is the last drop. To let a *later* alias's drain reach 1,
+        // release THIS binding's `Arc` from env after handling it — a
+        // drained binding is at its NLL endpoint (or scope exit), so its
+        // slot is dead and removal is safe. Without the release every
+        // alias of `let r2 = r` lingers in env until scope pop, the count
+        // never reaches 1, and the body would never fire. A return-value
+        // clone (tail escape) keeps the count > 1 here, so the body fires
+        // exactly once — when the final holder drops. Recursive /
+        // field-held inner refs (held inside another shared struct's
+        // field, not an env binding) still never reach a drain and need an
+        // Arc-drop hook; codegen handles them — the interpreter gap is
+        // tracked under the L940 drop-reconciliation item.
         if let Some(count) = shared_count {
-            if count != 1 {
-                return;
+            if has_user_drop {
+                if count == 1 {
+                    self.run_user_drop_body(&type_name, name);
+                }
+                self.env.remove_local(name);
             }
-        }
-        if !self.program.drop_method_keys.contains_key(&type_name) {
             return;
         }
+        if !has_user_drop {
+            return;
+        }
+        self.run_user_drop_body(&type_name, name);
+    }
+
+    /// Execute a binding's user `<Type>.drop` body with `self` bound to
+    /// the binding's value. Shared by the value-struct and shared-struct
+    /// drains in `invoke_user_drop_if_applicable`. No-op when the binding
+    /// or the `<Type>.drop` symbol can't be resolved.
+    fn run_user_drop_body(&mut self, type_name: &str, name: &str) {
         let value = match self.env.get(name) {
             Some(v) => v,
             None => return,

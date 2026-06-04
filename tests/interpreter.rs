@@ -1482,15 +1482,43 @@ fn test_user_drop_shared_struct_fires_once() {
     assert_eq!(output, vec!["7\n".to_string()]);
 }
 
-// NOTE: aliased / recursive / field-held shared structs (`let r2 = r`,
-// `Node { next: Some(child) }`) do NOT fire the user body reliably on
-// the interpreter path: a `Value::SharedStruct(Arc<…>)` clone lingers in
-// `env` until scope pop, so the drain-time `strong_count == 1` gate
-// never trips for a binding that still has a live alias. The codegen
-// path handles these correctly (the body fires at refcount→0; see the
-// recursive-chain codegen + ASAN tests). Closing this interpreter parity
-// gap needs env-release-on-drain or an Arc-drop hook — tracked under the
-// phase-7 "Drop ordering reconciliation across backends" item (L940).
+#[test]
+fn test_user_drop_shared_struct_alias_fires_once_at_last_ref() {
+    // phase-7 L940: `let r2 = r` is an Arc clone — two holders of one
+    // inner. The body must fire EXACTLY once, when the last holder's slot
+    // drains (env-release-on-drain decrements the strong-count as each
+    // holder drains, so the final one reaches 1). Output is the read
+    // `println(r2.id)` ("7") plus exactly one drop-body "7"; a third "7"
+    // would be a double-drop, zero extra would be the pre-L940 under-fire.
+    let (output, _drops) = run_program_with_drops(
+        "shared struct Res { id: i64 }\n\
+         impl Drop for Res {\n\
+             fn drop(mut ref self) {\n\
+                 println(self.id);\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let r = Res { id: 7 };\n\
+             let r2 = r;\n\
+             println(r2.id);\n\
+         }",
+    );
+    let fires = output.iter().filter(|l| l.trim() == "7").count();
+    assert_eq!(
+        fires, 2,
+        "expected the read (one `7`) + exactly one drop-body `7`; got {output:?}"
+    );
+}
+
+// NOTE: recursive / field-held shared structs (`Node { next: Some(child) }`)
+// still do NOT fire the user body on the interpreter path — an inner ref
+// held inside another shared struct's field is never an env binding, so it
+// never reaches a `CleanupAction::Drop` drain and env-release-on-drain
+// can't see it. Closing that needs an Arc-drop hook (a `SharedStructInner`
+// Drop impl that calls back into the interpreter). Codegen fires these
+// correctly (refcount→0; see the recursive-chain codegen + ASAN tests).
+// Tracked under the phase-7 "Drop ordering reconciliation across backends"
+// item (L940), recursive sub-item.
 
 // ── Move-suppression for user-Drop bindings (let-rebind) ──
 //

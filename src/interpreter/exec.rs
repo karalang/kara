@@ -455,6 +455,21 @@ impl Env {
         }
     }
 
+    /// Remove a binding from the nearest scope that holds it, releasing
+    /// its value (for a shared struct, dropping this holder's `Arc` and
+    /// decrementing the strong-count). Used by the shared-struct user-Drop
+    /// drain so a later alias's drain observes the decremented count — see
+    /// `Interpreter::invoke_user_drop_if_applicable`. Safe at a drain
+    /// point because the binding is at its NLL endpoint or scope exit and
+    /// is never read again.
+    pub(crate) fn remove_local(&mut self, name: &str) {
+        for scope in self.scopes.iter_mut().rev() {
+            if scope.remove(name).is_some() {
+                return;
+            }
+        }
+    }
+
     pub(crate) fn set(&mut self, name: &str, val: Value) {
         // Update in the nearest scope that has this name. If the existing
         // slot is a `SharedCell` (a `mut ref` closure capture aliased back
