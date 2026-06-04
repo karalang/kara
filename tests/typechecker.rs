@@ -22075,3 +22075,49 @@ fn shared_struct_mut_ref_self_receiver_still_accepted() {
          }",
     );
 }
+
+// ── `Atomic.new` in general expression position ──────────────────
+// `Atomic.new(v)` is recognized as a constructor in general expression
+// position (struct-field-init, local let), not just module-binding init,
+// so a concurrent `par struct` with an `Atomic` field can be constructed.
+// `Atomic[T]` is a transparent wrapper; codegen lowers `Atomic.new(v)` to
+// `v`. (Mutex.new is intentionally NOT recognized here — no codegen yet.)
+
+#[test]
+fn atomic_new_in_par_struct_field_init_accepted() {
+    typecheck_ok(
+        "par struct Counter { count: Atomic[i64] }
+         fn main() {
+             let _c = Counter { count: Atomic.new(0) };
+         }",
+    );
+}
+
+#[test]
+fn atomic_new_in_local_let_infers_atomic_of_arg_type() {
+    // The inner type is taken from the argument: Atomic.new(0) : Atomic[i64].
+    let result = typecheck_ok(
+        "fn main() {
+             let _a = Atomic.new(0);
+             let _b: Atomic[bool] = Atomic.new(false);
+         }",
+    );
+    assert!(result.errors.is_empty());
+}
+
+#[test]
+fn mutex_new_in_general_position_still_rejected() {
+    // Guard: only Atomic.new is general-position (Mutex.new has no codegen
+    // yet, so it must NOT silently typecheck in a value expression — that
+    // would turn a clean typecheck error into a codegen failure).
+    let errors = typecheck_errors(
+        "par struct S { m: Mutex[i64] }
+         fn main() {
+             let _s = S { m: Mutex.new(0) };
+         }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "Mutex.new in general expression position must still be rejected (no codegen yet)"
+    );
+}

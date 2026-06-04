@@ -519,6 +519,38 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `Atomic.new(v)` — transparent constructor for the `Atomic[T]`
+        // concurrency primitive, recognized in **general expression position**
+        // (struct-field-init, local `let`, call args), not just module-binding
+        // init (`module_binding_call_is_special_form`). This is what lets the
+        // canonical concurrent `par struct Counter { count: Atomic[i64] }` be
+        // *constructed*: `Counter { count: Atomic.new(0) }`. There is no
+        // `impl Atomic[T] { fn new }` in stdlib (atomic.kara bakes only the
+        // type shape), so without this arm the call falls through to the
+        // `resolve_path_type` rejection ("no associated function 'new' on type
+        // 'Atomic'"). Codegen already handles it — `Atomic[T]` is a transparent
+        // wrapper over `T`, so `assoc_call.rs`'s `Atomic && "new"` arm lowers
+        // `Atomic.new(v)` to `v` (widening `Atomic[bool]` → i8). The inner type
+        // comes straight from the argument, like `Vec.filled`. NOTE: `Mutex.new`
+        // is deliberately NOT here — it has no codegen yet (it rides with the
+        // `lock`-block slice), and typechecking it without codegen would turn a
+        // clean typecheck error into a codegen failure.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && segments[0] == "Atomic"
+                && segments[1] == "new"
+                && args.len() == 1
+            {
+                let inner_ty = self.infer_expr(&args[0].value);
+                let ty = Type::Named {
+                    name: "Atomic".to_string(),
+                    args: vec![inner_ty],
+                };
+                self.record_expr_type(span, &ty);
+                return ty;
+            }
+        }
+
         // `Vec.with_capacity(n)` — pairs with the `Vec.new()` arm above.
         // Same fresh-typevar return so an untyped `let mut v =
         // Vec.with_capacity(8); v.push(x);` can pin `?T` from the

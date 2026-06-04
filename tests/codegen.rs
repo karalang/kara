@@ -28573,6 +28573,30 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_par_struct_with_atomic_field_constructs() {
+        // `Atomic.new` in general (struct-field-init) position lets a
+        // concurrent `par struct` with an `Atomic` field be constructed —
+        // `Atomic[T]` is a transparent wrapper, so the field lowers to its
+        // inner value. (Atomic-method dispatch on a shared/par field receiver
+        // is a separate pre-existing gap; here we read a sibling plain field
+        // to prove construction + the Arc lifecycle work with an Atomic field
+        // present.)
+        let out = run_program(
+            r#"
+par struct Counter { count: Atomic[i64], label: i64 }
+fn label_of(c: Counter) -> i64 { c.label }
+fn main() {
+    let c = Counter { count: Atomic.new(0), label: 7 };
+    println(label_of(c));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7");
+        }
+    }
+
+    #[test]
     fn test_e2e_par_struct_passed_to_fn_and_aliased() {
         // Construct, alias (refcount inc), pass to a fn, read fields — the
         // whole atomic-refcount lifecycle in one binary.
