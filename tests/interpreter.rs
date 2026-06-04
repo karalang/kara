@@ -5991,6 +5991,24 @@ fn test_tracing_noop_exporter_implements_trait() {
 }
 
 #[test]
+fn test_tracing_log_ambient_emission_all_levels() {
+    // `Log.<level>("msg")` emits through the built-in StdoutExporter
+    // without the caller constructing/threading an exporter value — the
+    // ambient convenience layer. Each level renders its own tag.
+    let output = run(r#"fn main() {
+         Log.trace("t");
+         Log.debug("d");
+         Log.info("i");
+         Log.warn("w");
+         Log.error("e");
+     }"#);
+    assert_eq!(
+        output,
+        "[trace] t\n[debug] d\n[info] i\n[warn] w\n[error] e\n"
+    );
+}
+
+#[test]
 fn test_tracing_stdout_exporter_emits_event_line() {
     // StdoutExporter is the v1 emission surface: it renders a LogEvent
     // as one structured line — `[level] message key=value … span_id=N`,

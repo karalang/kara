@@ -233,3 +233,49 @@ impl Exporter for StdoutExporter {
         println(line);
     }
 }
+
+// Ambient emission — `Log.info("...")` and friends, so a program can log
+// a message without constructing and threading an exporter value. Each
+// call builds the matching `LogEvent` and emits it through a fresh
+// `StdoutExporter`, the v1 default sink. This is the convenience layer
+// over the explicit `exporter.export_event(LogEvent.info(...))` form:
+// reach for `Log.*` for a quick message, drop to the explicit builder
+// when you need structured fields (`.with_field`) or a span id.
+//
+// **v1 scope — fixed `StdoutExporter` sink, no level filter.** A
+// *configurable* ambient layer — registering a different sink (`NoOp` to
+// silence, or a custom exporter) and a process-global minimum level so
+// production can dial verbosity — needs ambient mutable state shared
+// across call sites (the `with_provider`-shape the spec calls out as
+// "natural once the network event loop lands"). It is carved as a
+// follow-on; today every `Log.*` call emits to stdout. Lives entirely in
+// the codegen-capable `Log` / `LogEvent` / `StdoutExporter` surface, so
+// `Log.info(...)` works under both `karac run` and `karac build`.
+struct Log { }
+
+impl Log {
+    fn trace(message: String) {
+        let sink = StdoutExporter {};
+        sink.export_event(LogEvent.trace(message));
+    }
+
+    fn debug(message: String) {
+        let sink = StdoutExporter {};
+        sink.export_event(LogEvent.debug(message));
+    }
+
+    fn info(message: String) {
+        let sink = StdoutExporter {};
+        sink.export_event(LogEvent.info(message));
+    }
+
+    fn warn(message: String) {
+        let sink = StdoutExporter {};
+        sink.export_event(LogEvent.warn(message));
+    }
+
+    fn error(message: String) {
+        let sink = StdoutExporter {};
+        sink.export_event(LogEvent.error(message));
+    }
+}

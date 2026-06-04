@@ -28187,6 +28187,26 @@ fn main() {
     }
 
     #[test]
+    fn e2e_tracing_log_ambient_emission() {
+        // `Log.<level>(...)` — the ambient emission namespace — compiles
+        // and runs in a real binary. `Log.info` etc. are assoc-fn bodies
+        // over `StdoutExporter`/`LogEvent`, so they lower through the same
+        // tracing-codegen pass; this pins that `karac build` (not just
+        // `karac run`) honors the convenience layer.
+        let out = run_program(
+            r#"fn main() {
+                Log.info("server started");
+                Log.warn("disk 85%");
+                Log.error("connection refused");
+            }"#,
+        );
+        assert_eq!(
+            out.as_deref(),
+            Some("[info] server started\n[warn] disk 85%\n[error] connection refused\n"),
+        );
+    }
+
+    #[test]
     fn e2e_tracing_noop_exporter_is_silent() {
         // The default exporter compiles + runs and emits nothing — the
         // `NoOpExporter` impl bodies lower through the same path.

@@ -1379,15 +1379,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         // Prefer source-AST identity for UFCS associated-fn calls
                         // whose target is a known user struct and whose LLVM
                         // return type matches that struct's LLVM identity.
-                        let ast_hint = if let ExprKind::Call { callee, .. } = &value.kind {
-                            if let ExprKind::Path { segments, .. } = &callee.kind {
-                                if segments.len() == 2 {
-                                    let target = &segments[0];
-                                    if let Some(target_st) = self.struct_types.get(target) {
-                                        if *target_st == st {
-                                            Some(target.clone())
-                                        } else {
-                                            None
+                        let ast_hint = match &value.kind {
+                            ExprKind::Call { callee, .. } => {
+                                if let ExprKind::Path { segments, .. } = &callee.kind {
+                                    if segments.len() == 2 {
+                                        let target = &segments[0];
+                                        match self.struct_types.get(target) {
+                                            Some(target_st) if *target_st == st => {
+                                                Some(target.clone())
+                                            }
+                                            _ => None,
                                         }
                                     } else {
                                         None
@@ -1395,11 +1396,18 @@ impl<'ctx> super::Codegen<'ctx> {
                                 } else {
                                     None
                                 }
-                            } else {
-                                None
                             }
-                        } else {
-                            None
+                            // A struct literal names its type authoritatively in
+                            // source — use it directly. Crucial for distinct
+                            // structs that lower to the same LLVM shape (every
+                            // empty struct is `{}`, e.g. `StdoutExporter` vs
+                            // `NoOpExporter`), which the LLVM-identity reverse-
+                            // lookup below would alias by HashMap-iteration order.
+                            ExprKind::StructLiteral { path, .. } => path
+                                .last()
+                                .filter(|n| self.struct_types.contains_key(n.as_str()))
+                                .cloned(),
+                            _ => None,
                         };
                         if let Some(name) = ast_hint {
                             self.record_var_type_name(var_name.clone(), name);

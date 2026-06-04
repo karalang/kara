@@ -4495,7 +4495,32 @@ impl<'ctx> Codegen<'ctx> {
 
     /// Inner body-emission loop for [`Self::compile_tracing_stdlib_methods`],
     /// run with the tracing program's span tables swapped in.
+    ///
+    /// Two phases:
+    ///
+    /// 1. **Compile every tracing method body.** No usage gate here —
+    ///    tracing methods call each other (`Log.info` → `StdoutExporter.
+    ///    export_event` → `LogEvent.info`), so a callee's only use may be a
+    ///    caller whose body hasn't been emitted yet; gating during this
+    ///    pass would delete the callee before its caller's call site
+    ///    exists.
+    /// 2. **Prune unused tracing functions to a fixpoint.** Once every body
+    ///    is emitted, every real call site exists, so a tracing function
+    ///    with zero uses is genuinely dead — delete it. Deleting one can
+    ///    orphan another (an unused `Log.info` was the only caller of
+    ///    `export_event`), so loop until a full scan deletes nothing. This
+    ///    keeps tracing-free binaries lean (no dead `Vec`/f-string
+    ///    machinery) and the IR-shape codegen tests valid.
     fn compile_tracing_stdlib_method_bodies(&mut self, tp: &Program) -> Result<(), String> {
+        // Compiling the tracing bodies repositions `self.builder` into the
+        // last tracing function, and the phase-2 prune may then *delete*
+        // that function — leaving the builder on a freed block. Downstream
+        // passes (e.g. `finalize_hot_swap_table`'s `get_insert_block`)
+        // assume a live insert position, so snapshot it now and restore it
+        // before returning. The saved block belongs to the user-side
+        // function the impl-body pass left off in; the prune never touches
+        // user functions, so it stays valid.
+        let saved_block = self.builder.get_insert_block();
         let mut compiled: std::collections::HashSet<String> = std::collections::HashSet::new();
         for value_self_pass in [true, false] {
             for item in &tp.items {
@@ -4516,40 +4541,6 @@ impl<'ctx> Codegen<'ctx> {
                                 if self.declare_only_fns.contains(&qualified) {
                                     continue;
                                 }
-                                // Usage gate. The declaration pass declared
-                                // EVERY tracing method up front (so a user
-                                // call site could resolve its symbol), but
-                                // emitting a body for a method the program
-                                // never calls would bloat every binary with
-                                // dead `Vec`/f-string machinery — against
-                                // this project's binary-size discipline, and
-                                // it breaks IR tests that assert the absence
-                                // of `insertvalue` etc. in tracing-free
-                                // programs. User bodies are already compiled
-                                // by the time this runs, so a tracing method
-                                // with no call site has zero uses: drop the
-                                // bare declaration instead of giving it a
-                                // body. Tracing methods never call each other,
-                                // so no deletion can orphan a live reference.
-                                let fv = match self.module.get_function(&qualified) {
-                                    Some(fv) => fv,
-                                    None => continue,
-                                };
-                                // `get_first_use` lives on the `BasicValue`
-                                // trait, which `FunctionValue` doesn't impl —
-                                // route through the function's global-value
-                                // pointer, which does.
-                                if inkwell::values::BasicValue::get_first_use(
-                                    &fv.as_global_value().as_pointer_value(),
-                                )
-                                .is_none()
-                                {
-                                    // SAFETY: the function has no uses (checked
-                                    // above) and no body yet, so removing it
-                                    // cannot dangle a call site.
-                                    unsafe { fv.delete() };
-                                    continue;
-                                }
                                 let synth = make_impl_method_function(&type_name, method);
                                 self.compile_function(&synth)?;
                             }
@@ -4557,6 +4548,34 @@ impl<'ctx> Codegen<'ctx> {
                     }
                 }
             }
+        }
+        // Phase 2: fixpoint prune of zero-use tracing functions.
+        loop {
+            let mut deleted_any = false;
+            for qualified in &compiled {
+                if let Some(fv) = self.module.get_function(qualified) {
+                    // `get_first_use` lives on the `BasicValue` trait, which
+                    // `FunctionValue` doesn't impl — route through the
+                    // function's global-value pointer, which does.
+                    if inkwell::values::BasicValue::get_first_use(
+                        &fv.as_global_value().as_pointer_value(),
+                    )
+                    .is_none()
+                    {
+                        // SAFETY: no uses (checked above), so deleting the
+                        // function cannot dangle a call site.
+                        unsafe { fv.delete() };
+                        deleted_any = true;
+                    }
+                }
+            }
+            if !deleted_any {
+                break;
+            }
+        }
+        // Restore the pre-pass insert position (see the snapshot above).
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
         }
         Ok(())
     }

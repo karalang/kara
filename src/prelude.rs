@@ -204,6 +204,9 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "SpanField",
     "NoOpExporter",
     "StdoutExporter",
+    // `Log` — ambient emission namespace (`Log.info("...")` etc.) over the
+    // built-in `StdoutExporter`, no exporter value to thread.
+    "Log",
     // `std.process` (v64 backend-platform lift): Command-builder /
     // Child handle / ExitStatus shapes. `EnvVar` is an internal row
     // type that backs `Command.cmd_env` and surfaces at scope-0
