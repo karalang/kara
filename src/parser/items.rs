@@ -86,6 +86,54 @@ impl super::Parser {
                     }
                 }
             }
+            // `par struct` / `par enum` — the design's mechanism for
+            // *intentional* concurrent struct sharing (Arc + `Atomic`/`Mutex`
+            // fields, cross-task-safe by definition per design.md § 9498) — is
+            // NOT implemented at v1. Emit a loud not-yet-supported error rather
+            // than silently dropping the `par` keyword: without this arm a
+            // leading `par` falls through to `_ => None`, and the item loop
+            // re-dispatches on the trailing `struct`/`enum`, so `par struct Foo`
+            // parses as a plain `struct Foo` with no diagnostic (the footgun
+            // tracked in docs/implementation_checklist/phase-6-runtime.md). For
+            // recovery we still parse the body as a plain definition so the rest
+            // of the file parses — the `par`-specific semantics are simply
+            // absent, which is the conservative outcome (a plain struct is
+            // rejected from 2+ concurrent `par {}` branches anyway).
+            Token::Par => {
+                let par_kw_span = self.current_span();
+                self.advance(); // consume `par`
+                match self.peek_token() {
+                    Token::Struct => {
+                        self.error_at(
+                            par_kw_span,
+                            "`par struct` is not supported yet — intentional \
+                             concurrent struct sharing via `par struct` is \
+                             planned but not implemented in v1; use a plain \
+                             `struct` or `shared struct` for RC reference \
+                             semantics",
+                        );
+                        Some(Item::StructDef(self.parse_struct_def(
+                            attributes, is_pub, is_private, false, None,
+                        )?))
+                    }
+                    Token::Enum => {
+                        self.error_at(
+                            par_kw_span,
+                            "`par enum` is not supported yet — intentional \
+                             concurrent enum sharing via `par enum` is planned \
+                             but not implemented in v1; use a plain `enum` or \
+                             `shared enum` for RC reference semantics",
+                        );
+                        Some(Item::EnumDef(
+                            self.parse_enum_def(attributes, is_pub, is_private, false)?,
+                        ))
+                    }
+                    _ => {
+                        self.error("Expected 'struct' or 'enum' after 'par'");
+                        None
+                    }
+                }
+            }
             Token::Trait => self.parse_trait_or_alias(attributes, is_pub, is_private),
             Token::Marker => Some(Item::MarkerTrait(
                 self.parse_marker_trait(attributes, is_pub, is_private)?,

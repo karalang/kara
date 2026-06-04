@@ -1746,6 +1746,92 @@ fn test_non_shared_struct_is_not_shared() {
     }
 }
 
+// ── 2.4b: `par struct` / `par enum` — not-yet-supported error ─────
+// `par` at item scope is a planned-but-unimplemented v1 construct. The
+// parser must emit a loud not-yet-supported error rather than silently
+// dropping the `par` keyword and parsing the definition as a plain
+// `struct`/`enum` (the footgun tracked in
+// docs/implementation_checklist/phase-6-runtime.md `par struct` entry).
+
+#[test]
+fn test_par_struct_emits_not_supported_error() {
+    let (prog, errors) = parse_with_errors("par struct Counter { count: i64 }");
+    // Loud diagnostic anchored at the `par` keyword.
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("`par struct` is not supported yet")),
+        "expected a `par struct` not-supported diagnostic, got: {errors:?}"
+    );
+    let par_err = errors
+        .iter()
+        .find(|e| e.message.contains("`par struct` is not supported yet"))
+        .unwrap();
+    assert_eq!(
+        par_err.span.line, 1,
+        "error should anchor at the `par` keyword line"
+    );
+    // Recovery: the body still parses as a (plain) struct so the rest of the
+    // file is reachable — the `par` keyword is NOT silently honored.
+    if let Item::StructDef(s) = &prog.items[0] {
+        assert_eq!(s.name, "Counter");
+        assert!(
+            !s.is_shared,
+            "`par struct` must NOT parse as a shared struct"
+        );
+    } else {
+        panic!("Expected a recovered StructDef, got: {:?}", prog.items);
+    }
+}
+
+#[test]
+fn test_par_enum_emits_not_supported_error() {
+    let (prog, errors) = parse_with_errors("par enum State { Idle, Running(i64) }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("`par enum` is not supported yet")),
+        "expected a `par enum` not-supported diagnostic, got: {errors:?}"
+    );
+    if let Item::EnumDef(e) = &prog.items[0] {
+        assert_eq!(e.name, "State");
+        assert!(!e.is_shared, "`par enum` must NOT parse as a shared enum");
+        assert_eq!(e.variants.len(), 2);
+    } else {
+        panic!("Expected a recovered EnumDef, got: {:?}", prog.items);
+    }
+}
+
+#[test]
+fn test_pub_par_struct_emits_not_supported_error() {
+    // Visibility flows through the recovery path — `pub` is not lost (the
+    // historical silent-drop re-dispatch would have dropped it).
+    let (prog, errors) = parse_with_errors("pub par struct Counter { count: i64 }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("`par struct` is not supported yet")),
+        "expected a `par struct` not-supported diagnostic, got: {errors:?}"
+    );
+    if let Item::StructDef(s) = &prog.items[0] {
+        assert!(s.is_pub, "`pub` must survive the par-recovery path");
+        assert!(!s.is_shared);
+    } else {
+        panic!("Expected a recovered StructDef, got: {:?}", prog.items);
+    }
+}
+
+#[test]
+fn test_par_without_struct_or_enum_errors() {
+    let (_, errors) = parse_with_errors("par fn worker() { }");
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("Expected 'struct' or 'enum' after 'par'")),
+        "expected an 'after par' diagnostic, got: {errors:?}"
+    );
+}
+
 // ── 2.5: Modules and Visibility ──────────────────────────────────
 
 #[test]

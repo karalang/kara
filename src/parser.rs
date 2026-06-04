@@ -481,6 +481,17 @@ impl Parser {
         });
     }
 
+    /// Emit a non-fatal diagnostic anchored at an explicit `span` rather than
+    /// the current token. Useful when the offending construct's keyword has
+    /// already been consumed (e.g. reporting an unsupported `par struct` at the
+    /// `par` keyword after advancing past it to inspect the following token).
+    fn error_at(&mut self, span: Span, message: &str) {
+        self.errors.push(ParseError {
+            message: message.to_string(),
+            span,
+        });
+    }
+
     /// Emit a non-fatal diagnostic if `name` does not have the expected
     /// `IdentClass`. The `context` string is the declaration kind (e.g.
     /// `"struct"`, `"fn"`, `"const"`). The diagnostic includes a rename
