@@ -7084,3 +7084,95 @@ fn test_concurrent_plain_struct_fires_via_inline_closure() {
         "inline-closure captures of plain `c` across two par branches should fire E_CONCURRENT_PLAIN_STRUCT; got errors: {errors:?}",
     );
 }
+
+// ── Phase 6 line 170 slice 5/6: par borrow-rule verification ───────
+//
+// Slice 5 ("borrow-rule consolidation at spawn boundaries") verifies the
+// existing live-range / concurrency analysis produces the right
+// diagnostics for the par-boundary borrow cases — it adds NO new
+// borrow-checker pass. These tests pin the behavior the v1 model actually
+// implements.
+//
+// **Design model (important).** v1 follows design.md § 8506's conservative
+// rule: a non-`par` struct value reachable from two-or-more `par {}`
+// branches is rejected (`E_CONCURRENT_PLAIN_STRUCT` / `…SHARED_STRUCT`),
+// *regardless of borrow mode* — even two shared `ref` reads. design.md
+// § 9476's "multiple sibling tasks may simultaneously hold `ref T`"
+// describes a more permissive model whose enabling type, `par struct`, is
+// not implemented at v1 (a leading `par` at item scope is currently
+// dropped — see the parser-gap tracker entry). So the "two readers
+// accepted" rows of the slice-6 matrix are gated on that work and are NOT
+// asserted here; the existing `test_concurrent_plain_struct_fires_via_
+// inline_closure` (which expects two `ref Counter` reads to FIRE) pins
+// the current model. The cross-task-safe *capture* matrix (Rc / OnceCell
+// / raw-pointer / shared-struct at spawn / par / channel / provider
+// sites) is covered by the slice 3a/3b/3c tests in `tests/typechecker.rs`.
+
+#[test]
+fn par_sole_branch_mut_ref_use_accepted() {
+    // Slice 6 positive (achievable): a `mut ref` borrow taken in exactly
+    // ONE par branch is sole-ownership at the fork point — accepted. The
+    // sibling branch does independent work touching no shared binding.
+    // (design.md § 9477 exclusive-borrow rule + the sole-branch accept
+    // side of the concurrent-struct rule.)
+    ownership_ok(
+        "fn append(l: mut ref Vec[i64]) { }\n\
+         fn main() {\n\
+             let mut log: Vec[i64] = Vec.new();\n\
+             par {\n\
+                 let _x: i64 = 1;\n\
+                 append(mut log);\n\
+             }\n\
+         }",
+    );
+}
+
+#[test]
+fn par_mut_ref_plus_read_across_siblings_rejected() {
+    // Slice 6 negative (achievable): a `mut ref` write in one branch and a
+    // `ref` read in a sibling branch is a cross-task conflict. In the v1
+    // § 8506 model this surfaces as `E_CONCURRENT_PLAIN_STRUCT` (the
+    // concurrent-struct rule fires on the two-branch reach) rather than
+    // the standalone "cannot borrow as immutable in branch 2" borrow-
+    // conflict wording the slice-6 sketch predicted — the conservative
+    // concurrent-struct rule is the operative diagnostic here. Pinned so a
+    // future move to the § 9476 mode-aware model is a visible, deliberate
+    // change to this expectation.
+    let errors = ownership_errors(
+        "fn append(l: mut ref Vec[i64]) { }\n\
+         fn read(l: ref Vec[i64]) -> i64 { 0 }\n\
+         fn main() {\n\
+             let mut log: Vec[i64] = Vec.new();\n\
+             par {\n\
+                 append(mut log);\n\
+                 let _y: i64 = read(log);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            &e.kind,
+            OwnershipErrorKind::ConcurrentPlainStruct { type_name, binding }
+                if type_name == "Vec" && binding == "log"
+        )),
+        "mut-ref + ref reads of `log` across par siblings should be rejected \
+         (E_CONCURRENT_PLAIN_STRUCT in the v1 § 8506 model); got: {errors:?}",
+    );
+}
+
+#[test]
+fn par_primitive_used_in_both_branches_accepted() {
+    // Slice 6 positive: a Copy primitive (`i64`) read in both branches is
+    // never a conflict — primitives are trivially cross-task-safe and the
+    // concurrent-struct rule only tracks struct/enum-typed bindings.
+    ownership_ok(
+        "fn read(x: i64) -> i64 { x }\n\
+         fn main() {\n\
+             let v: i64 = 5;\n\
+             par {\n\
+                 let _a: i64 = read(v);\n\
+                 let _b: i64 = read(v);\n\
+             }\n\
+         }",
+    );
+}
