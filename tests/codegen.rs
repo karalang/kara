@@ -15999,6 +15999,75 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_match_at_binding_outer_and_nested_write_through() {
+        // `whole @ Pair { a, b }` under `mut ref Pair`: the outer alias
+        // `whole: mut ref Pair` AND the nested leaf bindings `a` / `b`
+        // (`mut ref i64`) must all alias the scrutinee storage, so writes
+        // through any of them propagate back to the caller. Previously the
+        // whole `@`-pattern fell back to the value-source copy path and
+        // none of the writes propagated. `a` is set to 5 then overwritten
+        // to 7 via the `whole` alias (proving `a` and `whole.a` alias the
+        // same storage); `b` is set to 9 via its own leaf.
+        let out = run_program(
+            r#"
+struct Pair { a: i64, b: i64 }
+fn set_to(n: mut ref i64, v: i64) -> i64 { *n = v; v }
+fn set_a(p: mut ref Pair, v: i64) -> i64 { p.a = v; v }
+fn mutate(p: mut ref Pair) -> i64 {
+    match p {
+        whole @ Pair { a, b } => {
+            let _ = set_to(a, 5);
+            let _ = set_to(b, 9);
+            set_a(whole, 7)
+        }
+    }
+}
+fn main() {
+    let mut p = Pair { a: 1, b: 2 };
+    let _ = mutate(p);
+    println(p.a);
+    println(p.b);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "7\n9\n",
+                "at-binding outer alias + nested leaves must all write through"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_match_at_binding_ref_read_through_alias() {
+        // Read path: `whole @ Bag { n }` under `ref Bag`. The outer alias
+        // `whole: ref Bag` passes to a `ref Bag` param, and the nested
+        // `n: ref i64` auto-derefs in value position — both observe the
+        // live scrutinee.
+        let out = run_program(
+            r#"
+struct Bag { n: i64 }
+fn read_n(b: ref Bag) -> i64 { b.n }
+fn peek(b: ref Bag) -> i64 {
+    match b {
+        whole @ Bag { n } => read_n(whole) + n,
+    }
+}
+fn main() {
+    let b = Bag { n: 5 };
+    println(peek(b));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "10\n",
+                "at-binding outer alias + nested binding must read the live scrutinee"
+            );
+        }
+    }
+
     /// Map+VecDeque co-existence regression (2026-05-16).
     ///
     /// `let m: Map[i64, i64] = Map.new()` followed by

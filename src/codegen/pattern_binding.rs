@@ -782,13 +782,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(Some(()))
             }
-            // Or-patterns, at-bindings, slice patterns, range patterns,
-            // and literals fall back to the value-source path. The
-            // value-source path under a ref scrutinee still produces
-            // the correct match-condition + copy-semantic binding (per
-            // slice 3a); slice 3b's pull-signal trigger names the
-            // shapes that need write-through, and the four shapes
-            // above don't appear in those triggers yet.
+            // `name @ subpattern` under a ref scrutinee. Mirrors the
+            // value-source `AtBinding` arm (alias the outer `name` to the
+            // whole matched value, then recurse into the sub-pattern) but
+            // aliases the scrutinee *pointer* rather than copying the
+            // value — so `name: mut ref T` and any nested mut-ref leaf
+            // both write through to the scrutinee storage. The outer
+            // `name` aliases the full pointee; the sub-pattern recurses
+            // through the same pointer (e.g. `whole @ Bag { n }` → `n`
+            // GEPs into the field while `whole` aliases the struct).
+            //
+            // If the sub-pattern shape isn't via_ptr-handleable, the
+            // recursion returns `None` and the caller re-runs the
+            // value-source path on the whole `AtBinding` (re-binding both
+            // `name` and the sub-pattern via the slice-3a copy-shim —
+            // correct, just not write-through). The outer shim emitted
+            // here is then harmlessly overwritten in `variables`,
+            // mirroring the `Struct` arm's mid-emit `Ok(None)` fallback.
+            PatternKind::AtBinding {
+                name,
+                pattern: inner,
+            } => {
+                self.emit_ref_leaf_binding_at_ptr(name, scrut_ptr, pointee_ty.into(), "at.refshim");
+                self.bind_pattern_values_via_ptr(inner, scrut_ptr, pointee_ty)
+            }
+            // Or-patterns, slice patterns, range patterns, and literals
+            // fall back to the value-source path. The value-source path
+            // under a ref scrutinee still produces the correct
+            // match-condition + copy-semantic binding (per slice 3a);
+            // slice 3b's pull-signal trigger names the shapes that need
+            // write-through, and the remaining shapes above don't appear
+            // in those triggers yet.
             _ => Ok(None),
         }
     }
