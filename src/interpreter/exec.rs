@@ -488,6 +488,28 @@ impl Env {
         None
     }
 
+    /// For the user-`Drop` hook: report a binding's struct type name and,
+    /// when the binding is a shared struct, its current `Arc` strong-count
+    /// — WITHOUT cloning the slot. (`get` clones, which for a shared struct
+    /// would bump the count and defeat the last-reference test.) Returns
+    /// `None` when the binding is absent or is neither a value struct nor a
+    /// bare `SharedStruct` slot. The `Option<usize>` is `None` for a value
+    /// struct (no refcount) and `Some(count)` for a shared struct.
+    pub(crate) fn drop_target(&self, name: &str) -> Option<(String, Option<usize>)> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(v) = scope.get(name) {
+                return match v {
+                    Value::Struct { name, .. } => Some((name.clone(), None)),
+                    Value::SharedStruct(inner) => {
+                        Some((inner.name.clone(), Some(Arc::strong_count(inner))))
+                    }
+                    _ => None,
+                };
+            }
+        }
+        None
+    }
+
     /// Snapshot current env for closure capture. Preserves `SharedCell`
     /// slots verbatim so a captured `mut ref` alias keeps pointing at the
     /// shared cell when the closure dispatches.

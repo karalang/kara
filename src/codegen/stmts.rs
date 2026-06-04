@@ -1755,7 +1755,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             let alloca = slot.ptr;
-                            if has_user_drop {
+                            // A shared struct's user `impl Drop` is fired by the
+                            // RC path (`track_rc_var` → `emit_rc_dec` →
+                            // `__karac_rc_drop_<T>`, which calls the body at
+                            // refcount→0), NOT the value-type `UserDrop` drain.
+                            // Registering `track_user_drop_var` here too would
+                            // (a) fire the body twice and (b) pass `alloca` —
+                            // the slot holding the heap *pointer* — to
+                            // `<T>.drop`, so `self.<field>` would dereference a
+                            // pointer-to-pointer and crash. Gate it out for
+                            // shared structs. (phase-7 L938)
+                            if has_user_drop && !self.shared_types.contains_key(&struct_name) {
                                 self.track_user_drop_var(&struct_name, var_name, alloca);
                             } else if self.struct_types.contains_key(&struct_name) {
                                 self.track_struct_var(&struct_name, alloca);

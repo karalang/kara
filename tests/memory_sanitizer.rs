@@ -2249,6 +2249,35 @@ fn main() {
     }
 
     #[test]
+    fn asan_shared_struct_user_drop_recursive_chain_leak_free() {
+        // phase-7 L938: a `shared struct` with a user `impl Drop` over a
+        // recursive `Option[Self]` chain. The user body fires once per
+        // link at that link's refcount→0 (the iterative self-chain fast
+        // path is disabled when a user Drop exists, so each link routes
+        // through `__karac_rc_drop_Node`). This must be leak-clean AND
+        // free each node exactly once — no double-free from the body
+        // running on top of the field walk + heap free.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut next: Option[Node] }
+impl Drop for Node {
+    fn drop(mut ref self) {
+        println(self.val);
+    }
+}
+fn main() {
+    let c = Node { val: 3, next: None };
+    let b = Node { val: 2, next: Some(c) };
+    let a = Node { val: 1, next: Some(b) };
+    println(0);
+}
+"#,
+            &["0", "1", "2", "3"],
+            "shared_struct_user_drop_recursive_chain_leak_free",
+        );
+    }
+
+    #[test]
     fn asan_auto_par_shared_struct_option_return_slot() {
         // A par group with two effectful stmts where one returns
         // `Option[shared T]` consumed in the parent scope. Pre-fix

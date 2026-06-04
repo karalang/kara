@@ -680,13 +680,25 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .collect();
 
-        // No heap-owning / no-recursive-drop fields — fall back to
-        // plain `free(ptr)`. Cache `None` so subsequent calls skip
-        // the field walk.
         let any_walkable = kinds
             .iter()
             .any(|k| !matches!(k, SharedFieldKind::None | SharedFieldKind::_Phantom(_)));
-        if !any_walkable {
+        // A user `impl Drop for <SharedType>` must fire at refcount→0,
+        // before field cleanup and the heap free — RAII parity with the
+        // value-type path's `emit_user_drop_wrapper`. Gate on the
+        // authoritative `drop_method_keys`; the `<Type>.drop` LLVM symbol
+        // is already declared by the time this synth runs (the impl-method
+        // declare pass in `compile_program` precedes all body lowering,
+        // and `track_rc_var` triggers this fn during body lowering).
+        let has_user_drop = self
+            .program_snapshot
+            .as_ref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(struct_name));
+        // No heap-owning / no-recursive-drop fields AND no user drop —
+        // plain `free(ptr)` suffices, cache `None`. A user drop forces a
+        // synth fn even for a primitive-only shared struct so its body
+        // fires before the free (the field walk below is then all no-ops).
+        if !any_walkable && !has_user_drop {
             self.rc_drop_fns.insert(struct_name.to_string(), None);
             return None;
         }
@@ -745,6 +757,30 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(entry_bb);
         let p_arg = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
 
+        // User `impl Drop` body runs first. The refcount has already
+        // reached 0 by the time this fn is invoked (`emit_rc_dec` /
+        // `emit_arc_dec` dispatch here only inside their last-dec free
+        // branch), so the heap object is uniquely owned and the body
+        // observes live fields before the walk below frees them.
+        if has_user_drop {
+            if let Some(user_drop_fn) = self.module.get_function(&format!("{struct_name}.drop")) {
+                // Shared-struct methods receive `self` as a pointer to the
+                // binding slot that holds the heap pointer (`get_data_ptr`
+                // hands normal dispatch the alloca, and the body loads the
+                // heap pointer out of it). `p_arg` is the heap pointer
+                // itself, so wrap it in a temp slot to match that ABI —
+                // passing `p_arg` directly would make the body load
+                // `heap[0]` (the refcount, already 0 here) as the self
+                // pointer and dereference null.
+                let self_slot =
+                    self.create_entry_alloca(drop_fn, "rcdrop.self.slot", ptr_ty.into());
+                self.builder.build_store(self_slot, p_arg).unwrap();
+                self.builder
+                    .build_call(user_drop_fn, &[self_slot.into()], "")
+                    .unwrap();
+            }
+        }
+
         // Iterative-drop fast path. When the struct's only walkable
         // field is a niche-optimized `Option[Self]` in tail position
         // (the linked-list shape: `shared struct Node { val: i64,
@@ -768,7 +804,14 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => None,
         });
-        if let Some(niche_idx) = iterative_niche_field_idx {
+        // The iterative self-chain fast path drops each link inline
+        // without a per-link `drop_fn` call, so it would skip the user
+        // body on every link but the head. With a user drop present,
+        // stay on the recursive path: each link's `emit_rc_dec`
+        // dispatches back through this fn and fires the body. (Trades
+        // the chain-drop perf win for correctness — only when the type
+        // actually has a user `impl Drop`.)
+        if let Some(niche_idx) = iterative_niche_field_idx.filter(|_| !has_user_drop) {
             self.emit_iterative_self_chain_drop(drop_fn, p_arg, heap_type, (niche_idx + 1) as u32);
             self.current_fn = saved_fn;
             if let Some(bb) = saved_bb {

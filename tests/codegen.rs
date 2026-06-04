@@ -4431,6 +4431,115 @@ fn main() {
         );
     }
 
+    // ── phase-7 L938 user-`impl Drop` dispatch for shared structs ──
+    //
+    // A `shared struct` with `impl Drop` routes through the RC path
+    // (`track_rc_var` → `emit_rc_dec`), NOT the value-type
+    // `CleanupAction::UserDrop` drain. Before L938 the user body never
+    // fired on a shared binding: a primitive-only shared struct synth'd
+    // no `__karac_rc_drop_<T>` at all (plain `free`), and the
+    // `karac_drop_<T>` value-wrapper that *does* carry the body is never
+    // called for an RC binding. The fix injects the user body at the top
+    // of the synthesized RC drop fn (which runs only at refcount→0).
+
+    #[test]
+    fn test_ir_shared_struct_user_drop_synth_fn_calls_body() {
+        // Primitive-only shared struct: pre-L938 this returned `None`
+        // from `emit_shared_struct_rc_drop_fn` (no walkable fields) and
+        // `emit_rc_dec` fell back to plain `free`. With a user Drop a
+        // synth fn must now exist and call `@Res.drop` before the free.
+        let ir = ir_for(
+            r#"
+shared struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) {}
+}
+fn main() {
+    let r = Res { id: 7 };
+}
+"#,
+        );
+        let body = function_body(&ir, "__karac_rc_drop_Res").unwrap_or_else(|| {
+            panic!(
+                "expected a synthesized `__karac_rc_drop_Res` (user Drop forces \
+                 a drop fn even for a primitive-only shared struct); IR:\n{}",
+                ir
+            );
+        });
+        assert!(
+            body.contains("call void @Res.drop("),
+            "RC drop fn must call the user `@Res.drop(...)` body at refcount→0; \
+             body was:\n{}",
+            body
+        );
+        assert!(
+            body.contains("@free(") || body.contains("call void @free"),
+            "RC drop fn must still free the heap allocation after the user \
+             body; body was:\n{}",
+            body
+        );
+    }
+
+    #[test]
+    fn test_e2e_shared_struct_user_drop_fires() {
+        // Behavioral: the user Drop body runs when the sole reference
+        // goes out of scope. `start` prints first, then the body fires
+        // at `main` scope exit.
+        let out = run_program(
+            r#"
+shared struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(self.id);
+    }
+}
+fn main() {
+    let r = Res { id: 7 };
+    println(0);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "0\n7",
+                "expected `0` then the drop body printing `7` at scope exit"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_shared_struct_user_drop_recursive_chain_each_node_fires() {
+        // Recursive linked-list shape: the iterative self-chain fast
+        // path is disabled when a user Drop exists, so each link's
+        // refcount→0 dispatches back through `__karac_rc_drop_Node` and
+        // fires the body. All three node ids must appear.
+        let out = run_program(
+            r#"
+shared struct Node { val: i64, mut next: Option[Node] }
+impl Drop for Node {
+    fn drop(mut ref self) {
+        println(self.val);
+    }
+}
+fn main() {
+    let c = Node { val: 3, next: None };
+    let b = Node { val: 2, next: Some(c) };
+    let a = Node { val: 1, next: Some(b) };
+    println(0);
+}
+"#,
+        );
+        if let Some(out) = out {
+            for id in ["1", "2", "3"] {
+                assert!(
+                    out.lines().any(|l| l.trim() == id),
+                    "expected node id `{id}` from a per-link drop body; got:\n{out}"
+                );
+            }
+        }
+    }
+
     // ── Prereq.5 user-`impl Drop` dispatch — edge cases ──
     //
     // Drop ordering: when multiple bindings with user Drop coexist in

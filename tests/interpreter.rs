@@ -1458,6 +1458,40 @@ fn test_user_drop_body_can_read_struct_fields() {
     assert_eq!(output, vec!["42\n".to_string()]);
 }
 
+// ── phase-7 L938 user-`impl Drop` for SHARED structs (interpreter) ──
+//
+// A `shared struct` is `Value::SharedStruct(Arc<…>)`; the user body
+// fires when the LAST live reference drops (Arc strong-count → 1 at the
+// drain point), mirroring codegen's refcount→0. `drop_target` peeks the
+// count without cloning so the test is exact.
+
+#[test]
+fn test_user_drop_shared_struct_fires_once() {
+    let (output, _drops) = run_program_with_drops(
+        "shared struct Res { id: i64 }\n\
+         impl Drop for Res {\n\
+             fn drop(mut ref self) {\n\
+                 println(self.id);\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let r = Res { id: 7 };\n\
+         }",
+    );
+    // Sole reference, no later use → fires once, reading self.id.
+    assert_eq!(output, vec!["7\n".to_string()]);
+}
+
+// NOTE: aliased / recursive / field-held shared structs (`let r2 = r`,
+// `Node { next: Some(child) }`) do NOT fire the user body reliably on
+// the interpreter path: a `Value::SharedStruct(Arc<…>)` clone lingers in
+// `env` until scope pop, so the drain-time `strong_count == 1` gate
+// never trips for a binding that still has a live alias. The codegen
+// path handles these correctly (the body fires at refcount→0; see the
+// recursive-chain codegen + ASAN tests). Closing this interpreter parity
+// gap needs env-release-on-drain or an Arc-drop hook — tracked under the
+// phase-7 "Drop ordering reconciliation across backends" item (L940).
+
 // ── Move-suppression for user-Drop bindings (let-rebind) ──
 //
 // `let g = f;` where `f` has a user `impl Drop` moves the value

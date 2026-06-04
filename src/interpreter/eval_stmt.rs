@@ -536,17 +536,34 @@ impl<'a> super::Interpreter<'a> {
     /// heap-owned fields when the binding's `Value::Struct` is dropped
     /// at scope-exit Rust-level GC).
     fn invoke_user_drop_if_applicable(&mut self, name: &str) {
+        // Resolve the binding's type (and, for a shared struct, its Arc
+        // strong-count) WITHOUT cloning — cloning the value first would
+        // bump a shared struct's refcount and break the last-reference
+        // test below. See `Environment::drop_target`.
+        let (type_name, shared_count) = match self.env.drop_target(name) {
+            Some(t) => t,
+            None => return,
+        };
+        // Shared struct: fire the user body at refcount→0, mirroring
+        // codegen's `emit_rc_dec` free branch. `drop_target` reports the
+        // live count; `== 1` means this binding holds the sole reference
+        // and is therefore the last drop. A return-value clone (tail
+        // escape) or an alias still in scope keeps the count > 1, so the
+        // body fires exactly once, when the final holder drops. Recursive
+        // / field-held shared references are out of scope for this slice
+        // (cross-backend recursive-drop parity is tracked separately).
+        if let Some(count) = shared_count {
+            if count != 1 {
+                return;
+            }
+        }
+        if !self.program.drop_method_keys.contains_key(&type_name) {
+            return;
+        }
         let value = match self.env.get(name) {
             Some(v) => v,
             None => return,
         };
-        let type_name = match &value {
-            Value::Struct { name, .. } => name.clone(),
-            _ => return,
-        };
-        if !self.program.drop_method_keys.contains_key(&type_name) {
-            return;
-        }
         let method_key = format!("{}.drop", type_name);
         let func = match self.env.get(&method_key) {
             Some(f) => f,
