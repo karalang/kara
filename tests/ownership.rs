@@ -7176,3 +7176,90 @@ fn par_primitive_used_in_both_branches_accepted() {
          }",
     );
 }
+
+// ── Phase 6 `par struct` slice B: concurrency exemption ──────────
+// `par struct` / `par enum` are cross-task-safe by definition (design.md
+// § Part 5b > "Crossing parallel region boundaries"): a `par` binding
+// reachable from 2+ sibling `par {}` branches is NOT an E_CONCURRENT_*
+// error, in contrast to plain / `shared` structs.
+
+#[test]
+fn par_struct_reachable_from_two_branches_accepted() {
+    // The exact shape that fires E_CONCURRENT_SHARED_STRUCT for a `shared
+    // struct` (see test_concurrent_shared_struct_fires_on_two_branch_use)
+    // must be silent for a `par struct`.
+    let result = ownership_ok(
+        "par struct Counter { val: i64 }\n\
+         fn use_a(c: Counter) -> i64 { c.val }\n\
+         fn use_b(c: Counter) -> i64 { c.val }\n\
+         fn main() {\n\
+             let c = Counter { val: 0 };\n\
+             par {\n\
+                 use_a(c);\n\
+                 use_b(c);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        !result.errors.iter().any(|e| matches!(
+            &e.kind,
+            OwnershipErrorKind::ConcurrentSharedStruct { .. }
+                | OwnershipErrorKind::ConcurrentPlainStruct { .. }
+        )),
+        "par struct reachable from two branches must not fire E_CONCURRENT_*; got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn par_enum_reachable_from_two_branches_accepted() {
+    // `ref` params (borrow, no move) so the binding is reachable from both
+    // branches — the same `shared enum` shape fires E_CONCURRENT_SHARED_STRUCT
+    // (clone-on-pass reference semantics for enums is a separate, pre-existing
+    // gap; this test exercises the *classification* exemption Slice B changes).
+    let result = ownership_ok(
+        "par enum Msg { Ping, Pong }\n\
+         fn use_a(m: ref Msg) { }\n\
+         fn use_b(m: ref Msg) { }\n\
+         fn main() {\n\
+             let m = Msg.Ping;\n\
+             par {\n\
+                 use_a(m);\n\
+                 use_b(m);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        !result.errors.iter().any(|e| matches!(
+            &e.kind,
+            OwnershipErrorKind::ConcurrentSharedStruct { .. }
+                | OwnershipErrorKind::ConcurrentPlainStruct { .. }
+        )),
+        "par enum reachable from two branches must not fire E_CONCURRENT_*; got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn shared_struct_two_branch_use_still_fires_after_par_exemption() {
+    // Regression: the par exemption must not weaken the shared-struct rule.
+    let errors = ownership_errors(
+        "shared struct Counter { val: i64 }\n\
+         fn use_a(c: Counter) -> i64 { c.val }\n\
+         fn use_b(c: Counter) -> i64 { c.val }\n\
+         fn main() {\n\
+             let c = Counter { val: 0 };\n\
+             par {\n\
+                 use_a(c);\n\
+                 use_b(c);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            &e.kind,
+            OwnershipErrorKind::ConcurrentSharedStruct { type_name, .. } if type_name == "Counter"
+        )),
+        "shared struct two-branch use must still fire E_CONCURRENT_SHARED_STRUCT; got: {errors:?}"
+    );
+}

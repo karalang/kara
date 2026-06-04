@@ -238,9 +238,21 @@ impl<'a> super::OwnershipChecker<'a> {
 
     /// Return `Shared` for `shared struct` / `shared enum`, `Plain` for
     /// non-shared `struct`, `None` for anything else (plain enum,
-    /// union, primitive, generic param, …).
+    /// union, primitive, generic param, `par struct` / `par enum`, …).
+    ///
+    /// `par struct` / `par enum` return `None` — they are **cross-task-safe by
+    /// definition** (always Arc; every `mut` field is `Atomic[T]` / `Mutex[T]`,
+    /// enforced at the definition site by Slice A). The whole point of `par`
+    /// types is that they cross `par {}` / `spawn` / `TaskGroup` boundaries
+    /// freely, so a `par` binding reachable from 2+ sibling branches is safe,
+    /// not an `E_CONCURRENT_*` error. (design.md § Part 5b > "Crossing parallel
+    /// region boundaries".) The `is_par` check precedes `is_shared`; the two
+    /// are mutually exclusive but the order makes the exemption explicit.
     fn classify_binding_type(&self, name: &str) -> Option<BindingKind> {
         if let Some(info) = self.typecheck_result.struct_info.get(name) {
+            if info.is_par {
+                return None;
+            }
             return Some(if info.is_shared {
                 BindingKind::Shared
             } else {
@@ -248,6 +260,9 @@ impl<'a> super::OwnershipChecker<'a> {
             });
         }
         if let Some(info) = self.typecheck_result.enum_info.get(name) {
+            if info.is_par {
+                return None;
+            }
             if info.is_shared {
                 return Some(BindingKind::Shared);
             }

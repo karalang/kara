@@ -159,6 +159,20 @@ fn walk(
     // Immediate-hit checks — these are the v1 unsafe set's leaf shapes.
     match ty {
         Type::Shared(name) => {
+            // `par struct` / `par enum` values lower to `Type::Shared` too (both
+            // are reference-semantics handle types — see Slice A's lowering),
+            // but a `par` type is cross-task-safe BY DEFINITION: always Arc,
+            // every `mut` field is `Atomic[T]` / `Mutex[T]`, immutable fields
+            // are safe to read concurrently — all enforced at the definition
+            // site. Only a genuine `shared` type (single-task RC) is unsafe to
+            // send across a task boundary. design.md § Part 5b > "Crossing
+            // parallel region boundaries". Return `Ok` (not fall-through — the
+            // recursive match below marks `Type::Shared` `unreachable!()`).
+            let is_par = struct_info.get(name).is_some_and(|i| i.is_par)
+                || enum_info.get(name).is_some_and(|i| i.is_par);
+            if is_par {
+                return Ok(());
+            }
             return Err(CrossTaskUnsafePath {
                 root: root.to_string(),
                 path: path.clone(),
@@ -237,6 +251,13 @@ fn walk(
             }
             // Then transitively walk user struct fields / enum variants.
             if let Some(info) = struct_info.get(name) {
+                // Defensive: a `par` type is cross-task-safe by definition.
+                // In practice par types lower to `Type::Shared` (caught above),
+                // so this rarely fires via `Type::Named`, but the guard keeps
+                // the invariant explicit if a par type is ever reached here.
+                if info.is_par {
+                    return Ok(());
+                }
                 if info.is_shared {
                     return Err(CrossTaskUnsafePath {
                         root: root.to_string(),
@@ -251,6 +272,9 @@ fn walk(
                     path.pop();
                 }
             } else if let Some(info) = enum_info.get(name) {
+                if info.is_par {
+                    return Ok(());
+                }
                 if info.is_shared {
                     return Err(CrossTaskUnsafePath {
                         root: root.to_string(),

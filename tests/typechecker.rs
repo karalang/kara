@@ -20629,6 +20629,52 @@ fn spawn_capturing_shared_struct_rejected_with_par_fix_it() {
 }
 
 #[test]
+fn spawn_capturing_par_struct_accepted() {
+    // Phase 6 `par struct` slice B: a `par struct` is cross-task-safe by
+    // definition, so capturing it in a spawn closure is accepted — the same
+    // shape that is rejected for a `shared struct` above.
+    let result = typecheck_ok(
+        "par struct Cache { value: i64 }
+         impl Cache { fn get(ref self) -> i64 { self.value } }
+         fn main() {
+             let c: Cache = Cache { value: 0 };
+             let h: TaskHandle[i64] = spawn(|| c.get());
+             let _v: i64 = h.join();
+         }",
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture),
+        "par struct capture in spawn must not fire CrossTaskUnsafeCapture; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn taskgroup_spawn_capturing_par_struct_accepted() {
+    // Same acceptance, via the TaskGroup.spawn method-dispatch path.
+    let result = typecheck_ok(
+        "par struct Cache { value: i64 }
+         impl Cache { fn get(ref self) -> i64 { self.value } }
+         fn main() {
+             let c: Cache = Cache { value: 0 };
+             let mut tg: TaskGroup = TaskGroup.new();
+             tg.spawn(|| { let _v: i64 = c.get(); });
+         }",
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture),
+        "par struct capture in TaskGroup.spawn must not fire CrossTaskUnsafeCapture; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn taskgroup_spawn_capturing_shared_struct_rejected_with_par_fix_it() {
     // Same rejection, but via the method-dispatch path.
     let errors = typecheck_errors(

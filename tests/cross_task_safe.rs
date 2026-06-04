@@ -132,6 +132,32 @@ fn shared_struct_via_type_shared_is_unsafe() {
     assert_eq!(err.fix_it, CrossTaskUnsafeFixIt::SharedToPar);
 }
 
+#[test]
+fn par_struct_via_type_shared_is_safe() {
+    // Phase 6 `par struct` slice B: `par struct` / `par enum` values lower to
+    // `Type::Shared` too, but a `par` type is cross-task-safe by definition.
+    // The walker distinguishes via `StructInfo.is_par`, so it needs the real
+    // typechecked struct_info (not a bare `fn nop` snippet).
+    let types = typecheck_snippet("par struct Hub { value: i64 }");
+    let ty = Type::Shared("Hub".to_string());
+    assert!(
+        is_cross_task_safe(&ty, &types).is_ok(),
+        "par struct must be cross-task-safe by definition; got {:?}",
+        is_cross_task_safe(&ty, &types)
+    );
+}
+
+#[test]
+fn par_enum_via_type_shared_is_safe() {
+    let types = typecheck_snippet("par enum Hub { A, B }");
+    let ty = Type::Shared("Hub".to_string());
+    assert!(
+        is_cross_task_safe(&ty, &types).is_ok(),
+        "par enum must be cross-task-safe by definition; got {:?}",
+        is_cross_task_safe(&ty, &types)
+    );
+}
+
 // ── Transitive cases ───────────────────────────────────────
 
 #[test]
