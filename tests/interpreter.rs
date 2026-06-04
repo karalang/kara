@@ -6341,6 +6341,49 @@ fn test_semaphore_hand_rolled_zero_handle_fails_closed() {
     assert_eq!(output, "timeout\n");
 }
 
+// ── RateLimiter — token-bucket backpressure primitive ──────────────
+
+#[test]
+fn test_rate_limiter_grants_initial_burst_then_limits() {
+    // Bucket starts full (capacity 3): three immediate grants for a key,
+    // then the bucket is empty and the next try (microseconds later, no
+    // meaningful refill at 1 token/sec) is limited. Deterministic — the
+    // four calls run back-to-back well within one refill interval.
+    let output = run(r#"fn main() {
+         let rl = RateLimiter.new_token_bucket(1, 3);
+         println(rl.try_acquire("k"));
+         println(rl.try_acquire("k"));
+         println(rl.try_acquire("k"));
+         println(rl.try_acquire("k"));
+     }"#);
+    assert_eq!(output, "true\ntrue\ntrue\nfalse\n");
+}
+
+#[test]
+fn test_rate_limiter_buckets_are_per_key() {
+    // Each key gets an independent full bucket: exhausting key "a" leaves
+    // key "b" with its own fresh burst.
+    let output = run(r#"fn main() {
+         let rl = RateLimiter.new_token_bucket(1, 1);
+         println(rl.try_acquire("a"));
+         println(rl.try_acquire("a"));
+         println(rl.try_acquire("b"));
+     }"#);
+    assert_eq!(output, "true\nfalse\ntrue\n");
+}
+
+#[test]
+fn test_rate_limiter_hand_rolled_zero_handle_fails_closed() {
+    // A `RateLimiter { handle_id: 0 }` literal that bypassed the
+    // constructor has no table entry; try_acquire reports limited
+    // (false) rather than panicking.
+    let output = run(r#"fn main() {
+         let fake = RateLimiter { handle_id: 0 };
+         println(fake.try_acquire("k"));
+     }"#);
+    assert_eq!(output, "false\n");
+}
+
 // ── Pool[T] — connection-pool primitive surface ────────────────────
 
 #[test]

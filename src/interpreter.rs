@@ -23,6 +23,7 @@ mod method_call_map;
 mod method_call_optres;
 mod method_call_pool;
 mod method_call_process;
+mod method_call_rate_limiter;
 mod method_call_regex;
 mod method_call_semaphore;
 mod method_call_seq;
@@ -185,6 +186,15 @@ pub struct Interpreter<'a> {
     /// hand-rolled `Semaphore { handle_id: 0 }` (bypassing
     /// `Semaphore.new`) is distinguishable from a real semaphore.
     pub(crate) semaphore_handle_counter: i64,
+    /// `RateLimiter` token-bucket state keyed by `RateLimiter.handle_id`.
+    /// `new_token_bucket` populates an entry; `try_acquire` refills +
+    /// consumes a token per key. See
+    /// `src/interpreter/method_call_rate_limiter.rs`.
+    pub(crate) rate_limiter_table: HashMap<i64, RateLimiterEntry>,
+    /// Monotonic counter for `RateLimiter.handle_id`, starting at 1 so a
+    /// hand-rolled `RateLimiter { handle_id: 0 }` is distinguishable
+    /// from a real limiter.
+    pub(crate) rate_limiter_handle_counter: i64,
     /// REPL value-snapshot replay. When a `StmtKind::Let { pattern:
     /// PatternKind::Binding(name), .. }` evaluates and `name` is a key
     /// here, the RHS is **not** evaluated — the binding is created from
@@ -262,6 +272,24 @@ pub struct PoolEntry {
 pub struct SemEntry {
     pub available: i64,
     pub max: i64,
+}
+
+/// Per-`RateLimiter` token-bucket configuration plus the live per-key
+/// buckets. `rate` is tokens/second, `capacity` the max tokens a key's
+/// bucket holds (and starts at). See
+/// `src/interpreter/method_call_rate_limiter.rs`.
+pub struct RateLimiterEntry {
+    pub rate: f64,
+    pub capacity: f64,
+    pub buckets: HashMap<String, TokenBucket>,
+}
+
+/// One key's bucket: `tokens` available right now, last refilled at
+/// `last`. Refill is lazy — computed from elapsed time on each
+/// `try_acquire`, so idle keys cost nothing.
+pub struct TokenBucket {
+    pub tokens: f64,
+    pub last: std::time::Instant,
 }
 
 /// Format mode for [`Interpreter`]'s `dbg()` output. See design.md §
@@ -370,6 +398,8 @@ impl<'a> Interpreter<'a> {
             pool_handle_counter: 0,
             semaphore_table: HashMap::new(),
             semaphore_handle_counter: 0,
+            rate_limiter_table: HashMap::new(),
+            rate_limiter_handle_counter: 0,
             let_value_overrides: HashMap::new(),
             let_snapshot_watch: HashSet::new(),
             captured_let_values: HashMap::new(),

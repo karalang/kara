@@ -1,0 +1,51 @@
+// runtime/stdlib/rate_limiter.kara
+//
+// `std` application-layer backpressure — `RateLimiter` (token bucket).
+// Phase 8 floor (P1 backpressure primitives). Spec at
+// `phase-8-stdlib-floor.md § Application-layer backpressure primitives`.
+//
+// A per-key token bucket: each key gets a bucket that holds up to
+// `capacity` tokens and refills at `rate` tokens per second. `try_acquire`
+// takes one token if the bucket has at least one (returning `true`),
+// otherwise reports the key is currently limited (`false`). Buckets start
+// full, so the first `capacity` calls for a fresh key are granted as a
+// burst, after which grants are paced by `rate`.
+//
+// The canonical use is fair-sharing a scarce downstream — rate-limit per
+// API key / per client IP / per tenant so one caller can't starve the
+// rest.
+//
+// **v1 scope — synchronous `try_acquire` only.** The non-blocking form is
+// fully expressible in the tree-walk interpreter: the intrinsic keeps a
+// per-key `(tokens, last_refill)` table and refills against a monotonic
+// clock on each call. The *waiting* form — `acquire(key) -> impl Future`
+// that parks until a token frees — is event-loop dependent and lands on
+// the codegen/runtime path with the network event loop; it is carved as
+// a follow-on under the phase-8 backpressure entry.
+
+// Per-key token bucket limiter. `handle_id` keys into the interpreter's
+// `rate_limiter_table` side-table; `0` is reserved for a hand-rolled
+// `RateLimiter { handle_id: 0 }` literal that bypassed the constructor —
+// `try_acquire` on such a value reports limited (`false`), failing closed.
+struct RateLimiter {
+    handle_id: i64,
+}
+
+impl RateLimiter {
+    // Build a token-bucket limiter granting `rate` tokens per second per
+    // key, with each key's bucket holding at most `capacity` tokens (and
+    // starting full). Dispatched through `eval_call.rs`'s
+    // `"RateLimiter.new_token_bucket"` path-string arm.
+    #[compiler_builtin]
+    fn new_token_bucket(rate: i64, capacity: i64) -> RateLimiter {
+        RateLimiter { handle_id: 0 }
+    }
+
+    // Try to take one token for `key`. Returns `true` when a token was
+    // available (and consumes it), `false` when `key` is currently rate
+    // limited. Non-blocking — never waits.
+    #[compiler_builtin]
+    fn try_acquire(ref self, key: String) -> bool {
+        false
+    }
+}

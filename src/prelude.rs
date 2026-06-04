@@ -225,6 +225,9 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // See `runtime/stdlib/semaphore.kara`.
     "Semaphore",
     "SemaphoreError",
+    // `RateLimiter` token-bucket backpressure primitive (phase-8 P1).
+    // See `runtime/stdlib/rate_limiter.kara`.
+    "RateLimiter",
     // Phase 6 line 186 slice 1 — `TaskGroup` / `TaskHandle[T]` from
     // `runtime/stdlib/task_group.kara`. `TaskGroup` is the
     // scope-local fan-out container per design.md § Explicit
@@ -645,6 +648,13 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     (
         "semaphore.kara",
         include_str!("../runtime/stdlib/semaphore.kara"),
+    ),
+    // `RateLimiter` token-bucket backpressure primitive (phase-8 P1).
+    // Synchronous `try_acquire`; the async waiting `acquire` lands with
+    // the event loop.
+    (
+        "rate_limiter.kara",
+        include_str!("../runtime/stdlib/rate_limiter.kara"),
     ),
     // Compile-time layout introspection — `size_of[T]()` / `align_of[T]()`
     // (the `offset_of[T](field)` arm is a parser special-form, not a
