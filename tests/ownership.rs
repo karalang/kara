@@ -7184,6 +7184,38 @@ fn par_primitive_used_in_both_branches_accepted() {
 // error, in contrast to plain / `shared` structs.
 
 #[test]
+fn par_struct_multiple_sibling_ref_readers_accepted() {
+    // Phase 6 `par struct` slice D — design.md § 9476: "multiple sibling
+    // tasks may simultaneously hold `ref T`". This permissive concurrent-read
+    // model was "unreachable" at v1 because `par struct` didn't exist; now it
+    // does, and Slice B's exemption delivers it — two sibling `ref` readers of
+    // the SAME `par struct` binding are accepted (the same shape is rejected
+    // for `shared` / plain structs by the stricter § 8506 rule). This pins the
+    // design.md reconciliation note: the § 9476 allowance is live for `par`.
+    let result = ownership_ok(
+        "par struct Counter { val: i64 }\n\
+         fn read_a(c: ref Counter) -> i64 { c.val }\n\
+         fn read_b(c: ref Counter) -> i64 { c.val }\n\
+         fn main() {\n\
+             let c = Counter { val: 5 };\n\
+             par {\n\
+                 let _a = read_a(c);\n\
+                 let _b = read_b(c);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        !result.errors.iter().any(|e| matches!(
+            &e.kind,
+            OwnershipErrorKind::ConcurrentSharedStruct { .. }
+                | OwnershipErrorKind::ConcurrentPlainStruct { .. }
+        )),
+        "two sibling `ref` readers of a par struct must be accepted (§ 9476); got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
 fn par_struct_reachable_from_two_branches_accepted() {
     // The exact shape that fires E_CONCURRENT_SHARED_STRUCT for a `shared
     // struct` (see test_concurrent_shared_struct_fires_on_two_branch_use)

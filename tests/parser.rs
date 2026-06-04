@@ -1816,6 +1816,28 @@ fn test_plain_and_shared_structs_are_not_par() {
 }
 
 #[test]
+fn test_par_struct_round_trips_through_formatter() {
+    // Phase 6 `par struct` slice D: the formatter must re-emit the `par`
+    // keyword. Before the fix, `karac fmt` silently dropped it, turning a
+    // `par struct` into a plain `struct` (a semantics-changing rewrite).
+    let src = "par struct Counter {\n    name: String,\n    count: Atomic[i64],\n}\n";
+    let prog = parse_ok(src);
+    let formatted = karac::formatter::format_program(&prog);
+    assert_eq!(
+        formatted, src,
+        "par struct round-trip mismatch:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_par_enum_round_trips_through_formatter() {
+    let src = "par enum Msg {\n    Ping,\n    Data(i64),\n}\n";
+    let prog = parse_ok(src);
+    let formatted = karac::formatter::format_program(&prog);
+    assert_eq!(formatted, src, "par enum round-trip mismatch:\n{formatted}");
+}
+
+#[test]
 fn test_par_without_struct_or_enum_errors() {
     let (_, errors) = parse_with_errors("par fn worker() { }");
     assert!(

@@ -227,6 +227,10 @@ fn render_struct(s: &StructDef, filename: &str) -> String {
         record.push(',');
         write_kv(&mut record, "shared", "true");
     }
+    if s.is_par {
+        record.push(',');
+        write_kv(&mut record, "par", "true");
+    }
     if s.is_non_exhaustive {
         record.push(',');
         write_kv(&mut record, "non_exhaustive", "true");
@@ -295,6 +299,10 @@ fn render_enum(e: &EnumDef, filename: &str) -> String {
     if e.is_shared {
         record.push(',');
         write_kv(&mut record, "shared", "true");
+    }
+    if e.is_par {
+        record.push(',');
+        write_kv(&mut record, "par", "true");
     }
     if e.is_non_exhaustive {
         record.push(',');

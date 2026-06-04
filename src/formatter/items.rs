@@ -315,6 +315,8 @@ impl super::Formatter {
         self.write_visibility(s.visibility());
         if s.is_shared {
             self.write_str("shared ");
+        } else if s.is_par {
+            self.write_str("par ");
         }
         self.write_str("struct ");
         self.write_ident(&s.name);
@@ -383,6 +385,8 @@ impl super::Formatter {
         self.write_visibility(e.visibility());
         if e.is_shared {
             self.write_str("shared ");
+        } else if e.is_par {
+            self.write_str("par ");
         }
         self.write_str("enum ");
         self.write_ident(&e.name);
