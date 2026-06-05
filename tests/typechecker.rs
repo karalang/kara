@@ -22349,3 +22349,47 @@ fn vector_from_slice_non_slice_arg_rejected() {
         "from_slice with a non-Slice argument must be rejected; got: {errors:?}"
     );
 }
+
+// ── Vector slice 3a — bitwise & | ^ (binary) and ~ (unary) ───────────
+
+#[test]
+fn vector_bitwise_int_ok() {
+    // Element-wise `& | ^` type-check on integer-lane vectors.
+    typecheck_ok(
+        "fn main() { let a = Vector[i64, 4](1, 2, 3, 4); let b = Vector[i64, 4](5, 6, 7, 8); \
+         let c = (a & b) | (a ^ b); println(c[0]); }",
+    );
+}
+
+#[test]
+fn vector_bitnot_int_ok() {
+    typecheck_ok("fn main() { let a = Vector[u32, 4](1, 2, 3, 4); let n = ~a; println(n[0]); }");
+}
+
+#[test]
+fn vector_bitwise_float_rejected() {
+    // Bitwise operators have no meaning on float lanes.
+    let errors = typecheck_errors(
+        "fn main() { let a = Vector[f64, 2](1.0, 2.0); let b = Vector[f64, 2](3.0, 4.0); \
+         let c = a & b; println(c[0]); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("bitwise vector operators")),
+        "bitwise `&` on a float vector must be rejected; got: {errors:?}"
+    );
+}
+
+#[test]
+fn vector_bitnot_float_rejected() {
+    let errors = typecheck_errors(
+        "fn main() { let a = Vector[f64, 2](1.0, 2.0); let n = ~a; println(n[0]); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("unary '~' requires")),
+        "unary `~` on a float vector must be rejected; got: {errors:?}"
+    );
+}

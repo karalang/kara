@@ -29859,6 +29859,50 @@ fn main() {
         }
     }
 
+    // ── Vector slice 3a — bitwise & | ^ (binary) and ~ (unary) ───────────
+
+    #[test]
+    fn test_vector_bitwise_and_or_xor() {
+        // `build_and`/`build_or`/`build_xor` lower directly on `<4 x i64>`.
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](12, 10, 15, 3);
+    let b = Vector[i64, 4](10, 6, 1, 3);
+    let band = a & b;
+    let bor = a | b;
+    let bxor = a ^ b;
+    println(band[0]); // 12 & 10 = 8
+    println(bor[1]);  // 10 | 6  = 14
+    println(bxor[2]); // 15 ^ 1  = 14
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "8\n14\n14\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_bitnot() {
+        // Unary `~v` lowers via `build_not` on the `<4 x i64>` operand.
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](0, 3, -1, 255);
+    let n = ~a;
+    println(n[0]); // ~0   = -1
+    println(n[1]); // ~3   = -4
+    println(n[2]); // ~-1  = 0
+    println(n[3]); // ~255 = -256
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "-1\n-4\n0\n-256\n");
+        }
+    }
+
     // ── Stdlib non-builtin body compilation (L889 slice 1) ───────────────
     //
     // Before this slice codegen never walked STDLIB_PROGRAMS, so a real

@@ -28,6 +28,15 @@ impl<'a> super::Interpreter<'a> {
             (UnaryOp::Neg, Value::Float(f)) => Value::Float(-f),
             (UnaryOp::Not, Value::Bool(b)) => Value::Bool(!b),
             (UnaryOp::BitNot, Value::Int(i)) => Value::Int(!i),
+            // Integer-lane `Vector[T, N]` complement: `~v` folds `~` over each
+            // lane (the typechecker restricts the element to integer lanes).
+            (UnaryOp::BitNot, Value::Vector(lanes)) => {
+                let out: Vec<Value> = lanes
+                    .into_iter()
+                    .map(|l| self.eval_unary(&UnaryOp::BitNot, l, span))
+                    .collect();
+                Value::Vector(out)
+            }
             // In the tree-walk interpreter references are passed by value; `*r` is
             // a semantic no-op that returns the underlying value unchanged.
             (UnaryOp::Deref, v) => v,

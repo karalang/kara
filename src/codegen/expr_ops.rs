@@ -1575,6 +1575,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             .into()
                     }
                 }
+                // Bitwise `& | ^` — integer lanes only (typechecker-enforced),
+                // sign-agnostic so `is_unsigned` is irrelevant.
+                BinOp::BitAnd => self.builder.build_and(lv, rv, "vand").unwrap().into(),
+                BinOp::BitOr => self.builder.build_or(lv, rv, "vor").unwrap().into(),
+                BinOp::BitXor => self.builder.build_xor(lv, rv, "vxor").unwrap().into(),
                 _ => return Err(format!("unsupported vector int op {op:?}")),
             }
         };
@@ -2041,11 +2046,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         .into())
                 }
             }
-            UnaryOp::Not | UnaryOp::BitNot => Ok(self
-                .builder
-                .build_not(val.into_int_value(), "not")
-                .unwrap()
-                .into()),
+            UnaryOp::Not | UnaryOp::BitNot => {
+                // Integer-lane `Vector[T, N]` complement (`~v`): `build_not`
+                // is generic over `IntMathValue`, so it lowers a `<N x iX>`
+                // operand directly. Logical `!` only ever sees `bool`.
+                if val.is_vector_value() {
+                    Ok(self
+                        .builder
+                        .build_not(val.into_vector_value(), "vnot")
+                        .unwrap()
+                        .into())
+                } else {
+                    Ok(self
+                        .builder
+                        .build_not(val.into_int_value(), "not")
+                        .unwrap()
+                        .into())
+                }
+            }
             // Deref is handled in compile_expr before reaching here.
             UnaryOp::Deref => Err("unreachable: Deref handled in compile_expr".into()),
         }

@@ -447,15 +447,17 @@ impl<'a> super::TypeChecker<'a> {
         right: &Expr,
         _span: &Span,
     ) -> Type {
-        if !matches!(
+        let is_arith = matches!(
             op,
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
-        ) {
+        );
+        let is_bitwise = matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor);
+        if !is_arith && !is_bitwise {
             self.type_error(
                 format!(
                     "this operator is not yet supported on Vector[T, N] \
-                     (slice 1 supports element-wise + - * / %); found operands \
-                     '{}' and '{}'",
+                     (element-wise + - * / % for any numeric lane, & | ^ for integer lanes); \
+                     found operands '{}' and '{}'",
                     type_display(left_ty),
                     type_display(right_ty)
                 ),
@@ -484,6 +486,20 @@ impl<'a> super::TypeChecker<'a> {
                             type_display(right_ty)
                         ),
                         right.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                // Bitwise `& | ^` are integer-lane only — float vectors have no
+                // meaningful bit-and/or/xor. Arithmetic stays open to all lanes.
+                if is_bitwise && !matches!(**le, Type::Int(_) | Type::UInt(_)) {
+                    self.type_error(
+                        format!(
+                            "bitwise vector operators (& | ^) require integer lanes; \
+                             Vector element is '{}'",
+                            type_display(le)
+                        ),
+                        left.span.clone(),
                         TypeErrorKind::TypeMismatch,
                     );
                     return Type::Error;
@@ -800,10 +816,19 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             UnaryOp::BitNot => {
-                if !is_integer(&ty) {
+                // Also accept an integer-lane `Vector[T, N]` — `~v` complements
+                // every lane (design.md § Portable SIMD). Float lanes have no
+                // bitwise complement, so they stay rejected.
+                let vec_int = matches!(
+                    &ty,
+                    Type::Vector { element, .. }
+                        if matches!(**element, Type::Int(_) | Type::UInt(_))
+                );
+                if !is_integer(&ty) && !vec_int {
                     self.type_error(
                         format!(
-                            "unary '~' requires integer type, found '{}'",
+                            "unary '~' requires an integer or integer-lane Vector type, \
+                             found '{}'",
                             type_display(&ty)
                         ),
                         span.clone(),
