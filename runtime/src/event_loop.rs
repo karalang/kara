@@ -4745,6 +4745,162 @@ mod tests {
         drop(state);
     }
 
+    // ── Stage B3 regression: reap-on-peer-close through an inline,
+    // re-registering poll_fn ────────────────────────────────────────────
+    //
+    // The recv-loop coroutine shape that the demo's per-connection handler
+    // compiles to: park on read → (dispatcher resumes poll_fn) → recv →
+    // re-register for the next read → park again. When the peer disconnects
+    // (TCP EOF), the re-parked task MUST be re-woken and driven to its EOF
+    // arm (which, in the demo, drops the WebSocket and closes the fd). Stage
+    // B3's combined poll-and-dispatch ran poll_fn INLINE on the shard's only
+    // polling thread and dropped the EOF edge (armed-but-mapless +
+    // edge-triggered), wedging the task parked forever at 0% CPU — the
+    // observed fd-leak-on-disconnect (1M connections stuck in CLOSE-WAIT).
+    //
+    // Unlike the slot-signal tests above (which re-register on the *test's*
+    // thread via `park_slot_wait`), this poll_fn re-registers from *inside*
+    // the dispatcher's inline invocation — the exact path B3 broke.
+    #[cfg(unix)]
+    struct ReparkState {
+        fd: i32,
+        /// Points to the owning `KaracParkedTask` so poll_fn can re-park
+        /// itself. Set once before registration; read-only thereafter.
+        task_ptr: *mut c_void,
+        last_token: std::sync::atomic::AtomicU64,
+        data_reads: std::sync::atomic::AtomicU64,
+        /// Set when poll_fn observes EOF (the reap path).
+        completed: std::sync::atomic::AtomicBool,
+    }
+    // SAFETY: fields are atomics or set-once-before-publish; the fd's
+    // registrations all hash to one shard, so its poll_fn never runs
+    // concurrently with itself.
+    #[cfg(unix)]
+    unsafe impl Send for ReparkState {}
+    #[cfg(unix)]
+    unsafe impl Sync for ReparkState {}
+
+    #[cfg(unix)]
+    unsafe extern "C" fn repark_recv_poll_fn(
+        state_ptr: *mut c_void,
+        _cancel: *const std::sync::atomic::AtomicBool,
+    ) -> u8 {
+        use std::io::Read;
+        use std::os::fd::FromRawFd;
+        // SAFETY: caller passes the live `*const ReparkState`.
+        let st = unsafe { &*(state_ptr as *const ReparkState) };
+        // Resume edge: deregister the prior arming (epoll DEL), mirroring the
+        // codegen coroutine's deregister-after-park.
+        let tok = st.last_token.swap(0, Ordering::AcqRel);
+        if tok != 0 {
+            let _ = karac_runtime_event_loop_deregister_fd(st.fd, tok);
+        }
+        // Read without owning the fd (ManuallyDrop ⇒ no close here). The fd is
+        // ready on resume; non-blocking so a spurious wake re-parks instead of
+        // blocking the dispatcher thread.
+        let mut stream =
+            std::mem::ManuallyDrop::new(unsafe { std::net::TcpStream::from_raw_fd(st.fd) });
+        let mut buf = [0u8; 64];
+        match stream.read(&mut buf) {
+            Ok(0) => {
+                // EOF — peer closed. The demo's analogue drops + closes here.
+                st.completed.store(true, Ordering::Release);
+                KaracPollResult::Ready as u8
+            }
+            Ok(_) => {
+                st.data_reads.fetch_add(1, Ordering::Relaxed);
+                let t = karac_runtime_event_loop_register_fd(st.fd, 0, st.task_ptr);
+                st.last_token.store(t, Ordering::Release);
+                KaracPollResult::Pending as u8
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                let t = karac_runtime_event_loop_register_fd(st.fd, 0, st.task_ptr);
+                st.last_token.store(t, Ordering::Release);
+                KaracPollResult::Pending as u8
+            }
+            Err(_) => {
+                st.completed.store(true, Ordering::Release);
+                KaracPollResult::Err as u8
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatcher_reaps_connection_when_peer_closes_after_repark() {
+        let _guard = start_scheduler_for_test();
+        use std::io::Write;
+        use std::os::fd::{FromRawFd, IntoRawFd};
+
+        // Connected TCP pair: accept the server side, keep the client side.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let local = listener.local_addr().unwrap();
+        let connector = thread::spawn(move || std::net::TcpStream::connect(local).unwrap());
+        let (server, _addr) = listener.accept().unwrap();
+        let mut client = connector.join().unwrap();
+        server.set_nonblocking(true).unwrap();
+        let server_fd = server.into_raw_fd();
+
+        let state = Box::new(ReparkState {
+            fd: server_fd,
+            task_ptr: std::ptr::null_mut(),
+            last_token: std::sync::atomic::AtomicU64::new(0),
+            data_reads: std::sync::atomic::AtomicU64::new(0),
+            completed: std::sync::atomic::AtomicBool::new(false),
+        });
+        let task = Box::new(KaracParkedTask {
+            poll_fn: repark_recv_poll_fn,
+            state: &*state as *const ReparkState as *mut c_void,
+        });
+        let task_ptr = &*task as *const KaracParkedTask as *mut c_void;
+        // Wire the self-reference (single-threaded, before the fd is
+        // registered, so the dispatcher cannot observe a null task_ptr).
+        unsafe {
+            (*(&*state as *const ReparkState as *mut ReparkState)).task_ptr = task_ptr;
+        }
+
+        // Initial park.
+        let tok = karac_runtime_event_loop_register_fd(server_fd, 0, task_ptr);
+        assert_ne!(tok, 0);
+        state.last_token.store(tok, Ordering::Release);
+
+        // One message → dispatcher resumes → reads it → re-parks.
+        client.write_all(b"hi").unwrap();
+        let start = Instant::now();
+        while state.data_reads.load(Ordering::Acquire) == 0 {
+            if start.elapsed() > Duration::from_secs(2) {
+                panic!("dispatcher never delivered the first message");
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        // Peer closes → EOF. The re-parked task MUST be re-woken and reach
+        // its EOF arm. The B3 lost-wake leaves it parked forever.
+        drop(client);
+        let start = Instant::now();
+        while !state.completed.load(Ordering::Acquire) {
+            if start.elapsed() > Duration::from_secs(3) {
+                panic!(
+                    "dispatcher did not reap the connection on peer close — EOF edge lost \
+                     after re-register (Stage B3 inline-dispatch lost-wake)"
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        // Cleanup: drop any live registration, then close the fd.
+        let tok = state.last_token.swap(0, Ordering::AcqRel);
+        if tok != 0 {
+            let _ = karac_runtime_event_loop_deregister_fd(server_fd, tok);
+        }
+        // SAFETY: reclaim ownership to close exactly once.
+        unsafe {
+            drop(std::net::TcpStream::from_raw_fd(server_fd));
+        }
+        drop(task);
+        drop(state);
+    }
+
     // Async-scheduler integration slice 1 (phase 6 line 170 P0 blocker):
     // the load-bearing invariant the whole dispatcher-yield model rests
     // on — the dispatcher must drive MULTIPLE concurrently-parked tasks
