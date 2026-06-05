@@ -1,0 +1,24 @@
+// `std.web.net` — browser network surface (phase-10).
+//
+// Reuse over invention (`design.md § Web / Host Effect Vocabulary`):
+// `fetch` is semantically a network round-trip, so it carries the SAME
+// effect signature a native HTTP client does — `sends(Network)
+// receives(Network)` against the prelude `Network` resource declared in
+// `std.http`. No browser-specific "Fetch" resource exists, by design:
+// business logic that is generic over "talks to the network" stays
+// target-agnostic whether the bytes move via ureq on native or
+// `window.fetch` in a browser.
+//
+// Gated like its parent: enters scope only via
+// `import std.web.net.fetch;` (see `runtime/stdlib/web.kara` header).
+//
+// Declaration-only stage: the body is an honest stub. Lowering to the
+// host's `fetch` arrives with `host fn` (phase-10 Q2) — when that
+// lands, this becomes a thin wrapper over a `host fn` import and the
+// stub error disappears. Return shape mirrors `Client.get` in
+// `std.http` (`Result[Response, HttpError]`) so SSR/hydration code can
+// share response-handling paths across native and browser targets.
+
+fn fetch(url: String) -> Result[Response, HttpError] with sends(Network) receives(Network) {
+    Err(HttpError { message: "std.web.net.fetch: host-call lowering not wired yet (phase-10 `host fn`)" })
+}

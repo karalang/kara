@@ -472,6 +472,55 @@ impl<'a> super::Resolver<'a> {
             let name = resource.path.join(".");
             let first = resource.path.first().map(|s| s.as_str()).unwrap_or("");
             if let Some(sym) = self.table.lookup(first) {
+                // Phase-10 (`std.web` gating): the symbol must actually be
+                // resource-shaped. Without this check any in-scope name
+                // satisfies a verb clause — `writes(Display)` in native
+                // code silently resolved against the prelude `Display`
+                // (fmt) TRAIT instead of erroring until `std.web.Display`
+                // is imported, making the module gate hollow for every
+                // colliding name. `Import` is accepted as-is: in
+                // single-file mode there is no tree to chase the target's
+                // kind through, and in tree mode the import-site
+                // validation already confirmed the item exists.
+                let kind_label = match &sym.kind {
+                    SymbolKind::EffectResource | SymbolKind::Import { .. } => None,
+                    // Dotted resource paths (`reads(net.Conn)`) resolve
+                    // their first segment to a module binding.
+                    SymbolKind::Module if resource.path.len() > 1 => None,
+                    SymbolKind::Trait { .. } | SymbolKind::TraitAlias => Some("a trait"),
+                    SymbolKind::Struct { .. } => Some("a struct"),
+                    SymbolKind::Enum { .. } => Some("an enum"),
+                    SymbolKind::Union { .. } => Some("a union"),
+                    SymbolKind::Function { .. } | SymbolKind::ExternFunction => {
+                        Some("a function")
+                    }
+                    // Scope-0 registers every prelude type AND trait as
+                    // `Primitive` (`register_prelude_symbols`) — this is
+                    // the arm the `Display`-collision case lands in.
+                    SymbolKind::Primitive => Some("a prelude type or trait"),
+                    SymbolKind::Variable { .. } => Some("a variable"),
+                    SymbolKind::EffectGroup => Some(
+                        "an effect group — groups appear bare in a `with` clause, not inside a verb",
+                    ),
+                    _ => Some("not a resource declaration"),
+                };
+                if let Some(kind_label) = kind_label {
+                    // Guidance lives in the message — `suggestion` renders
+                    // as a `did you mean \`X\`?` name replacement, which
+                    // has no sensible value here.
+                    self.errors.push(ResolveError {
+                        message: format!(
+                            "'{}' is not an effect resource (it is {}); declare `effect resource {};` or import one (e.g. `import std.web.{};`)",
+                            name, kind_label, first, first
+                        ),
+                        span: resource.span.clone(),
+                        kind: ResolveErrorKind::UndefinedName,
+                        suggestion: None,
+                        replacement: None,
+                        stub_hint: None,
+                    });
+                    continue;
+                }
                 let id = sym.id;
                 self.record_resolution(&resource.span, id);
             } else {

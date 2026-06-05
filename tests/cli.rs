@@ -10093,3 +10093,93 @@ fn test_migrate_default_atomic_when_only_bare_assigns() {
         "default Atomic should rewrite bare = to .store(; stdout={stdout}",
     );
 }
+
+// ── Phase-10: gated stdlib modules (std.web) — single-file mode ─
+
+/// Regression: single-file mode has no ProgramTree, so a gated import
+/// used to blind-bind in the resolver and ICE in the interpreter on
+/// first use ("variable 'fetch' not found"). `Pipeline::resolve` now
+/// expands gated imports into the real baked items
+/// (`prelude::expand_gated_stdlib_imports`); this pins the full
+/// run path: import + effect-clause use + calling the fetch stub body.
+#[test]
+fn std_web_single_file_run_executes_gated_imports() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-std-web-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("webby.kara");
+    let src = r#"
+import std.web.{Display, Storage};
+import std.web.net.fetch;
+
+fn paint() with writes(Display) reads(Storage) {
+}
+
+fn main() {
+    paint();
+    match fetch("https://example.com/") {
+        Ok(resp) => println("fetched"),
+        Err(e) => println(f"stub: {e.message}"),
+    }
+}
+"#;
+    std::fs::write(&path, src).unwrap();
+
+    let out = karac_bin()
+        .args(["run", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "std.web single-file run should succeed; stdout={stdout} stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("stub: std.web.net.fetch: host-call lowering not wired yet"),
+        "fetch stub body should execute and surface its message: {stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The other half of the gate: without the import, the resource name
+/// must not exist — single-file mode included.
+#[test]
+fn std_web_single_file_unimported_resource_is_undefined() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-std-web-neg-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("nogate.kara");
+    std::fs::write(
+        &path,
+        "fn persist() with writes(Storage) {\n}\n\nfn main() { persist(); }\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["run", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "unimported std.web resource must fail to resolve",
+    );
+    assert!(
+        stderr.contains("undefined effect resource 'Storage'"),
+        "expected undefined-resource diagnostic, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}

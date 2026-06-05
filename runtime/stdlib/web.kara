@@ -1,0 +1,47 @@
+// `std.web` — browser-family host effect vocabulary (phase-10).
+//
+// Capability-neutral effect resources for WASM-targeted code, per
+// `design.md § Web / Host Effect Vocabulary`. Naming principle:
+// capability over host — a UI library writes `writes(Display)`, not
+// `writes(DOM)`, so the same Kāra source works against any
+// display-providing host.
+//
+// GATED MODULE — this file is deliberately NOT in the prelude
+// (`GATED_STDLIB_SOURCES` in `src/prelude.rs`, not `STDLIB_SOURCES`).
+// Native-only compilations never see these resource names; they enter
+// scope only via an explicit `import std.web.{Display, ...};`. That
+// keeps server-only programs' effect inference free of web-host noise
+// and is the model every future host-vocabulary module follows.
+//
+// Reuse over invention (see `std.web.net` for the worked example):
+// where a host API is semantically identical to a built-in primitive,
+// stdlib reuses the primitive — `performance.now()` is `reads(Clock)`,
+// `crypto.getRandomValues()` is `reads(RandomSource)`. The resources
+// below exist only for capabilities with no native-primitive analogue.
+//
+// Provider wiring: declarations only at this stage. Host-call lowering
+// arrives with `host fn` (phase-10 Q2); effect-driven target gating
+// (a `writes(Display)` function cannot compile to native) lands with
+// the target-provided-resource-set table, tracked in
+// `phase-10-targets.md § Effect-checker: target-provided-resource-set
+// parameterization`.
+
+// Display-surface mutation and read-back: DOM nodes, innerText,
+// bounding rects, computed style. Verbs: `reads`, `writes`.
+effect resource Display;
+
+// Persistent key-value storage: localStorage, sessionStorage,
+// IndexedDB. Verbs: `reads`, `writes`.
+effect resource Storage;
+
+// Host diagnostic channel: `console.log`, `console.error`.
+// Verbs: `writes`.
+effect resource Console;
+
+// Scheduled callbacks: `setTimeout`, `setInterval`,
+// `requestAnimationFrame`. Verbs: `reads`, `writes`.
+effect resource Timer;
+
+// User input sources: keyboard, pointer, gamepad, touch.
+// Verbs: `reads`.
+effect resource Input;

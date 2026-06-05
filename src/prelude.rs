@@ -32,8 +32,8 @@
 //! [`Item`]: crate::ast::Item
 
 use crate::ast::{
-    Block, Deprecation, Function, GenericParam, GenericParams, Item, Program, StructDef, TraitDef,
-    TypeKind, Unstable, Visibility,
+    Block, Deprecation, Function, GenericParam, GenericParams, ImportItem, Item, Program,
+    StructDef, TraitDef, TypeKind, Unstable, Visibility,
 };
 use crate::token::Span;
 use std::collections::HashMap;
@@ -695,6 +695,31 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Phase-10 (`std.web`): baked stdlib modules that are GATED — real Kāra
+/// source compiled into the binary like [`STDLIB_SOURCES`], but **not**
+/// part of the prelude. Nothing here reaches the resolver's scope-0, the
+/// `PRELUDE_*` name lists, or the typechecker's `register_baked_stdlib`
+/// walk; the only path into user scope is an explicit
+/// `import std.web.{Display, ...};` resolved against the synthetic
+/// modules [`build_program_tree`] splices in from
+/// [`synthetic_gated_modules`]. This is the design.md § "Web / Host
+/// Effect Vocabulary" module-gating rule: native-only compilations must
+/// never see these resource names, so server-only programs' effect
+/// inference stays free of web-host noise.
+///
+/// Each entry is `(module path segments, source)` — unlike
+/// `STDLIB_SOURCES`, the module path is explicit because these files
+/// define real (non-prelude) module identities.
+///
+/// [`build_program_tree`]: crate::module::build_program_tree
+pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
+    (&["std", "web"], include_str!("../runtime/stdlib/web.kara")),
+    (
+        &["std", "web", "net"],
+        include_str!("../runtime/stdlib/web_net.kara"),
+    ),
+];
+
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first
 /// access and cached for the lifetime of the process. The vector preserves
 /// the source order from `STDLIB_SOURCES`, so callers that need
@@ -725,6 +750,176 @@ pub static STDLIB_PROGRAMS: LazyLock<Vec<(&'static str, Program)>> = LazyLock::n
     }
     out
 });
+
+/// Parsed AST of every entry in [`GATED_STDLIB_SOURCES`]. Same contract as
+/// [`STDLIB_PROGRAMS`] (lazy, cached, panics on parse failure — a broken
+/// baked source is a compiler bug, not user error), keyed by module path
+/// instead of file name.
+pub static GATED_STDLIB_PROGRAMS: LazyLock<Vec<(Vec<String>, Program)>> = LazyLock::new(|| {
+    let mut out = Vec::with_capacity(GATED_STDLIB_SOURCES.len());
+    for &(path, src) in GATED_STDLIB_SOURCES {
+        let parsed = crate::parse(src);
+        if !parsed.errors.is_empty() {
+            let msgs = parsed
+                .errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("\n  ");
+            panic!(
+                "gated baked stdlib module `{}` failed to parse:\n  {}",
+                path.join("."),
+                msgs
+            );
+        }
+        let path: Vec<String> = path.iter().map(|s| s.to_string()).collect();
+        out.push((path, parsed.program));
+    }
+    out
+});
+
+/// Synthetic-module payloads for the gated stdlib: `(module path, items)`
+/// per [`GATED_STDLIB_SOURCES`] entry, with `stdlib_origin = true` flipped
+/// on item kinds that carry the flag (same resolver gate bypass
+/// [`synthetic_prelude_items`]'s baked splice uses). `build_program_tree`
+/// appends one `is_synthetic` module per entry so
+/// `import std.web.{Display, ...};` resolves — and nothing else does:
+/// these names have no scope-0 registration, which is the entire gating
+/// mechanism.
+pub fn synthetic_gated_modules() -> Vec<(Vec<String>, Vec<Item>)> {
+    GATED_STDLIB_PROGRAMS
+        .iter()
+        .map(|(path, program)| {
+            let items = program
+                .items
+                .iter()
+                .map(|item| {
+                    let mut cloned = item.clone();
+                    match &mut cloned {
+                        Item::Function(f) => f.stdlib_origin = true,
+                        Item::StructDef(s) => s.stdlib_origin = true,
+                        Item::EnumDef(e) => e.stdlib_origin = true,
+                        Item::TraitDef(t) => t.stdlib_origin = true,
+                        // `EffectResource` and friends carry no
+                        // `stdlib_origin`; nothing to flip.
+                        _ => {}
+                    }
+                    cloned
+                })
+                .collect();
+            (path.clone(), items)
+        })
+        .collect()
+}
+
+/// Resolve one import declaration against the gated baked stdlib: if
+/// `path` names a [`GATED_STDLIB_SOURCES`] module, return a real `Item`
+/// clone (stdlib_origin = true, alias applied) for every brace-listed
+/// name that module defines. Returns `None` when `path` is not a gated
+/// module; names the module does not define are silently skipped (the
+/// caller's normal unknown-item handling owns that diagnostic).
+///
+/// Two pipelines splice these clones into the program they compile:
+///
+///  - **Single-file** (`Pipeline::resolve`): there is no `ProgramTree`,
+///    so without expansion a gated import binds blindly and the first
+///    *use* ICEs in the interpreter ("variable 'fetch' not found") or
+///    falls over in codegen. Expansion replaces the import binding with
+///    the real declarations.
+///  - **Project codegen** (`run_multi_file_codegen`): synthetic modules
+///    are skipped when concatenating the super-program, so an imported
+///    `fetch` resolves and typechecks per-module (the typechecker
+///    chases the tree) but its body never reaches codegen. The
+///    concatenation appends the expansion of every gated import found
+///    in user modules.
+///
+/// Alias rename (`import std.web.Display as Screen;`) clones the item
+/// under the alias. For effect resources this matches project-mode
+/// semantics today: effect sets identify resources by the *clause
+/// string*, so `writes(Screen)` is the string "Screen" in either mode.
+pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<Vec<Item>> {
+    let (_, program) = GATED_STDLIB_PROGRAMS
+        .iter()
+        .find(|(p, _)| p.as_slice() == path)?;
+    let mut out = Vec::new();
+    for ii in items {
+        let found = program.items.iter().find(|item| match item {
+            Item::Function(f) => f.name == ii.name,
+            Item::StructDef(s) => s.name == ii.name,
+            Item::EnumDef(e) => e.name == ii.name,
+            Item::TraitDef(t) => t.name == ii.name,
+            Item::EffectResource(r) => r.name == ii.name,
+            _ => false,
+        });
+        let Some(found) = found else { continue };
+        let mut cloned = found.clone();
+        let bound = ii.alias.as_ref().unwrap_or(&ii.name);
+        match &mut cloned {
+            Item::Function(f) => {
+                f.stdlib_origin = true;
+                f.name = bound.clone();
+            }
+            Item::StructDef(s) => {
+                s.stdlib_origin = true;
+                s.name = bound.clone();
+            }
+            Item::EnumDef(e) => {
+                e.stdlib_origin = true;
+                e.name = bound.clone();
+            }
+            Item::TraitDef(t) => {
+                t.stdlib_origin = true;
+                t.name = bound.clone();
+            }
+            Item::EffectResource(r) => {
+                r.name = bound.clone();
+            }
+            _ => {}
+        }
+        out.push(cloned);
+    }
+    Some(out)
+}
+
+/// Single-file-mode gated-import expansion (see
+/// [`gated_items_for_import`]). Rewrites `program` in place: every
+/// import of a gated stdlib module is replaced by the real items it
+/// names; import items the gated module does NOT define are left in
+/// the import declaration so the resolver's blind-bind path keeps
+/// owning that (pre-existing) behaviour.
+pub fn expand_gated_stdlib_imports(program: &mut Program) {
+    let mut appended: Vec<Item> = Vec::new();
+    for item in &mut program.items {
+        let Item::Import(imp) = item else { continue };
+        let Some(expansion) = gated_items_for_import(&imp.path, &imp.items) else {
+            continue;
+        };
+        // Drop exactly the import items that expanded; keep the rest.
+        let expanded_names: Vec<&str> = expansion
+            .iter()
+            .map(|it| match it {
+                Item::Function(f) => f.name.as_str(),
+                Item::StructDef(s) => s.name.as_str(),
+                Item::EnumDef(e) => e.name.as_str(),
+                Item::TraitDef(t) => t.name.as_str(),
+                Item::EffectResource(r) => r.name.as_str(),
+                _ => "",
+            })
+            .collect();
+        imp.items.retain(|ii| {
+            let bound = ii.alias.as_ref().unwrap_or(&ii.name);
+            !expanded_names.contains(&bound.as_str())
+        });
+        appended.extend(expansion);
+    }
+    // Imports left with zero items would confuse downstream passes —
+    // remove them entirely.
+    program.items.retain(|item| match item {
+        Item::Import(imp) => !imp.items.is_empty(),
+        _ => true,
+    });
+    program.items.extend(appended);
+}
 
 /// A baked-stdlib method's stability annotations: the `#[unstable]` payload
 /// and the `#[deprecated]` payload, either or both of which may be present.

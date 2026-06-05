@@ -1173,3 +1173,168 @@ fn slice8_user_can_shadow_prelude_name() {
         "shadowing prelude `Option` must not be a resolve error: {errs:?}",
     );
 }
+
+// ── Phase-10: gated baked stdlib modules (`std.web`) ───────────
+//
+// First non-prelude stdlib surface. The gating contract
+// (design.md § Web / Host Effect Vocabulary): the resource names exist
+// ONLY behind `import std.web.{...};` — no scope-0 registration, so
+// native-only code never sees them. These tests pin both directions
+// plus the synthetic-module plumbing.
+
+#[test]
+fn std_web_modules_are_in_program_tree() {
+    let d = ScratchDir::new("std-web-in-tree");
+    d.write("src/main.kara", "fn main() {}\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    for (path, item_name) in [
+        (vec!["std", "web"], "Display"),
+        (vec!["std", "web", "net"], "fetch"),
+    ] {
+        let path: Vec<String> = path.into_iter().map(String::from).collect();
+        let id = built
+            .tree
+            .graph
+            .by_path
+            .get(&path)
+            .copied()
+            .unwrap_or_else(|| panic!("{} is indexed", path.join(".")));
+        let m = built.tree.module(id);
+        assert!(
+            m.is_synthetic,
+            "{} must be synthetic so per-module passes skip it",
+            path.join("."),
+        );
+        assert!(
+            m.items.iter().any(|i| match i {
+                karac::ast::Item::EffectResource(r) => r.name == item_name,
+                karac::ast::Item::Function(f) => f.name == item_name,
+                _ => false,
+            }),
+            "{} should expose `{}` as a real top-level item",
+            path.join("."),
+            item_name,
+        );
+    }
+}
+
+#[test]
+fn std_web_resources_invisible_without_import() {
+    // The entire point of gating: a native-only program referencing a
+    // web resource WITHOUT the import must fail resolution — the name
+    // simply does not exist in its namespace.
+    let d = ScratchDir::new("std-web-gated");
+    // Two distinct failure shapes, both required for the gate to hold:
+    //  - `Storage` has no in-scope symbol at all → plain undefined.
+    //  - `Display` collides with the prelude fmt TRAIT — before the
+    //    resolve_effect_verb kind check it silently resolved against
+    //    that trait, making the gate hollow for every colliding name.
+    d.write(
+        "src/main.kara",
+        concat!(
+            "fn paint() with writes(Display) {}\n",
+            "fn persist() with writes(Storage) {}\n",
+            "fn main() {}\n",
+        ),
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let errs = resolve_module_errors(&built.tree, built.tree.root);
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::UndefinedName
+                && e.message.contains(
+                    "'Display' is not an effect resource (it is a prelude type or trait)"
+                )),
+        "unimported Display must not resolve via the prelude trait: {errs:?}",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::UndefinedName
+                && e.message.contains("undefined effect resource 'Storage'")),
+        "unimported Storage must be an undefined name: {errs:?}",
+    );
+}
+
+#[test]
+fn std_web_import_brings_resources_into_effect_scope() {
+    let d = ScratchDir::new("std-web-import");
+    d.write(
+        "src/main.kara",
+        concat!(
+            "import std.web.{Display, Storage, Console, Timer, Input};\n",
+            "fn paint() with writes(Display) reads(Input) {}\n",
+            "fn persist() with writes(Storage) {}\n",
+            "fn log_tick() with writes(Console) reads(Timer) {}\n",
+            "fn main() {}\n",
+        ),
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let errs = resolve_module_errors(&built.tree, built.tree.root);
+    assert!(
+        errs.is_empty(),
+        "imported std.web resources must resolve in effect clauses: {errs:?}",
+    );
+}
+
+#[test]
+fn std_web_import_with_alias_resolves_in_effect_clause() {
+    let d = ScratchDir::new("std-web-alias");
+    d.write(
+        "src/main.kara",
+        concat!(
+            "import std.web.Display as Screen;\n",
+            "fn paint() with writes(Screen) {}\n",
+            "fn main() {}\n",
+        ),
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let errs = resolve_module_errors(&built.tree, built.tree.root);
+    assert!(
+        errs.is_empty(),
+        "aliased web resource must resolve in effect clauses: {errs:?}",
+    );
+}
+
+#[test]
+fn std_web_net_fetch_is_importable() {
+    let d = ScratchDir::new("std-web-net-fetch");
+    d.write("src/main.kara", "import std.web.net.fetch;\nfn main() {}\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let errs = resolve_module_errors(&built.tree, built.tree.root);
+    assert!(
+        errs.is_empty(),
+        "import std.web.net.fetch should resolve cleanly: {errs:?}",
+    );
+}
+
+#[test]
+fn std_web_unknown_item_gets_suggestion() {
+    // Typos against the gated module get the same E0225 + Levenshtein
+    // treatment as any cross-module import.
+    let d = ScratchDir::new("std-web-typo");
+    d.write("src/main.kara", "import std.web.Displai;\nfn main() {}\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let errs = resolve_module_errors(&built.tree, built.tree.root);
+    let e0225s: Vec<_> = errs
+        .iter()
+        .filter(|e| e.kind == ResolveErrorKind::UnknownItemInModule)
+        .collect();
+    assert_eq!(e0225s.len(), 1, "expected one E0225, got {errs:?}");
+    assert_eq!(
+        e0225s[0].suggestion.as_deref(),
+        Some("Display"),
+        "Levenshtein should suggest `Display` for `Displai`",
+    );
+}

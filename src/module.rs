@@ -401,6 +401,30 @@ pub fn build_program_tree_with(
         .or_insert(prelude_id);
     modules.push(prelude_module);
 
+    // Phase-10 (`std.web`): append one synthetic module per gated baked
+    // stdlib entry. Unlike `std.prelude`, these names are NOT mirrored
+    // into the resolver's scope-0 — `import std.web.{Display, ...};`
+    // resolving against these modules is the ONLY way the names reach
+    // user code. Per-module passes skip them via `is_synthetic`, same as
+    // the prelude module above.
+    for (path, items) in prelude::synthetic_gated_modules() {
+        let id = modules.len();
+        let module = Module {
+            id,
+            path,
+            file: PathBuf::from("<synthetic gated stdlib>"),
+            items,
+            imports: Vec::new(),
+            module_doc_comment: None,
+            is_test_file: false,
+            is_synthetic: true,
+            test_items_start: None,
+            test_file: None,
+        };
+        by_path.entry(module.path.clone()).or_insert(id);
+        modules.push(module);
+    }
+
     let root = root.unwrap_or(0);
 
     let mut graph = ModuleGraph {

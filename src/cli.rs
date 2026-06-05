@@ -717,6 +717,12 @@ impl Pipeline {
         if self.has_parse_errors() {
             return;
         }
+        // Phase-10 (`std.web`): single-file mode has no ProgramTree for
+        // gated stdlib imports to resolve against — expand them into the
+        // real baked items in place (replacing the import binding), so
+        // the resolver, effect checker, interpreter, and codegen all see
+        // ordinary declarations.
+        crate::prelude::expand_gated_stdlib_imports(&mut self.parsed.program);
         crate::desugar_program(&mut self.parsed.program);
         // Single-file mode infers the test-file flag from the filename
         // suffix — multi-module flows route through `resolve_modules`
@@ -5003,6 +5009,38 @@ fn run_multi_file_codegen(
             super_items.push(item.clone());
         }
     }
+
+    // Phase-10 (`std.web`): gated baked stdlib modules are synthetic, so
+    // the loop above never carries their items — an imported `fetch`
+    // resolves and typechecks per-module (those passes chase the tree)
+    // but its body would be missing here. Append the expansion of every
+    // gated import found in user modules, deduplicated on the bound name
+    // so two files importing the same item don't define it twice.
+    {
+        let mut seen: std::collections::HashSet<(Vec<String>, String)> =
+            std::collections::HashSet::new();
+        for m in &tree.modules {
+            if m.is_synthetic {
+                continue;
+            }
+            for imp in &m.imports {
+                let deduped: Vec<crate::ast::ImportItem> = imp
+                    .items
+                    .iter()
+                    .filter(|ii| {
+                        let bound = ii.alias.as_ref().unwrap_or(&ii.name);
+                        seen.insert((imp.path.clone(), bound.clone()))
+                    })
+                    .cloned()
+                    .collect();
+                if let Some(expansion) = crate::prelude::gated_items_for_import(&imp.path, &deduped)
+                {
+                    super_items.extend(expansion);
+                }
+            }
+        }
+    }
+
     let super_program = Program {
         items: super_items,
         ..Program::default()
