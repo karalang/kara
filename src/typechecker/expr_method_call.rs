@@ -531,7 +531,7 @@ impl<'a> super::TypeChecker<'a> {
         // evaluate `Vector[T, N]` as a value and rejects it. Mirrors the
         // `Vector[T,N](...)` construction intercept in
         // `infer_explicit_generic_args_call`.
-        if method == "splat" || method == "from_array" {
+        if method == "splat" || method == "from_array" || method == "from_slice" {
             if let ExprKind::Path {
                 segments,
                 generic_args: Some(ga),
@@ -540,7 +540,8 @@ impl<'a> super::TypeChecker<'a> {
                 if segments.len() == 1 && segments[0] == "Vector" {
                     return match method {
                         "splat" => self.infer_vector_splat(ga, args, span),
-                        _ => self.infer_vector_from_array(ga, args, span),
+                        "from_array" => self.infer_vector_from_array(ga, args, span),
+                        _ => self.infer_vector_from_slice(ga, args, span),
                     };
                 }
             }
@@ -2206,6 +2207,76 @@ impl<'a> super::TypeChecker<'a> {
             size: lanes.clone(),
         };
         self.check_expr(&args[0].value, &expected_array);
+        let result = Type::Vector { element, lanes };
+        self.record_expr_type(span, &result);
+        result
+    }
+
+    /// `Vector[T, N].from_slice(s)` — build a `<N x T>` from a `Slice[T]`. The
+    /// slice length is a runtime property (unlike `from_array`'s static `N`),
+    /// so the typechecker only verifies the argument is a `Slice` whose element
+    /// matches the vector element `T`; the `len == N` check happens at runtime
+    /// (codegen panic / interpreter panic). Both `Slice[T]` and `mut Slice[T]`
+    /// are accepted — construction reads the window, so mutability is irrelevant.
+    fn infer_vector_from_slice(
+        &mut self,
+        ga: &[GenericArg],
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let lowered = self.lower_vector_type(&Some(ga.to_vec()), &[], span);
+        let Some(Type::Vector { element, lanes }) = lowered else {
+            // lower_vector_type already reported the bad element/lane shape.
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Error;
+        };
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "'from_slice' takes exactly one argument, found {}",
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Vector { element, lanes };
+        }
+        let arg_ty = self.infer_expr(&args[0].value);
+        match &arg_ty {
+            Type::Slice {
+                element: arg_elem, ..
+            } => {
+                if **arg_elem != *element && !matches!(**arg_elem, Type::Error) {
+                    self.type_error(
+                        format!(
+                            "'from_slice' expects a 'Slice[{}]' matching the Vector element, \
+                             found 'Slice[{}]'",
+                            type_display(&element),
+                            type_display(arg_elem)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+            }
+            Type::Error => {}
+            other => {
+                self.type_error(
+                    format!(
+                        "'from_slice' expects a 'Slice[{}]' argument, found '{}'",
+                        type_display(&element),
+                        type_display(other)
+                    ),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
         let result = Type::Vector { element, lanes };
         self.record_expr_type(span, &result);
         result

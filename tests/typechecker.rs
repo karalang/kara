@@ -22313,3 +22313,39 @@ fn vector_reduce_min_max_unsigned_ok() {
          println(v.reduce_min()); println(v.reduce_max()); }",
     );
 }
+
+#[test]
+fn vector_from_slice_ok() {
+    // Vector[T, N].from_slice of a Slice[T] type-checks; the runtime len==N
+    // check is deferred to codegen / interpreter (length is a runtime value).
+    typecheck_ok(
+        "fn main() { let a: Array[i64, 4] = [1, 2, 3, 4]; \
+         let v = Vector[i64, 4].from_slice(a.as_slice()); println(v[0]); }",
+    );
+}
+
+#[test]
+fn vector_from_slice_wrong_element_rejected() {
+    // A Slice[i32] for an i64-element vector is an element-type mismatch.
+    let errors = typecheck_errors(
+        "fn main() { let a: Array[i32, 4] = [1, 2, 3, 4]; \
+         let v = Vector[i64, 4].from_slice(a.as_slice()); println(v[0]); }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("from_slice")),
+        "from_slice with a Slice[i32] for an i64 vector must be rejected; got: {errors:?}"
+    );
+}
+
+#[test]
+fn vector_from_slice_non_slice_arg_rejected() {
+    // A bare array literal is not a Slice — `from_slice` rejects it (use
+    // `from_array` for fixed arrays).
+    let errors = typecheck_errors(
+        "fn main() { let v = Vector[i64, 4].from_slice([1, 2, 3, 4]); println(v[0]); }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("from_slice")),
+        "from_slice with a non-Slice argument must be rejected; got: {errors:?}"
+    );
+}

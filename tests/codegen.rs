@@ -29816,6 +29816,49 @@ fn main() {
         }
     }
 
+    // ── Vector slice 2e-iii — from_slice (runtime-length construction) ────
+
+    #[test]
+    fn test_vector_from_slice_i64() {
+        // Slice header `{ptr, i64 len}` → `<4 x i64>`. The `len == N` runtime
+        // guard passes (4 == 4), then each lane is loaded from `data[i]`.
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Array[i64, 4] = [10, 20, 30, 40];
+    let v = Vector[i64, 4].from_slice(a.as_slice());
+    println(v.reduce_sum());
+    println(v[0]);
+    println(v[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "100\n10\n40\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_from_slice_subslice_offset() {
+        // A range-indexed sub-slice `a[1..5]` carries a data pointer offset to
+        // the 2nd element — proves codegen loads from the slice's own `data`
+        // pointer (window {2,3,4,5}), not the source array base.
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Array[i64, 6] = [1, 2, 3, 4, 5, 6];
+    let v = Vector[i64, 4].from_slice(a[1..5]);
+    println(v[0]);
+    println(v[3]);
+    println(v.reduce_sum());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "2\n5\n14\n");
+        }
+    }
+
     // ── Stdlib non-builtin body compilation (L889 slice 1) ───────────────
     //
     // Before this slice codegen never walked STDLIB_PROGRAMS, so a real

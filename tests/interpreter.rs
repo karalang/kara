@@ -12553,3 +12553,60 @@ fn test_vector_from_array_f64() {
     );
     assert_eq!(out, "1.5\n2.5\n");
 }
+
+// ── Vector slice 2e-iii — from_slice (runtime-length construction) ────
+
+#[test]
+fn test_vector_from_slice_i64() {
+    // Whole-array slice → vector. The runtime len==N check passes.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a: Array[i64, 4] = [10, 20, 30, 40];
+    let v = Vector[i64, 4].from_slice(a.as_slice());
+    println(v.reduce_sum());
+    println(v[0]);
+    println(v[3]);
+}
+"#,
+    );
+    assert_eq!(out, "100\n10\n40\n");
+}
+
+#[test]
+fn test_vector_from_slice_subslice_offset() {
+    // A range-indexed sub-slice (start != 0): `a[1..5]` is the window
+    // {2,3,4,5}, so the interpreter must read from `start..start+len`.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a: Array[i64, 6] = [1, 2, 3, 4, 5, 6];
+    let v = Vector[i64, 4].from_slice(a[1..5]);
+    println(v[0]);
+    println(v[3]);
+    println(v.reduce_sum());
+}
+"#,
+    );
+    assert_eq!(out, "2\n5\n14\n");
+}
+
+#[test]
+fn test_vector_from_slice_length_mismatch_panics() {
+    // A 3-element slice for a 4-lane vector is a runtime error (the length
+    // is only known at runtime, so the typechecker can't catch it).
+    let errs = runtime_errors(
+        r#"
+fn main() {
+    let a: Array[i64, 3] = [10, 20, 30];
+    let v = Vector[i64, 4].from_slice(a.as_slice());
+    println(v[0]);
+}
+"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| format!("{e:?}").contains("does not match Vector lane count")),
+        "expected a from_slice length-mismatch runtime error; got: {errs:?}"
+    );
+}

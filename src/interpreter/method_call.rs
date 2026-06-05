@@ -116,6 +116,42 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // SIMD static constructor — `Vector[T, N].from_slice(s)`. Same
+        // type-path-receiver intercept. The argument evaluates to a
+        // `Value::Slice` window; its length is a runtime property, so unlike
+        // `from_array` we must check it equals `N` and panic on mismatch.
+        if method == "from_slice" {
+            if let ExprKind::Path {
+                segments,
+                generic_args: Some(ga),
+            } = &object.kind
+            {
+                if segments.len() == 1 && segments[0] == "Vector" {
+                    let n = self.vector_lane_count(ga);
+                    if let Value::Slice {
+                        storage,
+                        start,
+                        len,
+                        ..
+                    } = self.eval_expr_inner(&args[0].value)
+                    {
+                        if len != n {
+                            return self.record_runtime_error(
+                                format!(
+                                    "from_slice: slice length {len} does not match \
+                                     Vector lane count {n}"
+                                ),
+                                span,
+                            );
+                        }
+                        let guard = storage.read().unwrap();
+                        let elems = guard[start..start + len].to_vec();
+                        return Value::Vector(elems);
+                    }
+                }
+            }
+        }
+
         // Type-receiver associated calls: `T.method(...)` where `T` is a
         // primitive type name. The receiver is an identifier naming a type
         // — not a value — so eval_expr_inner would panic. Handle two shapes:

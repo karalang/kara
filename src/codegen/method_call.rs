@@ -90,7 +90,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // § Portable SIMD). The receiver is the bare vector type-path, not a
         // value, so intercept before the receiver is compiled as an
         // expression. Broadcast the scalar across all `N` lanes.
-        if method == "splat" || method == "from_array" {
+        if method == "splat" || method == "from_array" || method == "from_slice" {
             if let ExprKind::Path {
                 segments,
                 generic_args: Some(ga),
@@ -99,7 +99,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 if segments.len() == 1 && segments[0] == "Vector" {
                     return match method {
                         "splat" => self.compile_vector_splat(ga, args),
-                        _ => self.compile_vector_from_array(ga, args),
+                        "from_array" => self.compile_vector_from_array(ga, args),
+                        _ => self.compile_vector_from_slice(ga, args),
                     };
                 }
             }
@@ -2728,6 +2729,88 @@ impl<'ctx> super::Codegen<'ctx> {
                     "from_array.lane",
                 )
                 .map_err(|e| format!("from_array insertelement failed: {e}"))?;
+        }
+        Ok(acc.into())
+    }
+
+    /// `Vector[T, N].from_slice(s)` — build a `<N x T>` from a `Slice[T]`. The
+    /// argument compiles to the 2-word slice header `{ptr data, i64 len}`; the
+    /// slice length is a runtime property, so we emit a `len == N` guard that
+    /// panics on mismatch (mirrors the slice-index bounds check) before loading
+    /// the `N` lanes from `data` and `insertelement`-ing each into the vector.
+    fn compile_vector_from_slice(
+        &mut self,
+        generic_args: &[GenericArg],
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let vec_ty = self
+            .llvm_vector_type(&Some(generic_args.to_vec()))
+            .ok_or_else(|| "from_slice: could not lower Vector[T, N] type".to_string())?;
+        let BasicTypeEnum::VectorType(vt) = vec_ty else {
+            return Err("from_slice: lowered type is not an LLVM vector".to_string());
+        };
+        let n = vt.get_size();
+        let elem_ty = vt.get_element_type();
+
+        // Compiled slice is an SSA `{ptr, i64}` struct value — pull the data
+        // pointer (field 0) and length (field 1) out directly.
+        let slice_val = self.compile_expr(&args[0].value)?.into_struct_value();
+        let data = self
+            .builder
+            .build_extract_value(slice_val, 0, "from_slice.data")
+            .map_err(|e| format!("from_slice extract data failed: {e}"))?
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_extract_value(slice_val, 1, "from_slice.len")
+            .map_err(|e| format!("from_slice extract len failed: {e}"))?
+            .into_int_value();
+
+        // Runtime guard: slice length must equal the static lane count `N`.
+        let i64_t = self.context.i64_type();
+        let n_const = i64_t.const_int(n as u64, false);
+        let fn_val = self.current_fn.unwrap();
+        let bad_bb = self.context.append_basic_block(fn_val, "from_slice.badlen");
+        let ok_bb = self.context.append_basic_block(fn_val, "from_slice.ok");
+        let cmp = self
+            .builder
+            .build_int_compare(IntPredicate::NE, len, n_const, "from_slice.lencheck")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cmp, bad_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(bad_bb);
+        self.emit_panic("from_slice: slice length does not match Vector lane count");
+        self.builder.build_unreachable().unwrap();
+
+        // Load each lane from `data[i]` and insert into the vector.
+        self.builder.position_at_end(ok_bb);
+        let i32_ty = self.context.i32_type();
+        let mut acc = vt.get_undef();
+        for i in 0..n {
+            let elem_ptr = unsafe {
+                self.builder
+                    .build_gep(
+                        elem_ty,
+                        data,
+                        &[i64_t.const_int(i as u64, false)],
+                        "from_slice.elem.ptr",
+                    )
+                    .map_err(|e| format!("from_slice gep failed: {e}"))?
+            };
+            let val = self
+                .builder
+                .build_load(elem_ty, elem_ptr, "from_slice.lane")
+                .map_err(|e| format!("from_slice load failed: {e}"))?;
+            acc = self
+                .builder
+                .build_insert_element(
+                    acc,
+                    val,
+                    i32_ty.const_int(i as u64, false),
+                    "from_slice.lane",
+                )
+                .map_err(|e| format!("from_slice insertelement failed: {e}"))?;
         }
         Ok(acc.into())
     }
