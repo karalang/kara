@@ -50,16 +50,21 @@ struct EnvVar {
 // `Inherit` (the default) shares the parent process's stream — the
 // child reads/writes the same terminal or pipe the parent has. `Null`
 // connects the stream to the platform's null device (`/dev/null`), so
-// the child's output is discarded and its input reads EOF.
+// the child's output is discarded and its input reads EOF. `Piped`
+// connects the stream to an OS pipe captured by the parent: after
+// spawn, the matching `Child.stdout()` / `.stderr()` / `.stdin()`
+// accessor yields the read/write handle so the parent can drive the
+// child's I/O.
 //
-// `Piped` (capture the stream so the parent can read it) is deferred:
-// it requires `Child` to carry the read/write handles and accessor
-// methods, and an *unread* pipe deadlocks a child that fills the pipe
-// buffer — so shipping it without the read side would be a footgun.
-// Tracked as a follow-on under the phase-8 `std.process` entry.
+// **Pipe-deadlock footgun.** A `Piped` stream the parent never drains
+// can deadlock the child once the pipe buffer fills (the child blocks
+// on a write the parent never reads). The read side (`read_to_string`
+// below) is what makes `Piped` safe to ship — read the captured output,
+// or `close()` a piped stdin to signal the child EOF.
 enum Stdio {
     Inherit,
     Null,
+    Piped,
 }
 
 struct Command {
@@ -71,11 +76,32 @@ struct Command {
     cmd_stderr: Stdio,
 }
 
-// `Child` is a handle to a running (or recently-finished) process.
-// Just the pid in v1; the follow-up that wires the real intrinsic
-// extends this with stdin/stdout/stderr handle pointers per the
-// `std::process::Child` shape.
+// `Child` is a handle to a running (or recently-finished) process,
+// identified by its OS `pid`. The live `std::process::Child` (and any
+// captured pipe handles) lives in interpreter-side tables keyed by this
+// pid; the Kāra value carries only the pid so it stays a plain copyable
+// struct. The `stdout()` / `stderr()` / `stdin()` accessors below
+// surface the captured-pipe handles when the matching stream was
+// spawned `Stdio.Piped`.
 struct Child {
+    pid: i64,
+}
+
+// Captured-pipe handles. Each carries the owning child's `pid`, which
+// keys the interpreter-side handle table holding the real OS stream.
+// `stdout` / `stderr` are read ends (`read_to_string`); `stdin` is the
+// write end (`write` + `close`). A handle is taken at most once from a
+// `Child` — a second `Child.stdout()` after the stream was taken yields
+// `Option.None`, mirroring `std::process::Child::stdout`.
+struct ChildStdout {
+    pid: i64,
+}
+
+struct ChildStderr {
+    pid: i64,
+}
+
+struct ChildStdin {
     pid: i64,
 }
 
@@ -203,6 +229,67 @@ impl Child {
     // to remove the entry from the side table.
     #[compiler_builtin]
     fn kill(ref self) -> Result[Unit, IoError] with sends(ProcessTable) {
+        Err(IoError.NotFound)
+    }
+
+    // Take the captured stdout read handle. `Some` iff stdout was
+    // spawned `Stdio.Piped` and not already taken; `None` otherwise
+    // (inherited / null stream, already taken, or the child is gone).
+    // Each stream is taken at most once.
+    #[compiler_builtin]
+    fn stdout(ref self) -> Option[ChildStdout] {
+        Option.None
+    }
+
+    // Take the captured stderr read handle. Same Some/None rule as
+    // `stdout()`.
+    #[compiler_builtin]
+    fn stderr(ref self) -> Option[ChildStderr] {
+        Option.None
+    }
+
+    // Take the captured stdin write handle. Same Some/None rule as
+    // `stdout()`.
+    #[compiler_builtin]
+    fn stdin(ref self) -> Option[ChildStdin] {
+        Option.None
+    }
+}
+
+impl ChildStdout {
+    // Read the child's entire stdout to a String (until the child
+    // closes its write end — typically when it exits). Carries `blocks`:
+    // the read parks the calling thread until EOF, so the scheduler
+    // must place it on a blocking-capable thread.
+    #[compiler_builtin]
+    fn read_to_string(ref self) -> Result[String, IoError] blocks {
+        Err(IoError.NotFound)
+    }
+}
+
+impl ChildStderr {
+    // Read the child's entire stderr to a String. Same blocking
+    // semantics as `ChildStdout.read_to_string`.
+    #[compiler_builtin]
+    fn read_to_string(ref self) -> Result[String, IoError] blocks {
+        Err(IoError.NotFound)
+    }
+}
+
+impl ChildStdin {
+    // Write bytes to the child's stdin. Carries `blocks`: a write
+    // parks the calling thread when the OS pipe buffer is full until
+    // the child drains it.
+    #[compiler_builtin]
+    fn write(ref self, data: String) -> Result[Unit, IoError] blocks {
+        Err(IoError.NotFound)
+    }
+
+    // Close the child's stdin, signaling EOF to the child (the standard
+    // way to let a child that reads-to-EOF finish). Idempotent: closing
+    // an already-closed / taken handle is a no-op `Ok`.
+    #[compiler_builtin]
+    fn close(ref self) -> Result[Unit, IoError] {
         Err(IoError.NotFound)
     }
 }

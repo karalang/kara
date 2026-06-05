@@ -174,6 +174,18 @@ pub struct Interpreter<'a> {
     /// processes — same behavior as a Rust `Child` that's dropped
     /// without `wait`. See `src/interpreter/method_call_process.rs`.
     pub(crate) child_table: HashMap<i64, std::process::Child>,
+    /// Captured-pipe handle tables for `Stdio.Piped` streams, keyed by
+    /// the owning child's pid. `Child.stdout()` / `.stderr()` / `.stdin()`
+    /// `take()` the stream off the `std::process::Child` in `child_table`
+    /// into the matching table here and hand back a Kāra handle struct;
+    /// `read_to_string` reads from a read table (removing the exhausted
+    /// entry), `ChildStdin.write` writes the stdin table entry, and
+    /// `ChildStdin.close` removes its entry — dropping the OS handle,
+    /// which signals EOF to the child. See
+    /// `src/interpreter/method_call_process.rs`.
+    pub(crate) child_stdout_table: HashMap<i64, std::process::ChildStdout>,
+    pub(crate) child_stderr_table: HashMap<i64, std::process::ChildStderr>,
+    pub(crate) child_stdin_table: HashMap<i64, std::process::ChildStdin>,
     /// `Pool[T]` intrinsic side-table — keyed by `Pool.handle_id`,
     /// holds the per-pool state (factory closure + bounds + slot
     /// vec). `Pool.new` populates an entry and returns a handle;
@@ -434,6 +446,9 @@ impl<'a> Interpreter<'a> {
             task_id_counter: Arc::new(AtomicU64::new(0)),
             captured_dbg: None,
             child_table: HashMap::new(),
+            child_stdout_table: HashMap::new(),
+            child_stderr_table: HashMap::new(),
+            child_stdin_table: HashMap::new(),
             pool_table: HashMap::new(),
             pool_handle_counter: 0,
             semaphore_table: HashMap::new(),

@@ -220,6 +220,11 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "EnvVar",
     // `Stdio` (stdin/stdout/stderr redirection setting for `Command`).
     "Stdio",
+    // Captured-pipe handles surfaced by `Child.stdout()` / `.stderr()`
+    // / `.stdin()` when the matching stream was spawned `Stdio.Piped`.
+    "ChildStdout",
+    "ChildStderr",
+    "ChildStdin",
     // `Pool[T]` (v64 backend-platform lift): connection-pool
     // primitive. `Pool[T]` / `PooledConnection[T]` / `PoolError`
     // are the user-facing surface. See `runtime/stdlib/pool.kara`.

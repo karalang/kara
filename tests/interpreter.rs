@@ -6412,6 +6412,110 @@ fn test_process_spawn_with_null_redirection_waits_clean() {
     assert_eq!(output, "true\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn test_process_capture_stdout_via_piped() {
+    // `Stdio.Piped` + the capture half: spawn `/bin/echo` with stdout
+    // piped, take the read handle off the child, and drain it to a
+    // String. `/bin/echo hello-pipe` writes "hello-pipe\n", so the
+    // captured output is exactly that. Proves Piped wiring at spawn,
+    // `Child.stdout()` yielding `Some(handle)`, and `read_to_string`.
+    let output = run(r#"fn main() {
+         let cmd = Command.new("/bin/echo").arg("hello-pipe").stdout(Stdio.Piped);
+         match cmd.spawn() {
+             Ok(child) => {
+                 match child.stdout() {
+                     Some(out) => {
+                         match out.read_to_string() {
+                             Ok(s) => print(s),
+                             Err(_) => println("read_err"),
+                         }
+                     }
+                     None => println("no_stdout"),
+                 }
+                 match child.wait() {
+                     Ok(_) => {}
+                     Err(_) => println("wait_err"),
+                 }
+             }
+             Err(_) => println("spawn_err"),
+         }
+     }"#);
+    assert_eq!(output, "hello-pipe\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_process_stdout_not_piped_yields_none() {
+    // A stream left at the default `Stdio.Inherit` (here stdout is
+    // redirected to `Null`, also not piped) has no captured handle, so
+    // `Child.stdout()` is `None` — mirroring `std::process::Child::stdout`.
+    let output = run(r#"fn main() {
+         let cmd = Command.new("/bin/echo").arg("x").stdout(Stdio.Null);
+         match cmd.spawn() {
+             Ok(child) => {
+                 match child.stdout() {
+                     Some(_) => println("some"),
+                     None => println("none"),
+                 }
+                 match child.wait() {
+                     Ok(_) => {}
+                     Err(_) => println("wait_err"),
+                 }
+             }
+             Err(_) => println("spawn_err"),
+         }
+     }"#);
+    assert_eq!(output, "none\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_process_write_stdin_close_and_read_stdout_roundtrip() {
+    // Full parent-drives-child round-trip through `/bin/cat` (echoes
+    // stdin to stdout): spawn with BOTH stdin and stdout piped, write a
+    // line to the child's stdin, then `close()` it. The close is the
+    // load-bearing step — `cat` reads to EOF, so without closing stdin
+    // it would block forever and the subsequent `read_to_string` would
+    // deadlock (the exact footgun the read side guards). After close,
+    // `cat` flushes "ping\n" and exits; the captured stdout reads it.
+    let output = run(r#"fn main() {
+         let cmd = Command.new("/bin/cat").stdin(Stdio.Piped).stdout(Stdio.Piped);
+         match cmd.spawn() {
+             Ok(child) => {
+                 match child.stdin() {
+                     Some(inp) => {
+                         match inp.write("ping\n") {
+                             Ok(_) => {}
+                             Err(_) => println("write_err"),
+                         }
+                         match inp.close() {
+                             Ok(_) => {}
+                             Err(_) => println("close_err"),
+                         }
+                     }
+                     None => println("no_stdin"),
+                 }
+                 match child.stdout() {
+                     Some(out) => {
+                         match out.read_to_string() {
+                             Ok(s) => print(s),
+                             Err(_) => println("read_err"),
+                         }
+                     }
+                     None => println("no_stdout"),
+                 }
+                 match child.wait() {
+                     Ok(_) => {}
+                     Err(_) => println("wait_err"),
+                 }
+             }
+             Err(_) => println("spawn_err"),
+         }
+     }"#);
+    assert_eq!(output, "ping\n");
+}
+
 // ── Semaphore — application-layer backpressure primitive ───────────
 
 #[test]

@@ -12,6 +12,7 @@
 //! child is in our table.
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::process::Command as StdCommand;
 
 use crate::ast::*;
@@ -32,6 +33,18 @@ impl<'a> super::Interpreter<'a> {
             "wait" => self.eval_child_wait(obj),
             "try_wait" => self.eval_child_try_wait(obj),
             "kill" => self.eval_child_kill(obj),
+            // Captured-pipe accessors / handle methods. Each guards on the
+            // receiver struct name and returns `None` for any other shape,
+            // so a same-named method on an unrelated type (e.g. the
+            // `Command.stdout(cfg)` builder, a `File.write`, or the `Stdin`
+            // resource's `read_to_string`) falls through to its own
+            // dispatcher.
+            "stdout" => self.eval_child_take_stream(obj, StdStream::Out),
+            "stderr" => self.eval_child_take_stream(obj, StdStream::Err),
+            "stdin" => self.eval_child_take_stream(obj, StdStream::In),
+            "read_to_string" => self.eval_child_stream_read_to_string(obj),
+            "write" => self.eval_child_stdin_write(obj, _args),
+            "close" => self.eval_child_stdin_close(obj),
             _ => None,
         }
     }
@@ -55,16 +68,16 @@ impl<'a> super::Interpreter<'a> {
             std_cmd.env(k, v);
         }
         // Stdio redirection (phase-8 std.process). Each field is a
-        // `Stdio` enum; only `Stdio.Null` changes behavior — `Inherit`
-        // is `std::process`'s own default, so leave it unset.
-        if stdio_field_is_null(fields, "cmd_stdin") {
-            std_cmd.stdin(std::process::Stdio::null());
+        // `Stdio` enum; only `Null` / `Piped` change behavior —
+        // `Inherit` is `std::process`'s own default, so leave it unset.
+        if let Some(cfg) = stdio_for_field(fields, "cmd_stdin") {
+            std_cmd.stdin(cfg);
         }
-        if stdio_field_is_null(fields, "cmd_stdout") {
-            std_cmd.stdout(std::process::Stdio::null());
+        if let Some(cfg) = stdio_for_field(fields, "cmd_stdout") {
+            std_cmd.stdout(cfg);
         }
-        if stdio_field_is_null(fields, "cmd_stderr") {
-            std_cmd.stderr(std::process::Stdio::null());
+        if let Some(cfg) = stdio_for_field(fields, "cmd_stderr") {
+            std_cmd.stderr(cfg);
         }
         match std_cmd.spawn() {
             Ok(child) => {
@@ -119,6 +132,171 @@ impl<'a> super::Interpreter<'a> {
             Err(e) => Some(result_err(io_error_variant_from(&e))),
         }
     }
+
+    /// `Child.{stdout,stderr,stdin}()` — `take()` the captured pipe handle
+    /// off the live `std::process::Child`, move it into the matching handle
+    /// table (keyed by pid), and hand back `Option.Some(handle)`. Returns
+    /// `Option.None` when the stream wasn't spawned `Stdio.Piped`, was
+    /// already taken, or the child is no longer tracked — mirroring
+    /// `std::process::Child::{stdout,stderr,stdin}` being `Option`. The
+    /// receiver-shape guard (`child_pid` requires a `Child` struct) returns
+    /// `None` for any other shape so unrelated `stdout`/`stderr`/`stdin`
+    /// methods (the `Command.<stream>(cfg)` builders) fall through.
+    fn eval_child_take_stream(&mut self, obj: Value, stream: StdStream) -> Option<Value> {
+        let pid = child_pid(&obj)?;
+        // The `std::process::Child` is borrowed only inside this block, so
+        // the borrow ends before we touch the handle tables (a second
+        // `&mut self`). An absent child → no handle to give (`None`).
+        match stream {
+            StdStream::Out => {
+                let taken = {
+                    let Some(child) = self.child_table.get_mut(&pid) else {
+                        return Some(option_none());
+                    };
+                    child.stdout.take()
+                };
+                match taken {
+                    Some(h) => {
+                        self.child_stdout_table.insert(pid, h);
+                        Some(option_some(child_stream_handle("ChildStdout", pid)))
+                    }
+                    None => Some(option_none()),
+                }
+            }
+            StdStream::Err => {
+                let taken = {
+                    let Some(child) = self.child_table.get_mut(&pid) else {
+                        return Some(option_none());
+                    };
+                    child.stderr.take()
+                };
+                match taken {
+                    Some(h) => {
+                        self.child_stderr_table.insert(pid, h);
+                        Some(option_some(child_stream_handle("ChildStderr", pid)))
+                    }
+                    None => Some(option_none()),
+                }
+            }
+            StdStream::In => {
+                let taken = {
+                    let Some(child) = self.child_table.get_mut(&pid) else {
+                        return Some(option_none());
+                    };
+                    child.stdin.take()
+                };
+                match taken {
+                    Some(h) => {
+                        self.child_stdin_table.insert(pid, h);
+                        Some(option_some(child_stream_handle("ChildStdin", pid)))
+                    }
+                    None => Some(option_none()),
+                }
+            }
+        }
+    }
+
+    /// `ChildStdout.read_to_string()` / `ChildStderr.read_to_string()` —
+    /// drain the captured read handle to a `String` (blocks until the child
+    /// closes its write end), removing the now-exhausted entry. A handle
+    /// that's absent (never taken, or already read) yields
+    /// `Err(IoError.NotFound)`. Returns `None` for any non-read-handle
+    /// receiver so the `Stdin` / `FileSystem` `read_to_string` resource
+    /// methods fall through to their own dispatcher.
+    fn eval_child_stream_read_to_string(&mut self, obj: Value) -> Option<Value> {
+        let Value::Struct { name, fields } = &obj else {
+            return None;
+        };
+        let pid = match fields.get("pid") {
+            Some(Value::Int(p)) => *p,
+            _ => return None,
+        };
+        let read: Option<std::io::Result<String>> = match name.as_str() {
+            "ChildStdout" => self.child_stdout_table.remove(&pid).map(|mut h| {
+                let mut buf = String::new();
+                h.read_to_string(&mut buf).map(|_| buf)
+            }),
+            "ChildStderr" => self.child_stderr_table.remove(&pid).map(|mut h| {
+                let mut buf = String::new();
+                h.read_to_string(&mut buf).map(|_| buf)
+            }),
+            _ => return None,
+        };
+        match read {
+            Some(Ok(s)) => Some(result_ok(Value::String(s))),
+            Some(Err(e)) => Some(result_err(io_error_variant_from(&e))),
+            None => Some(result_err(io_not_found())),
+        }
+    }
+
+    /// `ChildStdin.write(data)` — write `data`'s bytes to the captured
+    /// stdin pipe (blocks if the OS buffer is full). Absent handle →
+    /// `Err(IoError.NotFound)`. `None` for any non-`ChildStdin` receiver.
+    fn eval_child_stdin_write(&mut self, obj: Value, args: &[CallArg]) -> Option<Value> {
+        let Value::Struct { name, fields } = &obj else {
+            return None;
+        };
+        if name != "ChildStdin" {
+            return None;
+        }
+        let pid = match fields.get("pid") {
+            Some(Value::Int(p)) => *p,
+            _ => return None,
+        };
+        let data = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+            Some(Value::String(s)) => s,
+            // Receiver is confirmed `ChildStdin` — a non-String arg can't
+            // be another dispatcher's `write`, so surface an error rather
+            // than falling through.
+            _ => return Some(result_err(io_not_found())),
+        };
+        match self.child_stdin_table.get_mut(&pid) {
+            Some(h) => match h.write_all(data.as_bytes()) {
+                Ok(()) => Some(result_ok(Value::Unit)),
+                Err(e) => Some(result_err(io_error_variant_from(&e))),
+            },
+            None => Some(result_err(io_not_found())),
+        }
+    }
+
+    /// `ChildStdin.close()` — drop the captured stdin handle, closing the
+    /// pipe and signaling EOF to the child. Idempotent: closing an
+    /// already-closed / never-taken handle is a no-op `Ok`. `None` for any
+    /// non-`ChildStdin` receiver (so `File.close` etc. fall through).
+    fn eval_child_stdin_close(&mut self, obj: Value) -> Option<Value> {
+        let Value::Struct { name, fields } = &obj else {
+            return None;
+        };
+        if name != "ChildStdin" {
+            return None;
+        }
+        let pid = match fields.get("pid") {
+            Some(Value::Int(p)) => *p,
+            _ => return None,
+        };
+        // Dropping the handle (whether present or not) closes the fd.
+        self.child_stdin_table.remove(&pid);
+        Some(result_ok(Value::Unit))
+    }
+}
+
+/// Which standard stream a `Child.<accessor>()` call targets.
+#[derive(Clone, Copy)]
+enum StdStream {
+    Out,
+    Err,
+    In,
+}
+
+/// Build the Kāra captured-pipe handle struct (`ChildStdout` /
+/// `ChildStderr` / `ChildStdin`) carrying the owning child's pid.
+fn child_stream_handle(struct_name: &str, pid: i64) -> Value {
+    let mut fields = HashMap::new();
+    fields.insert("pid".to_string(), Value::Int(pid));
+    Value::Struct {
+        name: struct_name.to_string(),
+        fields,
+    }
 }
 
 // ── Receiver-shape helpers ────────────────────────────────────────
@@ -143,16 +321,22 @@ fn read_string_field(fields: &HashMap<String, Value>, key: &str) -> String {
     }
 }
 
-/// True when a `Command` redirection field holds `Stdio.Null`. Any other
-/// shape (the `Stdio.Inherit` default, or an absent field) reads as
-/// "inherit", which is `std::process`'s own default — so the spawn path
-/// only acts on an explicit `Null`.
-fn stdio_field_is_null(fields: &HashMap<String, Value>, key: &str) -> bool {
-    matches!(
-        fields.get(key),
-        Some(Value::EnumVariant { enum_name, variant, .. })
-            if enum_name == "Stdio" && variant == "Null"
-    )
+/// Map a `Command` redirection field to the `std::process::Stdio` to
+/// apply, or `None` to leave it at `std::process`'s own default. Only an
+/// explicit `Stdio.Null` (→ `null()`) or `Stdio.Piped` (→ `piped()`)
+/// acts; the `Stdio.Inherit` default and any other / absent shape read as
+/// "inherit", which is already the default.
+fn stdio_for_field(fields: &HashMap<String, Value>, key: &str) -> Option<std::process::Stdio> {
+    match fields.get(key) {
+        Some(Value::EnumVariant {
+            enum_name, variant, ..
+        }) if enum_name == "Stdio" => match variant.as_str() {
+            "Null" => Some(std::process::Stdio::null()),
+            "Piped" => Some(std::process::Stdio::piped()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn read_string_vec_field(fields: &HashMap<String, Value>, key: &str) -> Vec<String> {
