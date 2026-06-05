@@ -19,11 +19,15 @@
 //
 // **Effects on the OS-touching methods.** All four declare
 // `sends(ProcessTable)` per the spec — every interaction with the OS
-// process table is a write to that resource. The execution verbs
-// (`blocks` on `wait` for the synchronous form; `suspends` on the
-// future async form) are deferred to the slice that wires `wait()`
-// through the event loop. Adding the execution verbs at that point
-// is non-breaking — they widen the declared effect set, not narrow it.
+// process table is a write to that resource. The synchronous
+// `Child.wait()` additionally carries the `blocks` execution verb: it
+// parks the calling thread on the OS `waitpid` until the child exits,
+// so the scheduler must place it on a blocking-capable thread. The
+// `suspends` execution verb — `wait()` routed through the event loop
+// so the task yields rather than pinning a thread — is still deferred
+// to the slice that wires `wait()` through the network event loop.
+// Adding it then is non-breaking: it widens the declared effect set,
+// not narrows it.
 
 // `ProcessTable` — effect resource for child-process operations.
 // `Command.spawn` / `Child.wait` / `Child.try_wait` / `Child.kill`
@@ -173,11 +177,16 @@ impl Command {
 
 impl Child {
     // Block until the child exits and reap it (entry removed from
-    // the side table on the Ok path). Execution verb `blocks` is
-    // deferred until the event-loop slice — adding it later widens
-    // the effect set, not narrow.
+    // the side table on the Ok path). Carries the `blocks` execution
+    // verb: the synchronous form parks the *calling thread* on the OS
+    // `waitpid` until the child terminates, which is exactly what
+    // `blocks` denotes to the scheduler (place on a blocking-capable
+    // thread, never a cooperative coroutine worker). The async
+    // `suspends` form — `wait()` routed through the event loop so the
+    // task yields instead of pinning a thread — lands with the network
+    // event loop; it widens this set further (non-breaking).
     #[compiler_builtin]
-    fn wait(ref self) -> Result[ExitStatus, IoError] with sends(ProcessTable) {
+    fn wait(ref self) -> Result[ExitStatus, IoError] with sends(ProcessTable) blocks {
         Err(IoError.NotFound)
     }
 

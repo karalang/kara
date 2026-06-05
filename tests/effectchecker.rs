@@ -226,6 +226,77 @@ fn test_noblock_removes_blocks_from_c_unwind_but_keeps_panics() {
     );
 }
 
+// ── std.process — execution verbs on `Child` methods (phase-8 line 159) ──
+
+/// The synchronous `Child.wait()` carries the `blocks` execution verb (it
+/// parks the calling thread on the OS `waitpid` until the child exits),
+/// while the non-blocking `try_wait()` poll and the fire-and-return
+/// `kill()` do NOT. Asserted against the *actual baked* `process.kara`
+/// AST via `STDLIB_PROGRAMS`, so it pins the real stdlib declaration
+/// rather than a hand-written stand-in. The async `suspends` form — `wait()`
+/// routed through the network event loop — lands in a later slice and would
+/// widen `wait`'s declared set further (non-breaking).
+#[test]
+fn test_process_child_wait_declares_blocks_others_do_not() {
+    use karac::ast::{EffectItem, ImplItem, Item, TypeKind};
+
+    let (_, process_prog) = karac::prelude::STDLIB_PROGRAMS
+        .iter()
+        .find(|(name, _)| *name == "process.kara")
+        .expect("process.kara is a baked stdlib program");
+
+    // Collect the declared concrete effect verbs for each method in `impl Child`.
+    let mut declared: std::collections::HashMap<String, Vec<EffectVerbKind>> =
+        std::collections::HashMap::new();
+    for item in &process_prog.items {
+        let Item::ImplBlock(imp) = item else { continue };
+        let TypeKind::Path(p) = &imp.target_type.kind else {
+            continue;
+        };
+        if p.segments.last().map(String::as_str) != Some("Child") {
+            continue;
+        }
+        for ii in &imp.items {
+            let ImplItem::Method(m) = ii else { continue };
+            let verbs: Vec<EffectVerbKind> = m
+                .effects
+                .as_ref()
+                .map(|el| {
+                    el.items
+                        .iter()
+                        .filter_map(|i| match i {
+                            EffectItem::Verb(v) => Some(v.kind.clone()),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            declared.insert(m.name.clone(), verbs);
+        }
+    }
+
+    let wait = declared.get("wait").expect("Child has a `wait` method");
+    assert!(
+        wait.contains(&EffectVerbKind::Blocks),
+        "Child.wait() must declare the `blocks` execution verb (synchronous \
+         waitpid parks the calling thread); got {wait:?}"
+    );
+    assert!(
+        wait.contains(&EffectVerbKind::Sends),
+        "Child.wait() must still declare sends(ProcessTable); got {wait:?}"
+    );
+    for non_blocking in ["try_wait", "kill"] {
+        let verbs = declared
+            .get(non_blocking)
+            .unwrap_or_else(|| panic!("Child has a `{non_blocking}` method"));
+        assert!(
+            !verbs.contains(&EffectVerbKind::Blocks),
+            "Child.{non_blocking}() must NOT declare `blocks` — it does not park \
+             the calling thread; got {verbs:?}"
+        );
+    }
+}
+
 #[test]
 fn test_block_level_noblock_propagates_to_every_child_extern_c() {
     // Block-level `@noblock` lives on `ExternBlock.attributes` (not
