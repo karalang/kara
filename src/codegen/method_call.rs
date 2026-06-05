@@ -1861,6 +1861,43 @@ impl<'ctx> super::Codegen<'ctx> {
                 phi.add_incoming(&[(&ok_val, found_end), (&err_val, notfound_end)]);
                 Ok(phi.as_basic_value())
             }
+            ("Stdin", "read_line") | ("Stdin", "read_to_string") => {
+                if !arg_vals.is_empty() {
+                    return Err(format!(
+                        "codegen: stdin.{method} expects 0 arguments, found {}",
+                        arg_vals.len()
+                    ));
+                }
+                // `stdin.read_line()` / `read_to_string()` -> Result[String,
+                // IoError]. Same `KaracIoResult` out-param ABI + String-payload
+                // unpack as `FileSystem.read_to_string`: alloca the 32-byte
+                // result slot, call the runtime fn, then `lower_kara_io_result`
+                // builds `Result.Ok(string)` (error_kind == 0) or
+                // `Result.Err(IoError)` (variant from the runtime's error_kind),
+                // so all IoError-layout knowledge stays in the shared file-IO
+                // lowering rather than being duplicated here.
+                let symbol = if method == "read_line" {
+                    "karac_runtime_stdin_read_line"
+                } else {
+                    "karac_runtime_stdin_read_to_string"
+                };
+                let io_ty = self.kara_io_result_type();
+                let fn_val = self
+                    .current_fn
+                    .ok_or_else(|| format!("codegen: stdin.{method} called outside a function"))?;
+                let slot = self.create_entry_alloca(fn_val, "stdin.read.slot", io_ty.into());
+                let f = match self.module.get_function(symbol) {
+                    Some(f) => f,
+                    None => {
+                        let fn_ty = self.context.void_type().fn_type(&[ptr_t.into()], false);
+                        self.module.add_function(symbol, fn_ty, None)
+                    }
+                };
+                self.builder
+                    .build_call(f, &[slot.into()], "stdin.read.call")
+                    .unwrap();
+                self.lower_kara_io_result(slot, super::file::FileOkKind::StringPayload)
+            }
             _ => Err(format!(
                 "codegen: ambient resource method '{}.{}' is not yet lowered \
                  (interpreter-only); add a runtime FFI + an arm in \
@@ -3168,5 +3205,7 @@ pub(super) fn ambient_ffi_lowered(resource: &str, method: &str) -> bool {
             | ("RandomSource", "next_u64")
             | ("Env", "args")
             | ("Env", "var")
+            | ("Stdin", "read_line")
+            | ("Stdin", "read_to_string")
     )
 }

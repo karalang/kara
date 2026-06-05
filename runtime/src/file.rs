@@ -573,6 +573,53 @@ pub unsafe extern "C" fn karac_runtime_file_seek(
     };
 }
 
+/// `stdin.read_line() -> Result[String, IoError]` — read one line
+/// (including the trailing `\n`, matching the interpreter's
+/// `("Stdin", "read_line")` arm which returns `Value::String(buf)`
+/// verbatim). EOF returns `Ok("")` (Rust's `read_line` yields `Ok(0)`
+/// with an empty buffer at end of input), which `ok_string("")` lowers
+/// to the canonical `{null, 0, 0}` empty String. The Ok payload travels
+/// in the `error_msg_ptr`/`error_msg_len` fields, which codegen's
+/// `FileOkKind::StringPayload` arm rebuilds into the Kāra `String`
+/// aggregate — identical to `FileSystem.read_to_string`.
+///
+/// # Safety
+///
+/// `out` must point to a writable `KaracIoResult` slot, which codegen
+/// allocas on the caller's stack before the call.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_stdin_read_line(out: *mut KaracIoResult) {
+    if out.is_null() {
+        return;
+    }
+    let mut buf = String::new();
+    *out = match std::io::stdin().read_line(&mut buf) {
+        Ok(_) => ok_string(&buf),
+        Err(e) => err(&e),
+    };
+}
+
+/// `stdin.read_to_string() -> Result[String, IoError]` — slurp all of
+/// stdin to EOF. Companion to `read_line`; same `KaracIoResult`
+/// String-payload ABI and the same `("Stdin", "read_to_string")`
+/// interpreter arm. Empty input → `Ok("")`.
+///
+/// # Safety
+///
+/// `out` must point to a writable `KaracIoResult` slot (codegen-allocated).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_stdin_read_to_string(out: *mut KaracIoResult) {
+    if out.is_null() {
+        return;
+    }
+    use std::io::Read;
+    let mut buf = String::new();
+    *out = match std::io::stdin().read_to_string(&mut buf) {
+        Ok(_) => ok_string(&buf),
+        Err(e) => err(&e),
+    };
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 #[cfg(test)]

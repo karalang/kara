@@ -1056,6 +1056,91 @@ fn main() reads(Env) {
     }
 
     #[test]
+    fn test_e2e_ambient_stdin_read_line_eof_returns_ok_empty() {
+        // `Stdin.read_line() -> Result[String, IoError]`. The E2E harness
+        // spawns the binary via `Command::output`, which closes the child's
+        // stdin — so `read_line` hits immediate EOF and returns `Ok("")`
+        // (Rust's `read_line` yields `Ok(0)` with an empty buffer). Lowers
+        // through the shared `karac_runtime_stdin_read_line` +
+        // `lower_kara_io_result(StringPayload)` path, same as
+        // `FileSystem.read_to_string`. The Ok arm binds the String payload
+        // and checks `len() == 0`, exercising the full Result/String unpack
+        // (payload-typed binding + method dispatch), not just the branch.
+        // (Capitalized form is the resolvable surface — the lowercase `stdin`
+        // alias is not yet wired into the resolver; see the lowercase-ambient
+        // -alias gap entry in phase-7-codegen.md.)
+        let out = run_program(
+            r#"
+fn main() reads(Stdin) {
+    match Stdin.read_line() {
+        Ok(s) => { if s.len() == 0 { println("eof-ok"); } else { println("got-line"); } }
+        Err(_) => { println("io-err"); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "eof-ok");
+        }
+    }
+
+    #[test]
+    fn test_e2e_ambient_stdin_read_to_string_eof_returns_ok_empty() {
+        // Companion to read_line: `Stdin.read_to_string()` slurps to EOF.
+        // With the harness's closed stdin that's the empty string → `Ok("")`.
+        let out = run_program(
+            r#"
+fn main() reads(Stdin) {
+    match Stdin.read_to_string() {
+        Ok(s) => { if s.len() == 0 { println("eof-ok"); } else { println("got-data"); } }
+        Err(_) => { println("io-err"); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "eof-ok");
+        }
+    }
+
+    #[test]
+    fn test_stdin_read_line_resolves_and_typechecks_clean() {
+        // Full-pipeline check (NOT the `run_program` path, which tolerates
+        // resolve/typecheck errors — see the
+        // codegen-run_program-bypasses-typecheck hazard). `Stdin.read_line()`
+        // must resolve and typecheck cleanly: it is a real stdlib
+        // `#[compiler_builtin]` method whose `Result[String, IoError]` return
+        // flows to the `Ok(s)` binding so `s.len()` dispatches. Guards against
+        // regressing the capitalized surface into a codegen-only "fake pass".
+        let src = r#"
+fn main() reads(Stdin) {
+    match Stdin.read_line() {
+        Ok(s) => { let _n = s.len(); }
+        Err(_) => {}
+    }
+}
+"#;
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        assert!(
+            resolved.errors.is_empty(),
+            "resolve errors for Stdin.read_line: {:?}",
+            resolved.errors
+        );
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "typecheck errors for Stdin.read_line: {:?}",
+            typed.errors
+        );
+    }
+
+    #[test]
     fn test_ambient_override_of_nonvtable_method_errors_loudly() {
         // A `with_provider[Env]` override that supplies `args` (a method with
         // NO `AMBIENT_RESOURCE_METHODS` vtable slot) must be a LOUD codegen

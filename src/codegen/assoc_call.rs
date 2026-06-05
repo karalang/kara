@@ -496,7 +496,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // One-shot whole-file slurp; lowers to
         // `karac_runtime_file_read_to_string` and unpacks the
         // String-payload KaracIoResult. (Distinct from the no-arg
-        // `Stdin.read_to_string`, which stays a placeholder.)
+        // `Stdin.read_to_string`, which routes through the ambient FFI path
+        // — `compile_ambient_ffi`'s `("Stdin", …)` arm, L646 slice 3b —
+        // sharing this same `lower_kara_io_result` String-payload unpack.)
         if type_name == "FileSystem" && method == "read_to_string" && _args.len() == 1 {
             return self.compile_file_read_to_string(&_args[0].value);
         }
