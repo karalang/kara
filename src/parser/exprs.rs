@@ -763,10 +763,40 @@ impl super::Parser {
                 })
             }
 
-            // Lock block
+            // Lock block — `lock <place> [alias] { body }`. The place is a
+            // `Mutex[T]`-typed location: a binding name (`m`) or a field path
+            // (`self.state`, `node.lock`). Parse the base (`self` or an
+            // identifier) followed by a `.field` chain; a trailing identifier
+            // with NO leading `.` is the optional alias. The `.` vs bare-IDENT
+            // distinction disambiguates `lock a.b c { }` (alias `c`) from
+            // `lock a.b.c { }` (the path continues).
             Token::Lock => {
                 self.advance();
-                let mutex = self.expect_identifier()?;
+                let place_start = self.current_span();
+                let mut place = if self.check(&Token::SelfValue) {
+                    self.advance();
+                    Expr {
+                        span: self.span_from(&place_start),
+                        kind: ExprKind::SelfValue,
+                    }
+                } else {
+                    let name = self.expect_identifier()?;
+                    Expr {
+                        span: self.span_from(&place_start),
+                        kind: ExprKind::Identifier(name),
+                    }
+                };
+                while self.check(&Token::Dot) {
+                    self.advance();
+                    let field = self.expect_identifier()?;
+                    place = Expr {
+                        span: self.span_from(&place_start),
+                        kind: ExprKind::FieldAccess {
+                            object: Box::new(place),
+                            field,
+                        },
+                    };
+                }
                 let alias = if !self.check(&Token::LeftBrace) {
                     Some(self.expect_identifier()?)
                 } else {
@@ -775,7 +805,11 @@ impl super::Parser {
                 let body = self.parse_block()?;
                 Some(Expr {
                     span: self.span_from(&start),
-                    kind: ExprKind::Lock { mutex, alias, body },
+                    kind: ExprKind::Lock {
+                        mutex: Box::new(place),
+                        alias,
+                        body,
+                    },
                 })
             }
 

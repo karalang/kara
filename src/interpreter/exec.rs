@@ -833,7 +833,10 @@ pub(crate) fn collect_free_idents_expr(
         ExprKind::Par(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) => {
             collect_free_idents_block(b, bound, out);
         }
-        ExprKind::Lock { body, alias, .. } => {
+        ExprKind::Lock { mutex, body, alias } => {
+            // The place expression (`m`, `self.state`) is evaluated in the outer
+            // scope, so its free identifiers are captured.
+            collect_free_idents_expr(mutex, bound, out);
             let snap = bound.clone();
             if let Some(a) = alias {
                 bound.insert(a.clone());

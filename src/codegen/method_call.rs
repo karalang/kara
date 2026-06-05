@@ -2032,43 +2032,105 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Codegen for `lock m [alias] { body }` (design.md § Part 5: Shared Types,
-    /// `lock` blocks). `m` is a `Mutex[T]` binding laid out as
-    /// `{ i64 lockflag, T value }`. Emits a TAS spinlock: acquire by
-    /// `atomicrmw xchg`-ing the flag to 1 and spinning until the previous value
-    /// was 0; expose the value field as a `mut ref T` binding (the `alias`, or
-    /// the mutex name itself shadowed) for the body; release by atomically
-    /// storing 0. **Slice 1** is straight-line only — the typechecker rejects
-    /// early exits from the body, so the single fall-through release is sound.
+    /// Resolve a `lock` place expression to the `(Mutex struct type, pointer to
+    /// the aggregate)` pair. Handles the two place shapes: an `Identifier` (a
+    /// local / par-captured `Mutex` binding — its `VarSlot` IS the aggregate)
+    /// and a `FieldAccess` on a `par` / `shared` struct (a `Mutex` field stored
+    /// inline in the heap layout — GEP at `field_idx + 1`, reusing the
+    /// shared-field deref the atomic-field path uses).
+    fn resolve_mutex_storage(
+        &mut self,
+        mutex: &Expr,
+    ) -> Result<
+        (
+            inkwell::types::StructType<'ctx>,
+            inkwell::values::PointerValue<'ctx>,
+        ),
+        String,
+    > {
+        match &mutex.kind {
+            ExprKind::Identifier(name) => {
+                let slot = self.variables.get(name).copied().ok_or_else(|| {
+                    format!("codegen: lock target '{}' has no storage slot", name)
+                })?;
+                match slot.ty {
+                    BasicTypeEnum::StructType(st) if st.count_fields() == 2 => Ok((st, slot.ptr)),
+                    other => Err(format!(
+                        "codegen: lock target '{}' is not a Mutex[T] (slot type {:?})",
+                        name, other
+                    )),
+                }
+            }
+            ExprKind::FieldAccess {
+                object: inner,
+                field,
+            } => {
+                // `lock self.state` — `self.state` is a `Mutex` field stored
+                // inline in the `par`/`shared` struct's heap aggregate
+                // `{ i64 refcount, …, { i64 lockflag, T value }, … }`.
+                let (type_name, info) = self.shared_type_for_expr(inner).ok_or_else(|| {
+                    format!(
+                        "codegen: lock field receiver '.{}' is not on a par/shared struct",
+                        field
+                    )
+                })?;
+                let idx = self
+                    .struct_field_names
+                    .get(&type_name)
+                    .and_then(|names| names.iter().position(|n| n == field))
+                    .ok_or_else(|| {
+                        format!("codegen: struct '{}' has no field '{}'", type_name, field)
+                    })?;
+                let heap_ptr = self.compile_expr(inner)?.into_pointer_value();
+                let field_ptr = self
+                    .builder
+                    .build_struct_gep(
+                        info.heap_type,
+                        heap_ptr,
+                        (idx + 1) as u32, // +1: heap index 0 is the refcount
+                        "mutex.field.ptr",
+                    )
+                    .map_err(|e| format!("codegen: lock field gep failed: {:?}", e))?;
+                match info.heap_type.get_field_type_at_index((idx + 1) as u32) {
+                    Some(BasicTypeEnum::StructType(st)) if st.count_fields() == 2 => {
+                        Ok((st, field_ptr))
+                    }
+                    other => Err(format!(
+                        "codegen: lock field '{}.{}' is not a Mutex[T] (field type {:?})",
+                        type_name, field, other
+                    )),
+                }
+            }
+            other => Err(format!(
+                "codegen: unsupported lock place expression {:?}",
+                std::mem::discriminant(other)
+            )),
+        }
+    }
+
+    /// Codegen for `lock <place> [alias] { body }` (design.md § Part 5: Shared
+    /// Types, `lock` blocks). `place` names a `Mutex[T]` laid out as
+    /// `{ i64 lockflag, T value }` (a local binding or a `par`/`shared` struct
+    /// field). Emits a TAS spinlock: acquire by `atomicrmw xchg`-ing the flag to
+    /// 1 and spinning until the previous value was 0; expose the value field as a
+    /// `mut ref T` binding (the `alias`, or the mutex name itself shadowed for an
+    /// `Identifier` place) for the body; release by atomically storing 0.
+    /// Straight-line only — the typechecker rejects early exits from the body,
+    /// so the single fall-through release is sound.
     pub(super) fn compile_lock_block(
         &mut self,
-        mutex: &str,
+        mutex: &Expr,
         alias: Option<&str>,
         body: &Block,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // The mutex binding's slot holds the `{ i64 lockflag, T value }`
-        // aggregate; `slot.ptr` is a pointer to it.
-        let slot = self
-            .variables
-            .get(mutex)
-            .copied()
-            .ok_or_else(|| format!("codegen: lock target '{}' has no storage slot", mutex))?;
-        let mutex_struct = match slot.ty {
-            BasicTypeEnum::StructType(st) if st.count_fields() == 2 => st,
-            other => {
-                return Err(format!(
-                    "codegen: lock target '{}' is not a Mutex[T] (slot type {:?})",
-                    mutex, other
-                ))
-            }
-        };
+        let (mutex_struct, base_ptr) = self.resolve_mutex_storage(mutex)?;
         let flag_ptr = self
             .builder
-            .build_struct_gep(mutex_struct, slot.ptr, 0, "mutex.flag.ptr")
+            .build_struct_gep(mutex_struct, base_ptr, 0, "mutex.flag.ptr")
             .map_err(|e| format!("codegen: lock flag gep failed: {:?}", e))?;
         let value_ptr = self
             .builder
-            .build_struct_gep(mutex_struct, slot.ptr, 1, "mutex.val.ptr")
+            .build_struct_gep(mutex_struct, base_ptr, 1, "mutex.val.ptr")
             .map_err(|e| format!("codegen: lock value gep failed: {:?}", e))?;
         let value_ty = mutex_struct.get_field_type_at_index(1).unwrap();
 
@@ -2103,26 +2165,38 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Critical section.
         self.builder.position_at_end(held_bb);
-        // Bind the body alias (or the mutex name, shadowed) to the value slot —
-        // a `mut ref T` whose storage IS the mutex's value field, so the body's
-        // reads / writes / field accesses operate in place under the lock.
-        let bind_name = alias.unwrap_or(mutex).to_string();
-        let saved = self.variables.get(&bind_name).copied();
-        self.variables.insert(
-            bind_name.clone(),
-            super::VarSlot {
-                ptr: value_ptr,
-                ty: value_ty,
-            },
-        );
+        // Bind the body's inner-value name (the alias, or — for an `Identifier`
+        // place — the mutex name shadowed) to the value slot: a `mut ref T`
+        // whose storage IS the mutex's value field, so the body's reads /
+        // writes / field accesses operate in place under the lock. A field
+        // place without an alias is rejected by the typechecker.
+        let bind_name = match (alias, &mutex.kind) {
+            (Some(a), _) => Some(a.to_string()),
+            (None, ExprKind::Identifier(n)) => Some(n.clone()),
+            (None, _) => None,
+        };
+        let saved = bind_name
+            .as_ref()
+            .and_then(|n| self.variables.get(n).copied());
+        if let Some(ref name) = bind_name {
+            self.variables.insert(
+                name.clone(),
+                super::VarSlot {
+                    ptr: value_ptr,
+                    ty: value_ty,
+                },
+            );
+        }
         let body_val = self.compile_block(body)?;
         // Restore the shadowed binding (mutex name) / drop the alias.
-        match saved {
-            Some(s) => {
-                self.variables.insert(bind_name.clone(), s);
-            }
-            None => {
-                self.variables.remove(&bind_name);
+        if let Some(ref name) = bind_name {
+            match saved {
+                Some(s) => {
+                    self.variables.insert(name.clone(), s);
+                }
+                None => {
+                    self.variables.remove(name);
+                }
             }
         }
 

@@ -22191,6 +22191,37 @@ fn lock_block_on_borrowed_mutex_rejected_in_slice1() {
     );
 }
 
+#[test]
+fn lock_on_par_struct_mutex_field_with_alias_accepted() {
+    // Slice 2: `lock self.state s { … }` — locking a `Mutex` field of a par
+    // struct (a place expression). Requires an alias (the field has no name to
+    // shadow); `s` is the inner `T`.
+    typecheck_ok(
+        "par struct C { state: Mutex[i64] }
+         impl C {
+             fn bump(ref self) { lock self.state s { s = s + 1; } }
+         }",
+    );
+}
+
+#[test]
+fn lock_on_field_without_alias_rejected() {
+    // A field place has no name to shadow, so an alias is required.
+    let errors = typecheck_errors(
+        "par struct C { state: Mutex[i64] }
+         impl C {
+             fn bump(ref self) { lock self.state { } }
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::LockTargetNotMutex
+                && e.message.contains("requires an alias")),
+        "lock on a field without an alias must be rejected; got: {errors:?}"
+    );
+}
+
 // ── Atomic.compare_exchange → Result[T, T] ───────────────────────
 // compare_exchange is the one atomic method whose Result-shaped return is
 // modeled by the typechecker (the others fall through to a lax Type::Error).

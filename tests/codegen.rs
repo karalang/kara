@@ -28916,6 +28916,63 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_lock_par_struct_mutex_field_sequential() {
+        // Slice 2: `lock self.total` — locking a `Mutex` FIELD of a par struct
+        // (a place expression, not just a bare binding). The field is stored
+        // inline in the Arc heap aggregate; the lock GEPs to it and spins.
+        let out = run_program(
+            r#"
+par struct Counter { total: Mutex[i64] }
+impl Counter {
+    fn add(ref self, n: i64) { lock self.total t { t = t + n; } }
+    fn get(ref self) -> i64 { lock self.total t { t } }
+}
+fn main() {
+    let c = Counter { total: Mutex.new(0) };
+    c.add(5);
+    c.add(37);
+    println(c.get());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
+    #[test]
+    fn test_e2e_concurrent_par_struct_mutex_field_counter() {
+        // The canonical par-struct concurrent-mutation pattern: a `Mutex` field
+        // locked from two `par {}` branches. The par struct passes by value
+        // (Arc-shared), each branch `lock self.total`s and increments — the
+        // spinlock serializes, so 2×50_000 → exactly 100_000, no lost updates.
+        let out = run_program(
+            r#"
+par struct Counter { total: Mutex[i64] }
+impl Counter {
+    fn inc(ref self) { lock self.total t { t = t + 1; } }
+    fn get(ref self) -> i64 { lock self.total t { t } }
+}
+fn bump(c: Counter, n: i64) {
+    let mut i = 0;
+    while i < n { c.inc(); i = i + 1; }
+}
+fn main() {
+    let c = Counter { total: Mutex.new(0) };
+    par {
+        bump(c, 50000);
+        bump(c, 50000);
+    }
+    println(c.get());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "100000");
+        }
+    }
+
+    #[test]
     fn test_e2e_concurrent_atomic_counter_no_lost_updates() {
         // The headline lock-free-counter shape: two sibling `par {}` branches
         // each fetch_add 50_000 times on the SAME par struct's Atomic field.

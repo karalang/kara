@@ -962,16 +962,23 @@ impl<'a> super::Interpreter<'a> {
             // typechecker rejects early exits), so no control-flow unwinding of
             // the write-back is needed.
             ExprKind::Lock { mutex, alias, body } => {
-                let inner = match self.env.get(mutex) {
-                    Some(Value::Mutex(v)) => *v,
-                    other => {
-                        // Should be caught by the typechecker; be defensive.
-                        other.unwrap_or(Value::Unit)
-                    }
+                // Read the `Mutex` value named by the place (`m` or `self.state`).
+                let inner = match self.eval_expr_inner(mutex) {
+                    Value::Mutex(v) => *v,
+                    // Defensive — typechecker guarantees a Mutex place.
+                    other => other,
                 };
-                let bind_name = alias.clone().unwrap_or_else(|| mutex.clone());
+                // The inner-value binding name: the alias, or (for an
+                // `Identifier` place) the mutex name itself. A field place
+                // without an alias is rejected by the typechecker.
+                let bind_name = alias.clone().or_else(|| match &mutex.kind {
+                    ExprKind::Identifier(n) => Some(n.clone()),
+                    _ => None,
+                });
                 self.env.push_scope();
-                self.env.define(bind_name.clone(), inner);
+                if let Some(ref name) = bind_name {
+                    self.env.define(name.clone(), inner);
+                }
                 let result = match self.eval_block_inner(body) {
                     Ok(v) => v,
                     Err(cf) => {
@@ -979,9 +986,20 @@ impl<'a> super::Interpreter<'a> {
                         return self.set_cf(cf);
                     }
                 };
-                let new_inner = self.env.get(&bind_name).unwrap_or(Value::Unit);
+                let new_inner = bind_name
+                    .as_ref()
+                    .and_then(|n| self.env.get(n))
+                    .unwrap_or(Value::Unit);
                 self.env.pop_scope();
-                self.env.set(mutex, Value::Mutex(Box::new(new_inner)));
+                // Write the (possibly mutated) value back into the mutex place.
+                let wrapped = Value::Mutex(Box::new(new_inner));
+                match &mutex.kind {
+                    ExprKind::Identifier(name) => self.env.set(name, wrapped),
+                    ExprKind::FieldAccess { object, field } => {
+                        self.set_field(object, field, wrapped);
+                    }
+                    _ => {}
+                }
                 result
             }
 

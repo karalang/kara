@@ -499,10 +499,12 @@ impl super::Formatter {
                 self.format_block(block);
             }
             ExprKind::Lock { mutex, alias, body } => {
+                // `lock <place> [alias] { body }` — the alias has NO `as`
+                // keyword (the grammar is `lock IDENT [IDENT] BLOCK`).
                 self.write_str("lock ");
-                self.write_str(mutex);
+                self.format_expr(mutex);
                 if let Some(ref a) = alias {
-                    self.write_str(" as ");
+                    self.write_str(" ");
                     self.write_str(a);
                 }
                 self.write_str(" ");

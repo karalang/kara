@@ -304,9 +304,15 @@ pub enum ExprKind {
     // Parallel block (explicit fork-join)
     Par(Block),
 
-    // Lock block
+    // Lock block — `lock <place> [alias] { body }`. `mutex` is a place
+    // expression naming the `Mutex[T]` to acquire: an `Identifier` (a local /
+    // parameter binding) or a `FieldAccess` (a `Mutex` field of a `par` /
+    // `shared` struct, e.g. `self.state`). The optional `alias` binds the inner
+    // `T` as a `mut ref T` for the body; without one, an `Identifier` place's
+    // own name is shadowed to the inner value (a `FieldAccess` place requires
+    // an alias — there is no name to shadow).
     Lock {
-        mutex: String,
+        mutex: Box<Expr>,
         alias: Option<String>,
         body: Block,
     },

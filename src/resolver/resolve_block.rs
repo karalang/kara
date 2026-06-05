@@ -599,19 +599,20 @@ impl<'a> super::Resolver<'a> {
             ExprKind::Lock {
                 mutex, alias, body, ..
             } => {
-                // Resolve the mutex identifier
-                if let Some(sym) = self.table.lookup(mutex) {
-                    let id = sym.id;
-                    self.record_resolution(&expr.span, id);
-                } else {
-                    self.error_undefined_name(mutex, expr.span.clone());
-                }
-                // Resolve body with optional alias binding
+                // Resolve the place expression naming the mutex (`m`, `self.state`).
+                self.resolve_expr(mutex);
+                // Resolve body with optional alias binding. The alias (or, for an
+                // `Identifier` place, the mutex name itself shadowed) names the
+                // inner value for the body.
                 self.table.push_scope(ScopeKind::Block);
-                if let Some(ref alias_name) = alias {
+                let bind_name = alias.clone().or_else(|| match &mutex.kind {
+                    ExprKind::Identifier(n) => Some(n.clone()),
+                    _ => None,
+                });
+                if let Some(name) = bind_name {
                     let _ = self.table.define(
-                        alias_name.clone(),
-                        SymbolKind::Variable { is_mut: false },
+                        name,
+                        SymbolKind::Variable { is_mut: true },
                         expr.span.clone(),
                         false,
                     );

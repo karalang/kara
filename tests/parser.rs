@@ -1830,6 +1830,51 @@ fn test_par_struct_round_trips_through_formatter() {
 }
 
 #[test]
+fn test_lock_place_expr_parses_identifier_and_field() {
+    // `lock` target is a place expression: a bare binding or a field path.
+    // Helper: pull the first stmt's `Lock` expr out of the i-th function.
+    fn lock_of(prog: &Program, i: usize) -> (&Expr, &Option<String>) {
+        let Item::Function(f) = &prog.items[i] else {
+            panic!("item {i} is not a function");
+        };
+        // The `lock … { }` is the block's final expr (no trailing `;`).
+        let e = match (f.body.stmts.first(), &f.body.final_expr) {
+            (
+                Some(Stmt {
+                    kind: StmtKind::Expr(e),
+                    ..
+                }),
+                _,
+            ) => e,
+            (None, Some(e)) => e,
+            _ => panic!("function {i} has no lock expr"),
+        };
+        let ExprKind::Lock { mutex, alias, .. } = &e.kind else {
+            panic!("expected Lock, got {:?}", e.kind);
+        };
+        (mutex, alias)
+    }
+    let prog = parse_ok(
+        "fn f() { lock m x { } }\nfn g() { lock self.state s { } }\nfn h() { lock m { } }\n",
+    );
+    // `lock m x` — mutex is an Identifier, alias `x`.
+    let (mutex, alias) = lock_of(&prog, 0);
+    assert!(matches!(mutex.kind, ExprKind::Identifier(ref n) if n == "m"));
+    assert_eq!(alias.as_deref(), Some("x"));
+    // `lock self.state s` — mutex is a FieldAccess on `self`, alias `s`.
+    let (mutex, alias) = lock_of(&prog, 1);
+    assert!(
+        matches!(&mutex.kind, ExprKind::FieldAccess { field, .. } if field == "state"),
+        "expected FieldAccess on `state`, got {:?}",
+        mutex.kind
+    );
+    assert_eq!(alias.as_deref(), Some("s"));
+    // `lock m` — no alias.
+    let (_, alias) = lock_of(&prog, 2);
+    assert_eq!(alias.as_deref(), None);
+}
+
+#[test]
 fn test_par_enum_round_trips_through_formatter() {
     let src = "par enum Msg {\n    Ping,\n    Data(i64),\n}\n";
     let prog = parse_ok(src);
@@ -6299,7 +6344,8 @@ fn test_lock_block() {
     if let Item::Function(f) = &prog.items[0] {
         if let StmtKind::Let { value, .. } = &f.body.stmts[0].kind {
             if let ExprKind::Lock { mutex, alias, .. } = &value.kind {
-                assert_eq!(mutex, "counter");
+                // `mutex` is now a place expression (Box<Expr>), not a String.
+                assert!(matches!(&mutex.kind, ExprKind::Identifier(n) if n == "counter"));
                 assert!(alias.is_none());
             } else {
                 panic!("Expected Lock");
@@ -6314,7 +6360,7 @@ fn test_lock_block_with_alias() {
     if let Item::Function(f) = &prog.items[0] {
         if let StmtKind::Let { value, .. } = &f.body.stmts[0].kind {
             if let ExprKind::Lock { mutex, alias, .. } = &value.kind {
-                assert_eq!(mutex, "connection_pool");
+                assert!(matches!(&mutex.kind, ExprKind::Identifier(n) if n == "connection_pool"));
                 assert_eq!(alias.as_deref(), Some("mgr"));
             } else {
                 panic!("Expected Lock");
