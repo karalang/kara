@@ -6071,6 +6071,71 @@ fn test_tracing_log_ambient_emission_all_levels() {
 }
 
 #[test]
+fn test_tracing_log_min_level_filters_below_threshold() {
+    // phase-8 line 156 (interpreter half): `Log.set_min_level("warn")`
+    // drops trace/debug/info; only warn + error emit. The dropped calls'
+    // message args aren't even evaluated (standard log-filter semantics),
+    // though string literals make that unobservable here.
+    let output = run(r#"fn main() {
+         Log.set_min_level("warn");
+         Log.trace("t");
+         Log.debug("d");
+         Log.info("i");
+         Log.warn("w");
+         Log.error("e");
+     }"#);
+    assert_eq!(output, "[warn] w\n[error] e\n");
+}
+
+#[test]
+fn test_tracing_log_set_exporter_noop_silences() {
+    // Registering `NoOpExporter` as the ambient sink silences `Log.*` —
+    // the events route to NoOp's empty `export_event` instead of stdout.
+    let output = run(r#"fn main() {
+         Log.set_exporter(NoOpExporter {});
+         Log.info("i");
+         Log.error("e");
+     }"#);
+    assert_eq!(output, "");
+}
+
+#[test]
+fn test_tracing_log_reset_restores_default() {
+    // `Log.reset()` clears both the min-level and the registered sink, so
+    // a previously-dropped level emits to stdout again afterward.
+    let output = run(r#"fn main() {
+         Log.set_min_level("error");
+         Log.info("dropped");
+         Log.reset();
+         Log.info("kept");
+     }"#);
+    assert_eq!(output, "[info] kept\n");
+}
+
+#[test]
+fn test_tracing_log_custom_exporter_receives_events() {
+    // A user `Exporter` registered as the ambient sink receives `Log.*`
+    // events (dynamically dispatched), rendering its own format instead of
+    // the StdoutExporter line. Also exercises the min-level filter applying
+    // before the custom sink (the dropped `debug` never reaches it).
+    let output = run(r#"struct Tagging { }
+         impl Exporter for Tagging {
+             fn export_span(ref self, span: Span) { }
+             fn export_event(ref self, event: LogEvent) {
+                 println(f"CUSTOM<{event.level}>: {event.message}");
+             }
+         }
+         fn main() {
+             Log.set_exporter(Tagging {});
+             Log.set_min_level("info");
+             Log.debug("dropped");
+             Log.info("hi");
+             Log.error("bye");
+         }"#);
+    assert_eq!(output, "CUSTOM<info>: hi\nCUSTOM<error>: bye\n");
+}
+
+#[test]
 fn test_tracing_stdout_exporter_emits_event_line() {
     // StdoutExporter is the v1 emission surface: it renders a LogEvent
     // as one structured line — `[level] message key=value … span_id=N`,

@@ -97,6 +97,19 @@ pub struct Interpreter<'a> {
     /// real suspend), so unlike codegen there is no cross-suspend frame to
     /// preserve — the stack is the whole story here.
     pub(crate) active_span_stack: Vec<i64>,
+    /// Configurable ambient-logging state (phase-8 line 156, interpreter
+    /// half). `tracing_min_level` is the process-global minimum level —
+    /// `Log.*` calls below it are dropped (rank: trace 0 < debug 1 < info 2
+    /// < warn 3 < error 4; default 0 = emit everything). `tracing_exporter`
+    /// is the registered ambient sink: `None` → the default per-call
+    /// `StdoutExporter` (the existing `Log.*` body runs); `Some(value)` →
+    /// that exporter's `export_event` is dispatched instead (e.g. a
+    /// `NoOpExporter` to silence, or a custom `Exporter`). `Log.set_min_level`
+    /// / `set_exporter` / `reset` write these; `Log.*` consult them. Codegen
+    /// does not yet honor this (the runtime-global half is deferred), so a
+    /// compiled `Log.*` always emits to stdout — see the phase-8 entry.
+    pub(crate) tracing_min_level: i64,
+    pub(crate) tracing_exporter: Option<Value>,
     /// Names of `effect resource` declarations in the program, collected
     /// at [`register_items`] time. Used by [`eval_method_call`] to detect
     /// receivers of the form `UserDB.query(...)` — where `UserDB` is not
@@ -435,6 +448,8 @@ impl<'a> Interpreter<'a> {
             runtime_errors: Vec::new(),
             provider_stack: vec![HashMap::new()],
             active_span_stack: Vec::new(),
+            tracing_min_level: 0,
+            tracing_exporter: None,
             effect_resources: HashSet::new(),
             rand_state: seed_rand_state(),
             type_subs_stack: Vec::new(),

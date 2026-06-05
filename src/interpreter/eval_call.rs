@@ -72,6 +72,17 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Phase-8 line 156 (interpreter half): configurable ambient logging.
+        // `Log.set_min_level` / `set_exporter` / `reset` write the ambient
+        // state; `Log.{trace,debug,info,warn,error}` consult it (drop below
+        // the min level, route to a registered sink). Returns `None` for the
+        // default level-method case so the existing `Log.*` Kāra body runs
+        // (the per-call `StdoutExporter` stdout path), keeping the common
+        // path on the already-tested lowering.
+        if let Some(v) = self.try_eval_log_call(callee, args) {
+            return v;
+        }
+
         // Effect-resource method call — `UserDB.query(...)` parses as
         // `Call(Path(["UserDB", "query"]), args)` because `starts_upper(&name)`
         // roots a Path in `parse_primary`. Dispatch through the provider
@@ -1030,6 +1041,78 @@ impl<'a> super::Interpreter<'a> {
         Some((resource, &args[0].value, &args[1].value))
     }
 
+    /// Configurable ambient logging (phase-8 line 156, interpreter half).
+    /// Handles `Log.set_min_level` / `set_exporter` / `reset` (write the
+    /// ambient state) and `Log.{trace,debug,info,warn,error}` (consult it).
+    ///
+    /// Returns `Some(Unit)` when the call is fully handled here — a config
+    /// setter, a *dropped* level call (below the min level), or a level call
+    /// routed to a *registered* sink. Returns `None` for a level call in the
+    /// default configuration (no registered sink) so the caller falls through
+    /// to the existing `Log.*` Kāra body (the per-call `StdoutExporter` stdout
+    /// path), and for any non-`Log` callee.
+    ///
+    /// A dropped level call does **not** evaluate its message argument — the
+    /// standard "don't pay for filtered logs" logging semantic. (Codegen does
+    /// not yet honor any of this; a compiled `Log.*` always emits to stdout.)
+    fn try_eval_log_call(&mut self, callee: &Expr, args: &[CallArg]) -> Option<Value> {
+        let method = match &callee.kind {
+            ExprKind::Path { segments, .. } if segments.len() == 2 && segments[0] == "Log" => {
+                segments[1].as_str()
+            }
+            _ => return None,
+        };
+
+        match method {
+            "set_min_level" => {
+                if let Some(Value::String(name)) =
+                    args.first().map(|a| self.eval_expr_inner(&a.value))
+                {
+                    if let Some(rank) = log_level_rank(&name) {
+                        self.tracing_min_level = rank;
+                    }
+                }
+                Some(Value::Unit)
+            }
+            "set_exporter" => {
+                if let Some(v) = args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                    self.tracing_exporter = Some(v);
+                }
+                Some(Value::Unit)
+            }
+            "reset" => {
+                self.tracing_min_level = 0;
+                self.tracing_exporter = None;
+                Some(Value::Unit)
+            }
+            "trace" | "debug" | "info" | "warn" | "error" => {
+                let rank = log_level_rank(method).unwrap_or(0);
+                if rank < self.tracing_min_level {
+                    // Below the threshold — drop without evaluating the message.
+                    return Some(Value::Unit);
+                }
+                let Some(sink) = self.tracing_exporter.clone() else {
+                    // Default configuration: let the `Log.*` body emit to stdout.
+                    return None;
+                };
+                // Registered sink: build the event via the Kāra `LogEvent.<level>`
+                // constructor (so active-span auto-stamping is preserved) and
+                // dispatch the sink's `export_event`.
+                let message = args.first().map(|a| self.eval_expr_inner(&a.value))?;
+                let event = match self.env.get(&format!("LogEvent.{method}")) {
+                    Some(ctor) => self.invoke_function_value(ctor, vec![message]),
+                    None => return Some(Value::Unit),
+                };
+                let sink_type = self.value_type_name(&sink);
+                if let Some(func) = self.env.get(&format!("{sink_type}.export_event")) {
+                    self.invoke_function_value(func, vec![sink, event]);
+                }
+                Some(Value::Unit)
+            }
+            _ => None,
+        }
+    }
+
     /// Recognize `with_span(span, ||body)` (phase-8 line 153). Plain
     /// `Call` with an `Ident("with_span") | Path(["with_span"])` callee and
     /// two unlabeled args. Mirror of `codegen::helpers::match_with_span_call`.
@@ -1289,5 +1372,19 @@ impl<'a> super::Interpreter<'a> {
                 "{method_label}: comparator must return Ordering, returned a different value"
             ),
         }
+    }
+}
+
+/// Numeric rank of a log level for the `Log.set_min_level` filter
+/// (trace < debug < info < warn < error). `None` for an unrecognized
+/// name — `set_min_level` leaves the threshold unchanged in that case.
+fn log_level_rank(level: &str) -> Option<i64> {
+    match level {
+        "trace" => Some(0),
+        "debug" => Some(1),
+        "info" => Some(2),
+        "warn" => Some(3),
+        "error" => Some(4),
+        _ => None,
     }
 }
