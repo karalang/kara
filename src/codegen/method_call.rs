@@ -1495,6 +1495,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     resource, method, method_idx, fn_type, &arg_vals,
                 );
             }
+        } else if self.ambient_override_fn_type(resource, method).is_some() {
+            // The method has NO `AMBIENT_RESOURCE_METHODS` vtable slot, yet a
+            // `with_provider[<resource>]` override in this module supplies an
+            // impl of it (its `@<Type>.<method>` symbol exists). Codegen can't
+            // route the override through `compile_ambient_dispatch_branch`
+            // without a slot, so falling through to the builtin FFI default
+            // would SILENTLY ignore the override and diverge from the
+            // interpreter. Error loudly instead. Lifting this requires giving
+            // the method a vtable slot and generalizing the dispatch-branch
+            // phi beyond i64 (struct-returning methods like `Env.args`) —
+            // tracked in phase-7-codegen.md under the remaining-ambient-methods
+            // item ("ambient with_provider override of non-vtable methods").
+            return Err(format!(
+                "codegen: a `with_provider[{resource}]` override supplies `{method}`, but \
+                 ambient overrides of `{resource}.{method}` are not yet lowered (the method has \
+                 no vtable slot, so the override would be silently ignored). Run this program \
+                 with `karac run` (interpreter), or drop the override of `{method}`. Tracked in \
+                 docs/implementation_checklist/phase-7-codegen.md."
+            ));
         }
         self.compile_ambient_ffi(resource, method, &arg_vals)
     }
@@ -1723,6 +1742,41 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_call(fn_val, &[], "rand.next_u64")
                     .unwrap();
                 Ok(call.try_as_basic_value().unwrap_basic())
+            }
+            ("Env", "args") => {
+                if !arg_vals.is_empty() {
+                    return Err(format!(
+                        "codegen: env.args expects 0 arguments, found {}",
+                        arg_vals.len()
+                    ));
+                }
+                // `env.args() -> Vec[String]` — first aggregate-returning
+                // ambient method. Out-pointer ABI: alloca a `{ptr, i64, i64}`
+                // Vec slot, hand its address to the runtime fn (which
+                // heap-allocates the element buffer + each String in Kāra
+                // shape so scope-exit cleanup frees them), then load the Vec
+                // value. Mirrors the `Runtime.list_par_blocks` lowering.
+                let vec_ty = self.vec_struct_type();
+                let fn_val = self
+                    .current_fn
+                    .ok_or_else(|| "codegen: env.args called outside a function".to_string())?;
+                let slot = self.create_entry_alloca(fn_val, "env.args.slot", vec_ty.into());
+                let f = match self.module.get_function("karac_runtime_env_args_into") {
+                    Some(f) => f,
+                    None => {
+                        let fn_ty = self.context.void_type().fn_type(&[ptr_t.into()], false);
+                        self.module
+                            .add_function("karac_runtime_env_args_into", fn_ty, None)
+                    }
+                };
+                self.builder
+                    .build_call(f, &[slot.into()], "env.args.fill")
+                    .unwrap();
+                let value = self
+                    .builder
+                    .build_load(vec_ty, slot, "env.args.val")
+                    .unwrap();
+                Ok(value)
             }
             _ => Err(format!(
                 "codegen: ambient resource method '{}.{}' is not yet lowered \
@@ -3009,4 +3063,23 @@ pub(super) fn ambient_method_index(resource: &str, method: &str) -> Option<usize
         .iter()
         .find(|(r, _)| *r == resource)
         .and_then(|(_, methods)| methods.iter().position(|m| *m == method))
+}
+
+/// True iff `compile_ambient_ffi` has a builtin-default lowering for this
+/// `(resource, method)` pair. MUST stay in lockstep with that match's arms.
+///
+/// Used to route a capitalized `Resource.method()` call (`call_dispatch.rs`)
+/// to `compile_ambient_resource_method` even when the pair has no
+/// `AMBIENT_RESOURCE_METHODS` vtable slot — i.e. FFI-default methods like
+/// `RandomSource.next_u64` / `Env.args`. Without this, only the lowercase
+/// alias form (`rand.next_u64()`, routed in `compile_method_call`) reached
+/// the FFI lowering; the capitalized form fell through to `compile_assoc_call`
+/// and errored "no handler". (Vtable-slotted pairs — `Clock.now`, `Env.set` —
+/// are already routed by the `ambient_method_index` check at the call site;
+/// this is purely the no-slot complement.)
+pub(super) fn ambient_ffi_lowered(resource: &str, method: &str) -> bool {
+    matches!(
+        (resource, method),
+        ("Env", "set") | ("Clock", "now") | ("RandomSource", "next_u64") | ("Env", "args")
+    )
 }

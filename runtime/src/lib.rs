@@ -116,6 +116,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_env_set,
         karac_runtime_clock_now,
         karac_runtime_rand_next_u64,
+        karac_runtime_env_args_into,
     );
     // Design-by-contract predicate runtime (`requires` / `ensures` /
     // `invariant`). Codegen wraps each predicate evaluation in
@@ -498,6 +499,81 @@ pub extern "C" fn karac_runtime_rand_next_u64() -> i64 {
         s.set(x);
         x as i64
     })
+}
+
+/// `env.args()` — process argv as a Kāra `Vec[String]`. Codegen
+/// counterpart to the interpreter's `("Env", "args")` arm. First
+/// aggregate-returning ambient method: the result is written through an
+/// out-pointer (the codegen side allocas a `{ptr, i64, i64}` Vec slot and
+/// hands its address here), mirroring `karac_runtime_list_par_blocks_into`.
+///
+/// The Vec's element type is `String` = `RuntimeKaracString`
+/// (`{ptr, i64, i64}`, 24 bytes). The element buffer and each String's
+/// bytes are heap-allocated via `std::alloc::alloc` in Kāra's `Vec`/`String`
+/// shape (`cap == len`), so the codegen scope-exit cleanup frees them like
+/// any other Kāra-owned aggregate. An empty argv writes the canonical
+/// `{null, 0, 0}` (no allocation), matching `Vec.new()` so cleanup is a
+/// no-op. Includes argv[0] (the binary path), matching the interpreter's
+/// `std::env::args()` and design.md § Built-in Resources line 2799.
+///
+/// # Safety
+///
+/// `out` must point to a writable `{ptr, i64, i64}` slot, which codegen
+/// always allocas on the caller's stack before invoking.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_env_args_into(out: *mut KaracVec) {
+    if out.is_null() {
+        return;
+    }
+    let args: Vec<String> = std::env::args().collect();
+    let count = args.len();
+    if count == 0 {
+        (*out) = KaracVec {
+            data: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        return;
+    }
+
+    let elem_size = std::mem::size_of::<RuntimeKaracString>();
+    let align = std::mem::align_of::<RuntimeKaracString>();
+    let layout =
+        std::alloc::Layout::from_size_align(elem_size * count, align).expect("env.args Vec layout");
+    let buf = std::alloc::alloc(layout) as *mut RuntimeKaracString;
+    if buf.is_null() {
+        std::alloc::handle_alloc_error(layout);
+    }
+
+    for (i, arg) in args.iter().enumerate() {
+        let bytes = arg.as_bytes();
+        let s = if bytes.is_empty() {
+            RuntimeKaracString {
+                data: std::ptr::null_mut(),
+                len: 0,
+                cap: 0,
+            }
+        } else {
+            let str_layout = std::alloc::Layout::array::<u8>(bytes.len()).unwrap();
+            let str_buf = std::alloc::alloc(str_layout);
+            if str_buf.is_null() {
+                std::alloc::handle_alloc_error(str_layout);
+            }
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), str_buf, bytes.len());
+            RuntimeKaracString {
+                data: str_buf,
+                len: bytes.len() as i64,
+                cap: bytes.len() as i64,
+            }
+        };
+        std::ptr::write(buf.add(i), s);
+    }
+
+    (*out) = KaracVec {
+        data: buf as *mut u8,
+        len: count as i64,
+        cap: count as i64,
+    };
 }
 
 /// Newtype around `*const KaracFrame` that opts into `Send + Sync` for

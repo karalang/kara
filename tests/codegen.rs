@@ -917,6 +917,90 @@ fn main() reads(RandomSource) {
     }
 
     #[test]
+    fn test_e2e_ambient_env_args_returns_nonempty() {
+        // `env.args()` -> Vec[String] lowers to the
+        // `karac_runtime_env_args_into` out-pointer FFI (first
+        // aggregate-returning ambient method). Under the E2E test binary,
+        // argv[0] is the spawned exe path, so the Vec is guaranteed
+        // non-empty; we assert `len() > 0` rather than exact contents
+        // (environment-dependent). Mirrors the interpreter's
+        // `test_ambient_env_args_returns_nonempty_array`. Regression guard
+        // for "ambient resource method 'Env.args' is not yet lowered".
+        let out = run_program(
+            r#"
+fn main() reads(Env) {
+    let a = env.args();
+    if a.len() > 0 { println("args-ok"); } else { println("args-empty"); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "args-ok");
+        }
+    }
+
+    #[test]
+    fn test_e2e_ambient_env_args_capitalized_form() {
+        // The capitalized `Env.args()` form must reach the same FFI lowering
+        // as the lowercase `env.args()` alias. Before slice 2 the capitalized
+        // form fell through to `compile_assoc_call` and errored "no handler";
+        // the `ambient_ffi_lowered` routing gate (call_dispatch.rs) now sends
+        // no-vtable-slot ambient pairs to `compile_ambient_resource_method`.
+        let out = run_program(
+            r#"
+fn main() reads(Env) {
+    let a = Env.args();
+    if a.len() > 0 { println("args-ok"); } else { println("args-empty"); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "args-ok");
+        }
+    }
+
+    #[test]
+    fn test_ambient_override_of_nonvtable_method_errors_loudly() {
+        // A `with_provider[Env]` override that supplies `args` (a method with
+        // NO `AMBIENT_RESOURCE_METHODS` vtable slot) must be a LOUD codegen
+        // error, not a silent fall-through to the builtin FFI default — which
+        // would diverge from the interpreter, where the override wins
+        // (`test_ambient_env_with_provider_overrides_default`). Lifting the
+        // limitation needs a vtable slot + a non-i64 dispatch-branch phi;
+        // tracked in phase-7-codegen.md. This pins the loud-failure contract.
+        use karac::codegen::compile_to_ir;
+        let src = r#"
+struct FakeEnv {}
+impl FakeEnv { fn args(self) -> Vec[String] { ["a", "b"] } }
+fn main() reads(Env) {
+    with_provider[Env](FakeEnv {}, || {
+        let a = Env.args();
+        println(a.len());
+    });
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let result = compile_to_ir(&parsed.program, None, None);
+        let err = result.expect_err(
+            "expected a loud codegen error for a with_provider override of the \
+             no-vtable-slot method Env.args, but codegen succeeded (silent FFI \
+             fall-through would ignore the override)",
+        );
+        assert!(
+            err.contains("args"),
+            "override error should name the offending method `args`; got: {err}"
+        );
+    }
+
+    #[test]
     fn test_e2e_with_provider_ambient_override() {
         // `with_provider[Clock](FakeClock {}, || ...)` overrides the
         // ambient `Clock` resource with a statically-typed provider. The

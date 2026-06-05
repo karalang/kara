@@ -260,18 +260,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return Ok(value);
                 }
-                // Capitalized ambient resource call whose method is one the
-                // ambient lowering backs (`Clock.now`, `Env.set`): route
-                // through `compile_ambient_resource_method`, which consults
-                // the runtime provider stack for an active `with_provider[R]`
-                // override (cross-boundary) and otherwise emits the builtin
-                // FFI default. Restricted to `ambient_method_index`-known
-                // pairs so OTHER ambient resource methods that already have a
+                // Capitalized ambient resource call whose method the ambient
+                // lowering backs: route through `compile_ambient_resource_method`,
+                // which consults the runtime provider stack for an active
+                // `with_provider[R]` override (cross-boundary, vtable-slotted
+                // methods) and otherwise emits the builtin FFI default. Two
+                // disjoint cases qualify: (a) `ambient_method_index`-known
+                // pairs (`Clock.now`, `Env.set`) which have a vtable slot, and
+                // (b) `ambient_ffi_lowered` no-slot pairs (`RandomSource.next_u64`,
+                // `Env.args`) which have only an FFI default. Both gates are
+                // required so OTHER ambient resource methods that already have a
                 // dedicated lowering reached via `compile_assoc_call` (e.g.
-                // `FileSystem.read_to_string`) keep their existing path — the
-                // ambient lowering only knows `Clock.now`/`Env.set` and would
-                // otherwise error "not yet lowered" for them.
-                if super::method_call::ambient_method_index(&segments[0], &segments[1]).is_some() {
+                // `FileSystem.read_to_string`) keep their existing path rather
+                // than erroring "not yet lowered".
+                if super::method_call::ambient_method_index(&segments[0], &segments[1]).is_some()
+                    || super::method_call::ambient_ffi_lowered(&segments[0], &segments[1])
+                {
                     return self.compile_ambient_resource_method(&segments[0], &segments[1], args);
                 }
                 return self.compile_assoc_call(&segments[0], &segments[1], args);
