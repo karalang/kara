@@ -22496,3 +22496,101 @@ fn vector_i32_suffixless_lanes_ok() {
     // `1` (default i64) coerces to the i32 element — no `i32` suffix needed.
     typecheck_ok("fn main() { let v = Vector[i32, 4](1, 2, 3, 4); println(v[0]); }");
 }
+
+// ── Phase-10: `host fn` boundary-type restrictions ──────────────
+// design.md § Host Functions > Parameter and return types: permit
+// primitives, Copy-satisfying types, opaque-handle newtypes; reject
+// owned non-Copy, ref T, mut ref T. Generic host fns are rejected at
+// parse (no generic grammar), covered in tests/parser.rs.
+
+#[test]
+fn host_fn_boundary_accepts_primitives_copy_and_handles() {
+    typecheck_ok(
+        r#"
+effect resource Screen;
+
+struct ElementHandle { id: i64 }
+
+#[derive(Copy, Clone)]
+struct Point { x: f64, y: f64 }
+
+host fn ok_primitives(a: i64, b: f64, c: bool) -> i64 with reads(Clock);
+host fn ok_handle(el: ElementHandle) -> ElementHandle with writes(Screen);
+host fn ok_copy(p: Point) -> Point with reads(Clock);
+host fn ok_ptr(buf: *const u8, len: i64) with reads(Clock);
+
+fn main() {}
+"#,
+    );
+}
+
+#[test]
+fn host_fn_boundary_rejects_owned_non_copy_and_refs() {
+    let errs = typecheck_errors(
+        r#"
+struct Config { name: String, retries: i64 }
+
+#[derive(Copy, Clone)]
+struct Point { x: f64, y: f64 }
+
+host fn bad_string(s: String) with reads(Clock);
+host fn bad_ref(p: ref Point) with reads(Clock);
+host fn bad_mutref(p: mut ref Point) with reads(Clock);
+host fn bad_owned(c: Config) with reads(Clock);
+host fn bad_vec_ret() -> Vec[i64] with reads(Clock);
+
+fn main() {}
+"#,
+    );
+    let msgs: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
+    assert_eq!(errs.len(), 5, "exactly the five violations: {msgs:?}");
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("bad_string")
+                && m.contains("`String` cannot cross the host boundary"))
+    );
+    assert!(msgs
+        .iter()
+        .any(|m| m.contains("bad_ref") && m.contains("`ref` parameters cannot cross")));
+    assert!(msgs
+        .iter()
+        .any(|m| m.contains("bad_mutref") && m.contains("`mut ref` parameters cannot cross")));
+    assert!(msgs
+        .iter()
+        .any(|m| m.contains("bad_owned") && m.contains("`Config` cannot cross the host boundary")));
+    assert!(msgs
+        .iter()
+        .any(|m| m.contains("bad_vec_ret") && m.contains("return type `Vec<i64>` cannot cross")));
+}
+
+#[test]
+fn host_fn_boundary_multi_field_struct_is_not_a_handle() {
+    // Two primitive fields without #[derive(Copy)]: neither a handle
+    // (not single-field) nor Copy — must be rejected.
+    let errs = typecheck_errors(
+        r#"
+struct Pair { a: i64, b: i64 }
+
+host fn bad_pair(p: Pair) with reads(Clock);
+
+fn main() {}
+"#,
+    );
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].to_string().contains("`Pair` cannot cross"));
+}
+
+#[test]
+fn host_fn_extern_c_unaffected_by_host_restrictions() {
+    // extern "C" keeps its own rules — a ref param in an extern block
+    // must not trip the host-boundary check.
+    typecheck_ok(
+        r#"
+unsafe extern "C" {
+    fn c_takes_ptr(p: *const u8, n: i64) -> i64;
+}
+
+fn main() {}
+"#,
+    );
+}

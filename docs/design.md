@@ -12603,11 +12603,11 @@ A library author declares a browser API once as `host fn`; the same source file 
 host fn dom_append(parent: ElementHandle, child: ElementHandle)
     with writes(Display);
 
-host fn fetch_json(url: ref String) -> Result[Bytes, HttpError]
+host fn fetch_begin(url_ptr: *const u8, url_len: i64) -> RequestHandle
     with sends(Network), receives(Network), suspends;
 ```
 
-No body — ends with `;`. Placed at module scope. Supports attributes and visibility like any other item.
+No body — ends with `;`. Placed at module scope. Supports attributes and visibility like any other item. (`ElementHandle` / `RequestHandle` are opaque-handle newtypes and the string crosses as a `(ptr, len)` pair — earlier drafts showed `url: ref String` / `-> Result[Bytes, ...]` here, which the restriction list below rejects; a richer `fetch_json(url: ref String)` is the *library wrapper* built on top, not the `host fn` itself.)
 
 ### Effect declarations are required
 

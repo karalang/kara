@@ -1075,13 +1075,17 @@ HOST_FUNCTION = [ ATTRIBUTES ] [ VISIBILITY ] "host" "fn" IDENT
 
 No body — ends with `;`. Unlike `extern`, the `EFFECT_LIST` (a `with` clause) is **required** — `host fn` has no effect default. Parameter and return types are restricted to primitives, `Copy` types, and opaque-handle newtypes (see design.md § Host Functions).
 
+`host` is a **contextual keyword** (same mechanism as `test`): only `host` immediately followed by `fn` at item position parses as a host-function declaration. Everywhere else `host` remains an ordinary identifier — it is the most common networking parameter name (`fn create_server(host: String, port: u16)`), and hard-reserving it would break exactly the backend programs v1 targets.
+
 ```
 host fn dom_append(parent: ElementHandle, child: ElementHandle)
     with writes(Display);
 
-host fn fetch_json(url: ref String) -> Result[Bytes, HttpError]
+host fn fetch_begin(url_ptr: *const u8, url_len: i64) -> RequestHandle
     with sends(Network), receives(Network), suspends;
 ```
+
+(`ElementHandle` / `RequestHandle` are opaque-handle newtypes; strings cross as `(ptr, len)` pairs — `ref String` and owned non-`Copy` returns are rejected by the restriction above.)
 
 Target-neutral at the source level; the compiler lowers to `extern "C"` on native, WASM imports on browser-WASM, and WIT-backed Component Model (or C-ABI shim) on server-WASM.
 

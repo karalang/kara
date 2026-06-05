@@ -206,6 +206,26 @@ impl super::Parser {
                 self.error_bare_extern_at_module_scope();
                 None
             }
+            // `host fn name(...) [-> T] with ...;` — target-neutral
+            // host-function declaration, phase-10 per `syntax.md § 3.16`.
+            // Unlike `extern`, host fns are module-scope items (no
+            // `unsafe { }` block): the trust assertion lives in the
+            // REQUIRED `with` clause, and the compiler owns the
+            // target-specific lowering.
+            //
+            // `host` is a CONTEXTUAL keyword (same mechanism as `test`
+            // above): only `host` immediately followed by `fn` at item
+            // position dispatches here. Everywhere else `host` stays an
+            // ordinary identifier — it is the single most common
+            // networking parameter name (`create_server(host: String,
+            // port: u16)`), and Kāra's v1 is backend-first; hard-reserving
+            // it would wound exactly the programs the language targets.
+            Token::Identifier { ref name, .. }
+                if name == "host" && matches!(self.peek_token_at(1), Token::Fn) =>
+            {
+                let decl = self.parse_host_function(attributes, is_pub, is_private)?;
+                Some(Item::ExternFunction(decl))
+            }
             Token::Distinct => {
                 let def = self.parse_distinct_type(attributes, is_pub, is_private)?;
                 Some(Item::DistinctType(def))

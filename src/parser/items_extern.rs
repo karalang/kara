@@ -69,6 +69,18 @@ impl super::Parser {
             }
         };
 
+        // `"host"` is the internal ABI sentinel `host fn` declarations
+        // lower to (phase-10) — accepting it here would let an extern
+        // block mint host-marked functions while bypassing `host fn`'s
+        // required-`with` and boundary-type rules.
+        if abi == "host" {
+            self.error(
+                "`\"host\"` is not an ABI — use a `host fn` declaration for \
+                 target-neutral host bindings (`host fn name(...) with ...;`, \
+                 see syntax.md § 3.16).",
+            );
+        }
+
         self.expect(&Token::LeftBrace)?;
 
         let mut items = Vec::new();
@@ -196,6 +208,106 @@ impl super::Parser {
             is_pub,
             is_private,
             abi: block_abi.to_string(),
+            name,
+            params,
+            return_type,
+            effects,
+        })
+    }
+
+    /// Parse a module-scope `host fn name(...) [-> T] with ...;`
+    /// declaration (phase-10, `syntax.md § 3.16`). Picks up at the
+    /// `host` keyword; attributes / visibility were consumed by the
+    /// item dispatcher. Produces an [`ExternFunction`] with the
+    /// `"host"` ABI sentinel — downstream, native codegen declares it
+    /// exactly like an `extern "C"` of the same signature, the
+    /// effectchecker applies NO ABI default (unlike `extern "C"`'s
+    /// `{blocks}`), and the typechecker enforces the host-boundary
+    /// type restrictions.
+    ///
+    /// Grammar deviations from the extern-block form, all by design:
+    /// - generics are rejected (monomorphizing across the host
+    ///   boundary needs host-side cooperation; not in v1),
+    /// - the `with` clause is REQUIRED (no ABI-level effect default
+    ///   fits the heterogeneous host set),
+    /// - a `{ ... }` body is rejected (the host provides the body).
+    pub(super) fn parse_host_function(
+        &mut self,
+        attributes: Vec<Attribute>,
+        is_pub: bool,
+        is_private: bool,
+    ) -> Option<ExternFunction> {
+        let start = self.current_span();
+        let doc_comment = self.take_pending_doc();
+
+        // Contextual keyword: the item dispatcher guaranteed the current
+        // token is the identifier `host` with `fn` immediately after —
+        // consume both. (No Token::Host exists; `host` stays usable as an
+        // ordinary identifier everywhere else.)
+        debug_assert!(
+            matches!(self.peek_token(), Token::Identifier { name, .. } if name == "host"),
+            "parse_host_function called without `host` lookahead",
+        );
+        self.advance(); // `host`
+        self.expect(&Token::Fn)?;
+        let name = self.expect_identifier()?;
+        let name_span = self.span_from(&start);
+        self.check_ident_class(&name, IdentClass::Value, "host function", name_span);
+
+        if self.check(&Token::LeftBracket) {
+            self.error(
+                "generic `host fn` declarations are not permitted in v1 — \
+                 monomorphizing across the host boundary requires host-side \
+                 binding-layer cooperation (design.md § Host Functions > \
+                 Parameter and return types)",
+            );
+            return None;
+        }
+
+        self.expect(&Token::LeftParen)?;
+        self.fn_context_stack.push(FnContext::Function);
+        let mut params = Vec::new();
+        while !self.check(&Token::RightParen) && !self.is_at_end() {
+            params.push(self.parse_param()?);
+            if !self.eat(&Token::Comma) {
+                break;
+            }
+        }
+        self.fn_context_stack.pop();
+        self.expect(&Token::RightParen)?;
+
+        let return_type = if self.eat(&Token::Arrow) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        let effects = self.parse_optional_effect_list(&[]);
+        if effects.is_none() {
+            self.error(
+                "`host fn` must declare its effects; unlike `extern \"C\"`, \
+                 no default effect set applies — add a `with` clause \
+                 (e.g. `with writes(Display);`)",
+            );
+            return None;
+        }
+
+        if self.check(&Token::LeftBrace) {
+            self.error(
+                "`host fn` declarations have no body — the host provides the \
+                 implementation; end the declaration with `;`",
+            );
+            return None;
+        }
+        self.expect(&Token::Semicolon)?;
+
+        Some(ExternFunction {
+            span: self.span_from(&start),
+            attributes,
+            doc_comment,
+            is_pub,
+            is_private,
+            abi: "host".to_string(),
             name,
             params,
             return_type,

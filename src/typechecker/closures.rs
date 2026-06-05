@@ -35,7 +35,7 @@ impl<'a> super::TypeChecker<'a> {
     /// not yet exist. Used by the once-callability walker to decide
     /// whether a captured outer binding's type is Copy (no consume
     /// possible) or non-Copy (consume promotes the closure to OnceFn).
-    fn is_copy_type_during_check(&self, ty: &Type) -> bool {
+    pub(super) fn is_copy_type_during_check(&self, ty: &Type) -> bool {
         if matches!(
             ty,
             Type::Int(_)

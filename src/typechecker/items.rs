@@ -62,9 +62,116 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 }
+                // `host fn` boundary-type restrictions (phase-10,
+                // design.md § Host Functions > Parameter and return
+                // types). Extern-block fns are exempt — `extern "C"`
+                // is the raw C-ABI door and keeps its own rules.
+                Item::ExternFunction(e) if e.abi == "host" => {
+                    self.check_host_fn_boundary(e);
+                }
                 _ => {}
             }
         }
+    }
+
+    /// Enforce the `host fn` parameter/return restriction: primitives,
+    /// `Copy`-satisfying types, and opaque-handle newtypes (single
+    /// primitive-field structs) only. Owned non-`Copy` and `ref` /
+    /// `mut ref` get targeted diagnostics; generics are structurally
+    /// impossible (the grammar has no generic-param list).
+    fn check_host_fn_boundary(&mut self, e: &ExternFunction) {
+        for p in &e.params {
+            if let Some(msg) = self.host_boundary_violation(&p.ty, "parameter") {
+                self.type_error(
+                    format!("host fn '{}': {msg}", e.name),
+                    p.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+        if let Some(ref rt) = e.return_type {
+            if let Some(msg) = self.host_boundary_violation(rt, "return") {
+                self.type_error(
+                    format!("host fn '{}': {msg}", e.name),
+                    rt.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+    }
+
+    /// `None` when `ty` may cross the host boundary; `Some(message)`
+    /// naming the violation otherwise. `position` is "parameter" or
+    /// "return type" for message text.
+    fn host_boundary_violation(&mut self, ty: &TypeExpr, position: &str) -> Option<String> {
+        match &ty.kind {
+            // Borrow aliasing rules are a Kāra-compiler property; the
+            // host cannot be asked to honor them.
+            TypeKind::Ref(_) => Some(format!(
+                "`ref` {position}s cannot cross the host boundary — the host \
+                 cannot honor Kāra's borrow rules; pass an opaque handle or a \
+                 (pointer, length) pair instead (design.md § Host Functions)",
+            )),
+            TypeKind::MutRef(_) => Some(format!(
+                "`mut ref` {position}s cannot cross the host boundary — the \
+                 host cannot honor Kāra's borrow rules; pass an opaque handle \
+                 or a (pointer, length) pair instead (design.md § Host Functions)",
+            )),
+            // Raw pointers are primitive at the boundary (the unsafe
+            // contract is the programmer's, same as extern "C").
+            TypeKind::Pointer { .. } => None,
+            _ => {
+                let lowered = self.lower_type_expr(ty, &[]);
+                if self.host_boundary_type_ok(&lowered) {
+                    None
+                } else {
+                    Some(format!(
+                        "{position} type `{}` cannot cross the host boundary — \
+                         only primitives, `Copy`-satisfying types, and \
+                         opaque-handle newtypes (single primitive-field \
+                         structs) are permitted; owned non-`Copy` values \
+                         raise ownership-transfer questions the host cannot \
+                         answer (design.md § Host Functions)",
+                        type_display(&lowered),
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Lowered-type leg of the host-boundary check: primitives,
+    /// `Copy`-satisfying types, opaque-handle newtypes.
+    fn host_boundary_type_ok(&self, ty: &Type) -> bool {
+        if matches!(ty, Type::Pointer { .. }) {
+            return true;
+        }
+        if self.is_copy_type_during_check(ty) {
+            return true;
+        }
+        // Opaque-handle newtype: user struct with exactly one
+        // primitive-typed field. The host identity is the scalar; the
+        // wrapper exists purely for stronger typing — `Copy` derive is
+        // not required (handles often deliberately aren't Copy so a
+        // Drop impl can release the host resource).
+        if let Type::Named { name, args } = ty {
+            if args.is_empty() {
+                if let Some(info) = self.env.structs.get(name) {
+                    if info.fields.len() == 1 {
+                        let (_, field_ty, _) = &info.fields[0];
+                        return matches!(
+                            field_ty,
+                            Type::Int(_)
+                                | Type::UInt(_)
+                                | Type::Float(_)
+                                | Type::Bool
+                                | Type::Char
+                                | Type::Pointer { .. }
+                        );
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Type-check default method bodies inside a trait declaration.

@@ -1007,6 +1007,24 @@ impl<'a> EffectChecker<'a> {
         for item in &effects.items {
             match item {
                 EffectItem::Verb(verb) => {
+                    // Bare verbs (`blocks`, `suspends`, `panics`) carry no
+                    // resource list — the empty-resource Effect mirrors how
+                    // the extern-ABI defaults register `blocks`. Before this
+                    // arm existed (phase-10 `host fn` slice), a bare verb in
+                    // ANY `with` clause was silently dropped: `pub fn f()
+                    // with blocks { <blocking body> }` was rejected as
+                    // undeclared, and callers of a declared-`blocks`
+                    // signature with a non-blocking (stub) body never
+                    // inherited the effect at all.
+                    if verb.resources.is_empty() {
+                        result.add(
+                            Effect {
+                                verb: verb.kind.clone(),
+                                resource: String::new(),
+                            },
+                            EffectOrigin::Direct(verb.span.clone()),
+                        );
+                    }
                     for resource in &verb.resources {
                         let res_name = resource.path.join(".");
                         result.add(

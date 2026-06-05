@@ -10152,3 +10152,86 @@ fn bare_test_identifier_in_expression_position_keeps_parsing() {
     };
     assert_eq!(f.body.stmts.len(), 2);
 }
+
+// ── Phase-10: `host fn` declarations (syntax.md § 3.16) ─────────
+
+#[test]
+fn host_fn_parses_to_extern_function_with_host_abi() {
+    let p = parse_ok("host fn dom_append(parent: i64, child: i64) with writes(Screen);\n");
+    let Some(Item::ExternFunction(e)) = p.items.first() else {
+        panic!("expected Item::ExternFunction, got {:?}", p.items.first());
+    };
+    assert_eq!(e.abi, "host", "host fn lowers to the \"host\" ABI sentinel");
+    assert_eq!(e.name, "dom_append");
+    assert_eq!(e.params.len(), 2);
+    assert!(e.return_type.is_none());
+    assert!(e.effects.is_some(), "with-clause must be captured");
+}
+
+#[test]
+fn host_fn_with_return_type_and_visibility() {
+    let p = parse_ok("pub host fn perf_now() -> f64 with reads(Clock);\n");
+    let Some(Item::ExternFunction(e)) = p.items.first() else {
+        panic!("expected Item::ExternFunction");
+    };
+    assert!(e.is_pub);
+    assert!(e.return_type.is_some());
+}
+
+#[test]
+fn host_fn_missing_with_clause_gets_dedicated_diagnostic() {
+    let (_, errs) = parse_with_errors("host fn perf_now() -> f64;\n");
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("`host fn` must declare its effects")),
+        "expected the required-with diagnostic, got: {errs:?}",
+    );
+}
+
+#[test]
+fn host_fn_generics_rejected() {
+    let (_, errs) = parse_with_errors("host fn identity[T](x: T) -> T with reads(Clock);\n");
+    assert!(
+        errs.iter().any(|e| e
+            .to_string()
+            .contains("generic `host fn` declarations are not permitted")),
+        "expected the generics rejection, got: {errs:?}",
+    );
+}
+
+#[test]
+fn host_fn_body_rejected() {
+    let (_, errs) = parse_with_errors("host fn f(x: i64) -> i64 with reads(Clock) { x }\n");
+    assert!(
+        errs.iter().any(|e| e
+            .to_string()
+            .contains("`host fn` declarations have no body")),
+        "expected the no-body diagnostic, got: {errs:?}",
+    );
+}
+
+#[test]
+fn extern_block_host_abi_rejected() {
+    let (_, errs) = parse_with_errors("unsafe extern \"host\" {\n    fn evil(x: i64);\n}\n");
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("`\"host\"` is not an ABI")),
+        "expected the host-ABI spoof rejection, got: {errs:?}",
+    );
+}
+
+#[test]
+fn host_is_contextual_not_reserved() {
+    // `host` is a CONTEXTUAL keyword (same mechanism as `test`): only
+    // `host` followed by `fn` at item position declares a host function.
+    // Everywhere else it stays an ordinary identifier — it is the single
+    // most common networking parameter name and Kāra v1 is backend-first.
+    parse_ok("fn main() { let host = 1; let _ = host + 1; }\n");
+    parse_ok("fn create_server(host: String, port: u16) -> i64 { 0 }\n");
+    // ...while item-position `host fn` still dispatches:
+    let p = parse_ok("host fn h() with reads(Clock);\nfn main() {}\n");
+    assert!(
+        matches!(p.items.first(), Some(Item::ExternFunction(e)) if e.abi == "host"),
+        "item-position host fn must still parse",
+    );
+}

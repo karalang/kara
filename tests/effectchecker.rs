@@ -7417,3 +7417,74 @@ fn contract_with_panics_effect_allowed() {
 fn contract_pure_predicate_accepted() {
     effectcheck_ok("fn f(x: i64) -> i64 requires x > 0 ensures(result) result > x { x + 1 }");
 }
+
+// ── Phase-10: `host fn` effect semantics ────────────────────────
+// Declared effects are trusted (no body to verify) and there is NO
+// ABI default — unlike `extern "C"`'s implicit `{blocks}`. The
+// "host" ABI sentinel falls through the abi-default match unmatched.
+
+#[test]
+fn host_fn_declared_effects_propagate_to_callers() {
+    let errs = effectcheck_errors(
+        r#"
+effect resource Screen;
+
+host fn dom_clear() with writes(Screen);
+
+pub fn wipe() {
+    dom_clear();
+}
+
+fn main() {}
+"#,
+    );
+    assert!(
+        errs.iter().any(|e| {
+            let m = e.to_string();
+            m.contains("wipe") && m.contains("writes(Screen)")
+        }),
+        "declared host fn effects must propagate and flag the undeclared pub caller: {errs:?}",
+    );
+}
+
+#[test]
+fn host_fn_has_no_blocks_default() {
+    // A caller declaring exactly the host fn's declared set must pass —
+    // if the extern-"C" {blocks} default leaked in, `wipe` would be
+    // flagged for an undeclared `blocks`.
+    effectcheck_ok(
+        r#"
+effect resource Screen;
+
+host fn dom_clear() with writes(Screen);
+
+pub fn wipe() with writes(Screen) {
+    dom_clear();
+}
+
+fn main() {}
+"#,
+    );
+}
+
+#[test]
+fn host_fn_declared_blocks_is_honored_when_written() {
+    // No default ≠ blocks unavailable: an explicitly declared `blocks`
+    // flows like any other declared effect.
+    let errs = effectcheck_errors(
+        r#"
+host fn host_sleep(ms: i64) with blocks;
+
+pub fn nap() {
+    host_sleep(10);
+}
+
+fn main() {}
+"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("nap") && e.to_string().contains("blocks")),
+        "explicit blocks on a host fn must propagate: {errs:?}",
+    );
+}
