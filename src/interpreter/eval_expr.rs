@@ -377,6 +377,20 @@ impl<'a> super::Interpreter<'a> {
                         let vals = storage.read().unwrap();
                         vals[start + i].clone()
                     }
+                    // `Vector[T, N]` lane read `v[i] -> T` (design.md § Portable
+                    // SIMD, slice 1b). Value semantics — returns the lane by
+                    // clone; out-of-range panics, matching the codegen
+                    // bounds-check.
+                    (Value::Vector(lanes), Value::Int(i)) => {
+                        let i = *i as usize;
+                        let len = lanes.len();
+                        lanes.get(i).cloned().unwrap_or_else(|| {
+                            self.record_runtime_error(
+                                format!("vector lane index {} out of bounds (lanes {})", i, len),
+                                &expr.span,
+                            )
+                        })
+                    }
                     _ => unreachable!(
                         "index expression at {}:{}: obj=Value::{}, index=Value::{}; \
                          either an interpreter codepath produced wrong variants \

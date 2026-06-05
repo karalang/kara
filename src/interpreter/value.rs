@@ -76,6 +76,15 @@ pub enum Value {
     /// borrow-tracking parity § sub-item 3 "Aliased interpreter
     /// representation".
     Array(Arc<RwLock<Vec<Value>>>),
+    /// `Vector[T, N]` — the portable-SIMD lane vector (design.md § Portable
+    /// SIMD). Plain `Vec<Value>` of exactly `N` numeric lanes with **value
+    /// (Copy) semantics** — distinct from `Value::Array`'s shared
+    /// `Arc<RwLock<...>>` reference semantics. Element-wise arithmetic
+    /// produces a fresh `Vector`; lane read `v[i]` returns a lane by value.
+    /// The interpreter validates Vector *semantics*; codegen validates its
+    /// `<N x T>` memory representation (design.md "Interpreter parity scope").
+    /// Phase-7 line 289 slice 1b.
+    Vector(Vec<Value>),
     /// `Slice[T]` / `mut Slice[T]` runtime value — a window into shared
     /// storage. Created at `.as_slice()` / `.as_slice_mut()` /
     /// range-indexing / call-arg coercion sites; cloned by sharing the
@@ -626,6 +635,16 @@ impl std::fmt::Display for Value {
                 }
                 write!(f, "]")
             }
+            Value::Vector(lanes) => {
+                write!(f, "Vector(")?;
+                for (i, v) in lanes.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", v)?;
+                }
+                write!(f, ")")
+            }
             Value::Slice {
                 storage,
                 start,
@@ -888,6 +907,7 @@ impl Value {
             Value::Unit => "Unit",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",
+            Value::Vector(_) => "Vector",
             Value::Slice { .. } => "Slice",
             Value::Map(_) => "Map",
             Value::Struct { .. } => "Struct",

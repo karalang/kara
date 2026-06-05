@@ -12048,3 +12048,111 @@ fn shared_struct_mut_field_still_persists() {
          fn main() { let b = Box { v: 1 }; b.set(99); println(b.get()); }");
     assert_eq!(out.trim(), "99");
 }
+
+// ── Portable SIMD `Vector[T, N]` — slice 1b interpreter parity ────────
+//
+// design.md § Portable SIMD + "Interpreter parity scope": the tree-walk
+// interpreter and codegen must produce equivalent observable output for the
+// same program. These mirror the `tests/codegen.rs::test_vector_*` run-tests
+// (same sources, same expected stdout) so the two backends are pinned to the
+// same behaviour for construction, element-wise arithmetic, and lane read.
+
+#[test]
+fn test_vector_i64_construct_add_index() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    let b: Vector[i64, 4] = Vector[i64, 4](10, 20, 30, 40);
+    let c = a + b;
+    println(c[0]);
+    println(c[3]);
+}
+"#,
+    );
+    assert_eq!(out, "11\n44\n");
+}
+
+#[test]
+fn test_vector_i64_mul_and_sub() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a: Vector[i64, 4] = Vector[i64, 4](2, 3, 4, 5);
+    let b: Vector[i64, 4] = Vector[i64, 4](10, 10, 10, 10);
+    let prod = a * b;
+    let diff = b - a;
+    println(prod[1]);
+    println(diff[2]);
+}
+"#,
+    );
+    // prod = [20, 30, 40, 50] -> [1] == 30; diff = [8, 7, 6, 5] -> [2] == 6
+    assert_eq!(out, "30\n6\n");
+}
+
+#[test]
+fn test_vector_inferred_binding_type() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a = Vector[i64, 2](7, 8);
+    let b = Vector[i64, 2](100, 200);
+    let c = a + b;
+    println(c[1]);
+}
+"#,
+    );
+    assert_eq!(out, "208\n");
+}
+
+#[test]
+fn test_vector_f64_elementwise_div() {
+    // Parity with codegen: f64 whole numbers print without a decimal point.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a: Vector[f64, 2] = Vector[f64, 2](10.0, 9.0);
+    let b: Vector[f64, 2] = Vector[f64, 2](2.0, 3.0);
+    let q = a / b;
+    println(q[0]);
+    println(q[1]);
+}
+"#,
+    );
+    assert_eq!(out, "5\n3\n");
+}
+
+#[test]
+fn test_vector_value_semantics_no_aliasing() {
+    // `Vector` is Copy: rebinding does not alias. (Lane mutation isn't in the
+    // slice-1 surface, so this pins the representation choice for when it is.)
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a = Vector[i64, 2](1, 2);
+    let b = a;
+    let c = a + b;
+    println(c[0]);
+    println(c[1]);
+}
+"#,
+    );
+    assert_eq!(out, "2\n4\n");
+}
+
+#[test]
+fn test_vector_lane_out_of_bounds_is_runtime_error() {
+    let errs = runtime_errors(
+        r#"
+fn main() {
+    let a = Vector[i64, 2](1, 2);
+    println(a[5]);
+}
+"#,
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("lane index")),
+        "expected a vector lane out-of-bounds runtime error, got: {errs:?}"
+    );
+}

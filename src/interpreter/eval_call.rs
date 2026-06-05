@@ -114,6 +114,25 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // `Vector[T, N](lane0, …)` SIMD construction (design.md § Portable
+        // SIMD, slice 1b). Parses as `Call(Path(["Vector"], generic_args))`.
+        // The typechecker has already verified lane count == N and each lane's
+        // type; the interpreter just evaluates each lane into a value-semantics
+        // `Value::Vector`. Mirrors the codegen insertelement chain.
+        if let ExprKind::Path {
+            segments,
+            generic_args: Some(_),
+        } = &callee.kind
+        {
+            if segments.len() == 1 && segments[0] == "Vector" {
+                let lanes: Vec<Value> = args
+                    .iter()
+                    .map(|a| self.eval_expr_inner(&a.value))
+                    .collect();
+                return Value::Vector(lanes);
+            }
+        }
+
         // Built-in path-qualified functions (e.g. process.exit, Ordering.Relaxed, F64.from)
         if let ExprKind::Path { segments, .. } = &callee.kind {
             let path_str = segments.join(".");

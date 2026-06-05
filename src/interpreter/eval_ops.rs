@@ -80,6 +80,21 @@ impl<'a> super::Interpreter<'a> {
         let left_variant = left.variant_name();
         let right_variant = right.variant_name();
         match (op, left, right) {
+            // Element-wise SIMD arithmetic on `Vector[T, N]` (design.md
+            // § Portable SIMD, slice 1b). Recurse per lane pair so each lane
+            // reuses the exact scalar Int/Float semantics (overflow check,
+            // div-by-zero). The typechecker guarantees both sides are the same
+            // Vector[T, N] and op ∈ {+,-,*,/,%}, and equal lane counts, so the
+            // zip is total. Produces a fresh value-semantics Vector.
+            (_, Value::Vector(a), Value::Vector(b)) => {
+                let lanes: Vec<Value> = a
+                    .into_iter()
+                    .zip(b)
+                    .map(|(x, y)| self.eval_binary(op, x, y, span))
+                    .collect();
+                Value::Vector(lanes)
+            }
+
             // Arithmetic (Int)
             (BinOp::Add, Value::Int(a), Value::Int(b)) => Value::Int(match a.checked_add(b) {
                 Some(v) => v,
