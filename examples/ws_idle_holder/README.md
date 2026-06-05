@@ -40,7 +40,13 @@ fn handle_connection(ws: WebSocket) {
     loop {
         let r = ws.recv_text(mut buf);
         match r {
-            Result.Ok(n) => { if n == 0 { break; } }
+            Result.Ok(n) => {
+                if n == 0 { break; }              // clean EOF → handler returns → Drop reaps fd
+                match ws.send_text(buf[0..n]) {   // echo — only fires on a real inbound frame
+                    Result.Ok(_) => {}
+                    Result.Err(_) => { break; }
+                }
+            }
             Result.Err(_) => { break; }
         }
     }
@@ -56,6 +62,15 @@ fn main() {
     }
 }
 ```
+
+The handler **echoes unconditionally**, but `send_text` only fires on a real
+inbound frame, so the **idle path is byte-identical** to a pure recv-loop — idle
+density is unchanged whether or not a connection ever sends. The echo is what
+the active-traffic stress test drives (1 msg/sec/conn, server echoes); see
+[`bench/REPORT.md § Active-traffic stress test`](bench/REPORT.md#active-traffic-stress-test)
+for the realistic-arrival headline (sub-ms p50, 2.31× density holds under load),
+the synchronized-burst worst case (~5 ms p50 after the Stage B reactor work),
+and the 1M active functional-hold ceiling (8.23M msgs echoed, 0 failed).
 
 ## Cert handling
 
@@ -199,14 +214,19 @@ verification (note the `--insecure` flag for the self-signed cert):
 
 ```sh
 websocat --insecure wss://localhost:$PORT
-# (type some text, press Ctrl-D; the demo discards but accepts the frame)
+# (type some text + Enter; the demo echoes it back, then Ctrl-D to close)
 ```
 
 ## What the demo deliberately omits
 
-- **No echo.** M1's target is *idle* connections; echo would introduce
-  per-frame CPU and stdout traffic that confounds the memory + latency
-  measurements at scale.
+- **Echo, but idle-path-identical.** The handler echoes received frames
+  (`send_text`), which the Phase-2 active-traffic stress test exercises. This
+  was deliberately made zero-cost for the idle/density measurement: `send_text`
+  fires only on a real inbound frame, so an idle connection's code path and
+  memory are byte-identical to a pure recv-loop. The original "M1 measures idle,
+  no echo" stance held until the active-traffic slice (wip #66) needed a
+  round-trip; unconditional-same-binary echo was chosen precisely so the idle
+  density numbers stay valid (decision: 2026-05-31). No per-frame stdout traffic.
 - **No structured logging.** `std.tracing` integration lands when the
   demo grows beyond the smoke-test phase (slice 3+ of line 170).
 - **No graceful shutdown.** The accept loop runs until interrupted

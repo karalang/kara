@@ -42,8 +42,10 @@
 //   3. `tg.spawn(|| handle_connection(ws))` — same move-capture shape
 //      as slice 1, leveraging the `OnceFn() -> T` spawn slot.
 //
-// **Per-connection handler.** Identical to slice 1's: `recv_text` loop
-// until `Ok(0)` clean EOF or `Err(_)`. The framing FFIs check the TLS
+// **Per-connection handler.** `recv_text` loop until `Ok(0)` clean EOF
+// or `Err(_)`, echoing each received frame back via `send_text` (the
+// echo fires only on a real inbound frame, so the idle path is
+// byte-identical to slice 1's recv-only loop). The framing FFIs check the TLS
 // session registry by fd at each call; for a `WebSocket` produced by
 // `accept_tls`, the rustls session is present so plaintext flows
 // through `ServerConnection::reader()` / `.writer()` / `read_tls` /
@@ -51,7 +53,6 @@
 // keeps the existing fast path active. No kara-side flag needed.
 //
 // **What slice 2 deliberately omits** (same omissions as slice 1):
-//   - No echo. M1 measures idle.
 //   - No structured logging. `std.tracing` integration lands in slice 3+
 //     of line 170.
 //   - No graceful shutdown / max-connection cap.

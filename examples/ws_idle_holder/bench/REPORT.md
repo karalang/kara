@@ -394,7 +394,7 @@ number with the deviation rather than retuning to remove it._
 | connect p95 | 214.1 ms | |
 | connect p99 | 254.8 ms | tail collapsed vs pre-fix 1856 ms — `ec2_setup.sh` sysctls removed the SYN-retransmit cliff |
 | connect max | 480.4 ms | vs pre-fix 2306 ms |
-| churn cliff_ratio | TBD | deferred to active-traffic stress run (#66) |
+| churn cliff_ratio | TBD | active-traffic landed ([§Active-traffic stress test](#active-traffic-stress-test)); cliff_ratio tracks the deferred handshake-QPS / reconnect-storm sub-run (#66) |
 
 - Raw JSON: `docs/investigations/demo1_m3_1m_postfix_datalayout.json`.
 - Acceptance criteria (all met): `established == 1,000,000` AND
@@ -877,29 +877,94 @@ scale but rarely the choice for density-critical fleets.
 
 ## Active-traffic stress test
 
-> _Pending — wip task #66. Run after all idle-hold rows land._
+**Status: landed (wip task #66), 2026-06-05.** Measured on arm64 Graviton —
+`r8g.4xlarge` for the 250K head-to-head, `m8g.4xlarge` (16-core Graviton4) for
+the CPU-isolated burst sweep and the 1M ceiling. Build off `main ⊇ 97b2a39c`
+(Stage B3 combined poll-and-dispatch reactor).
 
-**Profile:** 1,000,000 idle held connections + 10,000 actively
-exchanging connections at 1 message/sec/conn (10K msg/sec aggregate
-floor). Payload: 64-byte text frame; small enough to not dominate
-network, large enough to exercise framing.
+**Profile:** held connections plus a subset actively exchanging a 64-byte text
+frame at 1 message/sec/conn, echoed by the server. The demo's
+`handle_connection` echoes unconditionally, but the **idle path is
+byte-identical** — `send_text` only fires on a real inbound frame, so idle
+density is unchanged from the §Kāra idle-hold numbers. Payload is small enough
+to not dominate the network, large enough to exercise framing. This is the
+measurement that answers the "but it's just idle" objection that the [per-conn
+density memory](../../../.claude/projects/-Users-mango-Documents-Gowtham-projects/memory/feedback_per_conn_density_is_the_headline.md)
+calls out as load-bearing.
 
-**What this measures (additional axes beyond idle):**
+### Headline — realistic (desynchronized) arrival @ 250K
 
-| axis | what it answers |
-|---|---|
-| per-conn-bytes under traffic | does the idle 12.1 KB hold up when 1% of conns are active? |
-| message latency p50/p99/p99.9 | what does a real conversation look like at this density? |
-| CPU-per-message | how much headroom for traffic ramp before the box saturates? |
-| reconnect-storm survival | if 10% of the held conns drop and reconnect in a 1-second window, does the box survive? |
+The real-workload number: 250K held + active conns arriving on independent
+timers (`--stagger-arrival`), the way production chatter actually lands.
 
-**Why this matters for the cost claim:** the [per-conn density
-memory](../../../.claude/projects/-Users-mango-Documents-Gowtham-projects/memory/feedback_per_conn_density_is_the_headline.md)
-calls out "but it's just idle" as the load-bearing objection. The
-active-traffic numbers are how that objection gets answered.
+| metric | Kāra | Rust (rustls + tokio) |
+|---|---|---|
+| per-conn-bytes under traffic | **12,126 B** | 28,034 B |
+| message latency p50 | **0.12 ms** | 0.04 ms |
+| message latency p99 | **0.34 ms** | 0.07 ms |
 
-**Per-comparator active-traffic results:** populated as a paired
-table to the idle-hold table once the harness extension lands.
+**Both stacks are sub-millisecond, and the 2.31× density advantage holds under
+active load** — the idle 12.1 KB/conn is not an artifact of doing nothing.
+Raw JSON captured on the rig (`active_250k_{kara,rust}-…_stageA.json`); not
+mirrored into the repo before teardown (numbers are authoritative here + in
+phase-6).
+
+### Worst case — synchronized burst (broadcast / reconnect storm)
+
+When every active conn fires in the same instant — broadcast fan-out, or a
+reconnect storm after a deploy — the load becomes a thundering herd. This is
+Kāra's worst case, and closing it drove the Stage B reactor work. CPU-isolated
+measurement (`m8g.4xlarge`, server `taskset -c 0-7` `KARAC_REACTOR_SHARDS=8`,
+client `-c 8-15`, 10K × 128 B × 1 Hz × 20 s synchronized):
+
+| stage | what changed | p50 | p99 | JSON |
+|---|---|---|---|---|
+| baseline | single shared reactor | 72 ms | 92 ms | `burst_isolated_baseline.json` |
+| B1 | release `fds` lock across `epoll_ctl` | 35 ms | 44 ms | `burst_isolated_b1.json` |
+| B2 | shard the reactor (N fd-routed epoll) | 24 ms | 33 ms | `burst_isolated_b2.json` |
+| **B3** | **combined poll-and-dispatch per shard** | **~5 ms** | **~8 ms** | `burst_isolated_b3.json` |
+
+**baseline 72 → B3 ~5 ms p50 — a ~14× worst-case improvement, now within ~3× of
+Rust's ~1.6 ms** (was ~45× at baseline). Removing the shared wakeup queue +
+condvar handoff let the idle cores drain the burst in parallel, exactly as the
+B2 diagnosis (0.28 of 8 cores used under load = serialization stall, not compute
+saturation) predicted. Zero echo failures across 6 B3 runs. JSONs are mirrored
+under `docs/investigations/`.
+
+### Density + functional hold @ 1M active
+
+The 1M ceiling run (`m8g.4xlarge`, single box, B3) confirms density scales and
+the server stays functional under real load:
+
+- **1,000,000 conns held, 0 failed.**
+- **Density 12,127 B/conn (11.84 KiB)** — scale-invariant across the active
+  ladder (250K ≈ 12.1K, 10K burst ≈ 12.5K, 1M ≈ 12.13K; ~2.3× vs Rust's
+  ~27.9K).
+- **Functional under load: 8.23M messages echoed, 0 echo failures** at 1M
+  active conns.
+- Connect p50 45 / p99 557 ms (c128 loopback tail, 0 failed). JSON
+  `demo1_1m_active_realistic_b3.json` (rig capture, not mirrored).
+
+> **Caveat — the 1M active *latency* is excluded from the headline.** On a
+> single box the Rust client driving 1M TLS connections saturated the shared
+> 16 cores (p50 2.4 s, only ~41 % of intended messages sent) — a co-location
+> confound, not a server property. A clean 1M active-latency number needs a
+> separate client box. The clean latency story is therefore the CPU-isolated
+> **250K realistic (sub-ms)** + the **B3 burst (~5 ms)**; the 1M run delivers
+> its intended value: the **density ceiling + 1M functional hold**.
+
+### Arrival-model note (why two latency numbers)
+
+The original "146 ms active latency" finding was almost entirely a
+**synchronized-burst measurement artifact**: the harness fired every active
+conn on aligned 1-second timers (tokio `interval`, first-tick-immediate), a
+thundering herd every second. Adding `--stagger-arrival` (commit `d618f708`)
+desynchronizes arrival → realistic chatter → latency collapses 74 ms → 0.15 ms
+p50. Canonical active-traffic runs use `--stagger-arrival`; the synchronized
+burst is kept as a labeled worst-case sidebar, not the headline.
+
+**Deferred:** handshake-QPS at high concurrency (c≥1000) — the reconnect-storm
+throughput number — is a separate rig run (wip task #66 sub-item).
 
 ---
 
@@ -1012,8 +1077,8 @@ their role's headline scale (`250K` or `100K`).
 
 | comparator | role | linearity (50K) | headline | 2M | active-traffic | reproduction script | raw JSON |
 |---|---|---|---|---|---|---|---|
-| Kāra | self | n/a (multi-scale ladder) | **1M landed (post-fix, 2026-06-01)** _(x86 1M re-read landed post-fix 2026-06-02)_ | **2M landed (post-fix, 2026-06-01)** | pending (#66) | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `docs/investigations/demo1_m3_1m_postfix_datalayout.json`; 2M: `docs/investigations/demo1_m3_2m_postfix_datalayout.json`; x86 1M (post-fix): `docs/investigations/demo1_m3_1m_x86_postfix.json`; x86 1M (pre-fix, historical): `docs/investigations/demo1_m3_1m_x86.json` |
-| Rust | credibility | n/a (tracks Kāra) | 1M landed | **2M landed (2026-05-30)** | pending (#66) | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `rust-1m.json`; 2M: `rust-2m.json` (mirror pending) |
+| Kāra | self | n/a (multi-scale ladder) | **1M landed (post-fix, 2026-06-01)** _(x86 1M re-read landed post-fix 2026-06-02)_ | **2M landed (post-fix, 2026-06-01)** | **250K + 1M landed (B3, 2026-06-05)** — 12,126 B/conn, p50 0.12 ms realistic; burst p50 ~5 ms; 1M held 0-failed, 8.23M echoed | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `docs/investigations/demo1_m3_1m_postfix_datalayout.json`; 2M: `docs/investigations/demo1_m3_2m_postfix_datalayout.json`; x86 1M (post-fix): `docs/investigations/demo1_m3_1m_x86_postfix.json`; x86 1M (pre-fix, historical): `docs/investigations/demo1_m3_1m_x86.json` |
+| Rust | credibility | n/a (tracks Kāra) | 1M landed | **2M landed (2026-05-30)** | **250K landed (2026-06-02)** — 28,034 B/conn, p50 0.04 ms realistic; burst ~1.6 ms | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `rust-1m.json`; 2M: `rust-2m.json` (mirror pending) |
 | Phoenix Channels | commercial | pending (#67) | 250K pending (#67) | n/a unless gate escalates | pending | TBD | TBD |
 | Java / Netty | commercial | pending (#68) | 250K pending (#68) | n/a unless gate escalates | pending | TBD | TBD |
 | Go | commercial | pending (#69) | 250K pending (#69) | n/a unless gate escalates | pending | TBD | TBD |
