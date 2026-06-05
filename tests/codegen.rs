@@ -29608,4 +29608,82 @@ fn main() {
             "reduce_min on an unsigned-element vector must be a type error (deferred)"
         );
     }
+
+    // ── Vector slice 2c — cross product (Vector[T, 3] only) ──────────────
+
+    #[test]
+    fn test_vector_cross_i64() {
+        // (2,3,4) × (5,6,7): c0 = 3*7-4*6 = -3; c1 = 4*5-2*7 = 6;
+        // c2 = 2*6-3*5 = -3. Asserting all three lanes pins the component
+        // ordering and signs (a single lane wouldn't catch a swap).
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Vector[i64, 3] = Vector[i64, 3](2, 3, 4);
+    let b: Vector[i64, 3] = Vector[i64, 3](5, 6, 7);
+    let c = a.cross(b);
+    println(c[0]);
+    println(c[1]);
+    println(c[2]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "-3\n6\n-3\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_cross_f64_orthonormal() {
+        // x̂ × ŷ = ẑ: (1,0,0) × (0,1,0) = (0,0,1).
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Vector[f64, 3] = Vector[f64, 3](1.0, 0.0, 0.0);
+    let b: Vector[f64, 3] = Vector[f64, 3](0.0, 1.0, 0.0);
+    let c = a.cross(b);
+    println(c[0]);
+    println(c[1]);
+    println(c[2]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "0\n0\n1\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_cross_non_three_lane_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let b = Vector[i64, 4](5, 6, 7, 8);
+    let _ = a.cross(b);
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "cross on a 4-lane vector must be a type error (3D only)"
+        );
+    }
+
+    #[test]
+    fn test_vector_cross_mismatched_type_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a = Vector[i64, 3](1, 2, 3);
+    let b = Vector[f64, 3](1.0, 2.0, 3.0);
+    let _ = a.cross(b);
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "cross between differently-typed vectors must be a type error"
+        );
+    }
 }

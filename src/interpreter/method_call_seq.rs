@@ -967,6 +967,38 @@ impl<'a> super::Interpreter<'a> {
                 }
                 acc
             }
+            // Cross product (3D only — the typechecker guarantees N == 3 and
+            // a same-typed argument). `c = a × b`:
+            //   c0 = a1*b2 - a2*b1,  c1 = a2*b0 - a0*b2,  c2 = a0*b1 - a1*b0
+            // Each lane uses `eval_binary` so the scalar Int/Float semantics
+            // match codegen exactly.
+            "cross" => {
+                let other = self.eval_expr_inner(&args[0].value);
+                let Value::Vector(rhs) = other else {
+                    return Some(self.record_runtime_error(
+                        "cross expects a vector argument".to_string(),
+                        span,
+                    ));
+                };
+                if lanes.len() != 3 || rhs.len() != 3 {
+                    return Some(self.record_runtime_error(
+                        "cross is defined only for 3-lane vectors".to_string(),
+                        span,
+                    ));
+                }
+                // c_lane = p*q - r*s
+                let comp = |me: &mut Self, p: Value, q: Value, r: Value, s: Value| -> Value {
+                    let pq = me.eval_binary(&BinOp::Mul, p, q, span);
+                    let rs = me.eval_binary(&BinOp::Mul, r, s, span);
+                    me.eval_binary(&BinOp::Sub, pq, rs, span)
+                };
+                let (a0, a1, a2) = (lanes[0].clone(), lanes[1].clone(), lanes[2].clone());
+                let (b0, b1, b2) = (rhs[0].clone(), rhs[1].clone(), rhs[2].clone());
+                let c0 = comp(self, a1.clone(), b2.clone(), a2.clone(), b1.clone());
+                let c1 = comp(self, a2, b0.clone(), a0.clone(), b2);
+                let c2 = comp(self, a0, b1, a1, b0);
+                Some(Value::Vector(vec![c0, c1, c2]))
+            }
             _ => None,
         }
     }

@@ -2213,11 +2213,61 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 elem
             }
+            // Cross product (design.md § Portable SIMD): `v.cross(w) ->
+            // Vector[T, 3]`, defined for 3-lane vectors only. Requires a
+            // statically-known lane count of exactly 3 and a same-typed
+            // argument; the result is the same `Vector[T, 3]`.
+            "cross" => {
+                let vec_ty = Type::Vector {
+                    element: Box::new(elem.clone()),
+                    lanes: lanes.clone(),
+                };
+                if !matches!(lanes, ConstArg::Literal(3)) {
+                    self.type_error(
+                        format!(
+                            "'cross' is defined only for 3-lane vectors (Vector[T, 3]); \
+                             found '{}'",
+                            type_display(&vec_ty)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                    return Type::Error;
+                }
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'cross' takes exactly one argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                    return vec_ty;
+                }
+                let arg_ty = self.infer_expr(&args[0].value);
+                if arg_ty != vec_ty && arg_ty != Type::Error {
+                    self.type_error(
+                        format!(
+                            "'cross' requires the argument to be the same vector type '{}', found '{}'",
+                            type_display(&vec_ty),
+                            type_display(&arg_ty)
+                        ),
+                        args[0].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                vec_ty
+            }
             _ => {
                 self.type_error(
                     format!(
-                        "no method '{}' on Vector[{}, _] (supported: dot, reduce_sum, \
-                         reduce_product, reduce_min, reduce_max, reduce_and, reduce_or, reduce_xor)",
+                        "no method '{}' on Vector[{}, _] (supported: dot, cross, \
+                         reduce_sum, reduce_product, reduce_min, reduce_max, \
+                         reduce_and, reduce_or, reduce_xor)",
                         method,
                         type_display(&elem)
                     ),

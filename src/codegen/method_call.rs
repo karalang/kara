@@ -95,6 +95,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if matches!(
                 key.as_str(),
                 "Vector.dot"
+                    | "Vector.cross"
                     | "Vector.reduce_sum"
                     | "Vector.reduce_product"
                     | "Vector.reduce_min"
@@ -2707,6 +2708,51 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 // N >= 1 guaranteed by the typechecker.
                 acc.ok_or_else(|| "dot on a zero-lane vector".to_string())
+            }
+            // Cross product — `<3 x T>` only (the typechecker rejects any
+            // other lane count and a non-same-typed argument). Compute the
+            // three components with scalar `compile_binop` (`c_i = p*q - r*s`)
+            // and reassemble a `<3 x T>` vector via `insertelement`.
+            // `BasicValueEnum` is `Copy`, so each lane is reused across the
+            // components without re-extracting.
+            "cross" => {
+                let other = self.compile_expr(&args[0].value)?.into_vector_value();
+                let (a0, a1, a2) = (
+                    lane(self, recv, 0)?,
+                    lane(self, recv, 1)?,
+                    lane(self, recv, 2)?,
+                );
+                let (b0, b1, b2) = (
+                    lane(self, other, 0)?,
+                    lane(self, other, 1)?,
+                    lane(self, other, 2)?,
+                );
+                let component = |cg: &mut Self,
+                                 p: BasicValueEnum<'ctx>,
+                                 q: BasicValueEnum<'ctx>,
+                                 r: BasicValueEnum<'ctx>,
+                                 s: BasicValueEnum<'ctx>|
+                 -> Result<BasicValueEnum<'ctx>, String> {
+                    let pq = cg.compile_binop(&BinOp::Mul, p, q)?;
+                    let rs = cg.compile_binop(&BinOp::Mul, r, s)?;
+                    cg.compile_binop(&BinOp::Sub, pq, rs)
+                };
+                let c0 = component(self, a1, b2, a2, b1)?;
+                let c1 = component(self, a2, b0, a0, b2)?;
+                let c2 = component(self, a0, b1, a1, b0)?;
+                let mut out = recv.get_type().get_undef();
+                for (i, c) in [c0, c1, c2].into_iter().enumerate() {
+                    out = self
+                        .builder
+                        .build_insert_element(
+                            out,
+                            c,
+                            i32_t.const_int(i as u64, false),
+                            "cross.lane",
+                        )
+                        .map_err(|e| format!("vector insertelement failed: {e}"))?;
+                }
+                Ok(out.into())
             }
             other => Err(format!("unsupported Vector method '{other}' in codegen")),
         }

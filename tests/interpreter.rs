@@ -12410,3 +12410,43 @@ fn main() {
     );
     assert_eq!(out, "1.5\n2.5\n");
 }
+
+// ── Vector slice 2c — cross product interpreter parity ───────────────
+
+#[test]
+fn test_vector_cross_i64() {
+    // (2,3,4) × (5,6,7) = (-3, 6, -3). Same expected output as the codegen
+    // E2E test (`tests/codegen.rs::test_vector_cross_i64`) — interpreter and
+    // compiled backends must agree lane-for-lane.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a: Vector[i64, 3] = Vector[i64, 3](2, 3, 4);
+    let b: Vector[i64, 3] = Vector[i64, 3](5, 6, 7);
+    let c = a.cross(b);
+    println(c[0]);
+    println(c[1]);
+    println(c[2]);
+}
+"#,
+    );
+    assert_eq!(out, "-3\n6\n-3\n");
+}
+
+#[test]
+fn test_vector_cross_f64_orthonormal() {
+    // x̂ × ŷ = ẑ: (1,0,0) × (0,1,0) = (0,0,1).
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a: Vector[f64, 3] = Vector[f64, 3](1.0, 0.0, 0.0);
+    let b: Vector[f64, 3] = Vector[f64, 3](0.0, 1.0, 0.0);
+    let c = a.cross(b);
+    println(c[0]);
+    println(c[1]);
+    println(c[2]);
+}
+"#,
+    );
+    assert_eq!(out, "0\n0\n1\n");
+}
