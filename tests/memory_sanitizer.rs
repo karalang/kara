@@ -286,6 +286,97 @@ fn main() {
     }
 
     #[test]
+    fn asan_fstring_into_returned_plain_struct_field_no_double_free() {
+        // An f-string used DIRECTLY as a struct-literal field value
+        // (`Resp { body: f"..." }`) moves the accumulator buffer into the
+        // field; the struct is returned, so the caller owns the buffer.
+        // Before the fix, `compile_struct_init` left `last_fstr_acc`
+        // staged, so the accumulator's scope-exit `FreeVecBuffer` freed
+        // the same buffer the returned struct carried — a double-free that
+        // aborted under macOS malloc (exit 133). The fix takes + cap-zeros
+        // the staged acc at the struct-field site, mirroring the Let /
+        // Assign take points. Reading the field three times in the caller
+        // surfaces a UAF under ASAN if the buffer were freed early. Covers
+        // the non-shared (stack-aggregate) branch of `compile_struct_init`.
+        assert_clean_asan_run(
+            r#"
+struct Resp { status: i64, body: String }
+fn make(id: i64, name: String) -> Resp {
+    Resp { status: 200, body: f"id={id} name={name}" }
+}
+fn main() {
+    let r = make(7, "Alice");
+    println(r.status);
+    println(r.body);
+    println(r.body);
+    println(r.body);
+}
+"#,
+            &[
+                "200",
+                "id=7 name=Alice",
+                "id=7 name=Alice",
+                "id=7 name=Alice",
+            ],
+            "fstring_into_returned_plain_struct_field_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_fstring_into_returned_shared_struct_field_no_double_free() {
+        // Same double-free, the shared-struct branch of
+        // `compile_struct_init` (Arc heap-RC layout — fields stored inline
+        // after the refcount header). An f-string field value transfers the
+        // buffer into the heap slot, so the staged acc must be suppressed
+        // identically. Reading the field twice through the returned handle
+        // surfaces a UAF under ASAN if the accumulator freed it early.
+        assert_clean_asan_run(
+            r#"
+shared struct Holder { label: String }
+fn make(n: i64) -> Holder {
+    Holder { label: f"n={n}" }
+}
+fn main() {
+    let h = make(42);
+    println(h.label);
+    println(h.label);
+}
+"#,
+            &["n=42", "n=42"],
+            "fstring_into_returned_shared_struct_field_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_fstring_explicit_return_no_double_free() {
+        // Sibling double-free site: a DIRECT `return f"..."` mid-function
+        // moves the accumulator buffer to the caller. The `Return` arm's
+        // pre-compile suppression is Identifier-only; the accumulator is
+        // staged only during `compile_expr`, so without post-compile
+        // suppression the scope-cleanup walk freed the returned buffer — a
+        // double-free aborting under macOS malloc. Exercises both the
+        // early-return arm and the tail-expr arm of the same fn; the caller
+        // reads each returned String, which surfaces a UAF under ASAN if the
+        // buffer were freed early.
+        assert_clean_asan_run(
+            r#"
+fn pick(id: i64) -> String {
+    if id > 0 { return f"pos={id}"; }
+    f"nonpos={id}"
+}
+fn main() {
+    let a = pick(5);
+    let b = pick(-3);
+    println(a);
+    println(b);
+}
+"#,
+            &["pos=5", "nonpos=-3"],
+            "fstring_explicit_return_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_println_ref_string_param_over_heap_source() {
         // `s: ref String` parameter, heap-source caller. The
         // identifier `s` inside `show` loads through the ref param

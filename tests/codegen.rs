@@ -8974,6 +8974,70 @@ fn main() {
         assert_eq!(out.as_deref(), Some("[info] one\nbetween\n[warn] two\n"));
     }
 
+    #[test]
+    fn test_e2e_fstring_into_returned_struct_field_no_double_free() {
+        // Regression: an f-string used DIRECTLY as a struct-literal field
+        // value (`Resp { body: f"..." }`) moves the accumulator buffer into
+        // the field, and the struct is returned (caller owns the buffer).
+        // `compile_struct_init` previously left `last_fstr_acc` staged, so
+        // the accumulator's scope-exit `FreeVecBuffer` freed the buffer the
+        // returned struct carried — a double-free aborting under macOS
+        // malloc (exit 133), no output. The Identifier-named field case
+        // (`Resp { body: b }`) was already covered by
+        // `suppress_source_vec_cleanup_for_arg`; the direct-f-string case
+        // was the gap. Reading the field repeatedly in the caller would hit
+        // a UAF / garbage if the buffer were freed early. (ASAN coverage:
+        // `tests/memory_sanitizer.rs::asan_fstring_into_returned_*`.) This
+        // is the codegen blocker for Parallax serializing real `Dashboard`
+        // data into its response body (phase-6 Demo 2 gap B).
+        let out = run_program(
+            r#"
+struct Resp { status: i64, body: String }
+fn make(id: i64, name: String) -> Resp {
+    Resp { status: 200, body: f"id={id} name={name}" }
+}
+fn main() {
+    let r = make(7, "Alice");
+    println(r.status);
+    println(r.body);
+    println(r.body);
+}
+"#,
+        );
+        assert_eq!(
+            out.as_deref(),
+            Some("200\nid=7 name=Alice\nid=7 name=Alice\n")
+        );
+    }
+
+    #[test]
+    fn test_e2e_fstring_explicit_return_no_double_free() {
+        // Sibling to the struct-field case: a DIRECT `return f"..."` mid-
+        // function (early return) also moves the accumulator buffer out to
+        // the caller. The `Return` arm's pre-compile
+        // `suppress_source_vec_cleanup_for_arg` is Identifier-only, and the
+        // accumulator is staged only during `compile_expr`, so without
+        // suppressing it post-compile the scope-cleanup walk freed the
+        // returned buffer — double-free / exit 133. Both the early-return
+        // arm and the tail-expr arm of the same fn are exercised, each
+        // called and read in the caller.
+        let out = run_program(
+            r#"
+fn pick(id: i64) -> String {
+    if id > 0 { return f"pos={id}"; }
+    f"nonpos={id}"
+}
+fn main() {
+    let a = pick(5);
+    let b = pick(-3);
+    println(a);
+    println(b);
+}
+"#,
+        );
+        assert_eq!(out.as_deref(), Some("pos=5\nnonpos=-3\n"));
+    }
+
     // ── RC-fallback codegen E2E ──────────────────────────────────
 
     #[test]

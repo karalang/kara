@@ -325,6 +325,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.suppress_user_drop_for_var(name);
                     }
                     let v = self.compile_expr(e)?;
+                    // Move-aware suppression for a DIRECT `return f"..."`: the
+                    // returned String buffer IS the f-string accumulator, now
+                    // owned by the caller. The `suppress_source_vec_cleanup_for_arg`
+                    // call above ran pre-compile (Identifier-only); the accumulator
+                    // is staged only during the `compile_expr` just above, so
+                    // suppress it here — before the scope-cleanup walk below frees
+                    // it (the same double-free the struct-field site hit).
+                    self.suppress_fstr_acc_if_moved_out(e);
                     // Contract `ensures` at an explicit `return expr` (design.md
                     // § Contracts), with `result` bound to the returned value —
                     // before the scope-exit cleanup below.
@@ -1112,6 +1120,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Mirrors the enum-variant constructor pattern
                     // already wired at `try_compile_enum_variant`.
                     self.suppress_source_vec_cleanup_for_arg(&field_init.value);
+                    self.suppress_fstr_acc_if_moved_out(&field_init.value);
                 }
                 return Ok(ptr.into());
             }
@@ -1131,10 +1140,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the source's data pointer; suppress the source's
                 // scope-exit free so the consumer can read through.
                 self.suppress_source_vec_cleanup_for_arg(&field_init.value);
+                self.suppress_fstr_acc_if_moved_out(&field_init.value);
             }
             Ok(agg.into())
         } else {
             Ok(self.context.i64_type().const_int(0, false).into())
+        }
+    }
+
+    /// Suppress the scope-exit free of an f-string accumulator whose
+    /// buffer has just been moved out of the current scope — into a
+    /// struct-literal field (`Foo { body: f"..." }`) or an explicit
+    /// `return f"..."`. A direct f-string value stages `last_fstr_acc`
+    /// during its `compile_expr`; the loaded `{data,len,cap}` String value
+    /// is copied into the destination (which now owns the buffer), but the
+    /// accumulator alloca still has a queued `FreeVecBuffer` cleanup. Take
+    /// the staged acc and zero its `cap` so that cleanup's `cap > 0` guard
+    /// no-ops — otherwise the accumulator frees the buffer the destination
+    /// (and any downstream consumer / the destination's own drop) carries,
+    /// a double-free that aborts under macOS malloc (exit 133). Mirrors the
+    /// Let / Assign take points (`stmts.rs`) and the tail-return
+    /// suppression (`compile_function`); the Identifier-named cases
+    /// (`Foo { body: b }` / `return b`) are already handled by
+    /// `suppress_source_vec_cleanup_for_arg`. Call AFTER `compile_expr`
+    /// (which stages the acc) and BEFORE the scope-cleanup walk.
+    fn suppress_fstr_acc_if_moved_out(&mut self, value: &Expr) {
+        if matches!(value.kind, ExprKind::InterpolatedStringLit(_)) {
+            if let Some(acc) = self.last_fstr_acc.take() {
+                self.zero_vec_alloca_cap(acc);
+            }
         }
     }
 
