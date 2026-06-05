@@ -30629,6 +30629,82 @@ fn main() {
         assert!(!errs.is_empty(), "reverse takes no arguments");
     }
 
+    // ── Slice 6d — lane replace (v.replace(i, x)) ───────────────────────
+
+    #[test]
+    fn test_vector_replace() {
+        // replace(2, 99) sets lane 2 in a new vector; the original is unchanged
+        // (value semantics — a[2] still reads 3).
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let r = a.replace(2, 99);
+    println(r[0]); println(r[1]); println(r[2]); println(r[3]);
+    println(a[2]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1\n2\n99\n4\n3\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_replace_runtime_index() {
+        // A runtime (non-literal) index lowers to insertelement with a dynamic
+        // index; the bounds check passes for an in-range index.
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[f64, 4](1.0, 2.0, 3.0, 4.0);
+    let i = 3;
+    let r = a.replace(i, 9.5);
+    println(r[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "9.5\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_replace_out_of_bounds_panics() {
+        // An out-of-range lane index traps (UGE bounds check → panic), exactly
+        // like the `v[i]` lane read.
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let r = a.replace(9, 0);
+    println(r[0]);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("vector lane index out of bounds"),
+                "expected vector lane OOB panic, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_vector_replace_wrong_arity_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let _ = a.replace(0);
+}
+"#,
+        );
+        assert!(!errs.is_empty(), "replace takes exactly two arguments");
+    }
+
     // ── Slice 4 — first-class Numeric trait + lane-literal ergonomics ─────
 
     #[test]

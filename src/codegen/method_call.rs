@@ -127,6 +127,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "Vector.reverse"
                     | "Vector.rotate_lanes_left"
                     | "Vector.rotate_lanes_right"
+                    | "Vector.replace"
             ) {
                 return self.compile_vector_method(object, method, args);
             }
@@ -3328,6 +3329,39 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_insert_element(out, v, i32_t.const_int(i as u64, false), "perm.lane")
                         .map_err(|e| format!("vector insertelement failed: {e}"))?;
                 }
+                Ok(out.into())
+            }
+            // `v.replace(i, x) -> Vector[T, N]` — a new vector with lane `i`
+            // set to `x`, via insertelement at a runtime index. The index is
+            // bounds-checked (panic on out-of-range) exactly like the `v[i]`
+            // lane read — an unchecked insertelement with an OOB index is
+            // poison in LLVM. The receiver is unchanged (the value is returned).
+            "replace" => {
+                let idx = self.compile_expr(&args[0].value)?.into_int_value();
+                let x = self.compile_expr(&args[1].value)?;
+                // Bounds-check `idx` against `N`, comparing in the index's own
+                // int width (UGE so a negative index also trips the panic).
+                let len = idx.get_type().const_int(n as u64, false);
+                let fn_val = self.current_fn.unwrap();
+                let oob_bb = self.context.append_basic_block(fn_val, "replace.oob");
+                let ok_bb = self.context.append_basic_block(fn_val, "replace.ok");
+                let cmp = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGE, idx, len, "replace.bounds")
+                    .map_err(|e| format!("vector replace bounds compare failed: {e}"))?;
+                self.builder
+                    .build_conditional_branch(cmp, oob_bb, ok_bb)
+                    .map_err(|e| format!("vector replace branch failed: {e}"))?;
+                self.builder.position_at_end(oob_bb);
+                self.emit_panic("vector lane index out of bounds");
+                self.builder
+                    .build_unreachable()
+                    .map_err(|e| format!("vector replace unreachable failed: {e}"))?;
+                self.builder.position_at_end(ok_bb);
+                let out = self
+                    .builder
+                    .build_insert_element(recv, x, idx, "replace.lane")
+                    .map_err(|e| format!("vector insertelement failed: {e}"))?;
                 Ok(out.into())
             }
             other => Err(format!("unsupported Vector method '{other}' in codegen")),

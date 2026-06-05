@@ -1084,6 +1084,27 @@ impl<'a> super::Interpreter<'a> {
                     .collect();
                 Some(Value::Vector(out))
             }
+            // `v.replace(i, x)` — return a new vector with lane `i` set to `x`.
+            // Runtime-bounds-checked (parity with codegen's panic on OOB).
+            "replace" => {
+                let idx_v = self.eval_expr_inner(&args[0].value);
+                let x = self.eval_expr_inner(&args[1].value);
+                let Value::Int(i) = idx_v else {
+                    return Some(self.record_runtime_error(
+                        "replace index must be an integer".to_string(),
+                        span,
+                    ));
+                };
+                let mut out = lanes;
+                if i < 0 || (i as usize) >= out.len() {
+                    return Some(self.record_runtime_error(
+                        "vector lane index out of bounds".to_string(),
+                        span,
+                    ));
+                }
+                out[i as usize] = x;
+                Some(Value::Vector(out))
+            }
             _ => None,
         }
     }

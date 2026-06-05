@@ -12806,6 +12806,26 @@ fn test_vector_rotate_wraps_modulo_lanes() {
 }
 
 #[test]
+fn test_vector_replace() {
+    // replace(2, 99) returns a new vector with lane 2 set; the original is
+    // unchanged (value semantics — a[2] still reads 3).
+    let out = run_no_errors(
+        "fn main() { let a = Vector[i64, 4](1, 2, 3, 4); let r = a.replace(2, 99); \
+         println(r[0]); println(r[1]); println(r[2]); println(r[3]); println(a[2]); }",
+    );
+    assert_eq!(out, "1\n2\n99\n4\n3\n");
+}
+
+#[test]
+fn test_vector_replace_runtime_index() {
+    let out = run_no_errors(
+        "fn main() { let a = Vector[i64, 4](1, 2, 3, 4); let i = 0; let r = a.replace(i, 7); \
+         println(r[0]); println(r[1]); }",
+    );
+    assert_eq!(out, "7\n2\n");
+}
+
+#[test]
 fn test_vector_compare_unsigned_mask() {
     // Unsigned compare: 3000000000 (high bit set as i32) is NOT < 10.
     let out = run_no_errors(

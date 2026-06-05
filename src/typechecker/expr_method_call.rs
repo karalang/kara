@@ -2591,13 +2591,53 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 vec_ty
             }
+            // Lane replace (design.md § Portable SIMD, "Lane access /
+            // mutation"): `v.replace(i, x) -> Vector[T, N]` returns a new
+            // vector with lane `i` set to `x` (the receiver is unchanged — the
+            // in-place `set(i, x)` is the paired follow-on). The index is a
+            // runtime integer, bounds-checked at run time exactly like the
+            // `v[i]` lane read; `x` must be assignable to the element type `T`
+            // (suffixless numeric literals coerce, as in construction).
+            "replace" => {
+                let vec_ty = Type::Vector {
+                    element: Box::new(elem.clone()),
+                    lanes: lanes.clone(),
+                };
+                if args.len() != 2 {
+                    self.type_error(
+                        format!(
+                            "'replace' takes exactly two arguments (index, value), found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                    return vec_ty;
+                }
+                let idx_ty = self.infer_expr(&args[0].value);
+                if !matches!(idx_ty, Type::Int(_) | Type::UInt(_)) && idx_ty != Type::Error {
+                    self.type_error(
+                        format!(
+                            "'replace' index must be an integer, found '{}'",
+                            type_display(&idx_ty)
+                        ),
+                        args[0].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                self.check_expr(&args[1].value, &elem);
+                vec_ty
+            }
             _ => {
                 self.type_error(
                     format!(
                         "no method '{}' on Vector[{}, _] (supported: dot, cross, \
                          reduce_sum, reduce_product, reduce_min, reduce_max, \
                          reduce_and, reduce_or, reduce_xor, reverse, \
-                         rotate_lanes_left, rotate_lanes_right; select on a \
+                         rotate_lanes_left, rotate_lanes_right, replace; select on a \
                          Vector[bool, N] mask)",
                         method,
                         type_display(&elem)
