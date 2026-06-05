@@ -4,8 +4,10 @@
 // the existing `examples/parallax/` carries the multi-file source-of-
 // truth for reading. This file is the bench-runnable form).
 //
-// `handle(req)` calls `get_dashboard(1)` and returns a hand-rolled JSON
-// body. The four `let` bindings inside `get_dashboard` carry disjoint
+// `handle(req)` calls `get_dashboard(1)` and serializes its fields into
+// a JSON body via an f-string (the same wire shape Rust/Go/Node emit;
+// all four fanned-out reads are observable in the body, so none get
+// DCE'd). The four `let` bindings inside `get_dashboard` carry disjoint
 // `reads(R_i)` effects — auto-par codegen (slices A `ab611d3` + D
 // `502250a`) fans them out across worker threads. The four wrapper fns
 // each run a busy-loop kernel sized proportional to the F5 latencies
@@ -79,14 +81,14 @@ fn busy_loop(n: i64) -> i64 {
 // fields, which prevents elision.
 fn fetch_profile_name(user_id: i64) -> String with reads(UserDB) {
     let _ = busy_loop(FETCH_PROFILE_WORK + user_id);
-    // String return path: profile_name is folded into `handle()`'s
-    // status only via the i64 fields, so this fetch's busy_loop
-    // result has no observable use and gets DCE'd. Accepted —
-    // 3 of 4 fan-out branches still execute real work, dominating
-    // the parallel critical path. A robust full-fan-out fix
-    // requires either a String-hash op in the language or a body-
-    // weaving path through the response; both are out of scope for
-    // this slice.
+    // Profile's busy_loop result is discarded and only the constant
+    // name "Alice" is returned — identical to the Rust (`let _ =
+    // busy_loop(...); "Alice"`) and Go (`_ = busyLoop(...); ...`)
+    // comparators, so whether the optimizer elides this smallest
+    // branch (700K iters, vs orders 4M / recommend 2.7M / notifs 1.7M)
+    // is symmetric across all impls — apples-to-apples is preserved.
+    // The three larger i64 fetches ARE woven into the body and survive
+    // DCE; they dominate the parallel critical path regardless.
     "Alice"
 }
 
@@ -117,22 +119,29 @@ pub fn get_dashboard(user_id: i64) -> Dashboard
     }
 }
 
-// `handle()` returns a fixed JSON literal body, but folds the three
-// i64 dashboard fields (order_id, notif_kind, rec_id) into the
-// response status code. The fold makes the field values observable
-// to wrk — without an observable use, LLVM's DCE removes the
-// busy_loop calls in the corresponding fetch_* fns. Status stays
-// in the 200/201 range so wrk's success-counter classifies all
-// responses correctly. (Folding `profile_name`'s value would
-// require either a String-hash op in the language or a body-
-// weaving path; out of scope for this slice — 3-of-4 coverage is
-// enough to dominate the parallel critical path.)
+// `handle()` serializes the actual `Dashboard` fields into the JSON
+// response body via an f-string — byte-for-byte the same wire shape
+// the Rust / Go / Node comparators emit from `dashboard_to_json`
+// (`{"profile":{"user_id":1,"name":"<profile_name>"},"latest_order":
+// {"order_id":<order_id>},"top_notification":{"kind":<notif_kind>},
+// "top_recommendation":{"item_id":<rec_id>}}`). Each interpolated
+// field is a real read of the fanned-out `Dashboard`, so the three
+// i64 busy_loop results are observable to LLVM and the corresponding
+// fetch_* calls survive DCE — no status-fold workaround needed (the
+// old impl folded the fields into the status code because the body
+// was a fixed literal). Status is a constant 200, matching the Rust
+// comparator. The literal JSON braces are escaped `\{` / `\}` so the
+// f-string lexer treats only `{expr}` as interpolation.
+//
+// This is exactly the "f-string directly as a struct-literal field
+// value" shape that the gap-B codegen fix (phase-6 Demo 2) made safe
+// — the accumulator buffer moves into `Response.body` and out to the
+// caller without a double-free.
 fn handle(req: Request) -> Response {
     let d = get_dashboard(1);
-    let s = 200 + ((d.order_id ^ d.notif_kind ^ d.rec_id) & 1);
     Response {
-        status: s,
-        body: "{\"profile\":{\"user_id\":1,\"name\":\"Alice\"},\"latest_order\":{\"order_id\":1001},\"top_notification\":{\"kind\":1},\"top_recommendation\":{\"item_id\":7001}}",
+        status: 200,
+        body: f"\{\"profile\":\{\"user_id\":1,\"name\":\"{d.profile_name}\"\},\"latest_order\":\{\"order_id\":{d.order_id}\},\"top_notification\":\{\"kind\":{d.notif_kind}\},\"top_recommendation\":\{\"item_id\":{d.rec_id}\}\}",
     }
 }
 

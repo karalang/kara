@@ -161,12 +161,15 @@ settling into steady-state.
 counts (700 K / 4 M / 1.7 M / 2.7 M) — see G1 history below for
 *why* this kernel rather than the original triangular sum. Three
 of the four busy_loops have observable returns through `Dashboard`
-fields that are then folded into each impl's response (status code
-for Kāra, JSON body for Rust/Go/Node), preventing the optimizer
-from eliding them. The fourth (`fetch_profile_name`) returns
-`String`/`&str`; its busy_loop result has no observable use and
-gets DCE'd in all four impls — accepted, since 3-of-4 fan-out
-branches dominate the parallel critical path.
+fields that are then woven into **every** impl's JSON response body
+(Kāra included, as of 2026-06-05 — previously Kāra folded them into
+the status code because its response body was a fixed literal; the
+f-string codegen gaps that blocked body-weaving are now fixed),
+preventing the optimizer from eliding them. The fourth
+(`fetch_profile_name`) returns `String`/`&str`; its busy_loop result
+has no observable use and gets DCE'd in all four impls identically —
+accepted and symmetric, since the 3-of-4 larger fan-out branches
+dominate the parallel critical path.
 
 **Cold-start vs steady-state — the comparison G5 enables.** Kāra
 goes from p99 **17 ms cold** to **300 ms steady-state at
@@ -320,11 +323,11 @@ the design lock specifies:
   measurement (recorded). Same window for every impl.
 
 - **Same wire shape:** every impl returns a JSON body for `GET
-  /dashboard/<id>`. Kāra returns a fixed JSON literal (see Source
-  comparison below for the v1 codegen-gap workaround); the others
-  serialize the dashboard struct via their language's standard JSON
-  encoder. Body bytes differ in size by < ~30 bytes across impls —
-  not a load-bearing throughput factor.
+  /dashboard/<id>` serialized from the actual `Dashboard` fields —
+  Kāra weaves them via an f-string (as of 2026-06-05), the others via
+  their language's standard JSON encoder. Body bytes differ in size by
+  < ~30 bytes across impls (only the digit counts of the busy-loop i64
+  results vary) — not a load-bearing throughput factor.
 
 - **Path randomization (F2):** `wrk` URL is hard-coded to
   `/dashboard/1` in v1 of `bench.sh`. The original F2 plan called for
@@ -348,15 +351,19 @@ Four impls, four idioms for the same problem.
   `karac build --concurrency-report kara/server.kara` to see the
   decision.
 
-  **v1 limitation: response body is a fixed JSON literal.** Two
-  pre-existing codegen gaps (the auto-par's `refs_in_expr` lacks an
-  `InterpolatedStringLit` arm; f-string accumulators are
-  unconditionally scope-exit-freed even when returned) gate weaving
-  the dashboard's data into the response body. The four parallelized
-  busy-loop fetches still run on every request — they're the
-  benchmark surface — but their results don't ride back into the
-  wire. Both gaps are filed for follow-up; see the in-source comments
-  for the failure trace and the workaround rationale.
+  **Response body serializes real `Dashboard` data (2026-06-05).**
+  `handle()` weaves the four dashboard fields into the JSON body via
+  an f-string — byte-for-byte the wire shape Rust/Go/Node emit. Two
+  codegen gaps previously blocked this and are now fixed: (gap A) the
+  auto-par `refs_in_expr` now has the `InterpolatedStringLit` arm, so
+  bindings read inside an f-string are visible to the conflict
+  analyzer; (gap B) an f-string used directly as a struct-literal
+  field value (or an explicit `return f"..."`) no longer double-frees
+  its accumulator buffer when the struct moves out. The three larger
+  i64 fetches ride into the body and survive DCE; `fetch_profile_name`
+  returns the constant `"Alice"` (its busy_loop is discarded
+  identically in all four impls — symmetric, see "How to read this"
+  above).
 
 - **[`rust/src/main.rs`](rust/src/main.rs)** — `tokio` + `hyper` +
   `tokio::join!`. `get_dashboard` `await`s a `tokio::join!` of four
