@@ -305,6 +305,13 @@ pub struct PoolEntry {
     pub max_waiters: i64,
     pub slots: Vec<Value>,
     pub active_count: i64,
+    /// Optional health-check hook (`Fn(T) -> bool`), registered via
+    /// `Pool.with_health_check`. When present, `acquire` validates each
+    /// idle slot it pops: a `false` verdict evicts the slot (decrementing
+    /// `active_count` so the connection no longer counts against the cap)
+    /// and `acquire` falls through to mint a fresh one. `None` → idle slots
+    /// are handed back unchecked (the v1 default).
+    pub health_check: Option<Value>,
 }
 
 /// Per-semaphore permit state. `available` is the live count an

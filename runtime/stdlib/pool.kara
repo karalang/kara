@@ -32,13 +32,17 @@
 // can call the same release path and the explicit release call
 // becomes optional.
 //
-// **Health-check hook — deferred.** Per spec, "health-check hook
-// fires on acquire (callable's responsibility); evict-on-error
-// pattern." The hook closure would live alongside `create_fn` on
-// `PoolEntry` and run on the slot-from-`slots` branch of acquire,
-// invalidating + minting fresh on Err. Mechanically straightforward
-// once `Pool.new` grows a fourth parameter (the hook), but waits
-// for a real consumer to pin down the hook's signature.
+// **Health-check hook — shipped.** Per spec, "health-check hook fires
+// on acquire (callable's responsibility); evict-on-error pattern."
+// `Pool.with_health_check(check)` registers an opt-in `Fn(T) -> bool`
+// hook (stored alongside `create_fn` on `PoolEntry`); chain it off
+// `Pool.new(...)`. On `acquire`, each idle slot pulled from `slots` is
+// passed to the hook: a `true` verdict hands the slot back, a `false`
+// verdict evicts it (the connection no longer counts toward the cap)
+// and `acquire` mints a fresh one in its place. Registering is opt-in
+// rather than a fourth `Pool.new` parameter so pools that don't need
+// validation keep the three-arg constructor — the idiomatic shape (cf.
+// r2d2 / deadpool, where the validator is optional builder config).
 
 enum PoolError {
     // The pool was at capacity and no slot freed before `timeout`.
@@ -129,5 +133,22 @@ impl[T] Pool[T] {
     #[compiler_builtin]
     fn release(ref self, conn: PooledConnection[T]) -> Unit {
         Unit
+    }
+
+    // Register an opt-in health-check hook and return the pool so the
+    // call chains off the constructor:
+    //
+    //     let pool = Pool.new(make_conn, 8, 16)
+    //         .with_health_check(|c| { c.ping() });
+    //
+    // `acquire` runs `check` on each idle slot it would reuse; a `false`
+    // verdict evicts that connection and mints a fresh one (evict-on-
+    // error). Slots minted on the spot (never released) are not checked —
+    // only reused idle slots, which are the ones that can have gone stale.
+    // Dispatched through `try_eval_pool_method`; the body is a
+    // typecheck-only placeholder.
+    #[compiler_builtin]
+    fn with_health_check(ref self, check: Fn(T) -> bool) -> Pool[T] {
+        Pool { handle_id: self.handle_id }
     }
 }

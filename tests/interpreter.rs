@@ -6809,6 +6809,71 @@ fn test_pool_release_returns_slot_for_next_acquire() {
 }
 
 #[test]
+fn test_pool_health_check_passes_reuses_idle_slot() {
+    // A registered health check that returns true hands the released
+    // (idle) slot straight back — no fresh mint. `make_conn` prints
+    // "mint" on each call, so a single "mint" proves the second acquire
+    // reused the slot rather than re-minting. (The first acquire always
+    // mints; the hook only validates *reused* idle slots.)
+    let output = run(r#"fn make_conn() -> i64 { println("mint"); 7 }
+         fn main() {
+             let pool: Pool[i64] = Pool.new(make_conn, 4, 8).with_health_check(|c| { c > 0 });
+             match pool.acquire(0) {
+                 Ok(c1) => { pool.release(c1); }
+                 Err(_) => println("acq1_err"),
+             }
+             match pool.acquire(0) {
+                 Ok(c2) => println(c2.val),
+                 Err(_) => println("acq2_err"),
+             }
+         }"#);
+    assert_eq!(output, "mint\n7\n");
+}
+
+#[test]
+fn test_pool_health_check_fails_evicts_and_mints_fresh() {
+    // A health check returning false evicts the reused idle slot and
+    // `acquire` mints a fresh one in its place (evict-on-error). The
+    // second acquire therefore mints again — two "mint" lines total.
+    let output = run(r#"fn make_conn() -> i64 { println("mint"); 7 }
+         fn main() {
+             let pool: Pool[i64] = Pool.new(make_conn, 4, 8).with_health_check(|c| { c < 0 });
+             match pool.acquire(0) {
+                 Ok(c1) => { pool.release(c1); }
+                 Err(_) => println("acq1_err"),
+             }
+             match pool.acquire(0) {
+                 Ok(c2) => println(c2.val),
+                 Err(_) => println("acq2_err"),
+             }
+         }"#);
+    assert_eq!(output, "mint\nmint\n7\n");
+}
+
+#[test]
+fn test_pool_health_check_eviction_at_cap_does_not_timeout() {
+    // The eviction-decrements-active_count contract: a pool at its
+    // `max_connections` cap (1) whose only idle slot fails the health
+    // check must evict (freeing a cap slot) and mint a replacement — NOT
+    // return Timeout. Without the decrement the mint path would see the
+    // pool still at cap and fail closed.
+    let output = run(r#"fn make_conn() -> i64 { println("mint"); 7 }
+         fn main() {
+             let pool: Pool[i64] = Pool.new(make_conn, 1, 1).with_health_check(|c| { false });
+             match pool.acquire(0) {
+                 Ok(c1) => { pool.release(c1); }
+                 Err(_) => println("acq1_err"),
+             }
+             match pool.acquire(0) {
+                 Ok(_) => println("ok2"),
+                 Err(PoolError.Timeout) => println("timeout2"),
+                 Err(_) => println("err2"),
+             }
+         }"#);
+    assert_eq!(output, "mint\nmint\nok2\n");
+}
+
+#[test]
 fn test_pool_acquire_on_uninitialized_handle_returns_pool_closed() {
     // A hand-rolled `Pool { handle_id: 0 }` bypasses `Pool.new` so
     // there's no entry in the side-table — acquire surfaces this

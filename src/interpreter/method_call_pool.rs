@@ -67,6 +67,7 @@ impl<'a> super::Interpreter<'a> {
                 max_waiters,
                 slots: Vec::new(),
                 active_count: 0,
+                health_check: None,
             },
         );
 
@@ -88,22 +89,69 @@ impl<'a> super::Interpreter<'a> {
         match method {
             "acquire" => self.eval_pool_acquire(obj),
             "release" => self.eval_pool_release(obj, args),
+            "with_health_check" => self.eval_pool_with_health_check(obj, args),
             _ => None,
         }
+    }
+
+    /// `pool.with_health_check(check) -> Pool[T]` — register the `Fn(T) ->
+    /// bool` validation hook on the pool entry and return the pool handle
+    /// (so it chains off `Pool.new(...)`). `acquire` consults it on every
+    /// idle slot it reuses. Re-registering replaces the prior hook.
+    fn eval_pool_with_health_check(&mut self, obj: Value, args: &[CallArg]) -> Option<Value> {
+        let handle = pool_handle(&obj)?;
+        let check = args.first().map(|a| self.eval_expr_inner(&a.value))?;
+        if let Some(entry) = self.pool_table.get_mut(&handle) {
+            entry.health_check = Some(check);
+        }
+        // Return the same handle value so the call chains off `Pool.new`.
+        Some(obj)
     }
 
     fn eval_pool_acquire(&mut self, obj: Value) -> Option<Value> {
         let handle = pool_handle(&obj)?;
 
-        // Fast path: an entry is sitting in `slots` — hand it back
-        // immediately without consulting `create_fn`.
-        if let Some(entry) = self.pool_table.get_mut(&handle) {
-            if let Some(val) = entry.slots.pop() {
+        // Fast path: reuse an idle slot from `slots`, validated by the
+        // health-check hook if one is registered. Pop slots until we find a
+        // healthy one (hand it back without consulting `create_fn`) or run
+        // out (fall through to the mint-or-fail branch). An unhealthy slot
+        // is evicted: the connection is destroyed, so `active_count` drops
+        // by one — that's what lets the mint path below find room to create
+        // a fresh replacement even when the pool was at its `max_connections`
+        // cap (the evict-on-error pattern).
+        loop {
+            let (popped, health_check) = {
+                let Some(entry) = self.pool_table.get_mut(&handle) else {
+                    return Some(result_err(pool_error("PoolClosed")));
+                };
+                (entry.slots.pop(), entry.health_check.clone())
+            };
+            let Some(val) = popped else {
+                // No idle slots left — fall through to mint-or-fail.
+                break;
+            };
+            let Some(check) = health_check else {
+                // No hook → hand the idle slot straight back.
+                return Some(result_ok(pooled_connection(handle, val)));
+            };
+            // Validate on a clone so the slot value survives a healthy
+            // verdict. `invoke_function_value` returns `Unit` on a
+            // non-callable hook; treat any non-`bool` result as healthy so a
+            // malformed hook never silently evicts.
+            let healthy = matches!(
+                self.invoke_function_value(check, vec![val.clone()]),
+                Value::Bool(true) | Value::Unit
+            );
+            if healthy {
                 return Some(result_ok(pooled_connection(handle, val)));
             }
-            // Else fall through to the mint-or-fail branch below.
-        } else {
-            return Some(result_err(pool_error("PoolClosed")));
+            // Unhealthy: evict (drop `val`) and decrement `active_count`.
+            if let Some(entry) = self.pool_table.get_mut(&handle) {
+                if entry.active_count > 0 {
+                    entry.active_count -= 1;
+                }
+            }
+            // Loop to try the next idle slot, or fall through to mint.
         }
 
         // Decide whether to mint a fresh slot. Snapshot the gate
