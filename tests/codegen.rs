@@ -1248,44 +1248,96 @@ fn main() {
     }
 
     #[test]
-    fn test_ambient_override_of_nonvtable_method_errors_loudly() {
-        // A `with_provider[Env]` override that supplies `args` (a method with
-        // NO `AMBIENT_RESOURCE_METHODS` vtable slot) must be a LOUD codegen
-        // error, not a silent fall-through to the builtin FFI default — which
-        // would diverge from the interpreter, where the override wins
-        // (`test_ambient_env_with_provider_overrides_default`). Lifting the
-        // limitation needs a vtable slot + a non-i64 dispatch-branch phi;
-        // tracked in phase-7-codegen.md. This pins the loud-failure contract.
-        use karac::codegen::compile_to_ir;
-        let src = r#"
-struct FakeEnv {}
-impl FakeEnv { fn args(self) -> Vec[String] { ["a", "b"] } }
-fn main() reads(Env) {
-    with_provider[Env](FakeEnv {}, || {
-        let a = Env.args();
-        println(a.len());
+    fn test_e2e_with_provider_override_rand_next_u64_scalar() {
+        // `with_provider[RandomSource]` override of `next_u64` — a method with
+        // NO vtable slot before this slice (it errored loudly at codegen,
+        // `test_ambient_override_of_nonvtable_method_errors_loudly`). Now it
+        // gets a slot + a runtime override-vs-default branch. Scalar (i64)
+        // phi shape. The override returns a fixed 777, observed BOTH directly
+        // and cross-boundary (`draw()` is a separate fn, so dispatch is via
+        // the runtime provider stack, not lexical scope). After the scope
+        // pops, the real FFI default resumes (two draws differ → "false").
+        // `karac run` of the same source matches.
+        let out = run_program(
+            r#"
+struct FakeRng { v: i64 }
+impl FakeRng { fn next_u64(ref self) -> i64 { self.v } }
+fn draw() -> i64 reads(RandomSource) { rand.next_u64() }
+fn main() reads(RandomSource) {
+    with_provider[RandomSource](FakeRng { v: 777 }, || {
+        println(draw());
+        println(rand.next_u64());
     });
+    println(rand.next_u64() == rand.next_u64());
 }
-"#;
-        let mut parsed = karac::parse(src);
-        assert!(
-            parsed.errors.is_empty(),
-            "parse errors: {:?}",
-            parsed.errors
+"#,
         );
-        let resolved = karac::resolve(&parsed.program);
-        let typed = karac::typecheck(&parsed.program, &resolved);
-        karac::lower(&mut parsed.program, &typed);
-        let result = compile_to_ir(&parsed.program, None, None);
-        let err = result.expect_err(
-            "expected a loud codegen error for a with_provider override of the \
-             no-vtable-slot method Env.args, but codegen succeeded (silent FFI \
-             fall-through would ignore the override)",
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "777\n777\nfalse");
+        }
+    }
+
+    #[test]
+    fn test_e2e_with_provider_override_env_var_result() {
+        // `with_provider[Env]` override of `var` — `Result[String, VarError]`
+        // return, exercising the dispatch-branch phi at an *enum struct* type
+        // (the generalization beyond the old hardcoded-i64 phi). The override
+        // returns `Ok("mocked")` for any key; after the scope pops, the real
+        // FFI default returns `Err(VarError.NotPresent)` for an unset key.
+        // The call lives in a separate fn (`rv`) so dispatch is cross-boundary.
+        let out = run_program(
+            r#"
+struct FakeEnv {}
+impl FakeEnv { fn var(self, name: String) -> Result[String, VarError] { Ok("mocked") } }
+fn rv() -> String reads(Env) {
+    match env.var("ANYTHING") { Ok(s) => s, Err(e) => "missing" }
+}
+fn main() reads(Env) {
+    with_provider[Env](FakeEnv {}, || { println(rv()); });
+    match env.var("KARA_DEFINITELY_UNSET_XYZ") {
+        Ok(s) => println(s),
+        Err(e) => println("unset-default"),
+    }
+}
+"#,
         );
-        assert!(
-            err.contains("args"),
-            "override error should name the offending method `args`; got: {err}"
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "mocked\nunset-default");
+        }
+    }
+
+    #[test]
+    fn test_e2e_with_provider_override_env_args_vec() {
+        // `with_provider[Env]` override of `args` — `Vec[String]` return, the
+        // dispatch-branch phi at a *Vec struct* type. This is the exact case
+        // the old `test_ambient_override_of_nonvtable_method_errors_loudly`
+        // pinned as a LOUD error; the slice lifts that to a working override.
+        // (The provider body builds the Vec via an explicitly-typed
+        // `Vec.new()` + push — an array literal as a `Vec[String]` return is a
+        // separate, pre-existing codegen-coercion gap, tracked in
+        // phase-7-codegen.md, orthogonal to override dispatch.) Cross-boundary
+        // call in `count()`.
+        let out = run_program(
+            r#"
+struct FakeEnv {}
+impl FakeEnv {
+    fn args(self) -> Vec[String] {
+        let mut v: Vec[String] = Vec.new();
+        v.push("alpha");
+        v.push("beta");
+        v.push("gamma");
+        v
+    }
+}
+fn count() -> i64 reads(Env) { env.args().len() }
+fn main() reads(Env) {
+    with_provider[Env](FakeEnv {}, || { println(count()); });
+}
+"#,
         );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3");
+        }
     }
 
     #[test]

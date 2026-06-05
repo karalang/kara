@@ -373,21 +373,36 @@ pub const PRELUDE_EFFECT_RESOURCES: &[&str] = &[
 /// (at the `with_provider` site) and the call-site runtime dispatch read
 /// this table, so they stay in lockstep.
 ///
-/// Scoped to ambient methods that support a *runtime* (non-static-shape)
-/// `with_provider` override — only those need a vtable slot. A method whose
-/// codegen lowering is FFI-default-plus-static-override only (e.g.
-/// `RandomSource.next_u64`, lowered in `compile_ambient_ffi` with static
-/// overrides devirtualized by `try_compile_ambient_override`) does NOT get
-/// an entry here: with no runtime vtable dispatch, `ambient_method_index`
-/// returns `None` and the call falls straight to the FFI default. The
-/// remaining ambient methods (`Env.var`/`args`, `stdin`, `fs.*`, explicit
-/// `stdout`/`stderr`) gain both their FFI lowering and (where they support
-/// runtime override) an entry here as that work lands — tracked alongside
-/// the gap in `phase-7-codegen.md`. Ambient methods are otherwise hardcoded
-/// in two places this must stay aligned with: the interpreter's
+/// Covers every ambient method that has a codegen FFI default *and* can be
+/// overridden via `with_provider[R]` at runtime. Each entry gets a vtable
+/// slot at its position, a minted resource ID (`compile_program` mints one
+/// per resource named here), and an override-vs-default runtime branch at
+/// the call site (`compile_ambient_dispatch_branch`). The branch phi takes
+/// the method's real return type — i64 (`Clock.now`, `RandomSource
+/// .next_u64`), the unit-placeholder i64 (`Env.set`, `Stdout/Stderr.*`), a
+/// `Vec` struct (`Env.args`), or a `Result` enum (`Env.var`, `Stdin.*`,
+/// `FileSystem.*`) — so no slot-method's return shape is special-cased.
+///
+/// A method absent here has no vtable slot: `ambient_method_index` returns
+/// `None`, the call falls straight to its FFI default, and an attempted
+/// `with_provider` override of it is a loud codegen error (the
+/// no-slot guard in `compile_ambient_resource_method`) rather than a silent
+/// fall-through that would diverge from the interpreter. Add a method here
+/// when it gains both an FFI lowering and override support.
+///
+/// Ambient methods are otherwise hardcoded in two places this must stay
+/// aligned with: the interpreter's
 /// `dispatch_builtin_resource_method_with_values` and codegen's
-/// `compile_ambient_resource_method`.
-pub const AMBIENT_RESOURCE_METHODS: &[(&str, &[&str])] = &[("Clock", &["now"]), ("Env", &["set"])];
+/// `compile_ambient_resource_method` / `compile_ambient_ffi`.
+pub const AMBIENT_RESOURCE_METHODS: &[(&str, &[&str])] = &[
+    ("Clock", &["now"]),
+    ("Env", &["set", "var", "args"]),
+    ("RandomSource", &["next_u64"]),
+    ("Stdin", &["read_line", "read_to_string"]),
+    ("Stdout", &["print", "println", "flush"]),
+    ("Stderr", &["print", "println", "flush"]),
+    ("FileSystem", &["read_to_string", "write"]),
+];
 
 // ── Baked stdlib source (CR-202 slice 3a) ───────────────────────────
 //

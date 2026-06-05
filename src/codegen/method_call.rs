@@ -1521,15 +1521,14 @@ impl<'ctx> super::Codegen<'ctx> {
         } else if self.ambient_override_fn_type(resource, method).is_some() {
             // The method has NO `AMBIENT_RESOURCE_METHODS` vtable slot, yet a
             // `with_provider[<resource>]` override in this module supplies an
-            // impl of it (its `@<Type>.<method>` symbol exists). Codegen can't
-            // route the override through `compile_ambient_dispatch_branch`
-            // without a slot, so falling through to the builtin FFI default
-            // would SILENTLY ignore the override and diverge from the
-            // interpreter. Error loudly instead. Lifting this requires giving
-            // the method a vtable slot and generalizing the dispatch-branch
-            // phi beyond i64 (struct-returning methods like `Env.args`) —
-            // tracked in phase-7-codegen.md under the remaining-ambient-methods
-            // item ("ambient with_provider override of non-vtable methods").
+            // impl of it (its `@<Type>.<method>` symbol exists). With no slot
+            // there is no runtime dispatch branch, so falling through to the
+            // builtin FFI default would SILENTLY ignore the override and
+            // diverge from the interpreter. Error loudly instead. Every
+            // ambient method that has both an FFI default and override support
+            // is listed in `AMBIENT_RESOURCE_METHODS` (so it takes the branch
+            // above) — reaching here means a method gained an override impl
+            // before earning a slot; add it to the table to lift this.
             return Err(format!(
                 "codegen: a `with_provider[{resource}]` override supplies `{method}`, but \
                  ambient overrides of `{resource}.{method}` are not yet lowered (the method has \
@@ -1548,16 +1547,22 @@ impl<'ctx> super::Codegen<'ctx> {
     ///   br (data != null), %override, %default
     /// override: fn = vt[<method_idx>]; r1 = call fn(self=data, args...)
     /// default:  r2 = <ambient FFI default>
-    /// merge:    phi i64 [r1, override], [r2, default]
+    /// merge:    phi <ret> [r1, override], [r2, default]
     /// ```
-    /// All ambient methods codegen lowers today return an i64-shaped slot
-    /// (`Clock.now` real i64; `Env.set` the unit-return placeholder), so
-    /// the phi is uniformly i64. A null fn-ptr slot (override implements
-    /// only some methods) would null-deref in the override arm — but the
-    /// override arm is only taken when a frame is active, and a fixture
-    /// only overrides methods it implements, so the implemented slot is
-    /// non-null. (Generalizing the phi type for non-i64 ambient methods is
-    /// tracked with the remaining-ambient-methods lowering gap.)
+    /// The merge phi takes the method's real return type, read off the
+    /// FFI-default value (`default_val.get_type()`): i64 for the scalar /
+    /// unit-placeholder methods (`Clock.now`, `RandomSource.next_u64`,
+    /// `Env.set`, `Stdout/Stderr.*`), the `Vec` struct for `Env.args`, the
+    /// `Result` enum for `Env.var` / `Stdin.*` / `FileSystem.*`. The
+    /// override arm and the default arm both lower the same Kāra signature,
+    /// so they produce the identical LLVM type (aggregates return by value —
+    /// no sret), and a void-returning override yields the same i64-0
+    /// placeholder the unit FFI default does. A null fn-ptr slot (override
+    /// implements only some methods) would null-deref in the override arm —
+    /// but the override arm is only taken when a frame is active, and an
+    /// active provider must implement every method the body calls (the
+    /// interpreter errors otherwise — `resource_method.rs`, no per-method
+    /// fallback), so the slot for a called method is non-null.
     fn compile_ambient_dispatch_branch(
         &mut self,
         resource: &str,
@@ -1669,9 +1674,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_unconditional_branch(merge_bb).unwrap();
         let default_end = self.builder.get_insert_block().unwrap();
 
-        // merge: phi the two i64 results.
+        // merge: phi the two results at the method's real return type. Both
+        // arms lower the same Kāra signature, so their LLVM types match; a
+        // void override reuses the unit i64-0 placeholder (= `default_val`).
         self.builder.position_at_end(merge_bb);
-        let phi = self.builder.build_phi(i64_t, "amb.result").unwrap();
+        let phi = self
+            .builder
+            .build_phi(default_val.get_type(), "amb.result")
+            .unwrap();
         phi.add_incoming(&[(&override_val, override_end), (&default_val, default_end)]);
         Ok(phi.as_basic_value())
     }
