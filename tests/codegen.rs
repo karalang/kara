@@ -30969,6 +30969,145 @@ fn main() {
         );
     }
 
+    // ── Slice 6e — masked load (Vector::load_masked(slice, mask)) ────────
+
+    #[test]
+    fn test_vector_load_masked_tail() {
+        // Tail handling: a 2-element slice loaded into a 4-lane vector with a
+        // mask true for the first two lanes. Active lanes load slice[i],
+        // inactive lanes read 0 — no out-of-bounds access past the slice.
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Array[i64, 6] = [10, 20, 30, 40, 50, 60];
+    let tail = a[0..2];
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](2, 2, 2, 2);
+    let m = idx < lim;
+    let v = Vector[i64, 4].load_masked(tail, m);
+    println(v[0]); println(v[1]); println(v[2]); println(v[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "10\n20\n0\n0\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_load_masked_all_active() {
+        // An all-true mask over a full-length slice loads every lane.
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Array[i64, 4] = [5, 6, 7, 8];
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](9, 9, 9, 9);
+    let m = idx < lim;
+    let v = Vector[i64, 4].load_masked(a.as_slice(), m);
+    println(v[0]); println(v[1]); println(v[2]); println(v[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "5\n6\n7\n8\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_load_masked_float() {
+        // Float lanes: masked-off lanes read 0.0 (typed zero).
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Array[f64, 4] = [1.5, 2.5, 3.5, 4.5];
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](2, 2, 2, 2);
+    let m = idx < lim;
+    let v = Vector[f64, 4].load_masked(a.as_slice(), m);
+    println(v[0]); println(v[1]); println(v[2]); println(v[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1.5\n2.5\n0\n0\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_load_masked_active_oob_panics() {
+        // An active lane whose index is past the slice length traps, like the
+        // `v[i]` lane read (a 1-element slice with lane 1 active).
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let a: Array[i64, 4] = [10, 20, 30, 40];
+    let one = a[0..1];
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](2, 2, 2, 2);
+    let m = idx < lim;
+    let v = Vector[i64, 4].load_masked(one, m);
+    println(v[0]);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout
+                    .contains("load_masked: active lane index out of bounds"),
+                "expected active-lane OOB panic, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_vector_load_masked_wrong_mask_type_is_type_error() {
+        // The mask must be a Vector[bool, N] — an i64 vector is rejected.
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a: Array[i64, 4] = [1, 2, 3, 4];
+    let bad = Vector[i64, 4](1, 0, 1, 0);
+    let _ = Vector[i64, 4].load_masked(a.as_slice(), bad);
+}
+"#,
+        );
+        assert!(!errs.is_empty(), "load_masked mask must be Vector[bool, N]");
+    }
+
+    #[test]
+    fn test_vector_load_masked_wrong_arity_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a: Array[i64, 4] = [1, 2, 3, 4];
+    let _ = Vector[i64, 4].load_masked(a.as_slice());
+}
+"#,
+        );
+        assert!(!errs.is_empty(), "load_masked takes exactly two arguments");
+    }
+
+    #[test]
+    fn test_vector_load_masked_non_slice_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](2, 2, 2, 2);
+    let m = idx < lim;
+    let _ = Vector[i64, 4].load_masked(7, m);
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "load_masked first argument must be a slice"
+        );
+    }
+
     // ── Slice 4 — first-class Numeric trait + lane-literal ergonomics ─────
 
     #[test]

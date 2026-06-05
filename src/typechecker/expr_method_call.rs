@@ -531,7 +531,11 @@ impl<'a> super::TypeChecker<'a> {
         // evaluate `Vector[T, N]` as a value and rejects it. Mirrors the
         // `Vector[T,N](...)` construction intercept in
         // `infer_explicit_generic_args_call`.
-        if method == "splat" || method == "from_array" || method == "from_slice" {
+        if method == "splat"
+            || method == "from_array"
+            || method == "from_slice"
+            || method == "load_masked"
+        {
             if let ExprKind::Path {
                 segments,
                 generic_args: Some(ga),
@@ -541,6 +545,7 @@ impl<'a> super::TypeChecker<'a> {
                     return match method {
                         "splat" => self.infer_vector_splat(ga, args, span),
                         "from_array" => self.infer_vector_from_array(ga, args, span),
+                        "load_masked" => self.infer_vector_load_masked(ga, args, span),
                         _ => self.infer_vector_from_slice(ga, args, span),
                     };
                 }
@@ -2297,6 +2302,94 @@ impl<'a> super::TypeChecker<'a> {
                     TypeErrorKind::TypeMismatch,
                 );
             }
+        }
+        let result = Type::Vector { element, lanes };
+        self.record_expr_type(span, &result);
+        result
+    }
+
+    /// `Vector[T, N].load_masked(slice, mask) -> Vector[T, N]` (design.md
+    /// § Portable SIMD, "Masked load/store"): build a `<N x T>` by loading only
+    /// the lanes the `mask` selects. `slice` is a `Slice[T]` (or `mut Slice[T]`
+    /// — reads ignore mutability); `mask` is the `Vector[bool, N]` predicate.
+    /// Lane `i` is *active* iff `mask[i]`; an active lane requires `i < len`
+    /// (a runtime panic otherwise), and an inactive lane reads `0` without
+    /// touching memory — so a tail mask processes a short slice safely.
+    fn infer_vector_load_masked(
+        &mut self,
+        ga: &[GenericArg],
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let lowered = self.lower_vector_type(&Some(ga.to_vec()), &[], span);
+        let Some(Type::Vector { element, lanes }) = lowered else {
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Error;
+        };
+        if args.len() != 2 {
+            self.type_error(
+                format!(
+                    "'load_masked' takes exactly two arguments (slice, mask), found {}",
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Vector { element, lanes };
+        }
+        // arg0 — a `Slice[T]` (mutable or not) whose element matches `T`.
+        let slice_ty = self.infer_expr(&args[0].value);
+        match &slice_ty {
+            Type::Slice {
+                element: arg_elem, ..
+            } => {
+                if **arg_elem != *element && !matches!(**arg_elem, Type::Error) {
+                    self.type_error(
+                        format!(
+                            "'load_masked' expects a 'Slice[{}]' matching the Vector element, \
+                             found 'Slice[{}]'",
+                            type_display(&element),
+                            type_display(arg_elem)
+                        ),
+                        args[0].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+            }
+            Type::Error => {}
+            other => {
+                self.type_error(
+                    format!(
+                        "'load_masked' expects a 'Slice[{}]' first argument, found '{}'",
+                        type_display(&element),
+                        type_display(other)
+                    ),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+        // arg1 — the `Vector[bool, N]` mask (same lane count as the result).
+        let mask_ty = self.infer_expr(&args[1].value);
+        let expected_mask = Type::Vector {
+            element: Box::new(Type::Bool),
+            lanes: lanes.clone(),
+        };
+        if mask_ty != expected_mask && mask_ty != Type::Error {
+            self.type_error(
+                format!(
+                    "'load_masked' mask must be a '{}' (a vector comparison result), found '{}'",
+                    type_display(&expected_mask),
+                    type_display(&mask_ty)
+                ),
+                args[1].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
         }
         let result = Type::Vector { element, lanes };
         self.record_expr_type(span, &result);

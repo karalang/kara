@@ -12900,6 +12900,43 @@ fn test_vector_shuffle_narrowing() {
 }
 
 #[test]
+fn test_vector_load_masked_tail() {
+    // Tail handling: a 2-element slice into a 4-lane vector, mask true for the
+    // first two lanes — active lanes load, inactive read 0 (parity w/ codegen).
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a: Array[i64, 6] = [10, 20, 30, 40, 50, 60];
+    let tail = a[0..2];
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](2, 2, 2, 2);
+    let m = idx < lim;
+    let v = Vector[i64, 4].load_masked(tail, m);
+    println(v[0]); println(v[1]); println(v[2]); println(v[3]);
+}
+"#,
+    );
+    assert_eq!(out, "10\n20\n0\n0\n");
+}
+
+#[test]
+fn test_vector_load_masked_float_zero_fill() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a: Array[f64, 4] = [1.5, 2.5, 3.5, 4.5];
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](2, 2, 2, 2);
+    let m = idx < lim;
+    let v = Vector[f64, 4].load_masked(a.as_slice(), m);
+    println(v[0]); println(v[1]); println(v[2]); println(v[3]);
+}
+"#,
+    );
+    assert_eq!(out, "1.5\n2.5\n0\n0\n");
+}
+
+#[test]
 fn test_vector_compare_unsigned_mask() {
     // Unsigned compare: 3000000000 (high bit set as i32) is NOT < 10.
     let out = run_no_errors(

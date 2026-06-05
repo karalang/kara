@@ -90,7 +90,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // § Portable SIMD). The receiver is the bare vector type-path, not a
         // value, so intercept before the receiver is compiled as an
         // expression. Broadcast the scalar across all `N` lanes.
-        if method == "splat" || method == "from_array" || method == "from_slice" {
+        if method == "splat"
+            || method == "from_array"
+            || method == "from_slice"
+            || method == "load_masked"
+        {
             if let ExprKind::Path {
                 segments,
                 generic_args: Some(ga),
@@ -100,6 +104,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     return match method {
                         "splat" => self.compile_vector_splat(ga, args),
                         "from_array" => self.compile_vector_from_array(ga, args),
+                        "load_masked" => self.compile_vector_load_masked(ga, args),
                         _ => self.compile_vector_from_slice(ga, args),
                     };
                 }
@@ -3180,6 +3185,122 @@ impl<'ctx> super::Codegen<'ctx> {
                     "from_slice.lane",
                 )
                 .map_err(|e| format!("from_slice insertelement failed: {e}"))?;
+        }
+        Ok(acc.into())
+    }
+
+    /// `Vector[T, N].load_masked(slice, mask)` — build a `<N x T>` loading only
+    /// the lanes the `mask` selects (design.md § Portable SIMD, "Masked
+    /// load/store"). Lane `i` is *active* iff `mask[i]`; an active lane whose
+    /// index is past the slice length traps (`emit_panic`, like the `v[i]`
+    /// bounds check), an active in-bounds lane loads `slice[i]`, and an inactive
+    /// lane reads `0` without touching memory — so a tail mask reads a short
+    /// slice without an out-of-bounds access. Per lane: branch on
+    /// `mask[i] && i >= len` to the panic block, then on `mask[i]` to a load /
+    /// zero pair joined by a phi that feeds the `insertelement`.
+    fn compile_vector_load_masked(
+        &mut self,
+        generic_args: &[GenericArg],
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let vec_ty = self
+            .llvm_vector_type(&Some(generic_args.to_vec()))
+            .ok_or_else(|| "load_masked: could not lower Vector[T, N] type".to_string())?;
+        let BasicTypeEnum::VectorType(vt) = vec_ty else {
+            return Err("load_masked: lowered type is not an LLVM vector".to_string());
+        };
+        let n = vt.get_size();
+        let elem_ty = vt.get_element_type();
+        let i64_t = self.context.i64_type();
+        let i32_ty = self.context.i32_type();
+
+        // Slice header `{ptr data, i64 len}` (field 0 / field 1).
+        let slice_val = self.compile_expr(&args[0].value)?.into_struct_value();
+        let data = self
+            .builder
+            .build_extract_value(slice_val, 0, "load_masked.data")
+            .map_err(|e| format!("load_masked extract data failed: {e}"))?
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_extract_value(slice_val, 1, "load_masked.len")
+            .map_err(|e| format!("load_masked extract len failed: {e}"))?
+            .into_int_value();
+        // Mask `<N x i1>`.
+        let mask = self.compile_expr(&args[1].value)?.into_vector_value();
+
+        let fn_val = self.current_fn.unwrap();
+        let zero: BasicValueEnum<'ctx> = match elem_ty {
+            BasicTypeEnum::IntType(t) => t.const_zero().into(),
+            BasicTypeEnum::FloatType(t) => t.const_zero().into(),
+            other => return Err(format!("load_masked: unsupported element type {other:?}")),
+        };
+        let mut acc = vt.get_undef();
+        for i in 0..n {
+            let lane_idx = i32_ty.const_int(i as u64, false);
+            let mask_i = self
+                .builder
+                .build_extract_element(mask, lane_idx, "load_masked.mask")
+                .map_err(|e| format!("load_masked extractelement mask failed: {e}"))?
+                .into_int_value();
+            let i_const = i64_t.const_int(i as u64, false);
+            let oob = self
+                .builder
+                .build_int_compare(IntPredicate::UGE, i_const, len, "load_masked.oob")
+                .map_err(|e| format!("load_masked bounds compare failed: {e}"))?;
+            let bad = self
+                .builder
+                .build_and(mask_i, oob, "load_masked.bad")
+                .map_err(|e| format!("load_masked and failed: {e}"))?;
+            let panic_bb = self.context.append_basic_block(fn_val, "load_masked.panic");
+            let ok_bb = self.context.append_basic_block(fn_val, "load_masked.ok");
+            self.builder
+                .build_conditional_branch(bad, panic_bb, ok_bb)
+                .map_err(|e| format!("load_masked panic branch failed: {e}"))?;
+            self.builder.position_at_end(panic_bb);
+            self.emit_panic("load_masked: active lane index out of bounds");
+            self.builder
+                .build_unreachable()
+                .map_err(|e| format!("load_masked unreachable failed: {e}"))?;
+
+            self.builder.position_at_end(ok_bb);
+            let load_bb = self.context.append_basic_block(fn_val, "load_masked.load");
+            let zero_bb = self.context.append_basic_block(fn_val, "load_masked.zero");
+            let merge_bb = self.context.append_basic_block(fn_val, "load_masked.merge");
+            self.builder
+                .build_conditional_branch(mask_i, load_bb, zero_bb)
+                .map_err(|e| format!("load_masked active branch failed: {e}"))?;
+            // Active lane → load `data[i]`.
+            self.builder.position_at_end(load_bb);
+            let elem_ptr = unsafe {
+                self.builder
+                    .build_gep(elem_ty, data, &[i_const], "load_masked.elem.ptr")
+                    .map_err(|e| format!("load_masked gep failed: {e}"))?
+            };
+            let loaded = self
+                .builder
+                .build_load(elem_ty, elem_ptr, "load_masked.lane")
+                .map_err(|e| format!("load_masked load failed: {e}"))?;
+            self.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(|e| format!("load_masked load->merge failed: {e}"))?;
+            let load_end = self.builder.get_insert_block().unwrap();
+            // Inactive lane → zero.
+            self.builder.position_at_end(zero_bb);
+            self.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(|e| format!("load_masked zero->merge failed: {e}"))?;
+            // Join the loaded / zero value and insert it.
+            self.builder.position_at_end(merge_bb);
+            let phi = self
+                .builder
+                .build_phi(elem_ty, "load_masked.val")
+                .map_err(|e| format!("load_masked phi failed: {e}"))?;
+            phi.add_incoming(&[(&loaded, load_end), (&zero, zero_bb)]);
+            acc = self
+                .builder
+                .build_insert_element(acc, phi.as_basic_value(), lane_idx, "load_masked.ins")
+                .map_err(|e| format!("load_masked insertelement failed: {e}"))?;
         }
         Ok(acc.into())
     }

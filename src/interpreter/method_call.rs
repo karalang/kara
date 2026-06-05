@@ -152,6 +152,78 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // SIMD static constructor — `Vector[T, N].load_masked(slice, mask)`.
+        // Same type-path-receiver intercept. Loads only the lanes the mask
+        // selects: lane `i` is active iff `mask[i]`; an active lane past the
+        // slice length panics (parity with codegen's `emit_panic`), and an
+        // inactive lane reads a typed zero without touching the slice.
+        if method == "load_masked" {
+            if let ExprKind::Path {
+                segments,
+                generic_args: Some(ga),
+            } = &object.kind
+            {
+                if segments.len() == 1 && segments[0] == "Vector" {
+                    let n = self.vector_lane_count(ga);
+                    let elem_is_float = ga.iter().any(|a| {
+                        matches!(a, GenericArg::Type(t)
+                        if matches!(&t.kind, crate::ast::TypeKind::Path(p)
+                            if matches!(
+                                p.segments.last().map(|s| s.as_str()),
+                                Some("f32") | Some("f64") | Some("float")
+                            )))
+                    });
+                    let zero = if elem_is_float {
+                        Value::Float(0.0)
+                    } else {
+                        Value::Int(0)
+                    };
+                    let slice_v = self.eval_expr_inner(&args[0].value);
+                    let mask_v = self.eval_expr_inner(&args[1].value);
+                    let (storage, start, slen) = match slice_v {
+                        Value::Slice {
+                            storage,
+                            start,
+                            len,
+                            ..
+                        } => (storage, start, len),
+                        other => {
+                            return self.record_runtime_error(
+                                format!(
+                                    "load_masked expects a Slice argument, got `{}`",
+                                    other.variant_name()
+                                ),
+                                span,
+                            )
+                        }
+                    };
+                    let Value::Vector(mask) = mask_v else {
+                        return self.record_runtime_error(
+                            "load_masked expects a Vector[bool, N] mask".to_string(),
+                            span,
+                        );
+                    };
+                    let guard = storage.read().unwrap();
+                    let mut out = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let active = matches!(mask.get(i), Some(Value::Bool(true)));
+                        if active {
+                            if i >= slen {
+                                return self.record_runtime_error(
+                                    "load_masked: active lane index out of bounds".to_string(),
+                                    span,
+                                );
+                            }
+                            out.push(guard[start + i].clone());
+                        } else {
+                            out.push(zero.clone());
+                        }
+                    }
+                    return Value::Vector(out);
+                }
+            }
+        }
+
         // Type-receiver associated calls: `T.method(...)` where `T` is a
         // primitive type name. The receiver is an identifier naming a type
         // — not a value — so eval_expr_inner would panic. Handle two shapes:
