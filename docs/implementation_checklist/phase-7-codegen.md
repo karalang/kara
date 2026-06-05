@@ -1012,7 +1012,7 @@ The items below land from the v62 brainstorm on interpreter perf and binary size
 
   **Cross-link.** Commit `62af025` (defensive watchdog), `bdbaadd` (root-cause fix). Entry below ("Mirror watchdog into …") is independent and still open — the watchdog mirror is a defensive measure orthogonal to this fix.
 
-- [ ] **Mirror `output_with_hang_watchdog` into `par_codegen.rs`, `parallax.rs`, `parallax_lite.rs`, `cli.rs`.** **Filed 2026-05-25.** Companion to commit `62af025`. The codegen suite shipped a per-spawn hang watchdog (`tests/codegen.rs::output_with_hang_watchdog`), but four other test files still call `Command::new(exe).output()` directly and have identical exposure to the same concurrent-spawn deadlock:
+- [x] **Mirror `output_with_hang_watchdog` into `par_codegen.rs`, `parallax.rs`, `parallax_lite.rs`, `cli.rs`.** **Filed 2026-05-25. ✓ Closed 2026-06-05.** Companion to commit `62af025`. The codegen suite shipped a per-spawn hang watchdog (`tests/codegen.rs::output_with_hang_watchdog`), but four other test files still call `Command::new(exe).output()` directly and have identical exposure to the same concurrent-spawn deadlock:
 
   - `tests/par_codegen.rs` — parallel codegen end-to-end tests (highest exposure; intentionally runs heavy par workloads)
   - `tests/parallax.rs` — parallax runtime tests
@@ -1026,6 +1026,8 @@ The items below land from the v62 brainstorm on interpreter perf and binary size
   **Priority.** Medium — the codegen suite was the one observed to hang, but the other four are structurally similar and one of them will eventually hang under enough load. Land before any large refactor that touches the test harness so the mirror is a one-shot, not a one-per-file scattershot.
 
   **Cross-link.** Commit `62af025`. Entry above (root-cause investigation) is the parent of this work in spirit but doesn't gate it — the watchdog mirror is defensive, root-causing is investigative.
+
+  **Resolution (2026-06-05).** Most of this had already landed incrementally: the helper was extracted to `tests/common/mod.rs` (`mod common;` per file, 15 s for short / 60 s for par-workload binaries), and `par_codegen.rs`, `parallax.rs`, `parallax_lite.rs` route every user-binary spawn through it (cli.rs via a `KaracBin(Command)` wrapper whose `.output()` calls the helper). The only residual bypass was **4 sites in `cli.rs`** that spawned the *compiled user binary* directly (`std::process::Command::new(&exe_path).output()` in the build-codegen E2E tests `two_files`, `three_module_chain`, `providers_as_module_name`, `manifest_name_becomes_binary_name`) — exactly the hang-prone shape; now routed through the 15 s watchdog. **Deliberately left unwrapped:** the one `cargo build -p karac-runtime` `.output()` in each of the three parallax/par_codegen files — it's serialized by `Once` (no concurrent exposure) and a cold LTO runtime build can exceed any reasonable watchdog timeout, so wrapping it would only risk false-positive kills. Note `tests/common/mod.rs` is the module the **Shape** above called `tests/common/spawn.rs` — same role, established name. Gates green (fmt + clippy ×3 cfgs); the 5 `test_build_project_codegen_*` cli tests pass under `--features llvm`.
 
 - [->] **`match`-on-literals: emit LLVM `switch` instead of an `icmp`-chain.** **Filed 2026-05-27.** `compile_pattern_condition` lowers each literal arm to `icmp eq + br` and chains them. For all-arms-literal, no-guard matches an LLVM `switch` would let the backend pick a jump-table / balanced tree by case density.
 

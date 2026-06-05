@@ -1456,7 +1456,10 @@ fn test_build_project_codegen_two_files_runs() {
     );
 
     let exe_path = tmp.join("two_file_demo");
-    let run = std::process::Command::new(&exe_path).output();
+    let run = common::output_with_hang_watchdog(
+        std::process::Command::new(&exe_path),
+        std::time::Duration::from_secs(15),
+    );
     let _ = std::fs::remove_dir_all(&tmp);
     let run = run.expect("executable should be runnable");
     assert!(
@@ -1500,7 +1503,10 @@ fn test_build_project_codegen_three_module_chain_runs() {
     );
 
     let exe_path = tmp.join("chain_demo");
-    let run = std::process::Command::new(&exe_path).output();
+    let run = common::output_with_hang_watchdog(
+        std::process::Command::new(&exe_path),
+        std::time::Duration::from_secs(15),
+    );
     let _ = std::fs::remove_dir_all(&tmp);
     let run = run.expect("executable should be runnable");
     assert!(
@@ -1641,7 +1647,10 @@ fn test_build_project_codegen_providers_as_module_name() {
     );
 
     let exe_path = tmp.join("providers_module");
-    let run = std::process::Command::new(&exe_path).output();
+    let run = common::output_with_hang_watchdog(
+        std::process::Command::new(&exe_path),
+        std::time::Duration::from_secs(15),
+    );
     let _ = std::fs::remove_dir_all(&tmp);
     let run = run.expect("executable should be runnable");
     assert!(
@@ -1671,7 +1680,10 @@ fn test_build_project_codegen_manifest_name_becomes_binary_name() {
 
     let exe_path = tmp.join("my_renamed_app");
     let exe_exists = exe_path.exists();
-    let run = std::process::Command::new(&exe_path).output();
+    let run = common::output_with_hang_watchdog(
+        std::process::Command::new(&exe_path),
+        std::time::Duration::from_secs(15),
+    );
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(
         exe_exists,
