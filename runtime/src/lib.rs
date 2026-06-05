@@ -112,7 +112,11 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // (`src/codegen/method_call.rs::compile_ambient_resource_method`).
     // Without these the LLJIT path's `dlsym` symbol-search generator
     // can't resolve `env.set` / `clock.now` call sites.
-    keep!(karac_runtime_env_set, karac_runtime_clock_now);
+    keep!(
+        karac_runtime_env_set,
+        karac_runtime_clock_now,
+        karac_runtime_rand_next_u64,
+    );
     // Design-by-contract predicate runtime (`requires` / `ensures` /
     // `invariant`). Codegen wraps each predicate evaluation in
     // `karac_runtime_enter_predicate` / `_exit_predicate`, and a
@@ -462,6 +466,38 @@ pub extern "C" fn karac_runtime_clock_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// `rand.next_u64()` — next draw from a non-cryptographic xorshift64 PRNG.
+/// Codegen counterpart to the interpreter's `("RandomSource", "next_u64")`
+/// arm. The algorithm (xorshift64) and the seeding strategy (wall-clock
+/// nanoseconds `| 1`) match the interpreter's `seed_rand_state` +
+/// `rand_state` exactly, so both backends produce statistically equivalent
+/// — and, like the interpreter, run-to-run nondeterministic — sequences.
+/// State is per-thread (`thread_local!`), so a draw on one worker never
+/// perturbs another's stream. The result is reinterpreted as `i64`: a
+/// lossless bit-for-bit cast matching the interpreter's `Value::Int(x as
+/// i64)` convention.
+#[no_mangle]
+pub extern "C" fn karac_runtime_rand_next_u64() -> i64 {
+    thread_local! {
+        static RAND_STATE: std::cell::Cell<u64> = std::cell::Cell::new({
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0);
+            // `| 1` guarantees a non-zero seed — xorshift64 is stuck at 0.
+            nanos | 1
+        });
+    }
+    RAND_STATE.with(|s| {
+        let mut x = s.get();
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        s.set(x);
+        x as i64
+    })
 }
 
 /// Newtype around `*const KaracFrame` that opts into `Send + Sync` for

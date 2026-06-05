@@ -892,6 +892,31 @@ fn main() writes(Env) reads(Clock) {
     }
 
     #[test]
+    fn test_e2e_ambient_rand_next_u64_advances_state() {
+        // `rand.next_u64()` lowers to the `karac_runtime_rand_next_u64` FFI
+        // (xorshift64), the codegen counterpart of the interpreter's
+        // `("RandomSource", "next_u64")` arm. Output is seeded from
+        // wall-clock nanoseconds so no specific value is assertable — but
+        // two consecutive draws differing is a sharp witness that the FFI
+        // fired and state advanced. Mirrors the interpreter's
+        // `test_ambient_random_source_next_u64_advances_state`. Regression
+        // guard for the "ambient resource method 'RandomSource.next_u64' is
+        // not yet lowered (interpreter-only)" codegen error.
+        let out = run_program(
+            r#"
+fn main() reads(RandomSource) {
+    let a = rand.next_u64();
+    let b = rand.next_u64();
+    if a != b { println("rand-advanced"); } else { println("rand-stuck"); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "rand-advanced");
+        }
+    }
+
+    #[test]
     fn test_e2e_with_provider_ambient_override() {
         // `with_provider[Clock](FakeClock {}, || ...)` overrides the
         // ambient `Clock` resource with a statically-typed provider. The

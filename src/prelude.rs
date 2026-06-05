@@ -373,12 +373,18 @@ pub const PRELUDE_EFFECT_RESOURCES: &[&str] = &[
 /// (at the `with_provider` site) and the call-site runtime dispatch read
 /// this table, so they stay in lockstep.
 ///
-/// Scoped to the methods codegen currently lowers (`Clock.now`,
-/// `Env.set`); the remaining ambient methods (`Env.var`/`args`, `rand`,
-/// `stdin`, `fs.*`, explicit `stdout`/`stderr`) get entries here as their
-/// codegen lowering lands — tracked alongside that gap in
-/// `phase-7-codegen.md`. Ambient methods are otherwise hardcoded in two
-/// places this must stay aligned with: the interpreter's
+/// Scoped to ambient methods that support a *runtime* (non-static-shape)
+/// `with_provider` override — only those need a vtable slot. A method whose
+/// codegen lowering is FFI-default-plus-static-override only (e.g.
+/// `RandomSource.next_u64`, lowered in `compile_ambient_ffi` with static
+/// overrides devirtualized by `try_compile_ambient_override`) does NOT get
+/// an entry here: with no runtime vtable dispatch, `ambient_method_index`
+/// returns `None` and the call falls straight to the FFI default. The
+/// remaining ambient methods (`Env.var`/`args`, `stdin`, `fs.*`, explicit
+/// `stdout`/`stderr`) gain both their FFI lowering and (where they support
+/// runtime override) an entry here as that work lands — tracked alongside
+/// the gap in `phase-7-codegen.md`. Ambient methods are otherwise hardcoded
+/// in two places this must stay aligned with: the interpreter's
 /// `dispatch_builtin_resource_method_with_values` and codegen's
 /// `compile_ambient_resource_method`.
 pub const AMBIENT_RESOURCE_METHODS: &[(&str, &[&str])] = &[("Clock", &["now"]), ("Env", &["set"])];

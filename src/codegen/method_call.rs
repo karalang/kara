@@ -1702,6 +1702,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 let call = self.builder.build_call(fn_val, &[], "clock.now").unwrap();
                 Ok(call.try_as_basic_value().unwrap_basic())
             }
+            ("RandomSource", "next_u64") => {
+                if !arg_vals.is_empty() {
+                    return Err(format!(
+                        "codegen: rand.next_u64 expects 0 arguments, found {}",
+                        arg_vals.len()
+                    ));
+                }
+                let fn_val = match self.module.get_function("karac_runtime_rand_next_u64") {
+                    Some(f) => f,
+                    None => {
+                        let fn_ty = i64_t.fn_type(&[], false);
+                        self.module
+                            .add_function("karac_runtime_rand_next_u64", fn_ty, None)
+                    }
+                };
+                let call = self
+                    .builder
+                    .build_call(fn_val, &[], "rand.next_u64")
+                    .unwrap();
+                Ok(call.try_as_basic_value().unwrap_basic())
+            }
             _ => Err(format!(
                 "codegen: ambient resource method '{}.{}' is not yet lowered \
                  (interpreter-only); add a runtime FFI + an arm in \
