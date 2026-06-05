@@ -2102,12 +2102,13 @@ impl<'a> super::TypeChecker<'a> {
     /// § Portable SIMD). Slices 2 / 2b surface — Vector→scalar:
     ///   - `reduce_{sum,product,and,or,xor}() -> T` — horizontal folds.
     ///     `and`/`or`/`xor` are bitwise (integer element only).
+    ///   - `reduce_{min,max}() -> T` — signed-integer / float element only
+    ///     (unsigned deferred — needs the signedness side-table).
     ///   - `dot(other: Vector[T, N]) -> T` — dot product (element-wise
     ///     product summed); `other` must be the same `Vector[T, N]`.
     ///
-    /// All return the element type `T`. `reduce_{min,max}` (need element
-    /// signedness), construction helpers (`splat`/`from_*`), and `cross` are
-    /// later sub-slices (phase-7 line 289).
+    /// All return the element type `T`. Construction helpers (`splat`/`from_*`)
+    /// and `cross` are later sub-slices (phase-7 line 289).
     fn infer_vector_method(
         &mut self,
         element: &Type,
@@ -2138,6 +2139,40 @@ impl<'a> super::TypeChecker<'a> {
                     self.type_error(
                         format!(
                             "'{}' requires an integer element type; Vector element is '{}'",
+                            method,
+                            type_display(&elem)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                elem
+            }
+            // Horizontal min/max → `T`. Slice 2c scope: **signed integer or
+            // float** element. Unsigned-integer elements are deferred: a
+            // correct unsigned min/max needs the signed-vs-unsigned compare
+            // choice threaded into codegen (the signedness side-table noted in
+            // L289 slice 3), and the type-erased interpreter compares its
+            // `Value::Int` carrier as signed — so an unsigned element would
+            // silently miscompile. Reject it explicitly rather than do that.
+            "reduce_min" | "reduce_max" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("'{}' takes no arguments", method),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                }
+                if !matches!(elem, Type::Int(_) | Type::Float(_)) {
+                    self.type_error(
+                        format!(
+                            "'{}' currently supports signed-integer and float vectors only; \
+                             Vector element is '{}' (unsigned-element min/max is deferred — \
+                             see phase-7 line 289 slice 3 signedness side-table)",
                             method,
                             type_display(&elem)
                         ),
@@ -2181,8 +2216,8 @@ impl<'a> super::TypeChecker<'a> {
             _ => {
                 self.type_error(
                     format!(
-                        "no method '{}' on Vector[{}, _] (supported: dot, \
-                         reduce_sum, reduce_product, reduce_and, reduce_or, reduce_xor)",
+                        "no method '{}' on Vector[{}, _] (supported: dot, reduce_sum, \
+                         reduce_product, reduce_min, reduce_max, reduce_and, reduce_or, reduce_xor)",
                         method,
                         type_display(&elem)
                     ),

@@ -927,6 +927,25 @@ impl<'a> super::Interpreter<'a> {
                 }
                 Some(acc)
             }
+            // Horizontal min/max. Element is signed-int / float (typechecker-
+            // enforced), so the signed/ordered `<`/`>` compare via `eval_binary`
+            // matches codegen. Keep `acc` when the compare holds, else the lane.
+            "reduce_min" | "reduce_max" => {
+                let cmp_op = if method == "reduce_min" {
+                    BinOp::Lt
+                } else {
+                    BinOp::Gt
+                };
+                let mut acc = lanes.first().cloned()?;
+                for lane in lanes.into_iter().skip(1) {
+                    let keep_acc = matches!(
+                        self.eval_binary(&cmp_op, acc.clone(), lane.clone(), span),
+                        Value::Bool(true)
+                    );
+                    acc = if keep_acc { acc } else { lane };
+                }
+                Some(acc)
+            }
             // Dot product: element-wise product of the two vectors, summed.
             "dot" => {
                 let other = self.eval_expr_inner(&args[0].value);

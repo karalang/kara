@@ -29546,4 +29546,66 @@ fn main() {
             "bitwise reduce_and on a float vector must be a type error"
         );
     }
+
+    // ── Vector slice 2c — min/max (signed-int + float) ───────────────────
+
+    #[test]
+    fn test_vector_reduce_min_max_i64() {
+        let out = run_program(
+            r#"
+fn main() {
+    let v = Vector[i64, 4](3, 1, 4, 2);
+    println(v.reduce_min());
+    println(v.reduce_max());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1\n4\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_reduce_min_max_i64_negative() {
+        // Signed compare: -5 min, 2 max.
+        let out = run_program(
+            r#"
+fn main() {
+    let v = Vector[i64, 3](-5, 2, -3);
+    println(v.reduce_min());
+    println(v.reduce_max());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "-5\n2\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_reduce_min_max_f64() {
+        let out = run_program(
+            r#"
+fn main() {
+    let v = Vector[f64, 2](2.5, 1.5);
+    println(v.reduce_min());
+    println(v.reduce_max());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1.5\n2.5\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_reduce_min_on_unsigned_is_type_error() {
+        let errs = vector_typecheck_errors(
+            "fn main() { let v = Vector[u32, 4](1, 2, 3, 4); let _ = v.reduce_min(); }",
+        );
+        assert!(
+            !errs.is_empty(),
+            "reduce_min on an unsigned-element vector must be a type error (deferred)"
+        );
+    }
 }

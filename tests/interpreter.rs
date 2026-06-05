@@ -12365,3 +12365,48 @@ fn test_vector_reduce_xor_i64() {
         run_no_errors("fn main() { let v = Vector[i64, 4](1, 2, 4, 8); println(v.reduce_xor()); }");
     assert_eq!(out, "15\n");
 }
+
+// ── Vector slice 2c — min/max (interpreter) ──────────────────────────
+
+#[test]
+fn test_vector_reduce_min_max_i64() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let v = Vector[i64, 4](3, 1, 4, 2);
+    println(v.reduce_min());
+    println(v.reduce_max());
+}
+"#,
+    );
+    assert_eq!(out, "1\n4\n");
+}
+
+#[test]
+fn test_vector_reduce_min_max_i64_negative() {
+    // Signed comparison: -5 is the min, 2 the max.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let v = Vector[i64, 3](-5, 2, -3);
+    println(v.reduce_min());
+    println(v.reduce_max());
+}
+"#,
+    );
+    assert_eq!(out, "-5\n2\n");
+}
+
+#[test]
+fn test_vector_reduce_min_max_f64() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let v = Vector[f64, 2](2.5, 1.5);
+    println(v.reduce_min());
+    println(v.reduce_max());
+}
+"#,
+    );
+    assert_eq!(out, "1.5\n2.5\n");
+}

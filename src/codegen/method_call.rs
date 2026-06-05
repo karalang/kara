@@ -97,6 +97,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 "Vector.dot"
                     | "Vector.reduce_sum"
                     | "Vector.reduce_product"
+                    | "Vector.reduce_min"
+                    | "Vector.reduce_max"
                     | "Vector.reduce_and"
                     | "Vector.reduce_or"
                     | "Vector.reduce_xor"
@@ -2666,6 +2668,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 for i in 1..n {
                     let l = lane(self, recv, i)?;
                     acc = self.compile_binop(&fold_op, acc, l)?;
+                }
+                Ok(acc)
+            }
+            // Horizontal min/max via compare + select. The typechecker
+            // restricts the element to signed-int / float, so the default
+            // signed (`slt`/`sgt`) / ordered (`olt`/`ogt`) compare from
+            // `compile_binop` is the correct predicate.
+            "reduce_min" | "reduce_max" => {
+                let cmp_op = if method == "reduce_min" {
+                    BinOp::Lt
+                } else {
+                    BinOp::Gt
+                };
+                let mut acc = lane(self, recv, 0)?;
+                for i in 1..n {
+                    let l = lane(self, recv, i)?;
+                    // keep `acc` when `acc <op> l` holds, else take `l`.
+                    let cmp = self.compile_binop(&cmp_op, acc, l)?.into_int_value();
+                    acc = self
+                        .builder
+                        .build_select(cmp, acc, l, "minmax")
+                        .map_err(|e| format!("vector min/max select failed: {e}"))?;
                 }
                 Ok(acc)
             }
