@@ -358,6 +358,18 @@ impl ProxyClient for HttpProxyClient {
 mod tests {
     use super::*;
 
+    /// Serializes tests that mutate the process-wide `PROXY_URL_ENV_VAR`.
+    /// Without this, the `from_env_*` tests race under cargo's default
+    /// parallel execution — one test's `set_var` / `remove_var` can land
+    /// between a sibling's `set_var` and its `from_env` read, corrupting
+    /// either assertion (observed as an intermittent
+    /// `from_env_ignores_whitespace_only_var` failure). Acquire with
+    /// `unwrap_or_else(|e| e.into_inner())` so a panicked test (poisoned
+    /// mutex) doesn't cascade-fail the rest. Mirrors `build_cache.rs`'s
+    /// `CACHE_ROOT_ENV_LOCK` and `runtime/src/lib.rs`'s
+    /// `FRAME_TRACKING_ENV_LOCK`.
+    static PROXY_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn v(s: &str) -> semver::Version {
         semver::Version::parse(s).unwrap()
     }
@@ -379,10 +391,7 @@ mod tests {
 
     #[test]
     fn from_env_uses_default_when_unset() {
-        // Saving / restoring env across tests is brittle; just unset
-        // the var for this assertion. Other tests in this module read
-        // the env var only through `from_env` so a stable default
-        // restoration isn't needed across the whole module.
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var(PROXY_URL_ENV_VAR);
         let c = ProxyConfig::from_env(ProxyMode::Default);
         assert_eq!(c.url, DEFAULT_PROXY_URL);
@@ -390,6 +399,7 @@ mod tests {
 
     #[test]
     fn from_env_uses_var_when_nonempty() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(PROXY_URL_ENV_VAR, "https://mirror.example.com");
         let c = ProxyConfig::from_env(ProxyMode::Default);
         assert_eq!(c.url, "https://mirror.example.com");
@@ -398,6 +408,7 @@ mod tests {
 
     #[test]
     fn from_env_ignores_whitespace_only_var() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(PROXY_URL_ENV_VAR, "   ");
         let c = ProxyConfig::from_env(ProxyMode::Default);
         assert_eq!(c.url, DEFAULT_PROXY_URL);
