@@ -217,10 +217,82 @@ fn comparison_op_classified_by_operand_type() {
         fn main() {}
     "#;
     let errs = require_errors(src);
+    let cmp = errs
+        .iter()
+        .find(|e| e.op_desc.contains("comparison"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the comparison op should be flagged, got {:?}",
+                errs.iter().map(|e| e.op_desc.clone()).collect::<Vec<_>>()
+            )
+        });
+    // The element must be the operand element `i32`, NOT the `bool` mask the
+    // comparison produces (the right-operand recovery, not the node result).
+    assert_eq!(
+        cmp.element, "i32",
+        "comparison should be classified by the i32 operand, not the bool mask"
+    );
+}
+
+#[test]
+fn require_simd_rejects_scalar_reduction() {
+    // A `reduce_sum` on a non-pow2 vector scalarizes — and the receiver's
+    // `(T, N)` is recovered from the typechecker side-table (the method node
+    // overwrites its own span with the scalar `i32` result type).
+    let src = r#"
+        #[require_simd]
+        fn total(a: Vector[i32, 3]) -> i32 {
+            a.reduce_sum()
+        }
+        fn main() {}
+    "#;
+    let errs = require_errors(src);
+    let red = errs
+        .iter()
+        .find(|e| e.op_desc.contains("reduce_sum"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the reduce_sum op should be flagged, got {:?}",
+                errs.iter().map(|e| e.op_desc.clone()).collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(red.element, "i32");
+    assert_eq!(red.lanes, 3);
+}
+
+#[test]
+fn require_simd_rejects_scalar_dot() {
+    let src = r#"
+        #[require_simd]
+        fn d(a: Vector[i32, 3], b: Vector[i32, 3]) -> i32 {
+            a.dot(b)
+        }
+        fn main() {}
+    "#;
+    let errs = require_errors(src);
     assert!(
-        errs.iter().any(|e| e.op_desc.contains("comparison")),
-        "the comparison op should be flagged, got {:?}",
-        errs.iter().map(|e| e.op_desc.clone()).collect::<Vec<_>>()
+        errs.iter()
+            .any(|e| e.op_desc.contains("dot") && e.element == "i32"),
+        "the dot op should be flagged on its i32 receiver, got {:?}",
+        errs.iter()
+            .map(|e| (e.op_desc.clone(), e.element.clone()))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn require_simd_accepts_native_reduction() {
+    // `reduce_sum` on a native (pow2, fits-register) vector is not a Scalar op.
+    let src = r#"
+        #[require_simd]
+        fn total(a: Vector[f32, 4]) -> f32 {
+            a.reduce_sum()
+        }
+        fn main() {}
+    "#;
+    assert!(
+        require_errors(src).is_empty(),
+        "reduce_sum on a native Vector[f32, 4] must not be rejected"
     );
 }
 
@@ -239,12 +311,18 @@ fn analyze_returns_empty_without_typecheck() {
 // analysis core.
 
 fn karac_check(source: &str, name: &str) -> std::process::Output {
+    karac_check_flagged(source, name, &[])
+}
+
+fn karac_check_flagged(source: &str, name: &str, flags: &[&str]) -> std::process::Output {
     let path = std::env::temp_dir().join(format!("karac_simd_{name}_{}.kara", std::process::id()));
     std::fs::write(&path, source).expect("write temp .kara");
     let bin = std::env::var("CARGO_BIN_EXE_karac")
         .expect("CARGO_BIN_EXE_karac not set — run via `cargo test`");
+    let mut args = vec!["check".to_string(), path.to_str().unwrap().to_string()];
+    args.extend(flags.iter().map(|s| s.to_string()));
     let out = std::process::Command::new(&bin)
-        .args(["check", path.to_str().unwrap()])
+        .args(&args)
         .output()
         .expect("failed to run karac check");
     let _ = std::fs::remove_file(&path);
@@ -282,5 +360,70 @@ fn karac_check_accepts_native_require_simd() {
         out.status.success(),
         "karac check should pass for a native power-of-two vector op:\nstderr={}",
         String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// ── --simd-report=verbose (slice 5b) ────────────────────────────
+
+// A program with a native op and a scalar op, no `#[require_simd]` — so it
+// type-checks clean and the report (not an error) is what we assert on.
+const MIXED_TIERS_SRC: &str = "\
+    fn native4(a: Vector[i32, 4], b: Vector[i32, 4]) -> Vector[i32, 4] { a + b }\n\
+    fn scalar3(a: Vector[i32, 3], b: Vector[i32, 3]) -> Vector[i32, 3] { a + b }\n\
+    fn main() {}\n";
+
+#[test]
+fn karac_check_simd_report_lists_tiers() {
+    let out = karac_check_flagged(MIXED_TIERS_SRC, "report", &["--simd-report=verbose"]);
+    assert!(
+        out.status.success(),
+        "no #[require_simd], so check should pass:\nstderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("SIMD lowering report"),
+        "report header should appear on stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("fn native4") && stdout.contains("native"),
+        "the native op should be listed:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("fn scalar3")
+            && stdout.contains("Vector[i32, 3]")
+            && stdout.contains("SCALAR"),
+        "the scalar op should be listed with its tier:\n{stdout}"
+    );
+}
+
+#[test]
+fn karac_check_without_flag_prints_no_simd_report() {
+    let out = karac_check(MIXED_TIERS_SRC, "noreport");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("SIMD lowering report"),
+        "no report should print without --simd-report:\n{stdout}"
+    );
+}
+
+#[test]
+fn karac_check_simd_report_bare_flag_alias() {
+    // bare `--simd-report` is accepted as an alias for `--simd-report=verbose`.
+    let out = karac_check_flagged(MIXED_TIERS_SRC, "barereport", &["--simd-report"]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("SIMD lowering report"),
+        "bare --simd-report should emit the report"
+    );
+}
+
+#[test]
+fn karac_check_simd_report_rejects_unknown_level() {
+    let out = karac_check_flagged(MIXED_TIERS_SRC, "badlevel", &["--simd-report=loud"]);
+    assert!(!out.status.success(), "unknown level should be rejected");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("unknown --simd-report level"),
+        "should name the bad level"
     );
 }

@@ -170,6 +170,11 @@ pub struct SimdFinding {
 }
 
 impl SimdFinding {
+    /// `Vector[T, N]` source-display form of this op's governing vector type.
+    pub fn vector_display(&self) -> String {
+        format!("Vector[{}, {}]", self.element, self.lanes)
+    }
+
     /// `#[require_simd]` rejection message for a `Scalar` finding.
     pub fn message(&self) -> String {
         let reason = self
@@ -209,6 +214,7 @@ pub fn analyze_program(program: &Program, typed: Option<&TypeCheckResult>) -> Ve
     };
     let mut scan = Scan {
         expr_types: &typed.expr_types,
+        vector_method_receivers: &typed.vector_method_receivers,
         findings: Vec::new(),
         func_name: String::new(),
         require_simd: false,
@@ -241,6 +247,53 @@ pub fn require_simd_errors(findings: &[SimdFinding]) -> Vec<SimdFinding> {
         .collect()
 }
 
+/// Render the `--simd-report=verbose` table: every vector op found in the
+/// program, grouped by function, with its classified lowering tier and (for
+/// `Scalar`) the scalarization cause. Findings are listed in source order
+/// within each function — `analyze_program` walks the body top-down.
+/// Returns the full report as a string (the CLI prints it to stdout).
+pub fn render_simd_report(findings: &[SimdFinding]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "SIMD lowering report (native vector width: {NATIVE_VECTOR_BITS} bits)\n"
+    ));
+    if findings.is_empty() {
+        out.push_str("  <no vector operations>\n");
+        return out;
+    }
+    // Column widths for the `Vector[T, N]` and op-description columns, so the
+    // tier column lines up across rows.
+    let type_w = findings
+        .iter()
+        .map(|f| f.vector_display().len())
+        .max()
+        .unwrap_or(0);
+    let desc_w = findings.iter().map(|f| f.op_desc.len()).max().unwrap_or(0);
+
+    let mut current = None;
+    for f in findings {
+        if current != Some(&f.func_name) {
+            out.push_str(&format!("\n  fn {}\n", f.func_name));
+            current = Some(&f.func_name);
+        }
+        let tier = match f.tier {
+            SimdTier::Native => "native".to_string(),
+            SimdTier::Wide => "wide".to_string(),
+            SimdTier::Scalar => match f.reason {
+                Some(r) => format!("SCALAR — {}", r.phrase()),
+                None => "SCALAR".to_string(),
+            },
+        };
+        out.push_str(&format!(
+            "    {:<type_w$}  {:<desc_w$}  {}\n",
+            f.vector_display(),
+            f.op_desc,
+            tier,
+        ));
+    }
+    out
+}
+
 /// Best-effort leading path segment of an impl target type, used to qualify
 /// method names in diagnostics (`Vec3.dot`). Falls back to the raw display.
 fn type_expr_name(ty: &crate::ast::TypeExpr) -> String {
@@ -256,6 +309,7 @@ fn type_expr_name(ty: &crate::ast::TypeExpr) -> String {
 
 struct Scan<'a> {
     expr_types: &'a HashMap<SpanKey, Type>,
+    vector_method_receivers: &'a HashMap<SpanKey, (Type, usize)>,
     findings: Vec<SimdFinding>,
     func_name: String,
     require_simd: bool,
@@ -271,6 +325,15 @@ impl Scan<'_> {
     /// `Vector[T, N]` element type + concrete lane count for an expr's
     /// inferred type, or `None` if the expr is not a vector with a resolved
     /// literal lane count.
+    ///
+    /// Note: a `MethodCall`/`Binary` node's span equals its receiver/left
+    /// operand's span, and the outer node's *result* type wins in `expr_types`
+    /// (last write). So this yields the **outermost** expr's result type at a
+    /// span — correct for arithmetic/bitwise ops (result == operand type) and
+    /// for vector-returning calls (construction / `splat` / `from_*` / `cross`
+    /// / `select`), but NOT for scalar-returning reductions or comparison
+    /// masks. The receiver of an instance method is recovered separately via
+    /// `vector_method_receivers`; comparison operands via the right operand.
     fn vector_type_of(&self, e: &Expr) -> Option<(Type, usize)> {
         match self.expr_types.get(&SpanKey::from_span(&e.span)) {
             Some(Type::Vector { element, lanes }) => {
@@ -278,6 +341,16 @@ impl Scan<'_> {
             }
             _ => None,
         }
+    }
+
+    /// Receiver `Vector[T, N]` recorded by the typechecker for a vector
+    /// instance-method call (`reduce_*` / `dot` / `cross` / `select`), keyed
+    /// by the method-call span. Recovers the type `vector_type_of` loses to
+    /// the result-type overwrite for scalar-returning methods.
+    fn method_receiver_of(&self, call_span: &Span) -> Option<(Type, usize)> {
+        self.vector_method_receivers
+            .get(&SpanKey::from_span(call_span))
+            .cloned()
     }
 
     fn record(&mut self, span: &Span, op_desc: String, elem: &Type, lanes: usize) {
@@ -334,9 +407,16 @@ impl Scan<'_> {
     fn walk_expr(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::Binary { op, left, right } => {
+                // Prefer the RIGHT operand's type: a comparison's result is a
+                // `Vector[bool, N]` mask (and the binary node's span == the
+                // left operand's span, so both are overwritten with the mask
+                // result in `expr_types`), but the right operand keeps its true
+                // `Vector[T, N]` element. For arithmetic/bitwise the result
+                // equals the operand type, so either operand is correct.
                 if let Some((elem, n)) = self
-                    .vector_type_of(left)
-                    .or_else(|| self.vector_type_of(right))
+                    .vector_type_of(right)
+                    .or_else(|| self.vector_type_of(left))
+                    .or_else(|| self.vector_type_of(expr))
                 {
                     self.record(&expr.span, binop_desc(op), &elem, n);
                 }
@@ -357,9 +437,11 @@ impl Scan<'_> {
                 args,
                 ..
             } => {
-                if let Some((elem, n)) = self.vector_type_of(object) {
+                if let Some((elem, n)) = self.method_receiver_of(&expr.span) {
                     // Instance method on a vector receiver (reduce_*, dot,
-                    // cross, select, lane swizzles, …).
+                    // cross, select, …). The receiver `(T, N)` comes from the
+                    // typechecker side-table because the method node overwrites
+                    // its own span (== receiver span) with the result type.
                     self.record(&expr.span, format!("`{method}`"), &elem, n);
                 } else if let Some((elem, n)) = self.vector_type_of(expr) {
                     // Static constructor whose result is a vector
@@ -621,5 +703,54 @@ mod tests {
         assert_eq!(classify(&Type::Int(IntSize::I8), 16), SimdTier::Native);
         // 32 × i8 = 256 bits — Wide.
         assert_eq!(classify(&Type::Int(IntSize::I8), 32), SimdTier::Wide);
+    }
+
+    fn finding(func: &str, elem: Type, lanes: usize, op: &str) -> SimdFinding {
+        let tier = classify(&elem, lanes);
+        SimdFinding {
+            span: Span::default(),
+            func_name: func.to_string(),
+            require_simd: false,
+            op_desc: op.to_string(),
+            element: type_display(&elem),
+            lanes,
+            tier,
+            reason: if tier == SimdTier::Scalar {
+                scalar_reason(&elem, lanes)
+            } else {
+                None
+            },
+        }
+    }
+
+    #[test]
+    fn render_empty_report() {
+        let out = render_simd_report(&[]);
+        assert!(out.contains("native vector width: 128 bits"));
+        assert!(out.contains("<no vector operations>"));
+    }
+
+    #[test]
+    fn render_groups_by_function_and_marks_tiers() {
+        let fs = vec![
+            finding("add3", Type::Int(IntSize::I32), 3, "element-wise `+`"),
+            finding("dot4", Type::Float(FloatSize::F32), 4, "`dot`"),
+            finding("wide8", Type::Int(IntSize::I32), 8, "element-wise `*`"),
+        ];
+        let out = render_simd_report(&fs);
+        assert!(out.contains("fn add3"), "groups by function:\n{out}");
+        assert!(out.contains("fn dot4"));
+        assert!(out.contains("fn wide8"));
+        // The scalar op is flagged with its cause; the native/wide ones aren't.
+        assert!(
+            out.contains("Vector[i32, 3]") && out.contains("SCALAR"),
+            "scalar op rendered:\n{out}"
+        );
+        assert!(
+            out.contains("power of two"),
+            "scalar cause rendered:\n{out}"
+        );
+        assert!(out.contains("native"), "native tier rendered:\n{out}");
+        assert!(out.contains("wide"), "wide tier rendered:\n{out}");
     }
 }

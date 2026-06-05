@@ -1086,6 +1086,15 @@ impl<'a> super::TypeChecker<'a> {
         // `Vector[T, N]` instance-method dispatch (design.md § Portable SIMD).
         // Not a `Type::Named`, so handle before the named-type extraction.
         if let Type::Vector { element, lanes } = &obj_ty.clone() {
+            // Record the receiver vector type for the SIMD scalarization
+            // analysis before delegating — the method-call node is about to
+            // overwrite this span in `expr_types` with the method's *result*
+            // type (scalar for reductions), erasing the receiver's `(T, N)`.
+            // See `TypeCheckResult::vector_method_receivers`.
+            if let Some(n) = lanes.as_usize() {
+                self.vector_method_receivers
+                    .insert(SpanKey::from_span(span), ((**element).clone(), n));
+            }
             return self.infer_vector_method(element, lanes, method, args, span);
         }
 

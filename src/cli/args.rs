@@ -230,6 +230,7 @@ fn parse_check_command(args: &[String]) -> Command {
     let mut output = OutputMode::Text;
     let mut profiles: Option<Vec<crate::manifest::CompileProfile>> = None;
     let mut concurrency_report = false;
+    let mut simd_report = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut i = 2usize;
     while i < args.len() {
@@ -242,6 +243,8 @@ fn parse_check_command(args: &[String]) -> Command {
             profiles = Some(parse_profiles_arg(rest));
         } else if arg == "--concurrency-report" {
             concurrency_report = true;
+        } else if parse_simd_report_flag(arg, &mut simd_report) {
+            // consumed `--simd-report` / `--simd-report=verbose`
         } else if arg.starts_with("--output=") {
             eprintln!(
                 "error: unknown output mode '{}'. Use json or jsonl.",
@@ -270,7 +273,30 @@ fn parse_check_command(args: &[String]) -> Command {
         output,
         profiles,
         concurrency_report,
+        simd_report,
         lint_overrides,
+    }
+}
+
+/// Parse the `--simd-report` / `--simd-report=verbose` flag (slice 5b). The
+/// documented spelling is `--simd-report=verbose`; bare `--simd-report` is
+/// accepted as an alias (v1 has only the verbose level). Any other value is
+/// a hard error so a typo can't silently disable the report. Returns `true`
+/// when the arg was a SIMD-report flag (consumed), `false` otherwise.
+fn parse_simd_report_flag(arg: &str, simd_report: &mut bool) -> bool {
+    if arg == "--simd-report" {
+        *simd_report = true;
+        true
+    } else if let Some(level) = arg.strip_prefix("--simd-report=") {
+        if level == "verbose" {
+            *simd_report = true;
+        } else {
+            eprintln!("error: unknown --simd-report level '{level}'. Use verbose.");
+            process::exit(1);
+        }
+        true
+    } else {
+        false
     }
 }
 
@@ -282,6 +308,7 @@ fn parse_build_command(args: &[String]) -> Command {
     let mut file: Option<String> = None;
     let mut output = OutputMode::Text;
     let mut concurrency_report = false;
+    let mut simd_report = false;
     let mut offline = false;
     let mut enable_hot_swap = false;
     let mut no_proxy = false;
@@ -298,6 +325,8 @@ fn parse_build_command(args: &[String]) -> Command {
             output = OutputMode::Jsonl;
         } else if arg == "--concurrency-report" {
             concurrency_report = true;
+        } else if parse_simd_report_flag(arg, &mut simd_report) {
+            // consumed `--simd-report` / `--simd-report=verbose`
         } else if arg == "--offline" {
             offline = true;
         } else if arg == "--enable-hot-swap" {
@@ -365,6 +394,7 @@ fn parse_build_command(args: &[String]) -> Command {
             file: f,
             output,
             concurrency_report,
+            simd_report,
             offline,
             enable_hot_swap,
             no_proxy,

@@ -740,6 +740,19 @@ pub struct TypeCheckResult {
     /// reachability pass; future signals belong here too.
     pub warnings: Vec<TypeError>,
     pub expr_types: HashMap<SpanKey, Type>,
+    /// Receiver `Vector[T, N]` type for each vector **instance**-method call
+    /// (`reduce_*` / `dot` / `cross` / `select`), keyed by the method-call
+    /// span, recorded as `(element, lane_count)`. A `MethodCall`'s span equals
+    /// its receiver's span (the receiver `Expr.span` is cloned onto the call
+    /// node), and the call node overwrites that span in `expr_types` with the
+    /// method's *result* type — so a scalar-returning reduction (`reduce_sum`
+    /// → `i32`) erases the receiver's vector type from `expr_types`. This
+    /// side-table preserves it for the SIMD scalarization analysis
+    /// (`simd_report`, phase-7-codegen.md line 308). Only resolved literal
+    /// lane counts are recorded (symbolic const-generic lanes are skipped —
+    /// they only arise pre-monomorphization and can't be classified per
+    /// target).
+    pub vector_method_receivers: HashMap<SpanKey, (Type, usize)>,
     pub struct_info: HashMap<String, StructInfo>,
     pub enum_info: HashMap<String, EnumInfo>,
     /// FFI union declarations (`union NAME { ... }`). Mirrors
@@ -978,6 +991,9 @@ pub struct TypeChecker<'a> {
     pub(super) errors: Vec<TypeError>,
     pub(super) warnings: Vec<TypeError>,
     pub(super) expr_types: HashMap<SpanKey, Type>,
+    /// See [`TypeCheckResult::vector_method_receivers`]. Populated at vector
+    /// instance-method inference; moved into the result at the end.
+    pub(super) vector_method_receivers: HashMap<SpanKey, (Type, usize)>,
     /// Lexical depth of enclosing `unsafe { ... }` blocks. Incremented
     /// on entry to `ExprKind::Unsafe`, decremented on exit. Read at the
     /// `E_UNION_READ_REQUIRES_UNSAFE` (line 549 slice 2a) field-read
@@ -1186,6 +1202,7 @@ impl<'a> TypeChecker<'a> {
             errors: Vec::new(),
             warnings: Vec::new(),
             expr_types: HashMap::new(),
+            vector_method_receivers: HashMap::new(),
             unsafe_depth: 0,
             assigning_lhs: false,
             borrow_context: None,
@@ -1318,6 +1335,7 @@ impl<'a> TypeChecker<'a> {
             errors: self.errors,
             warnings: self.warnings,
             expr_types: self.expr_types,
+            vector_method_receivers: self.vector_method_receivers,
             struct_info: self.env.structs,
             enum_info: self.env.enums,
             union_info: self.env.unions,

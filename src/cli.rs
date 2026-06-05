@@ -98,6 +98,11 @@ pub enum Command {
         /// complete. Already runs `concurrencycheck()` via
         /// `Pipeline::run_all_checks`, so wiring is purely render-side.
         concurrency_report: bool,
+        /// `--simd-report=verbose` (phase-7-codegen.md line 308, slice 5b):
+        /// also emit the per-function SIMD lowering-tier report to stdout
+        /// after checks complete. Reuses the `simd_check` findings already
+        /// gathered by `run_all_checks`, so wiring is purely render-side.
+        simd_report: bool,
         /// See [`Command::Run::lint_overrides`].
         lint_overrides: crate::lints::CliLintOverrides,
     },
@@ -111,6 +116,11 @@ pub enum Command {
         /// the speedup. See `docs/demo_ideas.md:80-88` for the locked
         /// output shape.
         concurrency_report: bool,
+        /// `--simd-report=verbose` (phase-7-codegen.md line 308, slice 5b):
+        /// emit the per-function SIMD lowering-tier report to stdout
+        /// alongside the binary build, so a developer can see which
+        /// `Vector[T, N]` ops lowered native / wide / scalar on the target.
+        simd_report: bool,
         /// `--offline`: read resolved dependencies only from the
         /// project-root `vendor/` directory (populated by
         /// `karac vendor`) and refuse any network access. Air-gap
@@ -533,12 +543,21 @@ pub fn execute(cmd: Command) {
             output,
             profiles,
             concurrency_report,
+            simd_report,
             lint_overrides,
-        } => cmd_check(&file, output, profiles, concurrency_report, lint_overrides),
+        } => cmd_check(
+            &file,
+            output,
+            profiles,
+            concurrency_report,
+            simd_report,
+            lint_overrides,
+        ),
         Command::Build {
             file,
             output,
             concurrency_report,
+            simd_report,
             offline,
             enable_hot_swap,
             no_proxy,
@@ -550,6 +569,7 @@ pub fn execute(cmd: Command) {
             &file,
             output,
             concurrency_report,
+            simd_report,
             offline,
             enable_hot_swap,
             no_proxy,
@@ -3977,6 +3997,7 @@ fn cmd_check(
     output: OutputMode,
     profiles: Option<Vec<crate::manifest::CompileProfile>>,
     concurrency_report: bool,
+    simd_report: bool,
     lint_overrides: crate::lints::CliLintOverrides,
 ) {
     let source = read_source(filename);
@@ -4003,6 +4024,10 @@ fn cmd_check(
             // error summary so the report sits with the rest of stdout.
             if concurrency_report {
                 emit_concurrency_report(&pipeline);
+            }
+            // SIMD lowering report (slice 5b) — same render-side placement.
+            if simd_report {
+                emit_simd_report(&pipeline);
             }
 
             match output {
@@ -4043,6 +4068,18 @@ fn emit_concurrency_report(pipeline: &Pipeline) {
         &pipeline.parsed.program,
     );
     print!("{report}");
+}
+
+/// `--simd-report=verbose` helper (slice 5b): render the per-function SIMD
+/// lowering-tier report from the typechecked program and emit it to stdout.
+/// Reuses `simd_report::analyze_program` — the same walk `simd_check` runs —
+/// but renders *all* tiers (Native/Wide/Scalar), not just the `#[require_simd]`
+/// errors. A no-op-shaped report (`<no vector operations>`) when the program
+/// has no vector ops or typecheck didn't run.
+fn emit_simd_report(pipeline: &Pipeline) {
+    let findings =
+        crate::simd_report::analyze_program(&pipeline.parsed.program, pipeline.typed.as_ref());
+    print!("{}", crate::simd_report::render_simd_report(&findings));
 }
 
 /// Multi-profile typecheck driver. Runs the full pipeline once per named
@@ -4146,6 +4183,7 @@ fn cmd_build(
     filename: &str,
     output: OutputMode,
     concurrency_report: bool,
+    simd_report: bool,
     offline: bool,
     enable_hot_swap: bool,
     no_proxy: bool,
@@ -4183,6 +4221,11 @@ fn cmd_build(
         // `Built: <exe>` line, regardless of whether codegen later fails.
         if concurrency_report {
             emit_concurrency_report(&pipeline);
+        }
+        // SIMD lowering report (slice 5b) — same pre-codegen placement, so it
+        // prints even when a `#[require_simd]` violation later aborts the build.
+        if simd_report {
+            emit_simd_report(&pipeline);
         }
 
         if pipeline.has_fatal_errors() {
@@ -4294,7 +4337,14 @@ fn cmd_build(
         // --target.
         let _ = monomorphization_budget;
         eprintln!("note: karac build requires the llvm feature; falling back to type check");
-        cmd_check(filename, output, None, concurrency_report, lint_overrides);
+        cmd_check(
+            filename,
+            output,
+            None,
+            concurrency_report,
+            simd_report,
+            lint_overrides,
+        );
     }
 }
 
