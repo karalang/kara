@@ -105,12 +105,24 @@ impl<'a> super::Interpreter<'a> {
                 }
                 // Try just the last segment (enum variant, etc.)
                 let last = segments.last().cloned().unwrap_or_default();
-                self.env.get(&last).unwrap_or_else(|| {
-                    unreachable!(
-                        "path '{}' not found at {}:{}; should be caught by resolver",
-                        full, expr.span.line, expr.span.column
-                    )
-                })
+                if let Some(v) = self.env.get(&last) {
+                    return v;
+                }
+                // A path that survived resolve + typecheck but has no
+                // evaluation rule here — historically a special-cased
+                // stdlib path (e.g. `String.new` before it was wired)
+                // falling through the `eval_call` match. Degrade to a
+                // structured runtime error instead of panicking so the
+                // next unwired path fails with a span-carrying
+                // diagnostic, per the no-panic diagnostics standard.
+                self.record_runtime_error(
+                    format!(
+                        "internal: path '{full}' has no interpreter evaluation rule \
+                         (accepted by the typechecker but not wired in the tree-walk \
+                         interpreter) — please report this"
+                    ),
+                    &expr.span,
+                )
             }
 
             ExprKind::SelfValue => self.env.get("self").unwrap_or_else(|| {

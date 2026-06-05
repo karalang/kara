@@ -230,6 +230,54 @@ impl<'a> super::Interpreter<'a> {
                 "Vec.new" => {
                     return Value::array_of(Vec::new());
                 }
+                // `String.new() -> String` — empty growable string. Wired
+                // here because `String.new` has no syntactic stdlib
+                // declaration; the typechecker special-cases the path the
+                // same way (see `typechecker/expr_call.rs`). Without this
+                // arm the call fell through to bare-path evaluation and
+                // died on the unwired-path diagnostic. The three arms
+                // below close the rest of that special-cased family —
+                // every path the typechecker accepts via its String /
+                // with_capacity special arms must have an evaluation rule
+                // here or `karac run` faults at the call site.
+                "String.new" => {
+                    return Value::String(String::new());
+                }
+                // `String.with_capacity(n) -> String` — capacity is a
+                // codegen-side allocation hint; at the Value layer every
+                // observable behavior matches `String.new()`. The arg is
+                // still evaluated for effects.
+                "String.with_capacity" => {
+                    if let Some(arg) = args.first() {
+                        let _ = self.eval_expr_inner(&arg.value);
+                    }
+                    return Value::String(String::new());
+                }
+                // `String.from(x) -> String` — passthrough, mirroring the
+                // codegen treatment (string literals / StringSlices /
+                // Strings all arrive as `Value::String` here).
+                "String.from" => {
+                    if let Some(arg) = args.first() {
+                        let v = self.eval_expr_inner(&arg.value);
+                        if self.pending_cf.is_some() {
+                            return v;
+                        }
+                        if let Value::String(s) = v {
+                            return Value::String(s);
+                        }
+                        return self
+                            .record_runtime_error("String.from expects a string argument", span);
+                    }
+                    return Value::String(String::new());
+                }
+                // `VecDeque.with_capacity(n) -> VecDeque[T]` — same
+                // capacity-hint treatment as `Vec.with_capacity`; the
+                // VecDeque runtime shape mirrors `Vec.new`'s storage (see
+                // the `VecDeque.new` arm below), so the Vec helper is
+                // reused verbatim.
+                "VecDeque.with_capacity" => {
+                    return self.eval_vec_with_capacity(args, span);
+                }
                 // `VecDeque.new() -> VecDeque[T]` — runtime shape mirrors
                 // `Vec.new`'s shared `Arc<RwLock<Vec<Value>>>` storage.
                 // Front-end ops (`push_front`/`pop_front`) translate to
@@ -772,6 +820,13 @@ impl<'a> super::Interpreter<'a> {
 
         // Evaluate callee
         let callee_val = self.eval_expr_inner(callee);
+        // Callee evaluation can itself fault (e.g. the unwired-path
+        // runtime error in eval_expr's Path fallback). Short-circuit
+        // before dispatching on the placeholder Value it returned, or
+        // the non-callable `unreachable!` below fires on Value::Unit.
+        if self.pending_cf.is_some() {
+            return callee_val;
+        }
         let callee_variant = callee_val.variant_name();
 
         match callee_val {

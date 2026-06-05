@@ -7605,6 +7605,83 @@ fn test_string_bytes_multibyte_utf8_yields_byte_count_not_char_count() {
     assert_eq!(output, "6\n");
 }
 
+// ── String/VecDeque constructor family (typechecker special-arm paths) ──
+//
+// These paths have no syntactic stdlib declaration — the typechecker
+// special-cases them (typechecker/expr_call.rs) and codegen claims them
+// directly, so each needs an explicit interpreter arm in
+// eval_call.rs. Surfaced by the 2026-06-05 kata-corpus audit: every one
+// of these previously died at the eval_expr unwired-path panic under
+// `karac run` while building fine under `karac build`.
+
+#[test]
+fn test_string_new_push_roundtrip() {
+    let output = run_no_errors(
+        r#"fn main() {
+            let mut s = String.new();
+            s.push_str("ab");
+            s.push('c');
+            println(s);
+        }"#,
+    );
+    assert_eq!(output, "abc\n");
+}
+
+#[test]
+fn test_string_from_literal_passthrough() {
+    let output = run_no_errors(r#"fn main() { println(String.from("xy")); }"#);
+    assert_eq!(output, "xy\n");
+}
+
+#[test]
+fn test_string_with_capacity_behaves_like_new() {
+    let output = run_no_errors(
+        r#"fn main() {
+            let mut s = String.with_capacity(8);
+            s.push_str("ok");
+            println(s);
+            println(s.len());
+        }"#,
+    );
+    assert_eq!(output, "ok\n2\n");
+}
+
+#[test]
+fn test_vecdeque_with_capacity_behaves_like_new() {
+    let output = run_no_errors(
+        r#"fn main() {
+            let mut q: VecDeque[i64] = VecDeque.with_capacity(4);
+            q.push_back(7);
+            q.push_front(3);
+            println(q.len());
+            println(q.pop_front().unwrap());
+        }"#,
+    );
+    assert_eq!(output, "2\n3\n");
+}
+
+#[test]
+fn test_unwired_path_reports_runtime_error_not_panic() {
+    // The eval_expr Path fallback used to be `unreachable!` — a
+    // typechecker-accepted-but-uninterpreted path killed the process
+    // with a Rust panic instead of a span-carrying diagnostic.
+    // `String.bogus()` survives resolve (run_program_full tolerates the
+    // typecheck rejection) and exercises the degraded path: a recorded
+    // RuntimeError naming the path, no panic.
+    let errors = runtime_errors(r#"fn main() { let _x = String.bogus(); }"#);
+    assert_eq!(errors.len(), 1, "expected exactly one runtime error");
+    assert!(
+        errors[0].message.contains("no interpreter evaluation rule"),
+        "unexpected message: {}",
+        errors[0].message
+    );
+    assert!(
+        errors[0].message.contains("String.bogus"),
+        "message should name the unwired path: {}",
+        errors[0].message
+    );
+}
+
 #[test]
 fn test_string_sorted_by_closure_descending() {
     let output = run(
