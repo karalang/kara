@@ -823,6 +823,36 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.build_store(token_field, token).unwrap();
 
+        // Active-span preservation across the suspend (phase-8 line 153 Phase 2).
+        // The ambient active span is a per-*thread* TLS register; a coroutine can
+        // resume on a different dispatcher worker than the one it parked on, so
+        // the resuming thread's register reflects whatever it last ran, not this
+        // coroutine's pre-suspend span. Snapshot it into a frame-resident slot
+        // here and restore it on every post-suspend edge (resume + destroy). The
+        // cross-suspend load below forces CoroSplit to spill this alloca into the
+        // coro frame — the same residency mechanism the token relies on. The two
+        // `karac_tracing_*` accessors are unconditional runtime externs (declared
+        // in `Codegen::new`, always present in the archive), so this is safe even
+        // for a program that never touches `std.tracing`.
+        let active_span_slot = self
+            .builder
+            .build_alloca(i64_ty, &format!("kara.coro.active_span.{n}"))
+            .unwrap();
+        let active_span_snap = self
+            .builder
+            .build_call(
+                self.karac_tracing_get_active_span_fn,
+                &[],
+                "kara.coro.active_span.snap",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        self.builder
+            .build_store(active_span_slot, active_span_snap)
+            .unwrap();
+
         // Suspend; switch to the shared suspend-return (default), a fresh resume
         // block (case 0), and a fresh per-park DESTROY block (case 1). The
         // destroy edge is the cancel/teardown path for a coroutine suspended
@@ -877,6 +907,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // Deregister-vs-drops-vs-signal order is immaterial (independent); the
         // frame free strictly follows all three.
         self.builder.position_at_end(destroy_bb);
+        // Restore the pre-suspend active span first, so any user-`Drop` run by
+        // `emit_coro_destroy_edge_drops` below logs under the coroutine's span
+        // rather than the resuming worker's.
+        self.emit_coro_restore_active_span(active_span_slot, i64_ty);
         let token_field_d = self
             .builder
             .build_struct_gep(ctx.parked_ty, parked, 2, "kara.coro.parked.token.destroy")
@@ -915,6 +949,28 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
         self.builder
             .build_call(deregister_fd, &[fd.into(), token2.into()], "")
+            .unwrap();
+        // Restore the pre-suspend active span on the resume edge. The builder
+        // stays here afterward, so the caller's post-park syscall still lands on
+        // this block verbatim — the restore is just prepended to it.
+        self.emit_coro_restore_active_span(active_span_slot, i64_ty);
+    }
+
+    /// Reload the frame-spilled pre-suspend active span from `slot` and reinstall
+    /// it into the per-thread TLS register via `karac_tracing_set_active_span`.
+    /// Shared by both post-suspend edges of [`Self::emit_coro_park_suspend`].
+    fn emit_coro_restore_active_span(
+        &self,
+        slot: PointerValue<'ctx>,
+        i64_ty: inkwell::types::IntType<'ctx>,
+    ) {
+        let saved = self
+            .builder
+            .build_load(i64_ty, slot, "kara.coro.active_span.restore")
+            .unwrap()
+            .into_int_value();
+        self.builder
+            .build_call(self.karac_tracing_set_active_span_fn, &[saved.into()], "")
             .unwrap();
     }
 

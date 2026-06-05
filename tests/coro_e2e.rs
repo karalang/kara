@@ -743,6 +743,80 @@ mod tests {
         );
     }
 
+    /// phase-8 line 153 **Phase 2** — the active span survives a *real*
+    /// suspend/resume. `serve_one` parks directly on `accept`, so it compiles
+    /// as a dispatcher-driven coroutine; `main` wraps the drive in
+    /// `with_span(s, || ...)`, which (inlined at codegen) sets the per-thread
+    /// active-span register to `7` on the thread that runs the ramp and takes
+    /// the `coro.suspend`. The dispatcher resumes the coroutine on a *different*
+    /// worker thread whose register is `0`, so the post-resume `Log.info` would
+    /// be stamped `span_id=0` (rendered with no suffix) WITHOUT Phase 2. With
+    /// the frame snapshot in `emit_coro_park_suspend` + the resume-edge restore,
+    /// `7` is reinstalled before the post-park body runs, so the log line
+    /// carries `span_id=7`. This is the literal "state-machine transform
+    /// preserves the active span" gate. (The `with_span` closure here is purely
+    /// an inlining vehicle — `build_state_struct_layouts` only keys top-level
+    /// fns / impl methods, never closures, so `serve_one` is the sole
+    /// coroutine; the `karac_tracing_*` accessors are unconditional runtime
+    /// externs present in both the lean and full archives, so the lean-archive
+    /// link this no-TLS program selects resolves them fine.)
+    const TRACING_ACTIVE_SPAN_HANDLER_SRC: &str = r#"
+        fn serve_one(listener: TcpListener) {
+            let _stream = listener.accept().unwrap();
+            Log.info("after-resume");
+        }
+        fn main() {
+            let s = Span.root("req", 7);
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            with_span(s, || { serve_one(listener); });
+            println(2);
+        }
+    "#;
+
+    #[test]
+    fn coroutine_preserves_active_span_across_suspend() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_span_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(TRACING_ACTIVE_SPAN_HANDLER_SRC, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let (exit_status, lines) = service_one_connection(&exe_path, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "active-span coroutine binary exited non-success {exit_status:?}; \
+             stdout lines: {lines:?}"
+        );
+        // The post-resume log line carries the pre-suspend active span (7),
+        // proving the frame save/restore reinstalled it on the resuming worker
+        // thread. Without Phase 2 the line is `[info] after-resume` (span_id=0
+        // → no suffix), so this assertion is what fails on a regression.
+        assert!(
+            lines.iter().any(|l| l == "[info] after-resume span_id=7"),
+            "expected the post-resume log line stamped with the preserved active \
+             span (`[info] after-resume span_id=7`); got {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "2"),
+            "expected `2` (main resumed after the coroutine drive returned); \
+             got {lines:?}"
+        );
+    }
+
     #[test]
     fn coroutine_spawned_free_fn_services_connection() {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
