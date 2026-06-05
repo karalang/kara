@@ -282,6 +282,17 @@ pub(super) fn method_self_is_value(method: &Function) -> bool {
         .any(|p| matches!(&p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
 }
 
+/// True when an impl method is `#[compiler_builtin]` — its Kāra body is a
+/// stub and codegen lowers the call through a hand-rolled arm, so the
+/// generalized stdlib-body passes (phase-7 line 889) must NOT declare or
+/// compile it.
+pub(super) fn method_is_compiler_builtin(method: &Function) -> bool {
+    method
+        .attributes
+        .iter()
+        .any(|a| a.is_bare("compiler_builtin"))
+}
+
 /// Build a synthetic `Function` node for an impl-block method so the
 /// existing `declare_function` / `compile_function` machinery can emit it
 /// as an LLVM function named `Type.method`. If the method has a receiver,

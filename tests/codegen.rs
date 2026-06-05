@@ -29786,4 +29786,53 @@ fn main() {
             assert_eq!(out, "1.5\n2.5\n");
         }
     }
+
+    // ── Stdlib non-builtin body compilation (L889 slice 1) ───────────────
+    //
+    // Before this slice codegen never walked STDLIB_PROGRAMS, so a real
+    // (non-`#[compiler_builtin]`) stdlib method like `Ordering.is_lt` had no
+    // emitted body and a call to it had no `Type.method` symbol to dispatch
+    // to. The generalized declare/compile passes now compile such bodies;
+    // `Ordering` is the first module wired in.
+
+    #[test]
+    fn test_stdlib_ordering_method_emits_function_ir() {
+        // The compiled body must appear as an LLVM function. (It's pruned if
+        // unused, so the program calls it.)
+        let ir = ir_for(
+            r#"
+fn main() {
+    let o = Ordering.Less;
+    if o.is_lt() { println(1); } else { println(0); }
+}
+"#,
+        );
+        assert!(
+            ir.contains("@\"Ordering.is_lt\"") || ir.contains("@Ordering.is_lt"),
+            "expected the compiled `Ordering.is_lt` body in IR; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_stdlib_ordering_methods_run() {
+        let out = run_program(
+            r#"
+fn main() {
+    let lt = Ordering.Less;
+    let gt = Ordering.Greater;
+    let eq = Ordering.Equal;
+    if lt.is_lt() { println(1); } else { println(0); }
+    if gt.is_lt() { println(1); } else { println(0); }
+    if gt.is_gt() { println(1); } else { println(0); }
+    if eq.is_eq() { println(1); } else { println(0); }
+    if eq.is_le() { println(1); } else { println(0); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            // lt.is_lt=1, gt.is_lt=0, gt.is_gt=1, eq.is_eq=1, eq.is_le=1
+            assert_eq!(out, "1\n0\n1\n1\n1\n");
+        }
+    }
 }

@@ -77,7 +77,9 @@ use driver::{
     read_runtime_debug_metadata_env, read_strip_contracts_env, read_strip_error_trace_env,
 };
 pub use driver::{link_executable, link_executable_with_sanitizer};
-use helpers::{impl_target_name, make_impl_method_function, method_self_is_value};
+use helpers::{
+    impl_target_name, make_impl_method_function, method_is_compiler_builtin, method_self_is_value,
+};
 use state::{
     AssertedIndexBound, CleanupAction, EnumLayout, LoopFrame, MapMonoMethods, SharedTypeInfo,
     SoaLayout, SpawnSiteRecord, VarSlot,
@@ -356,12 +358,18 @@ pub(crate) fn impl_target_name_for_repl(target: &crate::ast::TypeExpr) -> Option
 /// while it emits the bodies; since the tracing AST carries `tracing.kara`
 /// spans and the user program is never active during that window, the
 /// swap is collision-free (no span re-basing needed).
-static TRACING_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
-    let src = include_str!("../runtime/stdlib/tracing.kara");
+/// Parse → desugar → resolve → typecheck → lower one baked stdlib `.kara`
+/// source into a `Program` whose impl-method bodies codegen can compile
+/// (phase-7 line 889). The lowering pass populates the span-keyed side
+/// tables (`string_typed_exprs`, `method_callee_types`, …) that the
+/// body-emission pass swaps in. Each stdlib module resolves/typechecks
+/// standalone (the prelude is always in scope), so no cross-module link is
+/// needed for self-contained modules like `ordering` / `tracing`.
+fn lower_stdlib_source(module: &str, src: &str) -> Program {
     let mut parsed = crate::parse(src);
     debug_assert!(
         parsed.errors.is_empty(),
-        "tracing.kara failed to parse for codegen lowering: {:?}",
+        "{module}.kara failed to parse for codegen lowering: {:?}",
         parsed.errors
     );
     crate::desugar_program(&mut parsed.program);
@@ -370,13 +378,39 @@ static TRACING_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLo
     let mut program = parsed.program;
     crate::lower(&mut program, &tc);
     program
+}
+
+static TRACING_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
+    lower_stdlib_source("tracing", include_str!("../runtime/stdlib/tracing.kara"))
 });
 
 /// The lowered `std.tracing` program codegen compiles its impl bodies
 /// from. See [`TRACING_LOWERED_PROGRAM`] and
-/// [`Codegen::declare_tracing_stdlib_methods`].
+/// [`Codegen::declare_stdlib_program`].
 fn tracing_stdlib_program() -> &'static Program {
     &TRACING_LOWERED_PROGRAM
+}
+
+static ORDERING_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
+    lower_stdlib_source("ordering", include_str!("../runtime/stdlib/ordering.kara"))
+});
+
+/// The lowered `std` `Ordering` program — first non-`#[compiler_builtin]`
+/// stdlib module compiled through the generalized [`Codegen::declare_stdlib_program`]
+/// / [`Codegen::compile_stdlib_program`] passes (phase-7 line 889 slice 1).
+/// `Ordering`'s `is_lt`/`is_le`/`is_gt`/`is_ge`/`is_eq` are concrete,
+/// non-generic `match self` bodies — pure general lowerings, no hand-rolled
+/// codegen.
+fn ordering_stdlib_program() -> &'static Program {
+    &ORDERING_LOWERED_PROGRAM
+}
+
+/// The baked stdlib modules whose real (non-`#[compiler_builtin]`) impl
+/// bodies codegen compiles via the generalized stdlib-body passes, beyond
+/// the special-cased `tracing` program. Phase-7 line 889 grows this list
+/// one module at a time as each module's bodies are verified to lower.
+fn compiled_stdlib_programs() -> [&'static Program; 1] {
+    [ordering_stdlib_program()]
 }
 
 /// Variant of [`compile_to_ir_with_options`] that accepts the
@@ -4225,7 +4259,13 @@ impl<'ctx> Codegen<'ctx> {
         // a `tracer.export_event(...)` / `LogEvent.info(...)` call site in
         // a user body resolves its `Type.method` symbol. Bodies are
         // compiled by the sibling pass after the user impl-body loop.
-        self.declare_tracing_stdlib_methods()?;
+        self.declare_stdlib_program(tracing_stdlib_program())?;
+        // 889 slice 1: declare the other compiled stdlib modules' layouts +
+        // non-builtin impl-method signatures so user-body call sites resolve
+        // their `Type.method` symbols (e.g. `ordering_value.is_lt()`).
+        for tp in compiled_stdlib_programs() {
+            self.declare_stdlib_program(tp)?;
+        }
 
         // Theme 6: emit static vtables for impls of provider traits.
         // Runs after impl methods are *declared* (their fn-ptrs become
@@ -4360,7 +4400,14 @@ impl<'ctx> Codegen<'ctx> {
         // Compile the baked `std.tracing` impl-method bodies whose
         // signatures were declared above. Mirrors the user impl-body
         // pass; the bodies use only general lowerings.
-        self.compile_tracing_stdlib_methods()?;
+        self.compile_stdlib_program(tracing_stdlib_program())?;
+        // 889 slice 1: compile the other stdlib modules' real impl bodies
+        // (declared above). Each runs with its own span tables swapped in and
+        // prunes its own zero-use functions, so an ordering-free binary stays
+        // lean.
+        for tp in compiled_stdlib_programs() {
+            self.compile_stdlib_program(tp)?;
+        }
 
         // Slice c-repl.B.4: when this codegen pass is producing a
         // REPL cell module (signaled by `main_symbol_override`),
@@ -4396,34 +4443,36 @@ impl<'ctx> Codegen<'ctx> {
             .map_err(|e| format!("Module verification failed: {}", e))
     }
 
-    /// Bring the baked `std.tracing` surface into codegen — struct
-    /// layouts + impl-method *declarations*.
+    /// Bring one baked stdlib `Program`'s surface into codegen — struct +
+    /// enum layouts + non-`#[compiler_builtin]` impl-method *declarations*
+    /// (phase-7 line 889). Used for `std.tracing` and the modules in
+    /// [`compiled_stdlib_programs`] (`ordering`, …).
     ///
-    /// `std.tracing`'s types (`Span` / `LogEvent` / `SpanField`) and its
-    /// `Exporter` impls (`StdoutExporter` / `NoOpExporter`) live in
-    /// `STDLIB_PROGRAMS`, which codegen does NOT walk (`declarations.rs`
-    /// § "items reach the typechecker via `STDLIB_PROGRAMS` but do NOT
-    /// reach codegen"). Before this pass a compiled binary saw their
-    /// struct layouts as the i64 default (`e.message` loaded `0`) and any
-    /// `tracer.export_event(...)` / `LogEvent.info(...)` dispatch fell
-    /// through with "no handler for method". Unlike the TCP/TLS/WS stdlib
-    /// (whose methods are `#[compiler_builtin]` + hand-rolled lowerings),
-    /// the tracing methods are real Kāra bodies, so the maintainable path
-    /// is to compile that real source rather than hand-write inkwell for a
-    /// format loop: declare the layouts through the normal `declare_structs`
-    /// side-table populator (emits no IR), then declare every concrete impl
-    /// method so dispatch's `module.get_function("Type.method")` lookup
-    /// resolves. Bodies land in `compile_tracing_stdlib_methods`.
+    /// Stdlib types/impls live in `STDLIB_PROGRAMS`, which codegen does NOT
+    /// walk by default (`declarations.rs` § "items reach the typechecker via
+    /// `STDLIB_PROGRAMS` but do NOT reach codegen"). Without this pass a
+    /// compiled binary saw their struct/enum layouts as the i64 default and
+    /// any real-bodied method dispatch (`tracer.export_event(...)`,
+    /// `ordering_value.is_lt()`) fell through with "no handler for method".
+    /// Unlike the TCP/TLS/WS stdlib (whose methods are `#[compiler_builtin]`
+    /// with hand-rolled lowerings — skipped here), these are real Kāra bodies,
+    /// so the maintainable path is to compile that real source: declare the
+    /// layouts through the normal `declare_structs` / `declare_enums`
+    /// side-table populators (no IR), then declare every concrete non-builtin
+    /// impl method so dispatch's `module.get_function("Type.method")` lookup
+    /// resolves. Bodies land in [`Self::compile_stdlib_program`].
     ///
     /// Mirrors the value-self-first two-pass dedup of the user impl
     /// declaration loop in `compile_program`, kept identical so the two
     /// stay in lockstep.
-    fn declare_tracing_stdlib_methods(&mut self) -> Result<(), String> {
-        let tp = tracing_stdlib_program();
-        // Layouts + field side tables (struct_types / struct_field_*),
-        // no IR — so literals, field access, and the `Vec[SpanField]`
-        // field all lower at the right shape.
+    fn declare_stdlib_program(&mut self, tp: &Program) -> Result<(), String> {
+        // Layouts + field/variant side tables (struct_types / struct_field_* /
+        // enum layouts), no IR — so literals, field access, `match` on a
+        // stdlib enum, and aggregate fields all lower at the right shape.
+        // `declare_enums` is the addition over the original tracing-only pass
+        // (tracing has no enums; `Ordering` does).
         self.declare_structs(tp);
+        self.declare_enums(tp);
         let mut declared: std::collections::HashSet<String> = std::collections::HashSet::new();
         for value_self_pass in [true, false] {
             for item in &tp.items {
@@ -4432,6 +4481,14 @@ impl<'ctx> Codegen<'ctx> {
                         for impl_item in &imp.items {
                             if let ImplItem::Method(method) = impl_item {
                                 if method.generic_params.is_some() {
+                                    continue;
+                                }
+                                // 889: `#[compiler_builtin]` methods have
+                                // hand-rolled codegen lowerings (their Kāra
+                                // bodies are stubs); never declare/compile
+                                // them here. No-op for tracing (its builtins
+                                // are free fns) and `Ordering` (no builtins).
+                                if method_is_compiler_builtin(method) {
                                     continue;
                                 }
                                 if method_self_is_value(method) != value_self_pass {
@@ -4452,17 +4509,17 @@ impl<'ctx> Codegen<'ctx> {
         Ok(())
     }
 
-    /// Compile the baked `std.tracing` impl-method bodies declared by
-    /// [`Self::declare_tracing_stdlib_methods`]. Runs after the user
-    /// impl-body pass; the bodies use only general lowerings (struct
-    /// construction, `Vec.new` / `push`, f-strings, `for` over
-    /// `Vec[SpanField]`, String `+`, `println`), so no tracing-specific
-    /// codegen is needed. The `declare_only_fns` guard mirrors the user
-    /// loop's REPL-cell de-dup.
-    fn compile_tracing_stdlib_methods(&mut self) -> Result<(), String> {
-        let tp = tracing_stdlib_program();
-
-        // Swap in the tracing program's span-keyed side tables for the
+    /// Compile one baked stdlib `Program`'s non-builtin impl-method bodies,
+    /// declared by [`Self::declare_stdlib_program`] (phase-7 line 889). Runs
+    /// after the user impl-body pass; the bodies must use only general
+    /// lowerings (no module-specific codegen) — tracing's do (struct
+    /// construction, `Vec.new`/`push`, f-strings, `for`, String `+`,
+    /// `println`); `Ordering`'s are `match self` → bool. The program's
+    /// span-keyed side tables are swapped in for the duration so the bodies'
+    /// `<module>.kara` spans resolve. The `declare_only_fns` guard mirrors
+    /// the user loop's REPL-cell de-dup.
+    fn compile_stdlib_program(&mut self, tp: &Program) -> Result<(), String> {
+        // Swap in the stdlib program's span-keyed side tables for the
         // duration of body emission. The bodies carry `tracing.kara`
         // spans, so they only hit these tables; the user program's tables
         // are restored before this returns. Name-keyed state
@@ -4517,7 +4574,7 @@ impl<'ctx> Codegen<'ctx> {
             }};
         }
         swap_all!();
-        let result = self.compile_tracing_stdlib_method_bodies(tp);
+        let result = self.compile_stdlib_program_method_bodies(tp);
         swap_all!(); // restore the user program's tables
         result
     }
@@ -4540,7 +4597,7 @@ impl<'ctx> Codegen<'ctx> {
     ///    `export_event`), so loop until a full scan deletes nothing. This
     ///    keeps tracing-free binaries lean (no dead `Vec`/f-string
     ///    machinery) and the IR-shape codegen tests valid.
-    fn compile_tracing_stdlib_method_bodies(&mut self, tp: &Program) -> Result<(), String> {
+    fn compile_stdlib_program_method_bodies(&mut self, tp: &Program) -> Result<(), String> {
         // Compiling the tracing bodies repositions `self.builder` into the
         // last tracing function, and the phase-2 prune may then *delete*
         // that function — leaving the builder on a freed block. Downstream
@@ -4558,6 +4615,11 @@ impl<'ctx> Codegen<'ctx> {
                         for impl_item in &imp.items {
                             if let ImplItem::Method(method) = impl_item {
                                 if method.generic_params.is_some() {
+                                    continue;
+                                }
+                                // 889: skip `#[compiler_builtin]` — bodies are
+                                // stubs; codegen has hand-rolled lowerings.
+                                if method_is_compiler_builtin(method) {
                                     continue;
                                 }
                                 if method_self_is_value(method) != value_self_pass {
