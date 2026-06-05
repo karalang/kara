@@ -1525,6 +1525,9 @@ impl<'a> super::TypeChecker<'a> {
             "Clone" => return self.type_supports_clone(ty),
             "Copy" => return self.is_type_copy(ty),
             "Debug" => return self.type_supports_debug(ty),
+            // Built-in marker trait for primitive numeric types (SIMD lane
+            // elements + `fn f[T: Numeric]`). See `type_supports_numeric`.
+            "Numeric" => return self.type_supports_numeric(ty),
             _ => {}
         }
         // Other traits: explicit impl in the table, with supertrait closure.

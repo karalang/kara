@@ -526,10 +526,12 @@ impl<'a> super::TypeChecker<'a> {
             GenericArg::Type(t) => self.lower_type_expr(t, generic_scope),
             GenericArg::Const(_) => return None,
         };
-        // Element-type constraint: primitive numeric only (Numeric-trait
-        // surrogate). A type-param `T` in scope is permitted — the bound is
-        // re-checked at monomorphization once the const-arg is concrete.
-        if !matches!(element_ty, Type::TypeParam(_)) && !type_is_numeric_primitive(&element_ty) {
+        // Element-type constraint: the element must satisfy the built-in
+        // `Numeric` trait. A type-param `T` in scope is permitted — the bound
+        // is re-checked at monomorphization once the const-arg is concrete.
+        if !matches!(element_ty, Type::TypeParam(_))
+            && !self.type_satisfies_bound(&element_ty, "Numeric")
+        {
             self.type_error(
                 format!(
                     "Vector element type must be a primitive numeric type \
@@ -893,21 +895,5 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => ty.clone(),
         }
-    }
-}
-
-/// `Numeric`-trait surrogate for `Vector[T, N]` element types. `true` for the
-/// primitive integer and floating-point types permitted as SIMD lanes:
-/// `i8`…`i128`, `u8`…`u64`, `f32`, `f64`. `usize` is excluded per design.md
-/// § Portable SIMD (idiomatic Kāra reserves `usize` for sizes/indices, not
-/// lane data). Replaced by a real trait-bound check once the first-class
-/// `Numeric` trait lands (phase-7 line 289 sub-slice).
-fn type_is_numeric_primitive(ty: &Type) -> bool {
-    match ty {
-        Type::Int(_) => true,
-        Type::UInt(UIntSize::Usize) => false,
-        Type::UInt(_) => true,
-        Type::Float(_) => true,
-        _ => false,
     }
 }

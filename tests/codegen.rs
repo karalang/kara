@@ -30091,6 +30091,63 @@ fn main() {
         }
     }
 
+    // ── Slice 4 — first-class Numeric trait + lane-literal ergonomics ─────
+
+    #[test]
+    fn test_numeric_generic_arithmetic() {
+        // `[T: Numeric]` arithmetic monomorphizes to concrete int/float codegen.
+        let out = run_program(
+            r#"
+fn add3[T: Numeric](a: T, b: T, c: T) -> T { a + b + c }
+fn neg[T: Numeric](x: T) -> T { -x }
+fn main() {
+    println(add3(1, 2, 3));
+    println(add3(1.5, 2.5, 3.0));
+    println(neg(5));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "6\n7\n-5\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_f32_suffixless_lanes() {
+        // f64 lane literals coerce to f32 lanes; `<4 x float>` arithmetic.
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[f32, 4](1.0, 2.0, 3.0, 4.0);
+    let b = Vector[f32, 4](0.5, 0.5, 0.5, 0.5);
+    let c = a * b;
+    println(c[0]); println(c[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "0.5\n2\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_i32_suffixless_lanes() {
+        // i64 lane literals coerce to i32 lanes; `<4 x i32>` arithmetic.
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i32, 4](1, 2, 3, 4);
+    let b = Vector[i32, 4](10, 20, 30, 40);
+    let c = a + b;
+    println(c[0]); println(c[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "11\n44\n");
+        }
+    }
+
     // ── Stdlib non-builtin body compilation (L889 slice 1) ───────────────
     //
     // Before this slice codegen never walked STDLIB_PROGRAMS, so a real

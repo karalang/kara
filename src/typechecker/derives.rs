@@ -9,7 +9,7 @@
 
 use crate::ast::*;
 
-use super::types::{is_numeric, type_display, Type, VariantTypeInfo};
+use super::types::{is_numeric, type_display, Type, UIntSize, VariantTypeInfo};
 use super::{extract_derived_traits, TypeErrorKind};
 
 impl<'a> super::TypeChecker<'a> {
@@ -558,6 +558,23 @@ impl<'a> super::TypeChecker<'a> {
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
             | Type::Existential { .. } => false,
+        }
+    }
+
+    /// Built-in `Numeric` marker trait: satisfied by the primitive numeric
+    /// types usable as SIMD `Vector` lanes and `fn f[T: Numeric]` bounds —
+    /// `i8`…`i128`/`isize`, `u8`…`u128`, `f32`, `f64`. `usize` is excluded by
+    /// design (design.md § Portable SIMD: idiomatic Kāra reserves `usize` for
+    /// sizes/indices, not lane/arithmetic data); this mirrors the structural
+    /// surrogate it replaced exactly, so `Vector` element acceptance is
+    /// unchanged. Not user-derivable or impl-able — `type_satisfies_bound`
+    /// routes the `"Numeric"` arm here.
+    pub(super) fn type_supports_numeric(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Int(_) | Type::Float(_) => true,
+            Type::UInt(UIntSize::Usize) => false,
+            Type::UInt(_) => true,
+            _ => false,
         }
     }
 

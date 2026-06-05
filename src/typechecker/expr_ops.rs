@@ -536,6 +536,21 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// True iff `ty` is a generic type parameter carrying a `Numeric` bound in
+    /// the enclosing scope. Lets the operator checks treat `a + b` / `-a` on a
+    /// `T: Numeric` parameter as valid numeric arithmetic — the bound
+    /// guarantees `T` instantiates to a primitive numeric type.
+    fn type_param_has_numeric_bound(&self, ty: &Type) -> bool {
+        let Type::TypeParam(name) = ty else {
+            return false;
+        };
+        self.enclosing_bounds.get(name).is_some_and(|bounds| {
+            bounds
+                .iter()
+                .any(|b| b.path.last().is_some_and(|t| t == "Numeric"))
+        })
+    }
+
     pub(super) fn infer_binary(
         &mut self,
         op: &BinOp,
@@ -658,6 +673,23 @@ impl<'a> super::TypeChecker<'a> {
                             format!(
                                 "arithmetic on distinct type '{}' requires both operands to have \
                                  the same type, found '{}'",
+                                type_display(&left_ty),
+                                type_display(&right_ty)
+                            ),
+                            right.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                    left_ty
+                } else if self.type_param_has_numeric_bound(&left_ty) {
+                    // Arithmetic on a `T: Numeric` generic parameter — the bound
+                    // guarantees `T` is a primitive numeric type. Both operands
+                    // must be the same parameter (no mixed-`T` arithmetic).
+                    if left_ty != right_ty {
+                        self.type_error(
+                            format!(
+                                "arithmetic on a 'Numeric' type parameter requires both operands \
+                                 to have the same type, found '{}' and '{}'",
                                 type_display(&left_ty),
                                 type_display(&right_ty)
                             ),
@@ -803,7 +835,10 @@ impl<'a> super::TypeChecker<'a> {
 
         match op {
             UnaryOp::Neg => {
-                if !is_numeric(&ty) && !self.distinct_type_has_arithmetic(&ty) {
+                if !is_numeric(&ty)
+                    && !self.distinct_type_has_arithmetic(&ty)
+                    && !self.type_param_has_numeric_bound(&ty)
+                {
                     self.type_error(
                         format!(
                             "unary '-' requires numeric type, found '{}'",

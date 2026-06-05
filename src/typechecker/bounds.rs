@@ -28,6 +28,13 @@ impl<'a> super::TypeChecker<'a> {
             "Default",
             "Iterator",
         ];
+        // `Numeric` is a built-in *marker* trait satisfied by the primitive
+        // numeric types (not user-derivable, not impl-able). It gates SIMD
+        // `Vector[T, N]` elements and `fn f[T: Numeric]` bounds; satisfaction
+        // is decided structurally in `type_supports_numeric`.
+        if trait_name == "Numeric" {
+            return true;
+        }
         self.env.traits.contains_key(trait_name)
             || self.env.trait_aliases.contains(trait_name)
             || DERIVE_ONLY_BUILTINS.contains(&trait_name)

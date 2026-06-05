@@ -22444,3 +22444,55 @@ fn vector_select_lane_mismatch_rejected() {
         "select with mismatched lane count must be rejected; got: {errors:?}"
     );
 }
+
+// ── Slice 4 — first-class Numeric trait + lane-literal ergonomics ─────
+
+#[test]
+fn numeric_bound_arithmetic_ok() {
+    // `[T: Numeric]` is a real bound now; arithmetic and unary neg on the
+    // bounded parameter type-check.
+    typecheck_ok(
+        "fn add3[T: Numeric](a: T, b: T, c: T) -> T { a + b + c } \
+         fn neg[T: Numeric](x: T) -> T { -x } \
+         fn main() { println(add3(1, 2, 3)); println(neg(5)); }",
+    );
+}
+
+#[test]
+fn numeric_bound_rejects_non_numeric() {
+    // A `[T: Numeric]` function instantiated with a non-numeric type is a
+    // bound-not-satisfied error (String does not implement Numeric).
+    let errors = typecheck_errors(
+        "fn id[T: Numeric](x: T) -> T { x } fn main() { let s = id(\"hi\"); println(s); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Numeric` is not satisfied")
+                || e.message.contains("does not implement `Numeric`")),
+        "Numeric bound must reject a String instantiation; got: {errors:?}"
+    );
+}
+
+#[test]
+fn vector_element_usize_rejected_via_numeric() {
+    // The Vector element check now routes through the Numeric trait; `usize`
+    // is excluded (reserved for sizes/indices), so this still rejects.
+    let errors = typecheck_errors("fn main() { let v = Vector[usize, 2](1, 2); println(v[0]); }");
+    assert!(
+        !errors.is_empty(),
+        "Vector[usize, N] must be rejected (usize is not Numeric)"
+    );
+}
+
+#[test]
+fn vector_f32_suffixless_lanes_ok() {
+    // Lane-literal ergonomics: `1.0` (default f64) coerces to the f32 element.
+    typecheck_ok("fn main() { let v = Vector[f32, 4](1.0, 2.0, 3.0, 4.0); println(v[0]); }");
+}
+
+#[test]
+fn vector_i32_suffixless_lanes_ok() {
+    // `1` (default i64) coerces to the i32 element — no `i32` suffix needed.
+    typecheck_ok("fn main() { let v = Vector[i32, 4](1, 2, 3, 4); println(v[0]); }");
+}

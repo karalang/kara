@@ -12705,3 +12705,57 @@ fn main() {
     );
     assert_eq!(out, "false\ntrue\n");
 }
+
+// ── Slice 4 — first-class Numeric trait + lane-literal ergonomics ─────
+
+#[test]
+fn test_numeric_generic_arithmetic() {
+    // `[T: Numeric]` enables arithmetic on the bounded parameter; monomorphized
+    // for both i64 and f64.
+    let out = run_no_errors(
+        r#"
+fn add3[T: Numeric](a: T, b: T, c: T) -> T { a + b + c }
+fn neg[T: Numeric](x: T) -> T { -x }
+fn main() {
+    println(add3(1, 2, 3));
+    println(add3(1.5, 2.5, 3.0));
+    println(neg(5));
+}
+"#,
+    );
+    assert_eq!(out, "6\n7\n-5\n");
+}
+
+#[test]
+fn test_vector_f32_suffixless_lanes() {
+    // Lane literals `1.0` (default f64) coerce to f32 lanes — no suffix.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a = Vector[f32, 4](1.0, 2.0, 3.0, 4.0);
+    let b = Vector[f32, 4](0.5, 0.5, 0.5, 0.5);
+    let c = a * b;
+    println(c[0]); // 0.5
+    println(c[3]); // 2
+}
+"#,
+    );
+    assert_eq!(out, "0.5\n2\n");
+}
+
+#[test]
+fn test_vector_i32_suffixless_lanes() {
+    // Lane literals `1` (default i64) coerce to i32 lanes — no suffix.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a = Vector[i32, 4](1, 2, 3, 4);
+    let b = Vector[i32, 4](10, 20, 30, 40);
+    let c = a + b;
+    println(c[0]); // 11
+    println(c[3]); // 44
+}
+"#,
+    );
+    assert_eq!(out, "11\n44\n");
+}
