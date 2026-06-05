@@ -508,6 +508,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         None => self.compile_expr(&arg.value)?,
                     }
                 } else {
+                    // Owned-by-value arg moved into the coroutine: the coroutine
+                    // now owns it and drops it at completion (see the coroutine-
+                    // param registration in `compile_function_body`). Suppress
+                    // the caller's user-`Drop` of the source binding so it isn't
+                    // dropped twice — a synchronous (ramp+wait) caller would
+                    // otherwise drop the same value the coroutine already
+                    // dropped. No-op for non-`UserDrop` bindings and for the
+                    // spawn-wrapper path (the captured var has no caller-side
+                    // drop registered; the parent's drop is suppressed at the
+                    // capture site). `ref`/`slice` args are borrows — never
+                    // ownership transfers — so this only fires on owned moves.
+                    if let ExprKind::Identifier(var_name) = &arg.value.kind {
+                        self.suppress_user_drop_for_var(var_name);
+                    }
                     self.compile_expr(&arg.value)?
                 };
                 call_args.push(val.into());

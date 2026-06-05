@@ -357,6 +357,24 @@ struct StmtEffect {
     resource: String,
 }
 
+/// True iff a statement's effect set marks it as a **coroutine network-boundary
+/// call** — one that the A2 coroutine transform (`build_state_struct_layouts`,
+/// keyed off `sends(Network)`/`receives(Network)`) compiles into a dispatcher-
+/// driven LLVM coroutine, or a `suspends` park (e.g. `Receiver.recv`). Such a
+/// statement must not be auto-parallelized: a coroutine owns + drops its
+/// by-value params at completion while auto-par captures are shared-with-write-
+/// back (the parent keeps drop ownership), so lifting the call into a
+/// `__par_branch` worker double-drops any owned user-`Drop` arg (an fd
+/// double-close for a `WebSocket`), and the ramp+wait belongs to the async
+/// dispatcher, not the `karac_par_run` pool. See `find_parallel_groups`.
+fn effects_mark_coroutine_boundary(effects: &[StmtEffect]) -> bool {
+    effects.iter().any(|e| {
+        matches!(e.verb, EffectVerbKind::Suspends)
+            || (matches!(e.verb, EffectVerbKind::Sends | EffectVerbKind::Receives)
+                && e.resource == "Network")
+    })
+}
+
 // ── Checker ────────────────────────────────────────────────────
 
 pub struct ConcurrencyChecker<'a> {
@@ -1129,6 +1147,18 @@ impl<'a> ConcurrencyChecker<'a> {
                 continue;
             }
 
+            // A statement that calls a coroutine network-boundary fn must NOT
+            // be auto-parallelized into a `__par_branch` worker — the coroutine
+            // owns + drops its by-value params, but auto-par captures are
+            // shared-with-write-back, so a `__par_branch`-lifted call would
+            // double-drop an owned user-`Drop` arg (see
+            // `effects_mark_coroutine_boundary`). Keep it sequential (mirrors
+            // `has_early_exit`).
+            if effects_mark_coroutine_boundary(&infos[start].effects) {
+                assigned[start] = true;
+                continue;
+            }
+
             let mut group_indices = vec![start];
             assigned[start] = true;
 
@@ -1154,6 +1184,14 @@ impl<'a> ConcurrencyChecker<'a> {
                 // Same rule applied to candidates: an early-exit stmt
                 // ends the par group at its sibling boundary.
                 if infos[candidate].has_early_exit {
+                    break;
+                }
+
+                // A coroutine network-boundary statement is never auto-
+                // parallelized — it must not join a group seeded by a pure
+                // sibling either (see the seed-side guard above). End the group
+                // at this boundary.
+                if effects_mark_coroutine_boundary(&infos[candidate].effects) {
                     break;
                 }
 

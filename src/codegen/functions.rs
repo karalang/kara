@@ -491,6 +491,49 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                     continue;
                 }
+                // Coroutine-handler owned user-`Drop` param ownership (the
+                // `ws_idle_holder` connection-reap leak class). A coroutine-
+                // compiled fn cannot follow the normal by-value caller-drops
+                // model for its owned params: at a spawn boundary the caller
+                // ramps and returns (or moved the value into the task) *before*
+                // the coroutine finishes using it, so the caller cannot be the
+                // one to drop. Make the coroutine the owner instead — register
+                // owned user-`Drop` params here so `emit_scope_cleanup` runs
+                // their `Drop` on body-end completion and
+                // `emit_coro_destroy_edge_drops` runs it on the per-park
+                // destroy/cancel edge. Every caller of a coroutine fn suppresses
+                // its own drop of the owned arg (`call_dispatch` /
+                // `method_call`), keeping it a single drop — without that
+                // suppression a synchronous (ramp+wait) caller would double-drop.
+                //
+                // Gated tightly: ONLY for coroutine-compiled fns, ONLY owned
+                // (`Path`, non-ref) params, ONLY non-shared types (shared structs
+                // drop through the RC path, never the value-type UserDrop drain —
+                // see the `track_user_drop_var` gate in `compile_stmt`), and ONLY
+                // types with a real `impl Drop` (`drop_method_keys`). This is the
+                // user-`Drop` (resource) case only — `StructDrop`-only owned
+                // params (heap-field cleanup with no user `Drop`) are NOT
+                // registered here, because `suppress_user_drop_for_var` removes
+                // only `UserDrop` actions, so a `StructDrop` param that is then
+                // moved onward could not be suppressed and would double-free
+                // (the failure mode that broke the tracing-builder E2E when the
+                // general param loop tried to drop every owned struct param).
+                if self.is_coroutine_compiled(&func.name) {
+                    if let TypeKind::Path(path) = &param.ty.kind {
+                        if let Some(struct_name) = path.segments.first() {
+                            let has_user_drop = self
+                                .program_snapshot
+                                .as_deref()
+                                .map(|p| p.drop_method_keys.contains_key(struct_name))
+                                .unwrap_or(false);
+                            if has_user_drop
+                                && !self.shared_types.contains_key(struct_name.as_str())
+                            {
+                                self.track_user_drop_var(struct_name, &param_name, alloca);
+                            }
+                        }
+                    }
+                }
                 self.variables.insert(
                     param_name,
                     VarSlot {

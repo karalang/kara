@@ -161,6 +161,64 @@ mod tests {
         }
     "#;
 
+    /// Owned-user-`Drop` coroutine-param leak regression (the `ws_idle_holder`
+    /// connection-reap leak class, minimized). `serve_one` is coroutine-compiled
+    /// (it parks on `accept`) and takes an **owned** param `c: Conn` whose
+    /// `impl Drop` is observable (`println(7)`). The ownership model for a
+    /// coroutine handler is: the *coroutine* owns its by-value params and runs
+    /// their `Drop` at completion (and on the destroy/cancel edge); every caller
+    /// suppresses its own drop. Without that, the caller-drops-by-value model
+    /// breaks at a spawn boundary — the spawned wrapper ramps and returns (or
+    /// the parent moved the value into the task), so *nobody* drops the param and
+    /// the resource (an fd, for a `WebSocket`) leaks on every disconnect.
+    ///
+    /// Inline (synchronous) call shape — the IR test asserts `serve_one`'s
+    /// coroutine clones drop `c` and `main` does NOT (caller suppression, else a
+    /// double-drop).
+    const OWNED_DROP_INLINE_SRC: &str = r#"
+        struct Conn { id: i64 }
+        impl Drop for Conn {
+            fn drop(mut ref self) { println(self.id); }
+        }
+        fn serve_one(listener: TcpListener, c: Conn) {
+            let _stream = listener.accept().unwrap();
+            println(1);
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            let c = Conn { id: 7 };
+            serve_one(listener, c);
+            println(2);
+        }
+    "#;
+
+    /// Spawn shape of the owned-user-`Drop` coroutine-param leak — the real
+    /// `tg.spawn(|| handle_connection(ws))` topology. `c: Conn` is moved into the
+    /// non-blocking spawn (tail coroutine call) and must be dropped EXACTLY ONCE
+    /// when the spawned coroutine completes: zero drops == the leak; two drops ==
+    /// the double-free the naive "drop every owned struct param" fix caused. The
+    /// `Drop` body prints `7`, so the functional test can count occurrences — an
+    /// fd-close `Drop` (`TcpListener`/`WebSocket`) is invisible to LeakSanitizer
+    /// (no heap) and to macOS ASAN (no LSan), which is why a sentinel print, not
+    /// an ASAN green, is the load-bearing leak gate here.
+    const OWNED_DROP_SPAWN_SRC: &str = r#"
+        struct Conn { id: i64 }
+        impl Drop for Conn {
+            fn drop(mut ref self) { println(7); }
+        }
+        fn serve_one(listener: TcpListener, c: Conn) {
+            let _stream = listener.accept().unwrap();
+            println(1);
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            let c = Conn { id: 0 };
+            let mut tg = TaskGroup.new();
+            tg.spawn(|| serve_one(listener, c));
+            println(2);
+        }
+    "#;
+
     /// Coro-frame heap-overflow regression. A **fixed-size `Array[u8, 4096]`
     /// local live across a park** — the exact shape of the ws_idle_holder
     /// flagship handler's `recv_text` buffer. The array is touched at BOTH
@@ -937,6 +995,96 @@ mod tests {
         assert!(
             lines.iter().any(|l| l == "1") && lines.iter().any(|l| l == "2"),
             "non-blocking spawned coroutine did not complete under ASAN; \
+             stdout lines: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn coroutine_drops_owned_user_drop_param() {
+        // I1 + I2 at the IR level. A coroutine-compiled fn that takes an owned
+        // user-`Drop` param (`c: Conn`) must run that param's `Drop` on its own
+        // completion + destroy edges (the coroutine owns by-value params across
+        // the spawn boundary, where the caller cannot), and the caller must NOT
+        // also drop it (else double-free). `karac_drop_<Type>` is the user-drop
+        // wrapper emitted by `emit_user_drop_wrapper`.
+        let ir = compile_coro_split_ir(OWNED_DROP_INLINE_SRC).expect("coro-split IR");
+
+        // (I1) The destroy/cancel edge of the coroutine drops the owned param —
+        // a coroutine cancelled while parked must still free the resource it owns.
+        let destroy = extract_fn_ir(&ir, "@serve_one.destroy(")
+            .unwrap_or_else(|| panic!("no serve_one.destroy clone in IR:\n{ir}"));
+        assert!(
+            destroy.contains("@karac_drop_Conn"),
+            "coroutine destroy edge must drop its owned user-Drop param `c`; \
+             serve_one.destroy:\n{destroy}"
+        );
+
+        // (I1) The normal-completion path (the resume clone runs the body to its
+        // end, where `emit_scope_cleanup` drains the param) also drops it.
+        let resume = extract_fn_ir(&ir, "@serve_one.resume(")
+            .unwrap_or_else(|| panic!("no serve_one.resume clone in IR:\n{ir}"));
+        assert!(
+            resume.contains("@karac_drop_Conn"),
+            "coroutine completion path must drop its owned user-Drop param `c`; \
+             serve_one.resume:\n{resume}"
+        );
+
+        // (I2) `main` calls `serve_one` synchronously but must NOT drop `c` — the
+        // coroutine now owns it. A `@karac_drop_Conn` in `@main` would be the
+        // double-free the general-param-loop attempt caused (proven this session).
+        let main_ir =
+            extract_fn_ir(&ir, "@main(").unwrap_or_else(|| panic!("no @main in IR:\n{ir}"));
+        assert!(
+            !main_ir.contains("@karac_drop_Conn"),
+            "caller `main` must suppress its drop of the owned arg passed to a \
+             coroutine (the coroutine owns + drops it); @main:\n{main_ir}"
+        );
+    }
+
+    #[test]
+    fn coroutine_spawn_drops_owned_user_drop_param_exactly_once() {
+        // The end-to-end leak gate for the `ws_idle_holder` reap leak. A
+        // `Conn` moved into a non-blocking spawn (`tg.spawn(|| serve_one(.., c))`)
+        // must have its `Drop` run exactly once when the spawned coroutine
+        // completes. The `Drop` prints `7`; we count it. Zero `7`s == the fd leak
+        // (the bug); two `7`s == the double-free regression.
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_owned_drop_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(OWNED_DROP_SPAWN_SRC, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let (exit_status, lines) = service_one_connection(&exe_path, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "owned-drop spawn binary exited non-success {exit_status:?}; \
+             stdout lines: {lines:?}"
+        );
+        // Handler ran (`1`) and main resumed (`2`).
+        assert!(
+            lines.iter().any(|l| l == "1") && lines.iter().any(|l| l == "2"),
+            "owned-drop spawn coroutine did not complete; stdout lines: {lines:?}"
+        );
+        // The owned `Conn` param's `Drop` ran EXACTLY ONCE.
+        let drop_count = lines.iter().filter(|l| *l == "7").count();
+        assert_eq!(
+            drop_count, 1,
+            "owned user-Drop coroutine param must drop exactly once \
+             (0 == reap leak, 2 == double-free); saw {drop_count}; \
              stdout lines: {lines:?}"
         );
     }

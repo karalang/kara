@@ -377,6 +377,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.materialize_rvalue_for_ref_arg(v, usize::MAX)
                     }
                 } else {
+                    // Owned receiver moved into the coroutine method — the
+                    // coroutine owns + drops it at completion, so suppress the
+                    // caller's drop (mirrors the free-fn coroutine arg path in
+                    // `call_dispatch`). No-op for non-`UserDrop` receivers.
+                    if let ExprKind::Identifier(var_name) = &object.kind {
+                        self.suppress_user_drop_for_var(var_name);
+                    }
                     self.compile_expr(object)?
                 };
                 call_args.push(self_val.into());
@@ -403,6 +410,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             None => self.compile_expr(&arg.value)?,
                         }
                     } else {
+                        // Owned method arg moved into the coroutine — suppress the
+                        // caller's drop (see the receiver case above).
+                        if let ExprKind::Identifier(var_name) = &arg.value.kind {
+                            self.suppress_user_drop_for_var(var_name);
+                        }
                         self.compile_expr(&arg.value)?
                     };
                     call_args.push(val.into());
