@@ -4114,6 +4114,51 @@ fn test_ambient_env_not_required_to_declare_effect_resource() {
 }
 
 #[test]
+fn test_lowercase_alias_rand_advances_state() {
+    // Lowercase `rand.next_u64()` dispatches to the same ambient
+    // `RandomSource` as the capitalized form (via the interpreter's
+    // lowercase→capitalized alias map). Two draws differ = state advanced.
+    let output = run("fn main() {\n\
+                          let a = rand.next_u64();\n\
+                          let b = rand.next_u64();\n\
+                          println(a != b);\n\
+                      }");
+    assert_eq!(output, "true\n");
+}
+
+#[test]
+fn test_lowercase_alias_clock_with_provider_overrides_default() {
+    // `with_provider[Clock]` must intercept a lowercase `clock.now()` call —
+    // the alias routes through `eval_resource_method`, which consults the
+    // provider stack exactly as the capitalized `Clock.now()` does.
+    let output = run("struct FakeClock {}\n\
+                      impl FakeClock { fn now(self) -> i64 { 999 } }\n\
+                      fn main() {\n\
+                          with_provider[Clock](FakeClock {}, || {\n\
+                              println(clock.now());\n\
+                          });\n\
+                      }");
+    assert_eq!(output, "999\n");
+}
+
+#[test]
+fn test_local_var_shadows_lowercase_ambient_alias() {
+    // A same-name local binding shadows the module alias: `let clock = Timer
+    // { .. }; clock.now()` dispatches to the user's `Timer::now`, not the
+    // ambient `Clock`. The interpreter alias map guards on `env.get(name)`
+    // so the local wins — parity with codegen and the typechecker, which
+    // both apply the same shadow guard. (Regression guard: before the guard
+    // the interpreter ignored the local and called the ambient default.)
+    let output = run("struct Timer { ticks: i64 }\n\
+                      impl Timer { fn now(ref self) -> i64 { self.ticks } }\n\
+                      fn main() {\n\
+                          let clock = Timer { ticks: 42 };\n\
+                          println(clock.now());\n\
+                      }");
+    assert_eq!(output, "42\n");
+}
+
+#[test]
 fn test_ambient_env_var_present_returns_ok() {
     // `Env.var(name)` returns `Ok(value)` for a set environment variable.
     // We set the var via `std::env::set_var` from the test harness, then

@@ -603,19 +603,31 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // Lowercase stdlib module aliases: `env.args()`, `env.var(name)`.
-        // These use lowercase module names (design.md § I/O), distinct from
-        // the capitalized resource names used by the effect system. Map each
-        // lowercase module to its capitalized resource equivalent so the
-        // shared method signatures are found — first in the baked-impl table
-        // (`env.impls`, where the slice-2 migration moved `Env.args` /
-        // `Env.var`), then in `env.functions` for any future entries that
-        // can't be expressed as impl methods.
+        // Lowercase stdlib module aliases: `env.args()`, `clock.now()`,
+        // `stdout.println(s)`, `fs.write(p, c)`, … These use lowercase module
+        // names (design.md § I/O), distinct from the capitalized resource
+        // names used by the effect system. Map each lowercase module to its
+        // capitalized resource equivalent so the shared method signatures are
+        // found — first in the baked-impl table (`env.impls`, where the
+        // slice-2 migration moved the I/O resource methods), then in
+        // `env.functions` for any future entries that can't be expressed as
+        // impl methods. Resolving through the baked impl is what gives the
+        // call its exact return type (e.g. `Result[String, IoError]`), which
+        // flows into `pattern_binding_types` so a `match` arm binds the Ok
+        // payload at the right width — mirrors the resolver `push`, the
+        // interpreter alias map, and codegen's `ambient_resource_for_alias`.
         if let ExprKind::Identifier(mod_name) = &object.kind {
             let resource_name = match mod_name.as_str() {
                 "env" => Some("Env"),
+                "clock" => Some("Clock"),
+                "rand" => Some("RandomSource"),
+                "stdin" => Some("Stdin"),
+                "stdout" => Some("Stdout"),
+                "stderr" => Some("Stderr"),
+                "fs" => Some("FileSystem"),
                 _ => None,
-            };
+            }
+            .filter(|_| self.local_scope.lookup(mod_name).is_none());
             if let Some(resource) = resource_name {
                 let impl_sig = self.env.impls.iter().find_map(|imp| {
                     // Lowercase-module dispatch (`env.args()`) targets

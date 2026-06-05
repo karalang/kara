@@ -1956,6 +1956,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(i64_t.const_int(0, false).into())
             }
+            ("FileSystem", "read_to_string") => {
+                // Lowercase `fs.read_to_string(path)`. The capitalized
+                // `FileSystem.read_to_string` is lowered on the associated-call
+                // path (`assoc_call.rs` → `compile_file_read_to_string`); the
+                // ambient-alias path arrives here with the path already
+                // compiled, so route to the value-core variant.
+                if arg_vals.len() != 1 {
+                    return Err(format!(
+                        "codegen: fs.read_to_string expects 1 argument, found {}",
+                        arg_vals.len()
+                    ));
+                }
+                self.compile_file_read_to_string_val(arg_vals[0])
+            }
+            ("FileSystem", "write") => {
+                // Lowercase `fs.write(path, contents)`. Capitalized form is
+                // lowered via `assoc_call.rs` → `compile_fs_write`; here both
+                // args are pre-compiled, so use the value-core variant.
+                if arg_vals.len() != 2 {
+                    return Err(format!(
+                        "codegen: fs.write expects 2 arguments, found {}",
+                        arg_vals.len()
+                    ));
+                }
+                self.compile_fs_write_vals(arg_vals[0], arg_vals[1])
+            }
             _ => Err(format!(
                 "codegen: ambient resource method '{}.{}' is not yet lowered \
                  (interpreter-only); add a runtime FFI + an arm in \

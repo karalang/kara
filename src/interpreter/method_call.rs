@@ -231,12 +231,29 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
 
-            // Lowercase stdlib module aliases: `env.args()`, `env.var(name)`.
-            // Map to the capitalized effect resource name so the provider
-            // stack lookup in `eval_resource_method` finds the right binding.
-            let resource_alias = match type_name.as_str() {
-                "env" => Some("Env"),
-                _ => None,
+            // Lowercase stdlib module aliases: `env.args()`, `clock.now()`,
+            // `stdout.println(s)`, `fs.write(p, c)`, … Map to the capitalized
+            // effect resource name so the provider stack lookup in
+            // `eval_resource_method` finds the right binding. Mirrors the
+            // resolver alias `push`, the typechecker alias map, and codegen's
+            // `ambient_resource_for_alias`. A local binding of the same name
+            // shadows the module (`let clock = Timer { ... }; clock.now()`),
+            // so skip the alias when `type_name` names a bound variable — the
+            // same `!variables.contains_key` guard codegen and the typechecker
+            // (`local_scope.lookup`) apply.
+            let resource_alias = if self.env.get(type_name).is_some() {
+                None
+            } else {
+                match type_name.as_str() {
+                    "env" => Some("Env"),
+                    "clock" => Some("Clock"),
+                    "rand" => Some("RandomSource"),
+                    "stdin" => Some("Stdin"),
+                    "stdout" => Some("Stdout"),
+                    "stderr" => Some("Stderr"),
+                    "fs" => Some("FileSystem"),
+                    _ => None,
+                }
             };
             if let Some(resource) = resource_alias {
                 return self.eval_resource_method(resource, method, args, span);

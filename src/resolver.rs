@@ -264,9 +264,17 @@ impl SymbolTable {
         push(self, "process", SymbolKind::Module);
 
         // Lowercase stdlib module aliases per design.md § I/O: users write
-        // `env.args()`, `env.var(name)` — lowercase module, capitalized
-        // resource name dispatches at interpreter/codegen layer.
-        push(self, "env", SymbolKind::Module);
+        // `env.args()`, `clock.now()`, `stdout.println(s)` — lowercase module,
+        // capitalized resource name dispatches at interpreter/codegen layer.
+        // The capitalized targets are `Env` / `Clock` / `RandomSource` /
+        // `Stdin` / `Stdout` / `Stderr` / `FileSystem` (the alias table lives
+        // in the interpreter's `eval_method_call` and codegen's
+        // `ambient_resource_for_alias`); the lowercase method signatures are
+        // registered as `env.functions` path entries in
+        // `register_compiler_intrinsic_env`.
+        for alias in ["env", "clock", "rand", "stdin", "stdout", "stderr", "fs"] {
+            push(self, alias, SymbolKind::Module);
+        }
 
         // `ptr` is a built-in module hosting the strict-provenance pointer
         // APIs (`ptr.addr`, `ptr.with_addr`, `ptr.expose`, `ptr.from_exposed`,

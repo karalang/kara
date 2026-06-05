@@ -25394,6 +25394,166 @@ fn main() with writes(FileSystem) {
     }
 
     #[test]
+    fn test_lowercase_ambient_aliases_resolve_and_typecheck_clean() {
+        // The lowercase module aliases (`clock`, `rand`, `stdin`, `stdout`,
+        // `stderr`, `fs`) must resolve AND typecheck — NOT just survive the
+        // `run_program` codegen path, which tolerates resolve/typecheck errors
+        // (the codegen-run_program-bypasses-typecheck hazard). Before this
+        // slice only `env` was wired; the other six errored "undefined name
+        // 'clock'" at resolve, so every lowercase E2E test below passed
+        // FALSELY through the bypass. This guards the real frontend surface:
+        // resolver `push`, the typechecker lowercase→capitalized alias map
+        // (which finds each method's exact return type via the baked `impl`),
+        // and that the `Result[String, IoError]` of `fs.read_to_string` flows
+        // to the `Ok(s)` binding so `s.len()` dispatches.
+        let src = r#"
+fn main() with reads(Env) writes(FileSystem) reads(FileSystem) {
+    let _t = clock.now();
+    let _r = rand.next_u64();
+    let _a = env.args();
+    stdout.print("a");
+    stdout.println("b");
+    stdout.flush();
+    stderr.print("c");
+    stderr.println("d");
+    stderr.flush();
+    let _w = fs.write("/tmp/karac_lc_alias_tc.txt", "x");
+    match fs.read_to_string("/tmp/karac_lc_alias_tc.txt") {
+        Ok(s) => { let _n = s.len(); }
+        Err(_) => {}
+    }
+}
+"#;
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        assert!(
+            resolved.errors.is_empty(),
+            "resolve errors for lowercase ambient aliases: {:?}",
+            resolved.errors
+        );
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "typecheck errors for lowercase ambient aliases: {:?}",
+            typed.errors
+        );
+    }
+
+    #[test]
+    fn test_e2e_lowercase_fs_write_then_read_round_trips() {
+        // Lowercase `fs.write` / `fs.read_to_string` disk round-trip — the
+        // lowercase counterpart of `test_e2e_fs_write_then_read_round_trips`.
+        // These route through the ambient-alias codegen path
+        // (`ambient_resource_for_alias("fs")` → `compile_ambient_ffi`'s
+        // FileSystem arms → the `compile_fs_write_vals` /
+        // `compile_file_read_to_string_val` value-cores), distinct from the
+        // capitalized associated-call path — regression guard for the
+        // "FileSystem.write is not yet lowered" error the ambient path hit
+        // before this slice added its FileSystem arms.
+        let tmp = std::env::temp_dir().join("karac_e2e_lc_fs_write_rt.txt");
+        let _ = std::fs::remove_file(&tmp);
+        let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+        let src = format!(
+            r#"
+fn main() with writes(FileSystem) reads(FileSystem) {{
+    match fs.write("{path}", "hello-lc-fs") {{
+        Ok(_) => match fs.read_to_string("{path}") {{
+            Ok(s) => println(s),
+            Err(_) => println("read-err"),
+        }},
+        Err(_) => println("write-err"),
+    }}
+}}
+"#
+        );
+        let out = run_program(&src);
+        let _ = std::fs::remove_file(&tmp);
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "hello-lc-fs");
+        }
+    }
+
+    #[test]
+    fn test_e2e_lowercase_stdout_stderr_split() {
+        // Lowercase `stdout.println` / `stderr.println` must land on the same
+        // streams as their capitalized forms: stdout line on fd 1, stderr line
+        // on fd 2. Sharp witness that the lowercase alias reaches the same
+        // `emit_console_str_write` lowering (printf for stdout, dprintf(2) for
+        // stderr) as `Stdout`/`Stderr`.
+        let cap = run_program_capturing(
+            r#"
+fn main() {
+    stderr.println("lc-to-stderr");
+    stdout.println("lc-to-stdout");
+}
+"#,
+        );
+        if let Some(cap) = cap {
+            assert_eq!(cap.stdout.trim(), "lc-to-stdout");
+            assert!(
+                cap.stderr.contains("lc-to-stderr"),
+                "stderr missing line: {:?}",
+                cap.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_lowercase_rand_advances_state() {
+        // Lowercase `rand.next_u64()` must reach the same
+        // `karac_runtime_rand_next_u64` FFI as the capitalized form: two draws
+        // differ when state advances. Lowercase counterpart of
+        // `test_e2e_ambient_rand_next_u64_advances_state` — but this one is
+        // also covered for resolve/typecheck by the clean-pipeline test above,
+        // closing the false-pass gap that test documents.
+        let out = run_program(
+            r#"
+fn main() with reads(RandomSource) {
+    let a = rand.next_u64();
+    let b = rand.next_u64();
+    if a != b { println("rand-advanced"); } else { println("rand-stuck"); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "rand-advanced");
+        }
+    }
+
+    #[test]
+    fn test_e2e_local_var_shadows_lowercase_alias() {
+        // A local binding of the same name shadows the module alias:
+        // `let clock = Timer { .. }; clock.now()` must dispatch to the user's
+        // `Timer::now`, NOT the ambient `Clock`. This is the parity case that
+        // surfaced an interpreter/codegen split during the slice — codegen and
+        // the typechecker guarded on a same-name local; the interpreter alias
+        // map did not, and dispatched to the ambient resource. All three now
+        // apply the shadow guard. Codegen E2E witness (the interpreter side is
+        // covered in `tests/interpreter.rs`).
+        let out = run_program(
+            r#"
+struct Timer { ticks: i64 }
+impl Timer {
+    fn now(ref self) -> i64 { self.ticks }
+}
+fn main() {
+    let clock = Timer { ticks: 42 };
+    let t = clock.now();
+    if t == 42 { println("shadowed-ok"); } else { println("BUG"); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "shadowed-ok");
+        }
+    }
+
+    #[test]
     fn test_e2e_file_open_question_passes_through_ok() {
         // Successful File.open returns `Ok(File)`; `?` extracts the
         // File and the helper's terminal `Ok(0_i64)` propagates as the

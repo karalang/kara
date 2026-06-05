@@ -370,6 +370,18 @@ impl<'ctx> super::Codegen<'ctx> {
         path_arg: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let path_val = self.compile_expr(path_arg)?;
+        self.compile_file_read_to_string_val(path_val)
+    }
+
+    /// Value-core of `compile_file_read_to_string` (path already compiled).
+    /// The expr-taking wrapper above serves the capitalized
+    /// `FileSystem.read_to_string(path)` associated-call path; this variant
+    /// serves the lowercase `fs.read_to_string(path)` ambient-alias path,
+    /// which compiles its args once up front in `compile_ambient_resource_method`.
+    pub(super) fn compile_file_read_to_string_val(
+        &mut self,
+        path_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         let path_sv = path_val.into_struct_value();
         let path_ptr = self
             .builder
@@ -414,6 +426,21 @@ impl<'ctx> super::Codegen<'ctx> {
         contents_arg: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let path_val = self.compile_expr(path_arg)?;
+        let contents_val = self.compile_expr(contents_arg)?;
+        self.compile_fs_write_vals(path_val, contents_val)
+    }
+
+    /// Value-core of `compile_fs_write` (both args already compiled). The
+    /// expr-taking wrapper above serves the capitalized
+    /// `FileSystem.write(path, contents)` associated-call path; this variant
+    /// serves the lowercase `fs.write(path, contents)` ambient-alias path,
+    /// which compiles its args once up front in
+    /// `compile_ambient_resource_method`.
+    pub(super) fn compile_fs_write_vals(
+        &mut self,
+        path_val: BasicValueEnum<'ctx>,
+        contents_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         let path_sv = path_val.into_struct_value();
         let path_ptr = self
             .builder
@@ -425,7 +452,6 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_extract_value(path_sv, 1, "fsw.path.len")
             .unwrap()
             .into_int_value();
-        let contents_val = self.compile_expr(contents_arg)?;
         let contents_sv = contents_val.into_struct_value();
         let contents_ptr = self
             .builder

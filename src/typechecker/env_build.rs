@@ -509,6 +509,17 @@ impl<'a> super::TypeChecker<'a> {
         };
         self.env.functions.insert("env.set".to_string(), set_sig);
 
+        // NOTE: the remaining lowercase ambient methods (`clock.now()`,
+        // `rand.next_u64()`, `stdin.read_line()`, `stdout.println(s)`,
+        // `fs.write(p, c)`, …) need no `env.functions` entries here. They
+        // resolve through the lowercase→capitalized alias map in
+        // `expr_method_call.rs`, which finds the signature in the capitalized
+        // resource's baked `impl` (`env.impls`, from `runtime/stdlib/io.kara`)
+        // — that baked sig carries the exact return type. The hand-written
+        // `env.args` / `env.var` / `env.set` entries above predate the baked
+        // I/O impls and are retained only for the `env.*` path; the newer
+        // resources are baked-impl-only.
+
         // `String.from_utf8(bytes: Vec[u8]) -> Result[String, Utf8Error]` —
         // UTF-8-validating String constructor. Path-keyed sibling of
         // `env.var` above. The peer `Utf8Error` enum is declared in
