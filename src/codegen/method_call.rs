@@ -1778,6 +1778,89 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(value)
             }
+            ("Env", "var") => {
+                if arg_vals.len() != 1 {
+                    return Err(format!(
+                        "codegen: env.var expects 1 argument, found {}",
+                        arg_vals.len()
+                    ));
+                }
+                // `env.var(name) -> Result[String, VarError]`. The runtime FFI
+                // does the OS read + heap String copy and returns `found:i1`,
+                // writing the String into an out-slot; codegen builds the
+                // Result enum here — `Ok(string)` on found, `Err(VarError
+                // .NotPresent)` on miss — so all enum-layout knowledge stays
+                // on the codegen side (codegen-containment). String shares the
+                // `{ptr, i64, i64}` shape with Vec, so `vec_struct_type()` is
+                // the out-slot type.
+                let (name_ptr, name_len) = self.extract_string_ptr_len(arg_vals[0], "env.var.name");
+                let str_ty = self.vec_struct_type();
+                let fn_val = self
+                    .current_fn
+                    .ok_or_else(|| "codegen: env.var called outside a function".to_string())?;
+                let out_slot = self.create_entry_alloca(fn_val, "env.var.out", str_ty.into());
+                let f = match self.module.get_function("karac_runtime_env_var") {
+                    Some(f) => f,
+                    None => {
+                        let fn_ty = self
+                            .context
+                            .bool_type()
+                            .fn_type(&[ptr_t.into(), i64_t.into(), ptr_t.into()], false);
+                        self.module
+                            .add_function("karac_runtime_env_var", fn_ty, None)
+                    }
+                };
+                let found = self
+                    .builder
+                    .build_call(
+                        f,
+                        &[name_ptr.into(), name_len.into(), out_slot.into()],
+                        "env.var.found",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+
+                let result_ty = self
+                    .enum_layouts
+                    .get("Result")
+                    .map(|l| l.llvm_type)
+                    .ok_or_else(|| {
+                        "codegen: Result enum layout missing (codegen bug)".to_string()
+                    })?;
+
+                let found_bb = self.context.append_basic_block(fn_val, "env.var.found_bb");
+                let notfound_bb = self
+                    .context
+                    .append_basic_block(fn_val, "env.var.notfound_bb");
+                let merge_bb = self.context.append_basic_block(fn_val, "env.var.merge");
+                self.builder
+                    .build_conditional_branch(found, found_bb, notfound_bb)
+                    .unwrap();
+
+                // found arm: Result.Ok(<heap String the FFI wrote>).
+                self.builder.position_at_end(found_bb);
+                let string_val = self
+                    .builder
+                    .build_load(str_ty, out_slot, "env.var.str")
+                    .unwrap();
+                let ok_val = self.build_nonshared_enum_value("Result", "Ok", &[string_val])?;
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                let found_end = self.builder.get_insert_block().unwrap();
+
+                // miss arm: Result.Err(VarError.NotPresent).
+                self.builder.position_at_end(notfound_bb);
+                let varerr = self.build_nonshared_enum_value("VarError", "NotPresent", &[])?;
+                let err_val = self.build_nonshared_enum_value("Result", "Err", &[varerr])?;
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                let notfound_end = self.builder.get_insert_block().unwrap();
+
+                self.builder.position_at_end(merge_bb);
+                let phi = self.builder.build_phi(result_ty, "env.var.result").unwrap();
+                phi.add_incoming(&[(&ok_val, found_end), (&err_val, notfound_end)]);
+                Ok(phi.as_basic_value())
+            }
             _ => Err(format!(
                 "codegen: ambient resource method '{}.{}' is not yet lowered \
                  (interpreter-only); add a runtime FFI + an arm in \
@@ -3080,6 +3163,10 @@ pub(super) fn ambient_method_index(resource: &str, method: &str) -> Option<usize
 pub(super) fn ambient_ffi_lowered(resource: &str, method: &str) -> bool {
     matches!(
         (resource, method),
-        ("Env", "set") | ("Clock", "now") | ("RandomSource", "next_u64") | ("Env", "args")
+        ("Env", "set")
+            | ("Clock", "now")
+            | ("RandomSource", "next_u64")
+            | ("Env", "args")
+            | ("Env", "var")
     )
 }

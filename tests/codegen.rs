@@ -960,6 +960,102 @@ fn main() reads(Env) {
     }
 
     #[test]
+    fn test_e2e_ambient_env_var_present_returns_ok() {
+        // `env.var(name) -> Result[String, VarError]`. Set a unique var with
+        // `env.set`, then read it back: the codegen `("Env","var")` arm calls
+        // the `karac_runtime_env_var` FFI (found=true, heap String written)
+        // and builds `Result.Ok(string)`, which the match destructures.
+        // Exercises runtime-conditional enum construction + the seeded
+        // `VarError`/`Result` layouts. Mirrors the interpreter's
+        // `test_ambient_env_var_present_returns_ok`.
+        let out = run_program(
+            r#"
+fn main() writes(Env) reads(Env) {
+    env.set("KARAC_E2E_VAR_PRESENT", "hello-var");
+    match env.var("KARAC_E2E_VAR_PRESENT") {
+        Ok(v) => { println(v); }
+        Err(_) => { println("missing"); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "hello-var");
+        }
+    }
+
+    #[test]
+    fn test_e2e_ambient_env_var_missing_returns_err() {
+        // A guaranteed-absent key: the FFI returns found=false and codegen
+        // builds `Result.Err(VarError.NotPresent)`, which the match's Err arm
+        // takes. Pins the not-found half of the runtime branch + the
+        // `VarError.NotPresent` construction. Mirrors the interpreter's
+        // `test_env_var_missing_key_returns_err`.
+        let out = run_program(
+            r#"
+fn main() reads(Env) {
+    match env.var("__KARAC_E2E_NO_SUCH_VAR_ZZZ__") {
+        Ok(v) => { println(v); }
+        Err(_) => { println("missing"); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "missing");
+        }
+    }
+
+    #[test]
+    fn test_e2e_ambient_env_var_capitalized_form() {
+        // The capitalized `Env.var(name)` form reaches the same FFI lowering
+        // as the lowercase alias via the `ambient_ffi_lowered` routing gate.
+        let out = run_program(
+            r#"
+fn main() writes(Env) reads(Env) {
+    Env.set("KARAC_E2E_VAR_CAP", "cap-val");
+    match Env.var("KARAC_E2E_VAR_CAP") {
+        Ok(v) => { println(v); }
+        Err(_) => { println("missing"); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "cap-val");
+        }
+    }
+
+    #[test]
+    fn test_e2e_ambient_env_var_question_mark_propagates_as_io_error() {
+        // `env.var(x)?` in a `Result[_, IoError]`-returning fn desugars to a
+        // match whose Err arm calls `IoError.from(varErr)` via the stdlib
+        // `impl From for IoError { fn from(VarError) }` (runtime/stdlib/io.kara)
+        // — that conversion impl resolves on the codegen path, so the missing
+        // key propagates out as an `IoError` and the caller's match takes the
+        // Err arm. Pins that the slice-3a Result construction composes with
+        // `?`-propagation + cross-error-type `From` conversion (the idiomatic
+        // usage), not just the direct-match form.
+        let out = run_program(
+            r#"
+fn read_it() -> Result[String, IoError] reads(Env) {
+    let s: String = env.var("__KARAC_E2E_QMARK_NO_SUCH__")?;
+    Ok(s)
+}
+fn main() reads(Env) {
+    match read_it() {
+        Ok(v) => { println(v); }
+        Err(_) => { println("io-err"); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "io-err");
+        }
+    }
+
+    #[test]
     fn test_ambient_override_of_nonvtable_method_errors_loudly() {
         // A `with_provider[Env]` override that supplies `args` (a method with
         // NO `AMBIENT_RESOURCE_METHODS` vtable slot) must be a LOUD codegen

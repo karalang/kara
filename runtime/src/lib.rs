@@ -117,6 +117,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_clock_now,
         karac_runtime_rand_next_u64,
         karac_runtime_env_args_into,
+        karac_runtime_env_var,
     );
     // Design-by-contract predicate runtime (`requires` / `ensures` /
     // `invariant`). Codegen wraps each predicate evaluation in
@@ -574,6 +575,70 @@ pub unsafe extern "C" fn karac_runtime_env_args_into(out: *mut KaracVec) {
         len: count as i64,
         cap: count as i64,
     };
+}
+
+/// `env.var(name) -> Result[String, VarError]` — read an environment
+/// variable. Codegen counterpart to the interpreter's `("Env", "var")` arm.
+///
+/// The runtime half is intentionally split from the enum construction: it
+/// returns `true` and writes a heap `String` (`RuntimeKaracString`, Kāra
+/// `{ptr,len,cap}` shape, `cap==len`) into `out_str` when the variable is
+/// present and valid UTF-8, and `false` (writing the canonical `{null,0,0}`
+/// empty String) otherwise. Codegen then builds `Result.Ok(out_str)` on
+/// `true` and `Result.Err(VarError.NotPresent)` on `false`, keeping all
+/// Kāra enum-layout knowledge on the codegen side (codegen-containment).
+///
+/// `std::env::var` returns `Err(NotPresent)` for a missing var and
+/// `Err(NotUnicode)` for a non-UTF-8 value; both collapse to the `false`
+/// result here, matching the interpreter's collapse to `VarError.NotPresent`
+/// (Kāra's strict-UTF-8 `String` cannot carry the offending bytes).
+///
+/// # Safety
+///
+/// `name_ptr`/`name_len` must describe a valid UTF-8 byte range (always
+/// true of a Kāra `String`), and `out_str` must point to a writable
+/// `{ptr, i64, i64}` slot the codegen side allocas before the call.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_env_var(
+    name_ptr: *const u8,
+    name_len: usize,
+    out_str: *mut RuntimeKaracString,
+) -> bool {
+    let empty = RuntimeKaracString {
+        data: std::ptr::null_mut(),
+        len: 0,
+        cap: 0,
+    };
+    if out_str.is_null() {
+        return false;
+    }
+    let name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len));
+    match std::env::var(name) {
+        Ok(v) => {
+            let bytes = v.as_bytes();
+            if bytes.is_empty() {
+                // Present but empty — a valid empty Kāra String, still `Ok`.
+                (*out_str) = empty;
+                return true;
+            }
+            let str_layout = std::alloc::Layout::array::<u8>(bytes.len()).unwrap();
+            let str_buf = std::alloc::alloc(str_layout);
+            if str_buf.is_null() {
+                std::alloc::handle_alloc_error(str_layout);
+            }
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), str_buf, bytes.len());
+            (*out_str) = RuntimeKaracString {
+                data: str_buf,
+                len: bytes.len() as i64,
+                cap: bytes.len() as i64,
+            };
+            true
+        }
+        Err(_) => {
+            (*out_str) = empty;
+            false
+        }
+    }
 }
 
 /// Newtype around `*const KaracFrame` that opts into `Send + Sync` for
@@ -1532,11 +1597,15 @@ struct KaracSpawnSiteEntry {
 /// because `clone.rs` defines it with crate-private visibility for the
 /// `karac_string_clone` symbol; lifting it to a shared module is a
 /// post-slice-5 refactor.
+///
+/// `pub` because it now names the out-pointer parameter of the
+/// `karac_runtime_env_var` extern fn (L646 slice 3a) — same FFI-ABI rationale
+/// as the public `KaracVec` above.
 #[repr(C)]
-struct RuntimeKaracString {
-    data: *mut u8,
-    len: i64,
-    cap: i64,
+pub struct RuntimeKaracString {
+    pub data: *mut u8,
+    pub len: i64,
+    pub cap: i64,
 }
 
 /// Layout-compatible view of a Kāra `Vec[T]` value `{ ptr data, i64 len, i64 cap }`.

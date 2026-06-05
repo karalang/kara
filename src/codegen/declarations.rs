@@ -3084,6 +3084,44 @@ impl<'ctx> super::Codegen<'ctx> {
             self.seeded_enum_names.insert("Ordering".to_string());
         }
 
+        // Stdlib `VarError` enum (`runtime/stdlib/var_error.kara`) — unit-only
+        // `NotPresent` / `NotUnicode`, returned in the `Err` arm of
+        // `env.var(name) -> Result[String, VarError]`. Like `Ordering` above
+        // it reaches the typechecker via `STDLIB_PROGRAMS` but not codegen's
+        // `declare_enums` (which walks only the user's `program.items`), so
+        // without this seed the `VarError.NotPresent` construction in
+        // `compile_ambient_ffi`'s `("Env","var")` arm (L646 slice 3a) has no
+        // layout and falls through. 1-word `{ i64 tag }` struct, no payload,
+        // no drop kinds (every variant is unit). Tags follow the stdlib
+        // declaration order: NotPresent = 0, NotUnicode = 1.
+        if !self.enum_layouts.contains_key("VarError") {
+            let var_error_type = self.context.struct_type(&[i64_t], false);
+            let mut tags = HashMap::new();
+            tags.insert("NotPresent".to_string(), 0u64);
+            tags.insert("NotUnicode".to_string(), 1u64);
+            let mut field_counts = HashMap::new();
+            field_counts.insert("NotPresent".to_string(), 0usize);
+            field_counts.insert("NotUnicode".to_string(), 0usize);
+            let mut field_word_offsets = HashMap::new();
+            field_word_offsets.insert("NotPresent".to_string(), Vec::new());
+            field_word_offsets.insert("NotUnicode".to_string(), Vec::new());
+            let mut field_drop_kinds = HashMap::new();
+            field_drop_kinds.insert("NotPresent".to_string(), Vec::new());
+            field_drop_kinds.insert("NotUnicode".to_string(), Vec::new());
+            self.enum_layouts.insert(
+                "VarError".to_string(),
+                EnumLayout {
+                    llvm_type: var_error_type,
+                    tags,
+                    field_counts,
+                    field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
+                },
+            );
+            self.seeded_enum_names.insert("VarError".to_string());
+        }
+
         // Phase 6 line 17 slice 9b — stdlib `TcpError` enum. Baked
         // into `runtime/stdlib/tcp.kara` so the typechecker sees it
         // via `STDLIB_PROGRAMS`; codegen's `declare_enums` only walks

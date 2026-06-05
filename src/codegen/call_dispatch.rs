@@ -1140,6 +1140,66 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(Some(agg.into()))
     }
 
+    /// Construct a non-shared enum-variant aggregate value from already-
+    /// compiled payload values (the value-level analog of
+    /// `try_compile_enum_variant`, which compiles `Expr` args). Used where
+    /// codegen synthesizes an enum from runtime-produced SSA values rather
+    /// than source expressions — e.g. building `Result.Ok(<runtime String>)`
+    /// / `Result.Err(VarError.NotPresent)` for the `env.var` ambient lowering
+    /// (L646 slice 3a).
+    ///
+    /// MUST stay in lockstep with the non-shared tail of
+    /// `try_compile_enum_variant`: same tag-at-field-0 + per-field
+    /// `field_word_offsets` + `coerce_to_payload_words` layout. Restricted to
+    /// non-shared enums (the seeded `Result` / `VarError` / `Option` family
+    /// is never `shared`); a shared enum would need the heap-alloc + refcount
+    /// path and is rejected with an error rather than mis-lowered.
+    pub(super) fn build_nonshared_enum_value(
+        &mut self,
+        enum_name: &str,
+        variant: &str,
+        payload_vals: &[BasicValueEnum<'ctx>],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let layout = self.enum_layouts.get(enum_name).ok_or_else(|| {
+            format!("build_nonshared_enum_value: no layout for enum `{enum_name}` (codegen bug)")
+        })?;
+        if layout.is_shared {
+            return Err(format!(
+                "build_nonshared_enum_value: `{enum_name}` is a shared enum; \
+                 use the heap-alloc construction path (codegen bug)"
+            ));
+        }
+        let tag = *layout.tags.get(variant).ok_or_else(|| {
+            format!("build_nonshared_enum_value: enum `{enum_name}` has no variant `{variant}`")
+        })?;
+        let llvm_type = layout.llvm_type;
+        let offsets: Vec<(usize, usize)> = layout
+            .field_word_offsets
+            .get(variant)
+            .cloned()
+            .unwrap_or_default();
+
+        let i64_t = self.context.i64_type();
+        let mut agg = llvm_type.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, i64_t.const_int(tag, false), 0, "tag")
+            .unwrap()
+            .into_struct_value();
+        for (i, val) in payload_vals.iter().enumerate() {
+            let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
+            let words = self.coerce_to_payload_words(*val, num_words)?;
+            for (j, w) in words.into_iter().enumerate() {
+                agg = self
+                    .builder
+                    .build_insert_value(agg, w, (start_word + j + 1) as u32, "word")
+                    .unwrap()
+                    .into_struct_value();
+            }
+        }
+        Ok(agg.into())
+    }
+
     /// Phase 7.2 Slice DP — move-suppression helper. When an enum-
     /// variant constructor's argument is an Identifier referencing a
     /// tracked Vec/String binding, zero the source binding's `cap`
