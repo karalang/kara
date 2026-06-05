@@ -30670,4 +30670,47 @@ fn main() {
             assert_eq!(out, "1\n0\n1\n1\n1\n");
         }
     }
+
+    // ── Phase-10: `host fn` native lowering ─────────────────────
+    // design.md § Host Functions: on native, a `host fn` lowers to the
+    // same call sequence as an `extern "C"` of equivalent signature.
+    // The item slice (90f2a101) made this true by construction —
+    // `host fn` parses into ExternFunction and codegen declares
+    // externs by signature without reading `.abi` — these tests pin
+    // it observably.
+
+    #[test]
+    fn host_fn_lowers_to_external_declaration() {
+        let ir = ir_for(
+            "effect resource Screen;\n\
+             host fn host_paint(x: i64) -> i64 with writes(Screen);\n\
+             fn main() { let _ = host_paint(1); }\n",
+        );
+        assert!(
+            ir.contains("declare i64 @host_paint(i64"),
+            "host fn must lower to a plain external declaration: {ir}",
+        );
+        assert!(
+            !ir.contains("define i64 @host_paint"),
+            "host fn must NOT get a body: {ir}",
+        );
+    }
+
+    #[test]
+    fn host_fn_native_call_links_against_host_symbol_e2e() {
+        // `labs` is libc's i64 absolute value — the linker's default
+        // libc/libSystem provides the symbol, making this a true
+        // end-to-end "host provides the body" round trip: declare via
+        // `host fn`, call, link, run, observe the host's answer.
+        let out = run_program(
+            "host fn labs(x: i64) -> i64 with reads(Env);\n\
+             fn main() {\n\
+                 println(f\"{labs(0 - 42)}\");\n\
+                 println(f\"{labs(7)}\");\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "42\n7\n", "host-provided labs must answer");
+        }
+    }
 }
