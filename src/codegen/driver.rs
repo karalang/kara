@@ -211,6 +211,18 @@ fn symbol_listing_references_tls(nm_output: &str) -> bool {
 /// distribution that ships only the full archive still links correctly).
 /// Resolution order: `KARAC_RUNTIME` override → installed `<bin>/../lib`
 /// → dev `target/release`.
+///
+/// `KARAC_RUNTIME` is honored **verbatim** — it names the exact archive
+/// file to link, with no lean-sibling substitution. It's the dev/test
+/// iteration hatch ("use exactly this archive I just built"), and tests
+/// that link feature-gated symbols (e.g. `tests/park_and_wake.rs`'s
+/// `test-helpers` build) depend on the named file being the linked file.
+/// An earlier version substituted a `libkarac_runtime_min.a` sitting
+/// beside the override when `prefer_min` held; that silently swapped the
+/// test-helpers archive for the lean one and broke park_and_wake with an
+/// undefined `_karac_runtime_test_bind_and_print_port` whenever a lean
+/// archive existed on disk. The min preference now applies only to the
+/// directory-search tiers (2 and 3), where no specific file was named.
 pub(super) fn resolve_runtime_path(prefer_min: bool) -> Result<String, String> {
     const FULL: &str = "libkarac_runtime.a";
     const MIN: &str = "libkarac_runtime_min.a";
@@ -231,22 +243,12 @@ pub(super) fn resolve_runtime_path(prefer_min: bool) -> Result<String, String> {
         None
     };
 
-    // 1. Explicit override. Honor the given path, but when a lean archive
-    //    would do and a `libkarac_runtime_min.a` sits beside the override,
-    //    use that instead — so pointing `KARAC_RUNTIME` at a full archive
-    //    still gets the size win for compute-only programs.
+    // 1. Explicit override — honored verbatim (see doc comment above; no
+    //    lean-sibling substitution, regardless of `prefer_min`).
     if let Ok(p) = std::env::var("KARAC_RUNTIME") {
         let path = std::path::Path::new(&p);
         if !path.exists() {
             return Err(format!("KARAC_RUNTIME set to {p} but file does not exist"));
-        }
-        if prefer_min {
-            if let Some(dir) = path.parent() {
-                let sib = dir.join(MIN);
-                if sib.exists() {
-                    return Ok(sib.to_string_lossy().into_owned());
-                }
-            }
         }
         return Ok(p);
     }

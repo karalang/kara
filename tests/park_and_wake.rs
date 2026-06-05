@@ -192,18 +192,14 @@ mod park_and_wake_tests {
             );
             return;
         };
+        // `KARAC_RUNTIME` is honored verbatim by `resolve_runtime_path`
+        // (no lean-sibling substitution), so this pins the link to the
+        // exact test-helpers archive `runtime_path()` just built — robust
+        // whether or not a lean `libkarac_runtime_min.a` exists on disk.
+        // (An earlier resolver substituted the lean sibling for non-TLS
+        // programs, which dropped the test-helper symbol; that needed a
+        // KARAC_FORCE_FULL_RUNTIME=1 pin here, since removed.)
         std::env::set_var("KARAC_RUNTIME", &rt);
-        // Force the full archive. The compiled binary references the
-        // test-helper symbol `karac_runtime_test_bind_and_print_port`,
-        // which is non-TLS — so karac's symbol-detection would link the
-        // *lean* `libkarac_runtime_min.a` whenever one is present on disk.
-        // The lean archive is built `--no-default-features`, so it carries
-        // no `test-helpers` symbol and the link fails with an undefined
-        // `_karac_runtime_test_bind_and_print_port`. `runtime_path()` above
-        // builds the *full* archive with `--features test-helpers`; this
-        // pins the link to it (CLAUDE.md's documented escape hatch), so the
-        // test is robust whether or not a lean archive happens to exist.
-        std::env::set_var("KARAC_FORCE_FULL_RUNTIME", "1");
 
         // Kara source: declare the test-helper FFI in an `unsafe
         // extern "C"` block (no network effects — bind is a one-shot
@@ -363,18 +359,14 @@ mod park_and_wake_tests {
             );
             return;
         };
+        // `KARAC_RUNTIME` is honored verbatim by `resolve_runtime_path`
+        // (no lean-sibling substitution), so this pins the link to the
+        // exact test-helpers archive `runtime_path()` just built — robust
+        // whether or not a lean `libkarac_runtime_min.a` exists on disk.
+        // (An earlier resolver substituted the lean sibling for non-TLS
+        // programs, which dropped the test-helper symbol; that needed a
+        // KARAC_FORCE_FULL_RUNTIME=1 pin here, since removed.)
         std::env::set_var("KARAC_RUNTIME", &rt);
-        // Force the full archive. The compiled binary references the
-        // test-helper symbol `karac_runtime_test_bind_and_print_port`,
-        // which is non-TLS — so karac's symbol-detection would link the
-        // *lean* `libkarac_runtime_min.a` whenever one is present on disk.
-        // The lean archive is built `--no-default-features`, so it carries
-        // no `test-helpers` symbol and the link fails with an undefined
-        // `_karac_runtime_test_bind_and_print_port`. `runtime_path()` above
-        // builds the *full* archive with `--features test-helpers`; this
-        // pins the link to it (CLAUDE.md's documented escape hatch), so the
-        // test is robust whether or not a lean archive happens to exist.
-        std::env::set_var("KARAC_FORCE_FULL_RUNTIME", "1");
 
         let src = r#"
             effect resource Network;
