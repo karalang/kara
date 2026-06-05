@@ -287,6 +287,19 @@ pub type PatternBindingInnerTypesTable = std::collections::HashMap<(usize, usize
 pub type StringTypedExprsTable = std::collections::HashSet<(usize, usize)>;
 
 /// Side-table populated by the lowering pass from the typechecker's
+/// `expr_types` map: the set of `(span.offset, span.length)` keys for every
+/// expression whose Kāra type is a `Vector[T, N]` with an **unsigned-integer**
+/// element. The LLVM `<N x iX>` lane type is signless, so codegen can't
+/// recover element signedness from the value alone; this set lets the SIMD
+/// reduce / compare paths pick the unsigned predicate (`ult`/`ugt`) over the
+/// signed default (`slt`/`sgt`). Sibling to `StringTypedExprsTable` — same
+/// presence-as-signal, no per-span payload needed. First consumer:
+/// `compile_vector_method`'s `reduce_min`/`reduce_max` arm, keyed by the
+/// receiver-vector expression's span. Shared infra for the slice-3 mask
+/// comparisons (phase-7 line 302).
+pub type UnsignedVectorExprsTable = std::collections::HashSet<(usize, usize)>;
+
+/// Side-table populated by the lowering pass from the typechecker's
 /// `expr_types` map: for every expression whose Kāra type is a `Named`
 /// struct (`Type::Named { name, .. }`), maps `(span.offset, span.length)`
 /// to the canonical struct name. Sibling to `StringTypedExprsTable` but
@@ -398,6 +411,12 @@ pub struct Program {
     /// the same `{ptr, i64, i64}` LLVM struct shape without taking a
     /// `TypeCheckResult` dependency.
     pub string_typed_exprs: StringTypedExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: spans of
+    /// every expression whose Kāra type is a `Vector[T, N]` with an
+    /// unsigned-integer element. Lets the SIMD codegen pick the unsigned
+    /// compare predicate (`ult`/`ugt`) — the LLVM lane type is signless, so
+    /// the value alone can't tell signed from unsigned.
+    pub unsigned_vector_exprs: UnsignedVectorExprsTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: for
     /// every expression whose Kāra type is a `Named` struct, maps
     /// `(offset, length)` to the canonical struct name. Lets codegen

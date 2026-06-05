@@ -2770,21 +2770,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(acc)
             }
-            // Horizontal min/max via compare + select. The typechecker
-            // restricts the element to signed-int / float, so the default
-            // signed (`slt`/`sgt`) / ordered (`olt`/`ogt`) compare from
-            // `compile_binop` is the correct predicate.
+            // Horizontal min/max via compare + select. Element is numeric
+            // (signed-int / unsigned-int / float). The LLVM lane type is
+            // signless, so signedness rides the `unsigned_vector_exprs` span
+            // side-table keyed by the receiver-vector expression: a hit means
+            // the element is unsigned → `ult`/`ugt` via `compile_binop_typed`;
+            // otherwise the signed (`slt`/`sgt`) / ordered float compare.
             "reduce_min" | "reduce_max" => {
                 let cmp_op = if method == "reduce_min" {
                     BinOp::Lt
                 } else {
                     BinOp::Gt
                 };
+                let is_unsigned = self
+                    .unsigned_vector_exprs
+                    .contains(&(object.span.offset, object.span.length));
                 let mut acc = lane(self, recv, 0)?;
                 for i in 1..n {
                     let l = lane(self, recv, i)?;
                     // keep `acc` when `acc <op> l` holds, else take `l`.
-                    let cmp = self.compile_binop(&cmp_op, acc, l)?.into_int_value();
+                    let cmp = self
+                        .compile_binop_typed(&cmp_op, acc, l, is_unsigned)?
+                        .into_int_value();
                     acc = self
                         .builder
                         .build_select(cmp, acc, l, "minmax")

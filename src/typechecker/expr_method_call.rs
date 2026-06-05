@@ -2251,13 +2251,12 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 elem
             }
-            // Horizontal min/max → `T`. Slice 2c scope: **signed integer or
-            // float** element. Unsigned-integer elements are deferred: a
-            // correct unsigned min/max needs the signed-vs-unsigned compare
-            // choice threaded into codegen (the signedness side-table noted in
-            // L289 slice 3), and the type-erased interpreter compares its
-            // `Value::Int` carrier as signed — so an unsigned element would
-            // silently miscompile. Reject it explicitly rather than do that.
+            // Horizontal min/max → `T`. Any numeric element — signed integer,
+            // unsigned integer, or float. The element signedness rides the
+            // `unsigned_vector_exprs` span side-table (lowering → codegen) so
+            // codegen picks `ult`/`ugt` over `slt`/`sgt` for unsigned lanes;
+            // the interpreter reads the same signedness off the receiver's
+            // recorded type and compares the `Value::Int` carrier as `u64`.
             "reduce_min" | "reduce_max" => {
                 if !args.is_empty() {
                     self.type_error(
@@ -2269,12 +2268,11 @@ impl<'a> super::TypeChecker<'a> {
                         self.infer_expr(&a.value);
                     }
                 }
-                if !matches!(elem, Type::Int(_) | Type::Float(_)) {
+                if !matches!(elem, Type::Int(_) | Type::UInt(_) | Type::Float(_)) {
                     self.type_error(
                         format!(
-                            "'{}' currently supports signed-integer and float vectors only; \
-                             Vector element is '{}' (unsigned-element min/max is deferred — \
-                             see phase-7 line 289 slice 3 signedness side-table)",
+                            "'{}' requires a numeric Vector element (signed/unsigned \
+                             integer or float); Vector element is '{}'",
                             method,
                             type_display(&elem)
                         ),

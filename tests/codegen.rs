@@ -29599,14 +29599,43 @@ fn main() {
     }
 
     #[test]
-    fn test_vector_reduce_min_on_unsigned_is_type_error() {
-        let errs = vector_typecheck_errors(
-            "fn main() { let v = Vector[u32, 4](1, 2, 3, 4); let _ = v.reduce_min(); }",
+    fn test_vector_reduce_min_max_u32_unsigned() {
+        // Unsigned compare (`ult`/`ugt`). Slice 2e-ii: the `unsigned_vector_exprs`
+        // side-table flags the u32 element so codegen picks the unsigned
+        // predicate. `3000000000` is the most-negative value as a signed i32,
+        // so a signed `slt`/`sgt` would (wrongly) make it the min and pick `10`
+        // as the max — `3000000000\n10\n`. The unsigned compare yields the
+        // correct `5\n4000000000\n`, which is what distinguishes this test.
+        let out = run_program(
+            r#"
+fn main() {
+    let v = Vector[u32, 4](3000000000, 5, 10, 4000000000);
+    println(v.reduce_min());
+    println(v.reduce_max());
+}
+"#,
         );
-        assert!(
-            !errs.is_empty(),
-            "reduce_min on an unsigned-element vector must be a type error (deferred)"
+        if let Some(out) = out {
+            assert_eq!(out, "5\n4000000000\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_reduce_min_max_u8_unsigned() {
+        // u8 breadth. `200` and `255` have the high bit set → negative as i8,
+        // so a signed compare would invert min/max. Unsigned: min=10, max=255.
+        let out = run_program(
+            r#"
+fn main() {
+    let v = Vector[u8, 4](200, 10, 50, 255);
+    println(v.reduce_min());
+    println(v.reduce_max());
+}
+"#,
         );
+        if let Some(out) = out {
+            assert_eq!(out, "10\n255\n");
+        }
     }
 
     // ── Vector slice 2c — cross product (Vector[T, 3] only) ──────────────

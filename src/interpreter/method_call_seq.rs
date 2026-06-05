@@ -902,6 +902,7 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_vector_method(
         &mut self,
         method: &str,
+        object: &Expr,
         obj: Value,
         args: &[CallArg],
         span: &Span,
@@ -927,21 +928,47 @@ impl<'a> super::Interpreter<'a> {
                 }
                 Some(acc)
             }
-            // Horizontal min/max. Element is signed-int / float (typechecker-
-            // enforced), so the signed/ordered `<`/`>` compare via `eval_binary`
-            // matches codegen. Keep `acc` when the compare holds, else the lane.
+            // Horizontal min/max. Element is numeric (signed-int / unsigned-int
+            // / float). The signed/ordered `<`/`>` compare via `eval_binary`
+            // matches codegen for signed and float lanes. For an unsigned
+            // element the type-erased `Value::Int(i64)` lanes must compare as
+            // `u64` — a signed compare would invert order for lanes with the
+            // high bit set — so read the element signedness off the receiver's
+            // recorded type and pick the `u64` compare there.
             "reduce_min" | "reduce_max" => {
                 let cmp_op = if method == "reduce_min" {
                     BinOp::Lt
                 } else {
                     BinOp::Gt
                 };
+                let is_unsigned = self
+                    .typecheck_result
+                    .expr_types
+                    .get(&crate::resolver::SpanKey::from_span(&object.span))
+                    .is_some_and(|t| {
+                        matches!(t, crate::typechecker::Type::Vector { element, .. }
+                            if matches!(**element, crate::typechecker::Type::UInt(_)))
+                    });
                 let mut acc = lanes.first().cloned()?;
                 for lane in lanes.into_iter().skip(1) {
-                    let keep_acc = matches!(
-                        self.eval_binary(&cmp_op, acc.clone(), lane.clone(), span),
-                        Value::Bool(true)
-                    );
+                    let keep_acc = if is_unsigned {
+                        match (&acc, &lane) {
+                            (Value::Int(a), Value::Int(b)) => {
+                                let (ua, ub) = (*a as u64, *b as u64);
+                                if method == "reduce_min" {
+                                    ua < ub
+                                } else {
+                                    ua > ub
+                                }
+                            }
+                            _ => false,
+                        }
+                    } else {
+                        matches!(
+                            self.eval_binary(&cmp_op, acc.clone(), lane.clone(), span),
+                            Value::Bool(true)
+                        )
+                    };
                     acc = if keep_acc { acc } else { lane };
                 }
                 Some(acc)

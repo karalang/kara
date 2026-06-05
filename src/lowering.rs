@@ -94,6 +94,19 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             }
         })
         .collect();
+    // Sibling to `string_typed_exprs`: spans of every `Vector[T, N]`-typed
+    // expression whose element is an unsigned integer. The LLVM `<N x iX>`
+    // lane type is signless, so codegen consults this set to pick the
+    // unsigned compare predicate (`ult`/`ugt`) for SIMD `reduce_min/max`
+    // (keyed by the receiver-vector span) and the slice-3 mask comparisons.
+    program.unsigned_vector_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Vector { element, .. } if matches!(**element, Type::UInt(_)) => Some((k.0, k.1)),
+            _ => None,
+        })
+        .collect();
     // Sibling to `string_typed_exprs`: for each expression whose Kāra
     // type is a `Named` struct, record the canonical struct name. Codegen
     // uses this in `emit_sort_by_key_inline_thunk` to dispatch struct-typed

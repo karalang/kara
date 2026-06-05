@@ -22302,3 +22302,14 @@ fn vector_from_array_wrong_element_type_rejected() {
         "from_array with String elements for an i64 vector must be rejected; got: {errors:?}"
     );
 }
+
+#[test]
+fn vector_reduce_min_max_unsigned_ok() {
+    // Slice 2e-ii: unsigned-element reduce_min/reduce_max now type-check
+    // (they were rejected under slice 2c). Codegen recovers the signedness
+    // from the `unsigned_vector_exprs` span side-table to pick `ult`/`ugt`.
+    typecheck_ok(
+        "fn main() { let v = Vector[u32, 4](3000000000, 5, 10, 4000000000); \
+         println(v.reduce_min()); println(v.reduce_max()); }",
+    );
+}

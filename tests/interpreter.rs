@@ -12411,6 +12411,25 @@ fn main() {
     assert_eq!(out, "1.5\n2.5\n");
 }
 
+#[test]
+fn test_vector_reduce_min_max_u32() {
+    // Slice 2e-ii: unsigned element accepted (previously a type error). The
+    // interpreter reads element signedness off the receiver's recorded type
+    // and compares its `Value::Int` carrier as `u64`. u32 values all fit
+    // positively in i64, so signed and unsigned agree here — this pins the
+    // parity contract with codegen's unsigned-result `5\n4000000000\n`.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let v = Vector[u32, 4](3000000000, 5, 10, 4000000000);
+    println(v.reduce_min());
+    println(v.reduce_max());
+}
+"#,
+    );
+    assert_eq!(out, "5\n4000000000\n");
+}
+
 // ── Vector slice 2c — cross product interpreter parity ───────────────
 
 #[test]

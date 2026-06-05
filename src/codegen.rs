@@ -1406,6 +1406,14 @@ pub(super) struct Codegen<'ctx> {
     /// dispatch arm — `String` and `Vec[u8]` are indistinguishable from
     /// the LLVM value alone, so the span-set is what tells them apart.
     pub(crate) string_typed_exprs: HashSet<(usize, usize)>,
+    /// Set of `(span.offset, span.length)` keys for every expression whose
+    /// Kāra type is a `Vector[T, N]` with an unsigned-integer element.
+    /// Populated from `Program.unsigned_vector_exprs`. The LLVM `<N x iX>`
+    /// lane type is signless, so `compile_vector_method`'s `reduce_min`/
+    /// `reduce_max` arm consults this (keyed by the receiver-vector span)
+    /// to pick the unsigned compare predicate (`ult`/`ugt`) over the signed
+    /// default. Shared infra for the slice-3 mask comparisons.
+    pub(crate) unsigned_vector_exprs: HashSet<(usize, usize)>,
     /// Sibling to `string_typed_exprs`: for every expression whose Kāra
     /// type is a `Named` struct, the canonical struct name. Populated
     /// from `Program.expr_struct_type_names`. Lets codegen recover the
@@ -3621,6 +3629,7 @@ impl<'ctx> Codegen<'ctx> {
             call_effect_subs: crate::ast::CallEffectSubsTable::new(),
             method_unwrap_inner_types: HashMap::new(),
             string_typed_exprs: HashSet::new(),
+            unsigned_vector_exprs: HashSet::new(),
             expr_struct_type_names: HashMap::new(),
             user_ord_typed_exprs: HashMap::new(),
             pattern_binding_types: HashMap::new(),
@@ -4039,6 +4048,9 @@ impl<'ctx> Codegen<'ctx> {
         // LLVM struct shape is identical to `Vec[u8]` and a few other
         // 3-word types, so the value alone can't distinguish them.
         self.string_typed_exprs = program.string_typed_exprs.clone();
+        // Sibling: spans of unsigned-element vector expressions, so the SIMD
+        // `reduce_min/max` codegen picks `ult`/`ugt` over the signed default.
+        self.unsigned_vector_exprs = program.unsigned_vector_exprs.clone();
         // Sibling to `string_typed_exprs` for `Type::Named` struct
         // expressions. Maps span → struct name. `emit_sort_by_key_inline_thunk`
         // consults this to dispatch struct-typed keys (e.g.
@@ -4536,6 +4548,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_callee_effectful = tp.callee_effectful.clone();
         let mut t_method_callee_types = tp.method_callee_types.clone();
         let mut t_string_typed_exprs = tp.string_typed_exprs.clone();
+        let mut t_unsigned_vector_exprs = tp.unsigned_vector_exprs.clone();
         let mut t_expr_struct_type_names = tp.expr_struct_type_names.clone();
         let mut t_user_ord_typed_exprs = tp.user_ord_typed_exprs.clone();
         let mut t_call_effect_subs = tp.call_effect_subs.clone();
@@ -4549,6 +4562,10 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(&mut self.callee_effectful, &mut t_callee_effectful);
                 std::mem::swap(&mut self.method_callee_types, &mut t_method_callee_types);
                 std::mem::swap(&mut self.string_typed_exprs, &mut t_string_typed_exprs);
+                std::mem::swap(
+                    &mut self.unsigned_vector_exprs,
+                    &mut t_unsigned_vector_exprs,
+                );
                 std::mem::swap(
                     &mut self.expr_struct_type_names,
                     &mut t_expr_struct_type_names,
