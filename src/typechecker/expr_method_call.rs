@@ -2643,14 +2643,93 @@ impl<'a> super::TypeChecker<'a> {
                 self.check_expr(&args[1].value, &elem);
                 vec_ty
             }
+            // Lane shuffle (design.md § Portable SIMD, "Lane shuffling"):
+            // `v.shuffle([i0, i1, .., i_{M-1}]) -> Vector[T, M]` gathers source
+            // lanes by a compile-time index list — result lane `j` = source
+            // lane `indices[j]`. The result lane count `M` is the index-list
+            // length and may differ from the source `N`. The design's
+            // turbofish form `shuffle::<[i64; M]>()` is not yet parseable, so
+            // the index list is a literal-array argument. Each index must be a
+            // non-negative integer literal in range `[0, N)`.
+            "shuffle" => {
+                let src_vec = Type::Vector {
+                    element: Box::new(elem.clone()),
+                    lanes: lanes.clone(),
+                };
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "'shuffle' takes exactly one argument (the index list), found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                    return src_vec;
+                }
+                let ExprKind::ArrayLiteral(items) = &args[0].value.kind else {
+                    self.type_error(
+                        "'shuffle' requires a compile-time array literal of lane indices, \
+                         e.g. v.shuffle([0, 2, 1, 3])"
+                            .to_string(),
+                        args[0].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    let _ = self.infer_expr(&args[0].value);
+                    return src_vec;
+                };
+                if items.is_empty() {
+                    self.type_error(
+                        "'shuffle' index list must select at least one lane".to_string(),
+                        args[0].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                let n = lanes.as_usize();
+                for it in items {
+                    let _ = self.infer_expr(it);
+                    match &it.kind {
+                        ExprKind::Integer(v, _) if *v >= 0 => {
+                            if let Some(nn) = n {
+                                if (*v as usize) >= nn {
+                                    self.type_error(
+                                        format!(
+                                            "shuffle index {v} out of range for a {nn}-lane \
+                                             source vector (valid indices are 0..{nn})"
+                                        ),
+                                        it.span.clone(),
+                                        TypeErrorKind::TypeMismatch,
+                                    );
+                                }
+                            }
+                        }
+                        _ => {
+                            self.type_error(
+                                "'shuffle' indices must be non-negative integer literals"
+                                    .to_string(),
+                                it.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
+                    }
+                }
+                Type::Vector {
+                    element: Box::new(elem),
+                    lanes: ConstArg::Literal(items.len() as i64),
+                }
+            }
             _ => {
                 self.type_error(
                     format!(
                         "no method '{}' on Vector[{}, _] (supported: dot, cross, \
                          reduce_sum, reduce_product, reduce_min, reduce_max, \
                          reduce_and, reduce_or, reduce_xor, reverse, \
-                         rotate_lanes_left, rotate_lanes_right, replace; select on a \
-                         Vector[bool, N] mask)",
+                         rotate_lanes_left, rotate_lanes_right, replace, shuffle; \
+                         select on a Vector[bool, N] mask)",
                         method,
                         type_display(&elem)
                     ),

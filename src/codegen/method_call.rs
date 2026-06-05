@@ -128,6 +128,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "Vector.rotate_lanes_left"
                     | "Vector.rotate_lanes_right"
                     | "Vector.replace"
+                    | "Vector.shuffle"
             ) {
                 return self.compile_vector_method(object, method, args);
             }
@@ -3388,6 +3389,46 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_insert_element(recv, x, idx, "replace.lane")
                     .map_err(|e| format!("vector insertelement failed: {e}"))?;
+                Ok(out.into())
+            }
+            // `v.shuffle([i0..i_{M-1}]) -> Vector[T, M]` — gather source lanes
+            // by a compile-time index list into a fresh `M`-lane vector (which
+            // may differ from the source `N`). The indices are integer literals
+            // the typechecker has already range-checked into `[0, N)`; build
+            // the result via extractelement(recv, idx) + insertelement, which
+            // LLVM folds to a single `shufflevector`.
+            "shuffle" => {
+                let ExprKind::ArrayLiteral(items) = &args[0].value.kind else {
+                    return Err(
+                        "shuffle requires a compile-time array literal of lane indices".to_string(),
+                    );
+                };
+                let m = items.len() as u32;
+                let res_ty = match recv.get_type().get_element_type() {
+                    BasicTypeEnum::IntType(t) => t.vec_type(m),
+                    BasicTypeEnum::FloatType(t) => t.vec_type(m),
+                    other => {
+                        return Err(format!(
+                            "shuffle: unsupported vector element type {other:?}"
+                        ))
+                    }
+                };
+                let mut out = res_ty.get_undef();
+                for (j, it) in items.iter().enumerate() {
+                    let src = match &it.kind {
+                        ExprKind::Integer(v, _) => *v as u32,
+                        _ => {
+                            return Err(
+                                "shuffle index must be a compile-time integer literal".to_string()
+                            )
+                        }
+                    };
+                    let v = lane(self, recv, src)?;
+                    out = self
+                        .builder
+                        .build_insert_element(out, v, i32_t.const_int(j as u64, false), "shuf.lane")
+                        .map_err(|e| format!("vector insertelement failed: {e}"))?;
+                }
                 Ok(out.into())
             }
             other => Err(format!("unsupported Vector method '{other}' in codegen")),

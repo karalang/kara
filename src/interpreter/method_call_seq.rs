@@ -1105,6 +1105,37 @@ impl<'a> super::Interpreter<'a> {
                 out[i as usize] = x;
                 Some(Value::Vector(out))
             }
+            // `v.shuffle([i0..i_{M-1}])` — gather source lanes by a compile-time
+            // index list into a fresh M-lane vector (parity with codegen; the
+            // typechecker has range-checked each literal index into `[0, N)`).
+            "shuffle" => {
+                let ExprKind::ArrayLiteral(items) = &args[0].value.kind else {
+                    return Some(self.record_runtime_error(
+                        "shuffle requires a compile-time array literal of lane indices".to_string(),
+                        span,
+                    ));
+                };
+                let mut out = Vec::with_capacity(items.len());
+                for it in items {
+                    let src = match &it.kind {
+                        ExprKind::Integer(v, _) if *v >= 0 => *v as usize,
+                        _ => {
+                            return Some(self.record_runtime_error(
+                                "shuffle index must be a non-negative integer literal".to_string(),
+                                span,
+                            ))
+                        }
+                    };
+                    if src >= lanes.len() {
+                        return Some(self.record_runtime_error(
+                            "vector lane index out of bounds".to_string(),
+                            span,
+                        ));
+                    }
+                    out.push(lanes[src].clone());
+                }
+                Some(Value::Vector(out))
+            }
             _ => None,
         }
     }

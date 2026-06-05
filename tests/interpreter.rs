@@ -12871,6 +12871,35 @@ fn test_vector_replace_runtime_index() {
 }
 
 #[test]
+fn test_vector_shuffle_permute() {
+    // shuffle gathers source lanes by index — parity with codegen.
+    let out = run_no_errors(
+        "fn main() { let a = Vector[i64, 4](10, 20, 30, 40); let r = a.shuffle([0, 2, 1, 3]); \
+         println(r[0]); println(r[1]); println(r[2]); println(r[3]); }",
+    );
+    assert_eq!(out, "10\n30\n20\n40\n");
+}
+
+#[test]
+fn test_vector_shuffle_widening_with_repeats() {
+    // M (index-list length) may differ from N, and indices may repeat.
+    let out = run_no_errors(
+        "fn main() { let a = Vector[i64, 2](7, 9); let r = a.shuffle([1, 0, 1, 0]); \
+         println(r[0]); println(r[1]); println(r[2]); println(r[3]); }",
+    );
+    assert_eq!(out, "9\n7\n9\n7\n");
+}
+
+#[test]
+fn test_vector_shuffle_narrowing() {
+    let out = run_no_errors(
+        "fn main() { let a = Vector[i64, 4](1, 2, 3, 4); let r = a.shuffle([3, 0]); \
+         println(r[0]); println(r[1]); }",
+    );
+    assert_eq!(out, "4\n1\n");
+}
+
+#[test]
 fn test_vector_compare_unsigned_mask() {
     // Unsigned compare: 3000000000 (high bit set as i32) is NOT < 10.
     let out = run_no_errors(

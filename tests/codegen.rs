@@ -30865,6 +30865,110 @@ fn main() {
         assert!(!errs.is_empty(), "replace takes exactly two arguments");
     }
 
+    // ── Slice 6b — lane shuffle (v.shuffle([..])) ───────────────────────
+
+    #[test]
+    fn test_vector_shuffle_permute() {
+        // shuffle gathers source lanes by index: ([0,2,1,3]) reorders.
+        // (10,20,30,40) -> (10,30,20,40).
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](10, 20, 30, 40);
+    let r = a.shuffle([0, 2, 1, 3]);
+    println(r[0]); println(r[1]); println(r[2]); println(r[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "10\n30\n20\n40\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_shuffle_widening_with_repeats() {
+        // The index list length M may differ from the source N, and indices may
+        // repeat: a 2-lane source shuffled into a 4-lane result.
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i64, 2](7, 9);
+    let r = a.shuffle([1, 0, 1, 0]);
+    println(r[0]); println(r[1]); println(r[2]); println(r[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "9\n7\n9\n7\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_shuffle_narrowing_float() {
+        // Narrow a 4-lane f64 source to a 2-lane result (float lane type).
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[f64, 4](1.5, 2.5, 3.5, 4.5);
+    let r = a.shuffle([3, 0]);
+    println(r[0]); println(r[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "4.5\n1.5\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_shuffle_out_of_range_index_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let _ = a.shuffle([0, 4, 1, 2]);
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "shuffle index 4 is out of range for a 4-lane source"
+        );
+    }
+
+    #[test]
+    fn test_vector_shuffle_non_literal_index_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let n = 2;
+    let _ = a.shuffle([0, n]);
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "shuffle indices must be compile-time integer literals"
+        );
+    }
+
+    #[test]
+    fn test_vector_shuffle_non_array_arg_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let _ = a.shuffle(0);
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "shuffle requires an array-literal index list"
+        );
+    }
+
     // ── Slice 4 — first-class Numeric trait + lane-literal ergonomics ─────
 
     #[test]
