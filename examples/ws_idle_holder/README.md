@@ -80,8 +80,20 @@ primitive (`karac_park_on_fd`) suspends the per-connection task on the
 connection's read-readiness, so 100K idle connections occupy ~100K
 *parked* tasks in the scheduler's wait-set, not 100K *running*
 threads. The `Drop` impl on `WebSocket` (slice 9d of phase-6 line 17)
-closes the fd when the per-task handler returns, so clean peer
-disconnects don't leak file descriptors.
+closes the fd when the per-task handler returns, so peer disconnects
+don't leak file descriptors. Note this took two fixes: slice 9d gave
+`WebSocket` its fd-closing `Drop` impl, but because `handle_connection`
+is a **coroutine-compiled** handler that owns `ws` by value, the owned
+param was not registered to run that `Drop` on completion — so until
+`a5fd2798` (2026-06-05) the handler completed (recv loop broke) without
+ever dropping `ws`, leaking the fd + TLS session into `CLOSE-WAIT` on
+*every* disconnect. The fix makes the coroutine the owner of its
+user-`Drop` params (drop on body-end completion + per-park destroy
+edge). Validated at scale — co-located churn, 1M loopback mass-
+disconnect, and a cross-box real-NIC ungraceful `kill -9` all drain the
+server's fd table back to baseline (CLOSE-WAIT 0), confirming both clean
+and ungraceful disconnects reap. See `docs/spikes/network-async-coroutine-transform.md`
+(Drop-across-suspend follow-on) and `phase-7-codegen.md`.
 
 ## Prereqs the demo surfaced
 

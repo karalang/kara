@@ -1,6 +1,9 @@
 # Design spike — network async transform (phase-6 bug C fix)
 
-**Status:** design spike, 2026-05-30. Decision pending (A1 vs **A2** vs B).
+**Status:** design spike, 2026-05-30. **DECIDED — A2 chosen and SHIPPED** (the
+network-async coroutine transform landed and is default-on; slice table below
+tracks 2b→5 done, 5c mechanism done). Follow-on correctness fixes (slice 4 Drop-
+across-suspend; `a5fd2798` owned-param reap) recorded inline below.
 **Context:** phase-6 line 17 "effect-routed task parking"; bug C in
 `docs/implementation_checklist/phase-6-runtime.md`.
 
@@ -413,6 +416,28 @@ thesis B would surrender.
   live cancel; covered by an ASAN completion-path test + a CoroSplit `.destroy`
   clone structural test. v1 limit: heap is dropped on the destroy edge, user
   `defer` is not (defer-on-cancel is slice-5 cancel semantics).
+  **Follow-on — owned user-`Drop` PARAMS (`a5fd2798`, 2026-06-05).** Slice 4's
+  drop tracking covered heap *locals* live across a park (the `scope_cleanup_actions`
+  snapshot = body-declared bindings). It did **not** cover the coroutine's owned
+  by-value user-`Drop` **param** — e.g. `fn handle_connection(ws: WebSocket)`. The
+  by-value caller-drops model assumes the caller drops the arg after the call
+  returns; but a coroutine ramps+returns (or the parent moved the value into the
+  task) *before* the body finishes, so nobody ran the param's `Drop`. Result: the
+  fd + TLS session leaked on **every disconnect** (the `ws_idle_holder` connection-reap
+  leak; identical at 50 conns and 1M). Fix — make the coroutine the owner, reusing
+  this exact machinery: a coroutine-compiled fn now `track_user_drop_var`s its owned
+  user-`Drop` params, so `emit_scope_cleanup` (completion) and `emit_coro_destroy_edge_drops`
+  (per-park destroy edge) drop them; every caller of a coroutine fn suppresses its
+  own drop of the owned arg/receiver (no double-drop). Gated to owned non-ref
+  non-shared real-`impl Drop` params (`StructDrop`-only owned params excluded —
+  `suppress_user_drop_for_var` removes only `UserDrop`). Auto-par: a network-boundary
+  statement is no longer auto-parallelized (a coroutine call lifted into a `__par_branch`
+  worker would double-drop the moved-in arg). At-scale-validated — co-located churn,
+  1M loopback mass-disconnect, and cross-box real-NIC `kill -9`: server fds drain to
+  baseline (residual 52, identical across a 500× scale increase and loopback-vs-NIC),
+  CLOSE-WAIT 0. Tracked: `phase-7-codegen.md` "Coroutine-param owned user-Drop on
+  completion"; tests `tests/coro_e2e.rs::coroutine_drops_owned_user_drop_param` +
+  `_spawn_drops_owned_user_drop_param_exactly_once`.
 - **Self-borrows across suspend** (Pin-like aliasing): **RESOLVED (2b.2a) —
   no hazard.** Kāra structurally cannot hold a borrow across a park: borrows
   are call-statement-scoped and drained at scope exit
