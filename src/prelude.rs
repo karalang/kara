@@ -718,6 +718,10 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
         &["std", "web", "net"],
         include_str!("../runtime/stdlib/web_net.kara"),
     ),
+    (
+        &["std", "wasi"],
+        include_str!("../runtime/stdlib/wasi.kara"),
+    ),
 ];
 
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first

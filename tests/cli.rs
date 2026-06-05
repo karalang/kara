@@ -10183,3 +10183,50 @@ fn std_web_single_file_unimported_resource_is_undefined() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// std.wasi single-file: the gated-import expansion appends a
+/// REDECLARATION of a name scope-0 already provides (prelude resource
+/// shadowing is sanctioned — see process.kara on ProcessTable). Pins
+/// that the expansion path doesn't turn that into a duplicate
+/// definition, and the effect clause works through the import.
+#[test]
+fn std_wasi_single_file_import_over_prelude_resource() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-std-wasi-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("wasiish.kara");
+    let src = r#"
+import std.wasi.{FileSystem, Clock};
+
+fn snapshot() with reads(FileSystem) reads(Clock) {
+}
+
+fn main() {
+    snapshot();
+    println("std.wasi ok");
+}
+"#;
+    std::fs::write(&path, src).unwrap();
+
+    let out = karac_bin()
+        .args(["run", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "std.wasi single-file run should succeed; stdout={stdout} stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("std.wasi ok"),
+        "program should run: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}

@@ -1338,3 +1338,79 @@ fn std_web_unknown_item_gets_suggestion() {
         "Levenshtein should suggest `Display` for `Displai`",
     );
 }
+
+// ── Phase-10: gated stdlib — `std.wasi` (prelude re-export module) ─
+//
+// Unlike `std.web`, every `std.wasi` name also lives in the prelude's
+// scope-0 — the module exists as an explicit declaration of intent for
+// WASI-targeted code and as the anchor for future WASI-only resources.
+// The interesting contract is shadow-compatibility: importing a name
+// that scope-0 already provides must not be a duplicate definition,
+// and the unimported prelude path keeps working.
+
+#[test]
+fn std_wasi_module_is_in_program_tree() {
+    let d = ScratchDir::new("std-wasi-in-tree");
+    d.write("src/main.kara", "fn main() {}\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let path: Vec<String> = vec!["std".to_string(), "wasi".to_string()];
+    let id = built
+        .tree
+        .graph
+        .by_path
+        .get(&path)
+        .copied()
+        .expect("std.wasi is indexed");
+    let m = built.tree.module(id);
+    assert!(m.is_synthetic, "std.wasi must be synthetic");
+    for name in ["FileSystem", "Env", "Network", "Clock", "RandomSource"] {
+        assert!(
+            m.items
+                .iter()
+                .any(|i| matches!(i, karac::ast::Item::EffectResource(r) if r.name == name)),
+            "std.wasi should expose `{name}` as an effect resource",
+        );
+    }
+}
+
+#[test]
+fn std_wasi_import_shadows_prelude_resource_cleanly() {
+    let d = ScratchDir::new("std-wasi-import");
+    d.write(
+        "src/main.kara",
+        concat!(
+            "import std.wasi.{FileSystem, Clock, RandomSource};\n",
+            "fn snapshot() with reads(FileSystem) reads(Clock) reads(RandomSource) {}\n",
+            "fn main() {}\n",
+        ),
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let errs = resolve_module_errors(&built.tree, built.tree.root);
+    assert!(
+        errs.is_empty(),
+        "std.wasi import over scope-0 prelude names must resolve cleanly: {errs:?}",
+    );
+}
+
+#[test]
+fn std_wasi_prelude_resources_still_work_without_import() {
+    // Gating std.wasi must not take anything away: the same names keep
+    // resolving from the prelude with no import, as they always have.
+    let d = ScratchDir::new("std-wasi-no-import");
+    d.write(
+        "src/main.kara",
+        "fn snapshot() with reads(FileSystem) reads(Clock) {}\nfn main() {}\n",
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let errs = resolve_module_errors(&built.tree, built.tree.root);
+    assert!(
+        errs.is_empty(),
+        "prelude resources must keep resolving without std.wasi: {errs:?}",
+    );
+}

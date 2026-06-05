@@ -1,0 +1,46 @@
+// `std.wasi` — headless WASM / server-side runtime effect surface
+// (phase-10).
+//
+// Thin v1 module, per `design.md § Web / Host Effect Vocabulary`: a
+// WASM module running in wasmtime or a Component-Model host has no
+// `Display` or `Input`, but it does have filesystem, env, clock,
+// entropy, and network — capabilities Kāra already names with built-in
+// primitives. This module re-exports that subset so WASI-targeted code
+// can declare its host surface explicitly; WASI-specific resources
+// (e.g. precision timers) are added here only if the native primitive
+// coverage proves insufficient.
+//
+// GATED MODULE — same rule as `std.web` (`GATED_STDLIB_SOURCES` in
+// `src/prelude.rs`): names enter scope via `import std.wasi.{...};`.
+// Unlike `std.web`, every name below ALSO exists in the prelude's
+// scope-0, so the import is never required for the name to resolve —
+// importing from `std.wasi` is a declaration of intent (this code
+// targets a WASI host) and the anchor point for future WASI-only
+// resources, which WILL be gated-only.
+//
+// Re-export mechanics: effect sets identify resources by clause
+// string, so redeclaring the same name IS identity-preserving — a
+// `reads(FileSystem)` resolved through this module and one resolved
+// through the prelude produce the same effect. (Prelude resource names
+// are deliberately shadowable; see `runtime/stdlib/process.kara` on
+// `ProcessTable`.) If resource identity ever becomes more than the
+// string — e.g. the target-provided-resource-set gate pass — these
+// declarations must be canonicalized to the built-ins, same as the
+// alias rule recorded in `phase-10-targets.md § Effect-checker:
+// target-provided-resource-set parameterization`.
+
+// File and directory I/O (preopened-dir capability model on WASI).
+effect resource FileSystem;
+
+// Environment variables and program arguments.
+effect resource Env;
+
+// Socket I/O. WASI hosts gate this behind their socket proposals;
+// the resource name is the same one native HTTP/TCP carries.
+effect resource Network;
+
+// Wall-clock and monotonic time.
+effect resource Clock;
+
+// Host entropy source.
+effect resource RandomSource;
