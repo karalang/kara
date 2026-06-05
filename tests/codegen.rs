@@ -25139,6 +25139,90 @@ fn main() with reads(FileSystem) {
     }
 
     #[test]
+    fn test_e2e_fs_write_then_read_round_trips() {
+        // `FileSystem.write(path, contents) -> Result[Unit, IoError]`
+        // (L646 slice 4). Write a file, then read it back with
+        // `FileSystem.read_to_string` and print — a write→read round-trip
+        // that pins both the Unit-Ok unpack (write) and that the bytes
+        // actually landed on disk. Lowers to `karac_runtime_fs_write` +
+        // `lower_kara_io_result(FileOkKind::Unit)`. Uses the host temp dir
+        // (per-name, cleaned around the run) so it doesn't race other tests.
+        let tmp = std::env::temp_dir().join("karac_e2e_fs_write_rt.txt");
+        let _ = std::fs::remove_file(&tmp);
+        let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+        let src = format!(
+            r#"
+fn main() with writes(FileSystem) reads(FileSystem) {{
+    match FileSystem.write("{path}", "hello-fs-write") {{
+        Ok(_) => match FileSystem.read_to_string("{path}") {{
+            Ok(s) => println(s),
+            Err(_) => println("read-err"),
+        }},
+        Err(_) => println("write-err"),
+    }}
+}}
+"#
+        );
+        let out = run_program(&src);
+        let _ = std::fs::remove_file(&tmp);
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "hello-fs-write");
+        }
+    }
+
+    #[test]
+    fn test_e2e_fs_write_err_on_unwritable_path() {
+        // Writing under a nonexistent directory fails; codegen builds
+        // `Result.Err(IoError.<kind>)` via the shared `lower_kara_io_result`
+        // error arm. Pins the Err half of the Unit-result branch (the Ok
+        // half is covered by the round-trip test).
+        let out = run_program(
+            r#"
+fn main() with writes(FileSystem) {
+    match FileSystem.write("/no_such_dir_karac_l646_s4/x.txt", "data") {
+        Ok(_) => println("unexpected-ok"),
+        Err(_) => println("write-err"),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "write-err");
+        }
+    }
+
+    #[test]
+    fn test_fs_write_resolves_and_typechecks_clean() {
+        // Full-pipeline check (NOT `run_program`, which tolerates
+        // resolve/typecheck errors). `FileSystem.write(path, contents)` must
+        // resolve + typecheck cleanly as a real stdlib `#[compiler_builtin]`
+        // method returning `Result[Unit, IoError]`.
+        let src = r#"
+fn main() with writes(FileSystem) {
+    let _r = FileSystem.write("/tmp/karac_fs_write_tc.txt", "x");
+}
+"#;
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        assert!(
+            resolved.errors.is_empty(),
+            "resolve errors for FileSystem.write: {:?}",
+            resolved.errors
+        );
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "typecheck errors for FileSystem.write: {:?}",
+            typed.errors
+        );
+    }
+
+    #[test]
     fn test_e2e_file_open_question_passes_through_ok() {
         // Successful File.open returns `Ok(File)`; `?` extracts the
         // File and the helper's terminal `Ok(0_i64)` propagates as the

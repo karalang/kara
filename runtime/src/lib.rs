@@ -172,6 +172,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         file::karac_runtime_file_seek,
         file::karac_runtime_stdin_read_line,
         file::karac_runtime_stdin_read_to_string,
+        file::karac_runtime_fs_write,
     );
     // JSON runtime (this file's `runtime_json_*` block).
     keep!(

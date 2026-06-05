@@ -620,6 +620,47 @@ pub unsafe extern "C" fn karac_runtime_stdin_read_to_string(out: *mut KaracIoRes
     };
 }
 
+/// `FileSystem.write(path, contents) -> Result[Unit, IoError]` — one-shot
+/// whole-file write (create-or-truncate). Codegen counterpart to the
+/// interpreter's `("FileSystem", "write")` arm (`std::fs::write`). Same
+/// `KaracIoResult` out-param ABI as the open-family; the Ok payload is
+/// `Unit`, so success writes `ok(0)` (codegen's `FileOkKind::Unit` arm
+/// ignores the value field). `path`/`contents` are borrowed Kāra `String`
+/// views (`*const u8` + `i64 len`); the caller retains ownership.
+///
+/// # Safety
+///
+/// `out` must point to a writable `KaracIoResult` slot (codegen-allocated);
+/// `path_ptr`/`contents_ptr` must describe valid byte ranges of the given
+/// lengths.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_fs_write(
+    out: *mut KaracIoResult,
+    path_ptr: *const u8,
+    path_len: i64,
+    contents_ptr: *const u8,
+    contents_len: i64,
+) {
+    let Some(path) = read_path(path_ptr, path_len) else {
+        *out = err(&std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "path is not valid UTF-8",
+        ));
+        return;
+    };
+    // Contents are raw bytes — no UTF-8 round-trip needed (a Kāra String is
+    // already valid UTF-8, but `fs::write` takes `&[u8]` anyway).
+    let contents: &[u8] = if contents_ptr.is_null() || contents_len <= 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(contents_ptr, contents_len as usize)
+    };
+    *out = match std::fs::write(&path, contents) {
+        Ok(()) => ok(0),
+        Err(e) => err(&e),
+    };
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -2426,6 +2426,25 @@ impl<'ctx> Codegen<'ctx> {
         for sym in ["karac_runtime_file_read", "karac_runtime_file_write"] {
             module.add_function(sym, file_rw_type, Some(Linkage::External));
         }
+        // `FileSystem.write(path, contents)` — one-shot whole-file write:
+        // (out, path_ptr, path_len, contents_ptr, contents_len) -> void.
+        // No live handle (open+write+close in one runtime call), Unit Ok
+        // payload. L646 slice 4.
+        let fs_write_type = file_call_void_type.fn_type(
+            &[
+                ptr_type.into(),
+                ptr_type.into(),
+                i64_type.into(),
+                ptr_type.into(),
+                i64_type.into(),
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_fs_write",
+            fs_write_type,
+            Some(Linkage::External),
+        );
         // Flush: (out, handle) -> void.
         let file_flush_type =
             file_call_void_type.fn_type(&[ptr_type.into(), ptr_type.into()], false);

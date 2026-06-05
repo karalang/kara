@@ -400,6 +400,64 @@ impl<'ctx> super::Codegen<'ctx> {
         self.lower_kara_io_result(slot, FileOkKind::StringPayload)
     }
 
+    /// Compile `FileSystem.write(path, contents) -> Result[Unit, IoError]`
+    /// (L646 slice 4). One-shot whole-file write — like
+    /// `compile_file_read_to_string`, needs no live `File` handle: the
+    /// runtime opens/writes/closes in one call. Both args are Kāra
+    /// `String`s; extract their `{ptr, len}` and pass to the runtime,
+    /// then unpack the `KaracIoResult` via the `Unit` Ok arm (Ok payload
+    /// is `Unit`, so no value rebuild — just the `Result.Ok`/`Err` tag +
+    /// IoError variant).
+    pub(super) fn compile_fs_write(
+        &mut self,
+        path_arg: &Expr,
+        contents_arg: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let path_val = self.compile_expr(path_arg)?;
+        let path_sv = path_val.into_struct_value();
+        let path_ptr = self
+            .builder
+            .build_extract_value(path_sv, 0, "fsw.path.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let path_len = self
+            .builder
+            .build_extract_value(path_sv, 1, "fsw.path.len")
+            .unwrap()
+            .into_int_value();
+        let contents_val = self.compile_expr(contents_arg)?;
+        let contents_sv = contents_val.into_struct_value();
+        let contents_ptr = self
+            .builder
+            .build_extract_value(contents_sv, 0, "fsw.contents.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let contents_len = self
+            .builder
+            .build_extract_value(contents_sv, 1, "fsw.contents.len")
+            .unwrap()
+            .into_int_value();
+        let slot = self.alloca_io_result_slot()?;
+        let f = self
+            .module
+            .get_function("karac_runtime_fs_write")
+            .expect("karac_runtime_fs_write declared in Codegen::new");
+        self.builder
+            .build_call(
+                f,
+                &[
+                    BasicMetadataValueEnum::PointerValue(slot),
+                    BasicMetadataValueEnum::PointerValue(path_ptr),
+                    BasicMetadataValueEnum::IntValue(path_len),
+                    BasicMetadataValueEnum::PointerValue(contents_ptr),
+                    BasicMetadataValueEnum::IntValue(contents_len),
+                ],
+                "fs.write.call",
+            )
+            .unwrap();
+        self.lower_kara_io_result(slot, FileOkKind::Unit)
+    }
+
     /// Compile `file.read(buf)` — reads up to `buf.len()` bytes into
     /// `buf`'s backing storage. Returns `Result[usize, IoError]` with
     /// the byte count (0 = clean EOF).

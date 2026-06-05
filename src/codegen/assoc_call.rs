@@ -503,6 +503,14 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_file_read_to_string(&_args[0].value);
         }
 
+        // `FileSystem.write(path, contents) -> Result[Unit, IoError]`.
+        // One-shot whole-file write (create-or-truncate); lowers to
+        // `karac_runtime_fs_write` and unpacks the Unit-Ok KaracIoResult.
+        // Companion to `read_to_string` above (L646 slice 4).
+        if type_name == "FileSystem" && method == "write" && _args.len() == 2 {
+            return self.compile_fs_write(&_args[0].value, &_args[1].value);
+        }
+
         if type_name == "Server" && method == "serve_static" && _args.len() == 2 {
             {
                 let addr_val = self.compile_expr(&_args[0].value)?;
