@@ -865,6 +865,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load(elem_ty, elem_ptr, "arr.elem")
                 .unwrap();
             Ok(val)
+        } else if let BasicTypeEnum::VectorType(vt) = arr_ty {
+            // SIMD lane read `v[i] -> T` (design.md § Portable SIMD). The slot
+            // holds the `<N x T>` value directly (not pointer-backed), so we
+            // bounds-check the lane index, load the vector, and extractelement
+            // rather than GEP into memory.
+            let len = i64_t.const_int(vt.get_size() as u64, false);
+            let fn_val = self.current_fn.unwrap();
+            let oob_bb = self.context.append_basic_block(fn_val, "lane.oob");
+            let ok_bb = self.context.append_basic_block(fn_val, "lane.ok");
+            let cmp = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::UGE, idx_val, len, "lane.bounds")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(cmp, oob_bb, ok_bb)
+                .unwrap();
+
+            self.builder.position_at_end(oob_bb);
+            self.emit_panic("vector lane index out of bounds");
+            self.builder.build_unreachable().unwrap();
+
+            self.builder.position_at_end(ok_bb);
+            let vec_val = self
+                .builder
+                .build_load(arr_ty, arr_ptr, "vec.val")
+                .unwrap()
+                .into_vector_value();
+            let lane = self
+                .builder
+                .build_extract_element(vec_val, idx_val, "lane")
+                .map_err(|e| format!("vector extractelement failed: {e}"))?;
+            Ok(lane)
         } else {
             // Vec, Slice, Map already routed through their dedicated paths
             // above. Anything still reaching here is genuinely not indexable.

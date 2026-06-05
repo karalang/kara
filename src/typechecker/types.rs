@@ -35,6 +35,19 @@ pub enum Type {
         /// reach for the literal via `ConstArg::as_literal`.
         size: ConstArg,
     },
+    /// `Vector[T: Numeric, const N: i64]` — the portable-SIMD lane vector
+    /// (design.md § Portable SIMD — `Vector[T, N]`). Distinct from
+    /// `Type::Array` because the two have different physical layout and
+    /// operation surfaces: `Array` lowers to LLVM `[N x T]` (aggregate),
+    /// `Vector` lowers to `<N x T>` (`repr(simd)`) and supports element-wise
+    /// arithmetic / lane access that arrays do not. `element` is restricted
+    /// to primitive numeric `T` (enforced structurally at lowering until the
+    /// first-class `Numeric` trait lands — see phase-7 line 289 sub-slices);
+    /// `lanes` carries the const-arg shape exactly like `Array::size`.
+    Vector {
+        element: Box<Type>,
+        lanes: ConstArg,
+    },
     Slice {
         element: Box<Type>,
         mutable: bool,
@@ -499,6 +512,7 @@ pub(super) fn type_is_fully_concrete(ty: &Type) -> bool {
         Type::Refinement { base, .. } => type_is_fully_concrete(base),
         Type::Tuple(types) => types.iter().all(type_is_fully_concrete),
         Type::Array { element, .. } => type_is_fully_concrete(element),
+        Type::Vector { element, .. } => type_is_fully_concrete(element),
         Type::Slice { element, .. } => type_is_fully_concrete(element),
         Type::Ref(inner) | Type::MutRef(inner) | Type::Weak(inner) => type_is_fully_concrete(inner),
         Type::Rc(inner) | Type::Arc(inner) => type_is_fully_concrete(inner),
@@ -561,6 +575,11 @@ pub fn type_display(ty: &Type) -> String {
             "Array[{}, {}]",
             type_display(element),
             const_arg_display(size)
+        ),
+        Type::Vector { element, lanes } => format!(
+            "Vector[{}, {}]",
+            type_display(element),
+            const_arg_display(lanes)
         ),
         Type::Slice { element, mutable } => {
             if *mutable {
@@ -715,6 +734,7 @@ pub(super) fn method_callee_type_name(ty: &Type) -> Option<String> {
         Type::Str => Some("String".to_string()),
         Type::Slice { .. } => Some("Slice".to_string()),
         Type::Array { .. } => Some("Array".to_string()),
+        Type::Vector { .. } => Some("Vector".to_string()),
         Type::Bool => Some("bool".to_string()),
         Type::Char => Some("char".to_string()),
         Type::Int(IntSize::I8) => Some("i8".to_string()),
@@ -772,6 +792,7 @@ pub(super) fn clone_self_type_for(ty: &Type) -> Option<Type> {
     match ty {
         Type::Str => Some(Type::Str),
         Type::Array { .. } => Some(ty.clone()),
+        Type::Vector { .. } => Some(ty.clone()),
         Type::Named { name, args: _ } => match name.as_str() {
             "Vec" | "Set" | "SortedSet" | "VecDeque" | "Map" | "TreeMap" => Some(ty.clone()),
             _ => None,
@@ -796,6 +817,9 @@ pub(super) fn contains_type_param(ty: &Type) -> bool {
         // skipped entirely; post-3b we check the size too.
         Type::Array { element, size } => {
             contains_type_param(element) || matches!(size, ConstArg::ConstParam(_))
+        }
+        Type::Vector { element, lanes } => {
+            contains_type_param(element) || matches!(lanes, ConstArg::ConstParam(_))
         }
         Type::Slice { element, .. } => contains_type_param(element),
         Type::Ref(inner) | Type::MutRef(inner) | Type::Weak(inner) => contains_type_param(inner),

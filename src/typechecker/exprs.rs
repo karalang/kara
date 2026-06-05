@@ -1929,6 +1929,10 @@ impl<'a> super::TypeChecker<'a> {
                 match &obj_ty {
                     Type::Array { element, .. } => *element.clone(),
                     Type::Slice { element, .. } => *element.clone(),
+                    // `Vector[T, N]` lane read `v[i] -> T` (design.md § Portable
+                    // SIMD). Range indexing of a vector is not part of the v1
+                    // surface, so it falls through to the range-error path above.
+                    Type::Vector { element, .. } => *element.clone(),
                     Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
                         args[0].clone()
                     }

@@ -73,6 +73,7 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Vec",
     "VecDeque",
     "Array",
+    "Vector",
     "Slice",
     "Map",
     "Set",
@@ -952,8 +953,8 @@ fn stub_struct(name: &str, span: &Span) -> Item {
 /// participates in type inference.
 fn stub_generics(name: &str, span: &Span) -> Option<GenericParams> {
     let params: &[&str] = match name {
-        "Option" | "Vec" | "VecDeque" | "Slice" | "Array" | "Set" | "Atomic" | "Mutex"
-        | "SortedSet" | "Channel" | "Sender" | "Receiver" => &["T"],
+        "Option" | "Vec" | "VecDeque" | "Slice" | "Array" | "Vector" | "Set" | "Atomic"
+        | "Mutex" | "SortedSet" | "Channel" | "Sender" | "Receiver" => &["T"],
         "Result" => &["T", "E"],
         "Map" | "Entry" => &["K", "V"],
         _ => return None,

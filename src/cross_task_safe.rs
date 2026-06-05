@@ -221,6 +221,13 @@ fn walk(
             walk(element, struct_info, enum_info, path, root)?;
             path.pop();
         }
+        Type::Vector { element, .. } => {
+            // SIMD lanes are always primitive numerics today, but walk the
+            // element anyway to stay correct if the constraint ever widens.
+            path.push("vector lane".to_string());
+            walk(element, struct_info, enum_info, path, root)?;
+            path.pop();
+        }
         Type::Slice { element, .. } => {
             path.push("slice element".to_string());
             walk(element, struct_info, enum_info, path, root)?;

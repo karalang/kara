@@ -61,6 +61,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         return arr_ty;
                     }
                 }
+                if name == "Vector" {
+                    if let Some(vec_ty) = self.llvm_vector_type(&path.generic_args) {
+                        return vec_ty;
+                    }
+                }
                 if name == "Vec" || name == "VecDeque" {
                     // `VecDeque[T]` shares `Vec[T]`'s `{ptr, len, cap}`
                     // codegen layout — see `extract_vec_elem_type` and
@@ -232,6 +237,62 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let elem_ty = self.llvm_type_for_type_expr(elem_ty_expr);
         Some(elem_ty.array_type(size).into())
+    }
+
+    /// Lower `Vector[T, N]` generic args to an LLVM `<N x T>` SIMD vector type
+    /// (design.md § Portable SIMD — `repr(simd)` layout). Distinct from
+    /// [`llvm_array_type`]'s `[N x T]` aggregate: arithmetic on `<N x T>` is
+    /// element-wise and LLVM's instruction selector emits native SIMD where the
+    /// target supports it (tier 1) and scalarizes otherwise (tier 3) — so the
+    /// auto-fallback rule is the backend's job for basic ops. The lane count /
+    /// element extraction mirrors `llvm_array_type`; only the final
+    /// `vec_type` vs `array_type` differs. Element is always int or float (the
+    /// typechecker rejects non-numeric `T` at `lower_vector_type`).
+    pub(super) fn llvm_vector_type(
+        &self,
+        generic_args: &Option<Vec<GenericArg>>,
+    ) -> Option<BasicTypeEnum<'ctx>> {
+        let args = generic_args.as_ref()?;
+        if args.len() != 2 {
+            return None;
+        }
+        let elem_ty_expr = match &args[0] {
+            GenericArg::Type(t) => t,
+            GenericArg::Const(_) => return None,
+        };
+        let size = match &args[1] {
+            GenericArg::Const(expr) => match &expr.kind {
+                ExprKind::Integer(n, _) if *n > 0 => *n as u32,
+                ExprKind::Identifier(name) => {
+                    let cv = self.const_subst.get(name)?;
+                    const_value_as_u32(cv)?
+                }
+                _ => return None,
+            },
+            GenericArg::Type(te) => {
+                if let TypeKind::Path(p) = &te.kind {
+                    if p.segments.len() == 1 && p.generic_args.is_none() {
+                        let name = &p.segments[0];
+                        if let Some(cv) = self.const_subst.get(name) {
+                            const_value_as_u32(cv)?
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+            }
+        };
+        let elem_ty = self.llvm_type_for_type_expr(elem_ty_expr);
+        let vec_ty = match elem_ty {
+            BasicTypeEnum::IntType(it) => it.vec_type(size),
+            BasicTypeEnum::FloatType(ft) => ft.vec_type(size),
+            _ => return None,
+        };
+        Some(vec_ty.into())
     }
 
     /// Vec[T] runtime layout: `{ ptr data, i64 len, i64 capacity }`.

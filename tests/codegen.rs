@@ -29170,4 +29170,205 @@ fn main() {
             assert_eq!(out.trim(), "7");
         }
     }
+
+    // ── Portable SIMD `Vector[T, N]` — slice 1 ───────────────────────────
+    //
+    // design.md § Portable SIMD. Slice 1 surface: construction
+    // `Vector[T, N](lane0, …)`, element-wise arithmetic (`+ - * / %`), and
+    // lane read `v[i]`. Codegen lowers to LLVM `<N x T>` (insertelement chain
+    // for construction, native vector arithmetic, extractelement for lane
+    // read); LLVM's instruction selector handles the native-vs-scalar
+    // auto-fallback. Phase-7 line 289 sub-slices cover splat / dot / cross /
+    // reductions / masks / `#[require_simd]` / `--simd-report` / interpreter
+    // parity.
+
+    /// Helper: parse → resolve → typecheck, returning the typechecker errors as
+    /// debug strings. `run_program` deliberately ignores typecheck errors
+    /// (see the documented codegen-bypasses-typecheck gap), so reject-tests
+    /// assert against this directly.
+    fn vector_typecheck_errors(src: &str) -> Vec<String> {
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        typed.errors.iter().map(|e| format!("{:?}", e)).collect()
+    }
+
+    #[test]
+    fn test_vector_ir_emits_simd_type_and_ops() {
+        // Use function params so the optimizer-free `compile_to_ir` keeps the
+        // vector ops (literal-only inputs would still survive here since
+        // compile_to_ir does not run LLVM passes, but params make the intent
+        // explicit and the test robust to any future folding).
+        let ir = ir_for(
+            r#"
+fn lane0_of_sum(p: i64, q: i64) -> i64 {
+    let a: Vector[i64, 4] = Vector[i64, 4](p, p, p, p);
+    let b: Vector[i64, 4] = Vector[i64, 4](q, q, q, q);
+    let c = a + b;
+    c[0]
+}
+fn main() { println(lane0_of_sum(1, 10)); }
+"#,
+        );
+        assert!(
+            ir.contains("<4 x i64>"),
+            "expected `<4 x i64>` SIMD vector type in IR; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("insertelement"),
+            "expected `insertelement` (vector construction) in IR; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("extractelement"),
+            "expected `extractelement` (lane read) in IR; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_vector_i64_construct_add_index() {
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    let b: Vector[i64, 4] = Vector[i64, 4](10, 20, 30, 40);
+    let c = a + b;
+    println(c[0]);
+    println(c[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "11\n44\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_i64_mul_and_sub() {
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Vector[i64, 4] = Vector[i64, 4](2, 3, 4, 5);
+    let b: Vector[i64, 4] = Vector[i64, 4](10, 10, 10, 10);
+    let prod = a * b;
+    let diff = b - a;
+    println(prod[1]);
+    println(diff[2]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // prod = [20, 30, 40, 50] -> [1] == 30; diff = [8,7,6,5] -> [2] == 6
+            assert_eq!(out, "30\n6\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_inferred_binding_type() {
+        // No annotation on the construction binding — synthesis-mode inference
+        // resolves the binding's type to Vector[i64, 2].
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i64, 2](7, 8);
+    let b = Vector[i64, 2](100, 200);
+    let c = a + b;
+    println(c[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "208\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_f64_elementwise_div() {
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Vector[f64, 2] = Vector[f64, 2](10.0, 9.0);
+    let b: Vector[f64, 2] = Vector[f64, 2](2.0, 3.0);
+    let q = a / b;
+    println(q[0]);
+    println(q[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // 10.0/2.0 == 5, 9.0/3.0 == 3 (float print format is the runtime's)
+            assert_eq!(out, "5\n3\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_typechecks_clean() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    let b: Vector[i64, 4] = Vector[i64, 4](5, 6, 7, 8);
+    let c = a + b;
+    let _ = c[0];
+}
+"#,
+        );
+        assert!(
+            errs.is_empty(),
+            "expected a clean typecheck for a valid Vector program; got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn test_vector_lane_count_mismatch_is_type_error() {
+        let errs = vector_typecheck_errors("fn main() { let _ = Vector[i64, 4](1, 2, 3); }");
+        assert!(
+            !errs.is_empty(),
+            "Vector[i64, 4] built from 3 lanes must be a type error"
+        );
+    }
+
+    #[test]
+    fn test_vector_non_numeric_element_is_type_error() {
+        let errs = vector_typecheck_errors(
+            "fn main() { let _ = Vector[bool, 4](true, false, true, false); }",
+        );
+        assert!(
+            !errs.is_empty(),
+            "Vector[bool, N] (non-numeric element) must be a type error"
+        );
+    }
+
+    #[test]
+    fn test_vector_zero_lanes_is_type_error() {
+        let errs = vector_typecheck_errors("fn f(v: Vector[i64, 0]) {} fn main() {}");
+        assert!(
+            !errs.is_empty(),
+            "Vector[i64, 0] (non-positive lane count) must be a type error"
+        );
+    }
+
+    #[test]
+    fn test_vector_scalar_mix_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    let _ = a + 5;
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "vector + scalar must be a type error (no implicit broadcast)"
+        );
+    }
 }

@@ -51,6 +51,7 @@ impl<'a> super::TypeChecker<'a> {
             | Type::Unit => true,
             Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_partial_eq(e)),
             Type::Array { element, .. } => self.type_supports_partial_eq(element),
+            Type::Vector { element, .. } => self.type_supports_partial_eq(element),
             Type::Slice { element, .. } => self.type_supports_partial_eq(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_partial_eq(inner),
             Type::Named { name, args } => {
@@ -113,6 +114,7 @@ impl<'a> super::TypeChecker<'a> {
             Type::Float(_) => false,
             Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_eq(e)),
             Type::Array { element, .. } => self.type_supports_eq(element),
+            Type::Vector { element, .. } => self.type_supports_eq(element),
             Type::Slice { element, .. } => self.type_supports_eq(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_eq(inner),
             Type::Named { name, .. } => {
@@ -164,6 +166,7 @@ impl<'a> super::TypeChecker<'a> {
             Type::Float(_) => false,
             Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_hash(e)),
             Type::Array { element, .. } => self.type_supports_hash(element),
+            Type::Vector { element, .. } => self.type_supports_hash(element),
             Type::Slice { element, .. } => self.type_supports_hash(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_hash(inner),
             Type::Named { name, .. } => {
@@ -229,6 +232,7 @@ impl<'a> super::TypeChecker<'a> {
             Type::Float(_) => false,
             Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_ord(e)),
             Type::Array { element, .. } => self.type_supports_ord(element),
+            Type::Vector { element, .. } => self.type_supports_ord(element),
             Type::Slice { element, .. } => self.type_supports_ord(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_ord(inner),
             Type::Named { name, .. } => {
@@ -285,6 +289,7 @@ impl<'a> super::TypeChecker<'a> {
             | Type::Unit => true,
             Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_display(e)),
             Type::Array { element, .. } => self.type_supports_display(element),
+            Type::Vector { element, .. } => self.type_supports_display(element),
             Type::Slice { element, .. } => self.type_supports_display(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_display(inner),
             Type::Named { name, args } => match name.as_str() {
@@ -352,6 +357,7 @@ impl<'a> super::TypeChecker<'a> {
             | Type::Unit => true,
             Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_partial_ord(e)),
             Type::Array { element, .. } => self.type_supports_partial_ord(element),
+            Type::Vector { element, .. } => self.type_supports_partial_ord(element),
             Type::Slice { element, .. } => self.type_supports_partial_ord(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_partial_ord(inner),
             Type::Named { name, .. } => {
@@ -430,6 +436,7 @@ impl<'a> super::TypeChecker<'a> {
             | Type::Unit => true,
             Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_clone(e)),
             Type::Array { element, .. } => self.type_supports_clone(element),
+            Type::Vector { element, .. } => self.type_supports_clone(element),
             // Slices clone (the slice header is `(ptr, len)` — bitwise copy);
             // the borrowed data is not duplicated.
             Type::Slice { .. } => true,
@@ -505,6 +512,7 @@ impl<'a> super::TypeChecker<'a> {
             | Type::Unit => true,
             Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_debug(e)),
             Type::Array { element, .. } => self.type_supports_debug(element),
+            Type::Vector { element, .. } => self.type_supports_debug(element),
             Type::Slice { element, .. } => self.type_supports_debug(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_debug(inner),
             Type::Named { name, args } => {
@@ -567,6 +575,7 @@ impl<'a> super::TypeChecker<'a> {
             Type::Tuple(types) => types.iter().all(|t| self.is_type_copy(t)),
             // Array[T, N] is Copy iff T is Copy.
             Type::Array { element, .. } => self.is_type_copy(element),
+            Type::Vector { element, .. } => self.is_type_copy(element),
             // Slice[T] is unconditionally Copy; mut Slice[T] is not.
             Type::Slice { mutable, .. } => !mutable,
             Type::Named { name, args } => {

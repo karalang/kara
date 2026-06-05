@@ -13,7 +13,7 @@
 use crate::ast::*;
 
 use inkwell::types::{BasicTypeEnum, StructType};
-use inkwell::values::{BasicValueEnum, PointerValue};
+use inkwell::values::{BasicValueEnum, PointerValue, VectorValue};
 use inkwell::AddressSpace;
 use inkwell::{FloatPredicate, IntPredicate};
 
@@ -1508,6 +1508,79 @@ impl<'ctx> super::Codegen<'ctx> {
         self.compile_binop_typed(op, lhs, rhs, false)
     }
 
+    /// Element-wise SIMD arithmetic on two `<N x T>` vectors (design.md
+    /// § Portable SIMD, slice 1). The element type selects the integer vs
+    /// float instruction family; `is_unsigned` switches `Div`/`Mod` to the
+    /// unsigned integer forms. LLVM legalizes the `<N x T>` op to native SIMD
+    /// where the target supports it and scalarizes otherwise (the auto-fallback
+    /// rule, handled by the backend). Only `+ - * / %` reach here — the
+    /// typechecker rejects every other operator on vectors.
+    fn compile_vector_binop(
+        &mut self,
+        op: &BinOp,
+        lv: VectorValue<'ctx>,
+        rv: VectorValue<'ctx>,
+        is_unsigned: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let is_float = lv.get_type().get_element_type().is_float_type();
+        let result: BasicValueEnum<'ctx> = if is_float {
+            match op {
+                BinOp::Add => self.builder.build_float_add(lv, rv, "vadd").unwrap().into(),
+                BinOp::Sub => self.builder.build_float_sub(lv, rv, "vsub").unwrap().into(),
+                BinOp::Mul => self.builder.build_float_mul(lv, rv, "vmul").unwrap().into(),
+                BinOp::Div => self.builder.build_float_div(lv, rv, "vdiv").unwrap().into(),
+                BinOp::Mod => self.builder.build_float_rem(lv, rv, "vrem").unwrap().into(),
+                _ => return Err(format!("unsupported vector float op {op:?}")),
+            }
+        } else {
+            match op {
+                BinOp::Add => self
+                    .builder
+                    .build_int_nsw_add(lv, rv, "vadd")
+                    .unwrap()
+                    .into(),
+                BinOp::Sub => self
+                    .builder
+                    .build_int_nsw_sub(lv, rv, "vsub")
+                    .unwrap()
+                    .into(),
+                BinOp::Mul => self
+                    .builder
+                    .build_int_nsw_mul(lv, rv, "vmul")
+                    .unwrap()
+                    .into(),
+                BinOp::Div => {
+                    if is_unsigned {
+                        self.builder
+                            .build_int_unsigned_div(lv, rv, "vdiv")
+                            .unwrap()
+                            .into()
+                    } else {
+                        self.builder
+                            .build_int_signed_div(lv, rv, "vdiv")
+                            .unwrap()
+                            .into()
+                    }
+                }
+                BinOp::Mod => {
+                    if is_unsigned {
+                        self.builder
+                            .build_int_unsigned_rem(lv, rv, "vrem")
+                            .unwrap()
+                            .into()
+                    } else {
+                        self.builder
+                            .build_int_signed_rem(lv, rv, "vrem")
+                            .unwrap()
+                            .into()
+                    }
+                }
+                _ => return Err(format!("unsupported vector int op {op:?}")),
+            }
+        };
+        Ok(result)
+    }
+
     /// Type-aware sibling to `compile_binop`. `is_unsigned == true` switches
     /// signedness-sensitive integer ops to their unsigned forms:
     /// `Div`/`Mod` → `build_int_unsigned_{div,rem}`, comparison predicates
@@ -1524,6 +1597,20 @@ impl<'ctx> super::Codegen<'ctx> {
         rhs: BasicValueEnum<'ctx>,
         is_unsigned: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // SIMD vector path: element-wise arithmetic on `<N x T>` operands
+        // (design.md § Portable SIMD). Checked before the scalar paths since a
+        // VectorValue would panic in `into_int_value()` / `to_float`. The
+        // typechecker (`infer_vector_binary`) has already verified both sides
+        // are the same `Vector[T, N]` and the op is one of `+ - * / %`.
+        if lhs.is_vector_value() && rhs.is_vector_value() {
+            return self.compile_vector_binop(
+                op,
+                lhs.into_vector_value(),
+                rhs.into_vector_value(),
+                is_unsigned,
+            );
+        }
+
         // Struct path: strings or user-defined structs.
         if lhs.is_struct_value() && rhs.is_struct_value() {
             let ls = lhs.into_struct_value();

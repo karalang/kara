@@ -15,6 +15,7 @@ use super::const_eval::{const_value_to_array_size, const_value_type};
 use super::inference::substitute_type_params;
 use super::types::{type_display, ConstArg, FloatSize, IntSize, SubstValue, Type, UIntSize};
 use super::TypeErrorKind;
+use crate::token::Span;
 
 impl<'a> super::TypeChecker<'a> {
     // ── lower_type_expr ─────────────────────────────────────────
@@ -309,6 +310,16 @@ impl<'a> super::TypeChecker<'a> {
                     return ty;
                 }
             }
+            // Built-in `Vector[T: Numeric, const N: i64]` — portable-SIMD lane
+            // vector (design.md § Portable SIMD). Mirrors `Array` lowering but
+            // produces `Type::Vector` and enforces N > 0 + numeric element T.
+            if name == "Vector" {
+                if let Some(ty) =
+                    self.lower_vector_type(&path.generic_args, generic_scope, &path.span)
+                {
+                    return ty;
+                }
+            }
             // Built-in `Slice[T]` — borrowed view into contiguous memory
             if name == "Slice" {
                 if let Some(ty) = self.lower_slice_type(&path.generic_args, generic_scope) {
@@ -487,6 +498,107 @@ impl<'a> super::TypeChecker<'a> {
         Some(Type::Array {
             element: Box::new(element_ty),
             size,
+        })
+    }
+
+    /// Lower `Vector[T, N]` to `Type::Vector { element, lanes }`.
+    ///
+    /// Two structural constraints beyond `Array`'s, both enforced here until
+    /// the first-class `Numeric` trait + const-arg evaluator gate land (see
+    /// phase-7 line 289 sub-slices):
+    ///   - `N` must be a *positive* (`> 0`) lane count — a zero-lane SIMD
+    ///     vector has no native representation. (`Array` permits `N == 0`.)
+    ///   - `T` must be a primitive numeric type (`i8`…`i128`, `u8`…`u64`,
+    ///     `f32`/`f64`). `usize` is excluded per design.md § Portable SIMD
+    ///     ("`usize` is not a permitted element type"). A non-numeric `T`
+    ///     emits a focused diagnostic.
+    pub(super) fn lower_vector_type(
+        &mut self,
+        generic_args: &Option<Vec<GenericArg>>,
+        generic_scope: &[String],
+        span: &Span,
+    ) -> Option<Type> {
+        let args = generic_args.as_ref()?;
+        if args.len() != 2 {
+            return None;
+        }
+        let element_ty = match &args[0] {
+            GenericArg::Type(t) => self.lower_type_expr(t, generic_scope),
+            GenericArg::Const(_) => return None,
+        };
+        // Element-type constraint: primitive numeric only (Numeric-trait
+        // surrogate). A type-param `T` in scope is permitted — the bound is
+        // re-checked at monomorphization once the const-arg is concrete.
+        if !matches!(element_ty, Type::TypeParam(_)) && !type_is_numeric_primitive(&element_ty) {
+            self.type_error(
+                format!(
+                    "Vector element type must be a primitive numeric type \
+                     (i8..i128, u8..u64, f32, f64); got {}",
+                    type_display(&element_ty)
+                ),
+                span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return None;
+        }
+        // Reuse Array's const-arg parsing shape, then reject N <= 0.
+        let lanes: ConstArg = match &args[1] {
+            GenericArg::Const(expr) => match &expr.kind {
+                ExprKind::Integer(n, _) => {
+                    if *n <= 0 {
+                        self.type_error(
+                            format!("Vector lane count must be positive (N > 0); got {}", n),
+                            expr.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        return None;
+                    }
+                    ConstArg::Literal(*n)
+                }
+                ExprKind::Identifier(name) if generic_scope.contains(name) => {
+                    ConstArg::ConstParam(name.clone())
+                }
+                _ => match self.eval_const_expr(expr, &Type::UInt(UIntSize::Usize)) {
+                    Ok(cv) => match const_value_to_array_size(&cv) {
+                        Some(0) | None => {
+                            self.type_error(
+                                "Vector lane count must evaluate to a positive integer (N > 0)"
+                                    .to_string(),
+                                expr.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            return None;
+                        }
+                        Some(n) => ConstArg::Literal(n as i64),
+                    },
+                    Err(e) => {
+                        self.emit_const_eval_error(e);
+                        return None;
+                    }
+                },
+            },
+            // Parser carveout: plain identifier routed to GenericArg::Type
+            // (same disambiguation as `lower_array_type`).
+            GenericArg::Type(te) => {
+                if let TypeKind::Path(p) = &te.kind {
+                    if p.segments.len() == 1 && p.generic_args.is_none() {
+                        let name = &p.segments[0];
+                        if generic_scope.contains(name) {
+                            ConstArg::ConstParam(name.clone())
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+            }
+        };
+        Some(Type::Vector {
+            element: Box::new(element_ty),
+            lanes,
         })
     }
 
@@ -781,5 +893,21 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => ty.clone(),
         }
+    }
+}
+
+/// `Numeric`-trait surrogate for `Vector[T, N]` element types. `true` for the
+/// primitive integer and floating-point types permitted as SIMD lanes:
+/// `i8`…`i128`, `u8`…`u64`, `f32`, `f64`. `usize` is excluded per design.md
+/// § Portable SIMD (idiomatic Kāra reserves `usize` for sizes/indices, not
+/// lane data). Replaced by a real trait-bound check once the first-class
+/// `Numeric` trait lands (phase-7 line 289 sub-slice).
+fn type_is_numeric_primitive(ty: &Type) -> bool {
+    match ty {
+        Type::Int(_) => true,
+        Type::UInt(UIntSize::Usize) => false,
+        Type::UInt(_) => true,
+        Type::Float(_) => true,
+        _ => false,
     }
 }

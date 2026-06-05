@@ -13,7 +13,7 @@
 
 use crate::ast::*;
 
-use inkwell::types::BasicType;
+use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, FunctionValue};
 use inkwell::{AddressSpace, IntPredicate};
 
@@ -291,6 +291,16 @@ impl<'ctx> super::Codegen<'ctx> {
             } if segments.len() == 1 => (segments[0].clone(), Some(ga.clone())),
             _ => return Ok(self.context.i64_type().const_int(0, false).into()),
         };
+
+        // `Vector[T, N](lane0, …)` SIMD construction (design.md § Portable
+        // SIMD). Intercepted before the generic-fn path — `Vector` is a
+        // builtin type, not a user function. Builds an `<N x T>` value via an
+        // insertelement chain.
+        if name == "Vector" {
+            if let Some(ga) = explicit_generic_args.as_deref() {
+                return self.compile_vector_construction(ga, args);
+            }
+        }
 
         if name == "println" || name == "print" {
             return self.compile_print(&name, args);
@@ -1912,5 +1922,34 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_struct_value();
         Some(agg.into())
+    }
+
+    /// Compile `Vector[T, N](lane0, …, lane{N-1})` into an `<N x T>` SIMD value
+    /// (design.md § Portable SIMD). Builds the vector by inserting each compiled
+    /// lane argument into an undef vector at its index. The typechecker has
+    /// already verified the arg count equals `N` and each lane's type matches
+    /// `T`, so no shape re-validation is needed here.
+    fn compile_vector_construction(
+        &mut self,
+        generic_args: &[GenericArg],
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let vec_ty = self
+            .llvm_vector_type(&Some(generic_args.to_vec()))
+            .ok_or_else(|| "Vector construction: could not lower Vector[T, N] type".to_string())?;
+        let BasicTypeEnum::VectorType(vt) = vec_ty else {
+            return Err("Vector construction: lowered type is not an LLVM vector".to_string());
+        };
+        let i32_ty = self.context.i32_type();
+        let mut acc = vt.get_undef();
+        for (i, arg) in args.iter().enumerate() {
+            let lane = self.compile_expr(&arg.value)?;
+            let idx = i32_ty.const_int(i as u64, false);
+            acc = self
+                .builder
+                .build_insert_element(acc, lane, idx, "vec.ins")
+                .map_err(|e| format!("Vector construction insertelement failed: {e}"))?;
+        }
+        Ok(acc.into())
     }
 }

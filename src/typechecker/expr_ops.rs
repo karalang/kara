@@ -432,6 +432,80 @@ impl<'a> super::TypeChecker<'a> {
 
     // ── Binary / Unary Operators ────────────────────────────────
 
+    /// Element-wise arithmetic on `Vector[T, N]` (design.md § Portable SIMD).
+    /// Both operands must be the *same* `Vector[T, N]` type; the result is that
+    /// type. Slice 1 supports `+ - * / %`; bitwise ops and comparison-producing
+    /// `Mask` results are deferred to later slices. A vector-vs-scalar mix is a
+    /// type error (splat-from-scalar is an explicit `Vector::splat` call, not an
+    /// implicit broadcast).
+    fn infer_vector_binary(
+        &mut self,
+        op: &BinOp,
+        left_ty: &Type,
+        right_ty: &Type,
+        left: &Expr,
+        right: &Expr,
+        _span: &Span,
+    ) -> Type {
+        if !matches!(
+            op,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+        ) {
+            self.type_error(
+                format!(
+                    "this operator is not yet supported on Vector[T, N] \
+                     (slice 1 supports element-wise + - * / %); found operands \
+                     '{}' and '{}'",
+                    type_display(left_ty),
+                    type_display(right_ty)
+                ),
+                left.span.clone(),
+                TypeErrorKind::InvalidBinaryOp,
+            );
+            return Type::Error;
+        }
+        match (left_ty, right_ty) {
+            (
+                Type::Vector {
+                    element: le,
+                    lanes: ll,
+                },
+                Type::Vector {
+                    element: re,
+                    lanes: rl,
+                },
+            ) => {
+                if le != re || ll != rl {
+                    self.type_error(
+                        format!(
+                            "element-wise vector arithmetic requires both operands to be the \
+                             same Vector[T, N] type; found '{}' and '{}'",
+                            type_display(left_ty),
+                            type_display(right_ty)
+                        ),
+                        right.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                left_ty.clone()
+            }
+            _ => {
+                self.type_error(
+                    format!(
+                        "element-wise vector arithmetic requires both operands to be Vector[T, N]; \
+                         found '{}' and '{}' (use Vector::splat to broadcast a scalar)",
+                        type_display(left_ty),
+                        type_display(right_ty)
+                    ),
+                    right.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                Type::Error
+            }
+        }
+    }
+
     pub(super) fn infer_binary(
         &mut self,
         op: &BinOp,
@@ -451,6 +525,15 @@ impl<'a> super::TypeChecker<'a> {
 
         if left_ty == Type::Error || right_ty == Type::Error {
             return Type::Error;
+        }
+
+        // Element-wise SIMD arithmetic on `Vector[T, N]` (design.md § Portable
+        // SIMD). Handled before literal promotion — a vector never pairs with a
+        // bare scalar literal in v1 (splat-from-scalar is a separate method).
+        // Slice 1 covers `+ - * / %`; bitwise ops and comparison-to-`Mask` are
+        // later slices (phase-7 line 289).
+        if matches!(left_ty, Type::Vector { .. }) || matches!(right_ty, Type::Vector { .. }) {
+            return self.infer_vector_binary(op, &left_ty, &right_ty, left, right, span);
         }
 
         // Q4 literal promotion: for arithmetic, comparison, and equality ops,

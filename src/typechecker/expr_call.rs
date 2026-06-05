@@ -15,7 +15,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 use super::inference::{expr_as_type_expr, is_literal_const_arg_expr};
-use super::types::{type_display, IntSize, Type, UIntSize};
+use super::types::{type_display, ConstArg, IntSize, Type, UIntSize};
 use super::TypeErrorKind;
 
 impl<'a> super::TypeChecker<'a> {
@@ -30,6 +30,12 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
+        // Built-in `Vector[T, N](lane0, lane1, ...)` construction (design.md
+        // § Portable SIMD). Not a user function — intercept before the
+        // function-table lookup. One value argument per lane.
+        if name == "Vector" {
+            return self.infer_vector_construction(explicit_args, args, span);
+        }
         let Some(sig) = self.env.functions.get(name).cloned() else {
             // No matching function — fall through to the bare-identifier
             // dispatch via a synthetic Identifier callee so existing
@@ -68,6 +74,55 @@ impl<'a> super::TypeChecker<'a> {
             where_clause.as_ref(),
             span,
         )
+    }
+
+    /// Type-check a `Vector[T, N](lane0, …, lane{N-1})` construction.
+    ///
+    /// Slice 1 scope: concrete element / lane-count construction. The element
+    /// type and lane count are lowered through [`lower_vector_type`] (which
+    /// enforces numeric `T` and `N > 0` and emits its own diagnostics); each
+    /// value argument is then checked against the element type, and the arg
+    /// count must equal `N`. Returns `Type::Vector { element, lanes }` so the
+    /// result flows into binop / index / assignment positions.
+    fn infer_vector_construction(
+        &mut self,
+        explicit_args: &[GenericArg],
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let lowered = self.lower_vector_type(&Some(explicit_args.to_vec()), &[], span);
+        let Some(Type::Vector { element, lanes }) = lowered else {
+            // `lower_vector_type` already reported the bad element/lane shape.
+            // Still walk the args so downstream inference doesn't cascade.
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Error;
+        };
+        if let ConstArg::Literal(n) = &lanes {
+            if args.len() as i64 != *n {
+                self.type_error(
+                    format!(
+                        "Vector[{}, {}] construction expects {} lane argument(s), found {}",
+                        type_display(&element),
+                        n,
+                        n,
+                        args.len()
+                    ),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+            }
+        }
+        // Each lane value must be assignable to the element type. `check_expr`
+        // threads the element type as the expected type so suffixed literals
+        // and exact-typed bindings resolve cleanly.
+        for a in args {
+            self.check_expr(&a.value, &element);
+        }
+        let result = Type::Vector { element, lanes };
+        self.record_expr_type(span, &result);
+        result
     }
 
     /// Type-check a call to a layout-introspection intrinsic
