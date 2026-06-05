@@ -22176,18 +22176,15 @@ fn lock_block_on_non_mutex_rejected() {
 }
 
 #[test]
-fn lock_block_on_borrowed_mutex_rejected_in_slice1() {
-    // Slice 1 supports a directly-bound Mutex only; a `ref`/`mut ref Mutex`
-    // parameter is a tracked follow-on.
-    let errors = typecheck_errors(
+fn lock_on_borrowed_mutex_param_accepted() {
+    // `lock m` where `m: mut ref Mutex[T]` is now accepted (codegen loads
+    // through the reference). The inner `T` is unwrapped through the borrow,
+    // so `x = x + 1` typechecks against i64. (Concurrent use of a standalone
+    // Mutex across `par {}` is governed separately by the ownership checker —
+    // the idiomatic concurrent path is a `par struct` Mutex field.)
+    typecheck_ok(
         "fn bump(m: mut ref Mutex[i64]) { lock m x { x = x + 1; } }
          fn main() { let mut m = Mutex.new(0); bump(mut m); }",
-    );
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.kind == TypeErrorKind::LockTargetNotMutex && e.message.contains("borrowed")),
-        "lock on a borrowed Mutex must be rejected in slice 1; got: {errors:?}"
     );
 }
 

@@ -28916,6 +28916,27 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_lock_through_mut_ref_mutex_param() {
+        // `lock m` where `m: mut ref Mutex[i64]` — the alloca holds a pointer to
+        // the aggregate; the lock loads through the reference (recovering the
+        // Mutex struct type from `ref_params`) then spins. A helper that mutates
+        // a mutex passed by reference. 10 -> +5 -> 15.
+        let out = run_program(
+            r#"
+fn bump(m: mut ref Mutex[i64], n: i64) { lock m x { x = x + n; } }
+fn main() {
+    let mut m = Mutex.new(10);
+    bump(mut m, 5);
+    lock m v { println(v); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "15");
+        }
+    }
+
+    #[test]
     fn test_e2e_lock_par_struct_mutex_field_sequential() {
         // Slice 2: `lock self.total` — locking a `Mutex` FIELD of a par struct
         // (a place expression, not just a bare binding). The field is stored

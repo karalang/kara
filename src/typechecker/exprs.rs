@@ -2356,21 +2356,18 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Named { name, args } if name == "Mutex" && args.len() == 1 => {
                         Ok(args[0].clone())
                     }
-                    // A borrowed mutex (`ref`/`mut ref Mutex[T]` parameter) is a
-                    // follow-on — codegen would have to load through the
-                    // reference to reach the `{ lockflag, value }` aggregate.
-                    // Reject cleanly rather than fall to a codegen error.
+                    // A borrowed mutex (`ref`/`mut ref Mutex[T]` parameter) —
+                    // codegen loads through the reference to reach the
+                    // `{ lockflag, value }` aggregate (the pointee struct type
+                    // is recovered from `ref_params`).
                     Type::Ref(b) | Type::MutRef(b)
                         if matches!(b.as_ref(),
                             Type::Named { name, args } if name == "Mutex" && args.len() == 1) =>
                     {
-                        Err(format!(
-                            "`lock` on a borrowed `Mutex` (`{}`) is not supported yet — lock a \
-                             directly-bound `Mutex[T]` local or a `par`/`shared` struct `Mutex` \
-                             field; locking through a `ref`/`mut ref Mutex` parameter is a \
-                             tracked follow-on",
-                            type_display(&mutex_ty)
-                        ))
+                        match b.as_ref() {
+                            Type::Named { args, .. } => Ok(args[0].clone()),
+                            _ => unreachable!("guarded by the matches! above"),
+                        }
                     }
                     // `Type::Error` (unresolved place) is tolerated silently —
                     // the resolver already reported any undefined name.

@@ -2053,6 +2053,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 let slot = self.variables.get(name).copied().ok_or_else(|| {
                     format!("codegen: lock target '{}' has no storage slot", name)
                 })?;
+                // A `ref`/`mut ref Mutex[T]` parameter: the alloca holds a
+                // pointer TO the aggregate, and the pointee `{ lockflag, value }`
+                // struct type is recorded in `ref_params`. Load through the ref.
+                if let Some(&BasicTypeEnum::StructType(st)) = self.ref_params.get(name) {
+                    if st.count_fields() == 2 {
+                        let agg_ptr = self
+                            .builder
+                            .build_load(slot.ty, slot.ptr, "mutex.ref.load")
+                            .map_err(|e| format!("codegen: lock ref-param load failed: {:?}", e))?
+                            .into_pointer_value();
+                        return Ok((st, agg_ptr));
+                    }
+                }
+                // A directly-bound (or par-captured) local: the slot IS the
+                // aggregate.
                 match slot.ty {
                     BasicTypeEnum::StructType(st) if st.count_fields() == 2 => Ok((st, slot.ptr)),
                     other => Err(format!(
