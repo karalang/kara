@@ -22393,3 +22393,54 @@ fn vector_bitnot_float_rejected() {
         "unary `~` on a float vector must be rejected; got: {errors:?}"
     );
 }
+
+// ── Vector slice 3b — comparison → Mask[N] + select ──────────────────
+
+#[test]
+fn vector_compare_yields_mask_ok() {
+    // A vector comparison type-checks and its lanes index to `bool`.
+    typecheck_ok(
+        "fn main() { let a = Vector[i64, 4](1, 2, 3, 4); let b = Vector[i64, 4](4, 3, 2, 1); \
+         let m = a < b; let x: bool = m[0]; println(x); }",
+    );
+}
+
+#[test]
+fn vector_select_ok() {
+    typecheck_ok(
+        "fn main() { let a = Vector[i64, 4](1, 2, 3, 4); let b = Vector[i64, 4](4, 3, 2, 1); \
+         let r = (a < b).select(a, b); println(r[0]); }",
+    );
+}
+
+#[test]
+fn vector_select_on_non_mask_rejected() {
+    // `select` requires a `Vector[bool, N]` receiver — an integer vector is not
+    // a mask.
+    let errors = typecheck_errors(
+        "fn main() { let a = Vector[i64, 4](1, 2, 3, 4); let b = Vector[i64, 4](4, 3, 2, 1); \
+         let r = a.select(a, b); println(r[0]); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("only valid on a mask")),
+        "select on a non-mask receiver must be rejected; got: {errors:?}"
+    );
+}
+
+#[test]
+fn vector_select_lane_mismatch_rejected() {
+    // The select arguments must share the mask's lane count.
+    let errors = typecheck_errors(
+        "fn main() { let a = Vector[i64, 4](1, 2, 3, 4); let b = Vector[i64, 4](4, 3, 2, 1); \
+         let c = Vector[i64, 2](1, 2); let d = Vector[i64, 2](3, 4); \
+         let r = (a < b).select(c, d); println(r[0]); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("same lane count as the mask")),
+        "select with mismatched lane count must be rejected; got: {errors:?}"
+    );
+}

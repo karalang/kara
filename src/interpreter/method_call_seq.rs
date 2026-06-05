@@ -1026,6 +1026,26 @@ impl<'a> super::Interpreter<'a> {
                 let c2 = comp(self, a0, b1, a1, b0);
                 Some(Value::Vector(vec![c0, c1, c2]))
             }
+            // `mask.select(a, b)` — `lanes` is the mask (a `Value::Bool` per
+            // lane, produced by a vector comparison); pick `a[i]` where the
+            // lane is true, else `b[i]`. The typechecker guarantees both args
+            // are same-typed vectors with the mask's lane count.
+            "select" => {
+                let a = self.eval_expr_inner(&args[0].value);
+                let b = self.eval_expr_inner(&args[1].value);
+                let (Value::Vector(av), Value::Vector(bv)) = (a, b) else {
+                    return Some(self.record_runtime_error(
+                        "select expects two vector arguments".to_string(),
+                        span,
+                    ));
+                };
+                let out: Vec<Value> = lanes
+                    .into_iter()
+                    .zip(av.into_iter().zip(bv))
+                    .map(|(m, (x, y))| if matches!(m, Value::Bool(true)) { x } else { y })
+                    .collect();
+                Some(Value::Vector(out))
+            }
             _ => None,
         }
     }

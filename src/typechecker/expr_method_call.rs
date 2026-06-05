@@ -2433,12 +2433,105 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 vec_ty
             }
+            // `mask.select(a, b)` (design.md § Portable SIMD): per-lane choose
+            // `a[i]` where the mask lane is true, else `b[i]`. Valid only on a
+            // mask receiver — a `Vector[bool, N]` produced by a vector
+            // comparison. Both arguments must be the same `Vector[T, N]` whose
+            // lane count matches the mask; the result is that vector type.
+            "select" => {
+                let mask_ty = Type::Vector {
+                    element: Box::new(elem.clone()),
+                    lanes: lanes.clone(),
+                };
+                if !matches!(elem, Type::Bool) {
+                    self.type_error(
+                        format!(
+                            "'select' is only valid on a mask (Vector[bool, N]) produced \
+                             by a vector comparison; receiver is '{}'",
+                            type_display(&mask_ty)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                    return Type::Error;
+                }
+                if args.len() != 2 {
+                    self.type_error(
+                        format!("'select' takes exactly two arguments, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                    return Type::Error;
+                }
+                let a_ty = self.infer_expr(&args[0].value);
+                let b_ty = self.infer_expr(&args[1].value);
+                match (&a_ty, &b_ty) {
+                    (
+                        Type::Vector {
+                            element: ae,
+                            lanes: al,
+                        },
+                        Type::Vector {
+                            element: be,
+                            lanes: bl,
+                        },
+                    ) => {
+                        if ae != be || al != bl {
+                            self.type_error(
+                                format!(
+                                    "'select' arguments must be the same Vector[T, N] type; \
+                                     found '{}' and '{}'",
+                                    type_display(&a_ty),
+                                    type_display(&b_ty)
+                                ),
+                                args[1].value.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            return Type::Error;
+                        }
+                        if al != lanes {
+                            self.type_error(
+                                format!(
+                                    "'select' arguments must have the same lane count as the \
+                                     mask (mask is '{}', arguments are '{}')",
+                                    type_display(&mask_ty),
+                                    type_display(&a_ty)
+                                ),
+                                args[0].value.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            return Type::Error;
+                        }
+                        a_ty
+                    }
+                    (Type::Error, _) | (_, Type::Error) => Type::Error,
+                    _ => {
+                        self.type_error(
+                            format!(
+                                "'select' arguments must be Vector[T, N] values; \
+                                 found '{}' and '{}'",
+                                type_display(&a_ty),
+                                type_display(&b_ty)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        Type::Error
+                    }
+                }
+            }
             _ => {
                 self.type_error(
                     format!(
                         "no method '{}' on Vector[{}, _] (supported: dot, cross, \
                          reduce_sum, reduce_product, reduce_min, reduce_max, \
-                         reduce_and, reduce_or, reduce_xor)",
+                         reduce_and, reduce_or, reduce_xor; select on a Vector[bool, N] mask)",
                         method,
                         type_display(&elem)
                     ),

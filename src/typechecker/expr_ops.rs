@@ -452,12 +452,16 @@ impl<'a> super::TypeChecker<'a> {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
         );
         let is_bitwise = matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor);
-        if !is_arith && !is_bitwise {
+        let is_compare = matches!(
+            op,
+            BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq | BinOp::Eq | BinOp::NotEq
+        );
+        if !is_arith && !is_bitwise && !is_compare {
             self.type_error(
                 format!(
                     "this operator is not yet supported on Vector[T, N] \
-                     (element-wise + - * / % for any numeric lane, & | ^ for integer lanes); \
-                     found operands '{}' and '{}'",
+                     (element-wise + - * / % and & | ^ on lanes, comparisons \
+                     < <= > >= == != yielding a mask); found operands '{}' and '{}'",
                     type_display(left_ty),
                     type_display(right_ty)
                 ),
@@ -480,7 +484,7 @@ impl<'a> super::TypeChecker<'a> {
                 if le != re || ll != rl {
                     self.type_error(
                         format!(
-                            "element-wise vector arithmetic requires both operands to be the \
+                            "element-wise vector operators require both operands to be the \
                              same Vector[T, N] type; found '{}' and '{}'",
                             type_display(left_ty),
                             type_display(right_ty)
@@ -491,7 +495,8 @@ impl<'a> super::TypeChecker<'a> {
                     return Type::Error;
                 }
                 // Bitwise `& | ^` are integer-lane only — float vectors have no
-                // meaningful bit-and/or/xor. Arithmetic stays open to all lanes.
+                // meaningful bit-and/or/xor. Arithmetic / comparisons stay open
+                // to all numeric lanes.
                 if is_bitwise && !matches!(**le, Type::Int(_) | Type::UInt(_)) {
                     self.type_error(
                         format!(
@@ -504,7 +509,16 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return Type::Error;
                 }
-                left_ty.clone()
+                // Comparisons yield a per-lane mask `Vector[bool, N]` (lowers to
+                // `<N x i1>`); arithmetic / bitwise return the operand type.
+                if is_compare {
+                    Type::Vector {
+                        element: Box::new(Type::Bool),
+                        lanes: ll.clone(),
+                    }
+                } else {
+                    left_ty.clone()
+                }
             }
             _ => {
                 self.type_error(

@@ -234,6 +234,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => {
                     let lhs = self.compile_expr(left)?;
                     let rhs = self.compile_expr(right)?;
+                    // Vector binops aren't lowered to primitive method calls
+                    // (only primitives are), so they reach here as raw
+                    // `ExprKind::Binary` with no signedness context. Recover the
+                    // element signedness from the `unsigned_vector_exprs`
+                    // side-table (keyed by the left operand span) so unsigned
+                    // comparisons / div / mod pick `ult`/`ugt` / `udiv` / `urem`.
+                    if lhs.is_vector_value() && rhs.is_vector_value() {
+                        let is_unsigned = self
+                            .unsigned_vector_exprs
+                            .contains(&(left.span.offset, left.span.length));
+                        return self.compile_binop_typed(op, lhs, rhs, is_unsigned);
+                    }
                     self.compile_binop(op, lhs, rhs)
                 }
             },

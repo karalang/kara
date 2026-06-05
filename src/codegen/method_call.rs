@@ -123,6 +123,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "Vector.reduce_and"
                     | "Vector.reduce_or"
                     | "Vector.reduce_xor"
+                    | "Vector.select"
             ) {
                 return self.compile_vector_method(object, method, args);
             }
@@ -2962,6 +2963,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         .map_err(|e| format!("vector insertelement failed: {e}"))?;
                 }
                 Ok(out.into())
+            }
+            // `mask.select(a, b)` — per-lane blend via LLVM `select <N x i1>`.
+            // `recv` is the `<N x i1>` mask; the two args are the `<N x T>` data
+            // vectors. The typechecker guarantees matching lane counts.
+            "select" => {
+                let a = self.compile_expr(&args[0].value)?.into_vector_value();
+                let b = self.compile_expr(&args[1].value)?.into_vector_value();
+                self.builder
+                    .build_select(recv, a, b, "vselect")
+                    .map_err(|e| format!("vector select failed: {e}"))
             }
             other => Err(format!("unsupported Vector method '{other}' in codegen")),
         }

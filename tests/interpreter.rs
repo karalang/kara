@@ -12648,3 +12648,60 @@ fn main() {
     );
     assert_eq!(out, "-1\n-4\n0\n-256\n");
 }
+
+// ── Vector slice 3b — comparison → Mask[N] + select ──────────────────
+
+#[test]
+fn test_vector_compare_mask() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a = Vector[i64, 4](1, 5, 3, 8);
+    let b = Vector[i64, 4](4, 2, 3, 6);
+    let lt = a < b;
+    let eq = a == b;
+    println(lt[0]); // 1<4 = true
+    println(lt[1]); // 5<2 = false
+    println(eq[2]); // 3==3 = true
+    println(eq[0]); // 1==4 = false
+}
+"#,
+    );
+    assert_eq!(out, "true\nfalse\ntrue\nfalse\n");
+}
+
+#[test]
+fn test_vector_select() {
+    // `(a < b).select(a, b)` is a per-lane min.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a = Vector[i64, 4](1, 5, 3, 8);
+    let b = Vector[i64, 4](4, 2, 3, 6);
+    let mn = (a < b).select(a, b);
+    println(mn[0]); // 1
+    println(mn[1]); // 2
+    println(mn[2]); // 3
+    println(mn[3]); // 6
+}
+"#,
+    );
+    assert_eq!(out, "1\n2\n3\n6\n");
+}
+
+#[test]
+fn test_vector_compare_unsigned_mask() {
+    // Unsigned compare: 3000000000 (high bit set as i32) is NOT < 10.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a = Vector[u32, 2](3000000000, 5);
+    let b = Vector[u32, 2](10, 10);
+    let m = a < b;
+    println(m[0]); // false (unsigned)
+    println(m[1]); // true
+}
+"#,
+    );
+    assert_eq!(out, "false\ntrue\n");
+}

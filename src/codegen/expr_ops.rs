@@ -1530,6 +1530,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 BinOp::Mul => self.builder.build_float_mul(lv, rv, "vmul").unwrap().into(),
                 BinOp::Div => self.builder.build_float_div(lv, rv, "vdiv").unwrap().into(),
                 BinOp::Mod => self.builder.build_float_rem(lv, rv, "vrem").unwrap().into(),
+                // Comparisons → per-lane mask `<N x i1>`. Ordered float
+                // predicates match the scalar float compares.
+                BinOp::Eq => self
+                    .builder
+                    .build_float_compare(FloatPredicate::OEQ, lv, rv, "veq")
+                    .unwrap()
+                    .into(),
+                BinOp::NotEq => self
+                    .builder
+                    .build_float_compare(FloatPredicate::ONE, lv, rv, "vne")
+                    .unwrap()
+                    .into(),
+                BinOp::Lt => self
+                    .builder
+                    .build_float_compare(FloatPredicate::OLT, lv, rv, "vlt")
+                    .unwrap()
+                    .into(),
+                BinOp::LtEq => self
+                    .builder
+                    .build_float_compare(FloatPredicate::OLE, lv, rv, "vle")
+                    .unwrap()
+                    .into(),
+                BinOp::Gt => self
+                    .builder
+                    .build_float_compare(FloatPredicate::OGT, lv, rv, "vgt")
+                    .unwrap()
+                    .into(),
+                BinOp::GtEq => self
+                    .builder
+                    .build_float_compare(FloatPredicate::OGE, lv, rv, "vge")
+                    .unwrap()
+                    .into(),
                 _ => return Err(format!("unsupported vector float op {op:?}")),
             }
         } else {
@@ -1580,6 +1612,75 @@ impl<'ctx> super::Codegen<'ctx> {
                 BinOp::BitAnd => self.builder.build_and(lv, rv, "vand").unwrap().into(),
                 BinOp::BitOr => self.builder.build_or(lv, rv, "vor").unwrap().into(),
                 BinOp::BitXor => self.builder.build_xor(lv, rv, "vxor").unwrap().into(),
+                // Comparisons → per-lane mask `<N x i1>`. `is_unsigned` (from the
+                // operand's `unsigned_vector_exprs` span) picks `ult`/`ugt` over
+                // `slt`/`sgt`, matching the scalar integer compares.
+                BinOp::Eq => self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, lv, rv, "veq")
+                    .unwrap()
+                    .into(),
+                BinOp::NotEq => self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, lv, rv, "vne")
+                    .unwrap()
+                    .into(),
+                BinOp::Lt => self
+                    .builder
+                    .build_int_compare(
+                        if is_unsigned {
+                            IntPredicate::ULT
+                        } else {
+                            IntPredicate::SLT
+                        },
+                        lv,
+                        rv,
+                        "vlt",
+                    )
+                    .unwrap()
+                    .into(),
+                BinOp::LtEq => self
+                    .builder
+                    .build_int_compare(
+                        if is_unsigned {
+                            IntPredicate::ULE
+                        } else {
+                            IntPredicate::SLE
+                        },
+                        lv,
+                        rv,
+                        "vle",
+                    )
+                    .unwrap()
+                    .into(),
+                BinOp::Gt => self
+                    .builder
+                    .build_int_compare(
+                        if is_unsigned {
+                            IntPredicate::UGT
+                        } else {
+                            IntPredicate::SGT
+                        },
+                        lv,
+                        rv,
+                        "vgt",
+                    )
+                    .unwrap()
+                    .into(),
+                BinOp::GtEq => self
+                    .builder
+                    .build_int_compare(
+                        if is_unsigned {
+                            IntPredicate::UGE
+                        } else {
+                            IntPredicate::SGE
+                        },
+                        lv,
+                        rv,
+                        "vge",
+                    )
+                    .unwrap()
+                    .into(),
                 _ => return Err(format!("unsupported vector int op {op:?}")),
             }
         };

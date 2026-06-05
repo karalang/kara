@@ -29928,6 +29928,85 @@ fn main() {
         }
     }
 
+    // ── Vector slice 3b — comparison → Mask[N] + select ──────────────────
+
+    #[test]
+    fn test_vector_compare_mask() {
+        // `<`/`==` lower to `build_int_compare` on the vector → `<4 x i1>`;
+        // `m[i]` extractelements an i1 (== Kāra bool).
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](1, 5, 3, 8);
+    let b = Vector[i64, 4](4, 2, 3, 6);
+    let lt = a < b;
+    let eq = a == b;
+    println(lt[0]); println(lt[1]); println(eq[2]); println(eq[0]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "true\nfalse\ntrue\nfalse\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_select() {
+        // `(a < b).select(a, b)` lowers to LLVM `select <4 x i1>` — per-lane min.
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](1, 5, 3, 8);
+    let b = Vector[i64, 4](4, 2, 3, 6);
+    let mn = (a < b).select(a, b);
+    println(mn[0]); println(mn[1]); println(mn[2]); println(mn[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1\n2\n3\n6\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_compare_unsigned_mask() {
+        // Unsigned predicate (`ult`): 3000000000 is the most-negative i32, so a
+        // signed compare would wrongly make it `< 10`. The mask must read false.
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[u32, 2](3000000000, 5);
+    let b = Vector[u32, 2](10, 10);
+    let m = a < b;
+    println(m[0]); println(m[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "false\ntrue\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_compare_float_select() {
+        // Ordered float compare (`<=` → OLE) + select on the resulting mask.
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[f64, 2](1.5, 9.0);
+    let b = Vector[f64, 2](2.0, 3.0);
+    let m = a <= b;
+    println(m[0]); println(m[1]);
+    let pick = (a <= b).select(a, b);
+    println(pick[0]); println(pick[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "true\nfalse\n1.5\n3\n");
+        }
+    }
+
     // ── Stdlib non-builtin body compilation (L889 slice 1) ───────────────
     //
     // Before this slice codegen never walked STDLIB_PROGRAMS, so a real
