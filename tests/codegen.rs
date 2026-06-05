@@ -1141,6 +1141,113 @@ fn main() reads(Stdin) {
     }
 
     #[test]
+    fn test_e2e_stdout_println_interleaves_with_free_println() {
+        // `Stdout.println(s)` must share the SAME libc stdout buffer as the
+        // free `println` builtin — otherwise the two streams flush in the
+        // wrong order. Interleaving free and explicit prints and asserting
+        // exact line order is the sharp witness that `Stdout.*` routes
+        // through `self.printf_fn` (not a separately-buffered runtime
+        // stdout). L646 slice 4b.
+        let out = run_program(
+            r#"
+fn main() {
+    println("a");
+    Stdout.println("b");
+    print("c");
+    Stdout.print("d");
+    Stdout.println("e");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "a\nb\ncde\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_stderr_println_writes_to_stderr_not_stdout() {
+        // `Stderr.println(s)` lowers to `dprintf(2, …)` — it must land on
+        // stderr (fd 2), NOT stdout. Capture both streams and assert the
+        // split: the stderr line on stderr, the stdout line on stdout.
+        let cap = run_program_capturing(
+            r#"
+fn main() {
+    Stderr.println("to-stderr");
+    println("to-stdout");
+}
+"#,
+        );
+        if let Some(cap) = cap {
+            assert_eq!(cap.stdout.trim(), "to-stdout");
+            assert!(
+                cap.stderr.contains("to-stderr"),
+                "expected 'to-stderr' on stderr, got: {:?}",
+                cap.stderr
+            );
+            assert!(
+                !cap.stdout.contains("to-stderr"),
+                "stderr content leaked onto stdout: {:?}",
+                cap.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_stdout_print_and_flush() {
+        // `Stdout.print` (no newline) + `Stdout.flush()` + `Stdout.println`.
+        // flush lowers to `fflush(NULL)` and must run without crashing; the
+        // accumulated output is the concatenation with the final newline.
+        let out = run_program(
+            r#"
+fn main() {
+    Stdout.print("x");
+    Stdout.flush();
+    Stdout.println("y");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "xy\n");
+        }
+    }
+
+    #[test]
+    fn test_stdout_stderr_methods_resolve_and_typecheck_clean() {
+        // Full-pipeline check (NOT `run_program`, which tolerates
+        // resolve/typecheck errors). The capitalized `Stdout.*` / `Stderr.*`
+        // forms are real stdlib `#[compiler_builtin]` methods and must
+        // resolve + typecheck cleanly.
+        let src = r#"
+fn main() {
+    Stdout.print("a");
+    Stdout.println("b");
+    Stdout.flush();
+    Stderr.print("c");
+    Stderr.println("d");
+    Stderr.flush();
+}
+"#;
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        assert!(
+            resolved.errors.is_empty(),
+            "resolve errors for Stdout/Stderr methods: {:?}",
+            resolved.errors
+        );
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "typecheck errors for Stdout/Stderr methods: {:?}",
+            typed.errors
+        );
+    }
+
+    #[test]
     fn test_ambient_override_of_nonvtable_method_errors_loudly() {
         // A `with_provider[Env]` override that supplies `args` (a method with
         // NO `AMBIENT_RESOURCE_METHODS` vtable slot) must be a LOUD codegen

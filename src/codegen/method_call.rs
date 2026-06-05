@@ -1910,6 +1910,48 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.lower_kara_io_result(slot, super::file::FileOkKind::StringPayload)
             }
+            ("Stdout", "print")
+            | ("Stdout", "println")
+            | ("Stderr", "print")
+            | ("Stderr", "println") => {
+                if arg_vals.len() != 1 {
+                    return Err(format!(
+                        "codegen: {resource}.{method} expects 1 argument, found {}",
+                        arg_vals.len()
+                    ));
+                }
+                let to_stderr = resource == "Stderr";
+                let newline = method == "println";
+                self.emit_console_str_write(arg_vals[0], to_stderr, newline)?;
+                // Returns Unit → the i64-0 void-return placeholder.
+                Ok(i64_t.const_int(0, false).into())
+            }
+            ("Stdout", "flush") | ("Stderr", "flush") => {
+                if !arg_vals.is_empty() {
+                    return Err(format!(
+                        "codegen: {resource}.flush expects 0 arguments, found {}",
+                        arg_vals.len()
+                    ));
+                }
+                // `fflush(NULL)` flushes every open output stream — portable
+                // (POSIX), and crucially flushes the libc stdout buffer that
+                // `printf` (free `print`/`println` and `Stdout.*`) writes
+                // into. `Stderr.*` goes to fd 2 unbuffered via `dprintf`, so
+                // its flush is a no-op, but `fflush(NULL)` covers both
+                // uniformly. No FILE*-global access needed (the `stdout` /
+                // `__stderrp` symbol differs across libc).
+                let fflush = match self.module.get_function("fflush") {
+                    Some(f) => f,
+                    None => {
+                        let ty = self.context.i32_type().fn_type(&[ptr_t.into()], false);
+                        self.module.add_function("fflush", ty, None)
+                    }
+                };
+                self.builder
+                    .build_call(fflush, &[ptr_t.const_null().into()], "fflush")
+                    .unwrap();
+                Ok(i64_t.const_int(0, false).into())
+            }
             _ => Err(format!(
                 "codegen: ambient resource method '{}.{}' is not yet lowered \
                  (interpreter-only); add a runtime FFI + an arm in \
@@ -1917,6 +1959,94 @@ impl<'ctx> super::Codegen<'ctx> {
                 resource, method
             )),
         }
+    }
+
+    /// Emit a console write of a Kāra `String` value to stdout or stderr,
+    /// optionally with a trailing newline. Backs the `Stdout.{print,println}`
+    /// / `Stderr.{print,println}` ambient methods (L646 slice 4b).
+    ///
+    /// **Stdout** reuses `self.printf_fn` — the SAME libc `printf` / stdout
+    /// buffer the free `print`/`println` builtins use (`compile_print`), so a
+    /// program mixing `println(x)` and `Stdout.println(y)` never interleaves
+    /// out of order. **Stderr** writes to fd 2 via POSIX `dprintf`, avoiding
+    /// the non-portable `stderr` / `__stderrp` FILE*-global; fd 2 is
+    /// unbuffered. Both use `%.*s` with the explicit length (field 1) so a
+    /// non-NUL-terminated heap `String` is read exactly `len` bytes —
+    /// identical to `compile_print`'s String-value arm (which documents the
+    /// ASan heap-overflow that a bare `%s` would cause).
+    fn emit_console_str_write(
+        &mut self,
+        str_val: BasicValueEnum<'ctx>,
+        to_stderr: bool,
+        newline: bool,
+    ) -> Result<(), String> {
+        if !str_val.is_struct_value() {
+            return Err(format!(
+                "codegen: console write expects a String value, got {str_val:?}"
+            ));
+        }
+        let sv = str_val.into_struct_value();
+        let str_ptr = self
+            .builder
+            .build_extract_value(sv, 0, "con.str.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let str_len = self
+            .builder
+            .build_extract_value(sv, 1, "con.str.len")
+            .unwrap()
+            .into_int_value();
+        let len_i32 = self
+            .builder
+            .build_int_truncate(str_len, self.context.i32_type(), "con.len.i32")
+            .unwrap();
+        let nl = if newline { "\n" } else { "" };
+        if to_stderr {
+            let i32_t = self.context.i32_type();
+            let ptr_t = self.context.ptr_type(AddressSpace::default());
+            // int dprintf(int fd, const char *fmt, ...)
+            let dprintf = match self.module.get_function("dprintf") {
+                Some(f) => f,
+                None => {
+                    let ty = i32_t.fn_type(&[i32_t.into(), ptr_t.into()], true);
+                    self.module.add_function("dprintf", ty, None)
+                }
+            };
+            let fmt = self
+                .builder
+                .build_global_string_ptr(&format!("%.*s{nl}"), "con.fmt.e")
+                .unwrap();
+            let fd2 = i32_t.const_int(2, false);
+            self.builder
+                .build_call(
+                    dprintf,
+                    &[
+                        fd2.into(),
+                        fmt.as_pointer_value().into(),
+                        len_i32.into(),
+                        str_ptr.into(),
+                    ],
+                    "dprintf",
+                )
+                .unwrap();
+        } else {
+            let fmt = self
+                .builder
+                .build_global_string_ptr(&format!("%.*s{nl}"), "con.fmt.o")
+                .unwrap();
+            self.builder
+                .build_call(
+                    self.printf_fn,
+                    &[
+                        fmt.as_pointer_value().into(),
+                        len_i32.into(),
+                        str_ptr.into(),
+                    ],
+                    "printf",
+                )
+                .unwrap();
+        }
+        Ok(())
     }
 
     /// True iff `object` is a receiver shape whose static type is
@@ -3219,5 +3349,11 @@ pub(super) fn ambient_ffi_lowered(resource: &str, method: &str) -> bool {
             | ("Env", "var")
             | ("Stdin", "read_line")
             | ("Stdin", "read_to_string")
+            | ("Stdout", "print")
+            | ("Stdout", "println")
+            | ("Stdout", "flush")
+            | ("Stderr", "print")
+            | ("Stderr", "println")
+            | ("Stderr", "flush")
     )
 }
