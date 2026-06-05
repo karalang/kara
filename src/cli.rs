@@ -2608,6 +2608,13 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // always Arc with potential multiple holders (design.md
                 // § Part 5b > `ref self` receivers only).
                 crate::typechecker::TypeErrorKind::ParMutSelfReceiver => "E0258",
+                // Phase 6 `Mutex` / `lock` — a `lock` block body contains an
+                // early exit (`return` / `break` / `continue`); slice 1 emits
+                // the release only on the straight-line path.
+                crate::typechecker::TypeErrorKind::LockEarlyExit => "E0259",
+                // Phase 6 `Mutex` / `lock` — the `lock` target is not a
+                // `Mutex[T]` binding.
+                crate::typechecker::TypeErrorKind::LockTargetNotMutex => "E0260",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),

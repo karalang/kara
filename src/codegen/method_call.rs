@@ -2032,6 +2032,119 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Codegen for `lock m [alias] { body }` (design.md § Part 5: Shared Types,
+    /// `lock` blocks). `m` is a `Mutex[T]` binding laid out as
+    /// `{ i64 lockflag, T value }`. Emits a TAS spinlock: acquire by
+    /// `atomicrmw xchg`-ing the flag to 1 and spinning until the previous value
+    /// was 0; expose the value field as a `mut ref T` binding (the `alias`, or
+    /// the mutex name itself shadowed) for the body; release by atomically
+    /// storing 0. **Slice 1** is straight-line only — the typechecker rejects
+    /// early exits from the body, so the single fall-through release is sound.
+    pub(super) fn compile_lock_block(
+        &mut self,
+        mutex: &str,
+        alias: Option<&str>,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // The mutex binding's slot holds the `{ i64 lockflag, T value }`
+        // aggregate; `slot.ptr` is a pointer to it.
+        let slot = self
+            .variables
+            .get(mutex)
+            .copied()
+            .ok_or_else(|| format!("codegen: lock target '{}' has no storage slot", mutex))?;
+        let mutex_struct = match slot.ty {
+            BasicTypeEnum::StructType(st) if st.count_fields() == 2 => st,
+            other => {
+                return Err(format!(
+                    "codegen: lock target '{}' is not a Mutex[T] (slot type {:?})",
+                    mutex, other
+                ))
+            }
+        };
+        let flag_ptr = self
+            .builder
+            .build_struct_gep(mutex_struct, slot.ptr, 0, "mutex.flag.ptr")
+            .map_err(|e| format!("codegen: lock flag gep failed: {:?}", e))?;
+        let value_ptr = self
+            .builder
+            .build_struct_gep(mutex_struct, slot.ptr, 1, "mutex.val.ptr")
+            .map_err(|e| format!("codegen: lock value gep failed: {:?}", e))?;
+        let value_ty = mutex_struct.get_field_type_at_index(1).unwrap();
+
+        let i64_t = self.context.i64_type();
+        let one = i64_t.const_int(1, false);
+        let current_fn = self.current_fn.unwrap();
+        let spin_bb = self.context.append_basic_block(current_fn, "lock.spin");
+        let held_bb = self.context.append_basic_block(current_fn, "lock.held");
+        let after_bb = self.context.append_basic_block(current_fn, "lock.after");
+
+        // Acquire — TAS spin: swap the flag to 1; if the old value was 0 we now
+        // hold the lock, otherwise someone else does (the swap is a harmless
+        // 1→1 no-op) so spin and retry.
+        self.builder.build_unconditional_branch(spin_bb).unwrap();
+        self.builder.position_at_end(spin_bb);
+        let prev = self
+            .builder
+            .build_atomicrmw(
+                AtomicRMWBinOp::Xchg,
+                flag_ptr,
+                one,
+                AtomicOrdering::SequentiallyConsistent,
+            )
+            .map_err(|e| format!("codegen: lock acquire atomicrmw failed: {:?}", e))?;
+        let acquired = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, prev, i64_t.const_zero(), "lock.acquired")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(acquired, held_bb, spin_bb)
+            .unwrap();
+
+        // Critical section.
+        self.builder.position_at_end(held_bb);
+        // Bind the body alias (or the mutex name, shadowed) to the value slot —
+        // a `mut ref T` whose storage IS the mutex's value field, so the body's
+        // reads / writes / field accesses operate in place under the lock.
+        let bind_name = alias.unwrap_or(mutex).to_string();
+        let saved = self.variables.get(&bind_name).copied();
+        self.variables.insert(
+            bind_name.clone(),
+            super::VarSlot {
+                ptr: value_ptr,
+                ty: value_ty,
+            },
+        );
+        let body_val = self.compile_block(body)?;
+        // Restore the shadowed binding (mutex name) / drop the alias.
+        match saved {
+            Some(s) => {
+                self.variables.insert(bind_name.clone(), s);
+            }
+            None => {
+                self.variables.remove(&bind_name);
+            }
+        }
+
+        // Release — atomically clear the flag. Only reached on the straight-line
+        // path (early exits are rejected by the typechecker), so the body block
+        // is guaranteed to fall through here with no terminator.
+        let release = self
+            .builder
+            .build_store(flag_ptr, i64_t.const_zero())
+            .unwrap();
+        release
+            .set_atomic_ordering(AtomicOrdering::SequentiallyConsistent)
+            .map_err(|e| format!("codegen: lock release set_atomic_ordering failed: {:?}", e))?;
+        release
+            .set_alignment(8)
+            .map_err(|e| format!("codegen: lock release set_alignment failed: {:?}", e))?;
+        self.builder.build_unconditional_branch(after_bb).unwrap();
+        self.builder.position_at_end(after_bb);
+
+        Ok(body_val.unwrap_or_else(|| i64_t.const_int(0, false).into()))
+    }
+
     /// Recover the (storage pointer, element LLVM type) pair for an
     /// `Atomic[T]` receiver. Identifier path reads from `variables`;
     /// FieldAccess path GEPs to the struct field. Element type is the

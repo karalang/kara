@@ -125,6 +125,9 @@ pub enum Value {
     TotalFloat64(f64),
     /// Atomic[T] runtime value (single-threaded: plain value)
     Atomic(Box<Value>),
+    /// Mutex[T] runtime value (single-threaded: plain cell; `lock` blocks
+    /// bind the inner value as a mutable alias and write it back on exit).
+    Mutex(Box<Value>),
     /// SortedSet[T: Ord] — B-tree–backed ordered set keyed by OrdValue.
     /// BTreeMap provides O(log n) insert/remove/contains with iteration in
     /// ascending key order. The () value makes it a set (not a map).
@@ -390,6 +393,7 @@ impl PartialEq for Value {
             (Value::TotalFloat32(a), Value::TotalFloat32(b)) => a.total_cmp(b).is_eq(),
             (Value::TotalFloat64(a), Value::TotalFloat64(b)) => a.total_cmp(b).is_eq(),
             (Value::Atomic(a), Value::Atomic(b)) => a == b,
+            (Value::Mutex(a), Value::Mutex(b)) => a == b,
             (Value::Map(a), Value::Map(b)) => {
                 a.len() == b.len()
                     && a.iter()
@@ -724,6 +728,7 @@ impl std::fmt::Display for Value {
             Value::TotalFloat32(v) => write!(f, "F32({})", v),
             Value::TotalFloat64(v) => write!(f, "F64({})", v),
             Value::Atomic(v) => write!(f, "Atomic({})", v),
+            Value::Mutex(v) => write!(f, "Mutex({})", v),
             Value::SortedSet(set) => {
                 write!(f, "SortedSet{{")?;
                 for (i, k) in set.keys().enumerate() {
@@ -892,6 +897,7 @@ impl Value {
             Value::TotalFloat32(_) => "TotalFloat32",
             Value::TotalFloat64(_) => "TotalFloat64",
             Value::Atomic(_) => "Atomic",
+            Value::Mutex(_) => "Mutex",
             Value::SortedSet(_) => "SortedSet",
             Value::Set(_) => "Set",
             Value::Iterator { .. } => "Iterator",

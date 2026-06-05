@@ -108,6 +108,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // `Mutex[T]` — a spinlock-guarded cell laid out as
+                // `{ i64 lockflag, T value }`. Unlike `Atomic[T]` (transparent),
+                // `Mutex` carries an explicit lock word: `lock m { ... }`
+                // acquires by TAS-spinning on field 0 (`atomicrmw xchg`),
+                // exposes field 1 as a `mut ref T` alias for the body, then
+                // releases by storing 0. `Mutex.new(v)` builds `{ 0, v }`.
+                // (Slice 1: spinlock — a blocking/futex mutex is a perf
+                // follow-on.)
+                if name == "Mutex" {
+                    if let Some(args) = &path.generic_args {
+                        if let Some(GenericArg::Type(inner)) = args.first() {
+                            let inner_ty = self.llvm_type_for_type_expr(inner);
+                            return self
+                                .context
+                                .struct_type(&[self.context.i64_type().into(), inner_ty], false)
+                                .into();
+                        }
+                    }
+                }
                 // Map[K,V] and Set[T] are opaque heap pointers managed by the
                 // karac_map_* runtime functions.
                 if name == "Map" || name == "Set" || name == "SortedSet" {

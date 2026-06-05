@@ -140,6 +140,14 @@ impl<'a> super::Interpreter<'a> {
                     };
                     return Value::Atomic(Box::new(val));
                 }
+                "Mutex.new" => {
+                    let val = if let Some(arg) = args.first() {
+                        self.eval_expr_inner(&arg.value)
+                    } else {
+                        Value::Int(0)
+                    };
+                    return Value::Mutex(Box::new(val));
+                }
                 // Debugger Contract slice 5: `std.runtime` introspection
                 // surface (`runtime/stdlib/runtime.kara`). The tree-walk
                 // interpreter has its own par-block evaluation path and does

@@ -28844,6 +28844,77 @@ fn main() {
         }
     }
 
+    // ── Mutex + lock blocks (slice 1: spinlock, standalone) ──────
+
+    #[test]
+    fn test_ir_lock_block_emits_spinlock_atomicrmw_and_release() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let m = Mutex.new(0);
+    lock m x { x = x + 1; }
+}
+"#,
+        );
+        // Acquire spins via atomicrmw xchg; release is an atomic store.
+        assert!(
+            ir.contains("atomicrmw xchg"),
+            "lock acquire must emit `atomicrmw xchg`; got IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("store atomic"),
+            "lock release must emit an atomic store; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_lock_block_single_threaded_alias_and_no_alias() {
+        // Both forms: `lock m x { ... }` (alias) and `lock m { ... m ... }`
+        // (the mutex name shadows to the inner value). 10 -> +5 -> *2 -> 30.
+        let out = run_program(
+            r#"
+fn main() {
+    let m = Mutex.new(10);
+    lock m x { x = x + 5; }
+    lock m y { y = y * 2; }
+    lock m { println(m); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "30");
+        }
+    }
+
+    #[test]
+    fn test_e2e_concurrent_mutex_counter_no_lost_updates() {
+        // A standalone local `Mutex[i64]` shared across two `par {}` branches
+        // (par captures the local by reference to the same aggregate). The
+        // spinlock serializes the read-modify-write, so 2×50_000 increments
+        // yield exactly 100_000 — a non-locked `+1` would lose updates.
+        let out = run_program(
+            r#"
+fn main() {
+    let m = Mutex.new(0);
+    par {
+        {
+            let mut i = 0;
+            while i < 50000 { lock m x { x = x + 1; } i = i + 1; }
+        }
+        {
+            let mut j = 0;
+            while j < 50000 { lock m y { y = y + 1; } j = j + 1; }
+        }
+    }
+    lock m v { println(v); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "100000");
+        }
+    }
+
     #[test]
     fn test_e2e_concurrent_atomic_counter_no_lost_updates() {
         // The headline lock-free-counter shape: two sibling `par {}` branches

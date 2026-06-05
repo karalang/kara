@@ -22106,19 +22106,88 @@ fn atomic_new_in_local_let_infers_atomic_of_arg_type() {
 }
 
 #[test]
-fn mutex_new_in_general_position_still_rejected() {
-    // Guard: only Atomic.new is general-position (Mutex.new has no codegen
-    // yet, so it must NOT silently typecheck in a value expression — that
-    // would turn a clean typecheck error into a codegen failure).
-    let errors = typecheck_errors(
+fn mutex_new_in_general_position_accepted() {
+    // `Mutex.new` now has codegen (the `lock`-block slice), so it is a
+    // general-position constructor like `Atomic.new` — a `par struct` with a
+    // `Mutex` field is constructible. (Was rejected before the lock slice.)
+    typecheck_ok(
         "par struct S { m: Mutex[i64] }
          fn main() {
              let _s = S { m: Mutex.new(0) };
          }",
     );
+}
+
+// ── `lock` block typechecking ────────────────────────────────────
+
+#[test]
+fn lock_block_binds_alias_as_inner_type() {
+    // The alias is the inner `T`, so `x = x + 1` typechecks against i64.
+    typecheck_ok(
+        "fn main() {
+             let m = Mutex.new(0);
+             lock m x { x = x + 1; }
+         }",
+    );
+}
+
+#[test]
+fn lock_block_no_alias_shadows_mutex_name() {
+    // Without an alias the mutex name itself refers to the inner value.
+    typecheck_ok(
+        "fn main() {
+             let m = Mutex.new(0);
+             lock m { m = m + 1; }
+         }",
+    );
+}
+
+#[test]
+fn lock_block_early_return_rejected() {
+    let errors = typecheck_errors(
+        "fn f() -> i64 {
+             let m = Mutex.new(0);
+             lock m x { return x; }
+             0
+         }",
+    );
     assert!(
-        !errors.is_empty(),
-        "Mutex.new in general expression position must still be rejected (no codegen yet)"
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::LockEarlyExit),
+        "early `return` inside a lock body must be rejected; got: {errors:?}"
+    );
+}
+
+#[test]
+fn lock_block_on_non_mutex_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {
+             let x = 5;
+             lock x y { y = y + 1; }
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::LockTargetNotMutex),
+        "lock on a non-Mutex binding must be rejected; got: {errors:?}"
+    );
+}
+
+#[test]
+fn lock_block_on_borrowed_mutex_rejected_in_slice1() {
+    // Slice 1 supports a directly-bound Mutex only; a `ref`/`mut ref Mutex`
+    // parameter is a tracked follow-on.
+    let errors = typecheck_errors(
+        "fn bump(m: mut ref Mutex[i64]) { lock m x { x = x + 1; } }
+         fn main() { let mut m = Mutex.new(0); bump(mut m); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::LockTargetNotMutex && e.message.contains("borrowed")),
+        "lock on a borrowed Mutex must be rejected in slice 1; got: {errors:?}"
     );
 }
 

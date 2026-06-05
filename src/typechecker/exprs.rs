@@ -2337,7 +2337,84 @@ impl<'a> super::TypeChecker<'a> {
                 self.infer_block(block)
             }
 
-            ExprKind::Lock { body, .. } => self.infer_block(body),
+            ExprKind::Lock { mutex, alias, body } => {
+                // `lock m [alias] { body }` — acquire `m` (a `Mutex[T]`), expose
+                // its inner `T` as a mutable binding for the body, release on
+                // exit. The body's value is the block's value. (design.md
+                // § Part 5: Shared Types > `lock` blocks.)
+                //
+                // Resolve `m`'s type and the inner `T`. `Mutex[T]` lowers to
+                // `Type::Named { "Mutex", [T] }`; a `ref`/`mut ref` binding is
+                // unwrapped first (a `lock` on a borrowed mutex parameter).
+                let mutex_ty = self
+                    .local_scope
+                    .lookup(mutex)
+                    .cloned()
+                    .unwrap_or(Type::Error);
+                let inner = match &mutex_ty {
+                    Type::Named { name, args } if name == "Mutex" && args.len() == 1 => {
+                        Ok(args[0].clone())
+                    }
+                    // A borrowed mutex (`ref`/`mut ref Mutex[T]` parameter) is a
+                    // slice-2 follow-on — codegen would have to load through the
+                    // reference to reach the `{ lockflag, value }` aggregate, and
+                    // the value-type isn't available at the lock site for a ref
+                    // binding. Reject cleanly rather than fall to a codegen error.
+                    // (A standalone local `Mutex` — including one shared across
+                    // `par {}` branches — works, since par captures the local by
+                    // reference to the same aggregate.)
+                    Type::Ref(b) | Type::MutRef(b)
+                        if matches!(b.as_ref(),
+                            Type::Named { name, args } if name == "Mutex" && args.len() == 1) =>
+                    {
+                        Err(format!(
+                            "`lock` on a borrowed `Mutex` (`{}`) is not supported yet — lock a \
+                             directly-bound `Mutex[T]` local (slice 1); locking through a \
+                             `ref`/`mut ref Mutex` parameter or a `par struct` field is a \
+                             tracked follow-on",
+                            type_display(&mutex_ty)
+                        ))
+                    }
+                    // `Type::Error` (unresolved binding) is tolerated silently —
+                    // the resolver already reported the undefined name.
+                    Type::Error => Ok(Type::Error),
+                    _ => Err(format!(
+                        "`lock` target `{mutex}` must be a `Mutex[T]`, found `{}`",
+                        type_display(&mutex_ty)
+                    )),
+                };
+                let inner = match inner {
+                    Ok(t) => t,
+                    Err(msg) => {
+                        self.type_error(msg, expr.span.clone(), TypeErrorKind::LockTargetNotMutex);
+                        Type::Error
+                    }
+                };
+                // Slice 1: the lock release is emitted only on the straight-line
+                // fall-through, so an early `return` / `break` / `continue` out
+                // of the body would leak the held lock.
+                if crate::concurrency::block_has_early_exit(body) {
+                    self.type_error(
+                        "a `lock` block body cannot contain `return`, `break`, or `continue` \
+                         (slice 1: the lock release is emitted only on normal block exit; \
+                         release-on-all-paths is a tracked follow-on). Restructure so the \
+                         lock body is straight-line."
+                            .to_string(),
+                        expr.span.clone(),
+                        TypeErrorKind::LockEarlyExit,
+                    );
+                }
+                // Bind the body alias (or, without one, the mutex name itself —
+                // shadowed) to the inner `T` so `alias = v` / `alias.f = v` /
+                // `alias += 1` typecheck against `T`. The binding lives only for
+                // the body's scope.
+                self.local_scope.push();
+                let bind_name = alias.clone().unwrap_or_else(|| mutex.clone());
+                self.local_scope.insert(bind_name, inner);
+                let ty = self.infer_block(body);
+                self.local_scope.pop();
+                ty
+            }
 
             ExprKind::Providers { bindings, body } => {
                 // Provider values are plain expressions; infer their types

@@ -954,6 +954,37 @@ impl<'a> super::Interpreter<'a> {
                 Err(cf) => self.set_cf(cf),
             },
 
+            // `lock m [alias] { body }` — the tree-walk interpreter is
+            // single-threaded, so the lock is a no-op for synchronization. Bind
+            // the mutex's inner value as the alias (or the mutex name itself,
+            // shadowed), evaluate the body, then write the (possibly mutated)
+            // value back into the mutex cell. The body is straight-line (the
+            // typechecker rejects early exits), so no control-flow unwinding of
+            // the write-back is needed.
+            ExprKind::Lock { mutex, alias, body } => {
+                let inner = match self.env.get(mutex) {
+                    Some(Value::Mutex(v)) => *v,
+                    other => {
+                        // Should be caught by the typechecker; be defensive.
+                        other.unwrap_or(Value::Unit)
+                    }
+                };
+                let bind_name = alias.clone().unwrap_or_else(|| mutex.clone());
+                self.env.push_scope();
+                self.env.define(bind_name.clone(), inner);
+                let result = match self.eval_block_inner(body) {
+                    Ok(v) => v,
+                    Err(cf) => {
+                        self.env.pop_scope();
+                        return self.set_cf(cf);
+                    }
+                };
+                let new_inner = self.env.get(&bind_name).unwrap_or(Value::Unit);
+                self.env.pop_scope();
+                self.env.set(mutex, Value::Mutex(Box::new(new_inner)));
+                result
+            }
+
             ExprKind::SelfType | ExprKind::PipePlaceholder | ExprKind::Error => Value::Unit,
 
             _ => todo!(

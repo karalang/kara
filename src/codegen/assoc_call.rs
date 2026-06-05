@@ -1690,6 +1690,33 @@ impl<'ctx> super::Codegen<'ctx> {
             return Err("Atomic.new requires an initial value argument".to_string());
         }
 
+        // `Mutex.new(v)` — builds the spinlock-guarded cell aggregate
+        // `{ i64 lockflag = 0, T value = v }` (layout per `llvm_type_for_type_expr`'s
+        // Mutex arm). The unlocked state is lockflag = 0. `lock m { ... }` later
+        // TAS-spins on field 0 and exposes field 1 as the `mut ref T` body alias.
+        if type_name == "Mutex" && method == "new" {
+            if let Some(arg) = _args.first() {
+                let val = self.compile_expr(&arg.value)?;
+                let i64_t = self.context.i64_type();
+                let mutex_ty = self
+                    .context
+                    .struct_type(&[i64_t.into(), val.get_type()], false);
+                let mut agg = mutex_ty.get_undef();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, i64_t.const_zero(), 0, "mutex.flag")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, val, 1, "mutex.val")
+                    .unwrap()
+                    .into_struct_value();
+                return Ok(agg.into());
+            }
+            return Err("Mutex.new requires an initial value argument".to_string());
+        }
+
         if (type_name == "Vec" || type_name == "VecDeque") && method == "new" {
             // `VecDeque.new()` lowers to the same zero-initialized
             // `{ptr=null, len=0, cap=0}` aggregate as `Vec.new()` —

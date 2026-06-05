@@ -97,7 +97,11 @@ fn stmt_has_early_exit(stmt: &Stmt) -> bool {
     }
 }
 
-fn block_has_early_exit(block: &Block) -> bool {
+/// True when `block` contains a `return` / `break` / `continue` that would
+/// transfer control out of it. Reused by the `lock`-block typechecker to reject
+/// early exits from a lock body (Slice 1 emits the lock release only on the
+/// straight-line path, so an early exit would leak the lock).
+pub(crate) fn block_has_early_exit(block: &Block) -> bool {
     block.stmts.iter().any(stmt_has_early_exit)
         || block
             .final_expr

@@ -531,19 +531,19 @@ impl<'a> super::TypeChecker<'a> {
         // 'Atomic'"). Codegen already handles it — `Atomic[T]` is a transparent
         // wrapper over `T`, so `assoc_call.rs`'s `Atomic && "new"` arm lowers
         // `Atomic.new(v)` to `v` (widening `Atomic[bool]` → i8). The inner type
-        // comes straight from the argument, like `Vec.filled`. NOTE: `Mutex.new`
-        // is deliberately NOT here — it has no codegen yet (it rides with the
-        // `lock`-block slice), and typechecking it without codegen would turn a
-        // clean typecheck error into a codegen failure.
+        // comes straight from the argument, like `Vec.filled`. `Mutex.new(v)`
+        // rides the same path — a `Mutex[T]` (spinlock-guarded cell) is built by
+        // `assoc_call.rs`'s `Mutex && "new"` arm, and `lock m { ... }` operates
+        // on the resulting binding. Both lower to `Wrapper[type_of(v)]`.
         if let ExprKind::Path { segments, .. } = &callee.kind {
             if segments.len() == 2
-                && segments[0] == "Atomic"
+                && (segments[0] == "Atomic" || segments[0] == "Mutex")
                 && segments[1] == "new"
                 && args.len() == 1
             {
                 let inner_ty = self.infer_expr(&args[0].value);
                 let ty = Type::Named {
-                    name: "Atomic".to_string(),
+                    name: segments[0].clone(),
                     args: vec![inner_ty],
                 };
                 self.record_expr_type(span, &ty);

@@ -494,6 +494,9 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Path { segments, .. } => self.compile_path_expr(segments),
             ExprKind::LabeledBlock { label, body, .. } => self.compile_labeled_block(label, body),
             ExprKind::OffsetOf { ty, field_path } => self.compile_offset_of(ty, field_path),
+            ExprKind::Lock { mutex, alias, body } => {
+                self.compile_lock_block(mutex, alias.as_deref(), body)
+            }
             _ => Ok(self.context.i64_type().const_int(0, false).into()),
         }
     }
