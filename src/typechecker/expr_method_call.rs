@@ -523,6 +523,25 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // SIMD static constructor — `Vector[T, N].splat(x)` (design.md
+        // § Portable SIMD). The receiver is the bare vector type-path
+        // (`Path { segments: ["Vector"], generic_args: Some([T, N]) }`), not
+        // a value, so it must be intercepted before the normal receiver-type
+        // inference below tries to evaluate `Vector[T, N]` as a value and
+        // rejects it. Mirrors the `Vector[T,N](...)` construction intercept
+        // in `infer_explicit_generic_args_call`.
+        if method == "splat" {
+            if let ExprKind::Path {
+                segments,
+                generic_args: Some(ga),
+            } = &object.kind
+            {
+                if segments.len() == 1 && segments[0] == "Vector" {
+                    return self.infer_vector_splat(ga, args, span);
+                }
+            }
+        }
+
         // Strict-provenance `ptr` module — `ptr.addr(p)`, `ptr.with_addr(p, a)`,
         // `ptr.from_exposed(a)`, etc. (design.md § Pointer Provenance, v60
         // item 20). Routes through the generic-aware dispatch path because
@@ -2109,6 +2128,39 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// All return the element type `T`. Construction helpers (`splat`/`from_*`)
     /// and `cross` are later sub-slices (phase-7 line 289).
+    /// `Vector[T, N].splat(x) -> Vector[T, N]` (design.md § Portable SIMD):
+    /// broadcast a scalar to all `N` lanes. `x` must be assignable to the
+    /// element type `T`. This is the explicit broadcast slice-1 deliberately
+    /// omitted (vector-vs-scalar arithmetic stays a type error; broadcast is
+    /// spelled out via `splat`).
+    fn infer_vector_splat(&mut self, ga: &[GenericArg], args: &[CallArg], span: &Span) -> Type {
+        let lowered = self.lower_vector_type(&Some(ga.to_vec()), &[], span);
+        let Some(Type::Vector { element, lanes }) = lowered else {
+            // lower_vector_type already reported the bad element/lane shape.
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Error;
+        };
+        if args.len() != 1 {
+            self.type_error(
+                format!("'splat' takes exactly one argument, found {}", args.len()),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Vector { element, lanes };
+        }
+        // The scalar must be assignable to the element type; thread `T` as the
+        // expected type so a suffixless literal resolves cleanly.
+        self.check_expr(&args[0].value, &element);
+        let result = Type::Vector { element, lanes };
+        self.record_expr_type(span, &result);
+        result
+    }
+
     fn infer_vector_method(
         &mut self,
         element: &Type,

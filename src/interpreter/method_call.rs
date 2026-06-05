@@ -57,6 +57,21 @@ impl<'a> super::Interpreter<'a> {
         )
     }
 
+    /// Extract the lane count `N` from a `Vector[T, N]` generic-arg list
+    /// (`N` is the const arg of `[T, N]`), evaluated to a `usize`. Defensive
+    /// `0` if absent / non-integer — the typechecker guarantees a valid const
+    /// lane count upstream, so that branch is unreachable in checked programs.
+    fn vector_lane_count(&mut self, ga: &[GenericArg]) -> usize {
+        for arg in ga {
+            if let GenericArg::Const(expr) = arg {
+                if let Value::Int(n) = self.eval_expr_inner(expr) {
+                    return n.max(0) as usize;
+                }
+            }
+        }
+        0
+    }
+
     pub(crate) fn eval_method_call(
         &mut self,
         object: &Expr,
@@ -64,6 +79,24 @@ impl<'a> super::Interpreter<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Value {
+        // SIMD static constructor — `Vector[T, N].splat(x)`. The receiver is
+        // the bare vector type-path (not a value), so intercept before the
+        // generic eval below treats `Vector[T, N]` as a value. Broadcast the
+        // scalar to all `N` lanes (`N` is the second generic arg).
+        if method == "splat" {
+            if let ExprKind::Path {
+                segments,
+                generic_args: Some(ga),
+            } = &object.kind
+            {
+                if segments.len() == 1 && segments[0] == "Vector" {
+                    let scalar = self.eval_expr_inner(&args[0].value);
+                    let n = self.vector_lane_count(ga);
+                    return Value::Vector(vec![scalar; n]);
+                }
+            }
+        }
+
         // Type-receiver associated calls: `T.method(...)` where `T` is a
         // primitive type name. The receiver is an identifier naming a type
         // — not a value — so eval_expr_inner would panic. Handle two shapes:

@@ -12450,3 +12450,46 @@ fn main() {
     );
     assert_eq!(out, "0\n0\n1\n");
 }
+
+// ── Vector slice 2d — splat (scalar broadcast) interpreter parity ─────
+
+#[test]
+fn test_vector_splat_i64() {
+    // Vector[i64, 4].splat(7) → all four lanes == 7.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let v = Vector[i64, 4].splat(7);
+    println(v[0]);
+    println(v[3]);
+}
+"#,
+    );
+    assert_eq!(out, "7\n7\n");
+}
+
+#[test]
+fn test_vector_splat_enables_scalar_broadcast_arithmetic() {
+    // splat is the explicit broadcast: `v + Vector[T,N].splat(s)` is how a
+    // scalar combines with a vector (bare vector-vs-scalar arithmetic stays
+    // a type error). [1,2,3,4] + splat(10) = [11,12,13,14].
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let v: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    let r = v + Vector[i64, 4].splat(10);
+    println(r[0]);
+    println(r[3]);
+}
+"#,
+    );
+    assert_eq!(out, "11\n14\n");
+}
+
+#[test]
+fn test_vector_splat_f64() {
+    let out = run_no_errors(
+        "fn main() { let v = Vector[f64, 2].splat(1.5); println(v[0]); println(v[1]); }",
+    );
+    assert_eq!(out, "1.5\n1.5\n");
+}

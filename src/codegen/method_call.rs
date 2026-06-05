@@ -86,6 +86,22 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_expr(object);
         }
 
+        // SIMD static constructor — `Vector[T, N].splat(x)` (design.md
+        // § Portable SIMD). The receiver is the bare vector type-path, not a
+        // value, so intercept before the receiver is compiled as an
+        // expression. Broadcast the scalar across all `N` lanes.
+        if method == "splat" {
+            if let ExprKind::Path {
+                segments,
+                generic_args: Some(ga),
+            } = &object.kind
+            {
+                if segments.len() == 1 && segments[0] == "Vector" {
+                    return self.compile_vector_splat(ga, args);
+                }
+            }
+        }
+
         // `Vector[T, N]` instance methods (design.md § Portable SIMD, slice 2):
         // the two core Vector→scalar reductions. The receiver compiles to an
         // `<N x T>` VectorValue; reductions fold via extractelement + scalar
@@ -2632,6 +2648,34 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => Ok(None),
         }
+    }
+
+    /// `Vector[T, N].splat(x)` — broadcast scalar `x` to all `N` lanes
+    /// (design.md § Portable SIMD). Compile the scalar once and
+    /// `insertelement` it into every lane of an undef `<N x T>`; LLVM folds
+    /// the chain into a native broadcast (`shufflevector` w/ zero mask) on
+    /// targets that have one.
+    fn compile_vector_splat(
+        &mut self,
+        generic_args: &[GenericArg],
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let vec_ty = self
+            .llvm_vector_type(&Some(generic_args.to_vec()))
+            .ok_or_else(|| "splat: could not lower Vector[T, N] type".to_string())?;
+        let BasicTypeEnum::VectorType(vt) = vec_ty else {
+            return Err("splat: lowered type is not an LLVM vector".to_string());
+        };
+        let scalar = self.compile_expr(&args[0].value)?;
+        let i32_ty = self.context.i32_type();
+        let mut acc = vt.get_undef();
+        for i in 0..vt.get_size() {
+            acc = self
+                .builder
+                .build_insert_element(acc, scalar, i32_ty.const_int(i as u64, false), "splat.lane")
+                .map_err(|e| format!("splat insertelement failed: {e}"))?;
+        }
+        Ok(acc.into())
     }
 
     /// Lower a `Vector[T, N]` instance method to a scalar (design.md

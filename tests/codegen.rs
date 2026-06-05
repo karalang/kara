@@ -29686,4 +29686,49 @@ fn main() {
             "cross between differently-typed vectors must be a type error"
         );
     }
+
+    // ── Vector slice 2d — splat (scalar broadcast) ───────────────────────
+
+    #[test]
+    fn test_vector_splat_i64() {
+        let out = run_program(
+            r#"
+fn main() {
+    let v = Vector[i64, 4].splat(7);
+    println(v[0]);
+    println(v[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "7\n7\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_splat_enables_scalar_broadcast_arithmetic() {
+        // [1,2,3,4] + splat(10) = [11,12,13,14] — the canonical splat use.
+        let out = run_program(
+            r#"
+fn main() {
+    let v: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    let r = v + Vector[i64, 4].splat(10);
+    println(r[0]);
+    println(r[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "11\n14\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_splat_arity_is_type_error() {
+        let errs = vector_typecheck_errors("fn main() { let _ = Vector[i64, 4].splat(1, 2); }");
+        assert!(
+            !errs.is_empty(),
+            "splat with more than one argument must be a type error"
+        );
+    }
 }
