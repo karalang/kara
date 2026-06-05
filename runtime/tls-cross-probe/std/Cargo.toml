@@ -1,0 +1,48 @@
+# Phase-10 v64 P0 — TLS-provider cross-compile gate (std targets).
+#
+# Compile-only probe proving the vendored TLS provider (rustls 0.23 +
+# `ring` crypto — see design.md § v1 Positioning, ring swap 2026-05-27)
+# cross-compiles to every v1 target that has `std`. The full
+# `karac-runtime --features tls` tree only compiles where tokio/mio/hyper
+# do (native), so WASM coverage must gate on the *provider* in isolation —
+# this crate. When the phase-10 WASM runtime story lands, the
+# target-specific feature recipe below transfers to `runtime/Cargo.toml`.
+#
+# Workspace member on purpose: shares the root Cargo.lock, so the gate
+# always tests the exact rustls/ring versions the runtime pins, not a
+# drifted copy.
+#
+# Per-target build-config findings (probed 2026-06-05, macOS M5 Pro host):
+#   - native (linux/macos/windows, both arches): no extra config; the
+#     `karac-runtime --features tls` tree itself compiles (CI native jobs
+#     + cross job gate it directly; this probe adds nothing there).
+#   - wasm32-wasip1: compiles as-is (getrandom has native WASI support).
+#   - wasm32-unknown-unknown: needs the three target-gated additions
+#     below — getrandom `js` (entropy via Web Crypto), ring
+#     `wasm32_unknown_unknown_js` (gates its SecureRandom impl), and
+#     rustls-pki-types `web` (UnixTime::now via web-time; rustls's
+#     ticketer calls it).
+#   - C toolchain: ring's build.rs compiles C; the host cc must support
+#     the wasm32 triple. CI ubuntu clang does out of the box; on macOS,
+#     Apple clang does NOT — use brew LLVM:
+#       CC_wasm32_unknown_unknown=/opt/homebrew/opt/llvm@18/bin/clang \
+#         cargo check -p karac-tls-cross-probe --target wasm32-unknown-unknown
+
+[package]
+name = "karac-tls-cross-probe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Mirror runtime/Cargo.toml's rustls feature set exactly.
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring", "logging"] }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+# Browser WASM has no entropy syscall — getrandom must route through
+# Web Crypto (`js`), and ring only implements SecureRandom for
+# SystemRandom on wasm32-unknown-unknown behind its own feature.
+getrandom = { version = "0.2", features = ["js"] }
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
+# rustls's ticketer calls UnixTime::now(); on browser WASM the clock
+# comes from web-time behind pki-types' `web` feature.
+rustls-pki-types = { version = "1", features = ["web"] }

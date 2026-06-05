@@ -1,0 +1,30 @@
+# Phase-10 v64 P0 — TLS-provider cross-compile gate (embedded / no_std).
+#
+# Compile-only probe for the bare-metal ARM Cortex-M leg of the v1 target
+# matrix (thumbv7em-none-eabihf). rustls 0.23 supports no_std when the
+# `std` feature is off; the residual per-target config is entropy + the
+# C toolchain:
+#   - getrandom `custom`: bare metal has no OS entropy source; a real
+#     embedded consumer registers its board TRNG via
+#     `getrandom::register_custom_getrandom!`. The feature alone is
+#     enough for the compile gate (registration is a link-time concern,
+#     and `cargo check` doesn't link).
+#   - C toolchain: ring's build.rs needs a cross cc with newlib headers —
+#     `arm-none-eabi-gcc` (apt: gcc-arm-none-eabi). Plain clang fails
+#     with `'assert.h' file not found` (no bare-metal sysroot), which is
+#     why this leg is CI-gated rather than provable on a stock macOS host:
+#       CC_thumbv7em_none_eabihf=arm-none-eabi-gcc \
+#         cargo check -p karac-tls-cross-probe-embedded --target thumbv7em-none-eabihf
+#
+# Workspace member for the same reason as ../std: the gate must test the
+# rustls/ring versions the runtime actually pins (shared root Cargo.lock).
+
+[package]
+name = "karac-tls-cross-probe-embedded"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# no_std rustls: same `tls12` + `ring` as the runtime, minus `std`/`logging`.
+rustls = { version = "0.23", default-features = false, features = ["tls12", "ring"] }
+getrandom = { version = "0.2", features = ["custom"] }

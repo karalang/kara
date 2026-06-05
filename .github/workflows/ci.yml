@@ -88,6 +88,77 @@ jobs:
       - name: Cross-compile
         run: cross build --target ${{ matrix.target }}
 
+      # Phase-10 v64 P0 (TLS-provider cross-compile gate): `cross build`
+      # above only builds the root `karac` package — its rustls dep is
+      # dev-only, so the step compiles ZERO TLS code. The runtime's
+      # default `tls` feature (rustls + ring, incl. ring's C objects via
+      # the cross image's C toolchain) is the thing the v1 target matrix
+      # must prove, so build it explicitly.
+      - name: Cross-compile runtime (tls feature tree)
+        run: cross build --target ${{ matrix.target }} -p karac-runtime
+
+  # Phase-10 v64 P0 — TLS-provider cross-compile gate for the v1 targets
+  # the full runtime can't reach yet (tokio/mio/hyper don't compile on
+  # wasm32 / bare metal). Gates rustls + ring in isolation via the
+  # `runtime/tls-cross-probe/*` workspace members; per-target feature
+  # recipes live in those crates' Cargo.toml headers. Native legs are
+  # covered elsewhere: linux/macos/windows by `test` (workspace default
+  # `tls`), linux aarch64/armv7 by `cross` above, macOS x86_64 here.
+  tls-cross:
+    name: TLS cross-compile (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: wasm32-browser
+            runner: ubuntu-latest
+            target: wasm32-unknown-unknown
+            package: karac-tls-cross-probe
+          - name: wasm32-wasi
+            runner: ubuntu-latest
+            target: wasm32-wasip1
+            package: karac-tls-cross-probe
+          - name: cortex-m
+            runner: ubuntu-latest
+            target: thumbv7em-none-eabihf
+            package: karac-tls-cross-probe-embedded
+          - name: macos-x86_64
+            runner: macos-latest
+            target: x86_64-apple-darwin
+            # Apple-silicon runner cross-checks the x86_64 slice of the
+            # FULL runtime tls tree (same SDK, different arch) — no
+            # probe indirection needed on this leg.
+            package: karac-runtime
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # ring's build.rs compiles C for the target. Ubuntu's clang handles
+      # the wasm32 triples out of the box; bare-metal ARM needs the
+      # arm-none-eabi toolchain for its newlib sysroot (plain clang dies
+      # on `'assert.h' file not found`).
+      - name: Install ARM embedded toolchain
+        if: matrix.target == 'thumbv7em-none-eabihf'
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+
+      - name: Check TLS provider for target
+        env:
+          CC_wasm32_unknown_unknown: clang
+          CC_wasm32_wasip1: clang
+          CC_thumbv7em_none_eabihf: arm-none-eabi-gcc
+        run: cargo check -p ${{ matrix.package }} --target ${{ matrix.target }}
+
   # Phase-8 line 48 (public-CA trust default). Proves the runtime's
   # `Client.get("https://...")` validates a real CA-signed peer cert
   # using the embedded `webpki-roots` bundle — without relying on a

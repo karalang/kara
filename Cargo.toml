@@ -1,5 +1,18 @@
 [workspace]
-members = ["runtime", "playground", "kernel"]
+# `runtime/tls-cross-probe/*` are the phase-10 v64 P0 compile-only gates
+# proving the TLS provider (rustls + ring) cross-compiles to the v1
+# targets the full runtime can't reach yet (wasm32 ×2, Cortex-M; the
+# tokio/mio/hyper tree blocks `karac-runtime` itself there). Members —
+# not `exclude`d — so they resolve against THIS lockfile and the gate
+# tests the exact rustls/ring versions the runtime pins. See the probes'
+# Cargo.toml headers for the per-target feature recipes.
+members = [
+    "runtime",
+    "playground",
+    "kernel",
+    "runtime/tls-cross-probe/std",
+    "runtime/tls-cross-probe/embedded",
+]
 # Slice E (Parallax bench harness, 2026-05-09) — the `examples/parallax/
 # bench/rust/` subproject is a self-contained reference implementation
 # of the bench server in idiomatic tokio + hyper. Excluded from the
