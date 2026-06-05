@@ -97,6 +97,25 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // SIMD static constructor — `Vector[T, N].from_array([..])`. Same
+        // type-path-receiver intercept as `splat`. The argument evaluates to a
+        // `Value::Array`; its `N` elements become the vector lanes directly
+        // (the typechecker guarantees the element count matches `N`).
+        if method == "from_array" {
+            if let ExprKind::Path {
+                segments,
+                generic_args: Some(_),
+            } = &object.kind
+            {
+                if segments.len() == 1 && segments[0] == "Vector" {
+                    if let Value::Array(rc) = self.eval_expr_inner(&args[0].value) {
+                        let elems = rc.read().unwrap().clone();
+                        return Value::Vector(elems);
+                    }
+                }
+            }
+        }
+
         // Type-receiver associated calls: `T.method(...)` where `T` is a
         // primitive type name. The receiver is an identifier naming a type
         // — not a value — so eval_expr_inner would panic. Handle two shapes:

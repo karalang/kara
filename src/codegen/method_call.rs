@@ -90,14 +90,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // § Portable SIMD). The receiver is the bare vector type-path, not a
         // value, so intercept before the receiver is compiled as an
         // expression. Broadcast the scalar across all `N` lanes.
-        if method == "splat" {
+        if method == "splat" || method == "from_array" {
             if let ExprKind::Path {
                 segments,
                 generic_args: Some(ga),
             } = &object.kind
             {
                 if segments.len() == 1 && segments[0] == "Vector" {
-                    return self.compile_vector_splat(ga, args);
+                    return match method {
+                        "splat" => self.compile_vector_splat(ga, args),
+                        _ => self.compile_vector_from_array(ga, args),
+                    };
                 }
             }
         }
@@ -2674,6 +2677,57 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_insert_element(acc, scalar, i32_ty.const_int(i as u64, false), "splat.lane")
                 .map_err(|e| format!("splat insertelement failed: {e}"))?;
+        }
+        Ok(acc.into())
+    }
+
+    /// `Vector[T, N].from_array(a)` — build a `<N x T>` from a fixed `[T; N]`
+    /// array (design.md § Portable SIMD). The `N` lane scalars are recovered
+    /// and `insertelement`'d into an undef vector. When the argument is a
+    /// syntactic array literal the elements are compiled directly (no array
+    /// aggregate round-trip); otherwise the argument compiles to an `[N x T]`
+    /// aggregate and each lane is pulled out with `extractvalue`.
+    fn compile_vector_from_array(
+        &mut self,
+        generic_args: &[GenericArg],
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let vec_ty = self
+            .llvm_vector_type(&Some(generic_args.to_vec()))
+            .ok_or_else(|| "from_array: could not lower Vector[T, N] type".to_string())?;
+        let BasicTypeEnum::VectorType(vt) = vec_ty else {
+            return Err("from_array: lowered type is not an LLVM vector".to_string());
+        };
+        let n = vt.get_size();
+        let lanes: Vec<BasicValueEnum<'ctx>> =
+            if let ExprKind::ArrayLiteral(elems) = &args[0].value.kind {
+                elems
+                    .iter()
+                    .map(|e| self.compile_expr(e))
+                    .collect::<Result<_, _>>()?
+            } else {
+                let arr = self.compile_expr(&args[0].value)?;
+                let agg = arr.into_array_value();
+                (0..n)
+                    .map(|i| {
+                        self.builder
+                            .build_extract_value(agg, i, "from_array.lane")
+                            .map_err(|e| format!("from_array extractvalue failed: {e}"))
+                    })
+                    .collect::<Result<_, _>>()?
+            };
+        let i32_ty = self.context.i32_type();
+        let mut acc = vt.get_undef();
+        for (i, val) in lanes.iter().enumerate() {
+            acc = self
+                .builder
+                .build_insert_element(
+                    acc,
+                    *val,
+                    i32_ty.const_int(i as u64, false),
+                    "from_array.lane",
+                )
+                .map_err(|e| format!("from_array insertelement failed: {e}"))?;
         }
         Ok(acc.into())
     }

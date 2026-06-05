@@ -22270,3 +22270,35 @@ fn compare_exchange_wrong_arg_count_rejected() {
         "compare_exchange with 3 args must be rejected; got: {errors:?}"
     );
 }
+
+#[test]
+fn vector_from_array_ok() {
+    // Vector[T, N].from_array of an N-element literal of T type-checks.
+    typecheck_ok("fn main() { let v = Vector[i64, 4].from_array([1, 2, 3, 4]); println(v[0]); }");
+}
+
+#[test]
+fn vector_from_array_wrong_length_rejected() {
+    // The argument is checked against Array[T, N]; a 3-element literal for a
+    // 4-lane vector is a length mismatch caught at type-check time.
+    let errors = typecheck_errors(
+        "fn main() { let v = Vector[i64, 4].from_array([1, 2, 3]); println(v[0]); }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "from_array with 3 elements for a 4-lane vector must be rejected"
+    );
+}
+
+#[test]
+fn vector_from_array_wrong_element_type_rejected() {
+    // String elements for an i64-element vector are an element-type mismatch
+    // (each array element is checked against the vector element type `T`).
+    let errors = typecheck_errors(
+        "fn main() { let v = Vector[i64, 2].from_array([\"a\", \"b\"]); println(v[0]); }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("expected 'i64'")),
+        "from_array with String elements for an i64 vector must be rejected; got: {errors:?}"
+    );
+}

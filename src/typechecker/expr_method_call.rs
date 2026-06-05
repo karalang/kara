@@ -523,21 +523,25 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // SIMD static constructor — `Vector[T, N].splat(x)` (design.md
-        // § Portable SIMD). The receiver is the bare vector type-path
-        // (`Path { segments: ["Vector"], generic_args: Some([T, N]) }`), not
-        // a value, so it must be intercepted before the normal receiver-type
-        // inference below tries to evaluate `Vector[T, N]` as a value and
-        // rejects it. Mirrors the `Vector[T,N](...)` construction intercept
-        // in `infer_explicit_generic_args_call`.
-        if method == "splat" {
+        // SIMD static constructors — `Vector[T, N].splat(x)` and
+        // `Vector[T, N].from_array([..])` (design.md § Portable SIMD). The
+        // receiver is the bare vector type-path (`Path { segments: ["Vector"],
+        // generic_args: Some([T, N]) }`), not a value, so it must be
+        // intercepted before the normal receiver-type inference below tries to
+        // evaluate `Vector[T, N]` as a value and rejects it. Mirrors the
+        // `Vector[T,N](...)` construction intercept in
+        // `infer_explicit_generic_args_call`.
+        if method == "splat" || method == "from_array" {
             if let ExprKind::Path {
                 segments,
                 generic_args: Some(ga),
             } = &object.kind
             {
                 if segments.len() == 1 && segments[0] == "Vector" {
-                    return self.infer_vector_splat(ga, args, span);
+                    return match method {
+                        "splat" => self.infer_vector_splat(ga, args, span),
+                        _ => self.infer_vector_from_array(ga, args, span),
+                    };
                 }
             }
         }
@@ -2156,6 +2160,52 @@ impl<'a> super::TypeChecker<'a> {
         // The scalar must be assignable to the element type; thread `T` as the
         // expected type so a suffixless literal resolves cleanly.
         self.check_expr(&args[0].value, &element);
+        let result = Type::Vector { element, lanes };
+        self.record_expr_type(span, &result);
+        result
+    }
+
+    /// `Vector[T, N].from_array(a) -> Vector[T, N]` (design.md § Portable SIMD):
+    /// build a vector from a fixed `[T; N]` array. The single argument is
+    /// checked against the expected array type `Array[T, N]` — reusing the
+    /// check-mode `[..]`-literal coercion in `check_expr`, this enforces both
+    /// the element type (each element assignable to `T`) and the length (the
+    /// literal must hold exactly `N` elements) in one shot. `Vector.lanes` and
+    /// `Array.size` are the same `ConstArg`, so the lane count flows straight
+    /// through as the expected array size.
+    fn infer_vector_from_array(
+        &mut self,
+        ga: &[GenericArg],
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let lowered = self.lower_vector_type(&Some(ga.to_vec()), &[], span);
+        let Some(Type::Vector { element, lanes }) = lowered else {
+            // lower_vector_type already reported the bad element/lane shape.
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Error;
+        };
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "'from_array' takes exactly one argument, found {}",
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Vector { element, lanes };
+        }
+        let expected_array = Type::Array {
+            element: element.clone(),
+            size: lanes.clone(),
+        };
+        self.check_expr(&args[0].value, &expected_array);
         let result = Type::Vector { element, lanes };
         self.record_expr_type(span, &result);
         result

@@ -29731,4 +29731,59 @@ fn main() {
             "splat with more than one argument must be a type error"
         );
     }
+
+    // ── Vector slice 2e — from_array (fixed-array construction) ───────────
+
+    #[test]
+    fn test_vector_from_array_i64() {
+        // Vector[i64, 4].from_array([10, 20, 30, 40]) → lanes in order.
+        let out = run_program(
+            r#"
+fn main() {
+    let v = Vector[i64, 4].from_array([10, 20, 30, 40]);
+    println(v[0]);
+    println(v[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "10\n40\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_from_array_feeds_arithmetic() {
+        // from_array participates in element-wise vector ops:
+        // [1,2,3,4] + [10,20,30,40] = [11,22,33,44].
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i64, 4].from_array([1, 2, 3, 4]);
+    let b = Vector[i64, 4].from_array([10, 20, 30, 40]);
+    let r = a + b;
+    println(r[0]);
+    println(r[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "11\n44\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_from_array_f64() {
+        let out = run_program(
+            r#"
+fn main() {
+    let v = Vector[f64, 2].from_array([1.5, 2.5]);
+    println(v[0]);
+    println(v[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1.5\n2.5\n");
+        }
+    }
 }
