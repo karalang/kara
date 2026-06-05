@@ -31108,6 +31108,135 @@ fn main() {
         );
     }
 
+    // ── Slice 6e — masked store (v.store_masked(slice_mut, mask)) ────────
+
+    #[test]
+    fn test_vector_store_masked_partial() {
+        // Writes active lanes through a `mut Slice[i64]`; inactive lanes leave
+        // the destination untouched (lanes 0,1 written, 2,3 preserved).
+        let out = run_program(
+            r#"
+fn fill(xs: mut Slice[i64]) {
+    let v = Vector[i64, 4](10, 20, 30, 40);
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](2, 2, 2, 2);
+    let m = idx < lim;
+    v.store_masked(xs, m);
+}
+fn main() {
+    let mut a: Array[i64, 4] = [1, 2, 3, 4];
+    fill(mut a);
+    println(a[0]); println(a[1]); println(a[2]); println(a[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "10\n20\n3\n4\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_store_masked_float() {
+        let out = run_program(
+            r#"
+fn fill(xs: mut Slice[f64]) {
+    let v = Vector[f64, 4](1.5, 2.5, 3.5, 4.5);
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](1, 1, 1, 1);
+    let m = idx < lim;
+    v.store_masked(xs, m);
+}
+fn main() {
+    let mut a: Array[f64, 4] = [0.0, 0.0, 0.0, 0.0];
+    fill(mut a);
+    println(a[0]); println(a[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1.5\n0\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_store_masked_active_oob_panics() {
+        // A 2-element destination with an all-true mask: lanes 2,3 are active
+        // but past the slice length, so the store traps.
+        let captured = run_program_capturing(
+            r#"
+fn fill(xs: mut Slice[i64]) {
+    let v = Vector[i64, 4](10, 20, 30, 40);
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](9, 9, 9, 9);
+    let m = idx < lim;
+    v.store_masked(xs, m);
+}
+fn main() {
+    let mut a: Array[i64, 2] = [0, 0];
+    fill(mut a);
+    println(a[0]);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout
+                    .contains("store_masked: active lane index out of bounds")
+                    || c.stderr
+                        .contains("store_masked: active lane index out of bounds"),
+                "expected active-lane OOB panic, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_vector_store_masked_immutable_slice_is_type_error() {
+        // The destination must be a `mut Slice[T]`; an immutable `Slice[T]`
+        // param is rejected.
+        let errs = vector_typecheck_errors(
+            r#"
+fn fill(xs: Slice[i64]) {
+    let v = Vector[i64, 4](10, 20, 30, 40);
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](2, 2, 2, 2);
+    let m = idx < lim;
+    v.store_masked(xs, m);
+}
+fn main() {
+    let a: Array[i64, 4] = [1, 2, 3, 4];
+    fill(a);
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "store_masked destination must be a mut Slice[T]"
+        );
+    }
+
+    #[test]
+    fn test_vector_store_masked_wrong_mask_type_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn fill(xs: mut Slice[i64]) {
+    let v = Vector[i64, 4](10, 20, 30, 40);
+    let bad = Vector[i64, 4](1, 0, 1, 0);
+    v.store_masked(xs, bad);
+}
+fn main() {
+    let mut a: Array[i64, 4] = [1, 2, 3, 4];
+    fill(mut a);
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "store_masked mask must be Vector[bool, N]"
+        );
+    }
+
     // ── Slice 4 — first-class Numeric trait + lane-literal ergonomics ─────
 
     #[test]

@@ -2815,14 +2815,97 @@ impl<'a> super::TypeChecker<'a> {
                     lanes: ConstArg::Literal(items.len() as i64),
                 }
             }
+            // Masked store (design.md § Portable SIMD, "Masked load/store"):
+            // `v.store_masked(slice, mask)` writes each active lane `v[i]`
+            // through a `mut Slice[T]`. Lane `i` is active iff `mask[i]`; an
+            // active lane past the slice length traps at run time, an inactive
+            // lane leaves the slice untouched. The destination must be a
+            // *mutable* slice (the write side of `load_masked`); the receiver
+            // vector is read-only, so this needs no value-receiver write-back.
+            "store_masked" => {
+                if args.len() != 2 {
+                    self.type_error(
+                        format!(
+                            "'store_masked' takes exactly two arguments (slice, mask), found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                    return Type::Unit;
+                }
+                let slice_ty = self.infer_expr(&args[0].value);
+                match &slice_ty {
+                    Type::Slice {
+                        element: arg_elem,
+                        mutable: true,
+                    } => {
+                        if **arg_elem != elem && !matches!(**arg_elem, Type::Error) {
+                            self.type_error(
+                                format!(
+                                    "'store_masked' expects a 'mut Slice[{}]' matching the \
+                                     Vector element, found 'mut Slice[{}]'",
+                                    type_display(&elem),
+                                    type_display(arg_elem)
+                                ),
+                                args[0].value.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
+                    }
+                    Type::Slice { mutable: false, .. } => {
+                        self.type_error(
+                            "'store_masked' requires a 'mut Slice[T]' destination (the slice \
+                             must be mutable to write into)"
+                                .to_string(),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                    Type::Error => {}
+                    other => {
+                        self.type_error(
+                            format!(
+                                "'store_masked' expects a 'mut Slice[{}]' first argument, \
+                                 found '{}'",
+                                type_display(&elem),
+                                type_display(other)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                let mask_ty = self.infer_expr(&args[1].value);
+                let expected_mask = Type::Vector {
+                    element: Box::new(Type::Bool),
+                    lanes: lanes.clone(),
+                };
+                if mask_ty != expected_mask && mask_ty != Type::Error {
+                    self.type_error(
+                        format!(
+                            "'store_masked' mask must be a '{}' (a vector comparison result), \
+                             found '{}'",
+                            type_display(&expected_mask),
+                            type_display(&mask_ty)
+                        ),
+                        args[1].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                Type::Unit
+            }
             _ => {
                 self.type_error(
                     format!(
                         "no method '{}' on Vector[{}, _] (supported: dot, cross, \
                          reduce_sum, reduce_product, reduce_min, reduce_max, \
                          reduce_and, reduce_or, reduce_xor, reverse, \
-                         rotate_lanes_left, rotate_lanes_right, replace, shuffle; \
-                         select on a Vector[bool, N] mask)",
+                         rotate_lanes_left, rotate_lanes_right, replace, shuffle, \
+                         store_masked; select on a Vector[bool, N] mask)",
                         method,
                         type_display(&elem)
                     ),

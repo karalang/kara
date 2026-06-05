@@ -12937,6 +12937,29 @@ fn main() {
 }
 
 #[test]
+fn test_vector_store_masked_partial() {
+    // Writes active lanes through a mut slice; inactive lanes preserved
+    // (parity with codegen). Lanes 0,1 active → written; 2,3 inactive.
+    let out = run_no_errors(
+        r#"
+fn fill(xs: mut Slice[i64]) {
+    let v = Vector[i64, 4](10, 20, 30, 40);
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](2, 2, 2, 2);
+    let m = idx < lim;
+    v.store_masked(xs, m);
+}
+fn main() {
+    let mut a: Array[i64, 4] = [1, 2, 3, 4];
+    fill(mut a);
+    println(a[0]); println(a[1]); println(a[2]); println(a[3]);
+}
+"#,
+    );
+    assert_eq!(out, "10\n20\n3\n4\n");
+}
+
+#[test]
 fn test_vector_compare_unsigned_mask() {
     // Unsigned compare: 3000000000 (high bit set as i32) is NOT < 10.
     let out = run_no_errors(

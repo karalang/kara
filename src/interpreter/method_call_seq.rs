@@ -1136,6 +1136,59 @@ impl<'a> super::Interpreter<'a> {
                 }
                 Some(Value::Vector(out))
             }
+            // `v.store_masked(slice, mask)` — write each active lane through the
+            // mutable slice's shared storage (parity with codegen). Lane `i`
+            // active iff `mask[i]`; an active lane past the slice length panics,
+            // an inactive lane leaves the slice untouched. Returns unit.
+            "store_masked" => {
+                let slice_v = self.eval_expr_inner(&args[0].value);
+                let mask_v = self.eval_expr_inner(&args[1].value);
+                // The destination is a `mut Slice[T]`. When a `mut` array is
+                // bound to that param, the interpreter forwards it as a
+                // `Value::Array` (shared `Arc` storage, offset 0) rather than a
+                // `Value::Slice`; accept both so writes reach the backing store.
+                let (storage, start, slen) = match slice_v {
+                    Value::Slice {
+                        storage,
+                        start,
+                        len,
+                        ..
+                    } => (storage, start, len),
+                    Value::Array(rc) => {
+                        let len = rc.read().unwrap().len();
+                        (rc, 0, len)
+                    }
+                    other => {
+                        return Some(self.record_runtime_error(
+                            format!(
+                                "store_masked expects a mut Slice argument, got `{}`",
+                                other.variant_name()
+                            ),
+                            span,
+                        ))
+                    }
+                };
+                let Value::Vector(mask) = mask_v else {
+                    return Some(self.record_runtime_error(
+                        "store_masked expects a Vector[bool, N] mask".to_string(),
+                        span,
+                    ));
+                };
+                let mut guard = storage.write().unwrap();
+                for (i, lane) in lanes.iter().enumerate() {
+                    if matches!(mask.get(i), Some(Value::Bool(true))) {
+                        if i >= slen {
+                            drop(guard);
+                            return Some(self.record_runtime_error(
+                                "store_masked: active lane index out of bounds".to_string(),
+                                span,
+                            ));
+                        }
+                        guard[start + i] = lane.clone();
+                    }
+                }
+                Some(Value::Unit)
+            }
             _ => None,
         }
     }

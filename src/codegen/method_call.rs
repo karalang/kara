@@ -134,6 +134,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "Vector.rotate_lanes_right"
                     | "Vector.replace"
                     | "Vector.shuffle"
+                    | "Vector.store_masked"
             ) {
                 return self.compile_vector_method(object, method, args);
             }
@@ -3551,6 +3552,85 @@ impl<'ctx> super::Codegen<'ctx> {
                         .map_err(|e| format!("vector insertelement failed: {e}"))?;
                 }
                 Ok(out.into())
+            }
+            // `v.store_masked(slice, mask)` — write each active lane `v[i]`
+            // through the `mut Slice[T]` (design.md § Portable SIMD, "Masked
+            // load/store"; the write sibling of `load_masked`). Lane `i` is
+            // active iff `mask[i]`; an active lane past the slice length traps
+            // (`emit_panic`), and an inactive lane leaves the slice untouched.
+            // Per lane: branch on `mask[i] && i >= len` to the panic block, then
+            // on `mask[i]` to a store / skip pair. Returns unit (`i64 0`).
+            "store_masked" => {
+                let slice_val = self.compile_expr(&args[0].value)?.into_struct_value();
+                let data = self
+                    .builder
+                    .build_extract_value(slice_val, 0, "store_masked.data")
+                    .map_err(|e| format!("store_masked extract data failed: {e}"))?
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_extract_value(slice_val, 1, "store_masked.len")
+                    .map_err(|e| format!("store_masked extract len failed: {e}"))?
+                    .into_int_value();
+                let mask = self.compile_expr(&args[1].value)?.into_vector_value();
+                let elem_ty = recv.get_type().get_element_type();
+                let i64_t = self.context.i64_type();
+                let fn_val = self.current_fn.unwrap();
+                for i in 0..n {
+                    let lane_idx = i32_t.const_int(i as u64, false);
+                    let mask_i = self
+                        .builder
+                        .build_extract_element(mask, lane_idx, "store_masked.mask")
+                        .map_err(|e| format!("store_masked extractelement mask failed: {e}"))?
+                        .into_int_value();
+                    let i_const = i64_t.const_int(i as u64, false);
+                    let oob = self
+                        .builder
+                        .build_int_compare(IntPredicate::UGE, i_const, len, "store_masked.oob")
+                        .map_err(|e| format!("store_masked bounds compare failed: {e}"))?;
+                    let bad = self
+                        .builder
+                        .build_and(mask_i, oob, "store_masked.bad")
+                        .map_err(|e| format!("store_masked and failed: {e}"))?;
+                    let panic_bb = self
+                        .context
+                        .append_basic_block(fn_val, "store_masked.panic");
+                    let ok_bb = self.context.append_basic_block(fn_val, "store_masked.ok");
+                    self.builder
+                        .build_conditional_branch(bad, panic_bb, ok_bb)
+                        .map_err(|e| format!("store_masked panic branch failed: {e}"))?;
+                    self.builder.position_at_end(panic_bb);
+                    self.emit_panic("store_masked: active lane index out of bounds");
+                    self.builder
+                        .build_unreachable()
+                        .map_err(|e| format!("store_masked unreachable failed: {e}"))?;
+
+                    self.builder.position_at_end(ok_bb);
+                    let store_bb = self
+                        .context
+                        .append_basic_block(fn_val, "store_masked.store");
+                    let skip_bb = self.context.append_basic_block(fn_val, "store_masked.skip");
+                    self.builder
+                        .build_conditional_branch(mask_i, store_bb, skip_bb)
+                        .map_err(|e| format!("store_masked active branch failed: {e}"))?;
+                    // Active lane → store `v[i]` into `data[i]`.
+                    self.builder.position_at_end(store_bb);
+                    let v_i = lane(self, recv, i)?;
+                    let elem_ptr = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, data, &[i_const], "store_masked.elem.ptr")
+                            .map_err(|e| format!("store_masked gep failed: {e}"))?
+                    };
+                    self.builder
+                        .build_store(elem_ptr, v_i)
+                        .map_err(|e| format!("store_masked store failed: {e}"))?;
+                    self.builder
+                        .build_unconditional_branch(skip_bb)
+                        .map_err(|e| format!("store_masked store->skip failed: {e}"))?;
+                    // Inactive lane (or fall-through) continues at `skip_bb`.
+                    self.builder.position_at_end(skip_bb);
+                }
+                Ok(i64_t.const_zero().into())
             }
             other => Err(format!("unsupported Vector method '{other}' in codegen")),
         }
