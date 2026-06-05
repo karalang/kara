@@ -905,9 +905,16 @@ timers (`--stagger-arrival`), the way production chatter actually lands.
 
 **Both stacks are sub-millisecond, and the 2.31× density advantage holds under
 active load** — the idle 12.1 KB/conn is not an artifact of doing nothing.
-Raw JSON captured on the rig (`active_250k_{kara,rust}-…_stageA.json`); not
-mirrored into the repo before teardown (numbers are authoritative here + in
-phase-6).
+Raw JSON mirrored under `docs/investigations/` (realistic:
+`active_250k_{kara,rust}-250k-realistic_stageA.json`; synchronized sidebar:
+`active_250k_{kara,rust}-250k-sync_stageA.json`; pre-`--stagger-arrival`
+artifact runs: `active_250k_{kara,rust}_prewakefix.json`).
+
+> _Transparency:_ the Kāra realistic run logged **16 echo failures out of
+> 598,824 (0.003 %, `ok:false` in the JSON)** vs Rust's 0. Negligible for the
+> density/latency headline and not investigated here, but flagged so the
+> committed JSON doesn't read as a silent discrepancy — if a churn/active
+> comparator later shows the same small echo-loss tail, it's worth a look.
 
 ### Worst case — synchronized burst (broadcast / reconnect storm)
 
@@ -943,7 +950,7 @@ the server stays functional under real load:
 - **Functional under load: 8.23M messages echoed, 0 echo failures** at 1M
   active conns.
 - Connect p50 45 / p99 557 ms (c128 loopback tail, 0 failed). JSON
-  `demo1_1m_active_realistic_b3.json` (rig capture, not mirrored).
+  `demo1_1m_active_realistic_b3.json` (mirrored under `docs/investigations/`).
 
 > **Caveat — the 1M active *latency* is excluded from the headline.** On a
 > single box the Rust client driving 1M TLS connections saturated the shared
@@ -952,6 +959,15 @@ the server stays functional under real load:
 > separate client box. The clean latency story is therefore the CPU-isolated
 > **250K realistic (sub-ms)** + the **B3 burst (~5 ms)**; the 1M run delivers
 > its intended value: the **density ceiling + 1M functional hold**.
+>
+> A **cross-box** 1M active run (separate client boxes over a real NIC →
+> `demo1_1m_active_crossbox_b3.json`) corroborates the functional hold — 1M
+> established 0-failed, **10.03M messages echoed, 0 failures** — and trims the
+> latency to p50 1.83 s. It stays client-influenced (driving 1M live TLS conns
+> is itself heavy, even from a client fleet), so it confirms the hold without
+> yet yielding a clean 1M latency number; server-side memory wasn't sampled on
+> that run (server on a separate box), so density stays sourced from the
+> single-box run above.
 
 ### Arrival-model note (why two latency numbers)
 
@@ -1077,8 +1093,8 @@ their role's headline scale (`250K` or `100K`).
 
 | comparator | role | linearity (50K) | headline | 2M | active-traffic | reproduction script | raw JSON |
 |---|---|---|---|---|---|---|---|
-| Kāra | self | n/a (multi-scale ladder) | **1M landed (post-fix, 2026-06-01)** _(x86 1M re-read landed post-fix 2026-06-02)_ | **2M landed (post-fix, 2026-06-01)** | **250K + 1M landed (B3, 2026-06-05)** — 12,126 B/conn, p50 0.12 ms realistic; burst p50 ~5 ms; 1M held 0-failed, 8.23M echoed | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `docs/investigations/demo1_m3_1m_postfix_datalayout.json`; 2M: `docs/investigations/demo1_m3_2m_postfix_datalayout.json`; x86 1M (post-fix): `docs/investigations/demo1_m3_1m_x86_postfix.json`; x86 1M (pre-fix, historical): `docs/investigations/demo1_m3_1m_x86.json` |
-| Rust | credibility | n/a (tracks Kāra) | 1M landed | **2M landed (2026-05-30)** | **250K landed (2026-06-02)** — 28,034 B/conn, p50 0.04 ms realistic; burst ~1.6 ms | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `rust-1m.json`; 2M: `rust-2m.json` (mirror pending) |
+| Kāra | self | n/a (multi-scale ladder) | **1M landed (post-fix, 2026-06-01)** _(x86 1M re-read landed post-fix 2026-06-02)_ | **2M landed (post-fix, 2026-06-01)** | **250K + 1M landed (B3, 2026-06-05)** — 12,126 B/conn, p50 0.12 ms realistic; burst p50 ~5 ms; 1M held 0-failed, 8.23M echoed | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `docs/investigations/demo1_m3_1m_postfix_datalayout.json`; 2M: `docs/investigations/demo1_m3_2m_postfix_datalayout.json`; x86 1M (post-fix): `docs/investigations/demo1_m3_1m_x86_postfix.json`; x86 1M (pre-fix, historical): `docs/investigations/demo1_m3_1m_x86.json`; active-traffic: `docs/investigations/active_250k_kara-250k-{realistic,sync}_stageA.json`, `demo1_1m_active_realistic_b3.json`, `demo1_1m_active_crossbox_b3.json`; burst sweep: `burst_isolated_{baseline,b1,b2,b3}.json` |
+| Rust | credibility | n/a (tracks Kāra) | 1M landed | **2M landed (2026-05-30)** | **250K landed (2026-06-02)** — 28,034 B/conn, p50 0.04 ms realistic; burst ~1.6 ms | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `rust-1m.json`; 2M: `rust-2m.json` (mirror pending); active-traffic: `docs/investigations/active_250k_rust-250k-{realistic,sync}_stageA.json` |
 | Phoenix Channels | commercial | pending (#67) | 250K pending (#67) | n/a unless gate escalates | pending | TBD | TBD |
 | Java / Netty | commercial | pending (#68) | 250K pending (#68) | n/a unless gate escalates | pending | TBD | TBD |
 | Go | commercial | pending (#69) | 250K pending (#69) | n/a unless gate escalates | pending | TBD | TBD |
