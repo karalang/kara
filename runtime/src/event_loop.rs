@@ -427,6 +427,28 @@ static EVENT_LOOPS: OnceLock<Vec<Arc<EventLoop>>> = OnceLock::new();
 /// observing `EVENT_LOOPS` initialized implies the handles are set.
 static EVENT_LOOP_HANDLES: OnceLock<Vec<EventLoopHandle>> = OnceLock::new();
 
+/// Fast-path flags: is *some* reactor thread currently blocked in `run_once`
+/// on the shard epolls? Either the standalone background poller
+/// ([`POLLER_ACTIVE`], test/embedding path) or the combined scheduler
+/// dispatcher ([`DISPATCHER_ACTIVE`], the production poll-AND-dispatch threads,
+/// Stage B3). `register_fd` consults these to decide whether to wake the
+/// target shard so a blocked reactor thread re-arms interest on the new fd; the
+/// direct `event_loop_poll` FFI consults them to short-circuit (a reactor
+/// thread owns polling). Each flag is set to `true` *before* its threads are
+/// spawned and back to `false` *after* they are joined, so any registration
+/// observing `true` is guaranteed a thread is (or is about to be) polling — a
+/// stale `true` only costs a harmless spurious wake. Plain atomics keep this
+/// off the per-connection mutex path (B2 took a `BACKGROUND_POLLER` mutex here
+/// per register).
+static POLLER_ACTIVE: AtomicBool = AtomicBool::new(false);
+static DISPATCHER_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// True when a background poller or the combined dispatcher is driving the
+/// shard epolls (see [`POLLER_ACTIVE`] / [`DISPATCHER_ACTIVE`]).
+fn reactor_polling_active() -> bool {
+    POLLER_ACTIVE.load(Ordering::Acquire) || DISPATCHER_ACTIVE.load(Ordering::Acquire)
+}
+
 /// Maximum reactor shard count. The FFI registration token packs the shard
 /// index into its top [`TOKEN_SHARD_BITS`] bits (see [`pack_token`]), so the
 /// index must fit there — 256 distinct shards. Far above any real core count;
@@ -434,16 +456,17 @@ static EVENT_LOOP_HANDLES: OnceLock<Vec<EventLoopHandle>> = OnceLock::new();
 const MAX_SHARDS: usize = 1 << TOKEN_SHARD_BITS;
 
 /// Resolve the reactor shard count. Honors `KARAC_REACTOR_SHARDS` (>= 1) when
-/// set; otherwise defaults to the machine's available parallelism (floor 1,
-/// clamped to [`MAX_SHARDS`]). Distinct from `KARAC_DISPATCHER_THREADS` (the
-/// dispatcher *pool* size, which drains the shared wakeup queue): polling
-/// fan-out and dispatch fan-out size independently — see
-/// [`resolve_dispatcher_threads`].
+/// set, then the back-compat `KARAC_DISPATCHER_THREADS` (Stage B3 fused the
+/// dispatcher pool into the per-shard combined threads, so this knob now sizes
+/// shards = combined threads); otherwise defaults to the machine's available
+/// parallelism (floor 1, clamped to [`MAX_SHARDS`]).
 fn resolve_shard_count() -> usize {
-    if let Ok(s) = std::env::var("KARAC_REACTOR_SHARDS") {
-        if let Ok(n) = s.parse::<usize>() {
-            if n >= 1 {
-                return n.min(MAX_SHARDS);
+    for key in ["KARAC_REACTOR_SHARDS", "KARAC_DISPATCHER_THREADS"] {
+        if let Ok(s) = std::env::var(key) {
+            if let Ok(n) = s.parse::<usize>() {
+                if n >= 1 {
+                    return n.min(MAX_SHARDS);
+                }
             }
         }
     }
@@ -493,14 +516,16 @@ fn shard_of_fd(raw_fd: i32) -> usize {
 
 // ── Registration-token packing ─────────────────────────────────────────────
 //
-// The FFI registration token (`u64`) returned by `register_fd` and carried in
-// every `KaracWakeup` packs the owning shard index into its top
-// `TOKEN_SHARD_BITS` bits and the shard-local `mio::Token` value into the low
-// bits. This lets the dispatcher — which sees only a wakeup's token, not its
-// fd — route `take_registration` back to the shard that holds the live entry
-// ([`take_registration_routed`]). `register_fd` / `deregister_fd` route by fd
-// (and the packed shard agrees with `shard_of_fd`, since register used the
-// same hash); the dispatcher routes by the token's shard bits.
+// The FFI registration token (`u64`) returned by `register_fd` packs the
+// owning shard index into its top `TOKEN_SHARD_BITS` bits and the shard-local
+// `mio::Token` value into the low bits. Two purposes: (1) tokens are globally
+// unique across shards even though each shard's `mio::Token`s start at 1 (two
+// fds on different shards never collide); (2) the standalone `take_wakeups`
+// path stamps the same packed value so a wakeup's token matches the
+// `register_fd` return. `deregister_fd` routes by fd (the shard the register
+// hashed to) and uses only the unpacked shard-local id. The combined
+// dispatcher works on tokens from its own shard's `run_once`, so it needs no
+// unpacking at all.
 
 const TOKEN_SHARD_BITS: u32 = 8;
 const TOKEN_LOCAL_MASK: u64 = (1u64 << (64 - TOKEN_SHARD_BITS)) - 1;
@@ -514,16 +539,6 @@ fn unpack_token(packed: u64) -> (usize, usize) {
         (packed >> (64 - TOKEN_SHARD_BITS)) as usize,
         (packed & TOKEN_LOCAL_MASK) as usize,
     )
-}
-
-/// Resolve a packed FFI token to its shard's `take_registration`, routing by
-/// the token's shard bits. Returns `None` for an out-of-range shard (a stale
-/// or malformed token) or an already-claimed / absent registration.
-fn take_registration_routed(packed: u64) -> Option<*mut c_void> {
-    let (shard, local) = unpack_token(packed);
-    event_loops()
-        .get(shard)?
-        .take_registration(RegistrationToken(local))
 }
 
 /// Readiness wakeup entry written into the caller-allocated buffer by
@@ -604,13 +619,12 @@ pub extern "C" fn karac_runtime_event_loop_register_fd(
             // the wake to the only state it's needed for (a poller
             // blocked in `run_once`) and leaves the synchronous-poll
             // path race-free.
-            if BACKGROUND_POLLER
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .is_some()
-            {
-                // Wake only THIS fd's shard poller — each shard blocks on its
-                // own epoll, so a cross-shard wake would be wasted churn.
+            if reactor_polling_active() {
+                // Wake only THIS fd's shard reactor thread — each shard blocks
+                // on its own epoll, so a cross-shard wake would be wasted churn.
+                // (Covers both the background poller and the combined
+                // dispatcher — either may be blocked in `run_once` on this
+                // shard and must re-arm interest on the freshly-registered fd.)
                 if let Some(h) = EVENT_LOOP_HANDLES.get().and_then(|hs| hs.get(shard)) {
                     let _ = h.wake();
                 }
@@ -673,16 +687,11 @@ pub unsafe extern "C" fn karac_runtime_event_loop_poll(
         n if n > 0 => Some(Duration::from_nanos(n as u64)),
         _ => Some(Duration::ZERO),
     };
-    // If the background poller thread is running it owns polling — direct
-    // FFI poll callers get back an empty result so they fall through to
-    // `karac_runtime_event_loop_take_wakeups` instead of contending for
-    // the inner poll Mutex (which the background thread holds for the
-    // duration of its blocking call).
-    if BACKGROUND_POLLER
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .is_some()
-    {
+    // If a reactor thread owns polling — the background poller (drain via
+    // `take_wakeups`) or the combined dispatcher (drives `poll_fn` itself) —
+    // direct FFI poll callers get back an empty result rather than contend for
+    // a shard's inner poll Mutex (held for the duration of its blocking call).
+    if reactor_polling_active() {
         return 0;
     }
     // Synchronous single-thread fallback (tests / embedding). Production
@@ -977,6 +986,9 @@ pub extern "C" fn karac_runtime_event_loop_start_background_thread() -> i32 {
     });
     let n = poller.event_loops.len();
     let mut handles = Vec::with_capacity(n);
+    // Publish BEFORE spawning so any `register_fd` that races a poller thread
+    // into its first blocking `run_once` still wakes it (see `POLLER_ACTIVE`).
+    POLLER_ACTIVE.store(true, Ordering::Release);
     for shard in 0..n {
         let poller_for_thread = Arc::clone(&poller);
         let join = thread::Builder::new()
@@ -1089,6 +1101,9 @@ pub extern "C" fn karac_runtime_event_loop_shutdown_background_thread() -> i32 {
     for h in joins {
         let _ = h.join();
     }
+    // Cleared after join so a concurrent `register_fd` never observes `false`
+    // while a poller thread is still blocked in `run_once`.
+    POLLER_ACTIVE.store(false, Ordering::Release);
     // Drain any pending waker event on each shard. If a poller thread observed
     // the shutdown flag *before* our `wake()` was delivered to its `poll()`
     // call, mio's edge-armed waker leaves the event pending — the next thread
@@ -3472,20 +3487,36 @@ fn ws_drive_upgrade_handshake<S: std::io::Read + std::io::Write>(
     Ok(())
 }
 
-// ── Scheduler dispatcher (Phase 6 line 17 slice 4) ────────────────────────
+// ── Scheduler dispatcher (Phase 6 line 17 slice 4; Stage B3 combined model) ──
 //
-// A background dispatcher thread that drains the background poller's
-// wakeup queue and invokes `(task.poll_fn)(task.state, cancel)` on
-// each wakeup. The `parked` field of each `KaracWakeup` is interpreted
-// as `*const KaracParkedTask` — this is the convention that codegen
-// (when state-machine lowering for network-boundary functions lands —
-// phase-6 line 18) will follow when registering fds with the event
-// loop.
+// **Combined poll-and-dispatch, one thread per reactor shard.** Each
+// dispatcher thread owns a shard: it blocks in that shard's
+// `EventLoop::run_once`, and for every readiness wakeup resolves the parked
+// task from *its own* shard `fds` map and invokes
+// `(task.poll_fn)(task.state, cancel)` inline — no shared queue, no condvar
+// handoff. The `parked` field is interpreted as `*const KaracParkedTask`, the
+// codegen convention (phase-6 line 18).
 //
-// **Pairing with the background poller.** The dispatcher is opt-in
-// and requires the background poller to be running. Calling
-// `karac_runtime_scheduler_start_dispatcher` will auto-start the
-// poller if it isn't already running — see the body.
+// **Why combined (Stage B3).** B2 sharded the *polling* but kept a single
+// shared wakeup queue feeding a separate dispatcher pool. A CPU-isolated
+// re-measure (server 0.28/8 cores used under a 10K synchronized burst, p50
+// ~24 ms, flat across shard AND dispatcher counts) showed the serializer was
+// that shared queue + its serial condvar wake-a-friend ramp: neither more
+// pollers nor more dispatchers fed the idle cores. Fusing poll and dispatch
+// per shard removes the handoff entirely — each shard drains its own ready fds
+// in parallel, and the thread that polled an fd runs its `poll_fn` with a warm
+// cache. See `wip-bench-day.md` Phase 2 Stage B. (The standalone background
+// poller + `take_wakeups` queue path is retained, unchanged, for the
+// test/embedding surface; it is not on the dispatcher's path.)
+//
+// **Polls its own shards — does NOT use the background poller.** Unlike B2,
+// `start_dispatcher` does not start the background poller (the two would
+// double-poll the same epolls and contend on each shard's poll Mutex). The
+// combined threads ARE the pollers while the dispatcher runs.
+//
+// **One thread per shard.** The shard count (`resolve_shard_count`) fixes the
+// thread count: you cannot have two threads block on one `mio::Poll`. Tune via
+// `KARAC_REACTOR_SHARDS` (or the back-compat `KARAC_DISPATCHER_THREADS`).
 //
 // **Cancel routing.** v1 ships with a single process-global "never
 // cancelled" `AtomicBool` that the dispatcher passes to each
@@ -3518,14 +3549,13 @@ struct SchedulerDispatcher {
     ready_observations: std::sync::atomic::AtomicU64,
     err_observations: std::sync::atomic::AtomicU64,
     pending_observations: std::sync::atomic::AtomicU64,
-    /// Join handles for the dispatcher worker threads. The dispatcher
-    /// runs `resolve_dispatcher_threads()` threads, each draining the
-    /// shared (herd-free) wakeup queue and invoking `poll_fn` on claimed
-    /// tasks — so concurrent connections are serviced across cores. The
-    /// loop body is concurrency-safe by construction (the one-shot
-    /// `take_registration` claim guarantees each wakeup's `poll_fn` runs
-    /// at most once, counters are atomic, per-conn TLS sessions are
-    /// independently locked).
+    /// Join handles for the combined poll-and-dispatch threads — one per
+    /// reactor shard. Each polls its shard's epoll and invokes `poll_fn` on
+    /// the shard's own claimed tasks, so concurrent connections are serviced
+    /// across cores with no shared queue. The loop body is concurrency-safe by
+    /// construction (the one-shot `take_registration` claim guarantees each
+    /// wakeup's `poll_fn` runs at most once, counters are atomic, per-conn TLS
+    /// sessions are independently locked).
     handles: Mutex<Vec<thread::JoinHandle<()>>>,
 }
 
@@ -3538,44 +3568,40 @@ fn lock_scheduler_dispatcher_slot(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn dispatcher_thread_main(disp: Arc<SchedulerDispatcher>) {
-    // Drain wakeups in small batches; a short timeout makes shutdown
-    // responsive without busy-spinning.
-    let mut buf: [KaracWakeup; 16] = unsafe { std::mem::zeroed() };
+fn dispatcher_thread_main(disp: Arc<SchedulerDispatcher>, shard: usize) {
+    let event_loop = Arc::clone(&event_loops()[shard]);
     while !disp.shutdown.load(Ordering::Acquire) {
-        // 100ms timeout — bounded enough that shutdown takes effect
-        // within a poll cycle, brief enough that the dispatcher
-        // doesn't wake up needlessly when idle. The background poller
-        // delivers wakeups via the queue's Condvar, so this isn't a
-        // busy-loop.
-        let n = unsafe {
-            karac_runtime_event_loop_take_wakeups(buf.as_mut_ptr(), buf.len(), 100_000_000)
+        // Block on THIS shard's epoll and dispatch its ready fds inline — no
+        // shared queue, no condvar handoff. `run_once(None)` returns as soon as
+        // ≥1 fd is ready (so burst latency is unaffected by any timeout) or
+        // when `shutdown_dispatcher` wakes every shard to unblock it.
+        let wakeups = match event_loop.run_once(None) {
+            Ok(w) => w,
+            Err(_) => {
+                // Transient poll error — re-check shutdown and continue.
+                continue;
+            }
         };
-        for i in 0..n {
-            // SAFETY: indices 0..n were written by take_wakeups.
-            let w = unsafe { std::ptr::read(buf.as_ptr().add(i)) };
-            // One-shot claim: resolve the parked record from the *live*
-            // registration map (removing the token) rather than trusting
-            // the pointer captured into the wakeup. This is what makes the
-            // dispatcher safe against (a) duplicate / stale wakeups for the
-            // same fd (the second `take` returns `None` → skip, so a task's
-            // `poll_fn` runs at most once per registration) and (b)
-            // concurrent frees: the caller frees its parked record only
-            // after `poll_fn` signals it, which is strictly after this
-            // `take`+invoke, so the pointer is live for the duration of the
-            // call. A `None` here means the registration was already
-            // claimed (or deregistered) — the wakeup is spent, skip it.
-            // `w.token` packs the owning shard (see `pack_token`); route the
-            // claim to that shard's `fds` map.
-            let parked = match take_registration_routed(w.token) {
+        for w in wakeups {
+            // One-shot claim from this shard's OWN map (the combined thread
+            // knows its shard, so `w.token` is the shard-local `mio::Token` —
+            // no packing/routing needed). Resolving from the live map (removing
+            // the token) is what makes dispatch safe against (a) duplicate /
+            // stale wakeups for the same fd (the second `take` returns `None` →
+            // skip, so a task's `poll_fn` runs at most once per registration)
+            // and (b) concurrent frees: the caller frees its parked record only
+            // after `poll_fn` signals it, strictly after this `take`+invoke, so
+            // the pointer is live for the duration of the call. `None` ⇒ the
+            // registration was already claimed or deregistered — skip it.
+            let parked = match event_loop.take_registration(w.token) {
                 Some(p) if !p.is_null() => p,
                 _ => continue,
             };
-            // SAFETY: `take_registration` returned the parked pointer from
-            // the live map; the codegen / caller convention keeps the
-            // `KaracParkedTask` (and its state) alive until `poll_fn`
-            // signals completion, which happens inside this call. The
-            // dispatcher invokes `poll_fn` but never derefs `state` itself.
+            // SAFETY: `take_registration` returned the parked pointer from the
+            // live map; the codegen / caller convention keeps the
+            // `KaracParkedTask` (and its state) alive until `poll_fn` signals
+            // completion, which happens inside this call. We invoke `poll_fn`
+            // but never deref `state` ourselves.
             let task = unsafe { &*(parked as *const KaracParkedTask) };
             let result = unsafe { (task.poll_fn)(task.state, &disp.cancel) };
             disp.polls.fetch_add(1, Ordering::Relaxed);
@@ -3590,8 +3616,7 @@ fn dispatcher_thread_main(disp: Arc<SchedulerDispatcher>) {
                     disp.err_observations.fetch_add(1, Ordering::Relaxed);
                 }
                 _ => {
-                    // Unknown discriminant — treat as Err for
-                    // accounting purposes.
+                    // Unknown discriminant — treat as Err for accounting.
                     disp.err_observations.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -3599,12 +3624,14 @@ fn dispatcher_thread_main(disp: Arc<SchedulerDispatcher>) {
     }
 }
 
-/// Start the scheduler dispatcher thread.
+/// Start the combined scheduler dispatcher — one poll-and-dispatch thread per
+/// reactor shard ([`resolve_shard_count`]).
 ///
-/// Auto-starts the background poller if it isn't already running —
-/// the dispatcher's `take_wakeups` calls would otherwise return 0
-/// forever. Idempotent: a second call while running returns 0
-/// without re-spawning.
+/// Does NOT start the background poller: the combined threads own polling
+/// while the dispatcher runs (starting both would double-poll the shards). The
+/// background poller / `take_wakeups` path remains available for standalone
+/// use, just not on this path. Idempotent: a second call while running returns
+/// 0 without re-spawning.
 ///
 /// Returns 0 on success.
 #[no_mangle]
@@ -3613,9 +3640,6 @@ pub extern "C" fn karac_runtime_scheduler_start_dispatcher() -> i32 {
     if slot.is_some() {
         return 0;
     }
-    // Auto-start the background poller — take_wakeups depends on it.
-    let _ = karac_runtime_event_loop_start_background_thread();
-
     let disp = Arc::new(SchedulerDispatcher {
         shutdown: AtomicBool::new(false),
         cancel: AtomicBool::new(false),
@@ -3625,13 +3649,16 @@ pub extern "C" fn karac_runtime_scheduler_start_dispatcher() -> i32 {
         pending_observations: std::sync::atomic::AtomicU64::new(0),
         handles: Mutex::new(Vec::new()),
     });
-    let n_threads = resolve_dispatcher_threads();
+    let n_threads = shard_count();
     let mut handles = Vec::with_capacity(n_threads);
-    for i in 0..n_threads {
+    // Publish BEFORE spawning so a `register_fd` racing a thread into its first
+    // blocking `run_once` still wakes it (see `DISPATCHER_ACTIVE`).
+    DISPATCHER_ACTIVE.store(true, Ordering::Release);
+    for shard in 0..n_threads {
         let disp_for_thread = Arc::clone(&disp);
         let join = thread::Builder::new()
-            .name(format!("karac-scheduler-dispatcher-{i}"))
-            .spawn(move || dispatcher_thread_main(disp_for_thread))
+            .name(format!("karac-reactor-{shard}"))
+            .spawn(move || dispatcher_thread_main(disp_for_thread, shard))
             .expect("karac_runtime: failed to spawn scheduler dispatcher thread");
         handles.push(join);
     }
@@ -3640,30 +3667,9 @@ pub extern "C" fn karac_runtime_scheduler_start_dispatcher() -> i32 {
     0
 }
 
-/// Number of dispatcher worker threads. Honors `KARAC_DISPATCHER_THREADS`
-/// (>= 1) when set; otherwise defaults to the machine's available
-/// parallelism (floor 1). Separate knob from `KARAC_PAR_WORKERS` (the
-/// compute pool): I/O dispatch and compute fan-out have different sizing
-/// pressures.
-fn resolve_dispatcher_threads() -> usize {
-    if let Ok(s) = std::env::var("KARAC_DISPATCHER_THREADS") {
-        if let Ok(n) = s.parse::<usize>() {
-            if n >= 1 {
-                return n;
-            }
-        }
-    }
-    thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .max(1)
-}
-
-/// Signal the dispatcher to stop, join the thread, clear the global
-/// slot. Returns 0 on success, -1 if no dispatcher is running.
-///
-/// Does NOT stop the background poller; the poller has its own
-/// shutdown FFI and may be used independently of the dispatcher.
+/// Signal the dispatcher to stop, unblock every shard's `run_once` via the
+/// cross-thread waker, join the threads, clear the global slot. Returns 0 on
+/// success, -1 if no dispatcher is running.
 #[no_mangle]
 pub extern "C" fn karac_runtime_scheduler_shutdown_dispatcher() -> i32 {
     let disp = {
@@ -3674,13 +3680,23 @@ pub extern "C" fn karac_runtime_scheduler_shutdown_dispatcher() -> i32 {
         }
     };
     disp.shutdown.store(true, Ordering::Release);
-    // Each dispatcher thread's `take_wakeups` call has a 100ms timeout, so
-    // shutdown takes effect within one poll cycle without further
-    // signaling. (No need to wake or notify here.)
+    // The combined threads block in `run_once(None)`; wake every shard so each
+    // observes the shutdown flag and exits. `wake()` fans out to all shards.
+    let _ = karac_runtime_event_loop_wake();
     let joins: Vec<_> =
         std::mem::take(&mut *disp.handles.lock().unwrap_or_else(|p| p.into_inner()));
     for h in joins {
         let _ = h.join();
+    }
+    // Cleared after join so a concurrent `register_fd` never observes `false`
+    // while a combined thread is still blocked in `run_once`.
+    DISPATCHER_ACTIVE.store(false, Ordering::Release);
+    // Drain any pending waker event each shard's exit left armed (mio's
+    // edge-armed waker), so a follow-up direct poll / re-start sees a clean
+    // loop. The dispatcher slot is already None, so these don't race a live
+    // combined thread.
+    for ev in event_loops() {
+        let _ = ev.run_once(Some(Duration::ZERO));
     }
     0
 }
@@ -4185,18 +4201,6 @@ mod tests {
         assert_eq!(unpack_token(b).0, 3);
         // A shard-0 local token equals its bare local value (no high bits set).
         assert_eq!(pack_token(0, 42), 42);
-    }
-
-    #[test]
-    fn take_registration_routed_rejects_out_of_range_shard() {
-        // A token whose shard bits exceed the live shard count (stale/malformed)
-        // must resolve to None rather than panic on an out-of-bounds index.
-        let bogus = pack_token(MAX_SHARDS - 1, 1);
-        assert!(
-            shard_count() < MAX_SHARDS,
-            "test assumes fewer live shards than the max"
-        );
-        assert!(take_registration_routed(bogus).is_none());
     }
 
     #[test]
