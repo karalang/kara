@@ -92,7 +92,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // binop (LLVM re-vectorizes where profitable). dispatch_key is
         // `"Vector.<method>"` from `method_callee_type_name`.
         if let Some(ref key) = dispatch_key {
-            if key == "Vector.reduce_sum" || key == "Vector.dot" {
+            if matches!(
+                key.as_str(),
+                "Vector.dot"
+                    | "Vector.reduce_sum"
+                    | "Vector.reduce_product"
+                    | "Vector.reduce_and"
+                    | "Vector.reduce_or"
+                    | "Vector.reduce_xor"
+            ) {
                 return self.compile_vector_method(object, method, args);
             }
         }
@@ -2624,12 +2632,13 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Lower a `Vector[T, N]` instance method to a scalar (design.md
-    /// § Portable SIMD, slice 2). `reduce_sum` folds all lanes with `+`;
-    /// `dot` folds the element-wise product of the two vectors with `+`.
-    /// Lanes are read via `extractelement` and combined with the scalar
-    /// `compile_binop` (which selects int vs float automatically); LLVM
-    /// re-vectorizes the fold where profitable. The typechecker guarantees
-    /// `N >= 1` and, for `dot`, a same-typed vector argument.
+    /// § Portable SIMD, slices 2 / 2b). `reduce_{sum,product,and,or,xor}` fold
+    /// all lanes with the matching scalar op; `dot` folds the element-wise
+    /// product of the two vectors with `+`. Lanes are read via `extractelement`
+    /// and combined with the scalar `compile_binop` (which selects int vs float
+    /// automatically); LLVM re-vectorizes the fold where profitable. The
+    /// typechecker guarantees `N >= 1`, an integer element for the bitwise
+    /// folds, and a same-typed vector argument for `dot`.
     fn compile_vector_method(
         &mut self,
         object: &Expr,
@@ -2645,11 +2654,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 .map_err(|e| format!("vector extractelement failed: {e}"))
         };
         match method {
-            "reduce_sum" => {
+            "reduce_sum" | "reduce_product" | "reduce_and" | "reduce_or" | "reduce_xor" => {
+                let fold_op = match method {
+                    "reduce_sum" => BinOp::Add,
+                    "reduce_product" => BinOp::Mul,
+                    "reduce_and" => BinOp::BitAnd,
+                    "reduce_or" => BinOp::BitOr,
+                    _ => BinOp::BitXor, // reduce_xor
+                };
                 let mut acc = lane(self, recv, 0)?;
                 for i in 1..n {
                     let l = lane(self, recv, i)?;
-                    acc = self.compile_binop(&BinOp::Add, acc, l)?;
+                    acc = self.compile_binop(&fold_op, acc, l)?;
                 }
                 Ok(acc)
             }

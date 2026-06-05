@@ -29493,4 +29493,57 @@ fn main() {
             "an unknown Vector method must be a type error"
         );
     }
+
+    // ── Vector slice 2b — product + bitwise reductions ───────────────────
+
+    #[test]
+    fn test_vector_reduce_product_i64() {
+        let out = run_program(
+            "fn main() { let v = Vector[i64, 4](1, 2, 3, 4); println(v.reduce_product()); }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "24\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_reduce_and_i64() {
+        let out = run_program(
+            "fn main() { let v = Vector[i64, 4](15, 7, 3, 1); println(v.reduce_and()); }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_reduce_or_i64() {
+        let out = run_program(
+            "fn main() { let v = Vector[i64, 4](1, 2, 4, 8); println(v.reduce_or()); }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "15\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_reduce_xor_i64() {
+        let out = run_program(
+            "fn main() { let v = Vector[i64, 4](1, 2, 4, 8); println(v.reduce_xor()); }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "15\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_reduce_and_on_float_is_type_error() {
+        let errs = vector_typecheck_errors(
+            "fn main() { let v = Vector[f64, 2](1.0, 2.0); let _ = v.reduce_and(); }",
+        );
+        assert!(
+            !errs.is_empty(),
+            "bitwise reduce_and on a float vector must be a type error"
+        );
+    }
 }

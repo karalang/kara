@@ -894,8 +894,8 @@ impl<'a> super::Interpreter<'a> {
         None
     }
 
-    /// Instance methods on `Value::Vector` (design.md § Portable SIMD, slice
-    /// 2): the two core Vector→scalar reductions. Returns `Some(scalar)` when
+    /// Instance methods on `Value::Vector` (design.md § Portable SIMD, slices
+    /// 2 / 2b): `dot` + the `reduce_*` Vector→scalar folds. Returns `Some(scalar)` when
     /// `method` matches and the receiver is a vector; `None` otherwise (fall
     /// through). Folds reuse `eval_binary` so each lane uses the exact scalar
     /// Int/Float semantics — keeping interpreter output identical to codegen.
@@ -910,12 +910,20 @@ impl<'a> super::Interpreter<'a> {
             return None;
         };
         match method {
-            // Horizontal sum: fold all lanes with `+`. The typechecker
-            // guarantees N >= 1, so `lanes` is non-empty.
-            "reduce_sum" => {
+            // Horizontal folds: combine all lanes with the matching scalar op.
+            // The typechecker guarantees N >= 1 (and an integer element for the
+            // bitwise folds), so `lanes` is non-empty.
+            "reduce_sum" | "reduce_product" | "reduce_and" | "reduce_or" | "reduce_xor" => {
+                let fold_op = match method {
+                    "reduce_sum" => BinOp::Add,
+                    "reduce_product" => BinOp::Mul,
+                    "reduce_and" => BinOp::BitAnd,
+                    "reduce_or" => BinOp::BitOr,
+                    _ => BinOp::BitXor, // reduce_xor
+                };
                 let mut acc = lanes.first().cloned()?;
                 for lane in lanes.into_iter().skip(1) {
-                    acc = self.eval_binary(&BinOp::Add, acc, lane, span);
+                    acc = self.eval_binary(&fold_op, acc, lane, span);
                 }
                 Some(acc)
             }

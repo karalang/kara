@@ -2099,15 +2099,15 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     /// Type-check an instance-method call on `Vector[T, N]` (design.md
-    /// § Portable SIMD). Slice 2 surface — the two core Vector→scalar
-    /// reductions:
-    ///   - `reduce_sum() -> T` — horizontal sum of all lanes.
+    /// § Portable SIMD). Slices 2 / 2b surface — Vector→scalar:
+    ///   - `reduce_{sum,product,and,or,xor}() -> T` — horizontal folds.
+    ///     `and`/`or`/`xor` are bitwise (integer element only).
     ///   - `dot(other: Vector[T, N]) -> T` — dot product (element-wise
     ///     product summed); `other` must be the same `Vector[T, N]`.
     ///
-    /// Both return the element type `T`. Other reductions (`min`/`max`/
-    /// `product`/`and`/`or`/`xor`), construction helpers (`splat`/`from_*`),
-    /// and `cross` are later sub-slices (phase-7 line 289).
+    /// All return the element type `T`. `reduce_{min,max}` (need element
+    /// signedness), construction helpers (`splat`/`from_*`), and `cross` are
+    /// later sub-slices (phase-7 line 289).
     fn infer_vector_method(
         &mut self,
         element: &Type,
@@ -2118,7 +2118,11 @@ impl<'a> super::TypeChecker<'a> {
     ) -> Type {
         let elem = element.clone();
         match method {
-            "reduce_sum" => {
+            // No-argument horizontal reductions → `T`. `sum`/`product` work
+            // on any numeric element; `and`/`or`/`xor` are bitwise and require
+            // an integer element (design.md § Portable SIMD: "Bitwise — integer
+            // lanes only").
+            "reduce_sum" | "reduce_product" | "reduce_and" | "reduce_or" | "reduce_xor" => {
                 if !args.is_empty() {
                     self.type_error(
                         format!("'{}' takes no arguments", method),
@@ -2128,6 +2132,19 @@ impl<'a> super::TypeChecker<'a> {
                     for a in args {
                         self.infer_expr(&a.value);
                     }
+                }
+                let is_bitwise = matches!(method, "reduce_and" | "reduce_or" | "reduce_xor");
+                if is_bitwise && !matches!(elem, Type::Int(_) | Type::UInt(_)) {
+                    self.type_error(
+                        format!(
+                            "'{}' requires an integer element type; Vector element is '{}'",
+                            method,
+                            type_display(&elem)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
                 }
                 elem
             }
@@ -2164,7 +2181,8 @@ impl<'a> super::TypeChecker<'a> {
             _ => {
                 self.type_error(
                     format!(
-                        "no method '{}' on Vector[{}, _] (slice 2 supports reduce_sum, dot)",
+                        "no method '{}' on Vector[{}, _] (supported: dot, \
+                         reduce_sum, reduce_product, reduce_and, reduce_or, reduce_xor)",
                         method,
                         type_display(&elem)
                     ),

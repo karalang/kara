@@ -12333,3 +12333,35 @@ fn main() {
     // 2*4 + 3*5 = 8 + 15 = 23
     assert_eq!(out, "23\n");
 }
+
+// ── Vector slice 2b — product + bitwise reductions (interpreter) ──────
+
+#[test]
+fn test_vector_reduce_product_i64() {
+    let out = run_no_errors(
+        "fn main() { let v = Vector[i64, 4](1, 2, 3, 4); println(v.reduce_product()); }",
+    );
+    assert_eq!(out, "24\n");
+}
+
+#[test]
+fn test_vector_reduce_and_i64() {
+    let out = run_no_errors(
+        "fn main() { let v = Vector[i64, 4](15, 7, 3, 1); println(v.reduce_and()); }",
+    );
+    assert_eq!(out, "1\n");
+}
+
+#[test]
+fn test_vector_reduce_or_i64() {
+    let out =
+        run_no_errors("fn main() { let v = Vector[i64, 4](1, 2, 4, 8); println(v.reduce_or()); }");
+    assert_eq!(out, "15\n");
+}
+
+#[test]
+fn test_vector_reduce_xor_i64() {
+    let out =
+        run_no_errors("fn main() { let v = Vector[i64, 4](1, 2, 4, 8); println(v.reduce_xor()); }");
+    assert_eq!(out, "15\n");
+}
