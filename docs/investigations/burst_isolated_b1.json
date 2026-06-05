@@ -1,0 +1,60 @@
+{
+  "ok": false,
+  "config": {
+    "target": "127.0.0.1:37945",
+    "connections": 10000,
+    "concurrency": 64,
+    "churn_rounds": 0,
+    "churn_fraction": 0.1,
+    "source_ips": [
+      "127.0.0.2",
+      "127.0.0.3",
+      "127.0.0.4",
+      "127.0.0.5",
+      "127.0.0.6",
+      "127.0.0.7",
+      "127.0.0.8",
+      "127.0.0.9",
+      "127.0.0.10",
+      "127.0.0.11"
+    ]
+  },
+  "connect": {
+    "established": 10000,
+    "failed": 0,
+    "samples": 10000,
+    "min_ms": 40.912966000000004,
+    "mean_ms": 44.62690239839994,
+    "p50_ms": 44.958887000000004,
+    "p95_ms": 48.048001,
+    "p99_ms": 57.030662,
+    "p999_ms": 88.00349200000001,
+    "max_ms": 108.970231
+  },
+  "memory": {
+    "available": true,
+    "server_pid": 6418,
+    "rss_before_kb": 3016,
+    "rss_after_kb": 122960,
+    "per_conn_bytes": 12282.2656
+  },
+  "active_traffic": {
+    "active_conns": 10000,
+    "msg_bytes": 128,
+    "msg_rate": 1.0,
+    "duration_secs": 20,
+    "messages_sent": 199976,
+    "messages_echoed": 199964,
+    "echo_failures": 12,
+    "samples": 199964,
+    "min_ms": 0.080816,
+    "mean_ms": 31.47299553552649,
+    "p50_ms": 34.963977,
+    "p95_ms": 42.070706,
+    "p99_ms": 43.76222,
+    "p999_ms": 44.52065,
+    "max_ms": 46.710195000000006,
+    "rss_during_kb": 124808,
+    "per_conn_bytes_active": 12471.5008
+  }
+}

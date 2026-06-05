@@ -206,26 +206,43 @@ impl EventLoop {
         deadline: Option<Instant>,
         parked: *mut c_void,
     ) -> io::Result<RegistrationToken> {
-        let mut fds = self.fds.lock().unwrap_or_else(|p| p.into_inner());
-        let token = Token(fds.next_token);
-        fds.next_token = fds
-            .next_token
-            .checked_add(1)
-            .expect("event loop token exhaustion (usize wrap)");
-        // mio::Registry is Sync — safe to call without holding any
-        // additional lock. We still hold the fds lock through this
-        // call so the HashMap insert and OS-level registration appear
-        // atomic to other threads.
-        self.registry
-            .register(source, token, direction.to_interest())?;
-        fds.by_token.insert(
-            token,
-            FdState {
-                parked,
-                direction,
-                deadline,
-            },
-        );
+        // Allocate the token and publish the map entry under the lock, then
+        // perform the `epoll_ctl` ADD *without* holding the fds lock. The
+        // map entry must exist before the fd is armed (so a readiness wakeup
+        // resolves via `take_registration`), but the syscall itself does not
+        // need the lock: `mio::Registry` is `Sync` and the kernel serializes
+        // concurrent `epoll_ctl` efficiently. Holding the lock across the
+        // syscall serialized every connection's park/unpark on one mutex —
+        // the measured cap on parallel dispatch under burst load (a thread
+        // sweep plateaued at ~4 dispatchers; releasing the lock here is what
+        // lets dispatch scale past it). The fd is not armed until `register`
+        // returns, so no wakeup can observe the published-but-unarmed entry.
+        let token = {
+            let mut fds = self.fds.lock().unwrap_or_else(|p| p.into_inner());
+            let token = Token(fds.next_token);
+            fds.next_token = fds
+                .next_token
+                .checked_add(1)
+                .expect("event loop token exhaustion (usize wrap)");
+            fds.by_token.insert(
+                token,
+                FdState {
+                    parked,
+                    direction,
+                    deadline,
+                },
+            );
+            token
+        };
+        if let Err(e) = self
+            .registry
+            .register(source, token, direction.to_interest())
+        {
+            // The fd was never armed — roll back the speculative entry.
+            let mut fds = self.fds.lock().unwrap_or_else(|p| p.into_inner());
+            fds.by_token.remove(&token);
+            return Err(e);
+        }
         Ok(RegistrationToken(token.0))
     }
 
@@ -244,10 +261,17 @@ impl EventLoop {
         source: &mut S,
         token: RegistrationToken,
     ) -> io::Result<()> {
-        let mut fds = self.fds.lock().unwrap_or_else(|p| p.into_inner());
-        self.registry.deregister(source)?;
-        fds.by_token.remove(&Token(token.0));
-        Ok(())
+        // Remove the map entry under the lock, then `epoll_ctl` DEL without
+        // the lock held (same rationale as `register`). A stale wakeup that
+        // raced the removal resolves to `None` in `take_registration` (and
+        // `run_once` skips tokens absent from the map), so dropping the
+        // entry before the syscall is safe and keeps the lock off the
+        // syscall path.
+        {
+            let mut fds = self.fds.lock().unwrap_or_else(|p| p.into_inner());
+            fds.by_token.remove(&Token(token.0));
+        }
+        self.registry.deregister(source)
     }
 
     /// Atomically remove a registration by token and return its `parked`
