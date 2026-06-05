@@ -110,24 +110,38 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Unit);
                 }
             }
-            // `fetch_add(v, ord)` / `fetch_sub(v, ord)` — atomic read-modify-
-            // write, returns the PREVIOUS value (matching the codegen / Rust
-            // semantics). The tree-walk interpreter is single-threaded so the
-            // op is a plain read-update-write; the ordering arg is accepted and
-            // ignored. Like `store`, the in-place update only lands for an
-            // `Identifier` receiver (the interpreter's existing field-receiver
-            // limitation); the returned old value is correct regardless.
-            "fetch_add" | "fetch_sub" => {
+            // Single-operand read-modify-write ops — return the PREVIOUS value
+            // (matching the codegen / Rust semantics). The tree-walk interpreter
+            // is single-threaded so each is a plain read-update-write; the
+            // ordering arg is accepted and ignored. Like `store`, the in-place
+            // update only lands for an `Identifier` receiver (the interpreter's
+            // existing field-receiver limitation); the returned old value is
+            // correct regardless. The arithmetic/bitwise ops are integer-only;
+            // `swap` exchanges any value (incl. `Atomic[bool]`).
+            "fetch_add" | "fetch_sub" | "fetch_and" | "fetch_or" | "fetch_xor" | "swap" => {
                 if let Value::Atomic(inner) = &obj {
                     let old = (**inner).clone();
-                    let delta = args
+                    let arg_val = args
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
-                    if let (Value::Int(o), Value::Int(d)) = (&old, &delta) {
-                        let new = if method == "fetch_add" { o + d } else { o - d };
+                    let new = if method == "swap" {
+                        Some(arg_val)
+                    } else if let (Value::Int(o), Value::Int(d)) = (&old, &arg_val) {
+                        Some(Value::Int(match method {
+                            "fetch_add" => o + d,
+                            "fetch_sub" => o - d,
+                            "fetch_and" => o & d,
+                            "fetch_or" => o | d,
+                            "fetch_xor" => o ^ d,
+                            _ => unreachable!("RMW arm gated on the method set above"),
+                        }))
+                    } else {
+                        None
+                    };
+                    if let Some(new) = new {
                         if let ExprKind::Identifier(name) = &object.kind {
-                            self.env.set(name, Value::Atomic(Box::new(Value::Int(new))));
+                            self.env.set(name, Value::Atomic(Box::new(new)));
                         }
                     }
                     return Some(old);

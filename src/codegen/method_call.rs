@@ -1169,8 +1169,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // pattern-matches the trailing `MemoryOrdering.X` qualified-
         // variant arg into an `inkwell::AtomicOrdering`, and emits
         // `load atomic` / `store atomic`.
-        if matches!(method, "load" | "store" | "fetch_add" | "fetch_sub")
-            && self.is_atomic_receiver(object)
+        if matches!(
+            method,
+            "load"
+                | "store"
+                | "fetch_add"
+                | "fetch_sub"
+                | "swap"
+                | "fetch_and"
+                | "fetch_or"
+                | "fetch_xor"
+        ) && self.is_atomic_receiver(object)
         {
             return self.compile_atomic_method(object, method, args);
         }
@@ -1830,15 +1839,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // i64-0 placeholder used elsewhere for void returns.
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
-            // `fetch_add(v, ord)` / `fetch_sub(v, ord)` — atomic read-modify-
-            // write. Returns the PREVIOUS value (LLVM `atomicrmw` semantics,
-            // matching Rust's `Atomic::fetch_*`), so `count.fetch_add(1, ..)`
-            // is a race-free increment that yields the pre-increment count.
-            // `atomicrmw` accepts any memory ordering (unlike load/store), so
-            // no ordering rejection. Integer-only — `Atomic[bool]` has no
-            // arithmetic RMW. (swap / compare_exchange / fetch_and|or|xor are
-            // a tracked follow-on.)
-            "fetch_add" | "fetch_sub" => {
+            // Single-operand read-modify-write ops — all lower to one LLVM
+            // `atomicrmw` and return the PREVIOUS value (matching Rust's
+            // `Atomic::fetch_*` / `swap`), so e.g. `count.fetch_add(1, ..)` is
+            // a race-free increment yielding the pre-increment count. `atomicrmw`
+            // accepts any memory ordering (unlike load/store), so no ordering
+            // rejection. The arithmetic / bitwise ops are integer-only
+            // (`Atomic[bool]` has no arithmetic/bitwise RMW); `swap` (Xchg) is a
+            // plain exchange and is the one RMW that also works on `Atomic[bool]`
+            // (i8 slot — incoming i1 widened, returned old i8 truncated, same as
+            // load/store). `compare_exchange` is a separate slice (two operands,
+            // `cmpxchg`, Result-shaped return).
+            "fetch_add" | "fetch_sub" | "fetch_and" | "fetch_or" | "fetch_xor" | "swap" => {
                 if args.len() != 2 {
                     return Err(format!(
                         "codegen: Atomic.{} takes (value, MemoryOrdering), got {} args",
@@ -1846,14 +1858,34 @@ impl<'ctx> super::Codegen<'ctx> {
                         args.len()
                     ));
                 }
-                if inner_is_bool {
+                let is_swap = method == "swap";
+                if inner_is_bool && !is_swap {
                     return Err(format!(
-                        "codegen: Atomic[bool] does not support {} (no arithmetic RMW on a bool)",
+                        "codegen: Atomic[bool] does not support {} (no arithmetic/bitwise RMW \
+                         on a bool); only `swap` / `load` / `store`",
                         method
                     ));
                 }
                 let value = self.compile_expr(&args[0].value)?;
                 let ordering = self.parse_memory_ordering(&args[1].value)?;
+                // Atomic[bool] swap: the slot is i8 but the incoming value is
+                // i1 — widen at the boundary (mirrors `store`).
+                let value = if inner_is_bool {
+                    if let BasicValueEnum::IntValue(iv) = value {
+                        if iv.get_type().get_bit_width() == 1 {
+                            self.builder
+                                .build_int_z_extend(iv, self.context.i8_type(), "atomic.bool.zext")
+                                .unwrap()
+                                .into()
+                        } else {
+                            value
+                        }
+                    } else {
+                        value
+                    }
+                } else {
+                    value
+                };
                 let val_int = match value {
                     BasicValueEnum::IntValue(iv) => iv,
                     _ => {
@@ -1863,19 +1895,34 @@ impl<'ctx> super::Codegen<'ctx> {
                         ))
                     }
                 };
-                let op = if method == "fetch_add" {
-                    AtomicRMWBinOp::Add
-                } else {
-                    AtomicRMWBinOp::Sub
+                let op = match method {
+                    "fetch_add" => AtomicRMWBinOp::Add,
+                    "fetch_sub" => AtomicRMWBinOp::Sub,
+                    "fetch_and" => AtomicRMWBinOp::And,
+                    "fetch_or" => AtomicRMWBinOp::Or,
+                    "fetch_xor" => AtomicRMWBinOp::Xor,
+                    "swap" => AtomicRMWBinOp::Xchg,
+                    _ => unreachable!("RMW arm gated on the method set above"),
                 };
                 let old = self
                     .builder
                     .build_atomicrmw(op, storage_ptr, val_int, ordering)
                     .map_err(|e| format!("codegen: build_atomicrmw failed: {:?}", e))?;
+                // Atomic[bool] swap: returned old is i8 → trunc to i1 for the
+                // surface `bool` view (mirrors `load`). `build_atomicrmw`
+                // returns an `IntValue` directly.
+                if inner_is_bool {
+                    let i1 = self
+                        .builder
+                        .build_int_truncate(old, self.context.bool_type(), "atomic.bool.trunc")
+                        .unwrap();
+                    return Ok(i1.into());
+                }
                 Ok(old.into())
             }
             _ => unreachable!(
-                "compile_atomic_method gated on method in {{load, store, fetch_add, fetch_sub}}"
+                "compile_atomic_method gated on method in \
+                 {{load, store, fetch_add, fetch_sub, fetch_and, fetch_or, fetch_xor, swap}}"
             ),
         }
     }

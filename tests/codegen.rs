@@ -28667,6 +28667,90 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_atomic_swap_and_bitwise_emit_correct_atomicrmw() {
+        // swap / fetch_and / fetch_or / fetch_xor each lower to the matching
+        // single `atomicrmw` opcode (xchg / and / or / xor).
+        let ir = ir_for(
+            r#"
+par struct B { v: Atomic[i64] }
+impl B {
+    fn a(ref self) -> i64 { self.v.fetch_and(6, MemoryOrdering.SeqCst) }
+    fn o(ref self) -> i64 { self.v.fetch_or(1, MemoryOrdering.SeqCst) }
+    fn x(ref self) -> i64 { self.v.fetch_xor(2, MemoryOrdering.SeqCst) }
+    fn s(ref self) -> i64 { self.v.swap(9, MemoryOrdering.SeqCst) }
+}
+fn main() {
+    let b = B { v: Atomic.new(7) };
+    let _ = b.a(); let _ = b.o(); let _ = b.x(); let _ = b.s();
+}
+"#,
+        );
+        for op in [
+            "atomicrmw and",
+            "atomicrmw or",
+            "atomicrmw xor",
+            "atomicrmw xchg",
+        ] {
+            assert!(ir.contains(op), "expected `{op}` in IR; got:\n{ir}");
+        }
+    }
+
+    #[test]
+    fn test_e2e_atomic_bitwise_and_swap_semantics() {
+        // fetch_or / fetch_and / fetch_xor / swap all return the OLD value and
+        // apply the bitwise / exchange op in place.
+        let out = run_program(
+            r#"
+par struct Flags { bits: Atomic[i64] }
+impl Flags {
+    fn set_or(ref self, m: i64) -> i64 { self.bits.fetch_or(m, MemoryOrdering.SeqCst) }
+    fn clear_and(ref self, m: i64) -> i64 { self.bits.fetch_and(m, MemoryOrdering.SeqCst) }
+    fn toggle(ref self, m: i64) -> i64 { self.bits.fetch_xor(m, MemoryOrdering.SeqCst) }
+    fn exchange(ref self, v: i64) -> i64 { self.bits.swap(v, MemoryOrdering.SeqCst) }
+    fn get(ref self) -> i64 { self.bits.load(MemoryOrdering.SeqCst) }
+}
+fn main() {
+    let f = Flags { bits: Atomic.new(0) };
+    println(f.set_or(5));    // old 0  -> 5
+    println(f.set_or(2));    // old 5  -> 7
+    println(f.clear_and(6)); // old 7  -> 6   (7 & 6)
+    println(f.toggle(2));    // old 6  -> 4   (6 ^ 2)
+    println(f.exchange(99)); // old 4  -> 99
+    println(f.get());        // 99
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["0", "5", "7", "6", "4", "99"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_atomic_bool_swap() {
+        // `swap` is the one RMW that also works on `Atomic[bool]` (i8 slot —
+        // incoming i1 widened, returned old i8 truncated). A take-once latch.
+        let out = run_program(
+            r#"
+par struct Latch { flag: Atomic[bool] }
+impl Latch {
+    fn take(ref self) -> bool { self.flag.swap(true, MemoryOrdering.SeqCst) }
+    fn get(ref self) -> bool { self.flag.load(MemoryOrdering.SeqCst) }
+}
+fn main() {
+    let l = Latch { flag: Atomic.new(false) };
+    if l.take() { println(1); } else { println(0); }   // old false -> 0
+    if l.get() { println(1); } else { println(0); }    // now true  -> 1
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["0", "1"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_concurrent_atomic_counter_no_lost_updates() {
         // The headline lock-free-counter shape: two sibling `par {}` branches
         // each fetch_add 50_000 times on the SAME par struct's Atomic field.
