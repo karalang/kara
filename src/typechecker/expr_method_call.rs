@@ -1130,6 +1130,64 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `Atomic[T].compare_exchange(old, new, success, failure) -> Result[T, T]`
+        // (deferred.md § Atomic Operations, line 311). Special-cased because its
+        // Result-shaped return must be visible to the typechecker so the caller
+        // can `match` / `.is_ok()` on the outcome. The other atomic methods
+        // (`load` / `store` / `fetch_*` / `swap`) are codegen-only and fall
+        // through to the silent `Type::Error` arm below — their inner-type
+        // return isn't modeled here, which is harmless because `Type::Error`
+        // is universally assignable. `compare_exchange` can't ride that path:
+        // a `Result`-typed scrutinee is needed for exhaustive matching.
+        // Returns `Ok(prev)` on a successful swap, `Err(actual)` otherwise —
+        // both payloads are `T`, hence `Result[T, T]`.
+        if method == "compare_exchange" {
+            let inner = match &obj_ty {
+                Type::Named { name, args } if name == "Atomic" && args.len() == 1 => {
+                    Some(args[0].clone())
+                }
+                Type::Ref(b) | Type::MutRef(b) => match b.as_ref() {
+                    Type::Named { name, args } if name == "Atomic" && args.len() == 1 => {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(inner) = inner {
+                if args.len() != 4 {
+                    self.type_error(
+                        format!(
+                            "Atomic.compare_exchange expects (old, new, success: MemoryOrdering, \
+                             failure: MemoryOrdering) — 4 arguments, found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    // old / new must be assignable to the atomic's inner type T;
+                    // the two ordering args are inferred for recording (their
+                    // `MemoryOrdering.X` shape is validated at codegen).
+                    let old_ty = self.infer_expr(&args[0].value);
+                    self.check_assignable(&inner, &old_ty, args[0].value.span.clone());
+                    let new_ty = self.infer_expr(&args[1].value);
+                    self.check_assignable(&inner, &new_ty, args[1].value.span.clone());
+                    self.infer_expr(&args[2].value);
+                    self.infer_expr(&args[3].value);
+                }
+                let result_ty = Type::Named {
+                    name: "Result".to_string(),
+                    args: vec![inner.clone(), inner],
+                };
+                self.record_expr_type(span, &result_ty);
+                return result_ty;
+            }
+        }
+
         // `Vec[T].push(item: T)` slot check (round 12.46 / Step 4). Vec is a
         // built-in prelude type with no impl block, so without this dispatch
         // `push` falls through to the silent `Type::Error` arm below and the

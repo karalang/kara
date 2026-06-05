@@ -1179,6 +1179,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "fetch_and"
                 | "fetch_or"
                 | "fetch_xor"
+                | "compare_exchange"
         ) && self.is_atomic_receiver(object)
         {
             return self.compile_atomic_method(object, method, args);
@@ -1920,9 +1921,113 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(old.into())
             }
+            // `compare_exchange(old, new, success, failure) -> Result[T, T]`
+            // (deferred.md § Atomic Operations). Lowers to LLVM `cmpxchg`, which
+            // returns a `{ T, i1 }` struct: field 0 is the value loaded from the
+            // slot, field 1 is the success flag. The Kāra surface returns
+            // `Ok(prev)` on success / `Err(actual)` on failure — both payloads
+            // are the loaded value, so the ONLY thing that varies is the tag.
+            // Result's tags are `Ok = 1`, `Err = 0`, which is exactly
+            // `zext(success_i1)` — so the Result aggregate is built directly with
+            // no branch: tag = the success bit, payload word 0 = the loaded
+            // value. Integer-only for v1 (`Atomic[bool]` rejected — its i8/i1
+            // round-trip through the Result payload is a follow-on).
+            "compare_exchange" => {
+                if args.len() != 4 {
+                    return Err(format!(
+                        "codegen: Atomic.compare_exchange takes (old, new, success, failure), \
+                         got {} args",
+                        args.len()
+                    ));
+                }
+                if inner_is_bool {
+                    return Err(
+                        "codegen: Atomic[bool].compare_exchange is not supported in v1 \
+                         (use `swap` / `load` / `store` for bool flags); CAS on bool is a \
+                         tracked follow-on"
+                            .to_string(),
+                    );
+                }
+                let expected = self.compile_expr(&args[0].value)?;
+                let new_val = self.compile_expr(&args[1].value)?;
+                let success_ord = self.parse_memory_ordering(&args[2].value)?;
+                let failure_ord = self.parse_memory_ordering(&args[3].value)?;
+                // LLVM forbids Release / AcqRel as the *failure* ordering (it is
+                // the load-only path — no store happens on failure).
+                if matches!(
+                    failure_ord,
+                    AtomicOrdering::Release | AtomicOrdering::AcquireRelease
+                ) {
+                    return Err(format!(
+                        "codegen: Atomic.compare_exchange rejects MemoryOrdering.{:?} as the \
+                         failure ordering (LLVM forbids Release / AcqRel on the no-store path); \
+                         use Relaxed / Acquire / SeqCst",
+                        failure_ord
+                    ));
+                }
+                let (exp_int, new_int) = match (expected, new_val) {
+                    (BasicValueEnum::IntValue(a), BasicValueEnum::IntValue(b)) => (a, b),
+                    _ => {
+                        return Err(
+                            "codegen: Atomic.compare_exchange requires integer old/new values"
+                                .to_string(),
+                        )
+                    }
+                };
+                let cmpxchg = self
+                    .builder
+                    .build_cmpxchg(storage_ptr, exp_int, new_int, success_ord, failure_ord)
+                    .map_err(|e| format!("codegen: build_cmpxchg failed: {:?}", e))?;
+                // `cmpxchg` yields `{ T, i1 }` — extract the loaded value + flag.
+                let loaded = self
+                    .builder
+                    .build_extract_value(cmpxchg, 0, "cas.loaded")
+                    .unwrap();
+                let success = self
+                    .builder
+                    .build_extract_value(cmpxchg, 1, "cas.ok")
+                    .unwrap()
+                    .into_int_value();
+                // Build the Result[T, T] aggregate: tag = the success bit
+                // (Ok=1 / Err=0), payload word 0 = the loaded value.
+                let i64_t = self.context.i64_type();
+                let result_layout = self
+                    .enum_layouts
+                    .get("Result")
+                    .ok_or_else(|| "codegen: Result enum layout not registered".to_string())?;
+                let result_ty = result_layout.llvm_type;
+                let payload_words = result_ty.count_fields().saturating_sub(1);
+                let tag = self
+                    .builder
+                    .build_int_z_extend(success, i64_t, "cas.tag")
+                    .unwrap();
+                let loaded_word = self.coerce_to_i64(loaded)?;
+                let mut agg = result_ty.get_undef();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, tag, 0, "cas.res.tag")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, loaded_word, 1, "cas.res.val")
+                    .unwrap()
+                    .into_struct_value();
+                // Zero-fill the remaining payload words so the aggregate carries
+                // no `undef` past the single value word (Result is sized for its
+                // widest payload; a CAS value occupies only word 0).
+                for w in 2..=payload_words {
+                    agg = self
+                        .builder
+                        .build_insert_value(agg, i64_t.const_zero(), w, "cas.res.pad")
+                        .unwrap()
+                        .into_struct_value();
+                }
+                Ok(agg.into())
+            }
             _ => unreachable!(
-                "compile_atomic_method gated on method in \
-                 {{load, store, fetch_add, fetch_sub, fetch_and, fetch_or, fetch_xor, swap}}"
+                "compile_atomic_method gated on method in {{load, store, fetch_add, fetch_sub, \
+                 fetch_and, fetch_or, fetch_xor, swap, compare_exchange}}"
             ),
         }
     }

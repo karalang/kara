@@ -147,6 +147,35 @@ impl<'a> super::Interpreter<'a> {
                     return Some(old);
                 }
             }
+            // `compare_exchange(old, new, success, failure) -> Result[T, T]` —
+            // CAS. If the current value equals `old`, store `new` and return
+            // `Ok(prev)`; otherwise leave it and return `Err(actual)`. Both
+            // payloads are the loaded value. Single-threaded so the
+            // compare-and-store is trivially atomic; orderings ignored.
+            "compare_exchange" => {
+                if let Value::Atomic(inner) = &obj {
+                    let current = (**inner).clone();
+                    let expected = args
+                        .first()
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    let swapped = current == expected;
+                    if swapped {
+                        let new = args
+                            .get(1)
+                            .map(|a| self.eval_expr_inner(&a.value))
+                            .unwrap_or(Value::Unit);
+                        if let ExprKind::Identifier(name) = &object.kind {
+                            self.env.set(name, Value::Atomic(Box::new(new)));
+                        }
+                    }
+                    return Some(Value::EnumVariant {
+                        enum_name: "Result".to_string(),
+                        variant: if swapped { "Ok" } else { "Err" }.to_string(),
+                        data: EnumData::Tuple(vec![current]),
+                    });
+                }
+            }
             _ => return None,
         }
         None

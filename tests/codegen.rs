@@ -28751,6 +28751,100 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_atomic_compare_exchange_emits_cmpxchg() {
+        let ir = ir_for(
+            r#"
+par struct C { v: Atomic[i64] }
+impl C {
+    fn cas(ref self) -> Result[i64, i64] {
+        self.v.compare_exchange(0, 5, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst)
+    }
+}
+fn main() { let c = C { v: Atomic.new(0) }; let _ = c.cas(); }
+"#,
+        );
+        assert!(
+            ir.contains("cmpxchg"),
+            "compare_exchange must lower to LLVM `cmpxchg`; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_atomic_compare_exchange_success_and_failure() {
+        // CAS returns Ok(prev) and swaps when the expected value matches;
+        // Err(actual) and leaves the slot unchanged when it does not.
+        let out = run_program(
+            r#"
+par struct Cell { v: Atomic[i64] }
+impl Cell {
+    fn cas(ref self, old: i64, new: i64) -> Result[i64, i64] {
+        self.v.compare_exchange(old, new, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst)
+    }
+    fn get(ref self) -> i64 { self.v.load(MemoryOrdering.SeqCst) }
+}
+fn report(r: Result[i64, i64]) {
+    match r {
+        Ok(prev) => { println(100 + prev); }
+        Err(actual) => { println(200 + actual); }
+    }
+}
+fn main() {
+    let c = Cell { v: Atomic.new(5) };
+    report(c.cas(5, 9));   // 5 == 5 -> Ok(5)  -> 105
+    println(c.get());      // 9 (swapped)
+    report(c.cas(5, 1));   // 5 != 9 -> Err(9) -> 209
+    println(c.get());      // 9 (unchanged — failed CAS does not store)
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["105", "9", "209", "9"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_concurrent_cas_loop_increment_no_lost_updates() {
+        // The canonical lock-free pattern: a load + compare_exchange retry
+        // loop, run concurrently from two `par {}` branches 50_000× each.
+        // CAS guarantees exactly 100_000 — a failed exchange retries with the
+        // freshly-observed value, so no update is ever lost.
+        let out = run_program(
+            r#"
+par struct Counter { v: Atomic[i64] }
+impl Counter {
+    fn get(ref self) -> i64 { self.v.load(MemoryOrdering.SeqCst) }
+    fn inc(ref self) {
+        let mut done = false;
+        while not done {
+            let cur = self.v.load(MemoryOrdering.SeqCst);
+            match self.v.compare_exchange(cur, cur + 1, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst) {
+                Ok(_) => { done = true; }
+                Err(_) => { }
+            }
+        }
+    }
+}
+fn bump(c: Counter, n: i64) {
+    let mut i = 0;
+    while i < n { c.inc(); i = i + 1; }
+}
+fn main() {
+    let c = Counter { v: Atomic.new(0) };
+    par {
+        bump(c, 50000);
+        bump(c, 50000);
+    }
+    println(c.get());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "100000");
+        }
+    }
+
+    #[test]
     fn test_e2e_concurrent_atomic_counter_no_lost_updates() {
         // The headline lock-free-counter shape: two sibling `par {}` branches
         // each fetch_add 50_000 times on the SAME par struct's Atomic field.

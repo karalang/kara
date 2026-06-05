@@ -22121,3 +22121,55 @@ fn mutex_new_in_general_position_still_rejected() {
         "Mutex.new in general expression position must still be rejected (no codegen yet)"
     );
 }
+
+// ── Atomic.compare_exchange → Result[T, T] ───────────────────────
+// compare_exchange is the one atomic method whose Result-shaped return is
+// modeled by the typechecker (the others fall through to a lax Type::Error).
+
+#[test]
+fn compare_exchange_returns_result_of_inner_type() {
+    // The result must `match` as Result[i64, i64] — a non-Result return would
+    // make the Ok/Err arms a non-exhaustive / wrong-type error.
+    typecheck_ok(
+        "par struct C { v: Atomic[i64] }
+         impl C {
+             fn cas(ref self) -> i64 {
+                 match self.v.compare_exchange(0, 1, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst) {
+                     Ok(prev) => prev,
+                     Err(actual) => actual,
+                 }
+             }
+         }",
+    );
+}
+
+#[test]
+fn compare_exchange_result_binds_to_result_annotation() {
+    // Binding the call to a `Result[i64, i64]` annotation must unify — proves
+    // the inferred type is genuinely `Result[i64, i64]`, not lax `Type::Error`
+    // (which would also accept a wrong annotation; the negative guard below
+    // pins that it is NOT lax).
+    typecheck_ok(
+        "fn main() {
+             let a = Atomic.new(0);
+             let _r: Result[i64, i64] =
+                 a.compare_exchange(0, 1, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst);
+         }",
+    );
+}
+
+#[test]
+fn compare_exchange_wrong_arg_count_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {
+             let a = Atomic.new(0);
+             let _ = a.compare_exchange(0, 1, MemoryOrdering.SeqCst);
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("compare_exchange") && e.message.contains("4 argument")),
+        "compare_exchange with 3 args must be rejected; got: {errors:?}"
+    );
+}
