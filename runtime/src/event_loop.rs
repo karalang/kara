@@ -7,13 +7,16 @@
 //!
 //! ## v1 architectural commitments (per phase-6-runtime.md line 15)
 //!
-//! - **One event loop per process.** v1 runs exactly one loop; M2 / M3
-//!   may shard across multiple loops to reach the 1M+ idle-connection
-//!   target. The type is `Sync` — shared via `Arc<EventLoop>` from any
+//! - **Sharded event loops.** v1 ran exactly one loop; Stage B2 realizes
+//!   the "M2 / M3 may shard across multiple loops to reach the 1M+
+//!   idle-connection target" commitment — the process now runs
+//!   `resolve_shard_count()` independent `EventLoop`s (see `EVENT_LOOPS`),
+//!   one poller thread each, with connections routed by raw fd. Each loop
+//!   is still individually `Sync` — shared via `Arc<EventLoop>` from any
 //!   thread — with two interior Mutexes that split the polling and
 //!   registration code paths so a long-blocking `run_once` (held by
-//!   the background poller thread, slice 3) does not block concurrent
-//!   register / deregister calls.
+//!   that shard's background poller thread, slice 3) does not block
+//!   concurrent register / deregister calls on the same shard.
 //! - **Registration / de-registration are crate-internal.** The public
 //!   language surface stays effect-typed (`sends(Network)` /
 //!   `receives(Network)`); codegen lowers those effects into runtime
@@ -405,28 +408,122 @@ impl EventLoopHandle {
 // and lands separately. The `poll` and `wake` fns are cross-platform
 // (mio's `Poll` / `Waker` work everywhere).
 
-/// Process-global event loop instance, lazily initialized.
-/// Per the v1 architectural commitment: exactly one EventLoop per process.
-static EVENT_LOOP: OnceLock<Arc<EventLoop>> = OnceLock::new();
+/// Process-global event-loop **shards**, lazily initialized.
+///
+/// v1 ran exactly one loop per process (see the module header). Stage B2
+/// shards the reactor: [`resolve_shard_count`] independent `EventLoop`s, each
+/// with its own `mio::Poll` / `epoll` instance, registry, waker, and `fds`
+/// map. Connections route to a shard by raw fd ([`shard_of_fd`] = `raw_fd %
+/// N`), so a synchronized burst spreads its `epoll_ctl` + `take_registration`
+/// traffic across N independent locks and N poller threads instead of
+/// serializing on one. This realizes the "M2 / M3 may shard across multiple
+/// loops to reach the 1M+ idle target" commitment from the v1 module header.
+/// See `wip-bench-day.md` Phase 2 Stage B for the burst-latency diagnosis
+/// that motivated it.
+static EVENT_LOOPS: OnceLock<Vec<Arc<EventLoop>>> = OnceLock::new();
 
-/// Cached handle to the process-global event loop's waker. Populated
-/// during the same `OnceLock::get_or_init` that constructs `EVENT_LOOP`,
-/// so observing `EVENT_LOOP` initialized implies `EVENT_LOOP_HANDLE` is
-/// also set.
-static EVENT_LOOP_HANDLE: OnceLock<EventLoopHandle> = OnceLock::new();
+/// Cached per-shard waker handles, index-aligned with [`EVENT_LOOPS`].
+/// Populated in the same `get_or_init` that builds `EVENT_LOOPS`, so
+/// observing `EVENT_LOOPS` initialized implies the handles are set.
+static EVENT_LOOP_HANDLES: OnceLock<Vec<EventLoopHandle>> = OnceLock::new();
 
-fn global_event_loop() -> &'static Arc<EventLoop> {
-    EVENT_LOOP.get_or_init(|| {
-        let ev = EventLoop::new().expect("karac_runtime: process-global event loop init failed");
-        let arc = Arc::new(ev);
-        // `set` may already have been populated by a racing initializer if
-        // two threads called this concurrently; the `OnceLock::get_or_init`
-        // contract guarantees we are the unique initializer of `EVENT_LOOP`,
-        // but the handle write is a separate `OnceLock`, so ignore a
-        // duplicate-set error.
-        let _ = EVENT_LOOP_HANDLE.set(arc.handle());
-        arc
-    })
+/// Maximum reactor shard count. The FFI registration token packs the shard
+/// index into its top [`TOKEN_SHARD_BITS`] bits (see [`pack_token`]), so the
+/// index must fit there — 256 distinct shards. Far above any real core count;
+/// it only bounds the env-var override.
+const MAX_SHARDS: usize = 1 << TOKEN_SHARD_BITS;
+
+/// Resolve the reactor shard count. Honors `KARAC_REACTOR_SHARDS` (>= 1) when
+/// set; otherwise defaults to the machine's available parallelism (floor 1,
+/// clamped to [`MAX_SHARDS`]). Distinct from `KARAC_DISPATCHER_THREADS` (the
+/// dispatcher *pool* size, which drains the shared wakeup queue): polling
+/// fan-out and dispatch fan-out size independently — see
+/// [`resolve_dispatcher_threads`].
+fn resolve_shard_count() -> usize {
+    if let Ok(s) = std::env::var("KARAC_REACTOR_SHARDS") {
+        if let Ok(n) = s.parse::<usize>() {
+            if n >= 1 {
+                return n.min(MAX_SHARDS);
+            }
+        }
+    }
+    thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, MAX_SHARDS)
+}
+
+/// All reactor shards, lazily initialized on first access. The shard count is
+/// frozen here (read from the environment once) so every consumer —
+/// `register_fd`, the background pollers, the dispatcher's token routing —
+/// agrees on `N = event_loops().len()`.
+fn event_loops() -> &'static [Arc<EventLoop>] {
+    EVENT_LOOPS
+        .get_or_init(|| {
+            let n = resolve_shard_count();
+            let mut loops = Vec::with_capacity(n);
+            let mut handles = Vec::with_capacity(n);
+            for _ in 0..n {
+                let ev = Arc::new(
+                    EventLoop::new()
+                        .expect("karac_runtime: process-global event loop shard init failed"),
+                );
+                handles.push(ev.handle());
+                loops.push(ev);
+            }
+            // Separate `OnceLock`; ignore a duplicate-set from a racing
+            // initializer (the `EVENT_LOOPS` get_or_init guarantees we are the
+            // unique builder, but the handle write is its own lock).
+            let _ = EVENT_LOOP_HANDLES.set(handles);
+            loops
+        })
+        .as_slice()
+}
+
+/// Number of reactor shards (frozen at first [`event_loops`] call).
+fn shard_count() -> usize {
+    event_loops().len()
+}
+
+/// Map a raw fd to its reactor shard. `raw_fd` is non-negative for any live
+/// descriptor; the `as u32` guards the theoretical negative case.
+fn shard_of_fd(raw_fd: i32) -> usize {
+    (raw_fd as u32 as usize) % shard_count()
+}
+
+// ── Registration-token packing ─────────────────────────────────────────────
+//
+// The FFI registration token (`u64`) returned by `register_fd` and carried in
+// every `KaracWakeup` packs the owning shard index into its top
+// `TOKEN_SHARD_BITS` bits and the shard-local `mio::Token` value into the low
+// bits. This lets the dispatcher — which sees only a wakeup's token, not its
+// fd — route `take_registration` back to the shard that holds the live entry
+// ([`take_registration_routed`]). `register_fd` / `deregister_fd` route by fd
+// (and the packed shard agrees with `shard_of_fd`, since register used the
+// same hash); the dispatcher routes by the token's shard bits.
+
+const TOKEN_SHARD_BITS: u32 = 8;
+const TOKEN_LOCAL_MASK: u64 = (1u64 << (64 - TOKEN_SHARD_BITS)) - 1;
+
+fn pack_token(shard: usize, local: usize) -> u64 {
+    ((shard as u64) << (64 - TOKEN_SHARD_BITS)) | ((local as u64) & TOKEN_LOCAL_MASK)
+}
+
+fn unpack_token(packed: u64) -> (usize, usize) {
+    (
+        (packed >> (64 - TOKEN_SHARD_BITS)) as usize,
+        (packed & TOKEN_LOCAL_MASK) as usize,
+    )
+}
+
+/// Resolve a packed FFI token to its shard's `take_registration`, routing by
+/// the token's shard bits. Returns `None` for an out-of-range shard (a stale
+/// or malformed token) or an already-claimed / absent registration.
+fn take_registration_routed(packed: u64) -> Option<*mut c_void> {
+    let (shard, local) = unpack_token(packed);
+    event_loops()
+        .get(shard)?
+        .take_registration(RegistrationToken(local))
 }
 
 /// Readiness wakeup entry written into the caller-allocated buffer by
@@ -481,7 +578,8 @@ pub extern "C" fn karac_runtime_event_loop_register_fd(
         _ => return 0,
     };
     let mut source = mio::unix::SourceFd(&raw_fd);
-    let ev = global_event_loop();
+    let shard = shard_of_fd(raw_fd);
+    let ev = &event_loops()[shard];
     match ev.register(&mut source, dir, None, parked) {
         Ok(token) => {
             // Wake the background poller so it re-evaluates its interest
@@ -511,11 +609,13 @@ pub extern "C" fn karac_runtime_event_loop_register_fd(
                 .unwrap_or_else(|p| p.into_inner())
                 .is_some()
             {
-                if let Some(h) = EVENT_LOOP_HANDLE.get() {
+                // Wake only THIS fd's shard poller — each shard blocks on its
+                // own epoll, so a cross-shard wake would be wasted churn.
+                if let Some(h) = EVENT_LOOP_HANDLES.get().and_then(|hs| hs.get(shard)) {
                     let _ = h.wake();
                 }
             }
-            token.0 as u64
+            pack_token(shard, token.0)
         }
         Err(_) => 0,
     }
@@ -531,8 +631,11 @@ pub extern "C" fn karac_runtime_event_loop_register_fd(
 #[no_mangle]
 pub extern "C" fn karac_runtime_event_loop_deregister_fd(raw_fd: i32, token: u64) -> i32 {
     let mut source = mio::unix::SourceFd(&raw_fd);
-    let ev = global_event_loop();
-    match ev.deregister(&mut source, RegistrationToken(token as usize)) {
+    // Route by fd (authoritative — `register_fd` placed the entry on
+    // `shard_of_fd(raw_fd)`); the token only carries the shard-local id.
+    let ev = &event_loops()[shard_of_fd(raw_fd)];
+    let (_token_shard, local) = unpack_token(token);
+    match ev.deregister(&mut source, RegistrationToken(local)) {
         Ok(()) => 0,
         Err(_) => -1,
     }
@@ -582,26 +685,70 @@ pub unsafe extern "C" fn karac_runtime_event_loop_poll(
     {
         return 0;
     }
-    let ev = global_event_loop();
-    let wakeups = match ev.run_once(max_wait) {
-        Ok(w) => w,
-        Err(_) => return 0,
+    // Synchronous single-thread fallback (tests / embedding). Production
+    // never takes this path — codegen starts the background poller +
+    // dispatcher, which short-circuits above. Because each shard owns its own
+    // epoll, one thread cannot block-wait on all shards at once, so we sweep
+    // every shard non-blocking and, if nothing is ready and the caller allowed
+    // waiting, fall back to bounded blocking slices across shards until a
+    // wakeup arrives or the deadline elapses. A pending cross-thread `wake()`
+    // (which wakes every shard) cuts a slice short, so the loop stays
+    // responsive without busy-spinning.
+    let loops = event_loops();
+    // Per-slice blocking budget when waiting: small enough that the sweep
+    // re-checks all shards promptly, large enough to avoid a hot spin.
+    const SLICE: Duration = Duration::from_millis(20);
+    let deadline = match max_wait {
+        Some(d) if d.is_zero() => Some(Instant::now()), // one non-blocking sweep
+        Some(d) => Some(Instant::now() + d),
+        None => None, // "indefinite" — bounded by the slice loop
     };
-    let n = wakeups.len().min(max_wakeups);
-    for (i, w) in wakeups.iter().take(n).enumerate() {
-        // SAFETY: the caller's contract is that `wakeups_out` points
-        // to a writable buffer of at least `max_wakeups` elements;
-        // we write at offset `i < n <= max_wakeups`, so the offset
-        // is in bounds.
-        unsafe {
-            wakeups_out.add(i).write(KaracWakeup {
-                token: w.token.0 as u64,
-                parked: w.parked,
-                direction: w.direction as u8,
-            });
+    let mut n = 0usize;
+    let mut rotate = 0usize;
+    loop {
+        for (shard, ev) in loops.iter().enumerate() {
+            if n >= max_wakeups {
+                return n;
+            }
+            let wakeups = match ev.run_once(Some(Duration::ZERO)) {
+                Ok(w) => w,
+                Err(_) => continue,
+            };
+            for w in wakeups {
+                if n >= max_wakeups {
+                    break;
+                }
+                // SAFETY: caller's contract — `wakeups_out` is writable for
+                // `max_wakeups` elements; we write at offset `n < max_wakeups`.
+                unsafe {
+                    wakeups_out.add(n).write(KaracWakeup {
+                        token: pack_token(shard, w.token.0),
+                        parked: w.parked,
+                        direction: w.direction as u8,
+                    });
+                }
+                n += 1;
+            }
+        }
+        if n > 0 {
+            return n;
+        }
+        match deadline {
+            Some(d) if Instant::now() >= d => return 0,
+            _ => {}
+        }
+        // Nothing ready yet and waiting is allowed: block on one shard for a
+        // bounded slice (rotating so every shard gets blocking attention),
+        // capped by any remaining deadline, then re-sweep.
+        let slice = match deadline {
+            Some(d) => SLICE.min(d.saturating_duration_since(Instant::now())),
+            None => SLICE,
+        };
+        if !loops.is_empty() {
+            let _ = loops[rotate % loops.len()].run_once(Some(slice));
+            rotate += 1;
         }
     }
-    n
 }
 
 /// Wake the process-global event loop from a non-event-loop thread.
@@ -616,13 +763,24 @@ pub unsafe extern "C" fn karac_runtime_event_loop_poll(
 /// "successful.")
 #[no_mangle]
 pub extern "C" fn karac_runtime_event_loop_wake() -> i32 {
-    // Ensure init so EVENT_LOOP_HANDLE is populated.
-    let _ = global_event_loop();
-    match EVENT_LOOP_HANDLE.get() {
-        Some(h) => match h.wake() {
-            Ok(()) => 0,
-            Err(_) => -1,
-        },
+    // Ensure init so EVENT_LOOP_HANDLES is populated. Wake every shard — a
+    // bare `wake()` has no fd context, so it targets all reactors (used by the
+    // poller-shutdown path to unblock every shard's `run_once`).
+    let _ = event_loops();
+    match EVENT_LOOP_HANDLES.get() {
+        Some(handles) => {
+            let mut ok = true;
+            for h in handles {
+                if h.wake().is_err() {
+                    ok = false;
+                }
+            }
+            if ok {
+                0
+            } else {
+                -1
+            }
+        }
         None => -1,
     }
 }
@@ -701,19 +859,24 @@ unsafe impl Send for KaracParkedTask {}
 
 // ── Background event-loop poller + wakeup queue (Phase 6 line 17 slice 3) ──
 //
-// An opt-in background thread that owns event-loop polling. Once started,
-// the thread loops on `EventLoop::run_once(None)` indefinitely (blocking
-// in mio's poll inside the inner `poll` Mutex), depositing wakeups into
-// an internal `VecDeque<KaracWakeup>` for consumption by a scheduler
-// thread via `karac_runtime_event_loop_take_wakeups`.
+// An opt-in set of background threads that own event-loop polling — **one
+// thread per reactor shard** (Stage B2). Each thread loops on its shard's
+// `EventLoop::run_once(None)` indefinitely (blocking in mio's poll inside that
+// shard's `poll` Mutex), depositing wakeups into a **single shared**
+// `VecDeque<KaracWakeup>` for consumption by a scheduler thread via
+// `karac_runtime_event_loop_take_wakeups`. Sharding the *polling* (N epoll
+// instances, N `fds` maps) is what removes the single-poller burst-dispatch
+// plateau; the output queue stays shared so the dispatcher pool and the
+// `take_wakeups` FFI keep their single-queue contract. Each shard packs its
+// index into the wakeup token (see [`pack_token`]) so the dispatcher can route
+// `take_registration` back to the owning shard.
 //
-// **No deadlock with registration.** The `EventLoop` refactor that
-// landed alongside this section splits the inner state into two
-// independent Mutexes — `poll` (held by the background thread for the
-// duration of each blocking poll) and `fds` (held only briefly by
-// register / deregister). Concurrent `karac_runtime_event_loop_register_fd`
-// calls from any thread acquire only the `fds` Mutex, so the long-blocking
-// poll does not stall registration.
+// **No deadlock with registration.** The `EventLoop` splits its inner state
+// into two independent Mutexes — `poll` (held by a shard's poller for the
+// duration of each blocking poll) and `fds` (held only briefly by register /
+// deregister). Concurrent `karac_runtime_event_loop_register_fd` calls acquire
+// only the target shard's `fds` Mutex, so a long-blocking poll never stalls
+// registration.
 //
 // **Direct FFI poll coexistence.** While the background poller is running,
 // direct `karac_runtime_event_loop_poll` callers short-circuit to return
@@ -722,24 +885,27 @@ unsafe impl Send for KaracParkedTask {}
 // instead. Documented in `karac_runtime_event_loop_poll`'s body.
 //
 // **Shutdown protocol.** `karac_runtime_event_loop_shutdown_background_thread`
-// sets the shutdown flag, fires the cross-thread `wake()` to unblock the
-// current poll call, signals the queue's `Condvar` to release any
-// waiting `take_wakeups` callers, joins the thread, and clears the
+// sets the shutdown flag, fires the cross-thread `wake()` to unblock **every**
+// shard's current poll call, signals the queue's `Condvar` to release any
+// waiting `take_wakeups` callers, joins all shard threads, and clears the
 // global slot. Idempotent — calling on a non-running thread returns -1
 // without side effects, so a re-start after shutdown is supported within
 // the same process.
 
-/// Internal poller state. Held inside `Arc` so the spawned thread can
+/// Internal poller state. Held inside `Arc` so every spawned shard thread can
 /// share it with the global slot.
 struct EventLoopPoller {
-    event_loop: Arc<EventLoop>,
+    /// Reactor shards this poller drives — index-aligned with the global
+    /// [`event_loops`]. Shard thread `i` polls `event_loops[i]`.
+    event_loops: Vec<Arc<EventLoop>>,
+    /// Single shared output queue across all shard threads.
     queue: Mutex<VecDeque<KaracWakeup>>,
     notify: Condvar,
     shutdown: AtomicBool,
-    /// `JoinHandle` for the spawned thread. Wrapped in `Mutex<Option<_>>`
-    /// so the shutdown path can `take()` it independently of the rest
-    /// of the poller state.
-    handle: Mutex<Option<thread::JoinHandle<()>>>,
+    /// One `JoinHandle` per shard thread. Wrapped in `Mutex<Vec<_>>` so the
+    /// shutdown path can `take()` them independently of the rest of the
+    /// poller state.
+    handles: Mutex<Vec<thread::JoinHandle<()>>>,
 }
 
 /// Global slot for the background poller. `None` until the first
@@ -755,9 +921,10 @@ fn lock_background_poller_slot() -> std::sync::MutexGuard<'static, Option<Arc<Ev
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn poller_thread_main(poller: Arc<EventLoopPoller>) {
+fn poller_thread_main(poller: Arc<EventLoopPoller>, shard: usize) {
+    let event_loop = Arc::clone(&poller.event_loops[shard]);
     while !poller.shutdown.load(Ordering::Acquire) {
-        let wakeups = match poller.event_loop.run_once(None) {
+        let wakeups = match event_loop.run_once(None) {
             Ok(w) => w,
             Err(_) => {
                 // Treat transient poll errors as a yield — re-check
@@ -771,7 +938,9 @@ fn poller_thread_main(poller: Arc<EventLoopPoller>) {
         let mut q = poller.queue.lock().unwrap_or_else(|p| p.into_inner());
         for w in wakeups {
             q.push_back(KaracWakeup {
-                token: w.token.0 as u64,
+                // Pack this shard's index so the dispatcher routes
+                // `take_registration` back to the owning reactor.
+                token: pack_token(shard, w.token.0),
                 parked: w.parked,
                 direction: w.direction as u8,
             });
@@ -789,9 +958,9 @@ fn poller_thread_main(poller: Arc<EventLoopPoller>) {
     }
 }
 
-/// Start the background event-loop poller thread.
+/// Start the background event-loop poller threads — one per reactor shard.
 ///
-/// Idempotent: a second call while the thread is already running
+/// Idempotent: a second call while the threads are already running
 /// returns 0 without re-spawning. Returns 0 on success.
 #[no_mangle]
 pub extern "C" fn karac_runtime_event_loop_start_background_thread() -> i32 {
@@ -799,20 +968,24 @@ pub extern "C" fn karac_runtime_event_loop_start_background_thread() -> i32 {
     if slot.is_some() {
         return 0;
     }
-    let event_loop = Arc::clone(global_event_loop());
     let poller = Arc::new(EventLoopPoller {
-        event_loop,
+        event_loops: event_loops().to_vec(),
         queue: Mutex::new(VecDeque::new()),
         notify: Condvar::new(),
         shutdown: AtomicBool::new(false),
-        handle: Mutex::new(None),
+        handles: Mutex::new(Vec::new()),
     });
-    let poller_for_thread = Arc::clone(&poller);
-    let join = thread::Builder::new()
-        .name("karac-event-loop".to_string())
-        .spawn(move || poller_thread_main(poller_for_thread))
-        .expect("karac_runtime: failed to spawn event-loop poller thread");
-    *poller.handle.lock().unwrap_or_else(|p| p.into_inner()) = Some(join);
+    let n = poller.event_loops.len();
+    let mut handles = Vec::with_capacity(n);
+    for shard in 0..n {
+        let poller_for_thread = Arc::clone(&poller);
+        let join = thread::Builder::new()
+            .name(format!("karac-event-loop-{shard}"))
+            .spawn(move || poller_thread_main(poller_for_thread, shard))
+            .expect("karac_runtime: failed to spawn event-loop poller thread");
+        handles.push(join);
+    }
+    *poller.handles.lock().unwrap_or_else(|p| p.into_inner()) = handles;
     *slot = Some(poller);
     0
 }
@@ -891,11 +1064,11 @@ pub unsafe extern "C" fn karac_runtime_event_loop_take_wakeups(
     n_out
 }
 
-/// Signal the background poller thread to stop, unblock its `poll`
-/// call via the cross-thread waker, join the thread, and clear the
+/// Signal every background poller shard thread to stop, unblock each one's
+/// `poll` call via the cross-thread waker, join them all, and clear the
 /// global slot.
 ///
-/// Returns 0 on success, -1 if no background thread is running.
+/// Returns 0 on success, -1 if no background threads are running.
 /// A second shutdown after a successful shutdown returns -1 (the slot
 /// is empty).
 #[no_mangle]
@@ -908,29 +1081,25 @@ pub extern "C" fn karac_runtime_event_loop_shutdown_background_thread() -> i32 {
         }
     };
     poller.shutdown.store(true, Ordering::Release);
+    // `wake()` fans out to every shard, unblocking each poller's `run_once`.
     let _ = karac_runtime_event_loop_wake();
     poller.notify.notify_all();
-    let join = poller
-        .handle
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .take();
-    if let Some(h) = join {
+    let joins: Vec<_> =
+        std::mem::take(&mut *poller.handles.lock().unwrap_or_else(|p| p.into_inner()));
+    for h in joins {
         let _ = h.join();
     }
-    // Drain any pending waker event. If the poller thread observed
-    // the shutdown flag *before* our `wake()` was delivered to its
-    // `poll()` call (i.e., the thread had already returned from one
-    // `run_once` and was about to check the flag for the next loop
-    // iteration), mio's edge-armed waker leaves the event pending —
-    // the next thread to call `poll()` would receive it as a spurious
-    // empty wakeup. A non-blocking `run_once` here consumes it and
-    // leaves the event loop in a known-clean state for follow-up
-    // callers. BACKGROUND_POLLER is already None at this point (we
-    // took the Arc out at the top of this fn), so this `run_once`
-    // doesn't compete with any background polling.
-    let ev = global_event_loop();
-    let _ = ev.run_once(Some(Duration::ZERO));
+    // Drain any pending waker event on each shard. If a poller thread observed
+    // the shutdown flag *before* our `wake()` was delivered to its `poll()`
+    // call, mio's edge-armed waker leaves the event pending — the next thread
+    // to poll that shard would receive it as a spurious empty wakeup. A
+    // non-blocking `run_once` per shard consumes it and leaves every event
+    // loop in a known-clean state. BACKGROUND_POLLER is already None here (we
+    // took the Arc out at the top), so these polls don't compete with any
+    // background polling.
+    for ev in event_loops() {
+        let _ = ev.run_once(Some(Duration::ZERO));
+    }
     0
 }
 
@@ -3396,11 +3565,12 @@ fn dispatcher_thread_main(disp: Arc<SchedulerDispatcher>) {
             // `take`+invoke, so the pointer is live for the duration of the
             // call. A `None` here means the registration was already
             // claimed (or deregistered) — the wakeup is spent, skip it.
-            let parked =
-                match global_event_loop().take_registration(RegistrationToken(w.token as usize)) {
-                    Some(p) if !p.is_null() => p,
-                    _ => continue,
-                };
+            // `w.token` packs the owning shard (see `pack_token`); route the
+            // claim to that shard's `fds` map.
+            let parked = match take_registration_routed(w.token) {
+                Some(p) if !p.is_null() => p,
+                _ => continue,
+            };
             // SAFETY: `take_registration` returned the parked pointer from
             // the live map; the codegen / caller convention keeps the
             // `KaracParkedTask` (and its state) alive until `poll_fn`
@@ -3982,6 +4152,64 @@ mod tests {
         );
     }
 
+    // ── Reactor sharding (Stage B2) ───────────────────────────────────
+
+    #[test]
+    fn token_pack_unpack_round_trips() {
+        // Boundary shards (0, max) and local ids round-trip exactly.
+        for &shard in &[0usize, 1, 7, MAX_SHARDS - 1] {
+            for &local in &[1usize, 2, 1234, TOKEN_LOCAL_MASK as usize] {
+                let packed = pack_token(shard, local);
+                assert_eq!(
+                    unpack_token(packed),
+                    (shard, local),
+                    "round-trip {shard}/{local}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn token_pack_keeps_local_and_shard_in_disjoint_bit_ranges() {
+        // Same local id on different shards yields distinct tokens (the
+        // property `register_fd` relies on so cross-shard registrations never
+        // collide), and the low bits recover the shard-local `mio::Token`.
+        let a = pack_token(0, 5);
+        let b = pack_token(3, 5);
+        assert_ne!(
+            a, b,
+            "same local id, different shard → distinct packed token"
+        );
+        assert_eq!(unpack_token(a).1, 5);
+        assert_eq!(unpack_token(b).1, 5);
+        assert_eq!(unpack_token(b).0, 3);
+        // A shard-0 local token equals its bare local value (no high bits set).
+        assert_eq!(pack_token(0, 42), 42);
+    }
+
+    #[test]
+    fn take_registration_routed_rejects_out_of_range_shard() {
+        // A token whose shard bits exceed the live shard count (stale/malformed)
+        // must resolve to None rather than panic on an out-of-bounds index.
+        let bogus = pack_token(MAX_SHARDS - 1, 1);
+        assert!(
+            shard_count() < MAX_SHARDS,
+            "test assumes fewer live shards than the max"
+        );
+        assert!(take_registration_routed(bogus).is_none());
+    }
+
+    #[test]
+    fn shard_of_fd_is_in_range_and_deterministic() {
+        let n = shard_count();
+        assert!(n >= 1);
+        for fd in [0i32, 1, 2, 7, 255, 4096, i32::MAX] {
+            let s = shard_of_fd(fd);
+            assert!(s < n, "fd {fd} → shard {s} must be < {n}");
+            assert_eq!(s, shard_of_fd(fd), "routing is deterministic");
+        }
+    }
+
     // ── FFI surface (Phase 6 line 17 slice 1) ─────────────────────────
     //
     // The FFI fns go through the **process-global** event loop. Multiple
@@ -4068,22 +4296,28 @@ mod tests {
         let dereg = karac_runtime_event_loop_deregister_fd(raw_fd, token);
         assert_eq!(dereg, 0, "deregister should report success");
 
-        // Wake is callable; coalesces with any pending wake.
+        // Wake is callable and fans out to every shard; coalesces with any
+        // pending wake. (Under Stage B2 sharding a bare `wake()` has no fd
+        // context, so it targets all reactors — see `karac_runtime_event_loop_wake`.)
         let wake = karac_runtime_event_loop_wake();
         assert_eq!(wake, 0, "wake should report success");
 
-        // A subsequent poll with a long max_wait should return very
-        // quickly because the wake is pending. The returned count
-        // may legitimately be 0 (the wake event is filtered out of
-        // the wakeups buffer at the EventLoop layer).
+        // A non-blocking poll after the wake returns 0 immediately: the waker
+        // event is filtered out at the `EventLoop` layer, leaving no
+        // user-facing wakeup. (Pre-B2 this asserted that a bare `wake()`
+        // unblocks an *indefinite* direct poll; that semantic does not
+        // generalize across N independent epolls — one thread cannot block-wait
+        // on every shard at once — and the direct-poll path is a test/embedding
+        // fallback, not a production path. Production drains via the background
+        // poller + dispatcher, where each shard's poller observes its own
+        // waker.)
         let start = Instant::now();
-        let n2 =
-            unsafe { karac_runtime_event_loop_poll(2_000_000_000, buf.as_mut_ptr(), buf.len()) };
+        let n2 = unsafe { karac_runtime_event_loop_poll(0, buf.as_mut_ptr(), buf.len()) };
         let elapsed = start.elapsed();
         assert_eq!(n2, 0, "wake event filtered → empty wakeups");
         assert!(
-            elapsed < Duration::from_secs(1),
-            "wake should unblock poll well under 1s, took {elapsed:?}"
+            elapsed < Duration::from_millis(100),
+            "non-blocking poll after wake should return immediately, took {elapsed:?}"
         );
 
         // Non-blocking poll returns 0 immediately when nothing is
