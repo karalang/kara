@@ -121,6 +121,11 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     // GPU compute / shared types.
     "gpu",
     "cyclic",
+    // Portable SIMD — `#[require_simd]` on a function makes scalar
+    // fallback for any `Vector[T, N]` op in its body a hard build error
+    // (phase-7-codegen.md line 308). Read by `simd_report::require_simd_errors`;
+    // takes no arguments.
+    "require_simd",
     // Reserved for the eventual `#[rc_budget(max: N)]` knob; the
     // parser already accepts the syntactic shape (one of the test
     // fixtures uses it as a generic two-arg attribute example).

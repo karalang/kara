@@ -664,6 +664,16 @@ struct Pipeline {
     /// the final error count + diagnostic output alongside the other
     /// post-typecheck checkers.
     raii_errors: Option<Vec<crate::raii_check::RaiiAcrossYieldError>>,
+    /// Phase-7-codegen.md line 308 slice 5a: `#[require_simd]` violations —
+    /// one per `Vector[T, N]` op that would scalarize on the target inside a
+    /// `#[require_simd]` function. Populated by [`Pipeline::simd_check`] after
+    /// `typecheck` (depends only on `expr_types`); merged into the final error
+    /// count + diagnostic output alongside the other post-typecheck checkers.
+    /// A hard error: a function asking for the no-scalarization guarantee must
+    /// not silently fall back. The interpreter path (`karac run`) does not
+    /// enforce it — the tree-walker never vectorizes, so the guarantee is
+    /// vacuous there; it is a codegen/`check` surface.
+    simd_errors: Option<Vec<crate::simd_report::SimdFinding>>,
     profile: crate::manifest::CompileProfile,
     /// Build-wide lint level overrides from CLI flags
     /// (`-A NAME` / `-W NAME` / `-D NAME` / `-F NAME` / `-D warnings`).
@@ -688,6 +698,7 @@ impl Pipeline {
             concurrency: None,
             provider_escape: None,
             raii_errors: None,
+            simd_errors: None,
             profile: crate::manifest::CompileProfile::Default,
             lint_overrides: crate::lints::CliLintOverrides::default(),
         }
@@ -898,6 +909,17 @@ impl Pipeline {
         ));
     }
 
+    /// `#[require_simd]` guarantee (phase-7-codegen.md line 308 slice 5a).
+    /// Pure post-typecheck analysis over `expr_types` — no LLVM backend
+    /// needed, so it runs on the `check` path too (not just `build`),
+    /// surfacing scalarization-guarantee violations at fast-feedback time.
+    /// A no-op (empty list) when typecheck didn't run.
+    fn simd_check(&mut self) {
+        let findings =
+            crate::simd_report::analyze_program(&self.parsed.program, self.typed.as_ref());
+        self.simd_errors = Some(crate::simd_report::require_simd_errors(&findings));
+    }
+
     /// Run all analysis phases (no execution).
     fn run_all_checks(&mut self) {
         self.resolve();
@@ -908,6 +930,7 @@ impl Pipeline {
         self.concurrencycheck();
         self.provider_escape_check();
         self.raii_check();
+        self.simd_check();
     }
 
     /// Collect all errors across phases. Typecheck errors are included —
@@ -947,6 +970,9 @@ impl Pipeline {
         }
         if let Some(ref r) = self.raii_errors {
             n += r.len();
+        }
+        if let Some(ref s) = self.simd_errors {
+            n += s.len();
         }
         n
     }
@@ -1033,6 +1059,19 @@ fn print_text_diagnostics(pipeline: &Pipeline) {
                     sv.soiling_method, filename, sv.soil_span.line, sv.soil_span.column,
                 );
             }
+            eprintln!("  help: {}", err.help());
+        }
+    }
+    if let Some(ref simd) = pipeline.simd_errors {
+        for err in simd {
+            eprintln!(
+                "error[E_REQUIRE_SIMD]: {}:{}:{} (in `{}`): {}",
+                filename,
+                err.span.line,
+                err.span.column,
+                err.func_name,
+                err.message(),
+            );
             eprintln!("  help: {}", err.help());
         }
     }
@@ -2933,6 +2972,33 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
         }
     }
 
+    if let Some(ref simd) = pipeline.simd_errors {
+        for err in simd {
+            id_counter += 1;
+            let message = err.message();
+            let help = err.help();
+            let func = json_string(&err.func_name);
+            diags.add(DiagEntry {
+                id: &format!("d{id_counter}"),
+                severity: "error",
+                phase: "simd_check",
+                code: "E_REQUIRE_SIMD",
+                category: "require_simd",
+                message: &message,
+                filename,
+                span: &err.span,
+                suggestion: Some(&help),
+                extra_json: Some(format!("\"function\":{func}")),
+                lint_name: None,
+                fix_it: None,
+                class: None,
+                expected: None,
+                got: None,
+                stub_hint_json: None,
+            });
+        }
+    }
+
     diags
 }
 
@@ -3343,13 +3409,26 @@ fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
         ),
     );
 
+    // `#[require_simd]` guarantee phase (phase-7-codegen.md line 308 slice 5a)
+    emit_jsonl_event("phase_start", "\"phase\":\"simd_check\"");
+    pipeline.simd_check();
+    let simd_errors = pipeline.simd_errors.as_ref().map_or(0, |s| s.len());
+    emit_jsonl_event(
+        "phase_complete",
+        &format!(
+            "\"phase\":\"simd_check\",\"errors\":{},\"warnings\":0,\"notes\":0",
+            simd_errors
+        ),
+    );
+
     let total = parse_errors
         + resolve_errors
         + type_errors
         + effect_errors
         + ownership_errors
         + escape_errors
-        + raii_errors;
+        + raii_errors
+        + simd_errors;
     let effects = program_effects_json(pipeline);
     emit_jsonl_event(
         "build_complete",
@@ -4112,6 +4191,37 @@ fn cmd_build(
                 }
                 OutputMode::Jsonl => unreachable!(),
             }
+        }
+
+        // `#[require_simd]` guarantee (phase-7-codegen.md line 308, slice 5a):
+        // a function annotated `#[require_simd]` must not contain any
+        // `Vector[T, N]` op that would scalarize on the target. Checked after
+        // a clean typecheck, before codegen — the analysis consumes the
+        // `expr_types` side-table the typechecker populated. Aborts the build
+        // (the `check` path surfaces the same diagnostics non-fatally through
+        // `simd_check` in `run_all_checks`). Print only the SIMD diagnostics
+        // here — effect/ownership/concurrency findings are non-fatal at this
+        // build stage and are intentionally not surfaced by this abort.
+        pipeline.simd_check();
+        let simd_errors = pipeline.simd_errors.clone().unwrap_or_default();
+        if !simd_errors.is_empty() {
+            match output {
+                OutputMode::Json => emit_json_output(&pipeline),
+                OutputMode::Text | OutputMode::Jsonl => {
+                    for e in &simd_errors {
+                        eprintln!(
+                            "error[E_REQUIRE_SIMD]: {}:{}:{} (in `{}`): {}",
+                            filename,
+                            e.span.line,
+                            e.span.column,
+                            e.func_name,
+                            e.message(),
+                        );
+                        eprintln!("  help: {}", e.help());
+                    }
+                }
+            }
+            process::exit(1);
         }
 
         // Monomorphization budget (v1.x): per-generic instantiation
@@ -4916,6 +5026,7 @@ fn run_multi_file_codegen(
         concurrency: None,
         provider_escape: None,
         raii_errors: None,
+        simd_errors: None,
         profile: crate::manifest::CompileProfile::Default,
         lint_overrides: crate::lints::CliLintOverrides::default(),
     };
