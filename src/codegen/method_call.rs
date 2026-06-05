@@ -94,6 +94,7 @@ impl<'ctx> super::Codegen<'ctx> {
             || method == "from_array"
             || method == "from_slice"
             || method == "load_masked"
+            || method == "gather"
         {
             if let ExprKind::Path {
                 segments,
@@ -105,6 +106,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         "splat" => self.compile_vector_splat(ga, args),
                         "from_array" => self.compile_vector_from_array(ga, args),
                         "load_masked" => self.compile_vector_load_masked(ga, args),
+                        "gather" => self.compile_vector_gather(ga, args),
                         _ => self.compile_vector_from_slice(ga, args),
                     };
                 }
@@ -3312,6 +3314,94 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_insert_element(acc, phi.as_basic_value(), lane_idx, "load_masked.ins")
                 .map_err(|e| format!("load_masked insertelement failed: {e}"))?;
+        }
+        Ok(acc.into())
+    }
+
+    /// `Vector[T, N].gather(slice, indices)` — build a `<N x T>` reading
+    /// `slice[indices[i]]` for each lane (design.md § Portable SIMD, "Gather /
+    /// scatter"). Every lane is active; each index is widened to i64 and
+    /// bounds-checked (`UGE idx, len`, so a negative signed index also trips it,
+    /// exactly like the `v[i]` read) before loading `data[idx]`.
+    fn compile_vector_gather(
+        &mut self,
+        generic_args: &[GenericArg],
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let vec_ty = self
+            .llvm_vector_type(&Some(generic_args.to_vec()))
+            .ok_or_else(|| "gather: could not lower Vector[T, N] type".to_string())?;
+        let BasicTypeEnum::VectorType(vt) = vec_ty else {
+            return Err("gather: lowered type is not an LLVM vector".to_string());
+        };
+        let n = vt.get_size();
+        let elem_ty = vt.get_element_type();
+        let i64_t = self.context.i64_type();
+        let i32_ty = self.context.i32_type();
+
+        let slice_val = self.compile_expr(&args[0].value)?.into_struct_value();
+        let data = self
+            .builder
+            .build_extract_value(slice_val, 0, "gather.data")
+            .map_err(|e| format!("gather extract data failed: {e}"))?
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_extract_value(slice_val, 1, "gather.len")
+            .map_err(|e| format!("gather extract len failed: {e}"))?
+            .into_int_value();
+        let indices = self.compile_expr(&args[1].value)?.into_vector_value();
+
+        let fn_val = self.current_fn.unwrap();
+        let mut acc = vt.get_undef();
+        for i in 0..n {
+            let lane_idx = i32_ty.const_int(i as u64, false);
+            let raw = self
+                .builder
+                .build_extract_element(indices, lane_idx, "gather.idx")
+                .map_err(|e| format!("gather extractelement index failed: {e}"))?
+                .into_int_value();
+            // Widen the index lane to i64 for the gep / bounds check.
+            let idx = match raw.get_type().get_bit_width().cmp(&64) {
+                std::cmp::Ordering::Less => self
+                    .builder
+                    .build_int_s_extend(raw, i64_t, "gather.idx.sx")
+                    .map_err(|e| format!("gather index sext failed: {e}"))?,
+                std::cmp::Ordering::Greater => self
+                    .builder
+                    .build_int_truncate(raw, i64_t, "gather.idx.tr")
+                    .map_err(|e| format!("gather index truncate failed: {e}"))?,
+                std::cmp::Ordering::Equal => raw,
+            };
+            let oob = self
+                .builder
+                .build_int_compare(IntPredicate::UGE, idx, len, "gather.oob")
+                .map_err(|e| format!("gather bounds compare failed: {e}"))?;
+            let panic_bb = self.context.append_basic_block(fn_val, "gather.panic");
+            let ok_bb = self.context.append_basic_block(fn_val, "gather.ok");
+            self.builder
+                .build_conditional_branch(oob, panic_bb, ok_bb)
+                .map_err(|e| format!("gather panic branch failed: {e}"))?;
+            self.builder.position_at_end(panic_bb);
+            self.emit_panic("gather: index out of bounds");
+            self.builder
+                .build_unreachable()
+                .map_err(|e| format!("gather unreachable failed: {e}"))?;
+
+            self.builder.position_at_end(ok_bb);
+            let elem_ptr = unsafe {
+                self.builder
+                    .build_gep(elem_ty, data, &[idx], "gather.elem.ptr")
+                    .map_err(|e| format!("gather gep failed: {e}"))?
+            };
+            let loaded = self
+                .builder
+                .build_load(elem_ty, elem_ptr, "gather.lane")
+                .map_err(|e| format!("gather load failed: {e}"))?;
+            acc = self
+                .builder
+                .build_insert_element(acc, loaded, lane_idx, "gather.ins")
+                .map_err(|e| format!("gather insertelement failed: {e}"))?;
         }
         Ok(acc.into())
     }

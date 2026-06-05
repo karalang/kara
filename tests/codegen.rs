@@ -31289,6 +31289,100 @@ fn main() {
         );
     }
 
+    // ── Slice 6f — gather (Vector::gather(slice, indices)) ───────────────
+
+    #[test]
+    fn test_vector_gather_permuted_indices() {
+        // gather reads slice[indices[i]] per lane: idx (5,0,3,1) over
+        // [10,20,30,40,50,60] → (60,10,40,20).
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Array[i64, 6] = [10, 20, 30, 40, 50, 60];
+    let idx = Vector[i64, 4](5, 0, 3, 1);
+    let v = Vector[i64, 4].gather(a.as_slice(), idx);
+    println(v[0]); println(v[1]); println(v[2]); println(v[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "60\n10\n40\n20\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_gather_repeated_indices_float() {
+        // Indices may repeat; float element type.
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Array[f64, 3] = [1.5, 2.5, 3.5];
+    let idx = Vector[i64, 4](2, 2, 0, 1);
+    let v = Vector[f64, 4].gather(a.as_slice(), idx);
+    println(v[0]); println(v[1]); println(v[2]); println(v[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "3.5\n3.5\n1.5\n2.5\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_gather_out_of_bounds_panics() {
+        // An index past the slice length traps (UGE bounds check).
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let a: Array[i64, 4] = [10, 20, 30, 40];
+    let idx = Vector[i64, 4](0, 1, 9, 2);
+    let v = Vector[i64, 4].gather(a.as_slice(), idx);
+    println(v[0]);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("gather: index out of bounds")
+                    || c.stderr.contains("gather: index out of bounds"),
+                "expected gather OOB panic, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_vector_gather_non_integer_indices_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a: Array[i64, 4] = [10, 20, 30, 40];
+    let idx = Vector[f64, 4](0.0, 1.0, 2.0, 3.0);
+    let _ = Vector[i64, 4].gather(a.as_slice(), idx);
+}
+"#,
+        );
+        assert!(!errs.is_empty(), "gather indices must be an integer vector");
+    }
+
+    #[test]
+    fn test_vector_gather_wrong_lane_count_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a: Array[i64, 4] = [10, 20, 30, 40];
+    let idx = Vector[i64, 2](0, 1);
+    let _ = Vector[i64, 4].gather(a.as_slice(), idx);
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "gather indices must match the result lane count"
+        );
+    }
+
     // ── Slice 4 — first-class Numeric trait + lane-literal ergonomics ─────
 
     #[test]

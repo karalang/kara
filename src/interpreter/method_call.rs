@@ -224,6 +224,68 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // SIMD static constructor — `Vector[T, N].gather(slice, indices)`.
+        // Same type-path-receiver intercept. Reads `slice[indices[i]]` for
+        // each lane; every index is bounds-checked (`0 <= idx < len`, panic
+        // otherwise) like the `slice[i]` read.
+        if method == "gather" {
+            if let ExprKind::Path {
+                segments,
+                generic_args: Some(_),
+            } = &object.kind
+            {
+                if segments.len() == 1 && segments[0] == "Vector" {
+                    let slice_v = self.eval_expr_inner(&args[0].value);
+                    let indices_v = self.eval_expr_inner(&args[1].value);
+                    let (storage, start, slen) = match slice_v {
+                        Value::Slice {
+                            storage,
+                            start,
+                            len,
+                            ..
+                        } => (storage, start, len),
+                        Value::Array(rc) => {
+                            let len = rc.read().unwrap().len();
+                            (rc, 0, len)
+                        }
+                        other => {
+                            return self.record_runtime_error(
+                                format!(
+                                    "gather expects a Slice argument, got `{}`",
+                                    other.variant_name()
+                                ),
+                                span,
+                            )
+                        }
+                    };
+                    let Value::Vector(indices) = indices_v else {
+                        return self.record_runtime_error(
+                            "gather expects an integer index vector".to_string(),
+                            span,
+                        );
+                    };
+                    let guard = storage.read().unwrap();
+                    let mut out = Vec::with_capacity(indices.len());
+                    for idx_v in &indices {
+                        let Value::Int(idx) = idx_v else {
+                            return self.record_runtime_error(
+                                "gather index lane must be an integer".to_string(),
+                                span,
+                            );
+                        };
+                        if *idx < 0 || (*idx as usize) >= slen {
+                            return self.record_runtime_error(
+                                "gather: index out of bounds".to_string(),
+                                span,
+                            );
+                        }
+                        out.push(guard[start + *idx as usize].clone());
+                    }
+                    return Value::Vector(out);
+                }
+            }
+        }
+
         // Type-receiver associated calls: `T.method(...)` where `T` is a
         // primitive type name. The receiver is an identifier naming a type
         // — not a value — so eval_expr_inner would panic. Handle two shapes:

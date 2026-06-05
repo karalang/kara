@@ -535,6 +535,7 @@ impl<'a> super::TypeChecker<'a> {
             || method == "from_array"
             || method == "from_slice"
             || method == "load_masked"
+            || method == "gather"
         {
             if let ExprKind::Path {
                 segments,
@@ -546,6 +547,7 @@ impl<'a> super::TypeChecker<'a> {
                         "splat" => self.infer_vector_splat(ga, args, span),
                         "from_array" => self.infer_vector_from_array(ga, args, span),
                         "load_masked" => self.infer_vector_load_masked(ga, args, span),
+                        "gather" => self.infer_vector_gather(ga, args, span),
                         _ => self.infer_vector_from_slice(ga, args, span),
                     };
                 }
@@ -2390,6 +2392,115 @@ impl<'a> super::TypeChecker<'a> {
                 args[1].value.span.clone(),
                 TypeErrorKind::TypeMismatch,
             );
+        }
+        let result = Type::Vector { element, lanes };
+        self.record_expr_type(span, &result);
+        result
+    }
+
+    /// `Vector[T, N].gather(slice, indices) -> Vector[T, N]` (design.md
+    /// § Portable SIMD, "Gather / scatter"): build a `<N x T>` by reading
+    /// `slice[indices[i]]` for each lane. `slice` is a `Slice[T]`; `indices` is
+    /// a `Vector[U, N]` of integer lane offsets. Every lane is active (no mask);
+    /// each index is bounds-checked at run time (`0 <= idx < len`, panic
+    /// otherwise) exactly like the `v[i]` / `slice[i]` reads.
+    fn infer_vector_gather(&mut self, ga: &[GenericArg], args: &[CallArg], span: &Span) -> Type {
+        let lowered = self.lower_vector_type(&Some(ga.to_vec()), &[], span);
+        let Some(Type::Vector { element, lanes }) = lowered else {
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Error;
+        };
+        if args.len() != 2 {
+            self.type_error(
+                format!(
+                    "'gather' takes exactly two arguments (slice, indices), found {}",
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Vector { element, lanes };
+        }
+        // arg0 — a `Slice[T]` (mutable or not) whose element matches `T`.
+        let slice_ty = self.infer_expr(&args[0].value);
+        match &slice_ty {
+            Type::Slice {
+                element: arg_elem, ..
+            } => {
+                if **arg_elem != *element && !matches!(**arg_elem, Type::Error) {
+                    self.type_error(
+                        format!(
+                            "'gather' expects a 'Slice[{}]' matching the Vector element, \
+                             found 'Slice[{}]'",
+                            type_display(&element),
+                            type_display(arg_elem)
+                        ),
+                        args[0].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+            }
+            Type::Error => {}
+            other => {
+                self.type_error(
+                    format!(
+                        "'gather' expects a 'Slice[{}]' first argument, found '{}'",
+                        type_display(&element),
+                        type_display(other)
+                    ),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+        // arg1 — a `Vector[U, N]` of integer indices (lane count matches `N`).
+        let idx_ty = self.infer_expr(&args[1].value);
+        match &idx_ty {
+            Type::Vector {
+                element: ie,
+                lanes: il,
+            } => {
+                if !matches!(**ie, Type::Int(_) | Type::UInt(_) | Type::Error) {
+                    self.type_error(
+                        format!(
+                            "'gather' indices must be an integer vector, found '{}'",
+                            type_display(&idx_ty)
+                        ),
+                        args[1].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                } else if il != &lanes {
+                    self.type_error(
+                        format!(
+                            "'gather' indices must have the same lane count as the result \
+                             ('{}'), found '{}'",
+                            type_display(&Type::Vector {
+                                element: element.clone(),
+                                lanes: lanes.clone(),
+                            }),
+                            type_display(&idx_ty)
+                        ),
+                        args[1].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+            }
+            Type::Error => {}
+            other => {
+                self.type_error(
+                    format!(
+                        "'gather' indices must be an integer vector, found '{}'",
+                        type_display(other)
+                    ),
+                    args[1].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
         }
         let result = Type::Vector { element, lanes };
         self.record_expr_type(span, &result);

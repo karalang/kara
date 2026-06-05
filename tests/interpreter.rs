@@ -12960,6 +12960,22 @@ fn main() {
 }
 
 #[test]
+fn test_vector_gather_permuted_indices() {
+    // gather reads slice[indices[i]] per lane (parity with codegen).
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a: Array[i64, 6] = [10, 20, 30, 40, 50, 60];
+    let idx = Vector[i64, 4](5, 0, 3, 1);
+    let v = Vector[i64, 4].gather(a.as_slice(), idx);
+    println(v[0]); println(v[1]); println(v[2]); println(v[3]);
+}
+"#,
+    );
+    assert_eq!(out, "60\n10\n40\n20\n");
+}
+
+#[test]
 fn test_vector_compare_unsigned_mask() {
     // Unsigned compare: 3000000000 (high bit set as i32) is NOT < 10.
     let out = run_no_errors(
