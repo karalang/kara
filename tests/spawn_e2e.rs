@@ -275,4 +275,70 @@ mod spawn_e2e_tests {
              got `{stdout}`"
         );
     }
+
+    /// **Phase 6 line 218 slice 6 — cross-task-safe boundary enforced
+    /// in the BUILD pipeline (defense-in-depth regression guard).**
+    ///
+    /// Slice 6's integration is delivered by the line-170 entry's slice
+    /// 3a: the `spawn` / `TaskGroup.spawn` cross-task-safe check fires at
+    /// the *typechecker* layer (`src/typechecker/cross_task_check.rs`),
+    /// which strictly subsumes the originally-imagined codegen-side hook
+    /// — unsafe captures are rejected before codegen ever runs. The 8
+    /// existing slice-3a tests assert this via the typechecker unit path;
+    /// this test pins the same rejection through the *exact* phase chain
+    /// `compile_and_link` runs (parse → resolve → **typecheck** → lower →
+    /// codegen → link), so a future refactor that moved the check to a
+    /// pass the build path skips (cf. the ownership-pass-is-skipped-by-
+    /// `build` footgun the line-390 entry documents) would fail here.
+    ///
+    /// A `TaskGroup.spawn(|| use_it(c))` capturing a `shared struct`
+    /// must be rejected at the typecheck phase — `compile_and_link`
+    /// returns `Err` carrying the phase tag + the `E_NOT_CROSS_TASK`
+    /// boundary message — and NO binary may be emitted.
+    #[test]
+    fn test_spawn_unsafe_capture_rejected_before_codegen() {
+        let _guard = SPAWN_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // No runtime archive needed: rejection happens at typecheck,
+        // before codegen/link, so this runs regardless of archive state.
+        let src = r#"
+            shared struct Cache { n: i64 }
+            fn use_it(c: Cache) -> i64 { 0 }
+            fn main() {
+                let c = Cache { n: 1 };
+                let mut tg = TaskGroup.new();
+                tg.spawn(|| use_it(c));
+            }
+        "#;
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_spawn_e2e_unsafe_{pid}_{nanos}"));
+
+        let result = compile_and_link(src, &exe_path);
+        let emitted = exe_path.exists();
+        let _ = std::fs::remove_file(&exe_path);
+
+        let err = result.expect_err(
+            "build pipeline must reject a spawn capturing a `shared struct` \
+             before codegen — got a successful compile/link instead",
+        );
+        assert!(
+            err.contains("typecheck errors"),
+            "rejection must come from the typecheck phase of the build \
+             pipeline (so `build` can't bypass it); got: `{err}`"
+        );
+        assert!(
+            err.contains("E_NOT_CROSS_TASK") && err.contains("task boundary"),
+            "rejection must be the cross-task-safe boundary diagnostic; \
+             got: `{err}`"
+        );
+        assert!(
+            !emitted,
+            "no binary may be emitted for a rejected cross-task-unsafe \
+             spawn capture"
+        );
+    }
 }
