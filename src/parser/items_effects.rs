@@ -53,6 +53,7 @@ impl super::Parser {
                     name,
                     generic_params,
                     provider_trait,
+                    canonical_host_name: None,
                 }))
             }
             Token::Group => {

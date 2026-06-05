@@ -18,6 +18,7 @@ mod inference;
 mod modbind_synth;
 mod profile_compat;
 mod subtyping;
+mod target_gate;
 mod verify;
 mod with_e;
 
@@ -197,6 +198,11 @@ pub enum EffectErrorKind {
     /// forbids. Emitted by `check_profile_compat` after inference
     /// settles.
     ProfileIncompatibleEffect,
+    /// Phase-10 target gate: a function reachable from the build's
+    /// entry point requires a HOST resource the current compilation
+    /// target does not provide (and no provider is bound on the call
+    /// chain). See `effectchecker/target_gate.rs`.
+    TargetGateViolation,
     /// A `par { }` branch's transitive effect set contains
     /// `writes(BINDING_resource)` for a module-level `let mut BINDING`
     /// whose type is not an explicit concurrency primitive
@@ -796,6 +802,9 @@ impl<'a> EffectChecker<'a> {
         self.check_with_e_unification();
         self.check_profile_compat();
         self.check_modbind_par_conflicts();
+        // Phase-10: effect-driven target gating — reachable-from-entry
+        // host-resource availability for the current target.
+        self.check_target_gate();
 
         // Phase C: Detect mutual recursion groups and build resolution traces
         let mutual_recursion_groups = self.detect_mutual_recursion_groups();

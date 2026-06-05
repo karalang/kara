@@ -178,3 +178,85 @@ pub fn filter_inactive_items_in(
     });
     tombstones
 }
+
+// ── Target-provided resource sets (phase-10 target gate) ─────────
+//
+// Table per `design.md § Cross-target Compilation > Target-Provided
+// Resource Sets`. Only HOST resources are listed — user-defined
+// resources have no intrinsic target affinity (they exist wherever a
+// provider exists) and the gate never examines them directly.
+//
+// `ProcessTable` is not in the design table (doc gap, noted in the
+// phase-10 tracker entry): child-process spawning is native-only, so it
+// gates like `Hardware`.
+
+/// Is `resource` a host resource the target gate owns? Anything not in
+/// this set is user-defined and exempt from target gating.
+pub fn is_host_resource(resource: &str) -> bool {
+    matches!(
+        resource,
+        "FileSystem"
+            | "Stdin"
+            | "Stdout"
+            | "Stderr"
+            | "Env"
+            | "Network"
+            | "Clock"
+            | "RandomSource"
+            | "Heap"
+            | "Hardware"
+            | "GpuBuffer"
+            | "ProcessTable"
+            | "Display"
+            | "Storage"
+            | "Console"
+            | "Timer"
+            | "Input"
+    )
+}
+
+/// Does `target` provide `resource`? Callers must pre-check
+/// [`is_host_resource`]; unknown resources return `false` here.
+pub fn target_provides(target: &str, resource: &str) -> bool {
+    let provided: &[&str] = match target {
+        "native" => &[
+            "FileSystem",
+            "Stdin",
+            "Stdout",
+            "Stderr",
+            "Env",
+            "Network",
+            "Clock",
+            "RandomSource",
+            "Heap",
+            "Hardware",
+            "GpuBuffer",
+            "ProcessTable",
+        ],
+        "wasm_browser" => &[
+            "Network",
+            "Clock",
+            "RandomSource",
+            "Heap",
+            "Display",
+            "Storage",
+            "Console",
+            "Timer",
+            "Input",
+        ],
+        "wasm_wasi" => &[
+            "FileSystem",
+            "Stdin",
+            "Stdout",
+            "Stderr",
+            "Env",
+            "Network",
+            "Clock",
+            "RandomSource",
+            "Heap",
+        ],
+        "gpu" => &["GpuBuffer"],
+        _ => &[],
+    };
+    provided.contains(&resource)
+}

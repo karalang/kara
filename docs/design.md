@@ -10025,6 +10025,7 @@ Each target provides a specific subset of the built-in primitive resources. A fu
 | `RandomSource` | ✓ | ✓ | ✓ | — |
 | `Heap` | ✓ | ✓ | ✓ | — (GPU is heap-forbidden) |
 | `Hardware` | ✓ (kernel / driver builds) | — | — | — |
+| `ProcessTable` | ✓ | — | — | — |
 | `GpuBuffer[_]` | ✓ (host side of dispatch) | — | — | ✓ |
 | `Display` / `Storage` / `Console` / `Timer` / `Input` (from `std.web`) | — | ✓ | — | — |
 

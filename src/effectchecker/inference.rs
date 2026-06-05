@@ -925,6 +925,17 @@ impl<'a> super::EffectChecker<'a> {
             }
             ExprKind::Providers { bindings, body } => {
                 for b in bindings {
+                    // Phase-10 target gate: record the binding as a
+                    // synthetic pseudo-call (same trick as the
+                    // `__modbind_*` keys) so the gate pass can recover
+                    // per-function provider bindings from the existing
+                    // call collection. Real consumers are unaffected:
+                    // `build_call_graph` filters to known fn names and
+                    // `get_callee_effects` misses harmlessly.
+                    calls.push((
+                        format!("__providers_bind::{}", b.resource),
+                        b.resource_span.clone(),
+                    ));
                     self.collect_calls_in_expr(&b.value, calls, bounds);
                 }
                 let block_calls = self.collect_calls_in_block(body, bounds);

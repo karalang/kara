@@ -729,6 +729,13 @@ pub struct EffectResourceDecl {
     pub name: String,
     pub generic_params: Option<GenericParams>,
     pub provider_trait: Option<String>,
+    /// Phase-10 target gate: when this declaration is an alias-renamed
+    /// clone of a gated-stdlib HOST resource (`import std.web.Display
+    /// as Screen;` in single-file mode), the canonical host name
+    /// (`"Display"`). The target gate keys its provided-resource table
+    /// on the canonical name so renames cannot evade the gate. `None`
+    /// for ordinary declarations.
+    pub canonical_host_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]

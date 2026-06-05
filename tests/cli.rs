@@ -10098,7 +10098,13 @@ fn test_migrate_default_atomic_when_only_bare_assigns() {
 
 /// Regression: single-file mode has no ProgramTree, so a gated import
 /// used to blind-bind in the resolver and ICE in the interpreter on
-/// first use ("variable 'fetch' not found"). `Pipeline::resolve` now
+/// first use ("variable 'fetch' not found").
+///
+/// NOTE (target gate): this program calls `paint()` (writes(Display))
+/// from `main`, which `karac check`/`build` now reject on native — the
+/// test runs via `karac run`, which deliberately skips effect checking
+/// (lenient script path; typecheck is warnings-only there too). The
+/// run-mode leniency decision has its own phase-10 tracker entry. `Pipeline::resolve` now
 /// expands gated imports into the real baked items
 /// (`prelude::expand_gated_stdlib_imports`); this pins the full
 /// run path: import + effect-clause use + calling the fetch stub body.
@@ -10312,6 +10318,89 @@ fn target_attr_single_file_inactive_reference_diagnostic() {
         stderr.contains("'DomNode' is not available on target `native`")
             && stderr.contains("#[target(wasm_browser)]"),
         "expected the targeted gating diagnostic, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// ── Phase-10: effect-driven target gate (check path) ────────────
+// `karac run` deliberately skips effect checking (lenient script
+// path — typecheck is warnings-only there too); the gate fires on
+// `karac check` / `karac build`.
+
+#[test]
+fn target_gate_check_rejects_aliased_web_resource() {
+    // Alias canonicalization: `import std.web.Display as Screen;`
+    // must not evade the Display gate — the renamed clone carries
+    // canonical provenance.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-gate-alias-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("alias_gate.kara");
+    std::fs::write(
+        &path,
+        "import std.web.Display as Screen;\n\n\
+         fn paint() with writes(Screen) {\n}\n\n\
+         fn main() {\n    paint();\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "aliased gate must fail check");
+    assert!(
+        stderr.contains("target `native` does not provide resource 'Display'")
+            && stderr.contains("main → paint"),
+        "alias must canonicalize to Display with the chain: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn target_gate_check_provider_bound_web_resource_passes() {
+    // SSR pattern end-to-end through the binary: providers-bound
+    // Display is legal on native.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-gate-ssr-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("ssr_gate.kara");
+    std::fs::write(
+        &path,
+        "import std.web.Display;\n\n\
+         struct HtmlBuilder { buf: String }\n\n\
+         fn render() with writes(Display) {\n}\n\n\
+         fn main() {\n\
+             providers {\n\
+                 Display => HtmlBuilder { buf: \"\" },\n\
+             } in {\n\
+                 render();\n\
+             }\n\
+         }\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "provider-bound Display must pass the native gate: {stderr}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }

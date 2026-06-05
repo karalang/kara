@@ -876,6 +876,13 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
                 t.name = bound.clone();
             }
             Item::EffectResource(r) => {
+                // Alias-renamed host resources keep canonical provenance
+                // so the target gate keys its provided-resource table on
+                // the real name — `import std.web.Display as Screen;`
+                // must not let `writes(Screen)` evade the Display gate.
+                if r.canonical_host_name.is_none() && *bound != r.name {
+                    r.canonical_host_name = Some(r.name.clone());
+                }
                 r.name = bound.clone();
             }
             _ => {}

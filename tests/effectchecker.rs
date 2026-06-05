@@ -7488,3 +7488,140 @@ fn main() {}
         "explicit blocks on a host fn must propagate: {errs:?}",
     );
 }
+
+// ── Phase-10: effect-driven target gating ───────────────────────
+// design.md § Cross-target Compilation > Effect-Driven Target Gating.
+// Current target is `native`; std.web resources (Display/Storage/...)
+// are the not-provided set that can fire on it. Resource identity is
+// the clause string, so a source-level `effect resource Display;`
+// claims the host Display identity — that is the std.wasi
+// redeclaration philosophy and what makes these single-program tests
+// possible without the gated-import machinery.
+
+#[test]
+fn target_gate_rejects_reachable_unprovided_resource_with_chain() {
+    let errs = effectcheck_errors(
+        r#"
+effect resource Display;
+
+fn paint() with writes(Display) {
+}
+
+fn helper() {
+    paint();
+}
+
+fn main() {
+    helper();
+}
+"#,
+    );
+    assert!(
+        errs.iter().any(|e| {
+            let m = e.to_string();
+            m.contains("target `native` does not provide resource 'Display'")
+                && m.contains("main → helper → paint")
+        }),
+        "expected gate error with full call chain: {errs:?}",
+    );
+}
+
+#[test]
+fn target_gate_ignores_unreachable_declarations() {
+    effectcheck_ok(
+        r#"
+effect resource Display;
+
+fn paint() with writes(Display) {
+}
+
+fn main() {
+    println("ok");
+}
+"#,
+    );
+}
+
+#[test]
+fn target_gate_provider_binding_discharges_resource() {
+    // The SSR pattern from design.md: binding a provider over a
+    // target-foreign resource makes the subtree legal on this target.
+    effectcheck_ok(
+        r#"
+effect resource Display;
+
+struct HtmlBuilder { buf: String }
+
+fn render() with writes(Display) {
+}
+
+fn main() {
+    providers {
+        Display => HtmlBuilder { buf: "" },
+    } in {
+        render();
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn target_gate_exempts_user_resources() {
+    effectcheck_ok(
+        r#"
+effect resource UserDB;
+
+fn query() with reads(UserDB) {
+}
+
+fn main() {
+    query();
+}
+"#,
+    );
+}
+
+#[test]
+fn target_gate_native_provided_resources_pass() {
+    // FileSystem / Clock / Network / ProcessTable are all in native's
+    // provided set — reachable uses must not fire.
+    effectcheck_ok(
+        r#"
+fn snapshot() with reads(FileSystem) reads(Clock) sends(Network) sends(ProcessTable) {
+}
+
+fn main() {
+    snapshot();
+}
+"#,
+    );
+}
+
+#[test]
+fn target_gate_unbound_sibling_call_still_fires() {
+    // Function-granular discharge: a providers binding in `main`
+    // covers main's whole body (documented approximation), but a
+    // DIFFERENT entry path with no binding still fires.
+    let errs = effectcheck_errors(
+        r#"
+effect resource Display;
+
+fn render() with writes(Display) {
+}
+
+fn untracked() {
+    render();
+}
+
+fn main() {
+    untracked();
+}
+"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("main → untracked → render")),
+        "{errs:?}",
+    );
+}
