@@ -124,6 +124,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "Vector.reduce_or"
                     | "Vector.reduce_xor"
                     | "Vector.select"
+                    | "Vector.reverse"
+                    | "Vector.rotate_lanes_left"
+                    | "Vector.rotate_lanes_right"
             ) {
                 return self.compile_vector_method(object, method, args);
             }
@@ -3289,6 +3292,43 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_select(recv, a, b, "vselect")
                     .map_err(|e| format!("vector select failed: {e}"))
+            }
+            // Lane permutations (design.md § Portable SIMD, "Lane shuffling").
+            // Each builds the result `<N x T>` by extractelement-ing the source
+            // lane at the permuted index and insertelement-ing it into the
+            // result — a constant lane permutation LLVM folds to a single
+            // `shufflevector`. `reverse`: result lane i = source lane N-1-i.
+            // `rotate_lanes_left(k)`: result lane i = source lane (i+k) mod N.
+            // `rotate_lanes_right(k)`: result lane i = source lane (i+N-k) mod N.
+            "reverse" | "rotate_lanes_left" | "rotate_lanes_right" => {
+                let shift = if method == "reverse" {
+                    0
+                } else {
+                    // The typechecker guarantees a non-negative integer literal.
+                    let amt = match &args[0].value.kind {
+                        ExprKind::Integer(v, _) => *v as u64,
+                        _ => {
+                            return Err(format!(
+                                "{method} amount must be a compile-time integer literal"
+                            ))
+                        }
+                    };
+                    (amt % n as u64) as u32
+                };
+                let mut out = recv.get_type().get_undef();
+                for i in 0..n {
+                    let src = match method {
+                        "reverse" => n - 1 - i,
+                        "rotate_lanes_left" => (i + shift) % n,
+                        _ => (i + n - shift) % n, // rotate_lanes_right
+                    };
+                    let v = lane(self, recv, src)?;
+                    out = self
+                        .builder
+                        .build_insert_element(out, v, i32_t.const_int(i as u64, false), "perm.lane")
+                        .map_err(|e| format!("vector insertelement failed: {e}"))?;
+                }
+                Ok(out.into())
             }
             other => Err(format!("unsupported Vector method '{other}' in codegen")),
         }

@@ -1046,6 +1046,44 @@ impl<'a> super::Interpreter<'a> {
                     .collect();
                 Some(Value::Vector(out))
             }
+            // Lane permutations (design.md § Portable SIMD, "Lane shuffling").
+            // Pure index permutations — same mapping as codegen so the two
+            // backends agree lane-for-lane. `reverse`: lane i ← N-1-i;
+            // `rotate_lanes_left(k)`: lane i ← (i+k) mod N; `rotate_lanes_right`:
+            // lane i ← (i+N-k) mod N. The rotate amount is a non-negative
+            // integer literal (typechecker-guaranteed).
+            "reverse" => {
+                let mut out = lanes;
+                out.reverse();
+                Some(Value::Vector(out))
+            }
+            "rotate_lanes_left" | "rotate_lanes_right" => {
+                let nn = lanes.len();
+                if nn == 0 {
+                    return Some(Value::Vector(lanes));
+                }
+                let amt = match &args[0].value.kind {
+                    ExprKind::Integer(v, _) => *v,
+                    _ => {
+                        return Some(self.record_runtime_error(
+                            format!("{method} amount must be a compile-time integer literal"),
+                            span,
+                        ))
+                    }
+                };
+                let shift = amt.rem_euclid(nn as i64) as usize;
+                let out: Vec<Value> = (0..nn)
+                    .map(|i| {
+                        let src = if method == "rotate_lanes_left" {
+                            (i + shift) % nn
+                        } else {
+                            (i + nn - shift) % nn
+                        };
+                        lanes[src].clone()
+                    })
+                    .collect();
+                Some(Value::Vector(out))
+            }
             _ => None,
         }
     }

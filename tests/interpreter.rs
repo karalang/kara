@@ -12689,6 +12689,45 @@ fn main() {
     assert_eq!(out, "1\n2\n3\n6\n");
 }
 
+// ── Slice 6a — lane permutations (parity with codegen) ──────────────
+
+#[test]
+fn test_vector_reverse() {
+    let out = run_no_errors(
+        "fn main() { let a = Vector[i64, 4](1, 2, 3, 4); let r = a.reverse(); \
+         println(r[0]); println(r[1]); println(r[2]); println(r[3]); }",
+    );
+    assert_eq!(out, "4\n3\n2\n1\n");
+}
+
+#[test]
+fn test_vector_rotate_lanes_left() {
+    let out = run_no_errors(
+        "fn main() { let a = Vector[i64, 4](10, 20, 30, 40); let r = a.rotate_lanes_left(1); \
+         println(r[0]); println(r[1]); println(r[2]); println(r[3]); }",
+    );
+    assert_eq!(out, "20\n30\n40\n10\n");
+}
+
+#[test]
+fn test_vector_rotate_lanes_right() {
+    let out = run_no_errors(
+        "fn main() { let a = Vector[i64, 4](10, 20, 30, 40); let r = a.rotate_lanes_right(1); \
+         println(r[0]); println(r[1]); println(r[2]); println(r[3]); }",
+    );
+    assert_eq!(out, "40\n10\n20\n30\n");
+}
+
+#[test]
+fn test_vector_rotate_wraps_modulo_lanes() {
+    // rotate_left(5) on 4 lanes wraps to rotate_left(1) — parity with codegen.
+    let out = run_no_errors(
+        "fn main() { let a = Vector[i64, 4](10, 20, 30, 40); let r = a.rotate_lanes_left(5); \
+         println(r[0]); println(r[1]); println(r[2]); println(r[3]); }",
+    );
+    assert_eq!(out, "20\n30\n40\n10\n");
+}
+
 #[test]
 fn test_vector_compare_unsigned_mask() {
     // Unsigned compare: 3000000000 (high bit set as i32) is NOT < 10.

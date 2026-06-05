@@ -30463,6 +30463,108 @@ fn main() {
         }
     }
 
+    // ── Slice 6a — lane permutations (reverse / rotate_lanes_*) ──────────
+
+    #[test]
+    fn test_vector_reverse() {
+        // reverse reverses lane order: (1,2,3,4) -> (4,3,2,1).
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let r = a.reverse();
+    println(r[0]); println(r[1]); println(r[2]); println(r[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "4\n3\n2\n1\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_rotate_lanes_left() {
+        // rotate left by 1: result lane i = source lane (i+1) mod 4.
+        // (10,20,30,40) -> (20,30,40,10).
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](10, 20, 30, 40);
+    let r = a.rotate_lanes_left(1);
+    println(r[0]); println(r[1]); println(r[2]); println(r[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "20\n30\n40\n10\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_rotate_lanes_right() {
+        // rotate right by 1: result lane i = source lane (i+N-1) mod 4.
+        // (10,20,30,40) -> (40,10,20,30).
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](10, 20, 30, 40);
+    let r = a.rotate_lanes_right(1);
+    println(r[0]); println(r[1]); println(r[2]); println(r[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "40\n10\n20\n30\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_rotate_wraps_modulo_lanes() {
+        // A rotate amount >= N wraps: rotate_left(5) on 4 lanes == rotate_left(1).
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](10, 20, 30, 40);
+    let r = a.rotate_lanes_left(5);
+    println(r[0]); println(r[1]); println(r[2]); println(r[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "20\n30\n40\n10\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_rotate_non_literal_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let n = 2;
+    let _ = a.rotate_lanes_left(n);
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "a non-literal rotate amount must be a type error"
+        );
+    }
+
+    #[test]
+    fn test_vector_reverse_with_arg_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let _ = a.reverse(2);
+}
+"#,
+        );
+        assert!(!errs.is_empty(), "reverse takes no arguments");
+    }
+
     // ── Slice 4 — first-class Numeric trait + lane-literal ergonomics ─────
 
     #[test]

@@ -2535,12 +2535,70 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
             }
+            // Lane permutations (design.md § Portable SIMD, "Lane shuffling").
+            // `reverse()` reverses lane order; `rotate_lanes_left(n)` /
+            // `rotate_lanes_right(n)` cyclically shift lanes by a compile-time
+            // constant `n`. All return the same `Vector[T, N]`. The permutation
+            // is fixed at compile time (it lowers to a constant lane shuffle),
+            // so the rotate amount must be a non-negative integer literal — a
+            // runtime amount has no constant shuffle mask.
+            "reverse" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "'reverse' takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                }
+                Type::Vector {
+                    element: Box::new(elem),
+                    lanes: lanes.clone(),
+                }
+            }
+            "rotate_lanes_left" | "rotate_lanes_right" => {
+                let vec_ty = Type::Vector {
+                    element: Box::new(elem.clone()),
+                    lanes: lanes.clone(),
+                };
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "'{method}' takes exactly one argument (the rotate amount), \
+                             found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                    return vec_ty;
+                }
+                let _ = self.infer_expr(&args[0].value);
+                if !matches!(&args[0].value.kind, ExprKind::Integer(n, _) if *n >= 0) {
+                    self.type_error(
+                        format!(
+                            "'{method}' requires a non-negative compile-time integer literal \
+                             rotate amount"
+                        ),
+                        args[0].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                vec_ty
+            }
             _ => {
                 self.type_error(
                     format!(
                         "no method '{}' on Vector[{}, _] (supported: dot, cross, \
                          reduce_sum, reduce_product, reduce_min, reduce_max, \
-                         reduce_and, reduce_or, reduce_xor; select on a Vector[bool, N] mask)",
+                         reduce_and, reduce_or, reduce_xor, reverse, \
+                         rotate_lanes_left, rotate_lanes_right; select on a \
+                         Vector[bool, N] mask)",
                         method,
                         type_display(&elem)
                     ),
