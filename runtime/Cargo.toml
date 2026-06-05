@@ -38,23 +38,51 @@ name = "karac_runtime"
 crate-type = ["staticlib", "rlib"]
 
 [features]
-# `default = ["tls"]` so a plain `cargo build`/`cargo test` keeps the full
-# runtime surface (HTTPS serving, the HTTP client, WS-over-TLS). The
-# production AOT build emits TWO archives: the full one (`--features tls`,
-# the default) and a lean one (`--no-default-features`) for compute-only
-# Kāra programs. See phase-7-codegen.md § "Phase 4 binary-size" — `rustls`
-# + `ring` are the *only* deps whose unwind machinery survives `-dead_strip`
-# onto a compute binary's shared panic/alloc path (+48.5 KiB, measured;
-# tokio/hyper/mio/serde_json are all DCE-clean). Gating just the TLS surface
-# behind this feature lets the lean archive compile the rustls-pulling deps
-# out entirely, recovering that ~48 KiB on every compute binary.
-default = ["tls"]
+# `default = ["tls", "net"]` so a plain `cargo build`/`cargo test` keeps the
+# full runtime surface (HTTPS serving, the HTTP client, WS-over-TLS). The
+# production AOT build emits THREE archives: the full one (the default
+# feature set), a lean one (`--no-default-features --features net`) for
+# compute-only Kāra programs, and — phase-10 WASM build path — a wasm one
+# (`--no-default-features --target wasm32-wasip1`) with the whole native
+# networking/scheduler surface compiled out. See phase-7-codegen.md
+# § "Phase 4 binary-size" — `rustls` + `ring` are the *only* deps whose
+# unwind machinery survives `-dead_strip` onto a compute binary's shared
+# panic/alloc path (+48.5 KiB, measured; tokio/hyper/mio/serde_json are all
+# DCE-clean). Gating just the TLS surface behind `tls` lets the lean archive
+# compile the rustls-pulling deps out entirely, recovering that ~48 KiB on
+# every compute binary.
+default = ["tls", "net"]
+
+# Native networking + event-loop + scheduler surface: tokio/hyper HTTP
+# serving, the mio event loop, TCP, WebSocket, and the spawn/TaskGroup
+# scheduler (whose park/wake substrate lives in `event_loop.rs`). None of
+# these deps compile on wasm32 (`mio`/`socket2` carry `compile_error!`s;
+# tokio's `rt-multi-thread`/`net` features need OS threads + sockets), so
+# the wasm runtime archive is built `--no-default-features` — phase-10
+# `--target wasm_wasi` programs get vec/string/map/json/file/clone, no
+# native net. `tls` requires `net` (tokio-rustls wraps tokio streams).
+net = [
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:tokio",
+    "dep:http-body-util",
+    "dep:bytes",
+    "dep:mio",
+    "dep:socket2",
+]
 
 # TLS surface: HTTPS server (`karac_runtime_serve_https`), the ureq-backed
 # HTTP client, WS-over-TLS, and the `tls` module. Pulls the rustls/ring
 # dependency tree. Disabling it (lean archive) drops those capabilities but
 # keeps plain-HTTP serving, TCP, plain WebSocket, and JSON.
-tls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls", "dep:webpki-roots", "dep:ureq"]
+tls = [
+    "net",
+    "dep:rustls",
+    "dep:rustls-pemfile",
+    "dep:tokio-rustls",
+    "dep:webpki-roots",
+    "dep:ureq",
+]
 
 # Test-only FFI surface for `tests/park_and_wake.rs`. Adds
 # `karac_runtime_test_bind_and_print_port`, which binds a TCP socket
@@ -62,7 +90,7 @@ tls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls", "dep:webpki-roots
 # raw fd. Lets a kara binary exercise the parking primitive end-to-end
 # without a real stdlib `TcpListener` (M1 work). Disabled by default;
 # the test harness builds the runtime with `--features test-helpers`.
-test-helpers = []
+test-helpers = ["net"]
 
 [dependencies]
 # Slice F (`std.json`): backing impl for `karac_runtime_json_parse` /
@@ -84,12 +112,12 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # `serve_request` bridge is protocol-agnostic, so the same handler path
 # serves both. `server` wires up the connection-acceptor + service
 # driver.
-hyper = { version = "1", features = ["server", "http1", "http2"] }
+hyper = { version = "1", features = ["server", "http1", "http2"], optional = true }
 # `hyper-util` ships hyper 1's reusable server harness (`auto::Builder`,
 # `TokioExecutor`, `TokioIo`); hyper 1 itself is just the protocol core.
 # `http2` is required for `auto::Builder` to drive the HTTP/2 path it
 # negotiates.
-hyper-util = { version = "0.1", features = ["server-auto", "tokio", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["server-auto", "tokio", "http1", "http2"], optional = true }
 # Tokio multi-thread runtime — locked design (iv): per-request hyper
 # invokes the Kāra handler synchronously via `tokio::task::block_in_place`,
 # which requires the multi-thread flavor. `time` powers the serve-loop
@@ -97,11 +125,11 @@ hyper-util = { version = "0.1", features = ["server-auto", "tokio", "http1", "ht
 # `TokioTimer`-backed `header_read_timeout`); `sync` powers the optional
 # connection-concurrency cap (`tokio::sync::Semaphore`) — both phase-8
 # line 124 (slowloris / unbounded-spawn hardening).
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "sync"], optional = true }
 # Adapter between the std `Future` type and hyper's Body trait — `http_body_util`
 # ships `Full<Bytes>`, the trivial body type used for fixed-size responses.
-http-body-util = "0.1"
-bytes = "1"
+http-body-util = { version = "0.1", optional = true }
+bytes = { version = "1", optional = true }
 
 # Phase 6 line 15 (`event_loop`): cross-platform fd-readiness primitives
 # (epoll on Linux, kqueue on macOS / BSD, IOCP on Windows) plus the
@@ -110,7 +138,7 @@ bytes = "1"
 # OS substrates behind a single API. Already in our lockfile transitively
 # through tokio; promoting to a direct dep so the substrate choice is
 # explicit and the API surface is self-contained.
-mio = { version = "1", features = ["os-poll", "os-ext", "net"] }
+mio = { version = "1", features = ["os-poll", "os-ext", "net"], optional = true }
 
 # Phase 6 line 209 follow-on (M3 1M listen-backlog fix, 2026-05-29):
 # `std::net::TcpListener::bind` passes an opaque small backlog (Rust std
@@ -122,7 +150,7 @@ mio = { version = "1", features = ["os-poll", "os-ext", "net"] }
 # Linux, `kern.ipc.somaxconn` on BSD/macOS), which matches what large
 # servers (nginx, envoy) use by convention. Already in the lockfile as
 # a transitive dep via mio; promoting to a direct dep to use Socket API.
-socket2 = "0.5"
+socket2 = { version = "0.5", optional = true }
 
 # Phase 6 line 236 slice 1 (TLS / HTTPS server-side stdlib): rustls backs
 # `runtime/src/tls.rs` — pure-Rust TLS implementation, no openssl link

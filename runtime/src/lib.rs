@@ -34,9 +34,11 @@
 
 mod clone;
 mod emutls;
+#[cfg(feature = "net")]
 pub mod event_loop;
 mod file;
 mod map;
+#[cfg(feature = "net")]
 pub mod scheduler;
 #[cfg(feature = "tls")]
 pub mod tls;
@@ -207,10 +209,16 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_http_request_query_key_at,
         karac_runtime_http_request_query_val_at,
         karac_runtime_parse_i64,
-        karac_runtime_serve_http,
-        karac_runtime_serve_http_static,
     );
-    // Scheduler + event loop + TCP + WS (pub modules).
+    // The serve loops themselves need the tokio/hyper substrate (`net`);
+    // the request/response accessors above are plain FFI-struct reads and
+    // stay in every archive.
+    #[cfg(feature = "net")]
+    keep!(karac_runtime_serve_http, karac_runtime_serve_http_static,);
+    // Scheduler + event loop + TCP + WS (pub modules). Gated behind `net`
+    // alongside the modules themselves — the wasm archive
+    // (`--no-default-features`, phase-10) has no mio/tokio substrate.
+    #[cfg(feature = "net")]
     keep!(
         scheduler::karac_runtime_spawn,
         scheduler::karac_runtime_task_join,
@@ -4419,6 +4427,7 @@ pub unsafe extern "C" fn karac_runtime_http_builder_send(
 /// `KARAC_HTTP_HEADER_TIMEOUT_MS` is unset (phase-8 line 124). 10 s is
 /// generous for a real client's first request line / TLS round-trip yet
 /// short enough to reap a slowloris connection promptly.
+#[cfg(feature = "net")]
 const DEFAULT_HTTP_HEADER_TIMEOUT_MS: u64 = 10_000;
 
 /// Connection-level resource bounds shared by all three `karac_runtime_serve_*`
@@ -4438,11 +4447,13 @@ const DEFAULT_HTTP_HEADER_TIMEOUT_MS: u64 = 10_000;
 ///   acquires a permit *before* accepting, so reaching the cap applies
 ///   backpressure at the OS accept backlog rather than spawning unbounded
 ///   tasks.
+#[cfg(feature = "net")]
 struct ServeLimits {
     header_timeout: Option<std::time::Duration>,
     conn_permits: Option<Arc<tokio::sync::Semaphore>>,
 }
 
+#[cfg(feature = "net")]
 impl ServeLimits {
     /// Read the serve-loop bounds from the environment once per
     /// `karac_runtime_serve_*` call. A thin reader over [`from_raw`], which
@@ -4513,6 +4524,7 @@ impl ServeLimits {
 /// (there is no unbounded per-stream header accumulation to stall on),
 /// so the line-124 vector does not apply. The h2 keep-alive knobs are
 /// left at hyper defaults — a future tuning surface, not a v1 gate.
+#[cfg(feature = "net")]
 fn apply_serve_tuning(
     builder: &mut hyper_util::server::conn::auto::Builder<hyper_util::rt::TokioExecutor>,
     timeout: Option<std::time::Duration>,
@@ -4523,7 +4535,7 @@ fn apply_serve_tuning(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "net"))]
 mod serve_limits_tests {
     //! Phase-8 line 124 — serve-loop slowloris / resource-bound hardening:
     //! the env-driven config matrix, semaphore backpressure, and the
@@ -4728,6 +4740,7 @@ mod serve_limits_tests {
 /// must be thread-safe. `bound_port_out` may be null; if non-null it
 /// must point at writable `u16` storage that lives until at least the
 /// accept loop has been entered.
+#[cfg(feature = "net")]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_serve_http(
     addr_cstr: *const std::os::raw::c_char,
@@ -4986,6 +4999,7 @@ pub unsafe extern "C" fn karac_runtime_serve_https(
 /// `"<ip>:<port>"`. `body_ptr` must point at `body_len` initialized
 /// bytes (or be null with `body_len == 0`). The runtime copies the body
 /// before returning so the caller's buffer can be freed immediately.
+#[cfg(feature = "net")]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_serve_http_static(
     addr_cstr: *const std::os::raw::c_char,
@@ -5081,6 +5095,10 @@ pub unsafe extern "C" fn karac_runtime_serve_http_static(
 /// `%`) are kept literally rather than erroring — query strings reach
 /// the server from arbitrary clients, so lenient decode beats rejecting
 /// the whole request.
+// Only the `net`-gated `serve_request` calls this, but it is a pure
+// function with unit tests that should run in every feature combo —
+// keep it compiled and let the linker dead-strip it from no-net archives.
+#[cfg_attr(not(feature = "net"), allow(dead_code))]
 fn decode_form_component(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
@@ -5120,6 +5138,8 @@ fn decode_form_component(s: &str) -> String {
 /// `("foo", "")`). Empty segments (e.g. a trailing `&`) are skipped.
 /// Order is preserved and duplicate keys are kept — backing the
 /// `Vec[(String, String)]` (not Map) return shape of `Request.query()`.
+// Same all-combo treatment as `decode_form_component` above.
+#[cfg_attr(not(feature = "net"), allow(dead_code))]
 fn parse_query_pairs(query: &str) -> Vec<(String, String)> {
     let mut pairs = Vec::new();
     if query.is_empty() {
@@ -5165,6 +5185,7 @@ fn parse_query_pairs(query: &str) -> Vec<(String, String)> {
 /// behavior HTTP/1.1 keep-alive already had and is correct for v1; a
 /// fully-async handler ABI that would let streams on one connection run
 /// concurrently is a separate, larger slice.
+#[cfg(feature = "net")]
 async fn serve_request(
     req: hyper::Request<hyper::body::Incoming>,
     handler: extern "C" fn(*const KaracHttpRequest, *mut KaracHttpResponse),
