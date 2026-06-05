@@ -12221,3 +12221,50 @@ fn main() {
         "expected a vector lane out-of-bounds runtime error, got: {errs:?}"
     );
 }
+
+// ── Portable SIMD `Vector[T, N]` — slice 2 reductions (interpreter) ───
+// Mirror the codegen slice-2 run-tests for cross-backend parity.
+
+#[test]
+fn test_vector_reduce_sum_i64() {
+    let out =
+        run_no_errors("fn main() { let v = Vector[i64, 4](1, 2, 3, 4); println(v.reduce_sum()); }");
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn test_vector_reduce_sum_f64() {
+    let out =
+        run_no_errors("fn main() { let v = Vector[f64, 2](1.5, 2.5); println(v.reduce_sum()); }");
+    assert_eq!(out, "4\n");
+}
+
+#[test]
+fn test_vector_dot_i64() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let b = Vector[i64, 4](10, 20, 30, 40);
+    println(a.dot(b));
+}
+"#,
+    );
+    // 1*10 + 2*20 + 3*30 + 4*40 = 10 + 40 + 90 + 160 = 300
+    assert_eq!(out, "300\n");
+}
+
+#[test]
+fn test_vector_dot_f64() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a = Vector[f64, 2](2.0, 3.0);
+    let b = Vector[f64, 2](4.0, 5.0);
+    println(a.dot(b));
+}
+"#,
+    );
+    // 2*4 + 3*5 = 8 + 15 = 23
+    assert_eq!(out, "23\n");
+}

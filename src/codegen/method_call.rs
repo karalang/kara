@@ -86,6 +86,17 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_expr(object);
         }
 
+        // `Vector[T, N]` instance methods (design.md § Portable SIMD, slice 2):
+        // the two core Vector→scalar reductions. The receiver compiles to an
+        // `<N x T>` VectorValue; reductions fold via extractelement + scalar
+        // binop (LLVM re-vectorizes where profitable). dispatch_key is
+        // `"Vector.<method>"` from `method_callee_type_name`.
+        if let Some(ref key) = dispatch_key {
+            if key == "Vector.reduce_sum" || key == "Vector.dot" {
+                return self.compile_vector_method(object, method, args);
+            }
+        }
+
         // Phase 6 line 17 — stdlib `TcpListener` / `TcpStream`
         // compiler-builtin dispatch. Routes through the lowerings in
         // `src/codegen/tcp.rs`, each of which composes a
@@ -2609,6 +2620,55 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(Some(result.into()))
             }
             _ => Ok(None),
+        }
+    }
+
+    /// Lower a `Vector[T, N]` instance method to a scalar (design.md
+    /// § Portable SIMD, slice 2). `reduce_sum` folds all lanes with `+`;
+    /// `dot` folds the element-wise product of the two vectors with `+`.
+    /// Lanes are read via `extractelement` and combined with the scalar
+    /// `compile_binop` (which selects int vs float automatically); LLVM
+    /// re-vectorizes the fold where profitable. The typechecker guarantees
+    /// `N >= 1` and, for `dot`, a same-typed vector argument.
+    fn compile_vector_method(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let recv = self.compile_expr(object)?.into_vector_value();
+        let n = recv.get_type().get_size();
+        let i32_t = self.context.i32_type();
+        let lane = |cg: &Self, v: inkwell::values::VectorValue<'ctx>, i: u32| {
+            cg.builder
+                .build_extract_element(v, i32_t.const_int(i as u64, false), "lane")
+                .map_err(|e| format!("vector extractelement failed: {e}"))
+        };
+        match method {
+            "reduce_sum" => {
+                let mut acc = lane(self, recv, 0)?;
+                for i in 1..n {
+                    let l = lane(self, recv, i)?;
+                    acc = self.compile_binop(&BinOp::Add, acc, l)?;
+                }
+                Ok(acc)
+            }
+            "dot" => {
+                let other = self.compile_expr(&args[0].value)?.into_vector_value();
+                let mut acc: Option<BasicValueEnum<'ctx>> = None;
+                for i in 0..n {
+                    let a = lane(self, recv, i)?;
+                    let b = lane(self, other, i)?;
+                    let prod = self.compile_binop(&BinOp::Mul, a, b)?;
+                    acc = Some(match acc {
+                        None => prod,
+                        Some(s) => self.compile_binop(&BinOp::Add, s, prod)?,
+                    });
+                }
+                // N >= 1 guaranteed by the typechecker.
+                acc.ok_or_else(|| "dot on a zero-lane vector".to_string())
+            }
+            other => Err(format!("unsupported Vector method '{other}' in codegen")),
         }
     }
 }

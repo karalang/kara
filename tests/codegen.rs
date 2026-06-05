@@ -29392,4 +29392,105 @@ fn main() {
             "vector + scalar must be a type error (no implicit broadcast)"
         );
     }
+
+    // ── Vector slice 2 — reductions (dot, reduce_sum) ────────────────────
+
+    #[test]
+    fn test_vector_reduce_sum_ir_uses_extractelement() {
+        let ir = ir_for(
+            r#"
+fn sum4(p: i64, q: i64, r: i64, s: i64) -> i64 {
+    let v: Vector[i64, 4] = Vector[i64, 4](p, q, r, s);
+    v.reduce_sum()
+}
+fn main() { println(sum4(1, 2, 3, 4)); }
+"#,
+        );
+        assert!(
+            ir.contains("extractelement"),
+            "reduce_sum should fold lanes via extractelement; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_vector_reduce_sum_i64() {
+        let out = run_program(
+            "fn main() { let v = Vector[i64, 4](1, 2, 3, 4); println(v.reduce_sum()); }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "10\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_reduce_sum_f64() {
+        let out =
+            run_program("fn main() { let v = Vector[f64, 2](1.5, 2.5); println(v.reduce_sum()); }");
+        if let Some(out) = out {
+            assert_eq!(out, "4\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_dot_i64() {
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let b = Vector[i64, 4](10, 20, 30, 40);
+    println(a.dot(b));
+}
+"#,
+        );
+        if let Some(out) = out {
+            // 10 + 40 + 90 + 160 = 300
+            assert_eq!(out, "300\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_dot_f64() {
+        let out = run_program(
+            r#"
+fn main() {
+    let a = Vector[f64, 2](2.0, 3.0);
+    let b = Vector[f64, 2](4.0, 5.0);
+    println(a.dot(b));
+}
+"#,
+        );
+        if let Some(out) = out {
+            // 8 + 15 = 23
+            assert_eq!(out, "23\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_dot_mismatched_type_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let b = Vector[i64, 2](1, 2);
+    let _ = a.dot(b);
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "dot between Vector[i64,4] and Vector[i64,2] must be a type error"
+        );
+    }
+
+    #[test]
+    fn test_vector_unknown_method_is_type_error() {
+        let errs = vector_typecheck_errors(
+            "fn main() { let a = Vector[i64, 2](1, 2); let _ = a.frobnicate(); }",
+        );
+        assert!(
+            !errs.is_empty(),
+            "an unknown Vector method must be a type error"
+        );
+    }
 }

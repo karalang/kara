@@ -893,4 +893,54 @@ impl<'a> super::Interpreter<'a> {
         }
         None
     }
+
+    /// Instance methods on `Value::Vector` (design.md § Portable SIMD, slice
+    /// 2): the two core Vector→scalar reductions. Returns `Some(scalar)` when
+    /// `method` matches and the receiver is a vector; `None` otherwise (fall
+    /// through). Folds reuse `eval_binary` so each lane uses the exact scalar
+    /// Int/Float semantics — keeping interpreter output identical to codegen.
+    pub(super) fn try_eval_vector_method(
+        &mut self,
+        method: &str,
+        obj: Value,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<Value> {
+        let Value::Vector(lanes) = obj else {
+            return None;
+        };
+        match method {
+            // Horizontal sum: fold all lanes with `+`. The typechecker
+            // guarantees N >= 1, so `lanes` is non-empty.
+            "reduce_sum" => {
+                let mut acc = lanes.first().cloned()?;
+                for lane in lanes.into_iter().skip(1) {
+                    acc = self.eval_binary(&BinOp::Add, acc, lane, span);
+                }
+                Some(acc)
+            }
+            // Dot product: element-wise product of the two vectors, summed.
+            "dot" => {
+                let other = self.eval_expr_inner(&args[0].value);
+                let Value::Vector(rhs) = other else {
+                    return Some(
+                        self.record_runtime_error(
+                            "dot expects a vector argument".to_string(),
+                            span,
+                        ),
+                    );
+                };
+                let mut acc: Option<Value> = None;
+                for (x, y) in lanes.into_iter().zip(rhs) {
+                    let prod = self.eval_binary(&BinOp::Mul, x, y, span);
+                    acc = Some(match acc {
+                        None => prod,
+                        Some(a) => self.eval_binary(&BinOp::Add, a, prod, span),
+                    });
+                }
+                acc
+            }
+            _ => None,
+        }
+    }
 }

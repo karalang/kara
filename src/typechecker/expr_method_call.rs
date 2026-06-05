@@ -19,7 +19,7 @@ use super::env::{FunctionSig, ImplInfo};
 use super::inference::{resolve_type_var_top, substitute_type_params, unify_types};
 use super::types::{
     clone_self_type_for, iterator_item_type_for, method_callee_type_name,
-    receiver_for_method_lookup, type_display, IntSize, SubstValue, Type,
+    receiver_for_method_lookup, type_display, ConstArg, IntSize, SubstValue, Type,
 };
 use super::TypeErrorKind;
 
@@ -1059,6 +1059,12 @@ impl<'a> super::TypeChecker<'a> {
             return self.infer_slice_method(element, *mutable, method, args, span);
         }
 
+        // `Vector[T, N]` instance-method dispatch (design.md § Portable SIMD).
+        // Not a `Type::Named`, so handle before the named-type extraction.
+        if let Type::Vector { element, lanes } = &obj_ty.clone() {
+            return self.infer_vector_method(element, lanes, method, args, span);
+        }
+
         // Iterator-source methods: `iter()` / `into_iter()` on any iterable
         // collection produce an `Iterator[Item = T]` value. Handled here in
         // one place so per-collection method handlers don't have to repeat
@@ -2088,6 +2094,87 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 _ => return true,
+            }
+        }
+    }
+
+    /// Type-check an instance-method call on `Vector[T, N]` (design.md
+    /// § Portable SIMD). Slice 2 surface — the two core Vector→scalar
+    /// reductions:
+    ///   - `reduce_sum() -> T` — horizontal sum of all lanes.
+    ///   - `dot(other: Vector[T, N]) -> T` — dot product (element-wise
+    ///     product summed); `other` must be the same `Vector[T, N]`.
+    ///
+    /// Both return the element type `T`. Other reductions (`min`/`max`/
+    /// `product`/`and`/`or`/`xor`), construction helpers (`splat`/`from_*`),
+    /// and `cross` are later sub-slices (phase-7 line 289).
+    fn infer_vector_method(
+        &mut self,
+        element: &Type,
+        lanes: &ConstArg,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let elem = element.clone();
+        match method {
+            "reduce_sum" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("'{}' takes no arguments", method),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                }
+                elem
+            }
+            "dot" => {
+                let expected = Type::Vector {
+                    element: Box::new(elem.clone()),
+                    lanes: lanes.clone(),
+                };
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'dot' takes exactly one argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                    return elem;
+                }
+                let arg_ty = self.infer_expr(&args[0].value);
+                if arg_ty != expected && arg_ty != Type::Error {
+                    self.type_error(
+                        format!(
+                            "'dot' requires the argument to be the same vector type '{}', found '{}'",
+                            type_display(&expected),
+                            type_display(&arg_ty)
+                        ),
+                        args[0].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                elem
+            }
+            _ => {
+                self.type_error(
+                    format!(
+                        "no method '{}' on Vector[{}, _] (slice 2 supports reduce_sum, dot)",
+                        method,
+                        type_display(&elem)
+                    ),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                for a in args {
+                    self.infer_expr(&a.value);
+                }
+                Type::Error
             }
         }
     }
