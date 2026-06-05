@@ -369,6 +369,18 @@ pub(crate) fn pascal_to_snake(s: &str) -> String {
     result
 }
 
+/// True when `ty` is a concurrency primitive (`Atomic[T]` / `Mutex[T]`) — a
+/// field of this type provides interior mutability without the `mut` keyword,
+/// so it must be stored in a `RwLock` cell on a shared/par struct so writes
+/// (`.fetch_add` / `.store` / `lock`) persist through the shared `Arc`.
+fn is_interior_mutable_field_type(ty: &TypeExpr) -> bool {
+    matches!(
+        &ty.kind,
+        TypeKind::Path(p)
+            if matches!(p.segments.last().map(String::as_str), Some("Atomic") | Some("Mutex"))
+    )
+}
+
 /// True when `return_type` denotes `Self` or the named type `type_name` — the
 /// constructor return shape (a `-> Self` parses as `TypeKind::Path(["Self"])`;
 /// an explicit `-> Type` is `Path([… , "Type"])`). Used to distinguish a
@@ -1510,11 +1522,21 @@ impl<'a> Interpreter<'a> {
             field_vals.insert(field.name.clone(), val);
         }
         if let Some(def) = self.find_struct_def(&name) {
-            if def.is_shared {
+            // `par struct` is reference-semantic like `shared struct` (both are
+            // RC/Arc-backed in codegen), so it must be a `SharedStruct` in the
+            // interpreter too — otherwise a par struct is value-copied per
+            // `ref self` call and field mutations never reach the caller.
+            if def.is_shared || def.is_par {
+                // A field is interior-mutable (stored in a `RwLock` cell so
+                // writes persist through the shared `Arc`) if it is declared
+                // `mut`, OR its type is a concurrency primitive `Atomic[T]` /
+                // `Mutex[T]` — those provide interior mutability WITHOUT the
+                // `mut` keyword (a `par struct`'s `count: Atomic[i64]` field is
+                // mutated via `.fetch_add` / `lock`, not direct assignment).
                 let mut_field_names: HashSet<String> = def
                     .fields
                     .iter()
-                    .filter(|f| f.is_mut)
+                    .filter(|f| f.is_mut || is_interior_mutable_field_type(&f.ty))
                     .map(|f| f.name.clone())
                     .collect();
                 let weak_field_names: HashSet<String> = def

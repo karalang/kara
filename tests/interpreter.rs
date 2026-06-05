@@ -11893,3 +11893,54 @@ fn test_contract_predicate_panicked_in_ensures() {
         "expected `contract predicate panicked` in an ensures, got: {errors:?}"
     );
 }
+
+// ── par-struct field mutation persists through `ref self` ────────
+// Regression: a par struct must be reference-semantic in the interpreter
+// (SharedStruct, not a value-copy), and its `Atomic` / `Mutex` fields must
+// be interior-mutable cells so `.fetch_add` / `lock` writes through a
+// `ref self` method reach the caller. Was silently returning 0.
+
+#[test]
+fn par_struct_atomic_field_mutation_persists() {
+    let out = run("par struct C { n: Atomic[i64] }
+         impl C {
+             fn add(ref self, v: i64) { let _ = self.n.fetch_add(v, MemoryOrdering.SeqCst); }
+             fn get(ref self) -> i64 { self.n.load(MemoryOrdering.SeqCst) }
+         }
+         fn main() { let c = C { n: Atomic.new(0) }; c.add(5); c.add(37); println(c.get()); }");
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn par_struct_atomic_store_through_field_persists() {
+    let out = run("par struct C { n: Atomic[i64] }
+         impl C {
+             fn set(ref self, v: i64) { self.n.store(v, MemoryOrdering.SeqCst); }
+             fn get(ref self) -> i64 { self.n.load(MemoryOrdering.SeqCst) }
+         }
+         fn main() { let c = C { n: Atomic.new(0) }; c.set(7); println(c.get()); }");
+    assert_eq!(out.trim(), "7");
+}
+
+#[test]
+fn par_struct_mutex_field_mutation_persists() {
+    let out = run(
+        "par struct Counter { total: Mutex[i64] }
+         impl Counter {
+             fn add(ref self, n: i64) { lock self.total t { t = t + n; } }
+             fn get(ref self) -> i64 { lock self.total t { t } }
+         }
+         fn main() { let c = Counter { total: Mutex.new(0) }; c.add(5); c.add(37); println(c.get()); }",
+    );
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn shared_struct_mut_field_still_persists() {
+    // Regression guard: the par/shared SharedStruct change must not break the
+    // existing `shared struct` `mut`-field mutation path.
+    let out = run("shared struct Box { mut v: i64 }
+         impl Box { fn set(ref self, x: i64) { self.v = x; } fn get(ref self) -> i64 { self.v } }
+         fn main() { let b = Box { v: 1 }; b.set(99); println(b.get()); }");
+    assert_eq!(out.trim(), "99");
+}

@@ -103,10 +103,8 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         Value::Unit
                     };
-                    // Update the atomic in the environment
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::Atomic(Box::new(val)));
-                    }
+                    // Write the new value back to the receiver (local or field).
+                    self.atomic_write_back(object, Value::Atomic(Box::new(val)));
                     return Some(Value::Unit);
                 }
             }
@@ -140,9 +138,7 @@ impl<'a> super::Interpreter<'a> {
                         None
                     };
                     if let Some(new) = new {
-                        if let ExprKind::Identifier(name) = &object.kind {
-                            self.env.set(name, Value::Atomic(Box::new(new)));
-                        }
+                        self.atomic_write_back(object, Value::Atomic(Box::new(new)));
                     }
                     return Some(old);
                 }
@@ -165,9 +161,7 @@ impl<'a> super::Interpreter<'a> {
                             .get(1)
                             .map(|a| self.eval_expr_inner(&a.value))
                             .unwrap_or(Value::Unit);
-                        if let ExprKind::Identifier(name) = &object.kind {
-                            self.env.set(name, Value::Atomic(Box::new(new)));
-                        }
+                        self.atomic_write_back(object, Value::Atomic(Box::new(new)));
                     }
                     return Some(Value::EnumVariant {
                         enum_name: "Result".to_string(),
@@ -179,5 +173,20 @@ impl<'a> super::Interpreter<'a> {
             _ => return None,
         }
         None
+    }
+
+    /// Write an updated `Atomic` value back to its receiver after a mutating
+    /// op (`store` / `fetch_*` / `swap` / `compare_exchange`). The receiver is
+    /// either an `Identifier` (a local — write the env slot) or a `FieldAccess`
+    /// (`self.n` on a par/shared struct — route through `set_field` so the
+    /// write lands on the shared `Arc`'s interior-mutable cell). Without the
+    /// `FieldAccess` arm, mutations to a par-struct `Atomic` field through a
+    /// `ref self` method are silently lost.
+    fn atomic_write_back(&mut self, object: &Expr, value: Value) {
+        match &object.kind {
+            ExprKind::Identifier(name) => self.env.set(name, value),
+            ExprKind::FieldAccess { object, field } => self.set_field(object, field, value),
+            _ => {}
+        }
     }
 }
