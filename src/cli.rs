@@ -743,6 +743,15 @@ impl Pipeline {
         // the resolver, effect checker, interpreter, and codegen all see
         // ordinary declarations.
         crate::prelude::expand_gated_stdlib_imports(&mut self.parsed.program);
+        // Phase-10 `#[target(...)]`: items gated to a non-current target
+        // are absent from this compilation — strip them before any pass
+        // sees the program (their bodies may reference target-specific
+        // names). Tombstones feed the resolver's "not available on
+        // target X" diagnostic at reference sites.
+        let target_tombstones = crate::target::filter_inactive_items(
+            &mut self.parsed.program,
+            crate::target::CURRENT_TARGET,
+        );
         crate::desugar_program(&mut self.parsed.program);
         // Single-file mode infers the test-file flag from the filename
         // suffix — multi-module flows route through `resolve_modules`
@@ -754,6 +763,7 @@ impl Pipeline {
         self.resolved = Some(
             crate::resolver::Resolver::new(&self.parsed.program)
                 .with_test_file(is_test_file)
+                .with_target_tombstones(target_tombstones)
                 .resolve(),
         );
     }

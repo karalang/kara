@@ -1354,6 +1354,27 @@ impl<'a> super::Resolver<'a> {
             let binds_item = !binds_submodule && module_exposes_name(tree, &imp.path, &item.name);
 
             if !binds_submodule && !binds_item {
+                // Phase-10 `#[target(...)]`: the item exists in source but
+                // was filtered for the current compilation target — answer
+                // with the targeted diagnostic instead of unknown-item +
+                // available-list.
+                if let Some(spec) = self.target_tombstones.get(&item.name) {
+                    self.errors.push(ResolveError {
+                        message: format!(
+                            "'{}' is not available on target `{}` — it is gated to \
+                             `#[target({})]`",
+                            item.name,
+                            crate::target::CURRENT_TARGET,
+                            spec,
+                        ),
+                        span: item.span.clone(),
+                        kind: ResolveErrorKind::UndefinedName,
+                        suggestion: None,
+                        replacement: None,
+                        stub_hint: None,
+                    });
+                    continue;
+                }
                 // Look at target module's top-level items for suggestions,
                 // plus any submodule siblings.
                 let mut candidates_owned: Vec<String> = module_top_level_names(tree, &imp.path);

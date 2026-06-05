@@ -1414,3 +1414,49 @@ fn std_wasi_prelude_resources_still_work_without_import() {
         "prelude resources must keep resolving without std.wasi: {errs:?}",
     );
 }
+
+// ── Phase-10: `#[target(...)]` filtering in project mode ────────
+
+#[test]
+fn target_attr_project_filters_and_diagnoses_imports() {
+    let d = ScratchDir::new("target-attr-project");
+    d.write(
+        "src/main.kara",
+        "import helpers.browser_only;\nfn main() { let _ = browser_only(); }\n",
+    );
+    d.write(
+        "src/helpers.kara",
+        concat!(
+            "#[target(not(gpu))]\npub fn platform_label() -> String { \"cpu\" }\n",
+            "#[target(wasm_browser)]\npub fn browser_only() -> i64 { 1 }\n",
+        ),
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    // The filtered item leaves a tombstone on the tree...
+    assert_eq!(
+        built
+            .tree
+            .target_tombstones
+            .get("browser_only")
+            .map(String::as_str),
+        Some("wasm_browser"),
+        "filtered item must be tombstoned: {:?}",
+        built.tree.target_tombstones,
+    );
+    // ...the `not(gpu)` item survives on native...
+    assert!(
+        !built.tree.target_tombstones.contains_key("platform_label"),
+        "not(gpu) is active on native",
+    );
+    // ...and both the import and the use answer with the targeted
+    // diagnostic instead of unknown-item / undefined-name.
+    let errs = resolve_module_errors(&built.tree, built.tree.root);
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("'browser_only' is not available on target `native`")),
+        "import of a filtered item must get the gating diagnostic: {errs:?}",
+    );
+}

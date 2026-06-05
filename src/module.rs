@@ -108,6 +108,12 @@ pub struct ProgramTree {
     pub modules: Vec<Module>,
     pub root: ModuleId,
     pub graph: ModuleGraph,
+    /// Phase-10 `#[target(...)]`: item name → rendered target spec for
+    /// every item `target::filter_inactive_items` removed while the tree
+    /// was built (merged across modules). Resolver sessions adopt this
+    /// via `with_tree` so references to filtered items report "not
+    /// available on target X".
+    pub target_tombstones: std::collections::HashMap<String, String>,
 }
 
 impl ProgramTree {
@@ -427,6 +433,22 @@ pub fn build_program_tree_with(
 
     let root = root.unwrap_or(0);
 
+    // Phase-10 `#[target(...)]`: items gated to a target other than the
+    // current compilation target are treated as absent at resolution
+    // time — strip them from every user module before any pass walks
+    // the tree, recording tombstones for resolver diagnostics. Synthetic
+    // modules (prelude / gated stdlib) carry no target attributes.
+    let mut target_tombstones = std::collections::HashMap::new();
+    for m in &mut modules {
+        if m.is_synthetic {
+            continue;
+        }
+        target_tombstones.extend(crate::target::filter_inactive_items_in(
+            &mut m.items,
+            crate::target::CURRENT_TARGET,
+        ));
+    }
+
     let mut graph = ModuleGraph {
         edges: Vec::new(),
         by_path,
@@ -439,6 +461,7 @@ pub fn build_program_tree_with(
             modules,
             root,
             graph,
+            target_tombstones,
         },
         parse_errors,
     })
@@ -937,6 +960,7 @@ mod tests {
                 edges: edges.to_vec(),
                 by_path,
             },
+            target_tombstones: HashMap::new(),
         }
     }
 

@@ -2269,7 +2269,10 @@ fn process_order(o: Order) { ... }
 
 // Target gating — closed target set: native, wasm_browser, wasm_wasi, gpu.
 // Argument is a comma-separated list of bare target names, each optionally wrapped in not(...).
-// No general boolean logic. See design.md § Cross-target Compilation.
+// No general boolean logic: a list is either all-positive or all-negated —
+// mixing the two (#[target(native, not(gpu))]) is rejected at parse, and at
+// most one #[target(...)] attribute may appear per item (merge the names).
+// See design.md § Cross-target Compilation.
 #[target(native)]
 pub fn main() -> Result[(), AppError] { ... }
 

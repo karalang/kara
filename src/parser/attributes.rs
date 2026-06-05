@@ -27,6 +27,20 @@ impl super::Parser {
                 attrs.push(attr);
             }
         }
+        // Phase-10: at most one `#[target(...)]` per item — repeated
+        // attributes have ambiguous combination semantics (union? inter-
+        // section?), so the spec mandates a single merged list instead.
+        let mut target_attrs = attrs.iter().filter(|a| a.is_bare("target"));
+        if let (Some(_), Some(second)) = (target_attrs.next(), target_attrs.next()) {
+            let span = second.span.clone();
+            self.errors.push(super::ParseError {
+                message: "multiple `#[target(...)]` attributes on one item — merge the \
+                          target names into a single attribute, e.g. \
+                          `#[target(wasm_browser, wasm_wasi)]`"
+                    .to_string(),
+                span,
+            });
+        }
         attrs
     }
 
@@ -231,6 +245,65 @@ impl super::Parser {
                  `// Safety: ...` comment above the block per the \
                  `undocumented_unsafe` lint."
             ));
+        }
+
+        // Phase-10: `#[target(...)]` argument validation — parse-level
+        // per the tracker/spec. Grammar: comma-separated bare target
+        // names, each optionally wrapped in `not(...)`; names from the
+        // CLOSED v1 set; no general boolean logic (mixed positive +
+        // negative lists are rejected — the combination has no defined
+        // v1 semantics).
+        if path.len() == 1 && name == "target" {
+            if args.is_empty() {
+                self.error(
+                    "`#[target(...)]` needs at least one target name — \
+                     e.g. `#[target(native)]` or `#[target(not(gpu))]`",
+                );
+            }
+            let mut saw_positive = false;
+            let mut saw_negative = false;
+            for arg in &args {
+                let classified = arg
+                    .value
+                    .as_ref()
+                    .filter(|_| arg.name.is_none())
+                    .and_then(crate::target::classify_target_arg);
+                match classified {
+                    Some((target_name, negated)) => {
+                        if !crate::target::V1_TARGETS.contains(&target_name.as_str()) {
+                            self.errors.push(super::ParseError {
+                                message: format!(
+                                    "unknown target `{target_name}` in `#[target(...)]` — \
+                                     the v1 target set is closed: {}",
+                                    crate::target::V1_TARGETS.join(", "),
+                                ),
+                                span: arg.span.clone(),
+                            });
+                        }
+                        if negated {
+                            saw_negative = true;
+                        } else {
+                            saw_positive = true;
+                        }
+                    }
+                    None => {
+                        self.errors.push(super::ParseError {
+                            message: "invalid `#[target(...)]` argument — expected a bare \
+                                      target name or `not(<target>)`; no general boolean \
+                                      logic is supported (syntax.md § 8)"
+                                .to_string(),
+                            span: arg.span.clone(),
+                        });
+                    }
+                }
+            }
+            if saw_positive && saw_negative {
+                self.error(
+                    "`#[target(...)]` cannot mix positive and negated names in one \
+                     list — the combination has no defined semantics; use either \
+                     `#[target(a, b)]` or `#[target(not(a), not(b))]`",
+                );
+            }
         }
 
         Some(Attribute {

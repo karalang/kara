@@ -880,6 +880,14 @@ pub struct Resolver<'a> {
     /// plain diagnostic is emitted. The CLI sets this via
     /// `Resolver::with_test_file(module.is_test_file)`.
     pub(crate) is_test_file: bool,
+    /// Phase-10 `#[target(...)]` tombstones: item name → rendered target
+    /// spec, for every item `target::filter_inactive_items` removed before
+    /// this resolve session. Consulted by `error_undefined_name` so a
+    /// reference to a filtered item reports "not available on target X"
+    /// instead of a bare undefined-name. Single-file mode threads the map
+    /// via [`Resolver::with_target_tombstones`]; project mode adopts it
+    /// off the `ProgramTree` in [`Resolver::with_tree`].
+    pub(crate) target_tombstones: HashMap<String, String>,
 }
 
 impl<'a> Resolver<'a> {
@@ -895,16 +903,28 @@ impl<'a> Resolver<'a> {
             loop_labels: Vec::new(),
             is_stdlib_source: false,
             is_test_file: false,
+            target_tombstones: HashMap::new(),
         }
     }
 
     /// Attach a project-wide `ProgramTree` so `import` declarations can be
     /// validated across modules. Use [`Resolver::new`] followed by
     /// `.with_tree(tree, module_id)` when resolving a specific module in the
-    /// project.
+    /// project. Also adopts the tree's `#[target(...)]` tombstones so
+    /// references to target-filtered items get the targeted diagnostic.
     pub fn with_tree(mut self, tree: &'a ProgramTree, module_id: ModuleId) -> Self {
         self.tree = Some(tree);
         self.current_module = Some(module_id);
+        if self.target_tombstones.is_empty() {
+            self.target_tombstones = tree.target_tombstones.clone();
+        }
+        self
+    }
+
+    /// Phase-10: provide name → rendered-target-spec tombstones for items
+    /// removed by `target::filter_inactive_items` (single-file pipeline).
+    pub fn with_target_tombstones(mut self, tombstones: HashMap<String, String>) -> Self {
+        self.target_tombstones = tombstones;
         self
     }
 
@@ -954,6 +974,26 @@ impl<'a> Resolver<'a> {
     }
 
     fn error_undefined_name(&mut self, name: &str, span: Span) {
+        // Phase-10 `#[target(...)]`: a name that exists in source but was
+        // filtered for the current compilation target gets the targeted
+        // diagnostic instead of a bare undefined-name + fuzzy suggestion.
+        if let Some(spec) = self.target_tombstones.get(name) {
+            self.errors.push(ResolveError {
+                message: format!(
+                    "'{}' is not available on target `{}` — it is gated to \
+                     `#[target({})]`",
+                    name,
+                    crate::target::CURRENT_TARGET,
+                    spec,
+                ),
+                span,
+                kind: ResolveErrorKind::UndefinedName,
+                suggestion: None,
+                replacement: None,
+                stub_hint: None,
+            });
+            return;
+        }
         let visible = self.table.visible_names();
         let suggestion = suggest_similar(name, &visible);
         let mut message = format!("undefined name '{}'", name);

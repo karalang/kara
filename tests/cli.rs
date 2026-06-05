@@ -10230,3 +10230,88 @@ fn main() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// ── Phase-10: `#[target(...)]` absence semantics (single-file) ──
+
+/// Items gated to the current target (or `not(<other>)`) stay active;
+/// items gated elsewhere vanish silently unless referenced.
+#[test]
+fn target_attr_single_file_active_and_filtered() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-target-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("gated.kara");
+    std::fs::write(
+        &path,
+        r#"
+#[target(native)]
+fn platform_name() -> String { "native" }
+
+#[target(not(gpu))]
+fn io_helper() -> i64 { 7 }
+
+#[target(wasm_browser, wasm_wasi)]
+fn wasm_only() -> i64 { 1 }
+
+fn main() {
+    println(platform_name());
+    println(f"{io_helper()}");
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["run", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "native-active gated items must run; stdout={stdout} stderr={stderr}",
+    );
+    assert_eq!(stdout, "native\n7\n");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Referencing a filtered item answers with the targeted diagnostic,
+/// not a bare undefined-name.
+#[test]
+fn target_attr_single_file_inactive_reference_diagnostic() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-target-neg-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("gated_ref.kara");
+    std::fs::write(
+        &path,
+        "#[target(wasm_browser)]\nstruct DomNode { id: i64 }\n\n\
+         fn main() {\n    let n = DomNode { id: 1 };\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("'DomNode' is not available on target `native`")
+            && stderr.contains("#[target(wasm_browser)]"),
+        "expected the targeted gating diagnostic, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}

@@ -121,6 +121,11 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     // GPU compute / shared types.
     "gpu",
     "cyclic",
+    // Phase-10 cross-target gating — `#[target(...)]` with the closed
+    // v1 name set (`src/target.rs::V1_TARGETS`). Argument-shape and
+    // name-set validation is parse-level (`parser/attributes.rs`);
+    // absence semantics live in `target::filter_inactive_items`.
+    "target",
     // Portable SIMD — `#[require_simd]` on a function makes scalar
     // fallback for any `Vector[T, N]` op in its body a hard build error
     // (phase-7-codegen.md line 308). Read by `simd_report::require_simd_errors`;

@@ -10235,3 +10235,72 @@ fn host_is_contextual_not_reserved() {
         "item-position host fn must still parse",
     );
 }
+
+// ── Phase-10: `#[target(...)]` attribute validation ─────────────
+
+#[test]
+fn target_attr_valid_forms_parse_clean() {
+    parse_ok(
+        "#[target(native)]\nfn a() {}\n\
+         #[target(wasm_browser, wasm_wasi)]\nfn b() {}\n\
+         #[target(not(gpu))]\nfn c() {}\n\
+         #[target(not(wasm_browser), not(wasm_wasi))]\nfn d() {}\n\
+         fn main() {}\n",
+    );
+}
+
+#[test]
+fn target_attr_unknown_name_rejected_with_closed_set() {
+    let (_, errs) = parse_with_errors("#[target(webasm)]\nfn f() {}\nfn main() {}\n");
+    assert!(
+        errs.iter().any(|e| {
+            let m = e.to_string();
+            m.contains("unknown target `webasm`")
+                && m.contains("native, wasm_browser, wasm_wasi, gpu")
+        }),
+        "expected closed-set diagnostic: {errs:?}",
+    );
+}
+
+#[test]
+fn target_attr_unknown_name_inside_not_rejected() {
+    let (_, errs) = parse_with_errors("#[target(not(webasm))]\nfn f() {}\nfn main() {}\n");
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("unknown target `webasm`")),
+        "not(...) names must be validated too: {errs:?}",
+    );
+}
+
+#[test]
+fn target_attr_mixed_positive_negative_rejected() {
+    let (_, errs) = parse_with_errors("#[target(native, not(gpu))]\nfn f() {}\nfn main() {}\n");
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("cannot mix positive and negated")),
+        "mixed lists have no defined semantics: {errs:?}",
+    );
+}
+
+#[test]
+fn target_attr_duplicates_rejected_with_merge_guidance() {
+    let (_, errs) =
+        parse_with_errors("#[target(native)]\n#[target(gpu)]\nfn f() {}\nfn main() {}\n");
+    assert!(
+        errs.iter().any(|e| {
+            let m = e.to_string();
+            m.contains("multiple `#[target(...)]` attributes") && m.contains("merge")
+        }),
+        "duplicate target attrs must suggest merging: {errs:?}",
+    );
+}
+
+#[test]
+fn target_attr_empty_args_rejected() {
+    let (_, errs) = parse_with_errors("#[target()]\nfn f() {}\nfn main() {}\n");
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("needs at least one target name")),
+        "{errs:?}",
+    );
+}
