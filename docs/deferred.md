@@ -109,6 +109,10 @@ fn transfer(amount: i64, from: Account, to: Account) -> Result[Receipt, Error]
 - Mutual tail recursion is not covered — direct self-calls only.
 - GPU and `embedded` profiles forbid recursion entirely; `#[tailrec]` is not valid in those profiles.
 
+**Relationship to the reserved `become` keyword.** `design.md § Reserved-for-Future-Use Keywords` reserves `become` as a tail-call *return form* (call-site syntax), and the lexer already rejects it as an identifier (phase-4 tracker, v60 reservation slice). When this entry is picked up, decide whether the surface is the fn-level `#[tailrec]` attribute specced above, call-site `become f(args)`, or both (attribute = verification scope, `become` = per-site marker); the keyword reservation keeps every option open without a source break.
+
+**Natural-pull trigger.** [`kara-katas leetcode/1-100/21-merge-two-sorted-lists/recursive.kara`](../../kara-katas/leetcode/1-100/21-merge-two-sorted-lists/recursive.kara) lines 21–24 — the corpus's standing "Kāra does not yet guarantee TCO" citation (its README § Kāra features exercised cross-references this entry). Honest framing: that kata's merge shape is *not* tail-recursive as written (the recursive call's result feeds a field store before `Some(node)` returns), so the validation workload for this entry is its accumulator-style rewrite — or any future kata whose recursion depth is a real constraint rather than LeetCode's ≤50-node bound. No corpus workload is currently blocked on TCO; that is why this stays deferred.
+
 ---
 
 ### Opt-in Release-Mode Contract Checks

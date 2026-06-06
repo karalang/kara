@@ -2511,13 +2511,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     //     (`rhs_yields_fresh_ref` is true): the RHS
                     //     materializes a +1 transfer, distinct slot.
                     //
-                    // Vec[Vec[T]] / Vec[String] elements get their inner
-                    // buffers freed too — `emit_free_vec_buffer_if_owned`
-                    // takes the registered elem_ty and does the
-                    // recursive-drop walk inline. Without this, kata-17's
-                    // K=100k Letter-Combinations workload retains 38.5
-                    // MiB peak RSS instead of plateauing at the C/Rust
-                    // working-set baseline of 1.3 MiB.
+                    // OUTER buffer only — `emit_free_vec_buffer_if_owned`
+                    // deliberately does NOT walk inner heap-owning
+                    // elements (see its doc comment: a live per-element
+                    // alias's own scope-exit cleanup would double-free).
+                    // Without this eager outer free, kata-17's K=100k
+                    // Letter-Combinations workload retains 38.5 MiB peak
+                    // RSS instead of plateauing at the C/Rust working-set
+                    // baseline of 1.3 MiB. Inner elements of the replaced
+                    // generation still leak unless the program drains
+                    // them via per-element alias bindings (kata-17's
+                    // `let prefix = out[i]` pattern) — measured 2026-06-06
+                    // at ~15.7 MiB for the binding-free kata-17 variant;
+                    // tracked in phase-7-codegen.md § "Move-overwrite
+                    // inner-element drop".
                     let lhs_is_tracked_vec = self.vec_elem_types.contains_key(name.as_str());
                     let rhs_is_self_alias = matches!(
                         &value.kind,
