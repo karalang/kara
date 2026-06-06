@@ -81,7 +81,7 @@ mod parallax_bench_tests {
         }
         karac::lower(&mut parsed.program, &typed);
         let effects = karac::effectcheck(&parsed.program);
-        let _ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
         let analysis = karac::concurrency_analyze(&parsed.program, &effects);
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
@@ -89,8 +89,15 @@ mod parallax_bench_tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let obj = format!("/tmp/karac_bench_smoke_{pid}_{nanos}.o");
-        compile_to_object_with_options(&parsed.program, &obj, None, Some(&analysis), None, None)
-            .map_err(|e| format!("codegen failed: {e}"))?;
+        compile_to_object_with_options(
+            &parsed.program,
+            &obj,
+            Some(&ownership),
+            Some(&analysis),
+            None,
+            None,
+        )
+        .map_err(|e| format!("codegen failed: {e}"))?;
         link_executable(&obj, exe_path.to_str().unwrap())
             .map_err(|e| format!("link failed: {e}"))?;
         let _ = std::fs::remove_file(&obj);

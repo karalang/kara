@@ -497,12 +497,13 @@ mod runtime_confirmation {
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_safety_design_{}_{}.o", std::process::id(), id);
         let exe_path = format!("/tmp/karac_safety_design_{}_{}", std::process::id(), id);
 
-        if let Err(e) = compile_to_object(&parsed.program, &obj_path, None, None) {
+        if let Err(e) = compile_to_object(&parsed.program, &obj_path, Some(&ownership), None) {
             eprintln!("[{label}] compile_to_object failed: {e} — skipping");
             return;
         }

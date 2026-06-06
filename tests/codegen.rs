@@ -708,6 +708,17 @@ fn main() {
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
+        // Ownership-loaded by default — `karac build` (cli.rs) always
+        // passes `pipeline.ownership` to codegen, so a harness that
+        // passes `None` leaves the entire RC-fallback boxing surface
+        // (`is_rc_fallback_binding` / `rc_fallback_heap_types`) dead
+        // across the suite and systematically diverges from shipped
+        // binaries on exactly the bindings the ownership checker flags.
+        // That blind spot hid the Option[shared] RC-fallback boxing
+        // collision (b027fc15 bug 3): every real build of the
+        // prepend-builder shape segfaulted while 1100+ E2E tests stayed
+        // green. The suite tests what ships.
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
 
         // W3.3 — LLJIT dispatch under env-var control. Routes the whole
         // 543-test E2E suite through `LLJITEngine` instead of the AOT
@@ -728,9 +739,14 @@ fn main() {
         // the test program) — surface them loudly. Link and exec failures
         // stay as soft-skip because they can fire in environments that
         // lack libkarac_runtime.a or a working linker.
-        if let Err(e) =
-            compile_to_object_with_options(&parsed.program, &obj_path, None, None, filename, None)
-        {
+        if let Err(e) = compile_to_object_with_options(
+            &parsed.program,
+            &obj_path,
+            Some(&ownership),
+            None,
+            filename,
+            None,
+        ) {
             panic!("codegen failed for test program: {}", e);
         }
         link_executable(&obj_path, &exe_path).ok()?;
@@ -815,41 +831,14 @@ fn main() {
         })
     }
 
-    /// Like `run_program` but also runs the ownership checker and passes the
-    /// result to codegen so RC-fallback boxing is exercised.
+    /// Historical alias from when the default harness passed
+    /// `ownership: None`. `run_program` is ownership-loaded now (see
+    /// `run_program_capturing_inner`), so this just delegates — kept so
+    /// the tests written against the split read unchanged and the name
+    /// keeps documenting *why* those tests exist (they exercise
+    /// RC-fallback-flagged shapes).
     fn run_program_with_ownership(src: &str) -> Option<String> {
-        use karac::codegen::{compile_to_object, link_executable};
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-        let mut parsed = karac::parse(src);
-        if !parsed.errors.is_empty() {
-            let mut msg = String::from("test source failed to parse:\n");
-            for e in &parsed.errors {
-                msg.push_str(&format!("  {:?}\n", e));
-            }
-            panic!("{}", msg);
-        }
-        let resolved = karac::resolve(&parsed.program);
-        let typed = karac::typecheck(&parsed.program, &resolved);
-        karac::lower(&mut parsed.program, &typed);
-        let ownership = karac::ownershipcheck(&parsed.program, &typed);
-
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let obj_path = format!("/tmp/karac_e2e_ow_{}_{}.o", std::process::id(), id);
-        let exe_path = format!("/tmp/karac_e2e_ow_{}_{}", std::process::id(), id);
-
-        if let Err(e) = compile_to_object(&parsed.program, &obj_path, Some(&ownership), None) {
-            panic!("codegen failed for test program: {}", e);
-        }
-        link_executable(&obj_path, &exe_path).ok()?;
-
-        let output = output_with_hang_watchdog(std::process::Command::new(&exe_path))?;
-
-        let _ = std::fs::remove_file(&obj_path);
-        let _ = std::fs::remove_file(&exe_path);
-
-        Some(String::from_utf8_lossy(&output.stdout).to_string())
+        run_program(src)
     }
 
     #[test]
@@ -3157,10 +3146,11 @@ fn main() {
     // "Disjoint closure capture" slice 4: when the ownership pass
     // supplies per-path capture modes, `compile_closure` lays the env
     // struct out with one slot per captured `CapturePath` instead of one
-    // slot per captured root binding. `run_program_with_ownership` /
-    // `ir_for_with_ownership` are required — the plain `run_program` /
-    // `ir_for` helpers pass `None` for ownership and fall through to the
-    // per-name layout, which leaves slice-4 untested.
+    // slot per captured root binding. `run_program` is ownership-loaded
+    // (so the per-path layout is the default-exercised one); the IR
+    // inspections still need `ir_for_with_ownership` — the plain
+    // `ir_for` passes `None` for ownership and falls through to the
+    // per-name layout.
 
     #[test]
     fn test_e2e_disjoint_field_capture_returns_leaf_value() {
@@ -10471,14 +10461,21 @@ fn main() {
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
+        // Ownership-loaded, same rationale as `run_program_capturing_inner`.
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_e2e_envtrace_{}_{}.o", std::process::id(), id);
         let exe_path = format!("/tmp/karac_e2e_envtrace_{}_{}", std::process::id(), id);
 
-        if let Err(e) =
-            compile_to_object_with_options(&parsed.program, &obj_path, None, None, filename, None)
-        {
+        if let Err(e) = compile_to_object_with_options(
+            &parsed.program,
+            &obj_path,
+            Some(&ownership),
+            None,
+            filename,
+            None,
+        ) {
             panic!("codegen failed for test program: {}", e);
         }
         link_executable(&obj_path, &exe_path).ok()?;

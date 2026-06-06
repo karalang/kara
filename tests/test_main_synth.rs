@@ -58,14 +58,20 @@ fn build_and_run_test_fn_with_fixtures(
     let resolved = karac::resolve(&parsed.program);
     let typed = karac::typecheck(&parsed.program, &resolved);
     karac::lower(&mut parsed.program, &typed);
+    let ownership = karac::ownershipcheck(&parsed.program, &typed);
 
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     let obj_path = format!("/tmp/karac_synth_{}_{}.o", std::process::id(), id);
     let exe_path = format!("/tmp/karac_synth_{}_{}", std::process::id(), id);
 
-    if let Err(e) =
-        compile_to_object_with_options(&parsed.program, &obj_path, None, None, None, None)
-    {
+    if let Err(e) = compile_to_object_with_options(
+        &parsed.program,
+        &obj_path,
+        Some(&ownership),
+        None,
+        None,
+        None,
+    ) {
         panic!("codegen failed: {}", e);
     }
     link_executable(&obj_path, &exe_path).ok()?;

@@ -1681,12 +1681,20 @@ fn main() {
         karac::lower(&mut parsed.program, &typed);
         let effects = karac::effectcheck(&parsed.program);
         let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
         let obj = format!("/tmp/karac_bug3_{pid}_{id}.o");
         let exe = format!("/tmp/karac_bug3_{pid}_{id}");
-        compile_to_object_with_options(&parsed.program, &obj, None, Some(&analysis), None, None)
-            .unwrap();
+        compile_to_object_with_options(
+            &parsed.program,
+            &obj,
+            Some(&ownership),
+            Some(&analysis),
+            None,
+            None,
+        )
+        .unwrap();
         link_executable(&obj, &exe).unwrap();
         let out = super::common::output_with_hang_watchdog(
             std::process::Command::new(&exe),

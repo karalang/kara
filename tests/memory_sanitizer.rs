@@ -70,12 +70,18 @@ mod memory_sanitizer_tests {
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
+        // Ownership-loaded by default, mirroring `tests/codegen.rs`'s
+        // `run_program`: `karac build` always passes ownership, and a
+        // `None` here leaves the RC-fallback boxing surface untested —
+        // exactly the divergence that hid the Option[shared] boxing
+        // collision (b027fc15 bug 3) from the whole ASAN corpus.
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_asan_{}_{}.o", std::process::id(), id);
         let exe_path = format!("/tmp/karac_asan_{}_{}", std::process::id(), id);
 
-        if let Err(e) = compile_to_object(&parsed.program, &obj_path, None, None) {
+        if let Err(e) = compile_to_object(&parsed.program, &obj_path, Some(&ownership), None) {
             eprintln!("[{label}] compile_to_object failed: {e}");
             return None;
         }

@@ -128,14 +128,14 @@ mod park_and_wake_tests {
         }
         karac::lower(&mut parsed.program, &typed);
         let _effects = karac::effectcheck(&parsed.program);
-        let _ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let obj = format!("/tmp/karac_park_e2e_{pid}_{nanos}.o");
-        compile_to_object_with_options(&parsed.program, &obj, None, None, None, None)
+        compile_to_object_with_options(&parsed.program, &obj, Some(&ownership), None, None, None)
             .map_err(|e| format!("codegen failed: {e}"))?;
         link_executable(&obj, exe_path.to_str().unwrap())
             .map_err(|e| format!("link failed: {e}"))?;

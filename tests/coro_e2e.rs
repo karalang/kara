@@ -421,7 +421,7 @@ mod tests {
         parsed.program.callee_purely_polymorphic_effects =
             build_callee_purely_polymorphic_effects_set(&effects);
 
-        let _ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
 
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
@@ -429,7 +429,7 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let obj = format!("/tmp/karac_coro_e2e_{pid}_{nanos}.o");
-        compile_to_object_with_coro(&parsed.program, &obj, None, None)
+        compile_to_object_with_coro(&parsed.program, &obj, Some(&ownership), None)
             .map_err(|e| format!("codegen failed: {e}"))?;
         let link_res = match sanitizer {
             Some(flags) => link_executable_with_sanitizer(&obj, exe_path.to_str().unwrap(), flags),
