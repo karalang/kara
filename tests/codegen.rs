@@ -4239,8 +4239,10 @@ fn main() {
     // field-niche/call-ABI asymmetry and skipping the sret round-trip per
     // call. Bodies stay on the conventional shape: entry unpacks params,
     // return sites pack, `compile_call` packs args / unpacks results.
-    // Impl methods, closures, generic monos, and coroutine ramps keep the
-    // conventional ABI (no `fn_niche_abi` entry).
+    // The method extension widened eligibility to impl methods — the
+    // `usercall`/`usermethod`/provider-vtable call paths pack/unpack via
+    // the shared helpers. Closures, generic monos, and coroutine ramps
+    // keep the conventional ABI (no `fn_niche_abi` entry).
 
     #[test]
     fn test_ir_option_shared_niche_abi_signature_shapes() {
@@ -4289,11 +4291,15 @@ fn main() {
             ir.contains("@opt_i64({ i64, i64, i64, i64 }"),
             "Option[i64] param must stay conventional; IR:\n{ir}"
         );
-        // Impl methods are excluded this slice (provider-vtable arg
-        // paths don't pack yet) — conventional struct return.
+        // Impl methods are niche-shaped too (method extension): `ref
+        // self` lowers to ptr, the Option return to a nullable ptr.
         assert!(
-            ir.contains("define internal { i64, i64, i64, i64 } @ListNode.step"),
-            "impl method must keep the conventional Option return; IR:\n{ir}"
+            ir.contains("define internal ptr @ListNode.step(ptr"),
+            "impl method should be niche-shaped (ptr self -> ptr ret); IR:\n{ir}"
+        );
+        assert!(
+            !ir.contains("define internal { i64, i64, i64, i64 } @ListNode.step"),
+            "impl method must not keep the conventional Option return; IR:\n{ir}"
         );
     }
 
@@ -4518,6 +4524,302 @@ fn main() {
         );
         if let Some(out) = out {
             assert_eq!(out.trim(), "9");
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_shared_niche_method_args_and_reuse() {
+        // Method niche-ABI extension: `Option[shared T]` params/returns
+        // on instance methods (`usermethod` path). Also pins the
+        // arg-share discipline this slice ADDED to the method arg loops
+        // — passing the same tracked binding twice (`m.total(chain)`
+        // twice) read freed memory before, because the method paths
+        // lacked `compile_call`'s `share_option_shared_ref_for_arg`
+        // (pre-existing on the conventional ABI; surfaced by this
+        // slice's probes, 2026-06-05).
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+shared struct Merger { count: i64 }
+impl Merger {
+    fn total(ref self, head: Option[ListNode]) -> i64 {
+        let mut t = 0;
+        let mut cur = head;
+        while cur.is_some() {
+            let n = cur.unwrap();
+            t = t + n.val;
+            cur = n.next;
+        }
+        t
+    }
+    fn first_or_make(ref self, head: Option[ListNode]) -> Option[ListNode] {
+        if head.is_some() {
+            return head;
+        }
+        Some(ListNode { val: 99, next: None })
+    }
+}
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut t = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let n = cur.unwrap();
+        t = t + n.val;
+        cur = n.next;
+    }
+    t
+}
+fn main() {
+    let m = Merger { count: 0 };
+    let chain = make(3);
+    println(m.total(chain));
+    println(m.total(chain));
+    println(m.total(make(4)));
+    let got = m.first_or_make(make(2));
+    println(sum(got));
+    let fresh = m.first_or_make(None);
+    println(sum(fresh));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "6\n6\n10\n3\n99");
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_shared_niche_assoc_static() {
+        // Static associated fns (`Type.method(...)`, the `usercall`
+        // path) with `Option[shared T]` params/returns — binding reuse,
+        // explicit-return alias, and a fully chained
+        // `total(tail_of(build(...)))` through three niche boundaries.
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+impl ListNode {
+    fn build(n: i64) -> Option[ListNode] {
+        let mut head: Option[ListNode] = None;
+        let mut i = n;
+        while i > 0 {
+            let node = ListNode { val: i, next: head };
+            head = Some(node);
+            i = i - 1;
+        }
+        head
+    }
+    fn total(head: Option[ListNode]) -> i64 {
+        let mut t = 0;
+        let mut cur = head;
+        while cur.is_some() {
+            let n = cur.unwrap();
+            t = t + n.val;
+            cur = n.next;
+        }
+        t
+    }
+    fn tail_of(head: Option[ListNode]) -> Option[ListNode] {
+        if head.is_some() {
+            let n = head.unwrap();
+            return n.next;
+        }
+        None
+    }
+}
+fn main() {
+    let chain = ListNode.build(4);
+    println(ListNode.total(chain));
+    println(ListNode.total(chain));
+    let rest = ListNode.tail_of(chain);
+    println(ListNode.total(rest));
+    println(ListNode.total(ListNode.tail_of(ListNode.build(3))));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "10\n10\n9\n5");
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_shared_ref_self_tail_field_not_zeroed() {
+        // `fn step(ref self) -> Option[ListNode] { self.next }` — a tail
+        // field return rooted at a BORROWED receiver. Two fixes pinned:
+        //   1. The move-out tail zeroing (`suppress_tail_field_option_dec`,
+        //      the kata-#2 `dummy.next` mechanism) must NOT run for ref
+        //      roots — it both severed the caller's list semantically
+        //      AND miscompiled the address (wrote null through the
+        //      un-deref'd ref-param slot into the caller's stack frame).
+        //   2. The returned alias gets its +1 from the new ref-rooted
+        //      FieldAccess arm in `compile_tail_final_expr` instead.
+        // `chain` is summed AFTER the step() call to prove the caller's
+        // list is intact (pre-fix: stack corruption / severed chain).
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+impl ListNode {
+    fn step(ref self) -> Option[ListNode] { self.next }
+}
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut t = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let n = cur.unwrap();
+        t = t + n.val;
+        cur = n.next;
+    }
+    t
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 64 {
+        let chain = make(8);
+        let node = chain.unwrap();
+        let stepped = node.step();
+        total = total + sum(stepped);
+        total = total + sum(chain);
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // per iter: sum(stepped)=2..8=35, sum(chain)=1..8=36 → 71×64
+            assert_eq!(out.trim(), "4544");
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_shared_field_let_alias_acquires_ref() {
+        // `let stepped = node.next;` — an Identifier-object
+        // `Option[shared T]` field read bound by an untyped let. The
+        // case-(c) registration queued the binding's scope-exit
+        // `RcDecOption` but nothing inc'd the loaded inner — stepped's
+        // dec freed the sub-chain the field still owned and the owner's
+        // drop walked freed memory. LATENT on main since case (c)
+        // landed (the freed chunk's garbage rc-word usually stops the
+        // walk silently); the niche-ABI allocation-pattern shift made
+        // it trap deterministically (v0c repro, 2026-06-05). The
+        // binding now takes the same aliasing-acquire +1 as case (d).
+        // Free fns only — pins the fix independent of the method
+        // extension.
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut t = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let n = cur.unwrap();
+        t = t + n.val;
+        cur = n.next;
+    }
+    t
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 64 {
+        let chain = build(8);
+        let node = chain.unwrap();
+        let stepped = node.next;
+        total = total + sum(stepped);
+        total = total + sum(chain);
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // per iter: sum(stepped)=2..8=35, sum(chain)=1..8=36 → 71×64
+            assert_eq!(out.trim(), "4544");
+        }
+    }
+
+    #[test]
+    fn test_e2e_with_provider_option_shared_resource_methods() {
+        // Provider-vtable dispatch (`with_provider`) with
+        // `Option[shared T]` in the resource methods' signatures. The
+        // indirect-call FunctionType comes from the registered impl fn
+        // (niche-shaped under the method extension), and the dispatch
+        // site packs args / unpacks results keyed by the same impl
+        // (`provider_method_fn_type`'s returned qualified name). Lets
+        // are annotated: untyped `let got = Store.lookup(1)` is a
+        // typechecker inference gap for resource calls (bugs.md), not a
+        // codegen one.
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+effect resource Store;
+struct FakeStore { n: i64 }
+impl FakeStore {
+    fn lookup(self, k: i64) -> Option[ListNode] {
+        if k == 1 {
+            return Some(ListNode { val: self.n, next: None });
+        }
+        None
+    }
+    fn passthru(self, h: Option[ListNode]) -> Option[ListNode] { h }
+}
+fn probe() -> i64 reads(Store) {
+    let got: Option[ListNode] = Store.lookup(1);
+    let missed: Option[ListNode] = Store.lookup(0);
+    let mut t = 0;
+    if got.is_some() {
+        let node = got.unwrap();
+        t = t + node.val;
+    }
+    if missed.is_none() {
+        t = t + 100;
+    }
+    let chain: Option[ListNode] = Store.passthru(got);
+    if chain.is_some() {
+        let node = chain.unwrap();
+        t = t + node.val;
+    }
+    t
+}
+fn main() reads(Store) {
+    with_provider[Store](FakeStore { n: 5 }, || {
+        println(probe());
+    });
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "110");
         }
     }
 

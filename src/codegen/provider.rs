@@ -781,7 +781,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // NOT recorded in `user_ambient_resource_methods`: it falls through
         // to the ambient FFI-default path (`compile_ambient_resource_method`)
         // via `Ok(None)` so an unoverridden call gets the builtin behaviour.
-        let (method_order, fn_type) =
+        let (method_order, (fn_type, impl_key)) =
             if let Some(trait_name) = self.provider_resource_traits.get(name).cloned() {
                 let order = self
                     .provider_trait_methods
@@ -932,8 +932,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![self_arg];
         for a in args {
             let v = self.compile_expr(&a.value)?;
+            // `Option[shared T]` arg-share discipline — same as the
+            // direct method-call paths (`usercall` / `usermethod`): the
+            // callee's param `RcDecOption` owns a dec, so an aliasing
+            // arg needs its own +1 here.
+            self.share_option_shared_ref_for_arg(&a.value);
+            self.share_option_shared_field_ref_for_arg(&a.value, v);
             call_args.push(BasicMetadataValueEnum::from(v));
         }
+        // Niche-ABI pack at the vtable boundary, keyed by the same impl
+        // fn that supplied `fn_type` — all impls of the trait method
+        // share the lowered signature, so its niche positions are
+        // representative of whichever override is active at runtime.
+        self.pack_niche_abi_args(&impl_key, &mut call_args);
 
         // 4. Indirect call through the loaded fn pointer.
         let call = self
@@ -947,7 +958,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // path handles unit-returning method calls.
             Ok(Some(self.context.i64_type().const_int(0, false).into()))
         } else {
-            Ok(Some(basic.unwrap_basic()))
+            Ok(Some(
+                self.unpack_niche_abi_ret(&impl_key, basic.unwrap_basic()),
+            ))
         }
     }
 
@@ -956,16 +969,51 @@ impl<'ctx> super::Codegen<'ctx> {
     /// is registered in `provider_vtables`. Returns `None` when no impl
     /// has been declared yet (which would mean the vtable couldn't have
     /// been emitted either — handled as a dispatch error by the caller).
+    /// Also returns the qualified `<U>.<method>` name the type was
+    /// recovered from, so the dispatch site can consult `fn_niche_abi`
+    /// for the same impl that shaped the indirect-call signature — all
+    /// impls of a trait method share the lowered signature (and therefore
+    /// the same niche positions), so any registered impl is
+    /// representative.
     pub(super) fn provider_method_fn_type(
         &self,
         trait_name: &str,
         method: &str,
-    ) -> Option<inkwell::types::FunctionType<'ctx>> {
+    ) -> Option<(inkwell::types::FunctionType<'ctx>, String)> {
         for (target, t) in self.provider_vtables.keys() {
             if t == trait_name {
                 let qualified = format!("{}.{}", target, method);
                 if let Some(f) = self.module.get_function(&qualified) {
-                    return Some(f.get_type());
+                    return Some((f.get_type(), qualified));
+                }
+            }
+        }
+        None
+    }
+
+    /// Representative impl key (`<U>.<method>`) for a provider-resource
+    /// method call (`Store.lookup` where `Store` is an `effect resource`).
+    /// Used by the let-stmt `Option[shared T]` registration to look up
+    /// `fn_return_option_inner_shared` for a dispatch whose callee symbol
+    /// is indirect (the vtable) rather than a declared LLVM fn. Trait-ful
+    /// resources resolve through their trait name; trait-less user
+    /// resources use the resource name as the vtable's trait key — same
+    /// fallback `try_compile_provider_dispatch` applies. All impls share
+    /// the lowered signature, so any registered one is representative.
+    pub(super) fn provider_method_impl_key(&self, resource: &str, method: &str) -> Option<String> {
+        if !self.provider_resource_ids.contains_key(resource) {
+            return None;
+        }
+        let trait_key = self
+            .provider_resource_traits
+            .get(resource)
+            .cloned()
+            .unwrap_or_else(|| resource.to_string());
+        for (target, t) in self.provider_vtables.keys() {
+            if *t == trait_key {
+                let qualified = format!("{}.{}", target, method);
+                if self.module.get_function(&qualified).is_some() {
+                    return Some(qualified);
                 }
             }
         }

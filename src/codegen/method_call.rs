@@ -1298,8 +1298,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![receiver_arg];
                 for a in args {
-                    compiled_args.push(self.compile_expr(&a.value)?.into());
+                    let val = self.compile_expr(&a.value)?;
+                    // `Option[shared T]` arg-share discipline — mirrors
+                    // the free-fn call path in `compile_call`: a tracked
+                    // Identifier binding gets a tag+null-guarded inner
+                    // inc so the callee receives an independent +1 (its
+                    // param `RcDecOption` decs at exit; the caller's
+                    // binding keeps its own +1 for its scope-exit dec);
+                    // a FieldAccess arg reading an `Option[shared T]`
+                    // field gets the loaded inner inc'd. Without these,
+                    // reusing a binding after passing it — `m.total(c);
+                    // m.total(c)` — read freed memory (2026-06-05 probe,
+                    // pre-existing on the conventional ABI).
+                    self.share_option_shared_ref_for_arg(&a.value);
+                    self.share_option_shared_field_ref_for_arg(&a.value, val);
+                    compiled_args.push(val.into());
                 }
+                // Niche-ABI pack/unpack at the `obj.method(...)` boundary
+                // — the receiver occupies position 0 (`self`, never an
+                // Option, never a niche position) so source args line up
+                // with declared params 1..N.
+                self.pack_niche_abi_args(&qualified, &mut compiled_args);
                 let call_site = self
                     .builder
                     .build_call(fn_val, &compiled_args, "usermethod")
@@ -1310,7 +1329,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // expression slot with const-0 i64. NOT a dispatch fall-through.
                     Ok(self.context.i64_type().const_int(0, false).into())
                 } else {
-                    Ok(basic_val.unwrap_basic())
+                    Ok(self.unpack_niche_abi_ret(&qualified, basic_val.unwrap_basic()))
                 };
             }
         }

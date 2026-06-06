@@ -94,16 +94,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .collect();
 
         // Niche call ABI for `Option[shared T]` signature positions
-        // (wip-shared-struct-codegen-followups Slice 1): pass/return a
-        // single nullable `ptr` (null = None) instead of the 4-i64 Option
-        // enum struct, mirroring the field-niche layout so the type is
-        // pointer-shaped on both sides of the call boundary. Scope is
-        // deliberately free user fns only this slice:
-        //   - impl methods (dotted names) are excluded until the
-        //     `usercall`/`usermethod`/provider-vtable arg paths learn to
-        //     pack — the with_provider indirect dispatch compiles args
-        //     against hand-coerced shapes and would silently mismatch a
-        //     niche-shaped impl fn.
+        // (wip-shared-struct-codegen-followups Slice 1 + method
+        // extension): pass/return a single nullable `ptr` (null = None)
+        // instead of the 4-i64 Option enum struct, mirroring the
+        // field-niche layout so the type is pointer-shaped on both sides
+        // of the call boundary. Applies to free user fns AND impl
+        // methods (dotted names) — every method call surface packs/
+        // unpacks via the shared helpers (`pack_niche_abi_args` /
+        // `unpack_niche_abi_ret`): `usercall` (assoc_call.rs),
+        // `usermethod` (method_call.rs; the calls.rs receiver variants
+        // route through it), and the provider-vtable dispatch
+        // (provider.rs — its indirect-call FunctionType already comes
+        // from a declared impl fn via `provider_method_fn_type`, so a
+        // niche-shaped impl flows through the vtable type-consistently;
+        // ambient builtin resources have fixed scalar signatures that
+        // never qualify). Still excluded:
         //   - coroutine ramps keep their own `ptr`-handle convention.
         //   - generic fns never reach this path (monomorphized
         //     signatures are declared in `declare_mono_function`).
@@ -113,7 +118,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`option_inner_shared_type_for_type_expr`) so the two niche
         // surfaces stay in sync. The record lands in `fn_niche_abi`;
         // every pack/unpack site keys off that map.
-        let niche_eligible = !func.name.contains('.') && !self.is_coroutine_compiled(&func.name);
+        let niche_eligible = !self.is_coroutine_compiled(&func.name);
         let niche_params: Vec<bool> = func
             .params
             .iter()

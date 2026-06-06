@@ -93,6 +93,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.share_option_shared_ref_for_arg(expr);
                 Ok(v)
             }
+            // Tail field return rooted at a BORROWED object (`ref self` /
+            // `ref T` param): `fn step(ref self) -> Option[T] { self.next }`.
+            // The object belongs to the caller, so the move-out zeroing
+            // (`suppress_tail_field_option_dec`) must not run — it is
+            // skipped for ref roots — and the returned alias instead
+            // needs its own +1: the loaded inner inc here, balanced by
+            // whatever ownership the caller registers for the result.
+            // Owned-local roots (`dummy.next`, the kata-#2 shape) keep
+            // the zeroing path: their object dies with this frame, so
+            // the field's ref transfers wholesale. (2026-06-05, the
+            // niche-ABI method extension's `step` repro — the zeroing
+            // previously ALSO miscompiled ref roots by writing through
+            // the un-deref'd param slot into the caller's stack.)
+            ExprKind::FieldAccess { object, .. }
+                if match &object.kind {
+                    ExprKind::Identifier(n) => self.ref_params.contains_key(n.as_str()),
+                    ExprKind::SelfValue => self.ref_params.contains_key("self"),
+                    _ => false,
+                } =>
+            {
+                let v = self.compile_expr(expr)?;
+                self.share_option_shared_field_ref_for_arg(expr, v);
+                Ok(v)
+            }
             _ => self.compile_expr(expr),
         }
     }
@@ -1252,23 +1276,64 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let _ = inner_name;
                             }
                         }
-                        // (b) Untyped let with a free-fn call RHS whose
+                        // (b) Untyped let with a call-shaped RHS whose
                         //     return type is `Option[shared T]`. The
                         //     declare_function pass recorded the inner
-                        //     shared name in `fn_return_option_inner_shared`.
+                        //     shared name in `fn_return_option_inner_shared`
+                        //     (keyed by LLVM symbol: bare name for free
+                        //     fns, `Type.method` for impl methods).
+                        //     Covered shapes (extended 2026-06-05 for the
+                        //     niche-ABI method slice — previously
+                        //     free-fn-Identifier only, which left
+                        //     `let entry = cache.lookup(k)`-style bindings
+                        //     unregistered: `is_some`/`unwrap` dispatch
+                        //     fell through and no `RcDecOption` was
+                        //     queued):
+                        //       - `f(...)`            → key `f`
+                        //       - `Type.assoc(...)`   → key `Type.assoc`
+                        //       - `Resource.m(...)`   → representative
+                        //         impl key via `provider_method_impl_key`
+                        //         (the callee symbol is a vtable slot,
+                        //         not a declared fn)
+                        //       - `obj.method(...)`   → key
+                        //         `<receiver type>.method` via
+                        //         `inferred_receiver_type` (builtin
+                        //         receivers like Vec/Map produce keys
+                        //         absent from the map — no false
+                        //         positives)
                         if shared_option_info.is_none() {
-                            if let ExprKind::Call { callee, .. } = &value.kind {
-                                if let ExprKind::Identifier(fn_name) = &callee.kind {
-                                    if let Some(inner_name) = self
-                                        .fn_return_option_inner_shared
-                                        .get(fn_name.as_str())
-                                        .cloned()
-                                    {
-                                        if let Some(info) =
-                                            self.shared_types.get(inner_name.as_str()).cloned()
+                            let callee_key: Option<String> = match &value.kind {
+                                ExprKind::Call { callee, .. } => match &callee.kind {
+                                    ExprKind::Identifier(fn_name) => Some(fn_name.clone()),
+                                    ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                                        let direct = format!("{}.{}", segments[0], segments[1]);
+                                        if self.fn_return_option_inner_shared.contains_key(&direct)
                                         {
-                                            shared_option_info = Some((var_name.clone(), info));
+                                            Some(direct)
+                                        } else {
+                                            self.provider_method_impl_key(
+                                                &segments[0],
+                                                &segments[1],
+                                            )
                                         }
+                                    }
+                                    _ => None,
+                                },
+                                ExprKind::MethodCall { object, method, .. } => self
+                                    .inferred_receiver_type(object)
+                                    .map(|t| format!("{}.{}", t, method)),
+                                _ => None,
+                            };
+                            if let Some(key) = callee_key {
+                                if let Some(inner_name) = self
+                                    .fn_return_option_inner_shared
+                                    .get(key.as_str())
+                                    .cloned()
+                                {
+                                    if let Some(info) =
+                                        self.shared_types.get(inner_name.as_str()).cloned()
+                                    {
+                                        shared_option_info = Some((var_name.clone(), info));
                                     }
                                 }
                             }
@@ -1297,9 +1362,30 @@ impl<'ctx> super::Codegen<'ctx> {
                         //     forever, one per iteration leak.
                         if shared_option_info.is_none() {
                             if let ExprKind::FieldAccess { object, field } = &value.kind {
-                                let obj_type_name: Option<String> = self
-                                    .shared_type_for_call_like(object)
-                                    .map(|(n, _)| n)
+                                let call_like_name: Option<String> =
+                                    self.shared_type_for_call_like(object).map(|(n, _)| n);
+                                // Identifier/self-bound object (vs call-like):
+                                // the field read is a bare load — the
+                                // call-chain branch of `compile_field_access`
+                                // emits its own balancing inc for call-like
+                                // objects, but the binding-object read does
+                                // NOT. The new binding is a second owner of
+                                // the field's chain, so flag the same
+                                // aliasing-acquire inner inc case (d) uses;
+                                // the queued `RcDecOption` balances it.
+                                // Without this, `let stepped = node.next;`
+                                // queued an unbalanced dec: stepped's
+                                // scope-exit dec freed the sub-chain the
+                                // field still owned, and the owner's later
+                                // drop walked freed memory — a LATENT
+                                // double-free on main since case (c) landed,
+                                // masked because the freed chunk's garbage
+                                // rc-word usually stops the walk; the
+                                // niche-ABI slice's allocation-pattern shift
+                                // made it trap deterministically (v0c repro,
+                                // 2026-06-05).
+                                let via_binding = call_like_name.is_none();
+                                let obj_type_name: Option<String> = call_like_name
                                     .or_else(|| self.shared_type_for_expr(object).map(|(n, _)| n));
                                 if let Some(type_name) = obj_type_name {
                                     if let Some(idx) = self
@@ -1317,6 +1403,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                                 .option_inner_shared_type_for_type_expr(&field_te)
                                             {
                                                 shared_option_info = Some((var_name.clone(), info));
+                                                if via_binding {
+                                                    option_alias_needs_inner_inc = true;
+                                                }
                                             }
                                         }
                                     }

@@ -898,29 +898,11 @@ impl<'ctx> super::Codegen<'ctx> {
             compiled_args.push(BasicMetadataValueEnum::from(val));
         }
 
-        // Niche-ABI arg pack: positions the callee declares as a nullable
-        // ptr (`Option[shared T]` under `fn_niche_abi`) receive the packed
-        // pointer instead of the conventional 4-i64 Option struct. Runs
-        // AFTER the arg loop so the refcount bookkeeping above
+        // Niche-ABI arg pack — see `pack_niche_abi_args`. Runs AFTER the
+        // arg loop so the refcount bookkeeping above
         // (`share_option_shared_ref_for_arg` & co.) operated on the
-        // conventional shape; the pack is value-only and count-neutral —
-        // the callee's +1 travels through the pointer unchanged. Positions
-        // are 1:1 with `args` (ref/slice fast-paths push exactly one entry
-        // per arg, and niche positions are owned `Path` params which never
-        // take those paths).
-        if let Some(abi) = self.fn_niche_abi.get(&name).cloned() {
-            for (i, is_niche) in abi.params.iter().enumerate() {
-                if !is_niche {
-                    continue;
-                }
-                if let Some(slot) = compiled_args.get_mut(i) {
-                    if let BasicMetadataValueEnum::StructValue(sv) = *slot {
-                        let packed = self.option_value_to_niche_ptr(sv.into());
-                        *slot = packed.into();
-                    }
-                }
-            }
-        }
+        // conventional shape.
+        self.pack_niche_abi_args(&name, &mut compiled_args);
 
         // Phase-7 line 5 sub-item 1 — hot-swap indirect dispatch.
         // For callees registered in `hot_swap_slots`, lower the call as
@@ -944,18 +926,61 @@ impl<'ctx> super::Codegen<'ctx> {
         if basic_val.is_instruction() {
             Ok(self.context.i64_type().const_int(0, false).into())
         } else {
-            let v = basic_val.unwrap_basic();
-            // Niche-ABI result unpack: a callee returning `Option[shared T]`
-            // as a nullable ptr is rebuilt into the conventional 4-i64
-            // Option struct here, so every downstream consumer (let-binding
-            // RcDecOption registration via `fn_return_option_inner_shared`,
-            // pattern matches, `?`, re-returns) is shape-blind to the ABI.
-            if self.fn_niche_abi.get(&name).is_some_and(|abi| abi.ret) {
-                let unpacked = self.niche_ptr_to_option_value(v.into_pointer_value(), "call.niche");
-                return Ok(unpacked);
-            }
-            Ok(v)
+            Ok(self.unpack_niche_abi_ret(&name, basic_val.unwrap_basic()))
         }
+    }
+
+    /// Niche-ABI arg pack: positions the callee declares as a nullable
+    /// ptr (`Option[shared T]` under `fn_niche_abi`) receive the packed
+    /// pointer instead of the conventional 4-i64 Option struct. Must run
+    /// AFTER the caller's refcount bookkeeping
+    /// (`share_option_shared_ref_for_arg` & co.) so that operated on the
+    /// conventional shape; the pack is value-only and count-neutral —
+    /// the callee's +1 travels through the pointer unchanged. Positions
+    /// are 1:1 with the callee's declared params: free-fn call sites
+    /// push one entry per source arg, method sites push the receiver at
+    /// 0 (`self` — never an Option, so never a niche position) then the
+    /// source args. No-op for callees without a `fn_niche_abi` record
+    /// (closures, monos, builtins, extern decls).
+    pub(super) fn pack_niche_abi_args(
+        &self,
+        callee: &str,
+        compiled_args: &mut [BasicMetadataValueEnum<'ctx>],
+    ) {
+        let Some(abi) = self.fn_niche_abi.get(callee) else {
+            return;
+        };
+        let positions: Vec<usize> = abi
+            .params
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &n)| n.then_some(i))
+            .collect();
+        for i in positions {
+            if let Some(slot) = compiled_args.get_mut(i) {
+                if let BasicMetadataValueEnum::StructValue(sv) = *slot {
+                    let packed = self.option_value_to_niche_ptr(sv.into());
+                    *slot = packed.into();
+                }
+            }
+        }
+    }
+
+    /// Niche-ABI result unpack: a callee returning `Option[shared T]` as
+    /// a nullable ptr is rebuilt into the conventional 4-i64 Option
+    /// struct, so every downstream consumer (let-binding `RcDecOption`
+    /// registration via `fn_return_option_inner_shared`, pattern matches,
+    /// `?`, re-returns) is shape-blind to the ABI. Pass-through for
+    /// callees without a niche return.
+    pub(super) fn unpack_niche_abi_ret(
+        &self,
+        callee: &str,
+        v: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        if self.fn_niche_abi.get(callee).is_some_and(|abi| abi.ret) {
+            return self.niche_ptr_to_option_value(v.into_pointer_value(), "call.niche");
+        }
+        v
     }
 
     /// Lower a diverging prelude builtin (`todo()` / `unreachable()`, type
@@ -1289,6 +1314,13 @@ impl<'ctx> super::Codegen<'ctx> {
             },
             _ => None,
         });
+        // The Option[shared] tail-field zeroing applies ONLY to a true
+        // final-expression tail. A last-statement `return x.next;` flows
+        // through the explicit-Return arm in `compile_expr`, which emits
+        // its own alias +1 (`share_option_shared_field_ref_for_arg`,
+        // slice dc9befcd) — zeroing it here too would double-compensate
+        // (+1 and a defused dec) and leak the chain.
+        let zeroing_eligible = from_final.is_some();
         if let Some(expr) = from_final.or(from_last_stmt) {
             self.suppress_source_vec_cleanup_for_arg(expr);
             // Sub-slice (3) of move-suppression — when the tail
@@ -1351,7 +1383,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // `dummy`'s scope-exit free decremented `dummy.next`'s
             // inner head pointer, freeing the entire chain before
             // the caller could read it.
-            self.suppress_tail_field_option_dec(expr);
+            if zeroing_eligible {
+                self.suppress_tail_field_option_dec(expr);
+            }
         }
     }
 
@@ -1370,6 +1404,23 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::SelfValue => "self",
             _ => return,
         };
+        // Borrowed root (`ref self` / `ref T` param): NEVER zero. Two
+        // independent reasons (both bit on `fn step(ref self) ->
+        // Option[ListNode] { self.next }`, 2026-06-05):
+        //   1. Semantics — the object belongs to the caller; a tail
+        //      field return from a borrow is an ALIAS, not a move-out.
+        //      Zeroing would silently sever the caller's list.
+        //   2. Addressing — a ref param's slot holds a pointer to the
+        //      CALLER'S storage slot, not the heap object; the zeroing
+        //      GEP below (one load + struct GEP) would write null into
+        //      the caller's stack frame 16 bytes past its alloca —
+        //      stack corruption (observed: `%tail.var.ptr = load ptr,
+        //      ptr %self` then GEP+store, missing the second deref).
+        // The alias +1 these tails need instead is emitted by
+        // `compile_tail_final_expr`'s ref-rooted FieldAccess arm.
+        if self.ref_params.contains_key(var_name) {
+            return;
+        }
         let type_name = match self.var_type_names.get(var_name) {
             Some(n) => n.clone(),
             None => return,

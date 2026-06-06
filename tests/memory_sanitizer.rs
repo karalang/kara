@@ -3053,6 +3053,123 @@ fn main() {
     }
 
     #[test]
+    fn asan_option_shared_method_tail_field_step_repeat() {
+        // Method niche-ABI extension (2026-06-05): `node.step()` where
+        // `step(ref self) -> Option[ListNode] { self.next }` is a tail
+        // field return from a BORROWED receiver, looped with fresh
+        // chains, with the receiver's chain summed afterwards. Pins
+        // three fixes under ASAN:
+        //   1. ref-rooted tail field returns are NOT move-out zeroed
+        //      (the zeroing also wrote through the un-deref'd ref-param
+        //      slot into the caller's stack frame);
+        //   2. the returned alias carries its own +1 (the ref-rooted
+        //      FieldAccess arm in `compile_tail_final_expr`);
+        //   3. method arg loops share-inc tracked `Option[shared]` args
+        //      (`m.total(...)` consumes through the niche-ABI method
+        //      param without stealing the caller's ref).
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+shared struct Merger { count: i64 }
+impl ListNode {
+    fn build(n: i64) -> Option[ListNode] {
+        let mut head: Option[ListNode] = None;
+        let mut i = n;
+        while i > 0 {
+            let node = ListNode { val: i, next: head };
+            head = Some(node);
+            i = i - 1;
+        }
+        head
+    }
+    fn step(ref self) -> Option[ListNode] { self.next }
+}
+impl Merger {
+    fn total(ref self, head: Option[ListNode]) -> i64 {
+        let mut t = 0;
+        let mut cur = head;
+        while cur.is_some() {
+            let n = cur.unwrap();
+            t = t + n.val;
+            cur = n.next;
+        }
+        t
+    }
+}
+fn main() {
+    let m = Merger { count: 0 };
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 50 {
+        let chain = ListNode.build(50);
+        let node = chain.unwrap();
+        let stepped = node.step();
+        total = total + m.total(stepped);
+        total = total + m.total(chain);
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+            &["127450"],
+            "option_shared_method_tail_field_step_repeat",
+        );
+    }
+
+    #[test]
+    fn asan_option_shared_field_let_alias_repeat() {
+        // `let stepped = node.next;` — Identifier-object field read
+        // bound by an untyped let (case (c)). The registration queued a
+        // scope-exit dec with no balancing inc: stepped's dec freed the
+        // sub-chain the field still owned, and the owner's drop walked
+        // freed memory — LATENT on main (masked by garbage rc-words
+        // stopping the walk) until the niche-ABI allocation shift made
+        // it trap. Now takes the case-(d) aliasing-acquire +1. Summing
+        // both the alias and the original chain catches both failure
+        // directions under ASAN.
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut t = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let n = cur.unwrap();
+        t = t + n.val;
+        cur = n.next;
+    }
+    t
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 50 {
+        let chain = build(50);
+        let node = chain.unwrap();
+        let stepped = node.next;
+        total = total + sum(stepped);
+        total = total + sum(chain);
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+            &["127450"],
+            "option_shared_field_let_alias_repeat",
+        );
+    }
+
+    #[test]
     fn asan_option_shared_niche_abi_convergence_repeat() {
         // Niche call ABI for `Option[shared T]` signatures (Slice 1,
         // 2026-06-05) + the explicit-return alias compensation it
