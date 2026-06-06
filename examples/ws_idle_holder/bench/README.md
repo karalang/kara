@@ -224,29 +224,39 @@ and the ramp-phase concurrency to predict `(C/W)×T` mean.
 `ok` is `true` iff every requested connection established. The CI gate
 (slice 7, line 168) parses this object and threshold-checks the numbers.
 
-## Status — clean to 50K; 100K blocked by establishment-rate collapse
+## Status — landed; drove the full Phase-3 density campaign (to 2M)
 
 The original accept-loop wedge (held ≤1 concurrent connection) was
 **resolved 2026-05-28** (dispatcher-yield async integration +
-`spawn`-move double-drop fix). With that fixed, the harness now drives
-real scale on a single unprivileged Linux box (2 cores, 8 GB):
+`spawn`-move double-drop fix). The follow-on establishment-rate collapse
+that capped early single-box runs near ~77K was **cleared by the
+2026-05-29 1M verification** — the sysctl / `nofile` / loopback-alias
+tunings now captured in `scripts/ec2_setup.sh`. With both resolved, this
+harness drove the entire Phase-3 comparator campaign:
 
-- **Clean baseline: 50,000 idle wss:// connections** — 50000/50000
-  established, 0 failed, in 72.8 s; connect p99 208 ms; **7.9 KB/conn**;
-  churn cliff_ratio 6.6.
-- Per-connection memory is linear at ~7.9 KB/conn from 1K upward, so
-  100K would cost only ~790 MB server RSS — memory is not the limiter.
+- **Kāra + Rust reference — 1M and 2M idle wss:// connections, 0
+  failures**, head-to-head on one r8g.4xlarge: **Kāra ~12.1 KB/conn vs
+  Rust ~27.9 KB/conn (2.30×)**, scale-invariant 1M↔2M (Kāra −0.03 %
+  drift).
+- **Five commercial comparators at 250K headline + 50K linearity**
+  (2026-06-06), each on a fresh box, apples-to-apples in-process TLS:
+  Phoenix Channels, Java/Netty, Go (gorilla/websocket), .NET/Kestrel
+  (Linux), Node.js (`ws`).
 
-**100K is not yet reachable**: establishment throughput degrades
-superlinearly with held-connection count (925/s @10K → 686/s @50K →
-~6/s @77K), stalling acceptance near ~77K. The *hold* is stable (linear
-memory, ~5 server threads for tens of thousands of parked connections);
-the wall is server-side accept/establish throughput. Full topology,
-tuning, the results ladder, and root-cause analysis live in
-`docs/investigations/demo1_m1_verification.md`. The collapse is filed as
-its own P0 blocker under phase-6-runtime.md (Demo 1 sub-entries). The
-harness itself is correct and complete — it will produce the 100K number
-unchanged once that blocker is fixed.
+Density ladder (per-conn server RSS, densest first): **Kāra 12.1 KB** ·
+Netty 14.4 KB¹ · Rust 27.9 KB · Node 40.4 KB · Go 43.4 KB · .NET 52.9 KB
+· Phoenix 102.8 KB.
+
+Full methodology, per-comparator tables, GC-dial analysis, and the
+production-cost reframes live in **[`REPORT.md`](REPORT.md)** (the
+authoritative record). The early single-box figures this section used to
+carry (a 50K / 7.9 KB-per-conn baseline, the ~77K acceptance wall) are
+**superseded** by the at-scale campaign; that historical M1 ramp and its
+root-cause analysis remain in `docs/investigations/demo1_m1_verification.md`.
+
+¹ Netty's RSS is a JVM `-Xmx` dial — 14.4 KB is its balanced-heap
+deployment point (marginal slope ~12.8 KB, live set ~8–10 KB); every
+other stack reports a fixed live footprint. See REPORT.md § Java/Netty.
 
 ## See also
 
