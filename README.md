@@ -37,15 +37,43 @@ $ karac query concurrency dashboard.kara.load_dashboard
  "parallel_groups":[{"statements":[0,1,2],"reason":"no data or effect dependencies"}]}
 ```
 
-**Structured diagnostics with machine-applicable fixes.** `karac check|build|run --output=json` emits diagnostics with phase, error code, span, and — where the compiler knows the answer — the fix as concrete edits:
+**Structured diagnostics with machine-applicable fixes — the loop, end to end.** `karac check|build|run --output=json` emits diagnostics with phase, error code, span, and — where the compiler knows the answer — the fix as concrete edits. `karac fix` applies them. Here is the whole agent loop on a real mistake: an LLM writes a config resource whose trait method consumes its receiver (`self`) while promising a reads-only contract —
 
-```json
-{"severity":"error","phase":"resolve","code":"E0100","line":3,"column":13,
- "message":"undefined name 'totl', did you mean 'total'?",
- "replacement":{"offset":44,"length":4,"text":"total"}}
+```
+pub effect resource Cfg: Config;
+pub trait Config { fn get(self, key: i64) -> i64 with reads(Cfg); }
+
+fn limits() -> i64 with reads(Cfg) {
+    let lo = Cfg.get(1);
+    let hi = Cfg.get(2);
+    lo + hi
+}
 ```
 
-`karac fix` applies those edits directly (`--dry-run` to preview). `--output=jsonl` streams build events (`phase_start`, `diagnostic`, `build_complete`, …) so agents can react before the build finishes.
+An owned `self` receiver means every `Cfg.get(...)` call infers `writes(Cfg)` — the declared `reads(Cfg)` can never hold, and the two lookups in `limits` serialize as write-write conflicts. The compiler flags the root cause at the trait definition, with the fix as a byte-precise edit:
+
+```bash
+$ karac check config.kara --output=json
+{"diagnostics":[{"code":"E0412","phase":"effect","line":2,"column":27,
+  "message":"trait method 'Config.get' declares reads(Cfg) but its `self` receiver
+    makes every 'Cfg.get' call infer writes(Cfg); change the receiver to `ref self`
+    or declare writes(Cfg)",
+  "replacement":{"offset":59,"length":4,"text":"ref self"}}]}
+
+$ karac fix config.kara
+applied 1 fix(es) to config.kara
+
+$ karac check config.kara --output=json
+{"diagnostics":[]}
+
+$ karac query concurrency config.kara.limits
+{"function":"limits","total_statements":2,
+ "parallel_groups":[{"statements":[0,1],"reason":"concurrent reads on same resource"}]}
+```
+
+No prose was parsed anywhere in that loop. And the fix didn't just silence an error — with the receiver corrected to `ref self`, the two config reads now run concurrently.
+
+`--output=jsonl` streams build events (`phase_start`, `diagnostic`, `build_complete`, …) so agents can react before the build finishes.
 
 **Explanations on demand.** `karac explain --class=TYPE_MISMATCH` (or `--concept=<name>`) returns the spec-grounded explanation behind any diagnostic class, as text or JSON.
 
