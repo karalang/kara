@@ -127,8 +127,8 @@
 <circle cx="779.7" cy="405.4" r="3.2" fill="#ff922b" opacity="0.85"/>
 <circle cx="847" cy="84" r="5" fill="#ff922b"/>
 <text x="866" y="88" font-size="13" fill="#c9d1d9" font-weight="700">Kāra</text>
-<line x1="836" y1="108" x2="858" y2="108" stroke="#6e7681" stroke-width="1.6" stroke-dasharray="5 4"/>
-<text x="866" y="112" font-size="13" fill="#c9d1d9" font-weight="400">Rust</text>
+<line x1="836" y1="108" x2="858" y2="108" stroke="#a7b0bc" stroke-width="2" stroke-dasharray="5 4"/>
+<text x="866" y="112" font-size="13" fill="#c9d1d9" font-weight="400">Rust = 1.0×</text>
 <circle cx="847" cy="132" r="4" fill="#3fb950"/>
 <text x="866" y="136" font-size="13" fill="#c9d1d9" font-weight="400">C</text>
 <circle cx="847" cy="156" r="4" fill="#bc8cff"/>
