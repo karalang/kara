@@ -68,7 +68,9 @@ alongside; this file is **what we measured and what it means**, not
 
 > **Status:** _in progress_. Kāra 1M + 2M and Rust 1M + 2M numbers are
 > landed (credibility-comparator head-to-head at the ceiling is
-> complete). All non-Rust comparators are pending — see the
+> complete). **Go (first commercial comparator) landed 2026-06-06 —
+> 44.4 KB/conn, 3.66× Kāra, linearity +2.5%.** The remaining commercial +
+> stretch comparators are pending — see the
 > [Status / measurement matrix](#status--measurement-matrix) below.
 > Until a row's status is `landed`, treat the cells as placeholders.
 
@@ -87,7 +89,7 @@ alongside; this file is **what we measured and what it means**, not
 | Rust (rustls + tokio) | credibility | 27.9 KB | **2.30×** | 1M + 2M landed | landed @ 2M | [§Rust](#rust-rustls--tokio) |
 | Phoenix Channels (Elixir) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #67) | pending | [§Phoenix](#phoenix-channels-elixir) |
 | Java / Netty | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #68) | pending | [§Java/Netty](#java--netty) |
-| Go (gorilla/websocket) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #69) | pending | [§Go](#go-gorillawebsocket) |
+| Go (gorilla/websocket) | commercial | 43.4 KB | **3.66×** | 250K + 50K landed (2026-06-06), +2.5% linearity | landed @ 250K | [§Go](#go-gorillawebsocket) |
 | .NET / ASP.NET Core (Linux) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #71) | pending | [§.NET Linux](#net--aspnet-core-linux) |
 | .NET / ASP.NET Core (Windows) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #72) | pending | [§.NET Windows](#net--aspnet-core-windows) |
 | Node.js (ws) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #73) | pending | [§Node](#nodejs-ws) |
@@ -138,6 +140,23 @@ numbers land — see the discipline guards in that section.
   ~4.9M._ Full model + sourcing in the [commercial-reframe
   lens](#commercial-reframe-lens). _Caveats inherited from the [Rust comparator
   caveats](#rust-rustls--tokio)._
+
+- **Kāra vs Go** _(Kāra 250K landed; Go 250K + 50K landed 2026-06-06)_:
+  Kāra holds each connection in **3.66×** less userspace memory (12.1 KB vs
+  **44.4 KB/conn**, measured server-RSS slope at 250K; Go's per-conn cost is
+  linear, +2.5% drift 50K→250K). Go — the "good enough by default" stack — is
+  heavier than even Rust here (1.59× the Rust comparator), the structural cost
+  of a goroutine + `crypto/tls`'s per-conn record buffers + gorilla's 4 KB×2
+  buffers, none shared across connections. **Production-unit cost at 250K:**
+  Go's ~10.6 GiB userspace working set (measured) plus the ~3.3 KB/conn kernel
+  socket buffer both stacks pay puts Go on a **16 GiB `m7g.xlarge`** where Kāra
+  fits an **8 GiB `m7g.large`** — the same "one tier down → ~50 % infra cost"
+  (~$473/yr vs ~$946/yr per 250K unit, us-east-1 1-yr RI) as the Rust reframe,
+  but off a **larger** density gap. _The kernel-buffer share for Go is the
+  inherited ~3.3 KB/conn estimate (the harness measures process RSS, not the
+  total-system delta separately measured for Kāra/Rust); the userspace ratio
+  and the instance-tier consequence are measured/derived directly._ _Caveats:
+  raw gorilla + `crypto/tls`, no framework overhead — see [§Go](#go-gorillawebsocket)._
 
 ---
 
@@ -228,7 +247,8 @@ sized box for its real-world deployment shape:
 
 | comparator family | instance | vCPU | RAM | arch | rationale |
 |---|---|---|---|---|---|
-| Kāra / Rust / Go / Phoenix / Java / .NET Linux / Node | `r8g.4xlarge` | 16 (Graviton4) | 128 GB | arm64 | matches the Kāra & Rust 1M/2M baseline rig; cheap RAM headroom for the 2M target |
+| Kāra / Rust / Phoenix / Java / .NET Linux / Node | `r8g.4xlarge` | 16 (Graviton4) | 128 GB | arm64 | matches the Kāra & Rust 1M/2M baseline rig; cheap RAM headroom for the 2M target |
+| Go _(landed 2026-06-06)_ | `m8g.4xlarge` | 16 (Graviton4) | 61 GB | arm64 | same 16-vCPU Graviton4 class as the baseline; 250K Go fits ~10.6 GiB so 61 GB is ample. Per-conn density is RAM/ISA-independent (established cross-ISA), so the smaller RAM tier does not affect the head-to-head |
 | .NET Windows | `m7i.4xlarge` | 16 (Intel x86) | 64 GB | x86_64 | SChannel is x86-default on Windows Server; matched vCPU; 64 GB is sufficient for 1M target |
 | Cross-platform confirmation _(x86, post-fix — landed 2026-06-02)_ | `c7i.8xlarge` | 32 (Intel x86) | 64 GB | x86_64 | Working-handler Kāra 1M: **12,112 B/conn**, within −0.02 % of arm64 — density is ISA-identical, not Graviton-specific. Reproduces the cross-ISA p50 floor (44.2 ms). Supersedes the pre-fix 7,725 B read. `c7i.8xlarge` over `.4xlarge` — co-located 1M client+server needs >32 GB |
 
@@ -345,6 +365,15 @@ number with the deviation rather than retuning to remove it._
   4 KB floors), which is stack-independent and paid identically by both, gives
   15.0 KB (Kāra) vs 30.4 KB (Rust) total server-side memory. The 2.30× is the
   runtime-density figure; the 2.03× is the cost-relevant total-box figure.
+- **Go / gorilla** _(landed 2026-06-06):_ raw `gorilla/websocket` v1.5.3
+  on idiomatic `net/http` + pure-Go `crypto/tls` — the lean Go prod
+  default, **no framework** (no router/RPC/presence), so no framework
+  overhead is folded into the **44.4 KB/conn** (3.66× Kāra; 1.59× the
+  Rust comparator). Prod-default runtime config: `GOGC=100`,
+  `GOMAXPROCS=16` (all vCPU), no tuning. Same TLS floor as the others
+  (TLS 1.2 + 1.3, no client auth, single cert). The extra weight over
+  Rust is structural, not a config artifact — a goroutine per blocked
+  `ReadMessage` + `crypto/tls`'s per-conn record buffers, none shared.
 - **Phoenix Channels** _(pending — wip task #67):_ framework
   overhead expected for presence + pubsub broadcast tracking. We
   measure with presence **on** (production default) and **off** (raw
@@ -723,43 +752,93 @@ cost story when it lands.
 
 ### Go (gorilla/websocket)
 
-> _Pending — wip task #69._
-
-- **Status:** pending.
-- **Stack target:** Go 1.23 LTS, `gorilla/websocket` (most-deployed),
-  `net/http` server, `crypto/tls` for TLS.
-- **Hardware:** `r8g.4xlarge`; fresh box.
-- **TLS:** Go `crypto/tls`; matched cipher + cert.
+- **Status:** `landed @ 250K + 50K` (2026-06-06). First commercial
+  comparator landed.
+- **Build:** `examples/ws_idle_holder/go/`,
+  `go build -ldflags="-s -w" -trimpath`, `go.mod`/`go.sum` pinned.
+- **Stack:** Go 1.23.4, `gorilla/websocket` v1.5.3 (the raw-library Go
+  prod default), idiomatic `net/http` `http.Server.ServeTLS` +
+  `Upgrader`, Go stdlib `crypto/tls` (pure-Go, no OpenSSL/cgo).
+- **Hardware:** `m8g.4xlarge` (16 vCPU Graviton4, 61 GB) — same 16-vCPU
+  Graviton class as the Kāra/Rust runs; fresh box. (RAM class differs
+  from the `r8g.4xlarge` baseline, but per-conn density is RAM/ISA-
+  independent — established cross-ISA — so the head-to-head stays valid;
+  250K Go fits ~10.6 GiB, far under 61 GB.)
+- **TLS:** `crypto/tls`, TLS 1.2 + 1.3, no client auth, single cert —
+  matched to the rustls posture; same self-signed CN=localhost fixture.
+- **GC/runtime:** `GOGC=100` (default), `GOMAXPROCS=16` (default = all
+  vCPU). No tuning — prod defaults per the apples-to-apples discipline.
 - **Scale:** 250K headline + 50K linearity sub-curve (per
   [§Scale per comparator](#scale-per-comparator)).
 
-**Expected range (from public data):** 20–30 KB/conn. The modern
-default for new infra; smaller commercial delta than Java but
-strong rhetorical position ("Go is good enough" is the default
-counterargument we need to address).
+**Idle-hold @ 250K (landed, 2026-06-06):**
 
-**Sub-rows to fill:**
-
-**Headline measurements @ 250K:**
-
-| metric | Go + gorilla | notes |
+| metric | value | notes |
 |---|---|---|
-| established | TBD | |
-| per-conn bytes | TBD | RSS = Go process RSS, includes goroutine stacks |
-| goroutine stack overhead | TBD | sub-component; 2 goroutines per conn typical |
-| connect mean | TBD | |
+| established | 250,000 / 250,000 | 0 failed |
+| per-conn bytes | **~44,386 B (43.35 KiB)** | server-RSS delta / N (6,700 → 10,843,128 KiB) |
+| connect mean | 3.62 ms | `c=64`, loopback |
+| connect p50 | 3.37 ms | Go's async net poller collapses the handshake hop |
+| connect p95 | 6.96 ms | |
+| connect p99 | 9.73 ms | tighter tail than both Kāra and Rust at this N |
+| connect max | 36.59 ms | |
 
-**Linearity check @ 50K:**
+**Linearity check @ 50K (landed, 2026-06-06):**
 
 | metric | Go + gorilla @ 50K | drift vs 250K | gate |
 |---|---|---|---|
-| per-conn bytes | TBD | TBD | < 5% → publish; ≥ 5% → escalate to 1M |
+| established | 50,000 / 50,000 (0 failed) | — | — |
+| per-conn bytes | 43,310.8 B (42.30 KiB) | **+2.5 %** (42.30 → 43.35 KiB) | < 5 % → **publish, no 1M escalation** ✓ |
+| connect p50 / p99 | 3.43 / 15.56 ms | — | — |
 
-**Caveats to document on landing:**
+- Raw JSON: `docs/investigations/go_idle_250k.json`,
+  `docs/investigations/go_idle_50k.json`.
+- Acceptance criteria (all met):
+  1. `established == N` AND `failed == 0` at both scales. ✓
+  2. 50K→250K `per_conn_bytes` drift < 5 % (2.5 %) → linear, publish at
+     250K without a 1M escalation. ✓
+  3. `dmesg` clean on both runs (no SYN-flood / cookie fallback → the
+     listen backlog held; only kernel boot logs in the tail). ✓
 
-- Goroutine stacks start at 2 KB but grow; document the steady-state
-  per-conn goroutine count and stack size.
-- `GOGC` setting affects RSS; document the value used (default 100).
+**Head-to-head with Kāra @ 250K:**
+
+| metric | Kāra | Go | winner |
+|---|---|---|---|
+| established / failed | 250,000 / 0 | 250,000 / 0 | tie |
+| `connect.p50_ms` | ~41 (arch. floor) | **3.37** | Go |
+| `connect.p99_ms` | ~0.34 (realistic) / tail varies | **9.73** | mixed¹ |
+| **`per_conn_bytes`** | **~12,114** (post-fix idle) | **44,386** | **Kāra (3.66×)** |
+
+> ¹ Kāra's connect *latency* is its known architectural floor (~41 ms
+> p50, [phase-6 line 287 follow-on](../../../docs/implementation_checklist/phase-6-runtime.md));
+> Go's net poller collapses the handshake hop the same way Rust's tokio
+> does (~3 ms). Density is the headline metric, and there Kāra wins
+> decisively.
+
+**What this proves.** Go — the "good enough by default" counterargument —
+holds each idle connection in **44.4 KB**, i.e. **3.66× the Kāra
+density** (12.1 KB) and **1.59× even the Rust comparator** (27.9 KB). The
+extra weight over Rust is structural: Go pairs a goroutine (growable
+stack) per blocked `ReadMessage` with `crypto/tls`'s per-connection
+record buffers (~16 KB read + write staging) and gorilla's 4 KB read/4 KB
+write buffers — none shared across connections. Kāra's TLS state lives in
+a shared per-binding structure with per-conn references, which is the
+architectural reason it holds the density lead. Connect latency favors Go
+(~3 ms p50 vs Kāra's ~41 ms floor), the same multi-axis tradeoff seen vs
+Rust.
+
+**Caveats:**
+
+- **Real-world-vs-purist:** raw `gorilla/websocket` on `net/http` +
+  `crypto/tls` — the lean Go prod default, *no* framework (router/RPC/
+  presence). No framework overhead is folded into the 44.4 KB. A
+  framework-tier Go comparator is out of scope for v1.
+- Goroutine stacks start at 8 KB and grow; the steady-state idle handler
+  blocks in `ReadMessage` (~1 goroutine/conn). `GOGC=100` default — a
+  lower `GOGC` would trade CPU for slightly lower RSS but was left at the
+  prod default deliberately.
+- `crypto/tls` is pure-Go (no OpenSSL/cgo); an OpenSSL-backed Go TLS
+  stack is non-default and not tested.
 
 ### .NET / ASP.NET Core (Linux)
 
@@ -1140,7 +1219,7 @@ their role's headline scale (`250K` or `100K`).
 | Rust | credibility | n/a (tracks Kāra) | 1M landed | **2M landed (2026-05-30)** | **250K landed (2026-06-02)** — 28,034 B/conn, p50 0.04 ms realistic; burst ~1.6 ms | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `rust-1m.json`; 2M: `rust-2m.json` (mirror pending); active-traffic: `docs/investigations/active_250k_rust-250k-{realistic,sync}_stageA.json` |
 | Phoenix Channels | commercial | pending (#67) | 250K pending (#67) | n/a unless gate escalates | pending | TBD | TBD |
 | Java / Netty | commercial | pending (#68) | 250K pending (#68) | n/a unless gate escalates | pending | TBD | TBD |
-| Go | commercial | pending (#69) | 250K pending (#69) | n/a unless gate escalates | pending | TBD | TBD |
+| Go | commercial | **50K landed (2026-06-06)** — 43,311 B/conn, +2.5% drift | **250K landed (2026-06-06)** — 44,386 B/conn, p50 3.37 ms (3.66× Kāra) | n/a (gate passed: +2.5% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` | `docs/investigations/go_idle_{250k,50k}.json` |
 | .NET (Linux) | commercial | pending (#71) | 250K pending (#71) | n/a unless gate escalates | pending | TBD | TBD |
 | .NET (Windows) | commercial | pending (#72) | 250K pending (#72) | n/a | pending | TBD | TBD |
 | Node.js | commercial | pending (#73) | 250K pending (#73) | n/a unless gate escalates | pending | TBD | TBD |
@@ -1157,6 +1236,18 @@ their role's headline scale (`250K` or `100K`).
 
 ## Change log
 
+- **2026-06-06 (Go comparator landed — first commercial-tier row):** ran the Go
+  comparator (`gorilla/websocket` v1.5.3 + pure-Go `crypto/tls`, idiomatic
+  `net/http` `ServeTLS`) on a fresh `m8g.4xlarge` (16-vCPU Graviton4, 61 GB),
+  co-located client+server over loopback. **250K: 250,000 / 0 failed, 44,386
+  B/conn (43.35 KiB), connect p50 3.37 / p99 9.73 ms. 50K: 50,000 / 0 failed,
+  43,311 B/conn — linearity drift +2.5 %** (< 5 % gate → published at 250K, no
+  1M escalation). **Headline: Kāra holds 3.66× the density** (12.1 KB vs 44.4
+  KB), and Go lands 1.59× heavier than even the Rust comparator (27.9 KB).
+  dmesg clean (no SYN-flood). Updated: §Go (full landed tables + head-to-head +
+  caveats), TL;DR row, status matrix, hardware table (Go on m8g.4xlarge),
+  commercial-reframe (Kāra vs Go), consolidated apples-to-apples caveats, top
+  status banner. Raw JSON: `docs/investigations/go_idle_{250k,50k}.json`.
 - **2026-06-02 (x86 cross-ISA density re-read, POST-FIX — closes the last `‡`):**
   re-ran the working-handler Kāra **1M** on a fresh `c7i.8xlarge` (Intel x86_64,
   32 vCPU, 64 GB, Ubuntu 24.04; build off `main` ⊇ `eba48194`): 1,000,000 / 0

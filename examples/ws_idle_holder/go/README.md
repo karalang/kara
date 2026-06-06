@@ -85,12 +85,34 @@ The `--server-bin` flag is identical to the Kāra- and Rust-server
 invocations — the harness reads `BOUND_PORT=<n>` from the spawned
 process's stdout and measures its RSS via `ps -o rss=`.
 
-### Planned at-scale runs (Phase 3) — turnkey rig recipe
+## At-scale results (landed 2026-06-06)
+
+Run on a fresh **`m8g.4xlarge`** (16-vCPU Graviton4, 61 GB), co-located
+client+server over loopback, prod-default runtime config (`GOGC=100`,
+`GOMAXPROCS=16`):
+
+| scale | established | per-conn | connect p50 / p99 |
+|---|---|---|---|
+| **250K** (headline) | 250,000 / 0 failed | **44,386 B (43.35 KiB)** | 3.37 / 9.73 ms |
+| **50K** (linearity) | 50,000 / 0 failed | 43,311 B (42.30 KiB) | 3.43 / 15.56 ms |
+
+**Linearity drift 50K→250K = +2.5%** (< 5% gate → published at 250K, no
+1M escalation). **Headline: Kāra holds ~3.66× the density** (12.1 KB vs
+44.4 KB/conn), and Go lands ~1.59× heavier than even the Rust comparator
+(27.9 KB) — the structural cost of a goroutine per blocked `ReadMessage`
+plus `crypto/tls`'s per-conn record buffers plus gorilla's 4 KB×2
+buffers, none shared across connections. Go's connect latency is faster
+(~3.4 ms p50 vs Kāra's ~41 ms architectural floor), but density is the
+headline metric. Full head-to-head + caveats in
+[`../bench/REPORT.md` §Go](../bench/REPORT.md). Raw JSON:
+`docs/investigations/go_idle_{250k,50k}.json`.
+
+### Reproduce — turnkey rig recipe
 
 Per the bench-day comparator scale split, the commercial comparators run
 **250K (headline) + 50K (linearity sub-curve)** on a fresh Linux EC2 box,
 with a 1M escalation only if the 50K→250K `per_conn_bytes` drift exceeds
-5%. Expected ~20–30 KB/conn for gorilla on Go's goroutine-stack model.
+5% (Go passed at +2.5%).
 
 The runners (`../bench/scripts/run_250k.sh`, `run_50k.sh`) are analogues
 of `run_1m.sh` — same flag set, only N / ulimit / source-IP fan-out
