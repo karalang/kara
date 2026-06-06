@@ -64,9 +64,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// - `if` / `if let` / `match` / block constructs PROPAGATE the context to
     ///   their own branch finals (re-set `tail_ret_inner`), so the inc lands in
     ///   the deepest arm that actually returns a bare binding.
-    /// - `Some(...)` / a call move-out / `var.field` / anything else get no inc
-    ///   (the constructor already inc'd a `Some` payload; a call owns its ref;
-    ///   `var.field` is handled by `suppress_tail_field_option_dec`).
+    /// - A `var.field` leaf takes the loaded-inner inc via
+    ///   `share_option_shared_field_ref_for_arg` (binding-rooted objects only;
+    ///   call-like objects already inc in `compile_field_access`'s call-chain
+    ///   branch).
+    /// - `Some(...)` / a call move-out / anything else get no inc (the
+    ///   constructor already inc'd a `Some` payload; a call owns its ref).
     pub(super) fn compile_tail_final_expr(
         &mut self,
         expr: &Expr,
@@ -93,26 +96,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.share_option_shared_ref_for_arg(expr);
                 Ok(v)
             }
-            // Tail field return rooted at a BORROWED object (`ref self` /
-            // `ref T` param): `fn step(ref self) -> Option[T] { self.next }`.
-            // The object belongs to the caller, so the move-out zeroing
-            // (`suppress_tail_field_option_dec`) must not run — it is
-            // skipped for ref roots — and the returned alias instead
-            // needs its own +1: the loaded inner inc here, balanced by
-            // whatever ownership the caller registers for the result.
-            // Owned-local roots (`dummy.next`, the kata-#2 shape) keep
-            // the zeroing path: their object dies with this frame, so
-            // the field's ref transfers wholesale. (2026-06-05, the
-            // niche-ABI method extension's `step` repro — the zeroing
-            // previously ALSO miscompiled ref roots by writing through
-            // the un-deref'd param slot into the caller's stack.)
-            ExprKind::FieldAccess { object, .. }
-                if match &object.kind {
-                    ExprKind::Identifier(n) => self.ref_params.contains_key(n.as_str()),
-                    ExprKind::SelfValue => self.ref_params.contains_key("self"),
-                    _ => false,
-                } =>
-            {
+            // Tail field return (`fn f(...) -> Option[T] { x.next }`):
+            // the returned alias takes its own +1 via the loaded-inner
+            // inc — `share_option_shared_field_ref_for_arg` self-gates on
+            // "Identifier/self-bound shared object with an
+            // `Option[shared T]` field" and no-ops otherwise. Uniform for
+            // every root kind:
+            //   - borrowed (`ref self` / `ref T` param): the object
+            //     belongs to the caller; the alias +1 is balanced by
+            //     whatever ownership the caller registers for the result.
+            //   - owned shared param (`self` / `node`): the callee's
+            //     entry receive-inc + scope-exit dec keep the object
+            //     alive through the frame; the alias +1 survives it.
+            //   - owned local (`dummy.next`, the kata-#2 shape): the
+            //     inc (+1) and the dying owner's recursive-drop dec (-1)
+            //     net to a wholesale transfer of the field's ref.
+            // This replaced the move-out tail ZEROING
+            // (`suppress_tail_field_option_dec`, retired 2026-06-05):
+            // zeroing mutated the heap object — wrong whenever any other
+            // ref could observe it (owned-shared `self` with the caller
+            // still holding the receiver severed the caller's list), and
+            // its ref-root addressing wrote through the un-deref'd param
+            // slot into the caller's stack frame.
+            ExprKind::FieldAccess { .. } => {
                 let v = self.compile_expr(expr)?;
                 self.share_option_shared_field_ref_for_arg(expr, v);
                 Ok(v)

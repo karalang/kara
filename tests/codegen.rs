@@ -4475,23 +4475,21 @@ fn main() {
 
     #[test]
     fn test_e2e_option_shared_method_return_composes_with_niche_fn() {
-        // Impl methods keep the conventional ABI this slice; a method-
-        // returned `Option[shared T]` must still pack cleanly when passed
-        // into a niche-shaped free fn (and the niche fn's unpacked result
-        // must feed a conventional walk). Convergence of the two ABIs on
-        // one value.
+        // A method-returned `Option[shared T]` flows into a niche-shaped
+        // free fn and out to a conventional walk — convergence of all
+        // the ABI boundaries on one value.
         //
-        // `ref self` receiver deliberately: the owned-`self` variant of
-        // this exact shape segfaults on a PRE-EXISTING receiver-move
-        // refcount bug independent of the niche ABI (reproduced on main
-        // 2026-06-05; interpreter prints 9, AOT exit 139 even without
-        // any niche fn in the program) — tracked in
-        // docs/implementation_checklist/bugs.md.
+        // OWNED `self` receiver deliberately: this exact shape segfaulted
+        // on the receiver-move bug (the usermethod dispatch passed the
+        // stack-slot address where an owned-shared `self` expects the
+        // heap pointer; the callee's receive-inc then incremented a stack
+        // word) — fixed alongside the tail-zeroing retirement; the test
+        // was pinned to `ref self` until then.
         let out = run_program(
             r#"
 shared struct ListNode { val: i64, mut next: Option[ListNode] }
 impl ListNode {
-    fn step(ref self) -> Option[ListNode] { self.next }
+    fn step(self) -> Option[ListNode] { self.next }
 }
 fn make(n: i64) -> Option[ListNode] {
     let mut head: Option[ListNode] = None;
@@ -4707,6 +4705,130 @@ fn main() {
         if let Some(out) = out {
             // per iter: sum(stepped)=2..8=35, sum(chain)=1..8=36 → 71×64
             assert_eq!(out.trim(), "4544");
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_shared_owned_self_receiver() {
+        // Owned `self` on a SHARED receiver (the bugs.md receiver-move
+        // segfault, fixed 2026-06-05). Two coupled fixes pinned:
+        //   1. Receiver passing — owned-shared `self` is ptr-typed at
+        //      the LLVM level (shared types lower to the heap pointer),
+        //      indistinguishable from `ref self` by LLVM type alone; the
+        //      `usermethod` dispatch passed the STACK SLOT address for
+        //      both. The callee's entry receive-inc then incremented a
+        //      stack word as a refcount and every `self` field GEP was
+        //      one indirection off. Now discriminated via the
+        //      source-level ref flag (`fn_param_ref`): owned-shared self
+        //      receives the loaded heap pointer by value.
+        //   2. Tail `self.next` from owned `self` must not zero the
+        //      field — the heap object is still referenced by the
+        //      caller's binding (the receive-inc/scope-dec keep the
+        //      callee's frame balanced, they don't make it exclusive).
+        //      The retired move-out zeroing severed the caller's list;
+        //      the unified loaded-inner inc in `compile_tail_final_expr`
+        //      keeps it intact.
+        // `sum(chain)` AFTER the step() call proves non-destructive
+        // reads (matches the interpreter); the loop catches refcount
+        // drift in either direction.
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+impl ListNode {
+    fn step(self) -> Option[ListNode] { self.next }
+    fn value(self) -> i64 { self.val }
+}
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut t = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let n = cur.unwrap();
+        t = t + n.val;
+        cur = n.next;
+    }
+    t
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 64 {
+        let chain = make(8);
+        let node = chain.unwrap();
+        total = total + node.value();
+        let rest = node.step();
+        total = total + sum(rest);
+        total = total + sum(chain);
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // per iter: value=1, sum(rest)=2..8=35, sum(chain)=1..8=36 → 72×64
+            assert_eq!(out.trim(), "4608");
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_shared_dummy_tail_inc_not_zeroing() {
+        // The kata-#2 builder shape (`fn f() -> Option[T] { ...
+        // dummy.next }` — tail field return from a DYING owned local)
+        // under the unified loaded-inner inc that replaced the move-out
+        // field zeroing. The inc (+1) and the dying owner's
+        // recursive-drop dec (-1) net to a wholesale transfer of the
+        // field's ref — same caller-visible contract as the zeroing,
+        // without mutating heap state any other ref could observe.
+        // Looped so a drift in either direction (UAF or leak) surfaces.
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build_appended(n: i64) -> Option[ListNode] {
+    let mut dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 1;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    dummy.next
+}
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut t = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let n = cur.unwrap();
+        t = t + n.val;
+        cur = n.next;
+    }
+    t
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 64 {
+        total = total + sum(build_appended(8));
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // per iter: 1..8 = 36 → 36×64
+            assert_eq!(out.trim(), "2304");
         }
     }
 

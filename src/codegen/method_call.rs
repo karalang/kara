@@ -1274,6 +1274,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     .first()
                     .map(|t| matches!(t, BasicMetadataTypeEnum::PointerType(_)))
                     .unwrap_or(false);
+                // OWNED self on a SHARED receiver is ALSO ptr-typed at the
+                // LLVM level (shared types lower to the heap pointer), but
+                // it expects the heap pointer BY VALUE — one indirection
+                // less than the ref-self convention (whose body loads the
+                // param to reach the heap ptr; see `compile_function`'s
+                // `inner_type_of_ref` registration). The LLVM param type
+                // can't discriminate the two, so consult the source-level
+                // ref flag recorded by `declare_function`. Before this,
+                // `node.step()` with `fn step(self)` passed the STACK SLOT
+                // address: the callee's entry rc_inc then incremented a
+                // stack word as if it were a refcount header and every
+                // field GEP was one indirection off — the owned-`self`
+                // receiver-move segfault (bugs.md entry, 2026-06-05).
+                let first_param_is_ref = self
+                    .fn_param_ref
+                    .get(&qualified)
+                    .and_then(|flags| flags.first().copied())
+                    .unwrap_or(false);
                 // Receiver storage name for the ptr-self ABI. Both `obj`
                 // (Identifier) and `self` (SelfValue, registered under the
                 // synthesized "self" param) resolve to a data pointer; any
@@ -1283,7 +1301,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     ExprKind::SelfValue => Some("self"),
                     _ => None,
                 };
-                let receiver_arg: BasicMetadataValueEnum<'ctx> = if first_param_is_ptr {
+                let receiver_arg: BasicMetadataValueEnum<'ctx> = if first_param_is_ptr
+                    && !first_param_is_ref
+                    && self.shared_types.contains_key(&receiver_type)
+                {
+                    // Owned shared `self`: the heap pointer by value. The
+                    // callee's entry emits its own receive-inc ("caller
+                    // keeps its reference"), so no caller-side count
+                    // change here. `compile_expr` on an Identifier loads
+                    // the slot, which holds exactly the heap ptr.
+                    self.compile_expr(object)?.into()
+                } else if first_param_is_ptr {
                     if let Some(ptr) = recv_storage_name.and_then(|n| self.get_data_ptr(n)) {
                         ptr.into()
                     } else {

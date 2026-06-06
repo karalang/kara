@@ -1314,13 +1314,6 @@ impl<'ctx> super::Codegen<'ctx> {
             },
             _ => None,
         });
-        // The Option[shared] tail-field zeroing applies ONLY to a true
-        // final-expression tail. A last-statement `return x.next;` flows
-        // through the explicit-Return arm in `compile_expr`, which emits
-        // its own alias +1 (`share_option_shared_field_ref_for_arg`,
-        // slice dc9befcd) — zeroing it here too would double-compensate
-        // (+1 and a defused dec) and leak the chain.
-        let zeroing_eligible = from_final.is_some();
         if let Some(expr) = from_final.or(from_last_stmt) {
             self.suppress_source_vec_cleanup_for_arg(expr);
             // Sub-slice (3) of move-suppression — when the tail
@@ -1356,140 +1349,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // exposes it.
                 self.suppress_map_cleanup_for_tail_identifier(name);
             }
-            // Extra: when the tail is `var.field` and `var` is a
-            // shared struct whose field is `Option[shared T]`, the
-            // loaded Option-of-pointer is being moved into the
-            // caller. Without this, the recursive drop walk on
-            // `var`'s scope-exit dec would walk `var.field`'s
-            // inner pointer and dec the chain — but the caller now
-            // holds an unreferenced copy of that pointer in its
-            // own slot. Defuse by zeroing `var.field`'s tag in the
-            // heap to `None`; the recursive walk sees None and
-            // skips. The previously-loaded `result` value in the
-            // SSA register keeps the original Some(ptr) payload,
-            // so the caller still receives the live chain.
-            //
-            // Symmetric to the Identifier-tail rc_inc path (which
-            // adds a +1 ref so the source's dec balances out); the
-            // FieldAccess shape doesn't have a "source variable" to
-            // inc — the chain is reachable only through the field
-            // — so we instead suppress the dec entirely by clearing
-            // the option-tag-bearing field's Some bit.
-            //
-            // Closes the LeetCode #2 kata correctness bug
-            // (2026-05-17): `fn add_two_numbers(...) -> Option[
-            // ListNode] { ... dummy.next }` was returning a
-            // dangling pointer because the recursive drop on
-            // `dummy`'s scope-exit free decremented `dummy.next`'s
-            // inner head pointer, freeing the entire chain before
-            // the caller could read it.
-            if zeroing_eligible {
-                self.suppress_tail_field_option_dec(expr);
-            }
-        }
-    }
-
-    /// Defuse the recursive-drop dec on a tail-return `var.field`
-    /// shape when the field is `Option[shared T]`. Zeroes the field's
-    /// tag in `var`'s heap so the surrounding drop walk treats it as
-    /// `None`. See `suppress_cleanup_for_tail_return` for the full
-    /// rationale.
-    pub(super) fn suppress_tail_field_option_dec(&self, expr: &Expr) {
-        let (object, field) = match &expr.kind {
-            ExprKind::FieldAccess { object, field } => (object.as_ref(), field.as_str()),
-            _ => return,
-        };
-        let var_name = match &object.kind {
-            ExprKind::Identifier(n) => n.as_str(),
-            ExprKind::SelfValue => "self",
-            _ => return,
-        };
-        // Borrowed root (`ref self` / `ref T` param): NEVER zero. Two
-        // independent reasons (both bit on `fn step(ref self) ->
-        // Option[ListNode] { self.next }`, 2026-06-05):
-        //   1. Semantics — the object belongs to the caller; a tail
-        //      field return from a borrow is an ALIAS, not a move-out.
-        //      Zeroing would silently sever the caller's list.
-        //   2. Addressing — a ref param's slot holds a pointer to the
-        //      CALLER'S storage slot, not the heap object; the zeroing
-        //      GEP below (one load + struct GEP) would write null into
-        //      the caller's stack frame 16 bytes past its alloca —
-        //      stack corruption (observed: `%tail.var.ptr = load ptr,
-        //      ptr %self` then GEP+store, missing the second deref).
-        // The alias +1 these tails need instead is emitted by
-        // `compile_tail_final_expr`'s ref-rooted FieldAccess arm.
-        if self.ref_params.contains_key(var_name) {
-            return;
-        }
-        let type_name = match self.var_type_names.get(var_name) {
-            Some(n) => n.clone(),
-            None => return,
-        };
-        let info = match self.shared_types.get(&type_name) {
-            Some(i) => i.clone(),
-            None => return,
-        };
-        if info.is_enum {
-            return;
-        }
-        // Field index in the source declaration order.
-        let field_idx = match self
-            .struct_field_names
-            .get(&type_name)
-            .and_then(|names| names.iter().position(|n| n == field))
-        {
-            Some(i) => i,
-            None => return,
-        };
-        // Field must be `Option[shared T]` for this defuse to apply.
-        let field_te = match self
-            .struct_field_type_exprs
-            .get(&type_name)
-            .and_then(|v| v.get(field_idx))
-        {
-            Some(te) => te,
-            None => return,
-        };
-        if self
-            .option_inner_shared_type_for_type_expr(field_te)
-            .is_none()
-        {
-            return;
-        }
-        // Load `var`'s heap pointer (the alloca holds a `ptr`).
-        let slot = match self.variables.get(var_name) {
-            Some(s) => *s,
-            None => return,
-        };
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let heap_ptr = match self.builder.build_load(ptr_ty, slot.ptr, "tail.var.ptr") {
-            Ok(v) => v.into_pointer_value(),
-            Err(_) => return,
-        };
-        // GEP to the Option-typed field. Layout depends on niche-opt:
-        //   - Niche  → slot is a single `ptr`; store `null`.
-        //   - Legacy → slot is the 4-i64 Option struct; zero the whole
-        //              field (tag = 0 (None) + payload words zeroed for
-        //              hygiene).
-        let heap_field_idx = (field_idx + 1) as u32;
-        let field_ptr = match self.builder.build_struct_gep(
-            info.heap_type,
-            heap_ptr,
-            heap_field_idx,
-            "tail.opt.p",
-        ) {
-            Ok(p) => p,
-            Err(_) => return,
-        };
-        if self
-            .niche_field_inner_heap_type(&type_name, field_idx)
-            .is_some()
-        {
-            let ptr_ty = self.context.ptr_type(AddressSpace::default());
-            let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
-        } else {
-            let option_ty = self.enum_layouts["Option"].llvm_type;
-            let _ = self.builder.build_store(field_ptr, option_ty.const_zero());
+            // (Option[shared T] tail FIELD returns — `fn f() ->
+            // Option[T] { x.next }` — are compensated during body
+            // compilation by `compile_tail_final_expr`'s FieldAccess
+            // arm, which incs the loaded inner: +1 for the returned
+            // alias, balanced against the owner's drop wherever that
+            // happens. This replaced the move-out field ZEROING
+            // (`suppress_tail_field_option_dec`, retired 2026-06-05):
+            // zeroing mutated the heap object, which is wrong whenever
+            // any other live ref can observe it — an owned-shared
+            // `self` receiver severed the caller's list — and its
+            // ref-root addressing wrote through the un-deref'd param
+            // slot into the caller's stack frame.)
         }
     }
 

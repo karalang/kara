@@ -3170,6 +3170,64 @@ fn main() {
     }
 
     #[test]
+    fn asan_option_shared_owned_self_receiver_repeat() {
+        // Owned-`self` shared receiver (the bugs.md receiver-move
+        // segfault): the usermethod dispatch used to pass the stack-slot
+        // address where owned-shared `self` expects the heap pointer —
+        // the callee's receive-inc corrupted a stack word; and the tail
+        // `self.next` zeroing severed the caller's list. Fixed pair
+        // pinned under ASAN: receiver discriminated via the source-level
+        // ref flag, tail field returns take the loaded-inner inc. The
+        // post-call `m_total(chain)` read proves non-destructive reads;
+        // the loop catches drift both directions.
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+impl ListNode {
+    fn step(self) -> Option[ListNode] { self.next }
+    fn value(self) -> i64 { self.val }
+}
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut t = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let n = cur.unwrap();
+        t = t + n.val;
+        cur = n.next;
+    }
+    t
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 50 {
+        let chain = make(50);
+        let node = chain.unwrap();
+        total = total + node.value();
+        let rest = node.step();
+        total = total + sum(rest);
+        total = total + sum(chain);
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+            &["127500"],
+            "option_shared_owned_self_receiver_repeat",
+        );
+    }
+
+    #[test]
     fn asan_option_shared_niche_abi_convergence_repeat() {
         // Niche call ABI for `Option[shared T]` signatures (Slice 1,
         // 2026-06-05) + the explicit-return alias compensation it
