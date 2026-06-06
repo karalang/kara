@@ -1,0 +1,16 @@
+{
+  "task": "concurrent_emails",
+  "description": "Two LLM iterations modeling the effect-checker's par-conflict path. Iteration 0 is the LLM's natural attempt: a module-level `let mut SENT_COUNT` counter incremented from inside a `par { }` block. E0408 fires from the effect phase (no machine-applicable `replacement` — descriptive). Iteration 1 lifts the counter into a `par struct Counter { count: Atomic[i64] }` passed by `ref` and increments via `fetch_add`; build clean with the parallelism preserved. The harness should NOT find a `replacement` field (no karac fix invocation) — convergence relies on the LLM reading the E0408 message and restructuring to a concurrency primitive.",
+  "responses": [
+    {
+      "iteration": 0,
+      "note": "LLM's first attempt — a plain shared module-level counter written from inside par { }. E0408 fires: 'module-level let mut SENT_COUNT cannot be written from inside par { } — wrap in Atomic[T], Mutex[T], or use #[thread_local]'. The counter is named SCREAMING_SNAKE so the only diagnostic is the concurrency one (module-level bindings are Const-class; a Value-class name would also trip E_MODULE_BINDING_NAMING).",
+      "kara_source": "let mut SENT_COUNT: i64 = 0;\n\nfn send_welcome(user_id: i64) {\n    println(\"welcome user\");\n    SENT_COUNT = SENT_COUNT + 1;\n}\n\nfn main() {\n    par {\n        send_welcome(1);\n        send_welcome(2);\n        send_welcome(3);\n    }\n    println(\"done\");\n}\n"
+    },
+    {
+      "iteration": 1,
+      "note": "After receiving E0408, the LLM lifts the counter into a `par struct Counter { count: Atomic[i64] }`, passes it by `ref`, and increments via `fetch_add`. The par { } block is preserved — the fix made the counter race-free, it did NOT serialize the work. Build clean.",
+      "kara_source": "par struct Counter { count: Atomic[i64] }\n\nfn send_welcome(user_id: i64, counter: ref Counter) {\n    println(\"welcome user\");\n    counter.count.fetch_add(1);\n}\n\nfn main() {\n    let counter: Counter = Counter { count: Atomic.new(0) };\n    par {\n        send_welcome(1, counter);\n        send_welcome(2, counter);\n        send_welcome(3, counter);\n    }\n    let total: i64 = counter.count.load();\n    println(\"done\");\n}\n"
+    }
+  ]
+}

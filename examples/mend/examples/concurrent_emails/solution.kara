@@ -1,0 +1,17 @@
+par struct Counter { count: Atomic[i64] }
+
+fn send_welcome(user_id: i64, counter: ref Counter) {
+    println("welcome user");
+    counter.count.fetch_add(1);
+}
+
+fn main() {
+    let counter: Counter = Counter { count: Atomic.new(0) };
+    par {
+        send_welcome(1, counter);
+        send_welcome(2, counter);
+        send_welcome(3, counter);
+    }
+    let total: i64 = counter.count.load();
+    println("done");
+}

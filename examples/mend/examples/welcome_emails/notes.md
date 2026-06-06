@@ -21,31 +21,32 @@ It demonstrates the mechanism — JSON diagnostics with `replacement`
 spans → mechanical application → clean build — without yet engaging
 the effect system.
 
-## What changes in later corpus examples (slice 2+)
+## The concurrency punchline — see `concurrent_emails`
 
-A future `concurrent_emails` example will pose the same task with a
-parallelism ask. The LLM's natural attempt — fan out the
-`send_welcome` calls to run concurrently while sharing a `SentCount`
-resource — produces an auto-par diagnostic:
+The sibling `concurrent_emails` example poses the same task with a
+parallelism ask. The LLM's natural attempt — increment a shared
+mutable counter from inside a `par { }` block — is rejected at compile
+time. The real diagnostic (verified against the in-tree `karac`, not a
+mock) is `E0408` from the effect phase:
 
 ```
-error: cannot parallelize: branches conflict on writes(SentCount)
-  --> concurrent_emails.kara:42:5
-   |
-42 |     send_welcome(1);
-   |     ^^^^^^^^^^^^^^^ branch 0 writes SentCount
-43 |     send_welcome(2);
-   |     ^^^^^^^^^^^^^^^ branch 1 writes SentCount  (conflict)
-   |
-   = note: two parallel branches that both write the same resource race.
-   = help: either run sequentially, or shard the counter into per-branch
-           resources and merge after the join.
+module-level let mut 'SENT_COUNT' cannot be written from inside
+par { } — wrap in Atomic[T], Mutex[T], or use #[thread_local] for
+per-task state (binding declared at line 1)
 ```
+
+(Note: a write/write conflict in *ordinary* sequential code is not an
+error — the compiler silently serializes it. The hard error fires
+specifically for a shared mutable binding written from inside an
+explicit `par { }` region, where serializing is almost never intended.)
 
 This is the demo's punchline: *the same shape that races silently in
-Python is rejected at compile time in Kāra*. The LLM either accepts
-sequential execution or restructures to a shardable pattern — the
-compiler forces the question.
+Python — and that `go build`/`go vet` wave through in Go — is rejected
+at compile time in Kāra*. The LLM lifts the counter into an
+`Atomic[i64]` and the build goes clean with the parallelism preserved.
+Rust would reject this class too, so the contrast is against Python and
+Go; see `concurrent_emails/notes.md` for the precise, verified
+comparison.
 
 ## Why the contrast matters
 
