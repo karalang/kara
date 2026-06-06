@@ -31802,6 +31802,75 @@ fn main() {
         );
     }
 
+    // ── Slice 6c — element cast (Vector[U, N].cast_from(v)) ──────────────
+
+    #[test]
+    fn test_vector_cast_from_float_to_int() {
+        // f64 → i64 truncates toward zero per lane (fptosi).
+        let out = run_program(
+            r#"
+fn main() {
+    let f = Vector[f64, 4](1.7, 2.2, 3.9, 4.0);
+    let i = Vector[i64, 4].cast_from(f);
+    println(i[0]); println(i[1]); println(i[2]); println(i[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1\n2\n3\n4\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_cast_from_int_to_float() {
+        // i64 → f64 per lane (sitofp).
+        let out = run_program(
+            r#"
+fn main() {
+    let i = Vector[i64, 4](1, 2, 3, 4);
+    let f = Vector[f64, 4].cast_from(i);
+    println(f[0]); println(f[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1\n4\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_cast_from_unsigned_to_float() {
+        // u8 → f64 uses uitofp (not sitofp): 200/255 must not become negative.
+        let out = run_program(
+            r#"
+fn main() {
+    let u = Vector[u8, 2](200, 255);
+    let f = Vector[f64, 2].cast_from(u);
+    println(f[0]); println(f[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "200\n255\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_cast_from_wrong_lane_count_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn main() {
+    let f = Vector[f64, 2](1.0, 2.0);
+    let _ = Vector[i64, 4].cast_from(f);
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "cast_from source must match the target lane count"
+        );
+    }
+
     // ── Slice 4 — first-class Numeric trait + lane-literal ergonomics ─────
 
     #[test]

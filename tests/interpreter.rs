@@ -12996,6 +12996,23 @@ fn main() {
 }
 
 #[test]
+fn test_vector_cast_from_roundtrip() {
+    // f64 -> i64 (truncate) then i64 -> f64 (parity with codegen).
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let f = Vector[f64, 4](1.7, 2.2, 3.9, 4.0);
+    let i = Vector[i64, 4].cast_from(f);
+    println(i[0]); println(i[1]); println(i[2]); println(i[3]);
+    let back = Vector[f64, 4].cast_from(i);
+    println(back[0]); println(back[3]);
+}
+"#,
+    );
+    assert_eq!(out, "1\n2\n3\n4\n1\n4\n");
+}
+
+#[test]
 fn test_vector_compare_unsigned_mask() {
     // Unsigned compare: 3000000000 (high bit set as i32) is NOT < 10.
     let out = run_no_errors(

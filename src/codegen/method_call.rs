@@ -95,6 +95,7 @@ impl<'ctx> super::Codegen<'ctx> {
             || method == "from_slice"
             || method == "load_masked"
             || method == "gather"
+            || method == "cast_from"
         {
             if let ExprKind::Path {
                 segments,
@@ -107,6 +108,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         "from_array" => self.compile_vector_from_array(ga, args),
                         "load_masked" => self.compile_vector_load_masked(ga, args),
                         "gather" => self.compile_vector_gather(ga, args),
+                        "cast_from" => self.compile_vector_cast_from(ga, args),
                         _ => self.compile_vector_from_slice(ga, args),
                     };
                 }
@@ -3403,6 +3405,51 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_insert_element(acc, loaded, lane_idx, "gather.ins")
                 .map_err(|e| format!("gather insertelement failed: {e}"))?;
+        }
+        Ok(acc.into())
+    }
+
+    /// `Vector[U, N].cast_from(v)` — per-lane numeric conversion of a source
+    /// `Vector[S, N]` to the target element `U` (design.md § Portable SIMD,
+    /// "Conversion"). Each source lane is extracted and run through the scalar
+    /// `compile_cast` (int↔float via sitofp/uitofp/fptosi, int width via
+    /// trunc/sext/zext, float width via fpcast — the same lowering scalar `as`
+    /// uses), then inserted into the `<N x U>` result. The source element's
+    /// signedness rides the `unsigned_vector_exprs` span side-table (so a
+    /// `u*`-lane source picks `uitofp` / zext over the signed forms).
+    fn compile_vector_cast_from(
+        &mut self,
+        generic_args: &[GenericArg],
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let vec_ty = self
+            .llvm_vector_type(&Some(generic_args.to_vec()))
+            .ok_or_else(|| "cast_from: could not lower Vector[U, N] type".to_string())?;
+        let BasicTypeEnum::VectorType(vt) = vec_ty else {
+            return Err("cast_from: lowered type is not an LLVM vector".to_string());
+        };
+        let n = vt.get_size();
+        let target_elem = vt.get_element_type();
+        let i32_ty = self.context.i32_type();
+
+        let src_span = &args[0].value.span;
+        let src_unsigned = self
+            .unsigned_vector_exprs
+            .contains(&(src_span.offset, src_span.length));
+        let src = self.compile_expr(&args[0].value)?.into_vector_value();
+
+        let mut acc = vt.get_undef();
+        for i in 0..n {
+            let lane_idx = i32_ty.const_int(i as u64, false);
+            let lane = self
+                .builder
+                .build_extract_element(src, lane_idx, "cast_from.lane")
+                .map_err(|e| format!("cast_from extractelement failed: {e}"))?;
+            let converted = self.compile_cast(lane, target_elem, src_unsigned)?;
+            acc = self
+                .builder
+                .build_insert_element(acc, converted, lane_idx, "cast_from.ins")
+                .map_err(|e| format!("cast_from insertelement failed: {e}"))?;
         }
         Ok(acc.into())
     }

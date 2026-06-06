@@ -286,6 +286,56 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // SIMD static constructor — `Vector[U, N].cast_from(v)`. Per-lane
+        // numeric conversion of the source vector's lanes to the target
+        // element `U`. The interpreter models every int as `Value::Int(i64)`
+        // and every float as `Value::Float(f64)`, so only the int↔float
+        // direction changes a lane's carrier here: int→int and float→float
+        // are identity (a narrower-int / f32 target's truncation/rounding is a
+        // codegen-time concern, consistent with the interpreter's existing
+        // width-agnostic numeric model).
+        if method == "cast_from" {
+            if let ExprKind::Path {
+                segments,
+                generic_args: Some(ga),
+            } = &object.kind
+            {
+                if segments.len() == 1 && segments[0] == "Vector" {
+                    let target_is_float = ga.iter().any(|a| {
+                        matches!(a, GenericArg::Type(t)
+                        if matches!(&t.kind, crate::ast::TypeKind::Path(p)
+                            if matches!(
+                                p.segments.last().map(|s| s.as_str()),
+                                Some("f32") | Some("f64") | Some("float")
+                            )))
+                    });
+                    let Value::Vector(src) = self.eval_expr_inner(&args[0].value) else {
+                        return self.record_runtime_error(
+                            "cast_from expects a source vector".to_string(),
+                            span,
+                        );
+                    };
+                    let out: Vec<Value> = src
+                        .into_iter()
+                        .map(|lane| {
+                            if target_is_float {
+                                match lane {
+                                    Value::Int(i) => Value::Float(i as f64),
+                                    other => other,
+                                }
+                            } else {
+                                match lane {
+                                    Value::Float(f) => Value::Int(f as i64),
+                                    other => other,
+                                }
+                            }
+                        })
+                        .collect();
+                    return Value::Vector(out);
+                }
+            }
+        }
+
         // Type-receiver associated calls: `T.method(...)` where `T` is a
         // primitive type name. The receiver is an identifier naming a type
         // — not a value — so eval_expr_inner would panic. Handle two shapes:

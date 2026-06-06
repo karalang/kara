@@ -536,6 +536,7 @@ impl<'a> super::TypeChecker<'a> {
             || method == "from_slice"
             || method == "load_masked"
             || method == "gather"
+            || method == "cast_from"
         {
             if let ExprKind::Path {
                 segments,
@@ -548,6 +549,7 @@ impl<'a> super::TypeChecker<'a> {
                         "from_array" => self.infer_vector_from_array(ga, args, span),
                         "load_masked" => self.infer_vector_load_masked(ga, args, span),
                         "gather" => self.infer_vector_gather(ga, args, span),
+                        "cast_from" => self.infer_vector_cast_from(ga, args, span),
                         _ => self.infer_vector_from_slice(ga, args, span),
                     };
                 }
@@ -2498,6 +2500,97 @@ impl<'a> super::TypeChecker<'a> {
                         type_display(other)
                     ),
                     args[1].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+        let result = Type::Vector { element, lanes };
+        self.record_expr_type(span, &result);
+        result
+    }
+
+    /// `Vector[U, N].cast_from(v) -> Vector[U, N]` (design.md § Portable SIMD,
+    /// "Conversion: `v.cast::<U>()`"): per-lane numeric conversion of a source
+    /// `Vector[S, N]` to the target element `U`. Carried as a static
+    /// constructor (the `Vector[U, N].method(v)` type-path form already used by
+    /// `splat`/`from_array`/`load_masked`/`gather`) because the design's
+    /// instance turbofish `v.cast::<U>()` is not yet parseable (`[` after a
+    /// method name is not consumed as type-args — see the slice-6c note). Both
+    /// `S` and `U` must be numeric (signed/unsigned int or float); the source
+    /// lane count must equal the target `N`. Lossy where applicable
+    /// (float→int truncates, narrowing int truncates) — matches scalar `as`.
+    fn infer_vector_cast_from(&mut self, ga: &[GenericArg], args: &[CallArg], span: &Span) -> Type {
+        let lowered = self.lower_vector_type(&Some(ga.to_vec()), &[], span);
+        let Some(Type::Vector { element, lanes }) = lowered else {
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Error;
+        };
+        let numeric = |t: &Type| matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_));
+        if !numeric(&element) && !matches!(*element, Type::Error) {
+            self.type_error(
+                format!(
+                    "'cast_from' target element must be a numeric type (int or float), found '{}'",
+                    type_display(&element)
+                ),
+                span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+        }
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "'cast_from' takes exactly one argument (the source vector), found {}",
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Vector { element, lanes };
+        }
+        let src_ty = self.infer_expr(&args[0].value);
+        match &src_ty {
+            Type::Vector {
+                element: se,
+                lanes: sl,
+            } => {
+                if !numeric(se) && !matches!(**se, Type::Error) {
+                    self.type_error(
+                        format!(
+                            "'cast_from' source element must be a numeric type, found '{}'",
+                            type_display(&src_ty)
+                        ),
+                        args[0].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                } else if sl != &lanes {
+                    self.type_error(
+                        format!(
+                            "'cast_from' source must have the same lane count as the target \
+                             ('{}'), found '{}'",
+                            type_display(&Type::Vector {
+                                element: element.clone(),
+                                lanes: lanes.clone(),
+                            }),
+                            type_display(&src_ty)
+                        ),
+                        args[0].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+            }
+            Type::Error => {}
+            other => {
+                self.type_error(
+                    format!(
+                        "'cast_from' expects a source Vector[S, N], found '{}'",
+                        type_display(other)
+                    ),
+                    args[0].value.span.clone(),
                     TypeErrorKind::TypeMismatch,
                 );
             }
