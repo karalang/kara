@@ -4,6 +4,8 @@
 <text x="70" y="56" font-size="13" fill="#8b949e">relative to Rust = 1.0 · lower = faster · 36 programs</text>
 <line x1="70" y1="456.0" x2="812" y2="456.0" stroke="#3b414b" stroke-width="1"/>
 <text x="60" y="460.0" font-size="12" text-anchor="end" fill="#8b949e">0.0×</text>
+<line x1="70" y1="408.8" x2="812" y2="408.8" stroke="#a7b0bc" stroke-width="2" stroke-dasharray="5 4"/>
+<text x="60" y="412.8" font-size="12" text-anchor="end" fill="#aeb6c0" font-weight="700">1.0×</text>
 <line x1="70" y1="380.4" x2="812" y2="380.4" stroke="#3b414b" stroke-width="1"/>
 <text x="60" y="384.4" font-size="12" text-anchor="end" fill="#8b949e">1.6×</text>
 <line x1="70" y1="304.8" x2="812" y2="304.8" stroke="#3b414b" stroke-width="1"/>
