@@ -99,7 +99,7 @@ alongside; this file is **what we measured and what it means**, not
 | Go (gorilla/websocket) | commercial | 43.4 KB | **3.66×** | 250K + 50K landed (2026-06-06), +2.5% linearity | landed @ 250K | [§Go](#go-gorillawebsocket) |
 | .NET / ASP.NET Core (Linux) | commercial | 52.9 KB² | **4.47×** | 250K + 50K landed (2026-06-06), −1.4% linearity | landed @ 250K | [§.NET Linux](#net--aspnet-core-linux) |
 | .NET / ASP.NET Core (Windows) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #72) | pending | [§.NET Windows](#net--aspnet-core-windows) |
-| Node.js (ws) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #73) | pending | [§Node](#nodejs-ws) |
+| Node.js (ws) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #73 — impl prepped + locally validated, awaiting rig) | prepped | [§Node](#nodejs-ws) |
 | SignalR _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #74) | stretch | [§SignalR](#signalr-stretch) |
 | socket.io _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #75) | stretch | [§socket.io](#socketio-stretch) |
 | Python asyncio websockets _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #76) | stretch | [§Python](#python-asyncio-websockets-stretch) |
@@ -331,7 +331,8 @@ sized box for its real-world deployment shape:
 
 | comparator family | instance | vCPU | RAM | arch | rationale |
 |---|---|---|---|---|---|
-| Kāra / Rust / Node | `r8g.4xlarge` | 16 (Graviton4) | 128 GB | arm64 | matches the Kāra & Rust 1M/2M baseline rig; cheap RAM headroom for the 2M target |
+| Kāra / Rust | `r8g.4xlarge` | 16 (Graviton4) | 128 GB | arm64 | matches the Kāra & Rust 1M/2M baseline rig; cheap RAM headroom for the 2M target |
+| Node _(prepped, pending rig)_ | `m8g.4xlarge`-class | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go/.NET-Linux/Phoenix/Netty; 250K Node at an expected ~30–50 KB/conn fits well under 61 GB. Per-conn density is RAM/ISA-independent, so the RAM tier does not affect the head-to-head |
 | .NET Linux _(landed 2026-06-06)_ | 16-vCPU Graviton, 61 GB | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go/Phoenix/Netty; 250K .NET fits ~12.7 GiB so 61 GB is ample. Per-conn density is RAM/ISA-independent, so the smaller RAM tier does not affect the head-to-head |
 | Java _(landed 2026-06-06)_ | 16-vCPU Graviton, 61 GB | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go/Phoenix; all Netty runs fit (250K `-Xmx24g` over-commit peaked ~5.5 GiB, balanced `-Xmx4g` ~3.7 GiB). Per-conn density is RAM/ISA-independent, so the RAM tier does not affect the head-to-head |
 | Go _(landed 2026-06-06)_ | `m8g.4xlarge` | 16 (Graviton4) | 61 GB | arm64 | same 16-vCPU Graviton4 class as the baseline; 250K Go fits ~10.6 GiB so 61 GB is ample. Per-conn density is RAM/ISA-independent (established cross-ISA), so the smaller RAM tier does not affect the head-to-head |
@@ -1246,22 +1247,50 @@ whose .NET fleet is Windows-Server-default.
 
 ### Node.js (ws)
 
-> _Pending — wip task #73._
+> _Prepped + locally validated — wip task #73. Awaiting a rig box for
+> the 250K + 50K runs._
 
-- **Status:** pending.
-- **Stack target:** Node.js 22 LTS, `ws` library (most-deployed
-  Node WebSocket), `tls` module for TLS.
-- **Hardware:** `r8g.4xlarge`; fresh box.
+- **Status:** impl built (`../node/`), locally smoke-validated
+  (200/200 established, 150/150 echoed, 0 failed), **awaiting rig**.
+- **Stack target:** Node.js **24 LTS** (locally validated on Node 25),
+  `ws` 8.21.0 (the most-deployed raw Node WebSocket library, pinned
+  via committed `package-lock.json`), in-process `https.createServer`
+  over Node's bundled **OpenSSL 3.x** for TLS. **Not** socket.io —
+  that's the framework-tier stretch comparator #75.
+- **Concurrency:** single-threaded libuv event loop — the **only
+  comparator besides Kāra that is not thread/goroutine-per-conn**, so
+  no per-conn stack cost; architecturally the closest comparator to
+  Kāra's own reactor. Measured as a single process (a real Node shop
+  `cluster`s for cores, but that's a core-scaling choice, not a
+  density one — each worker holds its share at the same per-conn cost).
+- **TLS substrate:** OpenSSL 3.x — the **same stack as the .NET-Linux
+  comparator (#71)** and unlike Go's pure-Go `crypto/tls`, so the
+  Node-vs-.NET-Linux pair reads cleanly as runtime overhead over a
+  shared TLS stack.
+- **Hardware:** `m8g.4xlarge`-class (16-vCPU Graviton, 61 GB) to match
+  the Go/.NET-Linux cohort; fresh box.
 - **Scale:** 250K headline + 50K linearity sub-curve (per
   [§Scale per comparator](#scale-per-comparator)). Node's per-box
   ceiling is around 250K–500K in published deployments; 250K is
   the right scale for the headline both for cross-comparator
   consistency and as a deployment-realistic number.
 
-**Expected range (from public data):** 30–50 KB/conn. Predictable
-outcome; smaller commercial impact than Java/Phoenix. Included for
-completeness — Node WebSocket deploys are common at small/medium
-scale but rarely the choice for density-critical fleets.
+**Expected range (from public data):** ~30–50 KB/conn — V8 object
+overhead for the `ws` socket wrapper + Node stream buffers + per-conn
+OpenSSL record buffers (the unpooled SslStream-class buffers .NET
+showed are real) + libuv handle state, with no per-conn thread stack.
+Should land below goroutine-per-conn Go and near/above .NET (shared
+OpenSSL). Smaller commercial impact than Java/Phoenix; included for
+completeness — Node WebSocket deploys are common at small/medium scale
+but rarely the choice for density-critical fleets.
+
+**GC-heap-dial note:** like the JVM/.NET, V8 has a managed heap
+(`--max-old-space-size` is the `-Xmx` analog), so the run will apply
+the same live-vs-slack methodology .NET used — 50K→250K linearity plus
+a `--max-old-space-size=512` sidebar. The expectation is it lands like
+.NET (a real number, because most per-conn state is native C++ memory
+outside the V8 heap), not like the JVM (a dial); the data decides. See
+[`../node/README.md`](../node/README.md) § "GC-heap dial".
 
 ### SignalR _(stretch)_
 
@@ -1567,7 +1596,7 @@ their role's headline scale (`250K` or `100K`).
 | Go | commercial | **50K landed (2026-06-06)** — 43,311 B/conn, +2.5% drift | **250K landed (2026-06-06)** — 44,386 B/conn, p50 3.37 ms (3.66× Kāra) | n/a (gate passed: +2.5% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` | `docs/investigations/go_idle_{250k,50k}.json` |
 | .NET (Linux) | commercial | **50K landed (2026-06-06)** — 54,869 B/conn Server GC, −1.4% drift; Workstation-GC sidebar 53,781 B (−2.0%, proves live-not-dial) | **250K landed (2026-06-06)** — 54,125 B/conn (52.9 KiB) Server GC, marginal slope ≈ absolute (4.47× Kāra; 2nd-heaviest measured) | n/a (gate passed: −1.4% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` (Server GC default; `DOTNET_gcServer=0` for the Workstation sidebar) | `docs/investigations/dotnet_linux_{250k,50k,50k_wks}.json` |
 | .NET (Windows) | commercial | pending (#72) | 250K pending (#72) | n/a | pending | TBD | TBD |
-| Node.js | commercial | pending (#73) | 250K pending (#73) | n/a unless gate escalates | pending | TBD | TBD |
+| Node.js | commercial | pending (#73) | 250K pending (#73) — impl prepped (`../node/`, `ws` 8.21.0 / OpenSSL 3.x, single-thread libuv), locally validated (200/200, 150/150 echoed), awaiting rig | n/a unless gate escalates | pending | `scripts/run_250k.sh` + `scripts/run_50k.sh` (`--server-bin ../node/run_server.sh`; `NODE_OPTIONS=--max-old-space-size` heap-dial sidebar) | TBD |
 | SignalR _(stretch)_ | stretch | pending (#74) | 100K pending (#74) | n/a | pending | TBD | TBD |
 | socket.io _(stretch)_ | stretch | pending (#75) | 100K pending (#75) | n/a | pending | TBD | TBD |
 | Python _(stretch)_ | stretch | pending (#76) | 100K pending (#76) | n/a | pending | TBD | TBD |
