@@ -264,6 +264,30 @@ pub(crate) enum CleanupAction<'ctx> {
         /// `+1` past the refcount header).
         link_field_index: usize,
     },
+    /// Phase C1c: free an ADOPTED cluster root — an `Option[shared T]`
+    /// binding holding a fresh-return builder's chain (every node at
+    /// rc==1 straight from the callee's b2 build). Tag-guarded like
+    /// `RcDecOption` (the w0 word is garbage under `None`), then the
+    /// same link-following free-walk as `FreeClusterWalk` from the
+    /// recovered inner pointer. The family's read-only verify proves
+    /// nothing was spliced in or aliased out, so freeing by structure
+    /// is exact — no dec, no zero-test, no drop-fn dispatch.
+    FreeClusterWalkOption {
+        /// Binding name (diagnostics / IR value names only — the slot
+        /// pointer below is authoritative).
+        name: String,
+        /// Alloca of the Option struct (`{tag, w0, w1, w2}`).
+        option_slot: PointerValue<'ctx>,
+        /// The Option struct's LLVM type (for tag/w0 GEPs).
+        option_ty: StructType<'ctx>,
+        /// Member struct name (resolves `heap_type` + niche lookup at
+        /// emit time).
+        member_type: String,
+        /// User-field index of the `Option[Self]` link.
+        link_field_index: usize,
+        /// Numeric `Some` tag from the seeded Option layout.
+        some_tag: u64,
+    },
     /// Decrement the refcount of a `shared struct` value.
     RcDec {
         /// Variable name — used to reload the current pointer value in case

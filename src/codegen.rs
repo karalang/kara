@@ -1601,6 +1601,16 @@ pub(super) struct Codegen<'ctx> {
     /// `headerless_here` (a non-niche link would make the free-walk's
     /// RcDec fallback reachable — structurally excluded by demoting).
     pub(crate) headerless_fns: HashMap<String, HashMap<String, usize>>,
+    /// Phase C1c caller adoption: fn key → adopted root binding →
+    /// (member type, link user-field index), for clusters whose
+    /// analysis `adopted` flag is set. The root is an `Option[shared
+    /// T]` binding born from a fresh-return builder call; its let-site
+    /// queues a `FreeClusterWalkOption` cleanup instead of the
+    /// `RcDecOption` dec-walk (and skips `var_option_shared_heap`
+    /// registration — adopted roots are never reassigned, the analysis
+    /// poisons that). Kept separate from `elided_cluster_roots` so the
+    /// literal-cluster let-site/transfer paths never see adopted roots.
+    pub(crate) adopted_cluster_roots: HashMap<String, HashMap<String, (String, usize)>>,
     /// Per-function Arc-promoted binding names — the subset of `rc_fallback_fns`
     /// flagged by the ownership pass as crossing a `par {}` thread boundary.
     /// Inc/dec on these bindings emits atomic LLVM operations (`atomicrmw add` /
@@ -3843,6 +3853,7 @@ impl<'ctx> Codegen<'ctx> {
             elided_cluster_roots: HashMap::new(),
             elided_b2_bindings: HashMap::new(),
             headerless_fns: HashMap::new(),
+            adopted_cluster_roots: HashMap::new(),
             arc_fallback_fns: HashMap::new(),
             rc_fallback_heap_types: HashMap::new(),
             closure_capture_paths: HashMap::new(),
@@ -3978,6 +3989,17 @@ impl<'ctx> Codegen<'ctx> {
                 .entry(fn_name.clone())
                 .or_default();
             for c in clusters {
+                if c.adopted {
+                    // Phase C1c: adopted roots live in their own map —
+                    // the literal-cluster let-site / tail-transfer
+                    // paths must never see them (the root is Option-
+                    // typed, not a bare member literal).
+                    self.adopted_cluster_roots
+                        .entry(fn_name.clone())
+                        .or_default()
+                        .insert(c.root.clone(), (c.member_type.clone(), c.link_field_index));
+                    continue;
+                }
                 entry.insert(
                     c.root.clone(),
                     (c.member_type.clone(), c.link_field_index, c.returned),
@@ -3993,7 +4015,13 @@ impl<'ctx> Codegen<'ctx> {
                     member_type: c.member_type.clone(),
                     link_field_index: c.link_field_index,
                 };
-                b2_entry.insert(c.root.clone(), mk(state::B2Role::Root));
+                // Adopted roots are Option-typed call results, not
+                // literal roots — their cleanup dispatch happens via
+                // `adopted_root_info`; only their cursors take the
+                // count-free roles.
+                if !c.adopted {
+                    b2_entry.insert(c.root.clone(), mk(state::B2Role::Root));
+                }
                 for n in &c.fresh_linked {
                     b2_entry.insert(n.clone(), mk(state::B2Role::Fresh));
                 }
@@ -4152,6 +4180,17 @@ impl<'ctx> Codegen<'ctx> {
         name: &str,
     ) -> Option<(String, usize, crate::ownership::ReturnedChain)> {
         self.elided_cluster_roots
+            .get(&self.current_fn_name)
+            .and_then(|m| m.get(name))
+            .cloned()
+    }
+
+    /// Phase C1c adopted-root lookup for the current function:
+    /// `(member type, link user-field index)` when `name` is an
+    /// adopted cluster root (an `Option[shared T]` builder-call result
+    /// whose scope-exit cleanup is the option-guarded free-walk).
+    fn adopted_root_info(&self, name: &str) -> Option<(String, usize)> {
+        self.adopted_cluster_roots
             .get(&self.current_fn_name)
             .and_then(|m| m.get(name))
             .cloned()

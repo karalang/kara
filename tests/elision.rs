@@ -647,6 +647,255 @@ fn cluster_blocks_param_name_shadowing_cluster_name() {
     assert!(cluster_root(&r, "run").is_none());
 }
 
+// ════════════════════════════════════════════════════════════════
+// Phase C1c — caller adoption (fresh-return call results free-walk).
+// ════════════════════════════════════════════════════════════════
+
+/// SomeRoot builder reused by the adoption tests.
+const ADOPT_BUILDER: &str = "fn build(n: i64) -> Option[ListNode] {\n\
+     let head = ListNode { val: 1, next: None };\n\
+     let mut tail = head;\n\
+     let mut i = 2;\n\
+     while i <= n {\n\
+         let node = ListNode { val: i, next: None };\n\
+         tail.next = Some(node);\n\
+         tail = node;\n\
+         i = i + 1;\n\
+     }\n\
+     Some(head)\n\
+ }\n";
+
+fn adopted_cluster<'r>(
+    result: &'r OwnershipCheckResult,
+    fn_name: &str,
+) -> Option<&'r karac::ownership::ElidedCluster> {
+    result
+        .elided_clusters
+        .get(fn_name)
+        .and_then(|v| v.iter().find(|c| c.adopted))
+}
+
+#[test]
+fn adopts_matched_builder_result() {
+    // Kata #2 `main` shape: builder-call result bound in a loop,
+    // head read through the sanctioned match, dropped per iteration.
+    let src = format!(
+        "{NODE}{ADOPT_BUILDER}\
+         fn main() {{\n\
+             let mut total = 0;\n\
+             let mut iter = 0;\n\
+             while iter < 3 {{\n\
+                 let out = build(5);\n\
+                 match out {{\n\
+                     Some(node) => {{ total = total + node.val; }}\n\
+                     None => {{}}\n\
+                 }}\n\
+                 iter = iter + 1;\n\
+             }}\n\
+             println(total);\n\
+         }}"
+    );
+    let r = analyze(&src);
+    let c = adopted_cluster(&r, "main").expect("main adopts the build() result");
+    assert_eq!(c.root, "out");
+    assert!(c.b2, "adopted families reuse the b2 count-free roles");
+    assert!(!c.headerless);
+    assert_eq!(c.returned, karac::ownership::ReturnedChain::No);
+    assert!(c.bare_cursors.contains("node"), "{:?}", c.bare_cursors);
+}
+
+#[test]
+fn adopts_walked_builder_result() {
+    // The walking caller: option-cursor alias of the root, unwrap,
+    // link-read advance — all existing cursor rules plus the C1c
+    // alias shape.
+    let src = format!(
+        "{NODE}{ADOPT_BUILDER}\
+         fn main() {{\n\
+             let out = build(5);\n\
+             let mut sum = 0;\n\
+             let mut cur = out;\n\
+             while cur.is_some() {{\n\
+                 let x = cur.unwrap();\n\
+                 sum = sum + x.val;\n\
+                 cur = x.next;\n\
+             }}\n\
+             println(sum);\n\
+         }}"
+    );
+    let r = analyze(&src);
+    let c = adopted_cluster(&r, "main").expect("walked result adopts");
+    assert_eq!(c.root, "out");
+    assert!(c.option_cursors.contains("cur"), "{:?}", c.option_cursors);
+    assert!(c.bare_cursors.contains("x"), "{:?}", c.bare_cursors);
+}
+
+#[test]
+fn adoption_kata2_main_escaping_args_rejected_adopting_out() {
+    // Kata #2's full main: l1/l2 escape as call args (their own scans
+    // poison → full RC), while out adopts. Exactly one adopted family.
+    let src = format!(
+        "{NODE}{ADOPT_BUILDER}\
+         fn consume(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let mut tail = dummy;\n\
+             let mut a = l1;\n\
+             let mut b = l2;\n\
+             loop {{\n\
+                 let mut s: i64 = 0;\n\
+                 let mut done = true;\n\
+                 if let Some(n) = a {{\n\
+                     s = s + n.val;\n\
+                     a = n.next;\n\
+                     done = false;\n\
+                 }}\n\
+                 if let Some(n) = b {{\n\
+                     s = s + n.val;\n\
+                     b = n.next;\n\
+                     done = false;\n\
+                 }}\n\
+                 if done {{\n\
+                     break;\n\
+                 }}\n\
+                 let node = ListNode {{ val: s, next: None }};\n\
+                 tail.next = Some(node);\n\
+                 tail = node;\n\
+             }}\n\
+             dummy.next\n\
+         }}\n\
+         fn main() {{\n\
+             let l1 = build(4);\n\
+             let l2 = build(4);\n\
+             let mut total = 0;\n\
+             let mut iter = 0;\n\
+             while iter < 3 {{\n\
+                 let out = consume(l1, l2);\n\
+                 match out {{\n\
+                     Some(node) => {{ total = total + node.val; }}\n\
+                     None => {{}}\n\
+                 }}\n\
+                 iter = iter + 1;\n\
+             }}\n\
+             println(total);\n\
+         }}"
+    );
+    let r = analyze(&src);
+    let adopted: Vec<_> = r.elided_clusters["main"]
+        .iter()
+        .filter(|c| c.adopted)
+        .collect();
+    assert_eq!(adopted.len(), 1, "{:?}", r.elided_clusters["main"]);
+    assert_eq!(adopted[0].root, "out");
+}
+
+#[test]
+fn adoption_rejects_returned_root() {
+    // Re-exporting the adopted chain needs a transfer composition C1c
+    // doesn't claim — the family poisons and keeps full RC.
+    let src = format!(
+        "{NODE}{ADOPT_BUILDER}\
+         fn relay() -> Option[ListNode] {{\n\
+             let out = build(3);\n\
+             out\n\
+         }}\n\
+         fn main() {{\n\
+             let c = relay();\n\
+             if c.is_some() {{ println(1); }}\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(adopted_cluster(&r, "relay").is_none());
+}
+
+#[test]
+fn adoption_skips_fn_with_member_literals() {
+    // A caller that also constructs member literals keeps the
+    // literal-cluster machinery; adoption stands down for that type.
+    let src = format!(
+        "{NODE}{ADOPT_BUILDER}\
+         fn main() {{\n\
+             let out = build(3);\n\
+             let local = ListNode {{ val: 9, next: None }};\n\
+             if out.is_some() {{ println(local.val); }}\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(adopted_cluster(&r, "main").is_none());
+}
+
+#[test]
+fn adoption_rejects_guarded_match() {
+    // A guard breaks the sanctioned read-only match shape — the
+    // scrutinee mention falls back to default-deny.
+    let src = format!(
+        "{NODE}{ADOPT_BUILDER}\
+         fn main() {{\n\
+             let out = build(3);\n\
+             let mut t = 0;\n\
+             match out {{\n\
+                 Some(node) if node.val > 0 => {{ t = t + 1; }}\n\
+                 Some(node) => {{ t = t + node.val; }}\n\
+                 None => {{}}\n\
+             }}\n\
+             println(t);\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(adopted_cluster(&r, "main").is_none());
+}
+
+#[test]
+fn adoption_rejects_root_reassignment() {
+    let src = format!(
+        "{NODE}{ADOPT_BUILDER}\
+         fn main() {{\n\
+             let mut out = build(3);\n\
+             out = build(4);\n\
+             if out.is_some() {{ println(1); }}\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(adopted_cluster(&r, "main").is_none());
+}
+
+#[test]
+fn adoption_rejects_link_store_into_adopted_chain() {
+    // Adopted families are read-only: even the `= None` severing store
+    // (legal in literal clusters) poisons — the family's count-free
+    // cursors skip release-old, so the severed tail would leak past
+    // the root's walk.
+    let src = format!(
+        "{NODE}{ADOPT_BUILDER}\
+         fn main() {{\n\
+             let out = build(3);\n\
+             let mut cur = out;\n\
+             let x = cur.unwrap();\n\
+             x.next = None;\n\
+             println(x.val);\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(adopted_cluster(&r, "main").is_none());
+}
+
+#[test]
+fn adoption_requires_fresh_return_builder() {
+    // A callee without a fresh-return cluster summary yields no
+    // adoption — the result keeps full RC.
+    let src = format!(
+        "{NODE}\
+         fn just_none() -> Option[ListNode] {{\n\
+             None\n\
+         }}\n\
+         fn main() {{\n\
+             let out = just_none();\n\
+             if out.is_some() {{ println(1); }}\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(adopted_cluster(&r, "main").is_none());
+}
+
 #[test]
 fn cluster_blocks_prepend_idiom() {
     // Prepend couples the literal link-init to the root reassignment —

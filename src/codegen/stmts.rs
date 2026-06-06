@@ -1896,10 +1896,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         if is_nested {
                             self.zero_init_option_slot_in_entry_block(slot.ptr, option_ty);
                         }
-                        // Phase-B2 option cursors are non-owning: no
-                        // RcDecOption, no alias-acquire inc — see the
-                        // shared-arm comment above.
-                        if !self.b2_skips_counts(var_name) {
+                        // Phase C1c adopted root: the builder-call
+                        // result owns a chain at rc==1 per node — the
+                        // scope-exit cleanup is the option-guarded
+                        // free-walk, NOT the RcDecOption dec-walk.
+                        // `var_option_shared_heap` registration is
+                        // deliberately skipped: adopted roots are never
+                        // reassigned (the analysis poisons that), and
+                        // skipping keeps the Assign machinery + case
+                        // (d) alias-acquire from ever treating family
+                        // cursors as owners.
+                        if let Some((member_type, link_idx)) = self.adopted_root_info(var_name) {
+                            self.track_adopted_cluster_root_var(
+                                var_name,
+                                slot.ptr,
+                                option_ty,
+                                &member_type,
+                                link_idx,
+                            );
+                        } else if !self.b2_skips_counts(var_name) {
                             self.track_rc_option_var(var_name, slot.ptr, option_ty, info.heap_type);
                             // Case (d) aliasing acquire: the new binding is a second
                             // owner of the RHS binding's chain — inc the inner ref so

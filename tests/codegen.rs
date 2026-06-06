@@ -10790,6 +10790,120 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_adopted_root_takes_option_free_walk() {
+        // Phase C1c: a fresh-return builder call result bound to a
+        // non-escaping local drops via the Option-tag-guarded
+        // free-walk (acw_*) instead of the RcDecOption dec-walk — and
+        // the caller's whole body is count-free: the call move-out
+        // needs no inc, the sanctioned match binds a borrowed alias,
+        // and family cursors are non-owning.
+        let ir = ir_for_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build(n: i64) -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    let mut i = 2;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    Some(head)
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 4 {
+        let out = build(5);
+        match out {
+            Some(node) => { total = total + node.val; }
+            None => {}
+        }
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+        );
+        let body = function_body(&ir, "main").expect("fn body");
+        assert!(
+            body.contains("acw_tag") && body.contains("acw_loop"),
+            "adopted root must take the option-guarded free-walk; body:\n{body}"
+        );
+        assert!(
+            !body.contains("opt_rc_cleanup"),
+            "no RcDecOption dec-walk for the adopted root; body:\n{body}"
+        );
+        assert!(
+            !body.contains("rc_inc") && !body.contains("rc_dec"),
+            "adopting caller is count-free; body:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_adopted_builders_match_and_walk() {
+        // Phase C1c end-to-end: two adopted families in one fn (one
+        // SomeRoot builder result read through the sanctioned match,
+        // one RootLink builder result walked by non-owning cursors),
+        // repeated. A free-walk miscount is a deterministic UAF
+        // (double-free against the walk) or a wrong sum (leak reuses
+        // garbage).
+        let out = run_program_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build_someroot(n: i64) -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    let mut i = 2;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    Some(head)
+}
+fn build_rootlink(n: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 1;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    dummy.next
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 64 {
+        let a = build_someroot(50);
+        match a {
+            Some(node) => { total = total + node.val; }
+            None => {}
+        }
+        let b = build_rootlink(50);
+        let mut cur = b;
+        while cur.is_some() {
+            let x = cur.unwrap();
+            total = total + x.val;
+            cur = x.next;
+        }
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+        );
+        // 64 * (1 + 1275) = 81664.
+        assert_eq!(out.as_deref(), Some("81664\n"));
+    }
+
+    #[test]
     fn test_ir_cluster_root_takes_free_walk() {
         // Phase B1 WITHOUT B2: the root cleanup is the link-following
         // free-walk (cw_loop) while cursors keep their RcDec (they

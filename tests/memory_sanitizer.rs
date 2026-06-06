@@ -3447,6 +3447,70 @@ fn main() {
     }
 
     #[test]
+    fn asan_adopted_builders_repeat() {
+        // Phase C1c under ASAN: both adopted-family shapes — the
+        // sanctioned match head-read and the non-owning cursor walk —
+        // dropping per iteration via the option-guarded free-walk. An
+        // adoption miscount has both signatures: an over-eager walk
+        // double-frees against a still-counted ref (immediate ASAN
+        // UAF); a missed adoption / suppressed-cleanup mismatch leaks
+        // a 100-node chain per iteration (LeakSanitizer where
+        // available, RSS blowup otherwise). 100 iterations, exact
+        // total: (1 + 5050) * 100.
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build_someroot(n: i64) -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    let mut i = 2;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    Some(head)
+}
+fn build_rootlink(n: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 1;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    dummy.next
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 100 {
+        let a = build_someroot(100);
+        match a {
+            Some(node) => { total = total + node.val; }
+            None => {}
+        }
+        let b = build_rootlink(100);
+        let mut cur = b;
+        while cur.is_some() {
+            let x = cur.unwrap();
+            total = total + x.val;
+            cur = x.next;
+        }
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+            &["505100"],
+            "adopted_builders_repeat",
+        );
+    }
+
+    #[test]
     fn asan_param_coexisting_builders_repeat() {
         // Phase C1a under ASAN: kata #2's exact pipeline — C1b
         // builders feed a param-walking adder whose own cluster

@@ -537,6 +537,37 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Phase C1c adopted-root sibling of `track_rc_option_var`: queues
+    /// the Option-tag-guarded link-following free-walk instead of the
+    /// `RcDecOption` dec-walk. The member's recursive drop fn is still
+    /// lazily synthesized for the non-niche defensive fallback (which
+    /// degrades to the RcDecOption shape, behavior-preserving).
+    pub(super) fn track_adopted_cluster_root_var(
+        &mut self,
+        name: &str,
+        option_slot: PointerValue<'ctx>,
+        option_ty: StructType<'ctx>,
+        member_type: &str,
+        link_field_index: usize,
+    ) {
+        let _ = self.emit_shared_struct_rc_drop_fn(member_type);
+        let some_tag = self
+            .enum_layouts
+            .get("Option")
+            .and_then(|l| l.tags.get("Some").copied())
+            .unwrap_or(1);
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeClusterWalkOption {
+                name: name.to_string(),
+                option_slot,
+                option_ty,
+                member_type: member_type.to_string(),
+                link_field_index,
+                some_tag,
+            });
+        }
+    }
+
     /// RC-elided sibling of `track_rc_var` (ownership phase-A elision):
     /// queues an unconditional null-guarded `free` instead of the
     /// dec/zero-test/drop dance. No drop-fn synthesis — elision-eligible
@@ -1427,6 +1458,127 @@ impl<'ctx> super::Codegen<'ctx> {
                 phi.add_incoming(&[(&next, body_end)]);
                 self.builder.build_unconditional_branch(loop_bb).unwrap();
                 self.builder.position_at_end(done_bb);
+            }
+            CleanupAction::FreeClusterWalkOption {
+                name,
+                option_slot,
+                option_ty,
+                member_type,
+                link_field_index,
+                some_tag,
+            } => {
+                // Tag guard (mirror RcDecOption — w0 is garbage under
+                // None), then the FreeClusterWalk loop from the
+                // recovered inner pointer.
+                let tag_ptr = self
+                    .builder
+                    .build_struct_gep(
+                        *option_ty,
+                        *option_slot,
+                        0,
+                        &format!("{}_acw_tag_ptr", name),
+                    )
+                    .unwrap();
+                let tag = self
+                    .builder
+                    .build_load(i64_t, tag_ptr, &format!("{}_acw_tag", name))
+                    .unwrap()
+                    .into_int_value();
+                let some_tag_const = i64_t.const_int(*some_tag, false);
+                let is_some = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        tag,
+                        some_tag_const,
+                        &format!("{}_acw_is_some", name),
+                    )
+                    .unwrap();
+                let do_bb = self.context.append_basic_block(fn_val, "acw_do");
+                let join_bb = self.context.append_basic_block(fn_val, "acw_join");
+                self.builder
+                    .build_conditional_branch(is_some, do_bb, join_bb)
+                    .unwrap();
+                self.builder.position_at_end(do_bb);
+                let w0_ptr = self
+                    .builder
+                    .build_struct_gep(*option_ty, *option_slot, 1, &format!("{}_acw_w0_ptr", name))
+                    .unwrap();
+                let w0 = self
+                    .builder
+                    .build_load(i64_t, w0_ptr, &format!("{}_acw_w0", name))
+                    .unwrap()
+                    .into_int_value();
+                let head = self
+                    .builder
+                    .build_int_to_ptr(w0, ptr_ty, &format!("{}_acw_head", name))
+                    .unwrap();
+                let heap_type = self
+                    .shared_types
+                    .get(member_type)
+                    .map(|i| i.heap_type)
+                    .expect("adopted member type registered in shared_types");
+                let niche = self
+                    .niche_field_inner_heap_type(member_type, *link_field_index)
+                    .is_some();
+                if !niche {
+                    // Defensive fallback: degrade to the RcDecOption
+                    // shape (null-guarded dec of the head) — behavior-
+                    // preserving; unreachable for today's all-niched
+                    // `Option[shared Self]` links.
+                    let null = ptr_ty.const_null();
+                    let head_is_null = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, head, null, "acw_fb_null")
+                        .unwrap();
+                    let fb_do = self.context.append_basic_block(fn_val, "acw_fb_do");
+                    let fb_skip = self.context.append_basic_block(fn_val, "acw_fb_skip");
+                    self.builder
+                        .build_conditional_branch(head_is_null, fb_skip, fb_do)
+                        .unwrap();
+                    self.builder.position_at_end(fb_do);
+                    self.emit_refcount_dec(name, heap_type, head);
+                    self.builder.build_unconditional_branch(fb_skip).unwrap();
+                    self.builder.position_at_end(fb_skip);
+                    self.builder.build_unconditional_branch(join_bb).unwrap();
+                    self.builder.position_at_end(join_bb);
+                    return;
+                }
+                // Adopted chains are always headered (never phase-D):
+                // the layout helper still routes correctly because
+                // `headerless_here` can't hold for a type that crosses
+                // the builder's signature.
+                let (gep_ty, base) = self.shared_gep_layout(member_type, heap_type);
+                let link_heap_idx = *link_field_index as u32 + base;
+                let entry_bb = self.builder.get_insert_block().unwrap();
+                let loop_bb = self.context.append_basic_block(fn_val, "acw_loop");
+                let body_bb = self.context.append_basic_block(fn_val, "acw_body");
+                self.builder.build_unconditional_branch(loop_bb).unwrap();
+                self.builder.position_at_end(loop_bb);
+                let phi = self.builder.build_phi(ptr_ty, "acw_cur").unwrap();
+                phi.add_incoming(&[(&head, entry_bb)]);
+                let cur = phi.as_basic_value().into_pointer_value();
+                let is_null = self.builder.build_is_null(cur, "acw_is_null").unwrap();
+                self.builder
+                    .build_conditional_branch(is_null, join_bb, body_bb)
+                    .unwrap();
+                self.builder.position_at_end(body_bb);
+                let link_ptr = self
+                    .builder
+                    .build_struct_gep(gep_ty, cur, link_heap_idx, "acw_link")
+                    .unwrap();
+                let next = self
+                    .builder
+                    .build_load(ptr_ty, link_ptr, "acw_next")
+                    .unwrap()
+                    .into_pointer_value();
+                self.builder
+                    .build_call(self.free_fn, &[cur.into()], "")
+                    .unwrap();
+                let body_end = self.builder.get_insert_block().unwrap();
+                phi.add_incoming(&[(&next, body_end)]);
+                self.builder.build_unconditional_branch(loop_bb).unwrap();
+                self.builder.position_at_end(join_bb);
             }
             CleanupAction::FreeSharedElided { name, ptr } => {
                 // Mirror RcDec's reload + null-guard, then free directly:
