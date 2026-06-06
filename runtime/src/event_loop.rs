@@ -483,6 +483,22 @@ fn resolve_shard_count() -> usize {
 fn event_loops() -> &'static [Arc<EventLoop>] {
     EVENT_LOOPS
         .get_or_init(|| {
+            // Mask SIGPIPE process-wide before any socket I/O. A karac-compiled
+            // `main` bypasses Rust std's runtime init (`lang_start`), which is
+            // what normally installs `SIG_IGN` for SIGPIPE; without it a socket
+            // write that races the peer's close — routine under a reconnect
+            // storm, where clients abort handshakes mid-flight — delivers
+            // SIGPIPE, whose default action *silently terminates the process*
+            // (exit 141, no core, no stderr, no kernel log). Every socket fd is
+            // registered with this reactor before it sees any I/O, so this
+            // one-time init fences all TCP/TLS/WS writes. Network-scoped on
+            // purpose: compute-only binaries never reach the reactor, so the
+            // lean-archive floor is untouched. Mirrors what std does for every
+            // Rust program. See phase-7-codegen.md § "Unmasked SIGPIPE".
+            #[cfg(unix)]
+            unsafe {
+                libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+            }
             let n = resolve_shard_count();
             let mut loops = Vec::with_capacity(n);
             let mut handles = Vec::with_capacity(n);
@@ -3934,6 +3950,35 @@ mod tests {
         FFI_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Regression: the reactor's one-time init must mask SIGPIPE. A
+    /// karac-compiled `main` bypasses std's `lang_start`, so without this
+    /// the default SIGPIPE disposition (terminate) survives, and a socket
+    /// write racing a peer close kills the server silently (observed: a
+    /// cross-box reconnect storm at concurrency 4000 terminated the demo
+    /// server with exit 141 = 128 + SIGPIPE, no core, no stderr). Asserts
+    /// the disposition is `SIG_IGN` after the reactor has been touched.
+    #[cfg(unix)]
+    #[test]
+    fn reactor_init_masks_sigpipe() {
+        let _g = ffi_test_guard();
+        // Touch the reactor — triggers the one-time init that installs the
+        // SIG_IGN. Idempotent; safe even if another test got here first.
+        let _ = event_loops();
+        unsafe {
+            let mut cur: libc::sigaction = std::mem::zeroed();
+            assert_eq!(
+                libc::sigaction(libc::SIGPIPE, std::ptr::null(), &mut cur),
+                0,
+                "sigaction query failed"
+            );
+            assert_eq!(
+                cur.sa_sigaction,
+                libc::SIG_IGN,
+                "reactor init must leave SIGPIPE masked (SIG_IGN)"
+            );
+        }
     }
 
     #[test]

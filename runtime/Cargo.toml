@@ -69,6 +69,8 @@ net = [
     "dep:bytes",
     "dep:mio",
     "dep:socket2",
+    # SIGPIPE masking in the reactor's one-time init (`event_loop.rs`).
+    "dep:libc",
 ]
 
 # TLS surface: HTTPS server (`karac_runtime_serve_https`), the ureq-backed
@@ -151,6 +153,16 @@ mio = { version = "1", features = ["os-poll", "os-ext", "net"], optional = true 
 # servers (nginx, envoy) use by convention. Already in the lockfile as
 # a transitive dep via mio; promoting to a direct dep to use Socket API.
 socket2 = { version = "0.5", optional = true }
+
+# SIGPIPE masking (`event_loop.rs` reactor init): a karac-compiled `main`
+# bypasses Rust std's `lang_start`, so it never installs the `SIG_IGN` for
+# SIGPIPE that every Rust program normally gets. Without it a socket write
+# racing a peer close (reconnect storms) delivers SIGPIPE → silent process
+# termination (exit 141). `libc::signal` is the one-line fix. Already in the
+# lockfile transitively via mio/socket2/tokio; promoting to a direct (net-
+# gated) dep. Net-only — the wasm archive (`--no-default-features`) never
+# pulls it.
+libc = { version = "0.2", optional = true }
 
 # Phase 6 line 236 slice 1 (TLS / HTTPS server-side stdlib): rustls backs
 # `runtime/src/tls.rs` — pure-Rust TLS implementation, no openssl link
