@@ -76,7 +76,12 @@ alongside; this file is **what we measured and what it means**, not
 > second-densest stack and Kāra's closest competitor. .NET/ASP.NET Core
 > (Linux) landed 2026-06-06 — 52.9 KB/conn, 4.47× Kāra, linearity −1.4%; the
 > second-*heaviest* stack (between Go and Phoenix), and — unlike the JVM — a
-> real per-conn cost, not a GC-heap dial (Server↔Workstation GC delta ~2%).**
+> real per-conn cost, not a GC-heap dial (Server↔Workstation GC delta ~2%).
+> Node.js (`ws`) landed 2026-06-06 — 40.4 KB/conn, 3.42× Kāra, linearity
+> −1.79%; the 4th-densest stack — denser than Go (no per-conn stack on the
+> single-threaded event loop) yet lighter than .NET on the same OpenSSL, and
+> like .NET a real cost, not a dial (`--max-old-space-size` cap moves it
+> +0.07%).**
 > The remaining commercial + stretch comparators are pending — see the
 > [Status / measurement matrix](#status--measurement-matrix) below.
 > Until a row's status is `landed`, treat the cells as placeholders.
@@ -99,7 +104,7 @@ alongside; this file is **what we measured and what it means**, not
 | Go (gorilla/websocket) | commercial | 43.4 KB | **3.66×** | 250K + 50K landed (2026-06-06), +2.5% linearity | landed @ 250K | [§Go](#go-gorillawebsocket) |
 | .NET / ASP.NET Core (Linux) | commercial | 52.9 KB² | **4.47×** | 250K + 50K landed (2026-06-06), −1.4% linearity | landed @ 250K | [§.NET Linux](#net--aspnet-core-linux) |
 | .NET / ASP.NET Core (Windows) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #72) | pending | [§.NET Windows](#net--aspnet-core-windows) |
-| Node.js (ws) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #73 — impl prepped + locally validated, awaiting rig) | prepped | [§Node](#nodejs-ws) |
+| Node.js (ws) | commercial | 40.4 KB | **3.42×** | 250K + 50K landed (2026-06-06), −1.79% linearity | landed @ 250K | [§Node](#nodejs-ws) |
 | SignalR _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #74) | stretch | [§SignalR](#signalr-stretch) |
 | socket.io _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #75) | stretch | [§socket.io](#socketio-stretch) |
 | Python asyncio websockets _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #76) | stretch | [§Python](#python-asyncio-websockets-stretch) |
@@ -241,6 +246,29 @@ numbers land — see the discipline guards in that section.
   ratio and the instance-tier consequence are measured/derived directly._
   _Caveats: raw Kestrel + `UseWebSockets()` (no SignalR); in-process OpenSSL
   TLS — see [§.NET Linux](#net--aspnet-core-linux)._
+- **Kāra vs Node.js** _(Kāra 250K landed; Node 250K + 50K landed
+  2026-06-06)_: Kāra holds each connection in **3.42×** less userspace memory
+  (12.1 KB vs **40.4 KB/conn**, server-RSS at 250K; Node's per-conn cost is
+  linear, −1.79% drift 50K→250K). Like .NET and unlike the JVM, this is **not**
+  a GC dial: a `--max-old-space-size=512` cap moves it **+0.07%**, so the
+  40.4 KB is genuine live per-conn memory — native C++ buffers outside the V8
+  heap (OpenSSL record buffers + libuv handles + `ws` frame state). Two facts
+  sharpen the read: Node is **denser than Go** (40.4 vs 43.4 KB — the
+  single-threaded event loop pays no per-conn stack, the same structural lever
+  Kāra's reactor pushes 3.42× further), yet **lighter than .NET** (40.4 vs
+  52.9 KB) **on the same OpenSSL**, isolating a real libuv-vs-Kestrel runtime
+  delta. **Production-unit cost at 250K:** Node's ~9.86 GiB measured userspace
+  working set plus the ~3.3 KB/conn kernel socket buffer both stacks pay puts
+  Node on a **16 GiB `m7g.xlarge`** where Kāra fits an **8 GiB `m7g.large`** —
+  the same "one tier down → ~50% infra cost" (~$473/yr vs ~$946/yr per 250K
+  unit, us-east-1 1-yr RI) as the Go/.NET/Rust reframes. _Node's one edge is
+  the reverse axis — it is a mature, ubiquitous runtime with a vast hiring pool;
+  the Kāra story here is density + compile-time safety, not ecosystem maturity._
+  _The kernel-buffer share is the inherited ~3.3 KB/conn estimate; the userspace
+  ratio and instance-tier consequence are measured/derived directly._ _Caveats:
+  raw `ws` (no socket.io); single process (no `cluster`); in-process OpenSSL
+  TLS; Node's connect p50 ~50 ms is a single-thread handshake-throughput
+  artifact, not a density cost — see [§Node.js](#nodejs-ws)._
 
 ---
 
@@ -332,7 +360,7 @@ sized box for its real-world deployment shape:
 | comparator family | instance | vCPU | RAM | arch | rationale |
 |---|---|---|---|---|---|
 | Kāra / Rust | `r8g.4xlarge` | 16 (Graviton4) | 128 GB | arm64 | matches the Kāra & Rust 1M/2M baseline rig; cheap RAM headroom for the 2M target |
-| Node _(prepped, pending rig)_ | `m8g.4xlarge`-class | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go/.NET-Linux/Phoenix/Netty; 250K Node at an expected ~30–50 KB/conn fits well under 61 GB. Per-conn density is RAM/ISA-independent, so the RAM tier does not affect the head-to-head |
+| Node _(landed 2026-06-06)_ | `m8g.4xlarge`-class | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go/.NET-Linux/Phoenix/Netty; 250K Node held ~9.86 GiB so 61 GB is ample. Per-conn density is RAM/ISA-independent, so the RAM tier does not affect the head-to-head |
 | .NET Linux _(landed 2026-06-06)_ | 16-vCPU Graviton, 61 GB | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go/Phoenix/Netty; 250K .NET fits ~12.7 GiB so 61 GB is ample. Per-conn density is RAM/ISA-independent, so the smaller RAM tier does not affect the head-to-head |
 | Java _(landed 2026-06-06)_ | 16-vCPU Graviton, 61 GB | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go/Phoenix; all Netty runs fit (250K `-Xmx24g` over-commit peaked ~5.5 GiB, balanced `-Xmx4g` ~3.7 GiB). Per-conn density is RAM/ISA-independent, so the RAM tier does not affect the head-to-head |
 | Go _(landed 2026-06-06)_ | `m8g.4xlarge` | 16 (Graviton4) | 61 GB | arm64 | same 16-vCPU Graviton4 class as the baseline; 250K Go fits ~10.6 GiB so 61 GB is ample. Per-conn density is RAM/ISA-independent (established cross-ISA), so the smaller RAM tier does not affect the head-to-head |
@@ -497,6 +525,15 @@ number with the deviation rather than retuning to remove it._
   in-process TLS is the apples-to-apples basis (a TLS-offload LB moves TLS
   state off the box); (3) measured on .NET 8 LTS (.NET 9 is current STS). Full
   breakdown in the [§.NET Linux section](#net--aspnet-core-linux).
+- **Node.js (`ws`)** _(landed 2026-06-06):_ Node 24.15.0 LTS; raw `ws`
+  8.21.0 over in-process `https`/**OpenSSL 3.x** (no socket.io — that is
+  stretch row #75); single-threaded libuv event loop, single process (no
+  `cluster`). Three framing notes: (1) like .NET and unlike the JVM,
+  per-conn RSS is **not** a dial — a `--max-old-space-size=512` cap moves it
+  +0.07 %, so 40.4 KiB is real live memory (native C++ buffers outside the V8
+  heap); (2) Node's connect p50 ~50 ms is a single-thread handshake-throughput
+  artifact, not a density or steady-state cost; (3) in-process TLS is the
+  apples-to-apples basis. Full breakdown in the [§Node.js section](#nodejs-ws).
 - **.NET ASP.NET Core (Windows)** _(pending — wip task #72):_
   SChannel TLS (the production-default stack on Windows Server);
   .NET 8 LTS; raw Kestrel WebSocket middleware. The Linux/Windows
@@ -1247,16 +1284,16 @@ whose .NET fleet is Windows-Server-default.
 
 ### Node.js (ws)
 
-> _Prepped + locally validated — wip task #73. Awaiting a rig box for
-> the 250K + 50K runs._
+> _Landed @ 250K + 50K (2026-06-06). Real number, not a GC-heap dial —
+> like .NET, the opposite of the JVM._
 
-- **Status:** impl built (`../node/`), locally smoke-validated
-  (200/200 established, 150/150 echoed, 0 failed), **awaiting rig**.
-- **Stack target:** Node.js **24 LTS** (locally validated on Node 25),
-  `ws` 8.21.0 (the most-deployed raw Node WebSocket library, pinned
-  via committed `package-lock.json`), in-process `https.createServer`
-  over Node's bundled **OpenSSL 3.x** for TLS. **Not** socket.io —
-  that's the framework-tier stretch comparator #75.
+- **Status:** landed. 250K headline + 50K linearity + a V8 heap-cap
+  sidebar, on a fresh 16-vCPU Graviton / 61 GB box.
+- **Stack:** Node.js **24.15.0 LTS**, `ws` 8.21.0 (the most-deployed
+  raw Node WebSocket library, pinned via committed `package-lock.json`),
+  in-process `https.createServer` over Node's bundled **OpenSSL 3.x**
+  for TLS. **Not** socket.io — that's the framework-tier stretch
+  comparator #75.
 - **Concurrency:** single-threaded libuv event loop — the **only
   comparator besides Kāra that is not thread/goroutine-per-conn**, so
   no per-conn stack cost; architecturally the closest comparator to
@@ -1267,30 +1304,84 @@ whose .NET fleet is Windows-Server-default.
   comparator (#71)** and unlike Go's pure-Go `crypto/tls`, so the
   Node-vs-.NET-Linux pair reads cleanly as runtime overhead over a
   shared TLS stack.
-- **Hardware:** `m8g.4xlarge`-class (16-vCPU Graviton, 61 GB) to match
-  the Go/.NET-Linux cohort; fresh box.
-- **Scale:** 250K headline + 50K linearity sub-curve (per
-  [§Scale per comparator](#scale-per-comparator)). Node's per-box
-  ceiling is around 250K–500K in published deployments; 250K is
-  the right scale for the headline both for cross-comparator
-  consistency and as a deployment-realistic number.
+- **Hardware:** 16-vCPU Graviton, 61 GB (`m8g.4xlarge`-class), matching
+  the Go/.NET-Linux/Phoenix/Netty cohort; fresh box.
 
-**Expected range (from public data):** ~30–50 KB/conn — V8 object
-overhead for the `ws` socket wrapper + Node stream buffers + per-conn
-OpenSSL record buffers (the unpooled SslStream-class buffers .NET
-showed are real) + libuv handle state, with no per-conn thread stack.
-Should land below goroutine-per-conn Go and near/above .NET (shared
-OpenSSL). Smaller commercial impact than Java/Phoenix; included for
-completeness — Node WebSocket deploys are common at small/medium scale
-but rarely the choice for density-critical fleets.
+#### Idle-hold density @ 250K (headline)
 
-**GC-heap-dial note:** like the JVM/.NET, V8 has a managed heap
-(`--max-old-space-size` is the `-Xmx` analog), so the run will apply
-the same live-vs-slack methodology .NET used — 50K→250K linearity plus
-a `--max-old-space-size=512` sidebar. The expectation is it lands like
-.NET (a real number, because most per-conn state is native C++ memory
-outside the V8 heap), not like the JVM (a dial); the data decides. See
-[`../node/README.md`](../node/README.md) § "GC-heap dial".
+| metric | value |
+|---|---|
+| established / failed | **250,000 / 0** |
+| RSS before → after | 56,704 KiB → 10,158,860 KiB (~9.86 GiB held) |
+| **per-conn** | **41,378 B (40.4 KiB)** |
+| connect p50 / p95 / p99 | 50.78 / 79.77 / 92.66 ms |
+| 50K→250K linearity drift | **−1.79%** (per-conn *falls* with N) |
+| heap-cap (`--max-old-space-size=512`) Δ | **+0.07%** (proves live, not slack) |
+| vs Kāra (12,114 B) | **Kāra is 3.42× denser** |
+
+**Not a GC-heap dial — the opposite of the JVM, like .NET.** Going in,
+V8's managed heap (`--max-old-space-size` is the `-Xmx` analog) raised
+the same dial concern Netty hit. Three measurements refute it for Node:
+(1) **50K→250K linearity is −1.79%** — per-conn *decreases* slightly as
+N grows (a fixed base amortizing), the opposite of a heap reservation
+that would pin or grow RSS-delta/N; (2) the marginal slope ≈ the
+absolute per-conn; (3) a **V8 heap-cap sidebar** (re-run 50K under
+`--max-old-space-size=512`) moved RSS-delta/N by **+0.07%** — if the
+~41 KB were V8 heap slack, capping old-space would have forced reclaim
+and dropped the number, but it didn't budge. So the ~41 KB is
+**genuinely live per-conn memory** — native C++ buffers *outside* the
+V8 GC heap: per-conn OpenSSL `SSL` record buffers (the same unpooled
+SslStream-class buffers .NET showed are real), libuv per-handle state,
+Node stream buffers, and the `ws` frame state. The raw RSS-delta/N *is*
+the honest per-conn density here.
+
+#### Linearity @ 50K (sub-curve)
+
+| metric | 50K (default) | 50K (`--max-old-space-size=512`) |
+|---|---|---|
+| established / failed | 50,000 / 0 | 50,000 / 0 |
+| per-conn | 42,131 B (41.1 KiB) | 42,161 B (41.2 KiB) |
+| connect p50 / p99 | 49.52 / 82.72 ms | 49.12 / 82.48 ms |
+
+The heap-capped run lands **+0.07%** from the default — the live-vs-slack
+cross-check that decides the headline is real, not a dial (see above).
+
+#### Head-to-head with Kāra
+
+| | per-conn (idle) | ratio |
+|---|---|---|
+| **Kāra** | ~12,114 B | 1.0× |
+| **Node.js** | ~41,378 B | **Kāra 3.42× denser** |
+
+**What this proves.** Node is the **4th-densest** of the seven impls
+measured — between Rust (27.9 KiB) and Go (43.4 KiB), and notably:
+
+- **Denser than Go (~7%)** despite comparable library overhead, because
+  the single-threaded event loop pays **no per-conn goroutine/thread
+  stack** — the structural advantage Kāra's own reactor model takes
+  much further (3.42× past Node).
+- **Much lighter than .NET (1.31×) despite sharing OpenSSL** (40.4 vs
+  52.9 KiB) — Kestrel's `System.IO.Pipelines` segments + `SslStream`
+  buffers cost more per conn than libuv + `ws`. With the TLS substrate
+  held constant, this isolates a real Kestrel-vs-libuv runtime delta.
+
+**Caveats.**
+
+- **Connect latency is Node's weak axis:** p50 ~50 ms (vs Go's ~3 ms),
+  because the single thread serializes 50K–250K TLS handshakes through
+  one OpenSSL context. This is a *handshake-throughput* artifact of the
+  single-thread model, not a density or steady-state cost; density is
+  the headline metric. (Kāra's ~41 ms p50 floor is a separate,
+  documented park/wake-path matter, not the same cause.)
+- **Single process, no `cluster`:** the honest per-process density. A
+  production Node fleet clusters for cores; each worker holds its share
+  at the same per-conn cost, so clustering changes throughput/core
+  scaling, not density.
+- **In-process TLS** (OpenSSL in the Node process) is the apples-to-apples
+  basis every comparator shares; a fleet that offloads TLS at a load
+  balancer would shift that cost off the app box.
+
+Raw JSON: `docs/investigations/node_linux_{250k,50k,50k_cap}.json`.
 
 ### SignalR _(stretch)_
 
@@ -1550,12 +1641,12 @@ _From `feedback_commercial_reframe_lens` memory._
 
 ### Pending reframes (deferred — data not yet in this report)
 
-- **Kāra vs Phoenix / Java/Netty / Go / .NET (Linux):** _Landed
+- **Kāra vs Phoenix / Java/Netty / Go / .NET (Linux) / Node:** _Landed
   2026-06-06 — see the [Commercial reframe](#commercial-reframe--populated-as-each-row-lands)
   bullets above, which carry the per-row dollarized stories._ (Phoenix:
   8.69× density, two tiers down; Java/Netty: combination claim, not a
-  box-count cut; Go: one tier down; .NET: 4.47× density, one tier down.)
-- **Kāra vs Node:** _Deferred until §Node lands (#73)._
+  box-count cut; Go: one tier down; .NET: 4.47× density, one tier down;
+  Node: 3.42× density, one tier down.)
 - **Stretch rows (SignalR / socket.io / Python):** _Deferred per-row._
 
 ---
@@ -1596,7 +1687,7 @@ their role's headline scale (`250K` or `100K`).
 | Go | commercial | **50K landed (2026-06-06)** — 43,311 B/conn, +2.5% drift | **250K landed (2026-06-06)** — 44,386 B/conn, p50 3.37 ms (3.66× Kāra) | n/a (gate passed: +2.5% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` | `docs/investigations/go_idle_{250k,50k}.json` |
 | .NET (Linux) | commercial | **50K landed (2026-06-06)** — 54,869 B/conn Server GC, −1.4% drift; Workstation-GC sidebar 53,781 B (−2.0%, proves live-not-dial) | **250K landed (2026-06-06)** — 54,125 B/conn (52.9 KiB) Server GC, marginal slope ≈ absolute (4.47× Kāra; 2nd-heaviest measured) | n/a (gate passed: −1.4% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` (Server GC default; `DOTNET_gcServer=0` for the Workstation sidebar) | `docs/investigations/dotnet_linux_{250k,50k,50k_wks}.json` |
 | .NET (Windows) | commercial | pending (#72) | 250K pending (#72) | n/a | pending | TBD | TBD |
-| Node.js | commercial | pending (#73) | 250K pending (#73) — impl prepped (`../node/`, `ws` 8.21.0 / OpenSSL 3.x, single-thread libuv), locally validated (200/200, 150/150 echoed), awaiting rig | n/a unless gate escalates | pending | `scripts/run_250k.sh` + `scripts/run_50k.sh` (`--server-bin ../node/run_server.sh`; `NODE_OPTIONS=--max-old-space-size` heap-dial sidebar) | TBD |
+| Node.js | commercial | **50K landed (2026-06-06)** — 42,131 B/conn, −1.79% drift; `--max-old-space-size=512` sidebar 42,161 B (+0.07%, proves live-not-dial) | **250K landed (2026-06-06)** — 41,378 B/conn (40.4 KiB), p50 50.8 ms (3.42× Kāra; 4th-densest, denser than Go, lighter than .NET) | n/a (gate passed: −1.79% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` (`--server-bin ../node/run_server.sh`; `NODE_OPTIONS=--max-old-space-size=512` for the heap-cap sidebar) | `docs/investigations/node_linux_{250k,50k,50k_cap}.json` |
 | SignalR _(stretch)_ | stretch | pending (#74) | 100K pending (#74) | n/a | pending | TBD | TBD |
 | socket.io _(stretch)_ | stretch | pending (#75) | 100K pending (#75) | n/a | pending | TBD | TBD |
 | Python _(stretch)_ | stretch | pending (#76) | 100K pending (#76) | n/a | pending | TBD | TBD |
@@ -1610,6 +1701,25 @@ their role's headline scale (`250K` or `100K`).
 
 ## Change log
 
+- **2026-06-06 (Node.js `ws` comparator landed — denser than Go, lighter than
+  .NET, real not a dial):** ran the raw-`ws` comparator (Node 24.15.0 LTS, `ws`
+  8.21.0, in-process `https`/OpenSSL 3.x, single-threaded libuv, single
+  process) on a fresh 16-vCPU Graviton / 61 GB box, co-located over loopback.
+  **250K: 250,000 / 0 failed, 41,378 B/conn (40.4 KiB), server RSS ~9.86 GiB;
+  50K: 50,000 / 0 failed, 42,131 B/conn — linearity −1.79 %** (< 5 % gate → no
+  1M escalation). **Key findings:** (1) **not a GC-heap dial** — a
+  `--max-old-space-size=512` sidebar moved RSS-delta/N **+0.07 %**, proving the
+  ~41 KB is live native memory (OpenSSL + libuv + `ws` buffers outside the V8
+  heap), like .NET and the opposite of the JVM; (2) **4th-densest** of seven
+  impls — **denser than Go** (no per-conn stack on the single-threaded event
+  loop) yet **lighter than .NET on the same OpenSSL** (isolating a real
+  libuv-vs-Kestrel delta); (3) **Kāra 3.42× denser** (one instance tier down,
+  ~50 % infra cost). Node's one weak axis is connect p50 ~50 ms (single-thread
+  handshake serialization), a throughput artifact, not a density cost. Shipped
+  REPORT.md (§Node landed tables + head-to-head + caveats, TL;DR row, status
+  matrix, hardware row, commercial-reframe bullet, consolidated caveats, banner,
+  this entry), phase-6 tracker, and `node/README.md`; raw JSON
+  `docs/investigations/node_linux_{250k,50k,50k_cap}.json`.
 - **2026-06-06 (.NET/ASP.NET Core Linux comparator landed — the JVM's mirror
   image):** ran the raw-Kestrel comparator (.NET 8.0.421, `net8.0`,
   `WebApplication.CreateSlimBuilder` + `UseWebSockets()` echo middleware,

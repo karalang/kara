@@ -101,43 +101,57 @@ server.js`, so the harness-spawned PID *is* the measured process.
 
 ## At-scale results
 
-> **NOT YET RUN — comparator prepped and locally validated, awaiting a
-> rig box.** The headline 250K + 50K-linearity runs land on a fresh
-> Linux EC2 box per the bench-day cadence; numbers and the head-to-head
-> with Kāra go here and in **§Node.js in `bench/REPORT.md`** (the
-> authoritative record) once measured.
+**Landed 2026-06-06** on a fresh 16-vCPU Graviton / 61 GB box
+(`m8g.4xlarge`-class), co-located client+server over loopback, Node
+24.15.0 LTS, `ws` 8.21.0, single-threaded libuv, single process.
 
-**Expected range (public data):** ~30–50 KB/conn. The per-conn cost is V8
-object overhead for the `ws` socket wrapper + Node stream buffers + the
-per-conn OpenSSL `SSL` record buffers (the same SslStream-class native
-buffers the .NET-Linux comparator showed are *not* pooled) + libuv
-per-handle state. Single-threaded, so no per-conn thread/goroutine stack
-— which should land Node below the goroutine-per-conn Go number and in the
-neighborhood of (or above) .NET, both sharing OpenSSL.
+| scale | est / failed | per-conn | connect p50 / p99 |
+|---|---|---|---|
+| **250K (headline)** | 250,000 / 0 | **41,378 B (40.4 KiB)** | 50.78 / 92.66 ms |
+| 50K (linearity) | 50,000 / 0 | 42,131 B (41.1 KiB) | 49.52 / 82.72 ms |
+| 50K (heap-cap `--max-old-space-size=512`) | 50,000 / 0 | 42,161 B (41.2 KiB) | 49.12 / 82.48 ms |
 
-### GC-heap dial — anticipated; to be resolved by measurement
+- **Linearity −1.79 %** (50K→250K) — inside the 5 % gate, no 1M
+  escalation. Per-conn *falls* slightly as N grows (a fixed base
+  amortizing), and the marginal slope ≈ the absolute per-conn.
+- **The number is real, not a GC-heap dial — like .NET, the opposite of
+  the JVM.** The heap-cap sidebar (`--max-old-space-size=512`) moved
+  RSS-delta/N by **+0.07 %**: capping V8's old-space barely touched it, so
+  the ~41 KiB is **genuinely live per-conn memory** — native C++ buffers
+  *outside* the V8 heap (per-conn OpenSSL record buffers + libuv handle
+  state + Node stream buffers + `ws` frame state, none pooled). The raw
+  RSS-delta/N *is* the honest per-conn cost.
+- **Headline: Kāra holds 3.42× the density** (12,114 B vs 41,378 B). Node
+  is the **4th-densest comparator measured**, between Rust (27.9 KiB) and
+  Go (43.4 KiB): **denser than Go (~7 %)** — the single-threaded event
+  loop pays no per-conn goroutine/thread stack — yet **lighter than .NET
+  (1.31×) despite sharing OpenSSL**, isolating a real libuv-vs-Kestrel
+  runtime delta.
+- **Connect latency is Node's weak axis:** p50 ~50 ms (vs Go's ~3 ms),
+  because the single thread serializes every TLS handshake through one
+  OpenSSL context — a handshake-*throughput* artifact, not a density or
+  steady-state cost.
+- Raw JSON: `docs/investigations/node_linux_{250k,50k,50k_cap}.json`.
 
-V8 has a managed heap with lazy commit, so going in there is the same
+Full tables, head-to-head, and caveats: **§Node.js in `bench/REPORT.md`**
+(the authoritative record).
+
+### GC-heap dial — anticipated; it did NOT materialize
+
+V8 has a managed heap with lazy commit, so going in there was the same
 concern the [Netty](../java/README.md) and [.NET](../dotnet/README.md)
 comparators raised: that `per_conn_bytes = RSS-delta / N` is a
 `-Xmx`-style dial (`--max-old-space-size` is V8's analog) rather than live
-memory. Two facts argue it will land like .NET (a real number), not like
-the JVM (a dial): (1) most per-conn state — socket/TLS record buffers,
-`ws` frame buffers — is **native C++ memory outside the V8 heap**, exactly
-the unmanaged-buffer class that made .NET's number real; (2) the default
-V8 old-space is small and grows on demand, not pre-committed like a JVM
-`-Xmx` reservation. The methodology to **confirm at run time** mirrors
-.NET's Workstation-GC cross-check:
-
-1. **Linearity:** 50K→250K `per_conn_bytes` drift < 5% ⇒ slope ≈ absolute
-   ⇒ live memory (no 1M escalation needed).
-2. **Heap-cap sidebar:** re-run 50K with
-   `NODE_OPTIONS=--max-old-space-size=512`; if RSS-delta/N barely moves,
-   the per-conn cost is native (live), not V8 heap slack.
-
-Both are cheap and decide whether the headline is the raw RSS-delta/N or a
-caveated marginal-slope range. Documented as *anticipated* — the data
-decides, as it did for .NET.
+memory. **The measurement refutes it for Node** (see [At-scale
+results](#at-scale-results)): 50K→250K drift is −1.79 %, the marginal
+slope ≈ the absolute per-conn, and a heap-cap cross-check
+(`--max-old-space-size=512`) lands **+0.07 %** from the default. All three
+show the ~41 KiB is **genuinely live per-connection memory** — native C++
+buffers outside the V8 heap (OpenSSL record buffers + libuv handle state +
+`ws` frame state) — not committed-but-unused heap. Both *a priori* facts
+held: per-conn state is native, and V8 old-space grows on demand rather
+than pre-committing like a JVM `-Xmx` reservation. The clean mirror image
+of the JVM dial, just like .NET.
 
 ### Reproduce — turnkey rig recipe
 
@@ -165,8 +179,9 @@ NODE_BIN="$(cd ../../node && pwd)/run_server.sh"
 ./run_250k.sh "$NODE_BIN" node_linux_250k.json
 ./run_50k.sh  "$NODE_BIN" node_linux_50k.json
 
-# 3. (If linearity or a heap-cap sidebar is wanted) 50K with the V8 heap
-#    cap, the live-vs-slack cross-check:
+# 3. Heap-cap sidebar — 50K under the V8 old-space cap, the live-vs-slack
+#    cross-check (the run that proved the number is real, not a dial: it
+#    moved RSS-delta/N only +0.07%):
 NODE_OPTIONS=--max-old-space-size=512 ./run_50k.sh "$NODE_BIN" node_linux_50k_cap.json
 ```
 
