@@ -1,0 +1,35 @@
+// Minimal WebSocket echo server (plaintext ws://).
+//
+// `WebSocket` / `TcpListener` are stdlib builtins (runtime/stdlib/ws.kara).
+// The handler reads a text frame into a stack buffer and echoes it back,
+// in blocking style — the effect-driven scheduler moves the blocking
+// recv/send off the par-runtime threads. For the TLS variant, swap
+// `TcpListener.bind` + `WebSocket.accept` for `TlsListener.bind_tls` +
+// `WebSocket.accept_tls` (see examples/ws_idle_holder).
+//
+// Build & run:  karac run examples/std_net/ws_echo.kara
+fn echo(ws: WebSocket) {
+    let mut buf: Array[u8, 1024] = [0u8; 1024];
+    loop {
+        match ws.recv_text(mut buf) {
+            Result.Ok(n) => {
+                if n == 0 { break; }
+                match ws.send_text(buf[0..n]) {
+                    Result.Ok(_) => {}
+                    Result.Err(_) => { break; }
+                }
+            }
+            Result.Err(_) => { break; }
+        }
+    }
+}
+
+fn main() {
+    let listener = TcpListener.bind("127.0.0.1:8080").unwrap();
+    loop {
+        match WebSocket.accept(listener) {
+            Result.Ok(ws) => { echo(ws); }
+            Result.Err(_) => {}
+        }
+    }
+}

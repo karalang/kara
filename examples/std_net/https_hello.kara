@@ -1,0 +1,18 @@
+// Minimal HTTPS server — identical handler shape to the HTTP example,
+// with a TLS cert/key handed to `Server.serve_tls`. TLS lives in
+// runtime/stdlib/tls.kara; `serve_tls` wires it into the HTTP server.
+//
+// Replace the placeholder PEM strings with a real cert/key pair
+// (e.g. from `mkcert localhost`), then:
+//   karac run examples/std_net/https_hello.kara
+struct Response { status: i64, body: String }
+
+fn handle(req: Request) -> Response {
+    Response { status: 200, body: req.method() }
+}
+
+fn main() {
+    let cert = "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n";
+    let key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n";
+    let _ = Server.serve_tls("127.0.0.1:8443", cert, key, handle);
+}

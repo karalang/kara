@@ -1,0 +1,17 @@
+// Minimal HTTP/1.1 server.
+//
+// `Server` and `Request` are stdlib builtins (runtime/stdlib/http.kara);
+// the program supplies its own `Response { status, body }`. The handler
+// is a plain `Fn(Request) -> Response` — no async, no colored functions.
+//
+// Build & run:  karac run examples/std_net/http_hello.kara
+//   then:       curl localhost:8080/hello   ->   /hello
+struct Response { status: i64, body: String }
+
+fn handle(req: Request) -> Response {
+    Response { status: 200, body: req.path() }
+}
+
+fn main() {
+    let _ = Server.serve("127.0.0.1:8080", handle);
+}

@@ -155,20 +155,46 @@ What v1 ships with, what the numbers look like, and what the toolchain gives you
 
 ### Standard Library at v1
 
-In-tree, no third-party runtime dependencies.
+In-tree, no third-party runtime dependencies. Blocking-style I/O, no
+function coloring — the effect-driven scheduler moves blocking work off
+the par-runtime threads. Minimal, compiling examples live in
+[`examples/std_net`](examples/std_net).
 
-- `std.http` server (HTTP/1.1, HTTP/2) — _TBD: link to module + minimal example_
-- TLS — _TBD: link to module + minimal example_
-- WebSocket — _TBD: link to module + minimal example_
+- **HTTP/1.1 server** — [`runtime/stdlib/http.kara`](runtime/stdlib/http.kara) · `Server.serve(addr, handler)` over `Fn(Request) -> Response` · [minimal example](examples/std_net/http_hello.kara)
+- **TLS** — [`runtime/stdlib/tls.kara`](runtime/stdlib/tls.kara) · `Server.serve_tls(addr, cert, key, handler)`; `TlsListener` / `TlsStream` for raw sockets · [minimal example](examples/std_net/https_hello.kara)
+- **WebSocket** — [`runtime/stdlib/ws.kara`](runtime/stdlib/ws.kara) · `WebSocket.accept` / `accept_tls`, `recv_text` / `send_text` · [minimal example](examples/std_net/ws_echo.kara)
+
+The same surface, at scale: [`examples/ws_idle_holder`](examples/ws_idle_holder)
+holds 2M idle WebSocket-over-TLS connections (see Concurrency Runtime above).
 
 ### Performance
 
-Cross-language benchmarks vs. Rust and Go, reported in two lanes:
+Cross-language benchmarks vs. Rust (`rustc -O`), C (`clang -O3`), and Go
+(`go build`) live in the **[kara-katas](https://github.com/karalang/kara-katas)**
+repo — one corpus of algorithm kernels, each in multiple languages, with
+the data feed and chart generator versioned alongside the code. Full
+chart set and methodology: **[BENCHMARKS.md](https://github.com/karalang/kara-katas/blob/main/BENCHMARKS.md)**;
+raw numbers: **[bench-results.json](https://github.com/karalang/kara-katas/blob/main/bench-results.json)**.
 
-- **Sequential lane** (`KARAC_AUTO_PAR=0`): apples-to-apples comparison against single-threaded Rust/Go. **This is the headline lane.**
-- **Auto-parallel lane** (default): Kāra with the auto-par runtime enabled, reported separately and clearly labeled.
+**Sequential lane** (`KARAC_AUTO_PAR=0`) — the headline, apples-to-apples
+against single-threaded Rust/C/Go:
 
-_TBD: per-kata table and graphs, sourced from `bench/` and the `kara-katas` repo. Sequential lane leads; auto-par follows in its own callout._
+- **Runtime** ([chart](https://github.com/karalang/kara-katas/blob/main/graphs/runtime-seq.svg)) — Kāra tracks C closely and straddles the Rust baseline: ahead on allocation/RC- and string-heavy kernels, behind on a few tight numeric loops. Go trails on most single-threaded work.
+- **Binary size** ([chart](https://github.com/karalang/kara-katas/blob/main/graphs/binary-seq.svg)) — C-sized (~33 KiB) for most programs, rising to a ~285 KiB floor when the larger runtime surface links. Rust ~14× above C; Go ~70× (runtime + GC in every binary).
+- **Runtime memory** ([chart](https://github.com/karalang/kara-katas/blob/main/graphs/rss-seq.svg)) — Kāra/C/Rust at parity; Kāra runs leak-free at native footprint. Go's GC heap is 2–8×.
+- **Compile cost** ([time](https://github.com/karalang/kara-katas/blob/main/graphs/compile-elapsed.svg) · [memory](https://github.com/karalang/kara-katas/blob/main/graphs/compile-rss.svg)) — faster than `rustc -O` on every program (~0.55–0.8×) and ~0.3× its peak memory.
+
+**Auto-parallel lane** (default runtime, reported separately) — Kāra's
+compiler auto-parallelizes dependency-free reductions/maps with no
+`rayon`, no goroutines, no thread plumbing, and no data-race risk
+([chart](https://github.com/karalang/kara-katas/blob/main/graphs/autopar-speedup.svg)).
+This is *intra-Kāra* (same source, auto-par vs sequential): **3.7×** on a
+~100 ns kernel up to **13.4×** on a heavier one, against an 18-core
+ceiling. It applies to data-parallel work over large datasets — not
+I/O-bound, tiny, or sequentially-dependent loops, where the compiler's
+cost gate declines to parallelize. A full cross-language parallel lane
+(Kāra auto-par vs Rust `rayon` vs Go goroutines) lands as more parallel
+katas do.
 
 ### Toolchain
 
@@ -179,7 +205,8 @@ _TBD: per-kata table and graphs, sourced from `bench/` and the `kara-katas` repo
 ### Targets
 
 - **Native** — the v1 compile target.
-- **WASM, GPU, and embedded** — on the roadmap (Phase 10); one language across targets under per-target profile constraints. GPU ships as a compile target first; call-site ergonomics come later. See [docs/design.md](docs/design.md).
+- **WASM** (`wasm32-wasip1`) — single-file compute builds work today: `karac build x.kara --target=wasm_wasi` emits a `.wasm` that runs under any WASI host (arith, `Vec`, `Option`, `String`, `Map`, JSON, structs/enums/`match`, recursion, file I/O via WASI preopens — byte-identical to native). Verified end-to-end under `node:wasi`; see [`examples/wasm_hello`](examples/wasm_hello). **Compute-only for now** — no networking or auto-parallelism on WASM yet (the wasm runtime archive is built without the tokio/scheduler surface), and project-mode/browser builds are in progress. Scope: [docs/implementation_checklist/phase-10-targets.md](docs/implementation_checklist/phase-10-targets.md).
+- **GPU and embedded** — on the roadmap (Phase 10); one language across targets under per-target profile constraints. GPU ships as a compile target first; call-site ergonomics come later. See [docs/design.md](docs/design.md).
 
 ## Docs
 
