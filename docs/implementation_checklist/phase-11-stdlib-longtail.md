@@ -10,7 +10,7 @@
 
 See `../design.md § f16 / bf16 Implementation` for the full design shape.
 
-- [ ] Reserve `f16` and `bf16` as lexer-level keywords in v1 (compile error if used as identifiers — prevents future source-breaking rename). **The only item in this section with a deadline ahead of the rest of Phase 11 — it must land before any v1 syntax freeze, even if the types themselves come later.**
+- [x] Reserve `f16` and `bf16` as lexer-level keywords in v1 (compile error if used as identifiers — prevents future source-breaking rename). ✓ Already shipped — in the lexer since the first commit (`src/lexer.rs` reserved-future-numeric-keyword arm emits `Token::Error` for both; covered by `tests/lexer.rs::test_f16_is_reserved_keyword` / `test_bf16_is_reserved_keyword`). E2E-verified 2026-06-06: `let f16 = 1;` / `let bf16 = 2;` fail with the reserved-keyword diagnostic, exit 1. `r#f16` raw-identifier escape works (raw-ident path bypasses the keyword table by design). The v1-syntax-freeze deadline this item carried is satisfied.
 - [ ] Type system: add `f16` (IEEE 754-2008 half-precision) and `bf16` (bfloat16) as primitive types with the same trait surface as `f32`/`f64` (`PartialEq`, `PartialOrd`, arithmetic traits, `Copy`) but NOT `Eq`/`Ord`/`Hash`.
 - [ ] Codegen: lower `f16` → LLVM `half`, `bf16` → LLVM `bfloat`. Native instruction emission on capable targets; software promotion to `f32` on others with a `f16_software_emulated` performance lint.
 - [ ] Implicit widening: `f16` → `f32`, `bf16` → `f32` (both lossless).
