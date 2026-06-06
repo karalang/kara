@@ -10466,3 +10466,61 @@ fn test_array_const_args_unaffected_by_shape_literals() {
     let args = first_param_generic_args(&program);
     assert!(matches!(args[1], GenericArg::Const(_)));
 }
+
+// ── Dim/Shape generic-parameter declarations (Phase 11 Q1) ──────────
+
+#[test]
+fn test_variadic_shape_param_parses() {
+    let program =
+        parse_ok("fn reduce[T, ...S](t: Tensor[T, S]) -> T { t.first() }\nfn main() {}\n");
+    let func = program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(f) if f.name == "reduce" => Some(f),
+            _ => None,
+        })
+        .expect("fn reduce not found");
+    let gp = func.generic_params.as_ref().expect("generic params");
+    assert_eq!(gp.params.len(), 2);
+    assert!(!gp.params[0].is_variadic_shape);
+    assert!(gp.params[1].is_variadic_shape);
+    assert_eq!(gp.params[1].name, "S");
+}
+
+#[test]
+fn test_dim_bound_param_parses() {
+    let program = parse_ok("fn f[T, N: Dim](t: Tensor[T, [N]]) { }\nfn main() {}\n");
+    let func = program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(f) if f.name == "f" => Some(f),
+            _ => None,
+        })
+        .expect("fn f not found");
+    let gp = func.generic_params.as_ref().expect("generic params");
+    assert_eq!(gp.params[1].name, "N");
+    assert_eq!(gp.params[1].bounds.len(), 1);
+    assert_eq!(gp.params[1].bounds[0].path, vec!["Dim"]);
+}
+
+#[test]
+fn test_variadic_shape_param_mid_list() {
+    // transpose-style: `[T, ...S, M: Dim, N: Dim]`
+    let program = parse_ok(
+        "fn transpose[T, ...S, M: Dim, N: Dim](t: Tensor[T, [...S, M, N]]) -> Tensor[T, [...S, N, M]] { t }\nfn main() {}\n",
+    );
+    let func = program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(f) if f.name == "transpose" => Some(f),
+            _ => None,
+        })
+        .expect("fn transpose not found");
+    let gp = func.generic_params.as_ref().expect("generic params");
+    assert_eq!(gp.params.len(), 4);
+    assert!(gp.params[1].is_variadic_shape);
+    assert!(!gp.params[2].is_variadic_shape);
+}

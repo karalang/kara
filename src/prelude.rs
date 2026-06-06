@@ -1238,6 +1238,7 @@ fn stub_generics(name: &str, span: &Span) -> Option<GenericParams> {
                 bounds: Vec::new(),
                 is_const: false,
                 const_type: None,
+                is_variadic_shape: false,
             })
             .collect(),
     })

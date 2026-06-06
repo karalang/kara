@@ -66,6 +66,33 @@ impl super::Parser {
                 continue;
             }
             let pstart = self.current_span();
+            // `...S` — shape-variadic param (syntax.md § GENERIC_PARAM):
+            // binds a full dim list (Shape kind). Bounds are not legal on
+            // a variadic shape param at v1; the name follows the same
+            // Type-class convention as type params.
+            if self.check(&Token::DotDotDot) {
+                self.advance();
+                let name = self.expect_identifier()?;
+                let pname_span = self.span_from(&pstart);
+                self.check_ident_class(
+                    &name,
+                    IdentClass::Type,
+                    "shape-variadic generic parameter",
+                    pname_span,
+                );
+                params.push(GenericParam {
+                    name,
+                    bounds: Vec::new(),
+                    is_const: false,
+                    const_type: None,
+                    is_variadic_shape: true,
+                    span: self.span_from(&pstart),
+                });
+                if !self.eat(&Token::Comma) {
+                    break;
+                }
+                continue;
+            }
             // Check for const generic: `const N: Type`
             if self.check(&Token::Const) {
                 self.advance();
@@ -88,6 +115,7 @@ impl super::Parser {
                     bounds: Vec::new(),
                     is_const: true,
                     const_type: Some(ty),
+                    is_variadic_shape: false,
                     span: self.span_from(&pstart),
                 });
             } else {
@@ -136,6 +164,7 @@ impl super::Parser {
                         bounds,
                         is_const: false,
                         const_type: None,
+                        is_variadic_shape: false,
                         span: self.span_from(&pstart),
                     });
                 }

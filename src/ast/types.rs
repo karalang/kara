@@ -59,6 +59,12 @@ pub struct GenericParam {
     pub bounds: Vec<TraitBound>,
     pub is_const: bool,
     pub const_type: Option<TypeExpr>,
+    /// `...S` — shape-variadic parameter (syntax.md § GENERIC_PARAM
+    /// variadic row): binds a full dim list (Shape kind). Mutually
+    /// exclusive with `is_const`. A `: Dim` bound on a non-variadic
+    /// param is carried in `bounds` and classified at the typechecker
+    /// (like the structural `Effect` marker).
+    pub is_variadic_shape: bool,
     pub span: Span,
 }
 

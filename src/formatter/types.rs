@@ -18,6 +18,9 @@ impl super::Formatter {
             if p.is_const {
                 self.write_str("const ");
             }
+            if p.is_variadic_shape {
+                self.write_str("...");
+            }
             self.write_ident(&p.name);
             if let Some(ref ct) = p.const_type {
                 self.write_str(": ");
