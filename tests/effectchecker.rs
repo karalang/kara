@@ -7625,6 +7625,49 @@ fn test_pub_fn_with_reads_filesystem_declared_accepts_bufreader_lines() {
     );
 }
 
+#[test]
+fn test_pub_fn_calling_bufreader_fill_buf_must_declare_reads_filesystem() {
+    // fill_buf refills the buffer from the underlying reader, so it carries
+    // reads(FileSystem); a pub fn calling it without declaring the effect must
+    // fail.
+    let result = effectcheck_full_pipeline(
+        "pub fn peek(br: ref BufReader[File]) {
+             let _ = br.fill_buf();
+         }",
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("reads(FileSystem)")),
+        "expected MissingEffectDeclaration for reads(FileSystem); got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_pub_fn_calling_bufreader_consume_needs_no_effect() {
+    // consume only advances the buffer cursor — no I/O — so a pub fn calling
+    // it without any effect declaration is clean (proves consume is not
+    // seeded with reads(FileSystem)).
+    let result = effectcheck_full_pipeline(
+        "pub fn skip(br: ref BufReader[File]) {
+             br.consume(3);
+         }",
+    );
+    let real_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .collect();
+    assert!(
+        real_errors.is_empty(),
+        "expected clean effectcheck for effect-free consume; got: {:?}",
+        real_errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
 // ── Refinement types (phase-9 step 3) ───────────────────────────
 //
 // `x as Refined` is a runtime predicate assertion that panics on

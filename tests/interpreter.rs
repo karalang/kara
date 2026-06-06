@@ -5038,6 +5038,98 @@ fn test_bufreader_lines_empty_file_yields_nothing() {
     let _ = std::fs::remove_file(&tmp);
 }
 
+#[test]
+fn test_bufreader_fill_buf_peek_consume_read_roundtrip() {
+    // fill_buf peeks the buffered bytes without consuming; consume(5) advances
+    // past "HELLO"; a subsequent read then returns the remaining "WORLD".
+    let tmp = std::env::temp_dir().join("karac_test_bufreader_peek.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(&tmp, b"HELLOWORLD").expect("seed temp");
+    let src = format!(
+        "fn main() {{
+             match File.open(\"{path}\") {{
+                 Ok(f) => {{
+                     let br = BufReader.new(f);
+                     match br.fill_buf() {{
+                         Ok(buf) => println(\"peek len=\" + buf.len().to_string()
+                             + \" b0=\" + buf[0].to_string()),
+                         Err(_) => println(\"fill err\"),
+                     }}
+                     br.consume(5);
+                     let rest = [0u8, 0u8, 0u8, 0u8, 0u8];
+                     match br.read(rest[0..5]) {{
+                         Ok(n) => println(\"read n=\" + n.to_string()
+                             + \" first=\" + rest[0].to_string()),
+                         Err(_) => println(\"read err\"),
+                     }}
+                 }}
+                 Err(_) => println(\"open err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    // 'H' == 72 (peeked, not consumed), 'W' == 87 (first byte after consume(5)).
+    assert_eq!(out, "peek len=10 b0=72\nread n=5 first=87\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn test_bufreader_fill_buf_at_eof_returns_empty_slice() {
+    // fill_buf on an empty file returns Ok with a zero-length slice (EOF).
+    let tmp = std::env::temp_dir().join("karac_test_bufreader_fillbuf_eof.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(&tmp, b"").expect("seed temp");
+    let src = format!(
+        "fn main() {{
+             match File.open(\"{path}\") {{
+                 Ok(f) => {{
+                     let br = BufReader.new(f);
+                     match br.fill_buf() {{
+                         Ok(buf) => println(\"len=\" + buf.len().to_string()),
+                         Err(_) => println(\"fill err\"),
+                     }}
+                 }}
+                 Err(_) => println(\"open err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "len=0\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn test_bufreader_consume_clamps_past_buffer() {
+    // consume(n) with n past the buffered length is clamped (no panic); after
+    // consuming all 3 buffered bytes, a read returns 0 (EOF).
+    let tmp = std::env::temp_dir().join("karac_test_bufreader_consume_clamp.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(&tmp, b"abc").expect("seed temp");
+    let src = format!(
+        "fn main() {{
+             match File.open(\"{path}\") {{
+                 Ok(f) => {{
+                     let br = BufReader.new(f);
+                     let _ = br.fill_buf();
+                     br.consume(100);
+                     let rest = [0u8, 0u8, 0u8];
+                     match br.read(rest[0..3]) {{
+                         Ok(n) => println(\"n=\" + n.to_string()),
+                         Err(_) => println(\"read err\"),
+                     }}
+                 }}
+                 Err(_) => println(\"open err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "n=0\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
 // ── std.runtime introspection (Debugger Contract slice 5) ─────────────────────
 //
 // The tree-walk interpreter has its own par-block evaluation path and does

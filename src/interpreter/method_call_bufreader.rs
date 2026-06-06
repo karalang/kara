@@ -19,6 +19,7 @@
 //! deferred to follow-on slices.
 
 use std::io::{BufRead, Read};
+use std::sync::{Arc, RwLock};
 
 use crate::ast::*;
 use crate::token::Span;
@@ -145,6 +146,66 @@ impl<'a> super::Interpreter<'a> {
                 // attributed here at the `lines()` call.
                 self.track_effect("reads(FileSystem)");
                 Some(Value::LinesIter(reader_arc.clone()))
+            }
+            "fill_buf" => {
+                // `fill_buf() -> Result[Slice[u8], IoError]`: fill the internal
+                // buffer (if empty) from the underlying reader and return its
+                // currently-buffered, not-yet-consumed bytes (empty at EOF).
+                // The returned slice is a fresh *snapshot copy* of the buffer
+                // — the tree-walk interpreter can't hand back a `Slice` that
+                // aliases std::io::BufReader's private buffer — so it stays
+                // valid across a following `consume`; re-call `fill_buf` to
+                // observe the post-consume buffer.
+                self.track_effect("reads(FileSystem)");
+                let fill_result = {
+                    let mut guard = reader_arc.lock().unwrap();
+                    // Copy out before releasing the borrow on `guard`.
+                    guard.fill_buf().map(|bytes| bytes.to_vec())
+                };
+                match fill_result {
+                    Ok(bytes) => {
+                        let len = bytes.len();
+                        let storage: Vec<Value> =
+                            bytes.into_iter().map(|b| Value::Int(b as i64)).collect();
+                        Some(io_ok(Value::Slice {
+                            storage: Arc::new(RwLock::new(storage)),
+                            start: 0,
+                            len,
+                            mutable: false,
+                        }))
+                    }
+                    Err(e) => Some(io_err_value(io_error_from_std(&e))),
+                }
+            }
+            "consume" => {
+                // `consume(n: usize)`: mark `n` already-peeked bytes (from a
+                // preceding `fill_buf`) as consumed so they aren't returned
+                // again by `fill_buf` / `read`. No I/O, no effect; returns Unit
+                // (mirrors Rust's `BufRead::consume`). Clamped to the available
+                // buffered length — std::io::BufReader saturates an over-count,
+                // but being explicit avoids relying on that.
+                let Some(n_arg) = args.first() else {
+                    return Some(self.record_runtime_error(
+                        "BufReader.consume expects a `usize` count argument".to_string(),
+                        span,
+                    ));
+                };
+                let n = match self.eval_expr_inner(&n_arg.value) {
+                    Value::Int(n) => n.max(0) as usize,
+                    other => {
+                        return Some(self.record_runtime_error(
+                            format!(
+                                "BufReader.consume expects a `usize` count, got `{}`",
+                                other.variant_name()
+                            ),
+                            span,
+                        ));
+                    }
+                };
+                let mut guard = reader_arc.lock().unwrap();
+                let avail = guard.buffer().len();
+                guard.consume(n.min(avail));
+                Some(Value::Unit)
             }
             _ => None,
         }

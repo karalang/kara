@@ -770,6 +770,10 @@ impl<'a> EffectChecker<'a> {
                 // reads happen during iteration (no method-call site of their
                 // own), so the effect is attributed at the `lines()` call.
                 "BufReader.lines",
+                // `fill_buf()` refills the internal buffer from the underlying
+                // reader, so it reads. (`consume()` only advances the buffer
+                // cursor — no I/O — and is intentionally absent here.)
+                "BufReader.fill_buf",
             ] {
                 let mut set = EffectSet::new();
                 set.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span.clone()));

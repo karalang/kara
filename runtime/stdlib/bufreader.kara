@@ -26,10 +26,10 @@
 // read), so they carry no effect. The read methods carry
 // `reads(FileSystem)`.
 //
-// Interpreter-only MVP. `fill_buf` / `consume` (low-level peek/advance)
-// and the cancel-safety `#[cancel_unsafe_until(...)]` annotation are
-// deferred to follow-on slices — see the `BufReader[R]` entry in
-// `phase-8-stdlib-floor.md` for the v1 surface + deferral list.
+// Interpreter-only MVP. The cancel-safety `#[cancel_unsafe_until(...)]`
+// annotation is deferred to a follow-on slice (phase-6 slice 3b) — see the
+// `BufReader[R]` entry in `phase-8-stdlib-floor.md` for the v1 surface +
+// deferral list.
 //
 // **`lines()`.** Returns a `LinesIter` that the `for` loop drains one line
 // at a time, yielding `Result[String, IoError]` per line (the line with its
@@ -91,4 +91,22 @@ impl[R] BufReader[R] {
     // call (see `try_eval_bufreader_method`).
     #[compiler_builtin]
     fn lines(ref self) -> LinesIter with reads(FileSystem) { LinesIter { } }
+
+    // Low-level peek: fill the internal buffer (if empty) from the
+    // underlying reader and return its currently-buffered, not-yet-consumed
+    // bytes as a `Slice[u8]` (empty at EOF). The slice is a snapshot copy in
+    // the interpreter MVP — it does not alias the live buffer — so it stays
+    // valid across a following `consume`; re-call `fill_buf` to observe the
+    // post-consume buffer. Pair with `consume` to advance past peeked bytes.
+    // Carries `reads(FileSystem)` (it reads from the underlying reader to
+    // refill).
+    #[compiler_builtin]
+    fn fill_buf(ref self) -> Result[Slice[u8], IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    // Mark `n` bytes (from a preceding `fill_buf`) as consumed so they are
+    // not returned again by `fill_buf` / `read`. No I/O — advances the buffer
+    // cursor only — so it carries no effect; returns Unit. Mirrors Rust's
+    // `BufRead::consume`; an `n` past the buffered length is clamped.
+    #[compiler_builtin]
+    fn consume(ref self, n: usize) { }
 }

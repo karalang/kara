@@ -8629,6 +8629,49 @@ fn test_bufreader_lines_for_loop_binds_result_string() {
     );
 }
 
+#[test]
+fn test_bufreader_fill_buf_returns_result_slice_and_consume_takes_usize() {
+    // br.fill_buf() -> Result[Slice[u8], IoError]; matching Ok binds a
+    // Slice[u8] (usable where a slice is, e.g. `.len()`). br.consume(n: usize)
+    // returns Unit.
+    typecheck_ok(
+        "fn driver() with reads(FileSystem) {
+             match File.open(\"x.txt\") {
+                 Ok(f) => {
+                     let br = BufReader.new(f);
+                     match br.fill_buf() {
+                         Ok(buf) => { let _ = buf.len(); }
+                         Err(_) => {}
+                     }
+                     br.consume(3);
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
+fn test_bufreader_consume_wrong_arg_type_is_error() {
+    // consume expects a `usize` count; passing a String must be rejected.
+    let errs = typecheck_errors(
+        "fn driver() with reads(FileSystem) {
+             match File.open(\"x.txt\") {
+                 Ok(f) => {
+                     let br = BufReader.new(f);
+                     br.consume(\"nope\");
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+    assert!(
+        !errs.is_empty(),
+        "expected typechecker rejection for non-usize consume count; errs={:?}",
+        errs,
+    );
+}
+
 // ── std.runtime introspection signatures (Debugger Contract slice 5) ─────────
 //
 // Three Kāra-callable APIs declared in `runtime/stdlib/runtime.kara`. The
