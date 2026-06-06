@@ -388,6 +388,22 @@ special tooling. The complexity is in selecting good examples. Bonus: use this
 pipeline to process real public data (census data, stock prices) so the demo
 has realistic inputs.
 
+**This is the data-engineering flagship** (the data-pipeline demo previously
+tracked as "Flagship Demo 3" in `docs/implementation_checklist/phase-6-runtime.md`;
+**demoted to post-launch 2026-06-06** to match this catalog's launch sequence,
+where the data pipeline lands at Month 3 rather than Day 1). The phase-6 stub
+framed a **runtime-exercising variant** worth keeping in scope here: a
+Kafka → S3 → DuckDB-shape pipeline over the same v1 runtime (`Pool[T]`, TLS,
+`std.tracing`) — a service-shaped alternative to the batch-CSV ETL above. That
+variant doubles as the verification artifact for the v64 second-order-positive
+claim (backend-first investment compounds into the data-engineering persona):
+the same `Pool[T]` + TLS + tracing surface built for the server demos is reused
+wholesale, so the data-eng story is cheap incremental engineering on top of the
+v1 runtime rather than a separate build-out. Either shape (refinement-typed CSV
+ETL, or the live Kafka→S3→DuckDB service) works; the CSV form is the cheaper
+"correctness by construction" cut, the service form the "your backend runtime
+already covers data-eng" cut.
+
 ---
 
 ### Demo 7: Chronicle — Compiler Written in Itself
