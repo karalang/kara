@@ -32940,4 +32940,79 @@ fn main() {
             assert_eq!(out, "42\n7\n", "host-provided labs must answer");
         }
     }
+
+    // ── Sub-64-bit scalar widths at ABI boundaries ──────────────────
+    //
+    // Codegen's internal convention is default-width scalars (unsuffixed
+    // int literals and annotated `let` slots are i64, float literals
+    // f64) while fn signatures lower at their declared width. The
+    // boundary coercion (`coerce_scalar_to_type` + the binop width
+    // harmonization) is what makes sub-64-bit signatures usable at all —
+    // before it, `fn f() -> i32 { return 0; }` emitted `ret i64 0`,
+    // `f(5)` against an i8 param emitted `call i8 @f(i64 5)`, and
+    // `x + 1` on an i8 param emitted `add nsw i8 %x, i64 1` (every one
+    // a module-verification failure; surfaced 2026-06-05 by the
+    // browser-WASM slice's smoke programs, filed + fixed via bugs.md).
+
+    #[test]
+    fn test_ir_sub64_int_return_coerces_to_declared_width() {
+        let ir = ir_for(
+            "fn f() -> i32 {\n    return 0;\n}\n\
+             fn main() { println(f()); }\n",
+        );
+        let f_start = ir
+            .find("define internal i32 @f(")
+            .or_else(|| ir.find("define i32 @f("))
+            .expect("fn f must lower at its declared i32 width");
+        let f_body = &ir[f_start..ir[f_start..].find("\n}").map(|i| f_start + i).unwrap()];
+        assert!(
+            f_body.contains("ret i32"),
+            "f's return must be coerced to the declared i32 width: {f_body}",
+        );
+        assert!(
+            !f_body.contains("ret i64"),
+            "no i64-width ret may survive in f: {f_body}",
+        );
+    }
+
+    #[test]
+    fn test_e2e_sub64_widths_across_boundaries() {
+        // One program per boundary the coercion covers: explicit + tail
+        // returns (i32/i16/f32), an annotated-let u8 (i64-backed slot,
+        // trunc at ret — 200 pins zero-extension on the print path),
+        // literal call args landing in i8 params (free fn AND method),
+        // narrow-param arithmetic against a default-width literal (int
+        // and float lanes), and a negative i8 round trip (sign
+        // preserved through trunc + print sext).
+        let out = run_program(
+            "struct P { v: i64 }\n\
+             impl P {\n\
+                 fn add_small(self, k: i8) -> i8 {\n        return k + 1;\n    }\n\
+             }\n\
+             fn ret_i32() -> i32 {\n    return 0;\n}\n\
+             fn tail_i32() -> i32 {\n    7\n}\n\
+             fn ret_i16() -> i16 {\n    return 3;\n}\n\
+             fn u8_var() -> u8 {\n    let x: u8 = 200;\n    return x;\n}\n\
+             fn i8_inc(x: i8) -> i8 {\n    return x + 1;\n}\n\
+             fn f32_op(x: f32) -> f32 {\n    return x + 1.5;\n}\n\
+             fn main() {\n\
+                 println(ret_i32());\n\
+                 println(tail_i32());\n\
+                 println(ret_i16());\n\
+                 println(u8_var());\n\
+                 println(i8_inc(5));\n\
+                 println(i8_inc(0 - 2));\n\
+                 let p = P { v: 0 };\n\
+                 println(p.add_small(4));\n\
+                 println(f32_op(2.0));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "0\n7\n3\n200\n6\n-1\n5\n3.5\n",
+                "sub-64-bit widths must round-trip correct values across \
+                 ret, call-arg, method-arg, and binop boundaries",
+            );
+        }
+    }
 }

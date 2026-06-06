@@ -904,6 +904,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // conventional shape.
         self.pack_niche_abi_args(&name, &mut compiled_args);
 
+        // Scalar width coercion at the call-arg boundary — internal
+        // values default to i64/f64 widths while the callee's params
+        // lower at their declared width, so `f(5)` against
+        // `fn f(x: i8)` would emit `call i8 @f(i64 5)` and fail
+        // verification. Covers user fns AND extern/host declarations
+        // (same dispatch path). See `coerce_scalar_to_type`.
+        self.coerce_args_to_fn_params(func, &mut compiled_args);
+
         // Phase-7 line 5 sub-item 1 — hot-swap indirect dispatch.
         // For callees registered in `hot_swap_slots`, lower the call as
         // a load from the slot in `@karac_hotswap_table` followed by an

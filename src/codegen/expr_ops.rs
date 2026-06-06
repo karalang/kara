@@ -1333,6 +1333,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(n.as_str())
                 .map(|s| is_uint_name(s.as_str()))
                 .unwrap_or(false),
+            // Call result — the callee's declared return-type name
+            // (registered in `fn_return_type_names` during the function
+            // walk) carries the signedness. Without this arm,
+            // `println(u8_fn())` sign-extends the narrow result on the
+            // print path (200 printed as -56 — surfaced by the
+            // sub-64-bit boundary-coercion fix's E2E, 2026-06-06).
+            ExprKind::Call { callee, .. } => {
+                if let ExprKind::Identifier(n) = &callee.kind {
+                    return self
+                        .fn_return_type_names
+                        .get(n.as_str())
+                        .map(|s| is_uint_name(s.as_str()))
+                        .unwrap_or(false);
+                }
+                false
+            }
             // `vec_of_u32s[i]` / `array_of_u32s[i]` — check element TypeExpr.
             ExprKind::Index { object, .. } => {
                 if let ExprKind::Identifier(n) = &object.kind {
@@ -1771,6 +1787,35 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let lv = lhs.into_int_value();
         let rv = rhs.into_int_value();
+        // Width harmonization: a legal mixed-width int pair is always
+        // "narrow-typed operand × default-i64 literal" (two
+        // differently-typed int VARS are a type error; the Q4 rule
+        // makes the typechecker type the op at the NARROW side) — so
+        // truncate the wide side down to match source semantics.
+        // Without this, `x + 1` on an `i8` param emits
+        // `add nsw i8 %x, i64 1`, which fails module verification.
+        // Mirror rationale in `compile_float_binop`'s harmonization.
+        let (lv, rv) = {
+            let lw = lv.get_type().get_bit_width();
+            let rw = rv.get_type().get_bit_width();
+            if lw > rw {
+                (
+                    self.builder
+                        .build_int_truncate(lv, rv.get_type(), "iop.l.tr")
+                        .unwrap(),
+                    rv,
+                )
+            } else if rw > lw {
+                (
+                    lv,
+                    self.builder
+                        .build_int_truncate(rv, lv.get_type(), "iop.r.tr")
+                        .unwrap(),
+                )
+            } else {
+                (lv, rv)
+            }
+        };
         let result = match op {
             BinOp::Add => self.builder.build_int_nsw_add(lv, rv, "add").unwrap(),
             BinOp::Sub => self.builder.build_int_nsw_sub(lv, rv, "sub").unwrap(),
@@ -2066,12 +2111,133 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Scalar width coercion at a typed ABI boundary (a `ret` whose
+    /// function declares a sub-64-bit type, a call arg landing in a
+    /// narrower-declared param). Kāra codegen's internal convention is
+    /// default-width scalars — unsuffixed int literals and annotated
+    /// `let` slots are i64, float literals f64 — while function
+    /// signatures lower at their declared width, so a legal program
+    /// reaches the boundary with a wider value than the slot
+    /// (`ret i64 0` vs `i32`, `call i8 @f(i64 5)`). Truncate down /
+    /// extend up to the declared type; same-class same-width and every
+    /// non-scalar shape pass through untouched, so this is safe to
+    /// apply unconditionally at the boundary (it never converts across
+    /// classes — the verifier still catches genuinely-wrong IR).
+    /// Widening uses sext (Kāra's default int literal type is signed;
+    /// legal programs only widen via explicit `as`, which carries its
+    /// own signedness — see `compile_cast`).
+    pub(super) fn coerce_scalar_to_type(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        target: BasicTypeEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        match (val, target) {
+            (BasicValueEnum::IntValue(iv), BasicTypeEnum::IntType(tt)) => {
+                let src_w = iv.get_type().get_bit_width();
+                let dst_w = tt.get_bit_width();
+                if dst_w < src_w {
+                    self.builder
+                        .build_int_truncate(iv, tt, "bnd.tr")
+                        .unwrap()
+                        .into()
+                } else if dst_w > src_w {
+                    self.builder
+                        .build_int_s_extend(iv, tt, "bnd.sx")
+                        .unwrap()
+                        .into()
+                } else {
+                    val
+                }
+            }
+            (BasicValueEnum::FloatValue(fv), BasicTypeEnum::FloatType(ft))
+                if fv.get_type() != ft =>
+            {
+                self.builder
+                    .build_float_cast(fv, ft, "bnd.fcast")
+                    .unwrap()
+                    .into()
+            }
+            _ => val,
+        }
+    }
+
+    /// Boundary coercion for the current function's `ret`: coerce a
+    /// scalar return value to the declared LLVM return type. No-op for
+    /// void fns and non-scalar returns.
+    pub(super) fn coerce_to_current_ret_type(
+        &self,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        match self.current_fn.and_then(|f| f.get_type().get_return_type()) {
+            Some(ret_ty) => self.coerce_scalar_to_type(val, ret_ty),
+            None => val,
+        }
+    }
+
+    /// Boundary coercion for call args: coerce each scalar arg to the
+    /// callee's declared param type (`call i8 @f(i64 5)` →
+    /// `call i8 @f(i8 5)`). Walks only the zip of declared params ×
+    /// supplied args, so variadic tails and arity mismatches (the
+    /// verifier's problem, not ours) pass through.
+    pub(super) fn coerce_args_to_fn_params(
+        &self,
+        func: inkwell::values::FunctionValue<'ctx>,
+        args: &mut [inkwell::values::BasicMetadataValueEnum<'ctx>],
+    ) {
+        for (param_ty, arg) in func
+            .get_type()
+            .get_param_types()
+            .iter()
+            .zip(args.iter_mut())
+        {
+            let val: BasicValueEnum<'ctx> = match *arg {
+                inkwell::values::BasicMetadataValueEnum::IntValue(iv) => iv.into(),
+                inkwell::values::BasicMetadataValueEnum::FloatValue(fv) => fv.into(),
+                _ => continue,
+            };
+            let target: BasicTypeEnum<'ctx> = match *param_ty {
+                inkwell::types::BasicMetadataTypeEnum::IntType(t) => t.into(),
+                inkwell::types::BasicMetadataTypeEnum::FloatType(t) => t.into(),
+                _ => continue,
+            };
+            let coerced = self.coerce_scalar_to_type(val, target);
+            *arg = inkwell::values::BasicMetadataValueEnum::from(coerced);
+        }
+    }
+
     pub(super) fn compile_float_binop(
         &self,
         op: &BinOp,
         lf: inkwell::values::FloatValue<'ctx>,
         rf: inkwell::values::FloatValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Width harmonization: a legal mixed-width pair is always "real
+        // f32 operand × default-f64 float literal" (two differently-
+        // typed float VARS are a type error), and the typechecker typed
+        // the op at the narrower f32 — so cast the wide side DOWN. The
+        // literal-valued side converts exactly for any value the
+        // narrow type represents; computing in f32 matches source
+        // semantics (vs. widening, which would double-round on the way
+        // back down at the ret/arg boundary).
+        let f32_t = self.context.f32_type();
+        let f64_t = self.context.f64_type();
+        let (lf, rf) = if lf.get_type() == f64_t && rf.get_type() == f32_t {
+            (
+                self.builder
+                    .build_float_cast(lf, f32_t, "fop.l.tr")
+                    .unwrap(),
+                rf,
+            )
+        } else if lf.get_type() == f32_t && rf.get_type() == f64_t {
+            (
+                lf,
+                self.builder
+                    .build_float_cast(rf, f32_t, "fop.r.tr")
+                    .unwrap(),
+            )
+        } else {
+            (lf, rf)
+        };
         match op {
             BinOp::Add => Ok(self.builder.build_float_add(lf, rf, "fadd").unwrap().into()),
             BinOp::Sub => Ok(self.builder.build_float_sub(lf, rf, "fsub").unwrap().into()),

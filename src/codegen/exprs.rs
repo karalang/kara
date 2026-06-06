@@ -440,6 +440,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         let packed = self.option_value_to_niche_ptr(v);
                         self.builder.build_return(Some(&packed)).unwrap();
                     } else {
+                        // Scalar width coercion at the ret boundary —
+                        // internal values default to i64/f64 widths
+                        // (literals, annotated `let` slots) while the
+                        // signature declares the real width; without
+                        // the trunc, `fn f() -> i32 { return 0; }`
+                        // emits `ret i64 0` and fails verification.
+                        // See `coerce_scalar_to_type`.
+                        let v = self.coerce_to_current_ret_type(v);
                         self.builder.build_return(Some(&v)).unwrap();
                     }
                 } else {

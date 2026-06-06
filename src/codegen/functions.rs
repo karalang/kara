@@ -880,6 +880,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     let packed = self.option_value_to_niche_ptr(val);
                     self.builder.build_return(Some(&packed)).unwrap();
                 } else {
+                    // Scalar width coercion at the tail-ret boundary —
+                    // mirrors the explicit-`return` site in `exprs.rs`
+                    // (`fn f() -> i32 { 0 }` would otherwise emit
+                    // `ret i64 0`). See `coerce_scalar_to_type`.
+                    let val = self.coerce_to_current_ret_type(val);
                     self.builder.build_return(Some(&val)).unwrap();
                 }
             } else {

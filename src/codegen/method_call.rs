@@ -1347,6 +1347,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Option, never a niche position) so source args line up
                 // with declared params 1..N.
                 self.pack_niche_abi_args(&qualified, &mut compiled_args);
+                // Scalar width coercion at the method-arg boundary —
+                // mirrors the free-fn site in `call_dispatch.rs`
+                // (`p.scale(2)` against `fn scale(self, k: i8)` would
+                // otherwise emit a width-mismatched call). See
+                // `coerce_scalar_to_type`.
+                self.coerce_args_to_fn_params(fn_val, &mut compiled_args);
                 let call_site = self
                     .builder
                     .build_call(fn_val, &compiled_args, "usermethod")
