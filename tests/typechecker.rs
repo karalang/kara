@@ -22759,3 +22759,125 @@ fn main() {}
 "#,
     );
 }
+
+// ── Never-type inference (phase-6 line 487) ─────────────────────────
+//
+// `Never` (`!`) is the bottom type: `LUB(Never, T) = T` for branch joins,
+// and a diverging argument (`todo()` / `todo()`) must not pin a generic
+// metavar below a concrete sibling argument — order-independently. The
+// discriminating probe assigns the inferred value into a `bool` slot: if
+// inference picked the concrete type (e.g. `i64`) the assignment errors
+// with "found 'i64'"; if it (wrongly, or correctly for all-diverging)
+// picked `Never`, the value coerces to `bool` and there is no error.
+
+fn never_type_errors(source: &str) -> Vec<String> {
+    let parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    typecheck(&parsed.program, &resolved)
+        .errors
+        .iter()
+        .map(|e| e.message.clone())
+        .collect()
+}
+
+fn assert_inferred_i64(source: &str, label: &str) {
+    let errs = never_type_errors(source);
+    assert!(
+        errs.iter().any(|m| m.contains("found 'i64'")),
+        "{label}: expected the bool-slot to reject an inferred i64 (proving i64 inference), \
+         got errors: {errs:?}",
+    );
+}
+
+fn assert_inferred_never(source: &str, label: &str) {
+    let errs = never_type_errors(source);
+    assert!(
+        errs.is_empty(),
+        "{label}: expected Never inference (coerces into the bool slot, no error), \
+         got errors: {errs:?}",
+    );
+}
+
+const PICK: &str = "fn pick[T](a: T, b: T) -> T { a }\n";
+const ID: &str = "fn id[T](x: T) -> T { x }\n";
+
+#[test]
+fn never_generic_concrete_first_infers_concrete() {
+    // pick(42, todo()) : i64 — concrete arg first (already worked).
+    assert_inferred_i64(
+        &format!("{PICK}fn f() {{ let y: bool = pick(42, todo()); let _ = y; }}"),
+        "pick(42, todo())",
+    );
+}
+
+#[test]
+fn never_generic_diverging_first_infers_concrete() {
+    // pick(todo(), 42) : i64 — diverging arg FIRST. This is the
+    // order-independence fix: previously bound T=Never and stuck there.
+    assert_inferred_i64(
+        &format!("{PICK}fn f() {{ let y: bool = pick(todo(), 42); let _ = y; }}"),
+        "pick(todo(), 42)",
+    );
+}
+
+#[test]
+fn never_generic_all_diverging_infers_never() {
+    // pick(todo(), todo()) : Never — no concrete constraint anywhere.
+    assert_inferred_never(
+        &format!("{PICK}fn f() {{ let y: bool = pick(todo(), todo()); let _ = y; }}"),
+        "pick(todo(), todo())",
+    );
+}
+
+#[test]
+fn never_single_diverging_arg_infers_never() {
+    // id(todo()) : Never — the sole constraint is Never.
+    assert_inferred_never(
+        &format!("{ID}fn f() {{ let y: bool = id(todo()); let _ = y; }}"),
+        "id(todo())",
+    );
+}
+
+#[test]
+fn never_generic_diverging_first_then_concrete_three_args() {
+    // Deeper order check: diverging arg, then two concretes.
+    assert_inferred_i64(
+        "fn pick3[T](a: T, b: T, c: T) -> T { a }\n\
+         fn f() { let y: bool = pick3(todo(), 7, 9); let _ = y; }",
+        "pick3(todo(), 7, 9)",
+    );
+}
+
+#[test]
+fn never_if_both_arms_one_diverging_infers_concrete() {
+    // if cond { todo() } else { 5 } : i64 (LUB / branch pre-filter).
+    assert_inferred_i64(
+        "fn f() { let y: bool = if true { todo() } else { 5 }; let _ = y; }",
+        "if { todo() } else { 5 }",
+    );
+}
+
+#[test]
+fn never_match_arms_one_diverging_infers_concrete() {
+    // match with a diverging arm joins to the concrete arm's type.
+    assert_inferred_i64(
+        "fn f() { let y: bool = match 1 { 1 => todo(), _ => 5 }; let _ = y; }",
+        "match { 1 => todo(), _ => 5 }",
+    );
+}
+
+#[test]
+fn never_coerces_into_unit_annotation() {
+    // let x: () = todo() — Never coerces to any annotated type.
+    typecheck_ok("fn f() { let x: () = todo(); let _ = x; }");
+}

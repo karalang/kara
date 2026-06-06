@@ -664,9 +664,31 @@ pub(super) fn unify_types(
     substitutions: &mut HashMap<TypeVarId, Type>,
     const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
 ) -> bool {
+    // Never-as-bottom, order-independent metavar binding. A metavar
+    // tentatively bound to `Never` (a diverging argument — `panic()` /
+    // `todo()` / `unreachable()`) must yield to a concrete constraint from
+    // a sibling argument *regardless of argument order*, and a `Never`
+    // constraint must never demote a concrete binding. Inspect the RAW
+    // top-level metavar here, BEFORE `resolve_type_var_top` collapses a
+    // `Never`-bound var to `Never` and loses its id (the order bug:
+    // `pick(panic(), 42)` bound `T = Never` from arg 0, then `42` met an
+    // already-resolved `Never` and could not upgrade it). design.md § Type
+    // Inference — `Never` is the bottom type, `LUB(Never, T) = T`. An
+    // all-`Never` metavar stays bound to `Never` (the all-diverging case,
+    // e.g. `pick(panic(), panic())`). See [`unify_type_var`].
+    match (a, b) {
+        (Type::TypeVar(id_a), Type::TypeVar(id_b)) if id_a == id_b => return true,
+        (Type::TypeVar(id), other) | (other, Type::TypeVar(id)) => {
+            return unify_type_var(*id, other, substitutions, const_substitutions);
+        }
+        _ => {}
+    }
     let a = resolve_type_var_top(a, substitutions);
     let b = resolve_type_var_top(b, substitutions);
     match (&a, &b) {
+        // Top-level metavars are intercepted by the raw pre-match above, so
+        // these arms only fire for a var surfaced by resolving a non-var
+        // input (defensive; normally unreachable).
         (Type::TypeVar(id_a), Type::TypeVar(id_b)) if id_a == id_b => true,
         (Type::TypeVar(id), _) => {
             substitutions.insert(*id, b.clone());
@@ -816,6 +838,46 @@ pub(super) fn unify_types(
         // structural compatibility check (covers integer-coercion,
         // never, slice/vec coercions, etc).
         _ => types_compatible(&a, &b),
+    }
+}
+
+/// Bind a top-level metavar `id` against `other`, treating `Type::Never`
+/// as the bottom type so inference is order-independent (design.md § Type
+/// Inference). Rules, given the var's current binding:
+///   * **unbound** → bind to `other` (including `Never`; an all-`Never`
+///     metavar stays `Never` — `id(panic())` / `pick(panic(), panic())`).
+///   * **bound to `Never`, `other` concrete** → *upgrade* to `other`. This
+///     is the order-independence fix: a diverging argument no longer pins
+///     the var below a concrete sibling (`pick(panic(), 42) : i64`).
+///   * **`other` is `Never`** → keep the existing binding (a `Never`
+///     constraint never demotes a concrete one — `pick(42, panic()) : i64`).
+///   * **both concrete** → unify them structurally (an honest mismatch
+///     still returns `false`).
+///
+/// `Error` is excluded from the upgrade so error-poisoning stays inert.
+fn unify_type_var(
+    id: TypeVarId,
+    other: &Type,
+    substitutions: &mut HashMap<TypeVarId, Type>,
+    const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
+) -> bool {
+    let other = resolve_type_var_top(other, substitutions);
+    match substitutions.get(&id).cloned() {
+        None => {
+            substitutions.insert(id, other);
+            true
+        }
+        Some(cur) => {
+            let cur = resolve_type_var_top(&cur, substitutions);
+            if cur == Type::Never && other != Type::Never && other != Type::Error {
+                substitutions.insert(id, other);
+                true
+            } else if other == Type::Never {
+                true
+            } else {
+                unify_types(&cur, &other, substitutions, const_substitutions)
+            }
+        }
     }
 }
 
