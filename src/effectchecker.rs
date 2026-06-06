@@ -799,15 +799,6 @@ impl<'a> EffectChecker<'a> {
             self.fn_uses_with_underscore.insert(key);
         }
 
-        // Seed the verb contributed by `R.method(...)` for every
-        // `effect resource R: Trait` declaration. The verb is derived
-        // from the trait method's receiver mode (design.md § Resource
-        // call desugaring): `mut ref self` / owned `self` → writes(R),
-        // `ref self` → reads(R). Without this, the inference walker
-        // sees `Audit.log(msg)` as a call to the unknown key
-        // `"Audit.log"` and contributes no effect.
-        self.seed_resource_trait_dispatch_effects(&builtin_span);
-
         // Module-level `let mut` synthetic per-binding resources
         // (design.md §1322). Collect the bindings, then seed
         // `inferred_effects` with the `__modbind_read.<NAME>` /
@@ -821,6 +812,21 @@ impl<'a> EffectChecker<'a> {
         self.collect_transparent_effects();
         self.expand_effect_groups();
         self.collect_declared_effects();
+        // Seed the effects contributed by `R.method(...)` for every
+        // `effect resource R: Trait` declaration: the verb derived
+        // from the trait method's receiver mode (design.md § Resource
+        // call desugaring: `mut ref self` / owned `self` → writes(R),
+        // `ref self` → reads(R)) unioned with the method's declared
+        // effect ceiling. Without this, the inference walker sees
+        // `Audit.log(msg)` as a call to the unknown key `"Audit.log"`
+        // and contributes no effect. Must run after
+        // `collect_declared_effects` (the union reads the parsed
+        // `Trait.method` ceiling, with groups expanded and the
+        // trait-level fallback applied) but before
+        // `apply_unimpled_private_trait_rule` (the unimpled override
+        // to `with _` is about not trusting absent impls; the clause's
+        // stated effects still bind dispatch call sites).
+        self.seed_resource_trait_dispatch_effects(&builtin_span);
         self.apply_unimpled_private_trait_rule();
         self.collect_function_info();
         self.fn_bounds_index = self.build_fn_bounds_index();

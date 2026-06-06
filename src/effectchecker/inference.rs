@@ -73,7 +73,15 @@ impl<'a> super::EffectChecker<'a> {
     /// `effect resource R: Trait` declaration, walk `Trait`'s methods
     /// and contribute the verb implied by the method's receiver mode:
     /// `mut ref self` / owned `self` → `writes(R)`, `ref self` →
-    /// `reads(R)`. Methods with no `self` receiver are skipped — those
+    /// `reads(R)` — unioned with the method's declared effect ceiling
+    /// (the parsed `declared_effects["Trait.method"]` entry, so groups
+    /// arrive expanded and the trait-level ceiling fallback applies),
+    /// so a clause like `with reads(Cfg) writes(Log)` contributes its
+    /// `writes(Log)` to every `Cfg.get(...)` caller rather than being
+    /// silently dropped. Polymorphic remainders (`with _`, effect
+    /// variables) contribute nothing — same conservative skip as the
+    /// E0412 predicate. Must run after `collect_declared_effects`.
+    /// Methods with no `self` receiver are skipped — those
     /// are associated functions and don't go through the per-task
     /// provider stack at runtime, so they carry no inherent resource
     /// verb. Supertrait methods are intentionally not walked here; the
@@ -192,6 +200,27 @@ impl<'a> super::EffectChecker<'a> {
                     },
                     EffectOrigin::Direct(builtin_span.clone()),
                 );
+                // Union the method's declared effect ceiling: a dispatch
+                // call site inherits everything the clause declares
+                // (e.g. `writes(Log)` on `Cfg.get`), not just the
+                // receiver-implied verb on R. The verb-on-R floor above
+                // stays receiver-derived; E0412 already rejects
+                // clause-vs-receiver contradictions on R, and union
+                // dedupes the agreeing case. A `Polymorphic` ceiling
+                // (`with _` / effect variable) contributes nothing —
+                // the same conservative skip as the E0412 predicate.
+                match self
+                    .declared_effects
+                    .get(&format!("{}.{}", m.trait_name, m.name))
+                {
+                    Some(DeclaredEffects::Explicit(declared))
+                    | Some(DeclaredEffects::PolymorphicWithFixed(declared)) => {
+                        for te in &declared.effects {
+                            set.add(te.effect.clone(), te.origin.clone());
+                        }
+                    }
+                    Some(DeclaredEffects::Polymorphic) | Some(DeclaredEffects::None) | None => {}
+                }
                 self.inferred_effects.insert(key, set);
             }
         }

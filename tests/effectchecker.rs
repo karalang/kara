@@ -6388,6 +6388,128 @@ fn test_missing_resource_effect_under_declared_policy_diagnosed() {
     );
 }
 
+// ── Dispatch call sites inherit declared clause effects ────────────
+//
+// The receiver-derived verb on R is only the floor: a trait method's
+// declared `with` clause can name effects on *other* resources
+// (e.g. `fn get(ref self, ...) with reads(Cfg) writes(Log)`), and a
+// `Cfg.get(...)` call site must inherit those too. Before the fix the
+// seed inserted exactly one receiver-derived `verb(R)` per `R.method`
+// key and silently dropped the clause — under-attribution that would
+// let two tasks race on `Log` through `Cfg.get`.
+
+#[test]
+fn test_resource_dispatch_inherits_clause_effects_on_other_resources() {
+    // `f` declares only the receiver-implied reads(Cfg); the clause's
+    // writes(Log) must surface as a missing declaration.
+    let errors = effectcheck_errors(
+        "pub trait Logger { fn log(mut ref self, msg: i64); }\n\
+         pub trait Config { fn get(ref self, k: i64) -> i64 with reads(Cfg) writes(Log); }\n\
+         pub effect resource Cfg: Config;\n\
+         pub effect resource Log: Logger;\n\
+         pub struct C { v: i64 }\n\
+         impl Config for C { fn get(ref self, k: i64) -> i64 with reads(Cfg) writes(Log) { self.v } }\n\
+         pub fn f() -> i64 with reads(Cfg) { Cfg.get(1) }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("writes(Log)")),
+        "expected MissingEffectDeclaration mentioning writes(Log); got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_resource_dispatch_clause_effects_declared_passes() {
+    // Same program with writes(Log) declared on `f` — clean.
+    effectcheck_ok(
+        "pub trait Logger { fn log(mut ref self, msg: i64); }\n\
+         pub trait Config { fn get(ref self, k: i64) -> i64 with reads(Cfg) writes(Log); }\n\
+         pub effect resource Cfg: Config;\n\
+         pub effect resource Log: Logger;\n\
+         pub struct C { v: i64 }\n\
+         impl Config for C { fn get(ref self, k: i64) -> i64 with reads(Cfg) writes(Log) { self.v } }\n\
+         pub fn f() -> i64 with reads(Cfg) writes(Log) { Cfg.get(1) }",
+    );
+}
+
+#[test]
+fn test_resource_dispatch_clause_writes_survives_alongside_receiver_reads() {
+    // `ref self` + declared `writes(Db)`: the receiver contributes
+    // reads(Db), the clause contributes writes(Db) — both must land in
+    // the caller's inferred set (E0412 only rejects the inverse, a
+    // writes-receiver with a non-writes clause on R).
+    let result = effectcheck_ok(
+        "pub trait Store { fn put(ref self, v: i64) with writes(Db); }\n\
+         pub effect resource Db: Store;\n\
+         pub struct S { v: i64 }\n\
+         impl Store for S { fn put(ref self, v: i64) with writes(Db) { } }\n\
+         fn g() { Db.put(1); }",
+    );
+    let inferred = result
+        .inferred_effects
+        .get("g")
+        .expect("g must be in inferred_effects");
+    let has = |verb: fn(&EffectVerbKind) -> bool| {
+        inferred
+            .effects
+            .iter()
+            .any(|e| verb(&e.effect.verb) && e.effect.resource == "Db")
+    };
+    assert!(
+        has(|v| matches!(v, EffectVerbKind::Reads)) && has(|v| matches!(v, EffectVerbKind::Writes)),
+        "expected both reads(Db) and writes(Db) in g's inferred set; got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_resource_dispatch_inherits_clause_effects_through_group() {
+    // The clause names an effect group; the seed runs after
+    // `expand_effect_groups`/`collect_declared_effects`, so the
+    // group's expansion (writes(Log)) must be inherited too.
+    let errors = effectcheck_errors(
+        "effect group logging = writes(Log);\n\
+         pub trait Logger { fn log(mut ref self, msg: i64); }\n\
+         pub trait Config { fn get(ref self, k: i64) -> i64 with reads(Cfg) logging; }\n\
+         pub effect resource Cfg: Config;\n\
+         pub effect resource Log: Logger;\n\
+         pub struct C { v: i64 }\n\
+         impl Config for C { fn get(ref self, k: i64) -> i64 with reads(Cfg) logging { self.v } }\n\
+         pub fn f() -> i64 with reads(Cfg) { Cfg.get(1) }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("writes(Log)")),
+        "expected MissingEffectDeclaration mentioning writes(Log); got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_resource_dispatch_polymorphic_clause_contributes_only_receiver_verb() {
+    // A `with _` ceiling is conservatively skipped (same set the E0412
+    // predicate skips) — the dispatch site contributes only the
+    // receiver-implied reads(Cfg).
+    effectcheck_ok(
+        "pub trait Config { fn get(ref self, k: i64) -> i64 with _; }\n\
+         pub effect resource Cfg: Config;\n\
+         pub struct C { v: i64 }\n\
+         impl Config for C { fn get(ref self, k: i64) -> i64 { self.v } }\n\
+         pub fn f() -> i64 with reads(Cfg) { Cfg.get(1) }",
+    );
+}
+
 // ── E0412: resource-receiver contradiction ────────────────────────
 //
 // An `effect resource R: Trait` method whose declared `with` clause
