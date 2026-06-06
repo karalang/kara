@@ -1038,6 +1038,146 @@ mod tests {
         unsafe { karac_runtime_tls_config_free(cfg) };
     }
 
+    /// **p50 handshake-latency probe (`#[ignore]`d — run by hand).**
+    /// Drives the *real* `karac_runtime_ws_accept_tls` server path with
+    /// N sequential client connects, timing each full establish (TCP
+    /// connect → rustls handshake → RFC 6455 upgrade → 101 received —
+    /// the same "connection established" boundary the bench harness
+    /// measures), and prints connect-latency percentiles. Sequential by
+    /// design: the ~40 ms Nagle×delayed-ACK handshake stall is a
+    /// *per-connection fixed cost* that is clearest with no concurrent
+    /// traffic to piggyback ACKs, so this isolates the latency *floor*
+    /// (the bench's flat p50), not establishment throughput.
+    ///
+    /// Falsification protocol for the missing-`TCP_NODELAY` hypothesis:
+    /// run this once on the current build (server omits `set_nodelay`),
+    /// note p50; then with the one-line server-side `set_nodelay(true)`
+    /// in `karac_runtime_ws_accept_tls`'s accept-drain loop, run again.
+    /// A floor that collapses isolates Nagle as the cause. (Caveat:
+    /// loopback delayed-ACK timing is platform-dependent — a *positive*
+    /// delta here is decisive; a null result on macOS does not clear the
+    /// hypothesis for the Linux rig.)
+    ///
+    ///   cargo test -p karac-runtime --features tls --release \
+    ///     -- --ignored --nocapture handshake_latency_probe
+    ///
+    /// `KARAC_PROBE_N` overrides the connection count (default 200).
+    #[test]
+    #[ignore = "latency probe; run by hand with --ignored --nocapture"]
+    #[cfg(feature = "tls")]
+    fn handshake_latency_probe() {
+        use std::io::{Read, Write};
+        use std::os::unix::io::IntoRawFd;
+        use std::time::Instant;
+
+        let n: usize = std::env::var("KARAC_PROBE_N")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(200);
+
+        let (cert_pem, key_pem) = gen_test_cert();
+        let cfg = unsafe {
+            karac_runtime_tls_config_new(
+                cert_pem.as_ptr(),
+                cert_pem.len() as i64,
+                key_pem.as_ptr(),
+                key_pem.len() as i64,
+            )
+        };
+        assert!(!cfg.is_null());
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let cfg_addr = cfg as usize;
+        let listener_fd = listener.into_raw_fd();
+
+        // Server: accept + handshake N connections through the real FFI,
+        // closing each upgraded fd so sessions don't accumulate.
+        let server = thread::spawn(move || {
+            for _ in 0..n {
+                let fd = unsafe {
+                    crate::event_loop::karac_runtime_ws_accept_tls(listener_fd, cfg_addr as *mut _)
+                };
+                if fd < 0 {
+                    break;
+                }
+                karac_runtime_tls_close(fd);
+            }
+        });
+
+        // Let the worker pool spin up + flip the listener non-blocking.
+        thread::sleep(Duration::from_millis(50));
+
+        let client_cfg = build_test_client_config(&cert_pem);
+        let server_name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+        let req = b"GET / HTTP/1.1\r\n\
+                    Host: localhost\r\n\
+                    Upgrade: websocket\r\n\
+                    Connection: Upgrade\r\n\
+                    Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                    Sec-WebSocket-Version: 13\r\n\
+                    \r\n";
+
+        let mut samples_us: Vec<u128> = Vec::with_capacity(n);
+        for _ in 0..n {
+            let start = Instant::now();
+            let mut client =
+                rustls::ClientConnection::new(Arc::clone(&client_cfg), server_name.clone())
+                    .unwrap();
+            let mut sock = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            client.complete_io(&mut sock).unwrap();
+            client.writer().write_all(req).unwrap();
+            while client.wants_write() {
+                client.write_tls(&mut sock).unwrap();
+            }
+            // Read until the 101 terminator — connection "established".
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut buf = Vec::with_capacity(256);
+            let mut tmp = [0u8; 256];
+            loop {
+                assert!(Instant::now() < deadline, "probe: no 101 within 5s");
+                if client.wants_read() {
+                    client.read_tls(&mut sock).unwrap();
+                    client.process_new_packets().unwrap();
+                }
+                match client.reader().read(&mut tmp) {
+                    Ok(0) if !client.wants_read() => break,
+                    Ok(0) => {}
+                    Ok(n) => {
+                        buf.extend_from_slice(&tmp[..n]);
+                        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(e) => panic!("probe: client read failed: {e}"),
+                }
+            }
+            samples_us.push(start.elapsed().as_micros());
+            drop(sock);
+        }
+
+        server.join().expect("probe server thread");
+        unsafe { karac_runtime_tls_config_free(cfg) };
+
+        samples_us.sort_unstable();
+        let pct = |p: f64| -> f64 {
+            let idx = ((p / 100.0) * (samples_us.len() as f64 - 1.0)).round() as usize;
+            samples_us[idx] as f64 / 1000.0
+        };
+        let mean = samples_us.iter().sum::<u128>() as f64 / samples_us.len() as f64 / 1000.0;
+        eprintln!(
+            "handshake_latency_probe: n={} connects (sequential, loopback TLS+WS)\n  \
+             mean {:.2} ms | p50 {:.2} ms | p90 {:.2} ms | p99 {:.2} ms | max {:.2} ms",
+            samples_us.len(),
+            mean,
+            pct(50.0),
+            pct(90.0),
+            pct(99.0),
+            pct(100.0),
+        );
+    }
+
     /// Phase-8 line 22 — same round trip as `round_trip_echo`, but the
     /// CLIENT side now goes through `karac_runtime_tls_client_connect`
     /// and the shared `karac_runtime_tls_read` / `_write` / `_close`

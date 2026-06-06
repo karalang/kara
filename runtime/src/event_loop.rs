@@ -3459,6 +3459,17 @@ pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
                 // synchronous `complete_io` and HTTP read. Regression
                 // test: `tls::tests::ws_accept_tls_succeeds_with_nonblocking_listener`.
                 let _ = sock.set_nonblocking(false);
+                // Disable Nagle on the accepted socket. The TLS handshake
+                // + RFC 6455 upgrade is a multi-round-trip exchange of
+                // small records; with Nagle on, a server record can sit
+                // withheld behind an unacked prior segment until the
+                // peer's ~40 ms delayed-ACK timer fires — the classic
+                // fixed handshake-latency floor. Every other comparator
+                // in the bench (Go forces it runtime-wide, .NET/Node/
+                // Phoenix via their stacks) runs nodelay; Kāra omitted
+                // it. Best-effort: a failure here only forgoes the
+                // latency win, never breaks the connection.
+                let _ = sock.set_nodelay(true);
                 let raw = sock.into_raw_fd();
                 let mut q = pool.work.lock().unwrap_or_else(|p| p.into_inner());
                 q.push_back(raw);
