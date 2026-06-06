@@ -132,8 +132,18 @@ pub enum Value {
     TotalFloat32(f32),
     /// F64 total-order wrapper: NaN sorts last, implements Eq/Ord/Hash
     TotalFloat64(f64),
-    /// Atomic[T] runtime value (single-threaded: plain value)
-    Atomic(Box<Value>),
+    /// Atomic[T] runtime value. `Arc<Mutex<...>>` (not `Box`) so a par
+    /// struct's `Atomic` field is genuinely *shared* across `par {}`
+    /// branches — `eval_par_block` clones each branch's env values, and an
+    /// `Arc` clone shares the same cell, matching codegen's reference
+    /// semantics. The `Mutex` makes each `fetch_*` / `swap` / `compare_exchange`
+    /// a real read-modify-write under lock, so concurrent branches don't race
+    /// on a non-atomic cell (the prior `Box<Value>` raced: torn reads
+    /// surfaced as `method '…' not found on type 'unknown'` panics and lost
+    /// updates). An owned, un-aliased `Atomic` is never observed through two
+    /// live handles single-threaded, so share-on-clone is unobservable
+    /// outside the par case it fixes. Same rationale applies to `Mutex`.
+    Atomic(Arc<Mutex<Value>>),
     /// Mutex[T] runtime value (single-threaded: plain cell; `lock` blocks
     /// bind the inner value as a mutable alias and write it back on exit).
     Mutex(Box<Value>),
@@ -401,7 +411,13 @@ impl PartialEq for Value {
             // TotalFloat uses total ordering: NaN == NaN, -0.0 < +0.0
             (Value::TotalFloat32(a), Value::TotalFloat32(b)) => a.total_cmp(b).is_eq(),
             (Value::TotalFloat64(a), Value::TotalFloat64(b)) => a.total_cmp(b).is_eq(),
-            (Value::Atomic(a), Value::Atomic(b)) => a == b,
+            (Value::Atomic(a), Value::Atomic(b)) => {
+                // Snapshot each under its own lock (released before the next)
+                // so comparing an atomic to itself can't self-deadlock.
+                let av = a.lock().unwrap().clone();
+                let bv = b.lock().unwrap().clone();
+                av == bv
+            }
             (Value::Mutex(a), Value::Mutex(b)) => a == b,
             (Value::Map(a), Value::Map(b)) => {
                 a.len() == b.len()
@@ -746,7 +762,7 @@ impl std::fmt::Display for Value {
             Value::Function { name, .. } => write!(f, "<fn {}>", name),
             Value::TotalFloat32(v) => write!(f, "F32({})", v),
             Value::TotalFloat64(v) => write!(f, "F64({})", v),
-            Value::Atomic(v) => write!(f, "Atomic({})", v),
+            Value::Atomic(v) => write!(f, "Atomic({})", v.lock().unwrap()),
             Value::Mutex(v) => write!(f, "Mutex({})", v),
             Value::SortedSet(set) => {
                 write!(f, "SortedSet{{")?;

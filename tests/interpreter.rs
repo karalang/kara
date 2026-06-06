@@ -3428,6 +3428,71 @@ fn test_atomic_bool() {
     assert_eq!(output, "false\n");
 }
 
+// ── par-shared Atomic: concurrent read-modify-write (regression) ──
+//
+// `Value::Atomic` is `Arc<Mutex<Value>>`, so a par struct's Atomic field is
+// genuinely shared across `par {}` branches (which run on real OS threads via
+// `thread::scope`) and every `fetch_*` / `compare_exchange` is a real
+// read-modify-write under lock. Before that, `Atomic` was a `Box<Value>`
+// (non-atomic, single-threaded), so two branches racing on a shared par-struct
+// counter produced lost updates AND intermittent `method '…' not found on type
+// 'unknown'` panics from torn reads. These tests loop enough times to defeat
+// the old intermittency (it failed within a handful of runs). They exercise the
+// default `run_program` path, which runs par on real threads (sequential_mode
+// is false). The AOT/codegen path always produced the correct value; this
+// closes the interpreter (`karac run`) divergence on a program that passes all
+// static checks.
+
+#[test]
+fn test_par_shared_atomic_counter_no_lost_updates() {
+    let src = "par struct Counter { count: Atomic[i64] }\n\
+         impl Counter {\n\
+             fn inc(ref self) { let _ = self.count.fetch_add(1, MemoryOrdering.SeqCst); }\n\
+             fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }\n\
+         }\n\
+         fn bump_many(c: Counter, n: i64) {\n\
+             let mut i = 0;\n\
+             while i < n { c.inc(); i = i + 1; }\n\
+         }\n\
+         fn main() {\n\
+             let c = Counter { count: Atomic.new(0) };\n\
+             par { bump_many(c, 5000); bump_many(c, 5000); }\n\
+             println(c.get());\n\
+         }";
+    // Repeat: the prior race was intermittent (lost updates / torn-read panic).
+    for iter in 0..30 {
+        assert_eq!(
+            run(src),
+            "10000\n",
+            "par-shared atomic counter, iteration {iter}"
+        );
+    }
+}
+
+#[test]
+fn test_par_shared_atomic_reaches_after_par_statement() {
+    // The torn-read panic / lost-update path also manifested as the statement
+    // *after* the par block never executing. Assert the trailing print lands.
+    let src = "par struct Counter { count: Atomic[i64] }\n\
+         impl Counter {\n\
+             fn inc(ref self) { let _ = self.count.fetch_add(1, MemoryOrdering.SeqCst); }\n\
+             fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }\n\
+         }\n\
+         fn main() {\n\
+             let c = Counter { count: Atomic.new(0) };\n\
+             par { c.inc(); c.inc(); }\n\
+             println(c.get());\n\
+             println(\"after\");\n\
+         }";
+    for iter in 0..30 {
+        assert_eq!(
+            run(src),
+            "2\nafter\n",
+            "trailing statement after par, iteration {iter}"
+        );
+    }
+}
+
 // ── Ordering / MemoryOrdering Enums ───────────────────────────
 
 #[test]

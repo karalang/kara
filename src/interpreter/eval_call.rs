@@ -168,7 +168,7 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         Value::Int(0)
                     };
-                    return Value::Atomic(Box::new(val));
+                    return Value::Atomic(Arc::new(Mutex::new(val)));
                 }
                 "Mutex.new" => {
                     let val = if let Some(arg) = args.first() {

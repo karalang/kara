@@ -11,7 +11,10 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_option_result_method(
         &mut self,
         method: &str,
-        object: &Expr,
+        // The receiver place-expr. No longer needed for atomic mutation —
+        // `Value::Atomic` is now an `Arc<Mutex<…>>` shared cell mutated in
+        // place under lock, so there is no write-back to the env slot/field.
+        _object: &Expr,
         obj: Value,
         args: &[CallArg],
         span: &Span,
@@ -91,38 +94,49 @@ impl<'a> super::Interpreter<'a> {
                 });
             }
             "load" => {
-                if let Value::Atomic(inner) = &obj {
-                    // Ordering argument accepted but ignored (no concurrency in tree-walk interpreter)
-                    return Some(*inner.clone());
+                if let Value::Atomic(cell) = &obj {
+                    // Ordering argument accepted but ignored — the `Mutex`
+                    // already serialises every op, which is stronger than any
+                    // requested ordering.
+                    return Some(cell.lock().unwrap().clone());
                 }
             }
             "store" => {
-                if let Value::Atomic(_) = &obj {
+                if let Value::Atomic(cell) = &obj {
+                    // Evaluate the argument *before* taking the lock: the
+                    // interpreter could otherwise re-enter and touch the same
+                    // atomic, and `std::sync::Mutex` is not re-entrant.
                     let val = if let Some(arg) = args.first() {
                         self.eval_expr_inner(&arg.value)
                     } else {
                         Value::Unit
                     };
-                    // Write the new value back to the receiver (local or field).
-                    self.atomic_write_back(object, Value::Atomic(Box::new(val)));
+                    *cell.lock().unwrap() = val;
                     return Some(Value::Unit);
                 }
             }
             // Single-operand read-modify-write ops — return the PREVIOUS value
-            // (matching the codegen / Rust semantics). The tree-walk interpreter
-            // is single-threaded so each is a plain read-update-write; the
-            // ordering arg is accepted and ignored. Like `store`, the in-place
-            // update only lands for an `Identifier` receiver (the interpreter's
-            // existing field-receiver limitation); the returned old value is
-            // correct regardless. The arithmetic/bitwise ops are integer-only;
-            // `swap` exchanges any value (incl. `Atomic[bool]`).
+            // (matching the codegen / Rust semantics). The whole read-update-
+            // write happens under the cell's `Mutex`, so concurrent `par {}`
+            // branches sharing the same atomic serialise correctly (the prior
+            // `Box<Value>` cell raced — torn reads surfaced as
+            // `method '…' not found on type 'unknown'` panics and lost
+            // updates). The mutation lands regardless of receiver shape
+            // (identifier or `self.field`) because the `Arc` cell is shared,
+            // not written back to a place — fixing the old field-receiver
+            // limitation. Arithmetic/bitwise ops are integer-only; `swap`
+            // exchanges any value (incl. `Atomic[bool]`). The ordering arg is
+            // accepted and ignored.
             "fetch_add" | "fetch_sub" | "fetch_and" | "fetch_or" | "fetch_xor" | "swap" => {
-                if let Value::Atomic(inner) = &obj {
-                    let old = (**inner).clone();
+                if let Value::Atomic(cell) = &obj {
+                    // Eval the operand before locking (re-entrancy guard, as in
+                    // `store`).
                     let arg_val = args
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
+                    let mut guard = cell.lock().unwrap();
+                    let old = guard.clone();
                     let new = if method == "swap" {
                         Some(arg_val)
                     } else if let (Value::Int(o), Value::Int(d)) = (&old, &arg_val) {
@@ -138,7 +152,7 @@ impl<'a> super::Interpreter<'a> {
                         None
                     };
                     if let Some(new) = new {
-                        self.atomic_write_back(object, Value::Atomic(Box::new(new)));
+                        *guard = new;
                     }
                     return Some(old);
                 }
@@ -146,23 +160,30 @@ impl<'a> super::Interpreter<'a> {
             // `compare_exchange(old, new, success, failure) -> Result[T, T]` —
             // CAS. If the current value equals `old`, store `new` and return
             // `Ok(prev)`; otherwise leave it and return `Err(actual)`. Both
-            // payloads are the loaded value. Single-threaded so the
-            // compare-and-store is trivially atomic; orderings ignored.
+            // payloads are the loaded value. The compare-and-store runs under
+            // the cell's `Mutex` so it is genuinely atomic across branches;
+            // orderings ignored.
             "compare_exchange" => {
-                if let Value::Atomic(inner) = &obj {
-                    let current = (**inner).clone();
+                if let Value::Atomic(cell) = &obj {
+                    // Eval both operands before locking (re-entrancy guard).
+                    // `new` is evaluated unconditionally — these are value
+                    // arguments per the CAS signature, so this matches Rust
+                    // and avoids running user code under the lock.
                     let expected = args
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
+                    let new = args
+                        .get(1)
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    let mut guard = cell.lock().unwrap();
+                    let current = guard.clone();
                     let swapped = current == expected;
                     if swapped {
-                        let new = args
-                            .get(1)
-                            .map(|a| self.eval_expr_inner(&a.value))
-                            .unwrap_or(Value::Unit);
-                        self.atomic_write_back(object, Value::Atomic(Box::new(new)));
+                        *guard = new;
                     }
+                    drop(guard);
                     return Some(Value::EnumVariant {
                         enum_name: "Result".to_string(),
                         variant: if swapped { "Ok" } else { "Err" }.to_string(),
@@ -173,20 +194,5 @@ impl<'a> super::Interpreter<'a> {
             _ => return None,
         }
         None
-    }
-
-    /// Write an updated `Atomic` value back to its receiver after a mutating
-    /// op (`store` / `fetch_*` / `swap` / `compare_exchange`). The receiver is
-    /// either an `Identifier` (a local — write the env slot) or a `FieldAccess`
-    /// (`self.n` on a par/shared struct — route through `set_field` so the
-    /// write lands on the shared `Arc`'s interior-mutable cell). Without the
-    /// `FieldAccess` arm, mutations to a par-struct `Atomic` field through a
-    /// `ref self` method are silently lost.
-    fn atomic_write_back(&mut self, object: &Expr, value: Value) {
-        match &object.kind {
-            ExprKind::Identifier(name) => self.env.set(name, value),
-            ExprKind::FieldAccess { object, field } => self.set_field(object, field, value),
-            _ => {}
-        }
     }
 }
