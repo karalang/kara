@@ -1267,6 +1267,22 @@ pub(super) struct Codegen<'ctx> {
     /// (`let out: Option[ListNode] = ...`) reads the inner directly
     /// off the surface `TypeExpr`.
     pub(crate) fn_return_option_inner_shared: HashMap<String, String>,
+    /// Niche-ABI record per function (wip-shared-struct-codegen-followups
+    /// Slice 1). A function whose signature mentions `Option[shared T]`
+    /// in return and/or parameter position is declared with a single
+    /// nullable `ptr` (null = None, non-null = Some) at those positions
+    /// instead of the conventional 4-i64 Option enum struct — closing
+    /// the field-niche/call-ABI asymmetry and skipping the sret
+    /// round-trip on every call. The function *body* still works on the
+    /// conventional 4-word shape: `compile_function` unpacks niche
+    /// params at entry, the return sites pack at `ret`, and
+    /// `compile_call` packs args / unpacks the result, so every other
+    /// codegen path (refcounting, pattern matching, RC-fallback
+    /// analysis) is shape-blind to the ABI. Keyed by LLVM symbol name;
+    /// names absent from the map (impl methods, closures, generic
+    /// monos, coroutine ramps, extern decls) keep the conventional ABI.
+    /// Eligibility is decided once in `declare_function`.
+    pub(crate) fn_niche_abi: HashMap<String, state::NicheAbi>,
     /// Per-binding inner-shared-heap layout for `Option[shared T]`
     /// variables. Populated by `track_rc_option_var` at let-binding
     /// time; read by the `Assign` arm so reassignment of a tracked
@@ -3668,6 +3684,7 @@ impl<'ctx> Codegen<'ctx> {
             fn_param_ref: HashMap::new(),
             fn_return_type_names: HashMap::new(),
             fn_return_option_inner_shared: HashMap::new(),
+            fn_niche_abi: HashMap::new(),
             var_option_shared_heap: HashMap::new(),
             tail_ret_inner: None,
             soa_layouts: HashMap::new(),

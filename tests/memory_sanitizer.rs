@@ -3051,6 +3051,84 @@ fn main() {
             "option_shared_prepend_builder_rc_fallback_repeat",
         );
     }
+
+    #[test]
+    fn asan_option_shared_niche_abi_convergence_repeat() {
+        // Niche call ABI for `Option[shared T]` signatures (Slice 1,
+        // 2026-06-05) + the explicit-return alias compensation it
+        // surfaced. One loop exercising every convergence point under
+        // ASAN: chained call-result args (`ident(make(...))` packs and
+        // unpacks at each boundary), explicit `return head;` /
+        // `return node.next;` aliases (each needs the Return-arm +1 so
+        // the param's scope-exit dec doesn't free the returned chain),
+        // recursion (`nth`), and the `?` operator (shared-typed `let`
+        // from `q_w0` + null early-return through the niche). Repeats
+        // catch both failure directions: UAF (under-count) trips ASAN,
+        // leak (over-count) trips LeakSanitizer on platforms that have
+        // it.
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn ident(head: Option[ListNode]) -> Option[ListNode] { head }
+fn ret_field(head: Option[ListNode]) -> Option[ListNode] {
+    if head.is_some() {
+        let node = head.unwrap();
+        return node.next;
+    }
+    return None;
+}
+fn nth(head: Option[ListNode], k: i64) -> Option[ListNode] {
+    if k == 0 {
+        return head;
+    }
+    if head.is_none() {
+        return None;
+    }
+    let node = head.unwrap();
+    nth(node.next, k - 1)
+}
+fn second(head: Option[ListNode]) -> Option[ListNode] {
+    let first = head?;
+    let rest = first.next?;
+    Some(rest)
+}
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut total = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let node = cur.unwrap();
+        total = total + node.val;
+        cur = node.next;
+    }
+    total
+}
+fn main() {
+    let mut total: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 32i64 {
+        total = total + sum(ident(make(10)));
+        total = total + sum(ret_field(make(10)));
+        total = total + sum(nth(make(10), 4));
+        total = total + sum(second(make(10)));
+        k = k + 1i64;
+    }
+    println(total);
+}
+"#,
+            &["6656"],
+            "option_shared_niche_abi_convergence_repeat",
+        );
+    }
     // ── Auto-par slot-ownership transfer (2026-06-05) ─────────────
 
     /// The Map-handle slot-publication UAF: auto-par groups

@@ -87,11 +87,58 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(self.module.add_function(symbol, main_type, None));
         }
 
-        let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = func
+        let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> = func
             .params
             .iter()
             .map(|p| self.llvm_param_type(p))
             .collect();
+
+        // Niche call ABI for `Option[shared T]` signature positions
+        // (wip-shared-struct-codegen-followups Slice 1): pass/return a
+        // single nullable `ptr` (null = None) instead of the 4-i64 Option
+        // enum struct, mirroring the field-niche layout so the type is
+        // pointer-shaped on both sides of the call boundary. Scope is
+        // deliberately free user fns only this slice:
+        //   - impl methods (dotted names) are excluded until the
+        //     `usercall`/`usermethod`/provider-vtable arg paths learn to
+        //     pack — the with_provider indirect dispatch compiles args
+        //     against hand-coerced shapes and would silently mismatch a
+        //     niche-shaped impl fn.
+        //   - coroutine ramps keep their own `ptr`-handle convention.
+        //   - generic fns never reach this path (monomorphized
+        //     signatures are declared in `declare_mono_function`).
+        //   - extern decls are declared elsewhere (FFI shape is
+        //     contract-fixed).
+        // Eligibility per position reuses the field-niche predicate
+        // (`option_inner_shared_type_for_type_expr`) so the two niche
+        // surfaces stay in sync. The record lands in `fn_niche_abi`;
+        // every pack/unpack site keys off that map.
+        let niche_eligible = !func.name.contains('.') && !self.is_coroutine_compiled(&func.name);
+        let niche_params: Vec<bool> = func
+            .params
+            .iter()
+            .map(|p| niche_eligible && self.option_inner_shared_type_for_type_expr(&p.ty).is_some())
+            .collect();
+        let niche_ret = niche_eligible
+            && func
+                .return_type
+                .as_ref()
+                .is_some_and(|te| self.option_inner_shared_type_for_type_expr(te).is_some());
+        if niche_params.iter().any(|&p| p) || niche_ret {
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            for (i, &is_niche) in niche_params.iter().enumerate() {
+                if is_niche {
+                    param_types[i] = ptr_ty.into();
+                }
+            }
+            self.fn_niche_abi.insert(
+                func.name.clone(),
+                super::state::NicheAbi {
+                    ret: niche_ret,
+                    params: niche_params,
+                },
+            );
+        }
 
         // A2 slice 2b.3: a coroutine-compiled network-boundary fn is a *ramp*.
         // It takes a hidden trailing `ptr` completion-slot param (the caller
@@ -104,6 +151,14 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut coro_params = param_types.clone();
             coro_params.push(ptr_ty.into());
             ptr_ty.fn_type(&coro_params, false)
+        } else if niche_ret {
+            // Niche return: single nullable ptr instead of the 4-i64
+            // Option struct (and instead of the sret round-trip the
+            // struct shape costs on aarch64). The body's return sites
+            // pack via `option_value_to_niche_ptr`.
+            self.context
+                .ptr_type(AddressSpace::default())
+                .fn_type(&param_types, false)
         } else {
             match self.llvm_return_type(&func.return_type) {
                 Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_types, false),
@@ -353,6 +408,22 @@ impl<'ctx> super::Codegen<'ctx> {
             for (i, param) in func.params.iter().enumerate() {
                 let param_name = self.param_name(param);
                 let param_val = fn_val.get_nth_param(i as u32).unwrap();
+                // Niche-ABI param unpack: an `Option[shared T]` param
+                // declared `ptr`-shaped (see `declare_function`) is
+                // rebuilt into the conventional 4-i64 Option struct here,
+                // so the alloca below — and every downstream consumer
+                // (`track_rc_option_var`, the Assign arms, pattern
+                // matches, the RC-fallback boxing exclusion) — sees the
+                // exact shape it saw before the ABI niche existed.
+                let param_val = if self
+                    .fn_niche_abi
+                    .get(&func.name)
+                    .is_some_and(|abi| abi.params.get(i).copied().unwrap_or(false))
+                {
+                    self.niche_ptr_to_option_value(param_val.into_pointer_value(), &param_name)
+                } else {
+                    param_val
+                };
                 let alloca = self.create_entry_alloca(fn_val, &param_name, param_val.get_type());
                 self.builder.build_store(alloca, param_val).unwrap();
                 // Track ref params: alloca holds a pointer-to-data.
@@ -796,6 +867,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     .is_none();
                 if fn_returns_void {
                     self.builder.build_return(None).unwrap();
+                } else if self.current_fn_ret_is_niche() {
+                    // Niche-ABI return: pack the conventional 4-i64
+                    // Option value into the single nullable ptr the
+                    // signature declares. Tag-aware select — a `None`
+                    // tail must yield null even though its w0 is undef.
+                    let packed = self.option_value_to_niche_ptr(val);
+                    self.builder.build_return(Some(&packed)).unwrap();
                 } else {
                     self.builder.build_return(Some(&val)).unwrap();
                 }

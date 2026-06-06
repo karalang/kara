@@ -1315,13 +1315,28 @@ impl<'ctx> super::Codegen<'ctx> {
         name: &str,
     ) -> BasicValueEnum<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let i64_t = self.context.i64_type();
-        let option_ty = self.enum_layouts["Option"].llvm_type;
         let loaded_ptr = self
             .builder
             .build_load(ptr_ty, field_ptr, &format!("{name}.niche.ptr"))
             .unwrap()
             .into_pointer_value();
+        self.niche_ptr_to_option_value(loaded_ptr, name)
+    }
+
+    /// Niche-ABI unpack: materialize a full 4-i64 Option struct SSA value
+    /// from a bare nullable pointer (null = `None`, non-null = `Some`).
+    /// The SSA core of `niche_load_option_field` (which loads from a heap
+    /// slot first); also used directly by `compile_function`'s entry
+    /// unpack for niche-ABI params and `compile_call`'s result unpack for
+    /// niche-ABI returns, where the pointer arrives as an SSA value
+    /// rather than behind a slot.
+    pub(crate) fn niche_ptr_to_option_value(
+        &self,
+        loaded_ptr: inkwell::values::PointerValue<'ctx>,
+        name: &str,
+    ) -> BasicValueEnum<'ctx> {
+        let i64_t = self.context.i64_type();
+        let option_ty = self.enum_layouts["Option"].llvm_type;
         let is_null = self
             .builder
             .build_is_null(loaded_ptr, &format!("{name}.niche.is_null"))
@@ -1370,8 +1385,31 @@ impl<'ctx> super::Codegen<'ctx> {
         field_ptr: inkwell::values::PointerValue<'ctx>,
         new_val: BasicValueEnum<'ctx>,
     ) {
+        let new_ptr = self.option_value_to_niche_ptr(new_val);
+        self.builder.build_store(field_ptr, new_ptr).unwrap();
+    }
+
+    /// Niche-ABI pack: convert a 4-i64 Option struct SSA value into the
+    /// single nullable pointer the niche representation expects. The SSA
+    /// core of `niche_store_option_field` (which follows with a heap-slot
+    /// store); also used directly by the function-return sites and
+    /// `compile_call`'s arg loop for niche-ABI signatures, where the
+    /// pointer is passed by value rather than stored.
+    ///
+    /// Tag-aware (same rationale as the store path): a `None` value is
+    /// built as `get_undef()` + tag store, so `w0` must not be trusted
+    /// when the tag says None — select null instead. A value that is
+    /// already a pointer passes through unchanged (defensive; today every
+    /// caller hands the conventional struct shape).
+    pub(crate) fn option_value_to_niche_ptr(
+        &self,
+        new_val: BasicValueEnum<'ctx>,
+    ) -> inkwell::values::PointerValue<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
+        if let BasicValueEnum::PointerValue(p) = new_val {
+            return p;
+        }
         let sv = new_val.into_struct_value();
         let tag = self
             .builder
@@ -1401,11 +1439,45 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_int_to_ptr(w0, ptr_ty, "niche.store.ptr_some")
             .unwrap();
-        let new_ptr = self
-            .builder
+        self.builder
             .build_select(is_some, ptr_from_w0, ptr_ty.const_null(), "niche.store.ptr")
-            .unwrap();
-        self.builder.build_store(field_ptr, new_ptr).unwrap();
+            .unwrap()
+            .into_pointer_value()
+    }
+
+    /// True when the function currently being compiled returns
+    /// `Option[shared T]` under the niche call ABI (single nullable
+    /// `ptr`), i.e. every `ret` must pack the conventional 4-i64 Option
+    /// value through `option_value_to_niche_ptr` first. Keyed off
+    /// `current_fn`'s LLVM symbol name so nested-fn compiles (closures,
+    /// par branch fns, reduce workers, generic monos — all of which swap
+    /// `current_fn` and none of which mint `fn_niche_abi` entries)
+    /// resolve to `false` without any flag threading.
+    pub(crate) fn current_fn_ret_is_niche(&self) -> bool {
+        let Some(cf) = self.current_fn else {
+            return false;
+        };
+        cf.get_name()
+            .to_str()
+            .ok()
+            .and_then(|name| self.fn_niche_abi.get(name))
+            .is_some_and(|abi| abi.ret)
+    }
+
+    /// Inner shared heap type when the function currently being compiled
+    /// returns `Option[shared T]` — the same record `compile_function`
+    /// seeds `tail_ret_inner` from, but derivable at any point in the
+    /// body (the flow-sensitive `tail_ret_inner` is deliberately cleared
+    /// during statement compilation, so an explicit `return expr;` can't
+    /// read it). Keyed off `current_fn`'s LLVM symbol name via
+    /// `fn_return_option_inner_shared`, so nested-fn compiles (closures,
+    /// par branch fns, monos) resolve to `None` without flag threading —
+    /// same discipline as `current_fn_ret_is_niche`.
+    pub(crate) fn current_fn_ret_option_inner_heap(&self) -> Option<StructType<'ctx>> {
+        let cf = self.current_fn?;
+        let name = cf.get_name().to_str().ok()?;
+        let inner = self.fn_return_option_inner_shared.get(name)?;
+        Some(self.shared_types.get(inner.as_str())?.heap_type)
     }
 
     pub(super) fn option_inner_shared_type_for_type_expr(

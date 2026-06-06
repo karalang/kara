@@ -324,7 +324,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let ExprKind::Identifier(name) = &e.kind {
                         self.suppress_user_drop_for_var(name);
                     }
-                    let v = self.compile_expr(e)?;
+                    // `Option[shared T]` return compensation at an explicit
+                    // `return expr;` — mirrors the per-branch TAIL machinery
+                    // (`compile_tail_final_expr`): a bare tracked binding
+                    // (`return head;`) is inc'd so the chain survives the
+                    // binding's own scope-exit `RcDecOption` below with a
+                    // net +1 for the caller; control-flow shapes re-arm the
+                    // context for their branch finals; fresh sources
+                    // (calls, `Some(...)` ctors — which inc shared
+                    // payloads, `None`) compile plain. The FieldAccess
+                    // companion after compile covers `return node.next;`
+                    // (the niche field load is a bare ptr read — no inc —
+                    // and the source field stays owned by the object, so
+                    // the returned alias needs its own +1). Before this,
+                    // every explicit-return alias shape under-counted and
+                    // the caller read freed memory (`ret_ident`/`ret_field`
+                    // repros, 2026-06-05 — pre-existing, surfaced by the
+                    // niche-ABI slice's convergence tests; tail-position
+                    // siblings were fixed by 426b8dc3/fca1e3ea).
+                    let ret_opt_inner = self.current_fn_ret_option_inner_heap();
+                    let v = if ret_opt_inner.is_some() {
+                        let v = self.compile_tail_final_expr(e, ret_opt_inner)?;
+                        self.share_option_shared_field_ref_for_arg(e, v);
+                        v
+                    } else {
+                        self.compile_expr(e)?
+                    };
                     // Move-aware suppression for a DIRECT `return f"..."`: the
                     // returned String buffer IS the f-string accumulator, now
                     // owned by the caller. The `suppress_source_vec_cleanup_for_arg`
@@ -406,6 +431,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.builder
                             .build_unconditional_branch(ctx.coro_return_bb)
                             .unwrap();
+                    } else if self.current_fn_ret_is_niche() {
+                        // Niche-ABI return (`Option[shared T]` →
+                        // nullable ptr): pack the conventional 4-i64
+                        // Option value at the ret boundary. The ensures/
+                        // invariant checks above already ran on the
+                        // conventional shape.
+                        let packed = self.option_value_to_niche_ptr(v);
+                        self.builder.build_return(Some(&packed)).unwrap();
                     } else {
                         self.builder.build_return(Some(&v)).unwrap();
                     }
@@ -858,17 +891,28 @@ impl<'ctx> super::Codegen<'ctx> {
         // their inner field.
         let propagated_word = self.coerce_to_i64(propagated_payload)?;
 
-        let ret_struct = {
-            let undef = enum_ty.get_undef();
-            let s1 = self
-                .builder
-                .build_insert_value(undef, i64_t.const_int(0, false), 0, "q_ret_tag")
-                .unwrap();
-            self.builder
-                .build_insert_value(s1, propagated_word, 1, "q_ret_val")
-                .unwrap()
-        };
-        self.builder.build_return(Some(&ret_struct)).unwrap();
+        if self.current_fn_ret_is_niche() {
+            // Niche-ABI enclosing fn (`-> Option[shared T]` declared as
+            // a nullable ptr): the `?` failure path early-returns None,
+            // which is null under the niche. No struct to build.
+            let null = self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .const_null();
+            self.builder.build_return(Some(&null)).unwrap();
+        } else {
+            let ret_struct = {
+                let undef = enum_ty.get_undef();
+                let s1 = self
+                    .builder
+                    .build_insert_value(undef, i64_t.const_int(0, false), 0, "q_ret_tag")
+                    .unwrap();
+                self.builder
+                    .build_insert_value(s1, propagated_word, 1, "q_ret_val")
+                    .unwrap()
+            };
+            self.builder.build_return(Some(&ret_struct)).unwrap();
+        }
 
         // Ok/Some block: clear any frames a recovered earlier `?` had
         // pushed, then continue with the unwrapped payload word. Mirrors

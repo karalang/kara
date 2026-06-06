@@ -898,6 +898,30 @@ impl<'ctx> super::Codegen<'ctx> {
             compiled_args.push(BasicMetadataValueEnum::from(val));
         }
 
+        // Niche-ABI arg pack: positions the callee declares as a nullable
+        // ptr (`Option[shared T]` under `fn_niche_abi`) receive the packed
+        // pointer instead of the conventional 4-i64 Option struct. Runs
+        // AFTER the arg loop so the refcount bookkeeping above
+        // (`share_option_shared_ref_for_arg` & co.) operated on the
+        // conventional shape; the pack is value-only and count-neutral —
+        // the callee's +1 travels through the pointer unchanged. Positions
+        // are 1:1 with `args` (ref/slice fast-paths push exactly one entry
+        // per arg, and niche positions are owned `Path` params which never
+        // take those paths).
+        if let Some(abi) = self.fn_niche_abi.get(&name).cloned() {
+            for (i, is_niche) in abi.params.iter().enumerate() {
+                if !is_niche {
+                    continue;
+                }
+                if let Some(slot) = compiled_args.get_mut(i) {
+                    if let BasicMetadataValueEnum::StructValue(sv) = *slot {
+                        let packed = self.option_value_to_niche_ptr(sv.into());
+                        *slot = packed.into();
+                    }
+                }
+            }
+        }
+
         // Phase-7 line 5 sub-item 1 — hot-swap indirect dispatch.
         // For callees registered in `hot_swap_slots`, lower the call as
         // a load from the slot in `@karac_hotswap_table` followed by an
@@ -920,7 +944,17 @@ impl<'ctx> super::Codegen<'ctx> {
         if basic_val.is_instruction() {
             Ok(self.context.i64_type().const_int(0, false).into())
         } else {
-            Ok(basic_val.unwrap_basic())
+            let v = basic_val.unwrap_basic();
+            // Niche-ABI result unpack: a callee returning `Option[shared T]`
+            // as a nullable ptr is rebuilt into the conventional 4-i64
+            // Option struct here, so every downstream consumer (let-binding
+            // RcDecOption registration via `fn_return_option_inner_shared`,
+            // pattern matches, `?`, re-returns) is shape-blind to the ABI.
+            if self.fn_niche_abi.get(&name).is_some_and(|abi| abi.ret) {
+                let unpacked = self.niche_ptr_to_option_value(v.into_pointer_value(), "call.niche");
+                return Ok(unpacked);
+            }
+            Ok(v)
         }
     }
 

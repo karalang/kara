@@ -756,6 +756,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // already minted.
         if let ExprKind::Call { callee, .. } = &value.kind {
             if let ExprKind::Identifier(name) = &callee.kind {
+                // Niche-ABI callee: the DECLARED LLVM return type is a
+                // nullable ptr, but the in-body value shape the branch
+                // fn stores into the slot is the conventional 4-i64
+                // Option struct (`compile_call` unpacks at the call
+                // boundary). Size the slot for the unpacked shape — a
+                // ptr-sized slot would silently truncate the 32-byte
+                // store.
+                if self.fn_niche_abi.get(name).is_some_and(|abi| abi.ret) {
+                    return Some(self.enum_layouts["Option"].llvm_type.into());
+                }
                 if let Some(fn_val) = self.module.get_function(name) {
                     if let Some(ret) = fn_val.get_type().get_return_type() {
                         return Some(ret);
@@ -1464,6 +1474,30 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // `?` on `Option[shared T]` (`let first = head?;`) yields the
+                // unwrapped payload as the raw i64 word `q_w0` — the enum
+                // payload lowering is word-uniform (`compile_question` hands
+                // back field 1 untyped). A shared binding's slot must hold
+                // the heap pointer: int_to_ptr it back before the inc/track
+                // below and before the alloca takes `val`'s type, so
+                // downstream field access / method dispatch see the pointer
+                // shape every other shared RHS produces. Pre-existing gap
+                // (panicked at `into_pointer_value` on any karac build since
+                // the `?` lowering landed) surfaced 2026-06-05 by the
+                // niche-ABI slice's `?` convergence test; `.unwrap()` was
+                // never affected — its method lowering re-types the payload.
+                let val = if shared_info.is_some() && val.is_int_value() {
+                    self.builder
+                        .build_int_to_ptr(
+                            val.into_int_value(),
+                            self.context.ptr_type(inkwell::AddressSpace::default()),
+                            "shared_w0_ptr",
+                        )
+                        .unwrap()
+                        .into()
+                } else {
+                    val
+                };
                 // For shared types: rc_inc when copying from another variable (not fresh construction).
                 if let Some((ref var_name, ref info)) = shared_info {
                     if !is_fresh_construction {

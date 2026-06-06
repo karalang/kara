@@ -4230,6 +4230,297 @@ fn main() {
         }
     }
 
+    // ── Niche call ABI for `Option[shared T]` signatures ───────────
+    //
+    // wip-shared-struct-codegen-followups Slice 1 (2026-06-05): free user
+    // fns with `Option[shared T]` in return/param position are declared
+    // with a single nullable `ptr` at those positions (null = None)
+    // instead of the conventional 4-i64 Option enum struct — closing the
+    // field-niche/call-ABI asymmetry and skipping the sret round-trip per
+    // call. Bodies stay on the conventional shape: entry unpacks params,
+    // return sites pack, `compile_call` packs args / unpacks results.
+    // Impl methods, closures, generic monos, and coroutine ramps keep the
+    // conventional ABI (no `fn_niche_abi` entry).
+
+    #[test]
+    fn test_ir_option_shared_niche_abi_signature_shapes() {
+        let ir = ir_for(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+impl ListNode {
+    fn step(ref self) -> Option[ListNode] { self.next }
+}
+fn make() -> Option[ListNode] {
+    Some(ListNode { val: 1, next: None })
+}
+fn ident(head: Option[ListNode]) -> Option[ListNode] { head }
+fn opt_i64(x: Option[i64]) -> Option[i64] { x }
+fn main() {
+    let a = ident(make());
+    let b = opt_i64(Some(3));
+    let n = ListNode { val: 2, next: None };
+    let c = n.step();
+    if a.is_some() { println(1); }
+    if b.is_some() { println(2); }
+    if c.is_none() { println(3); }
+}
+"#,
+        );
+        // Niche positions: ptr return + ptr param on the free fns.
+        assert!(
+            ir.contains("define internal ptr @ident(ptr"),
+            "ident should be niche-shaped (ptr -> ptr); IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("define internal ptr @make()"),
+            "make should be niche-shaped (-> ptr); IR:\n{ir}"
+        );
+        // Call sites use the niche shape.
+        assert!(
+            ir.contains("call ptr @make()"),
+            "call to make should return ptr; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("call ptr @ident(ptr"),
+            "call to ident should pass+return ptr; IR:\n{ir}"
+        );
+        // Non-shared Option keeps the conventional 4-i64 struct ABI.
+        assert!(
+            ir.contains("@opt_i64({ i64, i64, i64, i64 }"),
+            "Option[i64] param must stay conventional; IR:\n{ir}"
+        );
+        // Impl methods are excluded this slice (provider-vtable arg
+        // paths don't pack yet) — conventional struct return.
+        assert!(
+            ir.contains("define internal { i64, i64, i64, i64 } @ListNode.step"),
+            "impl method must keep the conventional Option return; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_option_shared_niche_abi_explicit_return_alias() {
+        // Explicit-`return` compensation for aliased `Option[shared T]`
+        // values (pre-existing soundness gap surfaced by this slice's
+        // convergence tests; tail-position siblings were fixed by
+        // 426b8dc3 / fca1e3ea). Three shapes, all of which under-counted
+        // and returned freed memory before the fix:
+        //   - `return head;`      (param identifier — trap on main)
+        //   - `return node.next;` (field access — garbage sums)
+        //   - `node.next` tail    (control: already worked, stays green)
+        // The Return arm now routes through `compile_tail_final_expr`
+        // (bare-binding inc, control-flow re-arm) plus the FieldAccess
+        // companion `share_option_shared_field_ref_for_arg`.
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn ret_ident(head: Option[ListNode], flag: i64) -> Option[ListNode] {
+    if flag == 1 {
+        return head;
+    }
+    None
+}
+fn ret_field(head: Option[ListNode]) -> Option[ListNode] {
+    if head.is_some() {
+        let node = head.unwrap();
+        return node.next;
+    }
+    return None;
+}
+fn tail_field(head: Option[ListNode]) -> Option[ListNode] {
+    let node = head.unwrap();
+    node.next
+}
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut total = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let node = cur.unwrap();
+        total = total + node.val;
+        cur = node.next;
+    }
+    total
+}
+fn main() {
+    println(sum(ret_ident(make(3), 1)));
+    println(sum(ret_field(make(3))));
+    println(sum(tail_field(make(3))));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "6\n5\n5");
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_shared_niche_abi_recursion() {
+        // Recursion through the niche ABI: every recursive call packs
+        // the field-loaded `node.next` arg to a ptr and unpacks the ptr
+        // result; the explicit `return head;` / `return None;` exits
+        // exercise the Return-arm compensation + niche packing together.
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn nth(head: Option[ListNode], k: i64) -> Option[ListNode] {
+    if k == 0 {
+        return head;
+    }
+    if head.is_none() {
+        return None;
+    }
+    let node = head.unwrap();
+    nth(node.next, k - 1)
+}
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut total = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let node = cur.unwrap();
+        total = total + node.val;
+        cur = node.next;
+    }
+    total
+}
+fn main() {
+    println(sum(nth(make(5), 3)));
+    println(sum(nth(make(5), 0)));
+    if nth(make(2), 5).is_none() { println(1); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "9\n15\n1");
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_shared_question_operator_shared_let() {
+        // `let first = head?;` — the `?` success path yields the payload
+        // as the raw i64 word `q_w0`; a shared binding's slot must hold
+        // the heap pointer. Pre-existing panic ("expected PointerValue")
+        // at the let-site `into_pointer_value` on every karac build since
+        // the `?` lowering landed; the let handler now int_to_ptr's the
+        // word back when the binding is shared-typed. Also covers the
+        // niche `?` early-return (None propagates as a null ptr from a
+        // niche-shaped fn) and the success-path chain into `Some(...)`.
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn second(head: Option[ListNode]) -> Option[ListNode] {
+    let first = head?;
+    let rest = first.next?;
+    Some(rest)
+}
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut total = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let node = cur.unwrap();
+        sum_step(node.val);
+        total = total + node.val;
+        cur = node.next;
+    }
+    total
+}
+fn sum_step(v: i64) {
+    let _ = v;
+}
+fn main() {
+    println(sum(second(make(3))));
+    if second(make(1)).is_none() { println(7); }
+    if second(None).is_none() { println(8); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5\n7\n8");
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_shared_method_return_composes_with_niche_fn() {
+        // Impl methods keep the conventional ABI this slice; a method-
+        // returned `Option[shared T]` must still pack cleanly when passed
+        // into a niche-shaped free fn (and the niche fn's unpacked result
+        // must feed a conventional walk). Convergence of the two ABIs on
+        // one value.
+        //
+        // `ref self` receiver deliberately: the owned-`self` variant of
+        // this exact shape segfaults on a PRE-EXISTING receiver-move
+        // refcount bug independent of the niche ABI (reproduced on main
+        // 2026-06-05; interpreter prints 9, AOT exit 139 even without
+        // any niche fn in the program) — tracked in
+        // docs/implementation_checklist/bugs.md.
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+impl ListNode {
+    fn step(ref self) -> Option[ListNode] { self.next }
+}
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn ident(head: Option[ListNode]) -> Option[ListNode] { head }
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut total = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let node = cur.unwrap();
+        total = total + node.val;
+        cur = node.next;
+    }
+    total
+}
+fn main() {
+    let chain = make(4);
+    let node = chain.unwrap();
+    let rest = node.step();
+    println(sum(ident(rest)));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "9");
+        }
+    }
+
     #[test]
     fn test_e2e_bug8_call_chain_field_assoc_call() {
         // Sibling shape: associated-function call (`Node.make()`)

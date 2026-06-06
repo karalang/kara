@@ -80,6 +80,20 @@ pub(crate) struct SharedTypeInfo<'ctx> {
     pub(crate) niche_option_fields: Vec<Option<String>>,
 }
 
+/// Call-ABI niche record for one function (the fn-signature analog of
+/// `niche_option_fields` above — see `Codegen::fn_niche_abi`). `ret`
+/// means the function's LLVM return type is a single nullable `ptr`
+/// standing in for `Option[shared T]`; `params[i]` means parameter `i`
+/// is likewise `ptr`-shaped at the ABI. The body-side shape stays the
+/// conventional 4-i64 Option struct — packing/unpacking happens only at
+/// the call boundary (`declare_function` / `compile_function` entry /
+/// the return sites / `compile_call`).
+#[derive(Clone)]
+pub(crate) struct NicheAbi {
+    pub(crate) ret: bool,
+    pub(crate) params: Vec<bool>,
+}
+
 // ── Enum variant layout ─────────────────────────────────────────
 
 /// Per-payload-field drop classification recorded at `declare_enums`
