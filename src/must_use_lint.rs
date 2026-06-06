@@ -51,6 +51,30 @@ fn implicit_must_use_kind(name: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// Displaced-value exception (design.md § `#[must_use]` on Types >
+/// Mandate for stdlib): mutating container methods whose `Option` return
+/// reports the element the mutation displaced or removed — `Map` /
+/// `TreeMap` `insert` (the previous value) and `remove` (the removed
+/// value), `Vec.pop` / `Vec.remove_first`, `VecDeque.pop_front` /
+/// `pop_back` — are exempt from the implicit `Option` must-use. For
+/// these the mutation is the operation's purpose and the `Option` is an
+/// ancillary report; discarding it is the dominant correct idiom
+/// (`map.insert(k, v);` as a statement — Rust deliberately leaves
+/// `HashMap::insert` un-annotated for the same reason). The exemption is
+/// scoped by receiver type to the stdlib containers: a user-defined
+/// `insert` returning `Option` still warns. `receiver` / `method` are
+/// the two halves of the typechecker's canonical `Type.method` callee
+/// key (`method_callee_types`), already wrapper-normalized — a
+/// `mut ref Map[K, V]` parameter records `"Map.insert"`.
+fn displaced_value_exempt(receiver: &str, method: &str) -> bool {
+    matches!(
+        (receiver, method),
+        ("Map" | "TreeMap", "insert" | "remove")
+            | ("Vec", "pop" | "remove_first")
+            | ("VecDeque", "pop_front" | "pop_back")
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LintLevel {
     Warning,
@@ -234,9 +258,18 @@ impl Walker<'_> {
             return;
         };
 
-        // Source 1: implicit (slice 1) — Result / Option.
+        // Source 1: implicit (slice 1) — Result / Option. The
+        // displaced-value exception carves out `Option` returns from
+        // stdlib container mutators (`map.insert(k, v);` etc.) — see
+        // `displaced_value_exempt`. The exempt path still `return`s:
+        // sources 2/3 deliberately never re-examine an implicit-kind
+        // type (source 2 excludes them; source 3 has no stdlib
+        // container entries), so an exempt discard emits nothing.
         if let Type::Named { name, .. } = ty {
             if let Some((kind, why)) = implicit_must_use_kind(name) {
+                if kind == "Option" && self.is_displaced_value_discard(expr) {
+                    return;
+                }
                 self.diags.push(self.make_implicit_diag(expr, kind, why));
                 return;
             }
@@ -253,6 +286,37 @@ impl Walker<'_> {
             self.diags
                 .push(self.make_function_level_diag(expr, callee_name, msg));
         }
+    }
+
+    /// True when the discarded expression is a method call on a stdlib
+    /// container in the displaced-value family (see
+    /// `displaced_value_exempt`). The receiver type comes from
+    /// `typed.method_callee_types` — the canonical `Type.method` side-
+    /// table — NOT from `expr_types` keyed by the receiver's span: the
+    /// parser sets `MethodCall.span == receiver.span`, so the call's
+    /// return-type insertion overwrites the receiver's type at the same
+    /// `expr_types` key (the race documented on `method_callee_types`).
+    ///
+    /// The `callee_method == method` guard covers the chained-span
+    /// collision documented at the table's central insertion site:
+    /// because chained calls share one span key, the entry under this
+    /// span can belong to an *inner* link (e.g. the table holds
+    /// `"VecDeque.pop_front"` while the discarded outer call is the
+    /// skipped unwrap-family `.unwrap()`). Requiring the table entry's
+    /// method segment to match this call's method name means a stale
+    /// inner entry can never exempt a different outer call.
+    fn is_displaced_value_discard(&self, expr: &Expr) -> bool {
+        let ExprKind::MethodCall { method, .. } = &expr.kind else {
+            return false;
+        };
+        let key = SpanKey::from_span(&expr.span);
+        let Some(callee) = self.typed.method_callee_types.get(&key) else {
+            return false;
+        };
+        let Some((receiver, callee_method)) = callee.split_once('.') else {
+            return false;
+        };
+        callee_method == method && displaced_value_exempt(receiver, callee_method)
     }
 
     /// Resolve a statement-position expression's type to a

@@ -911,3 +911,127 @@ fn test_cli_deny_promotes_must_use() {
         "`-D must_use` should promote every emission; got: {diags:?}",
     );
 }
+
+// ── Displaced-value exception (design.md § Mandate for stdlib >
+// Displaced-value exception to category 1) ───────────────────────────
+//
+// Stdlib container mutators whose `Option` return reports the element
+// the mutation displaced or removed are exempt from the implicit
+// `Option` must-use: the mutation is the operation's purpose and the
+// `Option` is an ancillary report (`map.insert(k, v);` as a statement
+// is the dominant correct idiom — Rust deliberately leaves
+// `HashMap::insert` un-annotated for the same reason). Scoped by
+// receiver type to the stdlib containers; lookups (`Map.get`) and
+// user-defined `insert`-like methods still warn.
+
+#[test]
+fn test_discarded_map_insert_does_not_warn() {
+    // The kata-#3 sliding-window shape: bare `last_idx.insert(c, right);`.
+    let diags = lint(
+        "fn caller() {\n\
+             let mut m: Map[i64, i64] = Map.new();\n\
+             m.insert(1, 2);\n\
+         }",
+    );
+    assert!(diags.is_empty(), "expected no warnings, got: {diags:?}");
+}
+
+#[test]
+fn test_discarded_map_remove_does_not_warn() {
+    let diags = lint(
+        "fn caller() {\n\
+             let mut m: Map[i64, i64] = Map.new();\n\
+             m.insert(1, 2);\n\
+             m.remove(1);\n\
+         }",
+    );
+    assert!(diags.is_empty(), "expected no warnings, got: {diags:?}");
+}
+
+#[test]
+fn test_discarded_vec_pop_does_not_warn() {
+    let diags = lint(
+        "fn caller() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             v.pop();\n\
+         }",
+    );
+    assert!(diags.is_empty(), "expected no warnings, got: {diags:?}");
+}
+
+#[test]
+fn test_discarded_vecdeque_pops_do_not_warn() {
+    let diags = lint(
+        "fn caller() {\n\
+             let mut q: VecDeque[i64] = VecDeque.new();\n\
+             q.push_back(1);\n\
+             q.push_back(2);\n\
+             q.pop_front();\n\
+             q.pop_back();\n\
+         }",
+    );
+    assert!(diags.is_empty(), "expected no warnings, got: {diags:?}");
+}
+
+#[test]
+fn test_discarded_map_insert_through_mut_ref_param_does_not_warn() {
+    // The receiver resolution goes through `method_callee_types`, whose
+    // `method_callee_type_name` peels `Ref` / `MutRef` — a `mut ref
+    // Map[K, V]` parameter records the same `"Map.insert"` key as an
+    // owned local.
+    let diags = lint(
+        "fn put(m: mut ref Map[i64, i64]) {\n\
+             m.insert(1, 2);\n\
+         }",
+    );
+    assert!(diags.is_empty(), "expected no warnings, got: {diags:?}");
+}
+
+#[test]
+fn test_let_underscore_on_exempt_insert_stays_silent() {
+    // `let _ =` on an exempt call must not regress — the binding path
+    // never reaches the discard check at all.
+    let diags = lint(
+        "fn caller() {\n\
+             let mut m: Map[i64, i64] = Map.new();\n\
+             let _ = m.insert(1, 2);\n\
+         }",
+    );
+    assert!(diags.is_empty(), "expected no warnings, got: {diags:?}");
+}
+
+#[test]
+fn test_discarded_map_get_still_warns() {
+    // Lookups are NOT displaced-value mutators — the `Option` IS the
+    // result. The exemption must not widen to them.
+    let diags = lint(
+        "fn caller() {\n\
+             let mut m: Map[i64, i64] = Map.new();\n\
+             m.insert(1, 2);\n\
+             m.get(1);\n\
+         }",
+    );
+    assert_eq!(diags.len(), 1, "expected one warning, got: {diags:?}");
+    assert_must_use_warning(&diags, "discarded `Option` value");
+}
+
+#[test]
+fn test_discarded_user_insert_method_still_warns() {
+    // The exemption is scoped by receiver type to the stdlib
+    // containers — a user-defined `insert` returning `Option` is not
+    // in the family and still warns.
+    let diags = lint(
+        "struct Registry { x: i64 }\n\
+         impl Registry {\n\
+             fn insert(mut ref self, v: i64) -> Option[i64] {\n\
+                 let old = self.x;\n\
+                 self.x = v;\n\
+                 Option.Some(old)\n\
+             }\n\
+         }\n\
+         fn caller(r: mut ref Registry) { r.insert(7); }",
+    );
+    assert_eq!(diags.len(), 1, "expected one warning, got: {diags:?}");
+    assert_must_use_warning(&diags, "discarded `Option` value");
+}
