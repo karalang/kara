@@ -1268,7 +1268,14 @@ dependencies = []
         use std::collections::BTreeMap;
 
         fn stub_hasher(p: &Path) -> Result<String, LockfileError> {
-            Ok(format!("blake3:stub-{}", p.display()))
+            // Normalize separators so the embedded-path assertions hold on
+            // Windows too (`join` yields `\` there). Production hashes file
+            // *content* — the path never reaches the hash — so this is a
+            // stub-only concern.
+            Ok(format!(
+                "blake3:stub-{}",
+                p.display().to_string().replace('\\', "/")
+            ))
         }
 
         fn fail_hasher(_: &Path) -> Result<String, LockfileError> {
