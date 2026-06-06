@@ -730,9 +730,19 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 } else if let Some(&type_id) = name_to_id.get(formal_name) {
-                    if let GenericArg::Type(te) = explicit_arg {
-                        let ty = self.lower_type_expr(te, &[]);
-                        self.env.substitutions.insert(type_id, ty);
+                    match explicit_arg {
+                        GenericArg::Type(te) => {
+                            let ty = self.lower_type_expr(te, &[]);
+                            self.env.substitutions.insert(type_id, ty);
+                        }
+                        // Phase 11 Q1: an explicit shape literal binds a
+                        // shape-variadic param's metavar to the whole
+                        // lowered `Type::Shape`.
+                        GenericArg::Shape(lit) => {
+                            let ty = self.lower_shape_literal(lit, &[]);
+                            self.env.substitutions.insert(type_id, ty);
+                        }
+                        GenericArg::Const(_) => {}
                     }
                 }
             }

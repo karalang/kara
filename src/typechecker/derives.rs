@@ -97,6 +97,8 @@ impl<'a> super::TypeChecker<'a> {
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
             | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
         }
     }
 
@@ -151,6 +153,8 @@ impl<'a> super::TypeChecker<'a> {
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
             | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
         }
     }
 
@@ -201,6 +205,8 @@ impl<'a> super::TypeChecker<'a> {
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
             | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
         }
     }
 
@@ -267,6 +273,8 @@ impl<'a> super::TypeChecker<'a> {
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
             | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
         }
     }
 
@@ -338,6 +346,8 @@ impl<'a> super::TypeChecker<'a> {
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
             | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
         }
     }
 
@@ -396,6 +406,8 @@ impl<'a> super::TypeChecker<'a> {
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
             | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
         }
     }
     /// Returns `true` when `ty` is a distinct type that derives `Arithmetic`.
@@ -493,6 +505,8 @@ impl<'a> super::TypeChecker<'a> {
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
             | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
         }
     }
 
@@ -558,6 +572,8 @@ impl<'a> super::TypeChecker<'a> {
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
             | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
         }
     }
 

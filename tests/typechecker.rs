@@ -23077,21 +23077,187 @@ fn never_coerces_into_unit_annotation() {
 }
 // ── Shape-literal grammar (Phase 11 Q2) — v1 stub diagnostic ────────
 
+// ── Dim/Shape generic-parameter kinds (Phase 11 Q1) ─────────────────
+
 #[test]
-fn test_shape_literal_generic_arg_not_implemented_yet() {
-    // The grammar parses (syntax.md § SHAPE_LIT); the Dim/Shape kind
-    // system is the next Phase 11 slice. Until it lands, a shape literal
-    // in generic-arg position is rejected at the use site with a pointer
-    // — mirroring the try-block / trait-alias not-yet pattern.
+fn test_shape_variadic_struct_accepts_shape_literal() {
+    typecheck_ok(
+        "struct Mat[T, ...S] { }\n\
+         fn f(a: Mat[f64, [3, 4]]) { }\n\
+         fn main() {}\n",
+    );
+}
+
+#[test]
+fn test_shape_literal_on_non_shape_param_rejected() {
     let errors = typecheck_errors(
-        "struct Tensor { x: i64 }\n\
-         fn f(t: Tensor[f64, [3, 4]]) { }\n\
+        "struct Plain[T] { }\n\
+         fn f(a: Plain[[3, 4]]) { }\n\
          fn main() {}\n",
     );
     assert!(
         errors.iter().any(|e| e
             .message
-            .contains("shape-kinded generics are not implemented yet")),
+            .contains("does not match a shape-kinded generic parameter")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_matmul_dim_unification_happy_path() {
+    // M/K/N inferred Dim-kinded (used only in shape position).
+    typecheck_ok(
+        "struct Mat[T, ...S] { }\n\
+         fn matmul[M, K, N](a: Mat[f64, [M, K]], b: Mat[f64, [K, N]]) -> Mat[f64, [M, N]] { todo() }\n\
+         fn main() {\n\
+             let a: Mat[f64, [3, 4]] = todo();\n\
+             let b: Mat[f64, [4, 5]] = todo();\n\
+             let c = matmul(a, b);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_matmul_result_shape_inferred() {
+    // bool-slot probe: the inferred result type must render [3, 5].
+    let errors = typecheck_errors(
+        "struct Mat[T, ...S] { }\n\
+         fn matmul[M, K, N](a: Mat[f64, [M, K]], b: Mat[f64, [K, N]]) -> Mat[f64, [M, N]] { todo() }\n\
+         fn main() {\n\
+             let a: Mat[f64, [3, 4]] = todo();\n\
+             let b: Mat[f64, [4, 5]] = todo();\n\
+             let flag: bool = matmul(a, b);\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("[3, 5]")),
+        "expected the probe to reject Mat[f64, [3, 5]]: {errors:?}",
+    );
+}
+
+#[test]
+fn test_matmul_k_dim_mismatch_rejected() {
+    let errors = typecheck_errors(
+        "struct Mat[T, ...S] { }\n\
+         fn matmul[M, K, N](a: Mat[f64, [M, K]], b: Mat[f64, [K, N]]) -> Mat[f64, [M, N]] { todo() }\n\
+         fn main() {\n\
+             let a: Mat[f64, [3, 4]] = todo();\n\
+             let wrong: Mat[f64, [7, 5]] = todo();\n\
+             let c = matmul(a, wrong);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("error[E_SHAPE]")
+                && e.message.contains("expected 4, found 7")),
+        "K=4 vs K=7 must surface E_SHAPE naming both sides: {errors:?}",
+    );
+}
+
+#[test]
+fn test_shape_rank_mismatch_e_shape() {
+    let errors = typecheck_errors(
+        "struct Mat[T, ...S] { }\n\
+         fn rank2[M, N](t: Mat[f64, [M, N]]) { }\n\
+         fn main() {\n\
+             let t: Mat[f64, [2, 3, 4]] = todo();\n\
+             rank2(t);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("error[E_SHAPE]") && e.message.contains("rank mismatch")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_explicit_dim_bound_accepted() {
+    typecheck_ok(
+        "struct Mat[T, ...S] { }\n\
+         fn first[T, N: Dim](t: Mat[T, [N]]) -> bool { true }\n\
+         fn main() {\n\
+             let v: Mat[f64, [768]] = todo();\n\
+             let x = first(v);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_variadic_shape_param_binds_whole_shape() {
+    typecheck_ok(
+        "struct Mat[T, ...S] { }\n\
+         fn rank_ok[T, ...S](t: Mat[T, S]) -> bool { true }\n\
+         fn main() {\n\
+             let v: Mat[f64, [3, 4, 5]] = todo();\n\
+             let x = rank_ok(v);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_splice_transpose_result_shape() {
+    let errors = typecheck_errors(
+        "struct Mat[T, ...S] { }\n\
+         fn transpose[T, ...S, M: Dim, N: Dim](t: Mat[T, [...S, M, N]]) -> Mat[T, [...S, N, M]] { todo() }\n\
+         fn main() {\n\
+             let t: Mat[f64, [2, 3, 4]] = todo();\n\
+             let flag: bool = transpose(t);\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("[2, 4, 3]")),
+        "expected transpose to infer Mat[f64, [2, 4, 3]]: {errors:?}",
+    );
+}
+
+#[test]
+fn test_dynamic_dim_unifies_and_degrades() {
+    let errors = typecheck_errors(
+        "struct Mat[T, ...S] { }\n\
+         fn matmul[M, K, N](a: Mat[f64, [M, K]], b: Mat[f64, [K, N]]) -> Mat[f64, [M, N]] { todo() }\n\
+         fn main() {\n\
+             let a: Mat[f64, [3, ?]] = todo();\n\
+             let b: Mat[f64, [?, 5]] = todo();\n\
+             let flag: bool = matmul(a, b);\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("[3, 5]")),
+        "two ?s against concrete dims must still infer [3, 5]: {errors:?}",
+    );
+}
+
+#[test]
+fn test_dynamic_dim_degrades_result_position() {
+    let errors = typecheck_errors(
+        "struct Mat[T, ...S] { }\n\
+         fn matmul[M, K, N](a: Mat[f64, [M, K]], b: Mat[f64, [K, N]]) -> Mat[f64, [M, N]] { todo() }\n\
+         fn main() {\n\
+             let d: Mat[f64, [?, ?]] = todo();\n\
+             let b: Mat[f64, [?, 5]] = todo();\n\
+             let flag: bool = matmul(d, b);\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("[?, 5]")),
+        "M stays dynamic: expected Mat[f64, [?, 5]]: {errors:?}",
+    );
+}
+
+#[test]
+fn test_shape_param_arithmetic_deferred() {
+    let errors = typecheck_errors(
+        "struct Mat[T, ...S] { }\n\
+         fn f[A, B](t: Mat[f64, [A + B]]) { }\n\
+         fn main() {}\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("deferred to v1.5")),
         "{errors:?}",
     );
 }

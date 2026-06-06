@@ -209,6 +209,8 @@ fn walk(
 
     // Recursive cases — walk every reachable sub-type.
     match ty {
+        // Shape-kinded args carry dims, not types — nothing to walk.
+        Type::Shape(_) => {}
         Type::Tuple(elems) => {
             for (i, elem) in elems.iter().enumerate() {
                 path.push(format!("tuple element {}", i));

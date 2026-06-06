@@ -100,6 +100,14 @@ impl<'a> super::TypeChecker<'a> {
         for param in &params {
             for bound in &param.bounds {
                 let trait_name = bound.path.last().cloned().unwrap_or_default();
+                // Phase 11 Q1: `N: Dim` is a kind annotation, not a trait
+                // bound — recognized structurally (like the `Effect`
+                // marker on effect params) and excluded from trait
+                // discharge. The param is Dim-kinded; dims bind through
+                // the const-arg machinery at call sites.
+                if bound.path.len() == 1 && trait_name == "Dim" && bound.generic_args.is_none() {
+                    continue;
+                }
                 if self.is_trait_alias(&trait_name) {
                     self.report_trait_alias_use(&trait_name, &bound.span);
                 } else if !self.is_known_trait(&trait_name) {

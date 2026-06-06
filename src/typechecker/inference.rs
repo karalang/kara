@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::const_eval::substitute_const_arg;
 use super::types::{
-    type_display, types_compatible, ConstArg, ConstVarId, SubstValue, Type, TypeVarId,
+    type_display, types_compatible, ConstArg, ConstVarId, DimArg, SubstValue, Type, TypeVarId,
 };
 
 /// Structural substitution of `Type::TypeParam(name)` → concrete type
@@ -54,6 +54,22 @@ pub(super) fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValu
             // `ConstVar` arms pass through unchanged.
             size: substitute_const_arg(size, subs),
         },
+        // Phase 11 Q1: dim params substitute like Array const params; a
+        // named splice whose param solved to a shape expands inline.
+        Type::Shape(dims) => {
+            let mut out: Vec<DimArg> = Vec::new();
+            for d in dims {
+                match d {
+                    DimArg::Const(c) => out.push(DimArg::Const(substitute_const_arg(c, subs))),
+                    DimArg::Splice(n) => match subs.get(n).and_then(SubstValue::as_type) {
+                        Some(Type::Shape(inner)) => out.extend(inner.iter().cloned()),
+                        _ => out.push(d.clone()),
+                    },
+                    _ => out.push(d.clone()),
+                }
+            }
+            Type::Shape(out)
+        }
         Type::Slice { element, mutable } => Type::Slice {
             element: Box::new(substitute_type_params(element, subs)),
             mutable: *mutable,
@@ -206,6 +222,24 @@ pub(super) fn instantiate_signature_with_fresh_vars(
                     collect(a, names, seen, const_names, const_seen);
                 }
             }
+            // Phase 11 Q1: dim params inside shape literals are
+            // discovered exactly like Array const params; a `...S`
+            // splice name joins the *type*-var pool (its binding value
+            // is a whole `Type::Shape`), shared with any bare
+            // `TypeParam(S)` occurrence of the same param.
+            Type::Shape(dims) => {
+                for d in dims {
+                    match d {
+                        DimArg::Const(ConstArg::ConstParam(n)) if const_seen.insert(n.clone()) => {
+                            const_names.push(n.clone());
+                        }
+                        DimArg::Splice(n) if seen.insert(n.clone()) => {
+                            names.push(n.clone());
+                        }
+                        _ => {}
+                    }
+                }
+            }
             Type::Function {
                 params,
                 return_type,
@@ -295,6 +329,20 @@ pub(super) fn instantiate_signature_with_fresh_vars(
                 element: Box::new(substitute(element, name_to_id, name_to_const_id)),
                 size: substitute_const_param_to_var(size, name_to_const_id),
             },
+            Type::Shape(dims) => Type::Shape(
+                dims.iter()
+                    .map(|d| match d {
+                        DimArg::Const(c) => {
+                            DimArg::Const(substitute_const_param_to_var(c, name_to_const_id))
+                        }
+                        DimArg::Splice(n) => match name_to_id.get(n) {
+                            Some(&id) => DimArg::SpliceVar(id),
+                            None => d.clone(),
+                        },
+                        _ => d.clone(),
+                    })
+                    .collect(),
+            ),
             Type::Slice { element, mutable } => Type::Slice {
                 element: Box::new(substitute(element, name_to_id, name_to_const_id)),
                 mutable: *mutable,
@@ -574,6 +622,40 @@ pub(super) fn resolve_type_vars(
             element: Box::new(recur(element)),
             size: resolve_const_arg(size, const_substitutions, const_id_to_name),
         },
+        // Phase 11 Q1: resolve dims; a `?`-weak binding resolves to
+        // `Dynamic` (design.md degradation rule); a bound splice var
+        // expands its dim list inline.
+        Type::Shape(dims) => {
+            let mut out: Vec<DimArg> = Vec::new();
+            for d in dims {
+                match d {
+                    DimArg::Const(c) => {
+                        match resolve_const_arg(c, const_substitutions, const_id_to_name) {
+                            ConstArg::DynamicDim => out.push(DimArg::Dynamic),
+                            other => out.push(DimArg::Const(other)),
+                        }
+                    }
+                    DimArg::Dynamic => out.push(DimArg::Dynamic),
+                    DimArg::Splice(n) => out.push(DimArg::Splice(n.clone())),
+                    DimArg::SpliceVar(id) => {
+                        if let Some(bound) = substitutions.get(id) {
+                            match recur(bound) {
+                                Type::Shape(inner) => out.extend(inner),
+                                // A splice var bound to a non-shape —
+                                // malformed; keep the var for the
+                                // assignability layer to surface.
+                                _ => out.push(DimArg::SpliceVar(*id)),
+                            }
+                        } else if let Some(name) = id_to_name.get(id) {
+                            out.push(DimArg::Splice(name.clone()));
+                        } else {
+                            out.push(DimArg::SpliceVar(*id));
+                        }
+                    }
+                }
+            }
+            Type::Shape(out)
+        }
         Type::Slice { element, mutable } => Type::Slice {
             element: Box::new(recur(element)),
             mutable: *mutable,
@@ -757,6 +839,12 @@ pub(super) fn unify_types(
             unify_const_args(xs, ys, const_substitutions)
                 && unify_types(xe, ye, substitutions, const_substitutions)
         }
+        // Phase 11 Q1: shape-vs-shape unification (dim binding, `?`
+        // weak dims, `...S` splice splitting). design.md § Numerical
+        // Types > Generic dims with relations / Dynamic-dim unification.
+        (Type::Shape(xd), Type::Shape(yd)) => {
+            unify_shapes(xd, yd, substitutions, const_substitutions)
+        }
         (
             Type::Slice {
                 element: xe,
@@ -888,11 +976,152 @@ fn unify_type_var(
 /// the inference solver substitutes `ConstParam` → `ConstVar` at
 /// signature minting). Returns false on incompatible shapes; the
 /// caller surfaces the diagnostic.
+/// Shape-vs-shape unification (Phase 11 Q1). Without a splice, the dim
+/// lists must agree position-wise: `?` unifies with anything (weak),
+/// dim params bind through `unify_const_args`. With exactly one `...S`
+/// splice on a side, the other side's dims split into prefix / middle /
+/// suffix around it — prefix and suffix unify position-wise and the
+/// middle binds to the splice's metavar as a whole `Type::Shape`. Two
+/// same-position splices unify their surroundings (the body-side
+/// `[...S, N, M]` vs `[...S, M, N]` case). Lowering enforces "at most
+/// one splice per literal", so the splits are unambiguous.
+fn unify_shapes(
+    x: &[DimArg],
+    y: &[DimArg],
+    substitutions: &mut HashMap<TypeVarId, Type>,
+    const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
+) -> bool {
+    fn splice_pos(dims: &[DimArg]) -> Option<usize> {
+        dims.iter()
+            .position(|d| matches!(d, DimArg::Splice(_) | DimArg::SpliceVar(_)))
+    }
+    fn unify_dim(
+        a: &DimArg,
+        b: &DimArg,
+        const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
+    ) -> bool {
+        let to_const = |d: &DimArg| -> ConstArg {
+            match d {
+                DimArg::Const(c) => c.clone(),
+                DimArg::Dynamic => ConstArg::DynamicDim,
+                // Splices are handled by the caller's split; reaching
+                // here means a malformed pairing — be permissive and
+                // let the assignability layer report.
+                DimArg::Splice(_) | DimArg::SpliceVar(_) => ConstArg::DynamicDim,
+            }
+        };
+        unify_const_args(&to_const(a), &to_const(b), const_substitutions)
+    }
+
+    match (splice_pos(x), splice_pos(y)) {
+        (None, None) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y.iter())
+                    .all(|(a, b)| unify_dim(a, b, const_substitutions))
+        }
+        (Some(i), None) => unify_spliced(x, i, y, substitutions, const_substitutions),
+        (None, Some(j)) => unify_spliced(y, j, x, substitutions, const_substitutions),
+        (Some(i), Some(j)) => {
+            // Both sides carry a splice: require structural agreement —
+            // same prefix/suffix arity, splices unify with each other.
+            if i != j || x.len() != y.len() {
+                return false;
+            }
+            for (k, (a, b)) in x.iter().zip(y.iter()).enumerate() {
+                if k == i {
+                    match (a, b) {
+                        (DimArg::Splice(na), DimArg::Splice(nb)) if na == nb => {}
+                        (DimArg::SpliceVar(ia), DimArg::SpliceVar(ib)) if ia == ib => {}
+                        (DimArg::SpliceVar(id), DimArg::Splice(n))
+                        | (DimArg::Splice(n), DimArg::SpliceVar(id)) => {
+                            if !unify_types(
+                                &Type::TypeVar(*id),
+                                &Type::Shape(vec![DimArg::Splice(n.clone())]),
+                                substitutions,
+                                const_substitutions,
+                            ) {
+                                return false;
+                            }
+                        }
+                        _ => return false,
+                    }
+                } else if !unify_dim(a, b, const_substitutions) {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+}
+
+/// Helper for `unify_shapes`: `spliced` contains exactly one splice at
+/// `pos`; `concrete` has none. Splits `concrete` around the splice and
+/// binds the middle.
+fn unify_spliced(
+    spliced: &[DimArg],
+    pos: usize,
+    concrete: &[DimArg],
+    substitutions: &mut HashMap<TypeVarId, Type>,
+    const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
+) -> bool {
+    let pre = &spliced[..pos];
+    let post = &spliced[pos + 1..];
+    if concrete.len() < pre.len() + post.len() {
+        return false;
+    }
+    let mid_end = concrete.len() - post.len();
+    let (c_pre, rest) = concrete.split_at(pre.len());
+    let (c_mid, c_post) = rest.split_at(mid_end - pre.len());
+    let pairwise = |xs: &[DimArg],
+                    ys: &[DimArg],
+                    const_substitutions: &mut HashMap<ConstVarId, ConstArg>|
+     -> bool {
+        xs.iter().zip(ys.iter()).all(|(a, b)| {
+            let to_const = |d: &DimArg| match d {
+                DimArg::Const(c) => c.clone(),
+                _ => ConstArg::DynamicDim,
+            };
+            unify_const_args(&to_const(a), &to_const(b), const_substitutions)
+        })
+    };
+    if !pairwise(pre, c_pre, const_substitutions) || !pairwise(post, c_post, const_substitutions) {
+        return false;
+    }
+    match &spliced[pos] {
+        DimArg::SpliceVar(id) => unify_types(
+            &Type::TypeVar(*id),
+            &Type::Shape(c_mid.to_vec()),
+            substitutions,
+            const_substitutions,
+        ),
+        // An un-instantiated `Splice(name)` (body-side checking) binds
+        // nothing — accept iff the middle is exactly the same splice,
+        // which the (Some, Some) arm already covers; a concrete middle
+        // against a bare named splice is permissive here and reported
+        // (if genuinely wrong) by the assignability layer.
+        DimArg::Splice(_) => true,
+        _ => unreachable!("unify_spliced called without a splice at pos"),
+    }
+}
+
 pub(super) fn unify_const_args(
     a: &ConstArg,
     b: &ConstArg,
     const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
 ) -> bool {
+    // Phase 11 Q1: `DynamicDim` is a *weak* binding (the `?` dynamic
+    // dim) — inspect raw top-level vars before chain resolution so a
+    // concrete sibling constraint can upgrade a `?`-bound var without
+    // losing its id (the same order-independence rule as
+    // Never-as-bottom for type metavars).
+    match (a, b) {
+        (ConstArg::ConstVar(id_a), ConstArg::ConstVar(id_b)) if id_a == id_b => return true,
+        (ConstArg::ConstVar(id), other) | (other, ConstArg::ConstVar(id)) => {
+            return unify_const_var(*id, other, const_substitutions);
+        }
+        _ => {}
+    }
     let a = resolve_const_var_top(a, const_substitutions);
     let b = resolve_const_var_top(b, const_substitutions);
     match (&a, &b) {
@@ -905,9 +1134,44 @@ pub(super) fn unify_const_args(
             const_substitutions.insert(*id, a.clone());
             true
         }
+        // `?` unifies with any dim (design.md § Dynamic-dim
+        // unification); degradation is handled at resolution.
+        (ConstArg::DynamicDim, _) | (_, ConstArg::DynamicDim) => true,
         (ConstArg::Literal(x), ConstArg::Literal(y)) => x == y,
         (ConstArg::ConstParam(name_a), ConstArg::ConstParam(name_b)) => name_a == name_b,
         _ => false,
+    }
+}
+
+/// Bind / upgrade a const metavariable against `other`, treating an
+/// existing `DynamicDim` binding as weak: a concrete constraint
+/// replaces it, a second `?` leaves it, and a concrete existing
+/// binding is re-unified (never demoted). Mirrors `unify_type_var`'s
+/// Never-as-bottom handling on the const substrate.
+fn unify_const_var(
+    id: ConstVarId,
+    other: &ConstArg,
+    const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
+) -> bool {
+    let other_resolved = resolve_const_var_top(other, const_substitutions);
+    match const_substitutions.get(&id).cloned() {
+        None => {
+            // Avoid binding a var to itself through an alias chain.
+            if let ConstArg::ConstVar(other_id) = other_resolved {
+                if other_id == id {
+                    return true;
+                }
+            }
+            const_substitutions.insert(id, other_resolved);
+            true
+        }
+        Some(ConstArg::DynamicDim) => {
+            if !matches!(other_resolved, ConstArg::DynamicDim) {
+                const_substitutions.insert(id, other_resolved);
+            }
+            true
+        }
+        Some(bound) => unify_const_args(&bound, &other_resolved, const_substitutions),
     }
 }
 

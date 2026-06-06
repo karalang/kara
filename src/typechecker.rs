@@ -50,7 +50,7 @@ pub use env::{EnumInfo, FunctionSig, ImplInfo, StructInfo, TraitInfo, TypeEnv, U
 #[cfg(test)]
 use inference::substitute_type_params;
 pub use types::{
-    const_arg_display, type_display, type_to_concrete_or_param_name, ConstArg, ConstVarId,
+    const_arg_display, type_display, type_to_concrete_or_param_name, ConstArg, ConstVarId, DimArg,
     FloatSize, IntSize, SubstValue, Type, TypeVarId, UIntSize, VariantTypeInfo,
 };
 #[cfg(test)]
@@ -2737,6 +2737,76 @@ impl<'a> TypeChecker<'a> {
                     TypeErrorKind::TypeMismatch,
                 );
                 return false;
+            }
+        }
+        // Phase 11 Q1 — E_SHAPE: when both sides are the same named type
+        // and the mismatch is inside a shape argument, surface the dim
+        // (or rank) that disagrees instead of the generic expected/found
+        // pair (design.md § Numerical Types > Generic dims with
+        // relations). Falls through when nothing concrete disagrees.
+        if let (
+            Type::Named {
+                name: e_name,
+                args: e_args,
+            },
+            Type::Named {
+                name: f_name,
+                args: f_args,
+            },
+        ) = (expected, found)
+        {
+            if e_name == f_name && e_args.len() == f_args.len() {
+                for (e_arg, f_arg) in e_args.iter().zip(f_args.iter()) {
+                    let (Type::Shape(ed), Type::Shape(fd)) = (e_arg, f_arg) else {
+                        continue;
+                    };
+                    let has_splice = |dims: &[DimArg]| {
+                        dims.iter()
+                            .any(|d| matches!(d, DimArg::Splice(_) | DimArg::SpliceVar(_)))
+                    };
+                    if has_splice(ed) || has_splice(fd) {
+                        continue;
+                    }
+                    if ed.len() != fd.len() {
+                        self.type_error(
+                            format!(
+                                "error[E_SHAPE]: shape rank mismatch: expected {} dim(s), \
+                                 found {} — '{}' vs '{}'",
+                                ed.len(),
+                                fd.len(),
+                                type_display(expected),
+                                type_display(found),
+                            ),
+                            span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        return false;
+                    }
+                    for (i, (e_dim, f_dim)) in ed.iter().zip(fd.iter()).enumerate() {
+                        if let (
+                            DimArg::Const(ConstArg::Literal(a)),
+                            DimArg::Const(ConstArg::Literal(b)),
+                        ) = (e_dim, f_dim)
+                        {
+                            if a != b {
+                                self.type_error(
+                                    format!(
+                                        "error[E_SHAPE]: shape dim {} mismatch: expected \
+                                         {}, found {} — '{}' vs '{}'",
+                                        i,
+                                        a,
+                                        b,
+                                        type_display(expected),
+                                        type_display(found),
+                                    ),
+                                    span,
+                                    TypeErrorKind::TypeMismatch,
+                                );
+                                return false;
+                            }
+                        }
+                    }
+                }
             }
         }
         // Canonical assignment-mismatch site. Use the typed-fields

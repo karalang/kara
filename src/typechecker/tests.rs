@@ -1480,3 +1480,71 @@ mod gat_slice5_assoc_projection_resolution_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod shape_kind_unit_probes {
+    //! Phase 11 Q1 unit probes: instantiation descends Shape dims and
+    //! unify binds dim metavars.
+    use super::super::inference::{
+        instantiate_signature_with_fresh_vars, resolve_type_vars, unify_types,
+    };
+    use super::super::types::{ConstArg, DimArg, FloatSize, Type};
+    use std::collections::HashMap;
+
+    fn mat(dims: Vec<DimArg>) -> Type {
+        Type::Named {
+            name: "Mat".to_string(),
+            args: vec![Type::Float(FloatSize::F64), Type::Shape(dims)],
+        }
+    }
+
+    #[test]
+    fn instantiation_mints_const_vars_for_shape_dims() {
+        let sig_param = mat(vec![
+            DimArg::Const(ConstArg::ConstParam("M".to_string())),
+            DimArg::Const(ConstArg::ConstParam("K".to_string())),
+        ]);
+        let ret = mat(vec![DimArg::Const(ConstArg::ConstParam("M".to_string()))]);
+        let mut ntv = 0;
+        let mut ncv = 0;
+        let inst = instantiate_signature_with_fresh_vars(&[sig_param], &ret, &mut ntv, &mut ncv);
+        assert_eq!(ncv, 2, "expected fresh ConstVars for M and K, minted {ncv}");
+        // The instantiated param must carry ConstVar dims, not ConstParam.
+        let Type::Named { args, .. } = &inst.params[0] else {
+            panic!()
+        };
+        let Type::Shape(dims) = &args[1] else {
+            panic!()
+        };
+        assert!(
+            matches!(dims[0], DimArg::Const(ConstArg::ConstVar(_))),
+            "dim 0 not instantiated: {dims:?}",
+        );
+        // Unify against a concrete [3, 4] and resolve the return.
+        let mut subs = HashMap::new();
+        let mut csubs = HashMap::new();
+        let actual = mat(vec![
+            DimArg::Const(ConstArg::Literal(3)),
+            DimArg::Const(ConstArg::Literal(4)),
+        ]);
+        assert!(unify_types(&inst.params[0], &actual, &mut subs, &mut csubs));
+        assert_eq!(csubs.len(), 2, "M and K must bind: {csubs:?}");
+        let resolved = resolve_type_vars(
+            &inst.return_type,
+            &subs,
+            &inst.id_to_name,
+            &csubs,
+            &inst.const_id_to_name,
+        );
+        let Type::Named { args, .. } = &resolved else {
+            panic!()
+        };
+        let Type::Shape(dims) = &args[1] else {
+            panic!()
+        };
+        assert!(
+            matches!(dims[0], DimArg::Const(ConstArg::Literal(3))),
+            "return dim must resolve to 3: {dims:?}",
+        );
+    }
+}

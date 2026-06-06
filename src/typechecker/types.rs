@@ -108,6 +108,15 @@ pub enum Type {
     TypeParam(String),
     TypeVar(TypeVarId),
 
+    /// A Shape-kinded generic argument — the lowered form of a shape
+    /// literal `[3, 4, ?]` (or a bound shape-variadic param's dim list).
+    /// Lives inside `Named.args` next to ordinary type args, so the
+    /// existing recursion over generic args (substitution, unification,
+    /// compatibility, display) reaches it without new plumbing. See
+    /// design.md § Numerical Types > "Shape is a new generic-parameter
+    /// kind".
+    Shape(Vec<DimArg>),
+
     /// `T.Item` — an associated type projection. `param` is the generic type
     /// parameter name (e.g. `"I"`); after `substitute_type_params` has run
     /// it carries the resolved receiver's bare type name (e.g. `"Wrapper"`
@@ -261,6 +270,35 @@ pub enum ConstArg {
     Literal(i64),
     ConstParam(String),
     ConstVar(ConstVarId),
+    /// A dim metavariable bound from a `?` dynamic dim at a call site
+    /// (Phase 11 Q1). A *weak* binding — mirrors the Never-as-bottom
+    /// rule for type metavars: a concrete sibling constraint upgrades
+    /// it, and it never demotes a concrete binding. Resolves to
+    /// `DimArg::Dynamic` in shape positions (design.md § Dynamic-dim
+    /// unification); never constructed in `Array`/`Vector` size
+    /// positions.
+    DynamicDim,
+}
+
+/// One dim of a `Type::Shape`. Dim params are integer-valued at compile
+/// time, exactly like const params — so the `Const` case reuses the
+/// whole `ConstArg` machinery (param naming, call-site `ConstVar`
+/// minting, `unify_const_args` binding, `resolve_const_arg`
+/// resolution). The extra variants are shape-specific:
+/// `Dynamic` is the `?` marker (unifies with any dim and degrades the
+/// result position to `?` — design.md § Dynamic-dim unification);
+/// `Splice`/`SpliceVar` carry a `...S` variadic splice through
+/// declaration and call-site instantiation respectively.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DimArg {
+    Const(ConstArg),
+    Dynamic,
+    /// `...S` in a declared shape literal, pre-instantiation.
+    Splice(String),
+    /// `...S` after call-site instantiation: the splice binds the
+    /// matched dim sub-list as `Type::Shape` into the ordinary type
+    /// substitution map under this fresh `TypeVarId`.
+    SpliceVar(TypeVarId),
 }
 
 impl ConstArg {
@@ -351,6 +389,7 @@ pub fn const_arg_display(arg: &ConstArg) -> String {
         ConstArg::Literal(n) => n.to_string(),
         ConstArg::ConstParam(name) => name.clone(),
         ConstArg::ConstVar(id) => format!("?C{}", id.0),
+        ConstArg::DynamicDim => "?".to_string(),
     }
 }
 
@@ -507,6 +546,12 @@ pub(super) fn type_is_fully_concrete(ty: &Type) -> bool {
         // treat as non-concrete to keep them out of the specialized lane.
         Type::Existential { .. } => false,
         Type::Named { args, .. } => args.iter().all(type_is_fully_concrete),
+        // A shape is concrete iff no dim references an unresolved
+        // param/var. `?` is concrete — it is a committed runtime dim,
+        // not an unsolved metavariable.
+        Type::Shape(dims) => dims
+            .iter()
+            .all(|d| matches!(d, DimArg::Const(ConstArg::Literal(_)) | DimArg::Dynamic)),
         // A refinement is concrete iff its base is — a generic refinement
         // (`NonEmpty[T]`) carries the type param inside `base`.
         Type::Refinement { base, .. } => type_is_fully_concrete(base),
@@ -540,6 +585,21 @@ pub(super) fn type_is_fully_concrete(ty: &Type) -> bool {
 
 pub fn type_display(ty: &Type) -> String {
     match ty {
+        Type::Shape(dims) => {
+            let rendered: Vec<String> = dims
+                .iter()
+                .map(|d| match d {
+                    DimArg::Const(ConstArg::Literal(n)) => n.to_string(),
+                    DimArg::Const(ConstArg::ConstParam(name)) => name.clone(),
+                    DimArg::Const(ConstArg::ConstVar(_)) => "_".to_string(),
+                    DimArg::Const(ConstArg::DynamicDim) => "?".to_string(),
+                    DimArg::Dynamic => "?".to_string(),
+                    DimArg::Splice(name) => format!("...{}", name),
+                    DimArg::SpliceVar(_) => "..._".to_string(),
+                })
+                .collect();
+            format!("[{}]", rendered.join(", "))
+        }
         Type::Int(s) => match s {
             IntSize::I8 => "i8",
             IntSize::I16 => "i16",
@@ -822,6 +882,15 @@ pub(super) fn contains_type_param(ty: &Type) -> bool {
             contains_type_param(element) || matches!(lanes, ConstArg::ConstParam(_))
         }
         Type::Slice { element, .. } => contains_type_param(element),
+        // Phase 11 Q1: a dim param or splice inside a shape is a generic
+        // dependency exactly like Array's const-param size — the
+        // call-site solver must fire so dims get resolved.
+        Type::Shape(dims) => dims.iter().any(|d| {
+            matches!(
+                d,
+                DimArg::Const(ConstArg::ConstParam(_)) | DimArg::Splice(_) | DimArg::SpliceVar(_)
+            )
+        }),
         Type::Ref(inner) | Type::MutRef(inner) | Type::Weak(inner) => contains_type_param(inner),
         Type::Pointer { inner, .. } => contains_type_param(inner),
         Type::Named { args, .. } => args.iter().any(contains_type_param),
@@ -1052,6 +1121,33 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
         // structural check fires — that wrapper resolves projections
         // through `impl_assoc_types` first, then falls through here.
         // This function stays pure (no `&TypeChecker`) so it can be
+        // Phase 11 Q1: shape-vs-shape compatibility. `?` matches any
+        // dim (committed-at-runtime); unresolved dim params / vars and
+        // splices are permissive (mirroring the TypeParam wildcard rule
+        // above) — concrete-vs-concrete dims must agree.
+        (Type::Shape(xd), Type::Shape(yd)) => {
+            let has_splice = |dims: &[DimArg]| {
+                dims.iter()
+                    .any(|d| matches!(d, DimArg::Splice(_) | DimArg::SpliceVar(_)))
+            };
+            if has_splice(xd) || has_splice(yd) {
+                // Splices bind arbitrary-length middles — defer to the
+                // unifier's split; structurally permissive here.
+                true
+            } else {
+                xd.len() == yd.len()
+                    && xd.iter().zip(yd.iter()).all(|(x, y)| match (x, y) {
+                        (DimArg::Dynamic, _) | (_, DimArg::Dynamic) => true,
+                        (DimArg::Const(cx), DimArg::Const(cy)) => match (cx, cy) {
+                            (ConstArg::Literal(a), ConstArg::Literal(b)) => a == b,
+                            // Unresolved params / metavars are wildcards
+                            // at the compatibility layer.
+                            _ => true,
+                        },
+                        _ => true,
+                    })
+            }
+        }
         // called from `inference.rs::unify_types`, `lub_block_type`,
         // and the slice/array coercion arms below.
         (

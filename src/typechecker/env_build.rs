@@ -59,6 +59,11 @@ impl<'a> super::TypeChecker<'a> {
             match item {
                 Item::StructDef(s) => {
                     let gp = Self::generic_param_names(&s.generic_params);
+                    if let Some(positions) = Self::shape_param_positions(&s.generic_params) {
+                        self.env
+                            .shape_param_positions
+                            .insert(s.name.clone(), positions);
+                    }
                     let derived_traits = extract_derived_traits(&s.attributes);
                     let must_use_message = extract_must_use_message(&s.attributes);
                     self.env.structs.insert(
@@ -78,6 +83,11 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Item::EnumDef(e) => {
                     let gp = Self::generic_param_names(&e.generic_params);
+                    if let Some(positions) = Self::shape_param_positions(&e.generic_params) {
+                        self.env
+                            .shape_param_positions
+                            .insert(e.name.clone(), positions);
+                    }
                     let derived_traits = extract_derived_traits(&e.attributes);
                     let must_use_message = extract_must_use_message(&e.attributes);
                     self.env.enums.insert(

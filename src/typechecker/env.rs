@@ -236,6 +236,13 @@ pub struct RefinementPred {
 pub struct TypeEnv {
     pub structs: HashMap<String, StructInfo>,
     pub enums: HashMap<String, EnumInfo>,
+    /// Which generic-param positions of a named type are Shape-kinded
+    /// (declared `...S` on the struct/enum). Sparse — only types with at
+    /// least one shape-variadic param have an entry; the Vec is
+    /// positional, parallel to the item's `generic_params`. Consulted by
+    /// `lower_generic_args` to accept a `GenericArg::Shape` at that
+    /// position (Phase 11 Q1; design.md § Numerical Types > Shape kind).
+    pub shape_param_positions: HashMap<String, Vec<bool>>,
     /// `union NAME { ... }` declarations. See [`UnionInfo`].
     pub unions: HashMap<String, UnionInfo>,
     /// Derived traits for each `distinct type` declaration.
@@ -343,6 +350,7 @@ impl TypeEnv {
         TypeEnv {
             structs: HashMap::new(),
             enums: HashMap::new(),
+            shape_param_positions: HashMap::new(),
             unions: HashMap::new(),
             distinct_types: HashMap::new(),
             distinct_bases: HashMap::new(),

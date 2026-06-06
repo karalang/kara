@@ -13,7 +13,9 @@ use std::collections::{HashMap, HashSet};
 
 use super::const_eval::{const_value_to_array_size, const_value_type};
 use super::inference::substitute_type_params;
-use super::types::{type_display, ConstArg, FloatSize, IntSize, SubstValue, Type, UIntSize};
+use super::types::{
+    type_display, ConstArg, DimArg, FloatSize, IntSize, SubstValue, Type, UIntSize,
+};
 use super::TypeErrorKind;
 use crate::token::Span;
 
@@ -282,7 +284,8 @@ impl<'a> super::TypeChecker<'a> {
             .as_ref()
             .map(|ga| {
                 ga.iter()
-                    .filter_map(|arg| match arg {
+                    .enumerate()
+                    .filter_map(|(arg_idx, arg)| match arg {
                         GenericArg::Type(t) => Some(self.lower_type_expr(t, generic_scope)),
                         GenericArg::Const(expr) => {
                             let target = type_name.unwrap_or("this type");
@@ -298,25 +301,33 @@ impl<'a> super::TypeChecker<'a> {
                             );
                             None
                         }
-                        // v1 stub: the shape-literal grammar parses
-                        // (syntax.md § SHAPE_LIT) but the Dim/Shape kind
-                        // system is the next Phase 11 slice — reject at
-                        // the use site with a pointer, mirroring the
-                        // try-block / trait-alias not-yet pattern.
+                        // Shape literal arg — legal iff the target type
+                        // declares a shape-variadic (`...S`) param at this
+                        // position (Phase 11 Q1; design.md § Numerical
+                        // Types > Shape kind).
                         GenericArg::Shape(lit) => {
-                            let target = type_name.unwrap_or("this type");
-                            self.type_error(
-                                format!(
-                                    "shape literal generic argument on '{}' is recognized \
-                                     but shape-kinded generics are not implemented yet — \
-                                     the Dim/Shape kind system and `Tensor[T, Shape]` land \
-                                     with the Phase 11 numerical stdlib",
-                                    target
-                                ),
-                                lit.span.clone(),
-                                TypeErrorKind::TypeMismatch,
-                            );
-                            None
+                            let accepts_shape = type_name
+                                .and_then(|n| self.env.shape_param_positions.get(n))
+                                .and_then(|positions| positions.get(arg_idx))
+                                .copied()
+                                .unwrap_or(false);
+                            if accepts_shape {
+                                Some(self.lower_shape_literal(lit, generic_scope))
+                            } else {
+                                let target = type_name.unwrap_or("this type");
+                                self.type_error(
+                                    format!(
+                                        "shape literal argument on '{}' does not match a \
+                                         shape-kinded generic parameter at this position — \
+                                         declare the parameter as `...S` (shape-variadic) \
+                                         to accept a shape literal here",
+                                        target
+                                    ),
+                                    lit.span.clone(),
+                                    TypeErrorKind::TypeMismatch,
+                                );
+                                None
+                            }
                         }
                     })
                     .collect()
@@ -440,6 +451,112 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Lower `Array[T, N]` to `Type::Array { element, size }`.
     /// N must be a positive integer literal (const-eval of arithmetic expressions deferred).
+    /// Lower a parsed shape literal to `Type::Shape` (Phase 11 Q1).
+    /// Dims: a non-negative integer literal lowers to
+    /// `DimArg::Const(Literal)`; an identifier naming a generic param in
+    /// scope lowers to `DimArg::Const(ConstParam)` (the param is
+    /// Dim-kinded by usage — same discovery idiom as `Array[T, N]` const
+    /// params); any other const expression routes through the
+    /// const-expression evaluator. Arithmetic over shape params
+    /// (`[A + B]`) is deferred to v1.5 (design.md § Shape-param
+    /// arithmetic) and gets a focused diagnostic. `?` lowers to
+    /// `DimArg::Dynamic`; `...S` lowers to `DimArg::Splice` (at most one
+    /// splice per literal — the unifier needs an unambiguous split).
+    pub(super) fn lower_shape_literal(
+        &mut self,
+        lit: &crate::ast::ShapeLit,
+        generic_scope: &[String],
+    ) -> Type {
+        fn mentions_scope_param(expr: &Expr, scope: &[String]) -> bool {
+            match &expr.kind {
+                ExprKind::Identifier(n) => scope.contains(n),
+                ExprKind::Binary { left, right, .. } => {
+                    mentions_scope_param(left, scope) || mentions_scope_param(right, scope)
+                }
+                ExprKind::Unary { operand, .. } => mentions_scope_param(operand, scope),
+                _ => false,
+            }
+        }
+        let mut dims = Vec::new();
+        let mut seen_splice = false;
+        for dim in &lit.dims {
+            match dim {
+                crate::ast::ShapeDim::Const(expr) => match &expr.kind {
+                    ExprKind::Integer(n, _) if *n >= 0 => {
+                        dims.push(DimArg::Const(ConstArg::Literal(*n)));
+                    }
+                    ExprKind::Integer(n, _) => {
+                        self.type_error(
+                            format!("shape dim must be non-negative; got {}", n),
+                            expr.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        dims.push(DimArg::Dynamic);
+                    }
+                    ExprKind::Identifier(name) if generic_scope.contains(name) => {
+                        dims.push(DimArg::Const(ConstArg::ConstParam(name.clone())));
+                    }
+                    _ if mentions_scope_param(expr, generic_scope) => {
+                        self.type_error(
+                            "shape-param arithmetic (`[A + B]`, `[N * 2]`) is deferred to \
+                             v1.5 — it requires the type-level const-evaluator (design.md \
+                             § Shape-param arithmetic)"
+                                .to_string(),
+                            expr.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        dims.push(DimArg::Dynamic);
+                    }
+                    _ => match self.eval_const_expr(expr, &Type::UInt(UIntSize::Usize)) {
+                        Ok(cv) => match const_value_to_array_size(&cv) {
+                            Some(n) => dims.push(DimArg::Const(ConstArg::Literal(n as i64))),
+                            None => {
+                                self.type_error(
+                                    "shape dim const-expression must evaluate to a \
+                                     non-negative integer"
+                                        .to_string(),
+                                    expr.span.clone(),
+                                    TypeErrorKind::TypeMismatch,
+                                );
+                                dims.push(DimArg::Dynamic);
+                            }
+                        },
+                        Err(e) => {
+                            self.emit_const_eval_error(e);
+                            dims.push(DimArg::Dynamic);
+                        }
+                    },
+                },
+                crate::ast::ShapeDim::Dynamic { .. } => dims.push(DimArg::Dynamic),
+                crate::ast::ShapeDim::Splice { name, span } => {
+                    if !generic_scope.contains(name) {
+                        self.type_error(
+                            format!(
+                                "unknown shape-variadic parameter '...{}' — declare it in \
+                                 the generic-param list (`[T, ...{}]`)",
+                                name, name
+                            ),
+                            span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    } else if seen_splice {
+                        self.type_error(
+                            "a shape literal may contain at most one `...S` splice — two \
+                             variadic splices have no unambiguous dim split"
+                                .to_string(),
+                            span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    } else {
+                        seen_splice = true;
+                        dims.push(DimArg::Splice(name.clone()));
+                    }
+                }
+            }
+        }
+        Type::Shape(dims)
+    }
+
     fn lower_array_type(
         &mut self,
         generic_args: &Option<Vec<GenericArg>>,
@@ -717,6 +834,18 @@ impl<'a> super::TypeChecker<'a> {
             .as_ref()
             .map(|g| g.params.iter().map(|p| p.name.clone()).collect())
             .unwrap_or_default()
+    }
+
+    /// Positional shape-kinded flags for a generic-param list — `Some`
+    /// only when at least one param is declared `...S` (Phase 11 Q1).
+    /// Keeps `TypeEnv::shape_param_positions` sparse.
+    pub(super) fn shape_param_positions(generics: &Option<GenericParams>) -> Option<Vec<bool>> {
+        let g = generics.as_ref()?;
+        if g.params.iter().any(|p| p.is_variadic_shape) {
+            Some(g.params.iter().map(|p| p.is_variadic_shape).collect())
+        } else {
+            None
+        }
     }
 
     /// Collect inline + where-clause trait bounds keyed by the generic param's
