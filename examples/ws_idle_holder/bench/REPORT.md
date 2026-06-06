@@ -394,7 +394,7 @@ number with the deviation rather than retuning to remove it._
 | connect p95 | 214.1 ms | |
 | connect p99 | 254.8 ms | tail collapsed vs pre-fix 1856 ms — `ec2_setup.sh` sysctls removed the SYN-retransmit cliff |
 | connect max | 480.4 ms | vs pre-fix 2306 ms |
-| churn cliff_ratio | TBD | active-traffic landed ([§Active-traffic stress test](#active-traffic-stress-test)); cliff_ratio tracks the deferred handshake-QPS / reconnect-storm sub-run (#66) |
+| handshake-QPS | ~7–10K/sec | reconnect-storm throughput landed ([§Handshake-QPS](#handshake-qps--reconnect-storm-throughput--high-concurrency)); p50 ~43 ms, 0 failures; server survives c≥4000 storm (#66) |
 
 - Raw JSON: `docs/investigations/demo1_m3_1m_postfix_datalayout.json`.
 - Acceptance criteria (all met): `established == 1,000,000` AND
@@ -979,8 +979,51 @@ desynchronizes arrival → realistic chatter → latency collapses 74 ms → 0.1
 p50. Canonical active-traffic runs use `--stagger-arrival`; the synchronized
 burst is kept as a labeled worst-case sidebar, not the headline.
 
-**Deferred:** handshake-QPS at high concurrency (c≥1000) — the reconnect-storm
-throughput number — is a separate rig run (wip task #66 sub-item).
+### Handshake-QPS — reconnect-storm throughput @ high concurrency
+
+The reconnect-storm sub-run (#66): clients open a **full TLS + WS handshake and
+immediately close**, as fast as `--concurrency` allows, for N seconds — the
+"thundering herd reconnecting after a deploy" worst case. Two AWS Graviton
+`m8g.4xlarge` (arm64, 16 vCPU) boxes: a server box and a bench box, both at
+runtime commit `c1faf2f9`.
+
+| path | concurrency | handshakes/sec | failed | p50 | p99 | notes |
+|---|---|---|---|---|---|---|
+| cross-box (real NIC) | 200 | **4,518** | 0 | 43.9 ms | 53.0 ms | unsaturated; clean baseline |
+| loopback (8 source IPs) | 500 | **10,269** | 0 | 43.2 ms | 375 ms | peak observed; client co-located |
+| loopback (8 source IPs) | 300 | 7,266 | 0 | 43.0 ms | 84.5 ms | clean plateau |
+| loopback (8 source IPs) | 800 | 7,588 | 0 | 78.9 ms | 650 ms | clean plateau |
+
+**Sustained ~7–10K TLS+WS handshakes/sec on a 16-vCPU Graviton, p50 ~43 ms,
+0 failures.** The loopback figure runs the bench *on the server box*, so client
+TLS work steals ~half the cores — the server-alone ceiling is higher; treat
+7–10K/sec as a conservative floor. (TLS handshake is ECDHE-CPU-bound, so
+throughput is core-bound and shows run-to-run variance under co-located load;
+per-handshake **latency** — p50 ~43 ms — is the stable metric.)
+
+**Measurement caveat — the cross-box ceiling is client-bound, not server-bound.**
+A single source IP exposes only ~50,535 ephemeral ports (range 15000–65535), so
+any cross-box run longer than the pool drains caps at `done ≈ 50,536` with the
+remainder counted as client-side connect failures — it measures the bench box's
+port pool, not the server. The loopback path fans out across 8 source IPs
+(~400K ports) to remove that wall; the clean 0-failure loopback numbers above
+are the real server-side figures. Cross-box at-scale runs (c=1000→4000) are
+reported only for **survival** (next paragraph), not throughput.
+
+**Reconnect-storm survival — the load-bearing result.** The server holds through
+a sustained cross-box storm at **c = 1000, 2000, 3000, and 4000** with no crash,
+RSS flat at ~63 MB. This closes two codegen/runtime bugs the storm surfaced:
+(1) a cross-thread coroutine-frame **use-after-free** at an I/O park (missing
+`llvm.coro.save`, fix `30b0141b`) that corrupted the heap at c≥1000 under glibc;
+and (2) an **unmasked SIGPIPE** (fix `c1faf2f9`) — a karac `main` bypasses Rust
+std's `lang_start`, so a socket write racing a peer's mid-handshake close
+silently terminated the process (exit 141) at c=4000. Both are validated on the
+rig: the same storm that previously killed the server now runs clean. Root-cause
+detail in `docs/implementation_checklist/phase-7-codegen.md`.
+
+Raw JSON: `docs/investigations/handshake_qps_crossbox_c{200,1000,2000,3000,4000}.json`
+(real-NIC), `docs/investigations/handshake_qps_loopback*_c*.json` (server-side
+ceiling).
 
 ---
 

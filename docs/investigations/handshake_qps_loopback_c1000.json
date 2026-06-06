@@ -1,0 +1,54 @@
+{
+  "ok": true,
+  "config": {
+    "target": "127.0.0.1:8443",
+    "connections": 100,
+    "concurrency": 1000,
+    "churn_rounds": 3,
+    "churn_fraction": 0.1,
+    "source_ips": [
+      "127.0.0.2",
+      "127.0.0.3",
+      "127.0.0.4",
+      "127.0.0.5",
+      "127.0.0.6",
+      "127.0.0.7",
+      "127.0.0.8",
+      "127.0.0.9"
+    ]
+  },
+  "connect": {
+    "established": 0,
+    "failed": 0,
+    "samples": 0,
+    "min_ms": null,
+    "mean_ms": null,
+    "p50_ms": null,
+    "p95_ms": null,
+    "p99_ms": null,
+    "p999_ms": null,
+    "max_ms": null
+  },
+  "memory": {
+    "available": false,
+    "server_pid": null,
+    "rss_before_kb": null,
+    "rss_after_kb": null,
+    "per_conn_bytes": null
+  },
+  "handshake_qps": {
+    "duration_secs": 20,
+    "concurrency": 1000,
+    "handshakes_completed": 25104,
+    "handshakes_failed": 0,
+    "qps": 1245.2409759696745,
+    "samples": 25104,
+    "min_ms": 86.007008,
+    "mean_ms": 784.2735186978923,
+    "p50_ms": 795.145844,
+    "p95_ms": 845.4664250000001,
+    "p99_ms": 862.798486,
+    "p999_ms": 884.819771,
+    "max_ms": 912.786183
+  }
+}
