@@ -483,6 +483,7 @@ mod tests {
             target_dev_dependencies: BTreeMap::new(),
             target_profile_overrides: BTreeMap::new(),
             build_default_target: None,
+            build_targets: Vec::new(),
             lints: manifest::ManifestLints::default(),
             warnings: Vec::new(),
         }

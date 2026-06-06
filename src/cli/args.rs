@@ -229,6 +229,7 @@ fn parse_check_command(args: &[String]) -> Command {
     let mut file: Option<String> = None;
     let mut output = OutputMode::Text;
     let mut profiles: Option<Vec<crate::manifest::CompileProfile>> = None;
+    let mut targets: Option<Vec<String>> = None;
     let mut concurrency_report = false;
     let mut simd_report = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
@@ -241,6 +242,8 @@ fn parse_check_command(args: &[String]) -> Command {
             output = OutputMode::Jsonl;
         } else if let Some(rest) = arg.strip_prefix("--profiles=") {
             profiles = Some(parse_profiles_arg(rest));
+        } else if let Some(rest) = arg.strip_prefix("--targets=") {
+            targets = Some(parse_targets_arg(rest));
         } else if arg == "--concurrency-report" {
             concurrency_report = true;
         } else if parse_simd_report_flag(arg, &mut simd_report) {
@@ -272,10 +275,55 @@ fn parse_check_command(args: &[String]) -> Command {
         file,
         output,
         profiles,
+        targets,
         concurrency_report,
         simd_report,
         lint_overrides,
     }
+}
+
+/// Parse the `--targets=` value for `karac check` (phase-10
+/// multi-target verification). Mirrors `parse_profiles_arg`: a comma-
+/// separated list drawn from the closed v1 target set, with `all`
+/// expanding to the whole set. Unknown names, duplicates, and empty
+/// entries are hard errors — same posture as the manifest-side
+/// `[build].targets` parse, and for the same reason (a typo must not
+/// silently shrink a CI verification matrix).
+fn parse_targets_arg(spec: &str) -> Vec<String> {
+    if spec.is_empty() {
+        eprintln!(
+            "error: --targets requires at least one target name (e.g. --targets=all or --targets=native,wasm_browser)"
+        );
+        process::exit(1);
+    }
+    if spec == "all" {
+        return crate::target::V1_TARGETS
+            .iter()
+            .map(|t| t.to_string())
+            .collect();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for raw in spec.split(',') {
+        let name = raw.trim();
+        if name.is_empty() {
+            eprintln!("error: --targets entry must not be empty (got '{spec}')");
+            process::exit(1);
+        }
+        if !crate::target::is_v1_target_name(name) {
+            eprintln!(
+                "error: unknown target '{}'. Valid targets: {}, all.",
+                name,
+                crate::target::V1_TARGETS.join(", "),
+            );
+            process::exit(1);
+        }
+        if out.iter().any(|t| t == name) {
+            eprintln!("error: duplicate target '{name}' in --targets");
+            process::exit(1);
+        }
+        out.push(name.to_string());
+    }
+    out
 }
 
 /// Parse the `--simd-report` / `--simd-report=verbose` flag (slice 5b). The

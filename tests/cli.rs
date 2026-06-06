@@ -10618,6 +10618,282 @@ fn target_gate_check_provider_bound_web_resource_passes() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+// ── Phase-10: `karac check` multi-target verification ───────────
+//
+// `--targets=` (or a discovered manifest's `[build].targets`) runs the
+// full pipeline once per v1 target, parameterizing the target-provided
+// resource set each time; diagnostics are tagged per target and
+// findings identical on every target are deduplicated into an
+// "all targets" group. Analysis-only — no llvm/runtime infrastructure
+// needed, so none of these tests skip.
+
+/// Fresh temp dir for one multi-target check test.
+fn multi_target_dir(tag: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-mtcheck-{tag}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    tmp
+}
+
+/// Program whose `main` reaches `FileSystem` — in `native` and
+/// `wasm_wasi`'s provided sets but NOT `wasm_browser`'s, so it is the
+/// minimal target-differential probe.
+const MT_FILESYSTEM_PROBE: &str = "pub fn save() with writes(FileSystem) {\n    let _x = 1;\n}\n\n\
+     fn main() {\n    save();\n}\n";
+
+#[test]
+fn check_targets_flag_tags_per_target_findings() {
+    let tmp = multi_target_dir("difftag");
+    let path = tmp.join("gated.kara");
+    std::fs::write(&path, MT_FILESYSTEM_PROBE).unwrap();
+
+    let out = karac_bin()
+        .args([
+            "check",
+            path.to_str().unwrap(),
+            "--targets=native,wasm_browser",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "browser gate must fail the matrix");
+    assert!(
+        stderr.contains("── target: native ──")
+            && stderr.contains("All checks passed under target 'native'."),
+        "native pass must be reported under its own tag: {stderr}",
+    );
+    assert!(
+        stderr.contains("── target: wasm_browser ──")
+            && stderr.contains("target `wasm_browser` does not provide resource 'FileSystem'")
+            && stderr.contains("1 error(s) under target 'wasm_browser'."),
+        "browser violation must be tagged with its target: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn check_targets_dedupes_target_agnostic_diagnostics() {
+    // A plain typecheck error fires identically on every target — it
+    // must be reported once under "all targets", not once per target.
+    let tmp = multi_target_dir("dedup");
+    let path = tmp.join("shared.kara");
+    std::fs::write(&path, "fn main() {\n    let x: i64 = \"oops\";\n}\n").unwrap();
+
+    let out = karac_bin()
+        .args([
+            "check",
+            path.to_str().unwrap(),
+            "--targets=native,wasm_wasi",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("── all targets ──"),
+        "shared section must be present: {stderr}",
+    );
+    assert_eq!(
+        stderr.matches("expected 'i64', found 'String'").count(),
+        1,
+        "target-agnostic diagnostic must appear exactly once: {stderr}",
+    );
+    assert!(
+        stderr.contains("1 error(s) under target 'native'.")
+            && stderr.contains("1 error(s) under target 'wasm_wasi'."),
+        "per-target error counts still include the shared finding: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn check_targets_json_splits_shared_and_per_target() {
+    let tmp = multi_target_dir("json");
+    let path = tmp.join("gated.kara");
+    std::fs::write(&path, MT_FILESYSTEM_PROBE).unwrap();
+
+    let out = karac_bin()
+        .args([
+            "check",
+            path.to_str().unwrap(),
+            "--targets=native,wasm_browser",
+            "--output=json",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success());
+    assert!(
+        stdout.contains("\"target\":\"native\",\"success\":true")
+            && stdout.contains("\"target\":\"wasm_browser\",\"success\":false")
+            && stdout.contains("\"code\":\"E0411\"")
+            && stdout.contains("\"shared_diagnostics\":[]")
+            && stdout.contains("\"success\":false}"),
+        "JSON must carry per-target blocks and the (empty) shared group: {stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn check_targets_jsonl_brackets_each_target() {
+    let tmp = multi_target_dir("jsonl");
+    let path = tmp.join("gated.kara");
+    std::fs::write(&path, MT_FILESYSTEM_PROBE).unwrap();
+
+    let out = karac_bin()
+        .args([
+            "check",
+            path.to_str().unwrap(),
+            "--targets=native,wasm_browser",
+            "--output=jsonl",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success());
+    assert!(
+        stdout.contains("{\"type\":\"target_start\",\"target\":\"native\"}")
+            && stdout
+                .contains("\"type\":\"target_complete\",\"target\":\"native\",\"success\":true")
+            && stdout.contains("{\"type\":\"target_start\",\"target\":\"wasm_browser\"}")
+            && stdout.contains(
+                "\"type\":\"target_complete\",\"target\":\"wasm_browser\",\"success\":false"
+            ),
+        "JSONL must bracket each target's event stream: {stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn check_targets_single_target_parameterizes_resource_set() {
+    // One requested target is not a matrix, but the pass must still run
+    // under THAT target's provided-resource set — the probe passes a
+    // bare `karac check` (native) and must fail `--targets=wasm_browser`.
+    let tmp = multi_target_dir("single");
+    let path = tmp.join("gated.kara");
+    std::fs::write(&path, MT_FILESYSTEM_PROBE).unwrap();
+
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap(), "--targets=wasm_browser"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "browser-only check must fail");
+    assert!(
+        stderr.contains("── target: wasm_browser ──")
+            && stderr.contains("target `wasm_browser` does not provide resource 'FileSystem'"),
+        "single-target run still parameterizes the gate: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn check_targets_unknown_name_rejected() {
+    let tmp = multi_target_dir("badname");
+    let path = tmp.join("gated.kara");
+    std::fs::write(&path, MT_FILESYSTEM_PROBE).unwrap();
+
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap(), "--targets=native,wasm_wsi"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown target 'wasm_wsi'")
+            && stderr.contains("native, wasm_browser, wasm_wasi, gpu"),
+        "unknown name must list the closed set: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn check_targets_mutually_exclusive_with_profiles() {
+    let tmp = multi_target_dir("excl");
+    let path = tmp.join("gated.kara");
+    std::fs::write(&path, MT_FILESYSTEM_PROBE).unwrap();
+
+    let out = karac_bin()
+        .args([
+            "check",
+            path.to_str().unwrap(),
+            "--targets=all",
+            "--profiles=all",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("--profiles and --targets are mutually exclusive"),
+        "matrix product must be rejected loudly: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn check_manifest_build_targets_drives_multi_target() {
+    // The design trigger: a package declaring `[build].targets` gets the
+    // per-target matrix on a bare `karac check`, no flag required.
+    // Discovery walks upward from the checked file's own directory.
+    let tmp = multi_target_dir("manifest");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"mtprobe\"\n\n[build]\ntargets = [\"native\", \"wasm_browser\"]\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    let path = tmp.join("src").join("gated.kara");
+    std::fs::write(&path, MT_FILESYSTEM_PROBE).unwrap();
+
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "manifest matrix must fail on browser"
+    );
+    assert!(
+        stderr.contains("All checks passed under target 'native'.")
+            && stderr.contains("target `wasm_browser` does not provide resource 'FileSystem'"),
+        "manifest-declared targets must drive the matrix: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn check_manifest_unknown_build_target_is_hard_error() {
+    // A typo'd target must abort check, not silently shrink the matrix.
+    let tmp = multi_target_dir("badmanifest");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"mtprobe\"\n\n[build]\ntargets = [\"walm\"]\n",
+    )
+    .unwrap();
+    let path = tmp.join("gated.kara");
+    std::fs::write(&path, MT_FILESYSTEM_PROBE).unwrap();
+
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("`[build].targets`: unknown target 'walm'"),
+        "manifest typo must be a hard error: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 // ── Phase-10: WASM build path (`--target=wasm_wasi`) ────────────
 //
 // The build-path E2E needs three pieces of infrastructure beyond the

@@ -6,7 +6,11 @@
 //! per `brainstorming/brainstorming_v41.md § P1`. Every other field is
 //! **ignored, not rejected**: a user's `[dependencies]`, `[workspace]`, or
 //! `[build]` table is accepted but has no effect until the package-manager
-//! work lands in a later phase. Unknown keys *inside* `[package]` emit a soft
+//! work lands in a later phase. (Carve-outs that have since landed:
+//! `[dependencies]`/`[dev-dependencies]` and the `[target.*]` overlays are
+//! structurally parsed, `[build].target` selects the default build triple,
+//! and `[build].targets` declares the v1 target matrix for `karac check`
+//! multi-target verification — see `parse_build_targets`.) Unknown keys *inside* `[package]` emit a soft
 //! warning (so anything outside `{name, edition, version, authors}` surfaces
 //! a hint that it is ignored); invalid TOML is a hard error. `version` and
 //! `authors` are tolerated silently in v1 — they carry no semantic behavior
@@ -162,6 +166,17 @@ pub struct Manifest {
     /// time so the build pipeline reads it without re-walking the
     /// TOML table.
     pub build_default_target: Option<String>,
+    /// `[build].targets` — the v1 compilation targets this package
+    /// declares (closed set: `target::V1_TARGETS`). Drives `karac
+    /// check` multi-target verification: with two or more declared
+    /// targets, check runs the full pipeline once per target,
+    /// parameterizing the target-provided resource set each time
+    /// (design.md § Cross-target Compilation > `karac check` Under
+    /// Multiple Targets). Empty when undeclared — check then runs
+    /// single-pass under the default (`native`) target. Distinct from
+    /// `[build].target` (a rustc-style triple selecting the manifest
+    /// overlay for `karac build`).
+    pub build_targets: Vec<String>,
     /// `[lints]` table — project-wide lint posture, the global mirror of
     /// source-level `#[allow(...)]` / `#[deny(...)]`. Empty struct when
     /// the table is absent. The CLI lifts this into the typechecker's
@@ -304,6 +319,14 @@ pub enum ManifestError {
         name: String,
         message: String,
     },
+    /// `[build].targets` entry problem — unknown v1 target name or a
+    /// duplicate entry. Hard error rather than soft warning: a typo'd
+    /// target would otherwise silently drop a target from the `karac
+    /// check` verification matrix.
+    InvalidBuildTargets {
+        path: PathBuf,
+        message: String,
+    },
 }
 
 impl ManifestError {
@@ -393,6 +416,9 @@ impl std::fmt::Display for ManifestError {
                 name,
                 message,
             ),
+            ManifestError::InvalidBuildTargets { path, message } => {
+                write!(f, "`{}`: `[build].targets`: {}", path.display(), message)
+            }
         }
     }
 }
@@ -589,6 +615,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     let (target_dependencies, target_dev_dependencies, target_profile_overrides) =
         parse_target_tables(path, &table, &mut warnings)?;
     let build_default_target = parse_build_default_target(path, &table)?;
+    let build_targets = parse_build_targets(path, &table)?;
     let lints = parse_lints_table(path, &table, &mut warnings)?;
 
     // Stable order across package-key + dependency warnings — same sort key
@@ -611,6 +638,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         target_dev_dependencies,
         target_profile_overrides,
         build_default_target,
+        build_targets,
         lints,
         warnings,
     })
@@ -885,6 +913,67 @@ fn parse_build_default_target(
         });
     }
     Ok(Some(s.clone()))
+}
+
+/// Parse `[build].targets` — the package's declared v1 compilation
+/// targets, the trigger for `karac check` multi-target verification
+/// (design.md § Cross-target Compilation > `karac check` Under
+/// Multiple Targets). Every entry must name a member of the closed v1
+/// set (`target::V1_TARGETS`); unknown names and duplicates are hard
+/// errors — a soft-warn-and-ignore posture would let a typo silently
+/// drop a target from a CI verification matrix, which is exactly the
+/// failure the field exists to prevent. Absent is the common case
+/// (single-target package, checked under `native`).
+fn parse_build_targets(path: &Path, table: &toml::Table) -> Result<Vec<String>, ManifestError> {
+    let Some(build_value) = table.get("build") else {
+        return Ok(Vec::new());
+    };
+    // Wrong-shaped `[build]` is already rejected by
+    // `parse_build_default_target`; a non-table here is unreachable in
+    // practice but kept total for call-order independence.
+    let Some(build_table) = build_value.as_table() else {
+        return Ok(Vec::new());
+    };
+    let Some(targets_value) = build_table.get("targets") else {
+        return Ok(Vec::new());
+    };
+    let toml::Value::Array(entries) = targets_value else {
+        return Err(ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "build.targets".to_string(),
+            expected: "an array of v1 target names (e.g. [\"native\", \"wasm_browser\"])",
+        });
+    };
+    let mut out: Vec<String> = Vec::new();
+    for entry in entries {
+        let toml::Value::String(name) = entry else {
+            return Err(ManifestError::InvalidBuildTargets {
+                path: path.to_path_buf(),
+                message: format!(
+                    "entries must be strings naming v1 targets ({})",
+                    crate::target::V1_TARGETS.join(", "),
+                ),
+            });
+        };
+        if !crate::target::is_v1_target_name(name) {
+            return Err(ManifestError::InvalidBuildTargets {
+                path: path.to_path_buf(),
+                message: format!(
+                    "unknown target '{}'. Valid targets: {}",
+                    name,
+                    crate::target::V1_TARGETS.join(", "),
+                ),
+            });
+        }
+        if out.iter().any(|t| t == name) {
+            return Err(ManifestError::InvalidBuildTargets {
+                path: path.to_path_buf(),
+                message: format!("duplicate target '{name}'"),
+            });
+        }
+        out.push(name.clone());
+    }
+    Ok(out)
 }
 
 /// Merge `[target.<triple>]` overlays onto a manifest for the given
@@ -2469,6 +2558,99 @@ target = "   "
         match err {
             ManifestError::InvalidFieldType { key, .. } => assert_eq!(key, "build.target"),
             other => panic!("expected InvalidFieldType on `build.target`, got {other:?}"),
+        }
+    }
+
+    // ── `[build].targets` — multi-target check matrix (phase-10) ──
+
+    #[test]
+    fn build_targets_captured_in_declaration_order() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+targets = ["wasm_browser", "native"]
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.build_targets, vec!["wasm_browser", "native"]);
+        assert!(m.warnings.is_empty());
+    }
+
+    #[test]
+    fn build_targets_absent_is_empty() {
+        let src = r#"[package]
+name = "hello"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(m.build_targets.is_empty());
+    }
+
+    #[test]
+    fn build_targets_unknown_name_is_hard_error() {
+        // A soft warning would silently drop the target from a CI
+        // verification matrix — the field's whole job is to prevent that.
+        let src = r#"[package]
+name = "hello"
+
+[build]
+targets = ["native", "wasm_wsi"]
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidBuildTargets { message, .. } => {
+                assert!(message.contains("unknown target 'wasm_wsi'"), "{message}");
+                assert!(message.contains("wasm_wasi"), "valid set listed: {message}");
+            }
+            other => panic!("expected InvalidBuildTargets, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_targets_duplicate_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+targets = ["native", "native"]
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidBuildTargets { message, .. } => {
+                assert!(message.contains("duplicate target 'native'"), "{message}");
+            }
+            other => panic!("expected InvalidBuildTargets, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_targets_non_array_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+targets = "native"
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => assert_eq!(key, "build.targets"),
+            other => panic!("expected InvalidFieldType on `build.targets`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_targets_non_string_entry_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+targets = ["native", 42]
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidBuildTargets { message, .. } => {
+                assert!(message.contains("entries must be strings"), "{message}");
+            }
+            other => panic!("expected InvalidBuildTargets, got {other:?}"),
         }
     }
 

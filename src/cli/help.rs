@@ -182,6 +182,16 @@ OPTIONS:
                             Useful for CI matrices that advertise
                             multi-profile compatibility. Exits non-zero
                             if any profile fails.
+    --targets=<list|all>    Run the full pipeline once per v1 compilation
+                            target (native, wasm_browser, wasm_wasi, gpu),
+                            parameterizing the target-provided resource
+                            set each time. Diagnostics are tagged with
+                            the producing target; findings identical on
+                            every target are reported once as
+                            target-agnostic. Defaults to the discovered
+                            manifest's `[build].targets` when the flag is
+                            absent. Mutually exclusive with --profiles.
+                            Exits non-zero if any target fails.
     --concurrency-report    Print a human-readable summary of the auto-par
                             analyzer's per-function parallel groups to
                             stdout alongside the check output. Same shape

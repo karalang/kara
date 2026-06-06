@@ -93,6 +93,16 @@ pub enum Command {
         /// pipeline once per profile and group diagnostics per profile".
         /// `--profiles=all` expands to every known profile.
         profiles: Option<Vec<crate::manifest::CompileProfile>>,
+        /// Optional list of v1 compilation targets to check against
+        /// (phase-10 multi-target verification). `None` means "consult
+        /// the discovered manifest's `[build].targets`, falling back to
+        /// a single pass under the active (`native`) target".
+        /// `Some(list)` runs the full pipeline once per target,
+        /// parameterizing the target-provided resource set each time,
+        /// tags diagnostics with the producing target, and dedupes the
+        /// target-agnostic ones. `--targets=all` expands to the closed
+        /// v1 set. Mutually exclusive with `profiles`.
+        targets: Option<Vec<String>>,
         /// `--concurrency-report` (Slice D, 2026-05-08): also emit the
         /// human-readable concurrency analysis to stdout after checks
         /// complete. Already runs `concurrencycheck()` via
@@ -542,6 +552,7 @@ pub fn execute(cmd: Command) {
             file,
             output,
             profiles,
+            targets,
             concurrency_report,
             simd_report,
             lint_overrides,
@@ -549,6 +560,7 @@ pub fn execute(cmd: Command) {
             &file,
             output,
             profiles,
+            targets,
             concurrency_report,
             simd_report,
             lint_overrides,
@@ -1017,66 +1029,78 @@ impl Pipeline {
 // ── Text Output ─────────────────────────────────────────────────
 
 fn print_text_diagnostics(pipeline: &Pipeline) {
+    for block in render_text_diagnostics(pipeline) {
+        eprintln!("{block}");
+    }
+}
+
+/// Render the text-mode diagnostic stream as one string block per
+/// diagnostic (multi-line for diagnostics that carry notes/help).
+/// Factored out of `print_text_diagnostics` for the multi-target check
+/// driver, which compares rendered blocks across per-target pipeline
+/// runs to deduplicate target-agnostic findings (`cmd_check_targets`).
+fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     let filename = &pipeline.filename;
+    let mut out: Vec<String> = Vec::new();
     for err in &pipeline.parsed.errors {
-        eprintln!(
+        out.push(format!(
             "error[parse]: {}:{}:{}: {}",
             filename, err.span.line, err.span.column, err.message
-        );
+        ));
     }
     if let Some(ref r) = pipeline.resolved {
         for err in &r.errors {
-            eprintln!(
+            out.push(format!(
                 "error[resolve]: {}:{}:{}: {}",
                 filename, err.span.line, err.span.column, err.message
-            );
+            ));
         }
     }
     if let Some(ref t) = pipeline.typed {
         for err in &t.errors {
-            eprintln!(
+            out.push(format!(
                 "error[typecheck]: {}:{}:{}: {}",
                 filename, err.span.line, err.span.column, err.message
-            );
+            ));
         }
     }
     if let Some(ref e) = pipeline.effects {
         for err in &e.errors {
             if err.kind == EffectErrorKind::FfiLintHint {
-                eprintln!(
+                out.push(format!(
                     "note[effect]: {}:{}:{}: {}",
                     filename, err.span.line, err.span.column, err.message
-                );
+                ));
             } else {
-                eprintln!(
+                out.push(format!(
                     "error[effect]: {}:{}:{}: {}",
                     filename, err.span.line, err.span.column, err.message
-                );
+                ));
             }
         }
     }
     if let Some(ref o) = pipeline.ownership {
         for err in &o.errors {
-            eprintln!(
+            out.push(format!(
                 "error[ownership]: {}:{}:{}: {}",
                 filename, err.span.line, err.span.column, err.message
-            );
+            ));
         }
     }
     if let Some(ref esc) = pipeline.provider_escape {
         for err in esc {
-            eprintln!(
+            out.push(format!(
                 "error[provider_escape]: {}:{}:{}: {}",
                 filename,
                 err.closure_span.line,
                 err.closure_span.column,
                 err.message()
-            );
+            ));
         }
     }
     if let Some(ref raii) = pipeline.raii_errors {
         for err in raii {
-            eprintln!(
+            let mut block = format!(
                 "error[E_RAII_ACROSS_YIELD]: {}:{}:{}: {}",
                 filename,
                 err.yield_span.line,
@@ -1084,33 +1108,39 @@ fn print_text_diagnostics(pipeline: &Pipeline) {
                 err.message(),
             );
             if let Some(ref bs) = err.binding_span {
-                eprintln!(
-                    "  note: binding declared here at {}:{}:{}",
+                write!(
+                    block,
+                    "\n  note: binding declared here at {}:{}:{}",
                     filename, bs.line, bs.column,
-                );
+                )
+                .unwrap();
             }
             if let Some(ref sv) = err.state_violation {
-                eprintln!(
-                    "  note: soiled by `.{}()` here at {}:{}:{}",
+                write!(
+                    block,
+                    "\n  note: soiled by `.{}()` here at {}:{}:{}",
                     sv.soiling_method, filename, sv.soil_span.line, sv.soil_span.column,
-                );
+                )
+                .unwrap();
             }
-            eprintln!("  help: {}", err.help());
+            write!(block, "\n  help: {}", err.help()).unwrap();
+            out.push(block);
         }
     }
     if let Some(ref simd) = pipeline.simd_errors {
         for err in simd {
-            eprintln!(
-                "error[E_REQUIRE_SIMD]: {}:{}:{} (in `{}`): {}",
+            out.push(format!(
+                "error[E_REQUIRE_SIMD]: {}:{}:{} (in `{}`): {}\n  help: {}",
                 filename,
                 err.span.line,
                 err.span.column,
                 err.func_name,
                 err.message(),
-            );
-            eprintln!("  help: {}", err.help());
+                err.help(),
+            ));
         }
     }
+    out
 }
 
 // ── JSON Output ─────────────────────────────────────────────────
@@ -4061,14 +4091,41 @@ fn cmd_check(
     filename: &str,
     output: OutputMode,
     profiles: Option<Vec<crate::manifest::CompileProfile>>,
+    targets: Option<Vec<String>>,
     concurrency_report: bool,
     simd_report: bool,
     lint_overrides: crate::lints::CliLintOverrides,
 ) {
+    // Both drivers are "run the pipeline N times and group diagnostics"
+    // matrices; combining them would be an N×M product nobody has asked
+    // for. Reject loudly rather than picking a silent precedence.
+    if profiles.is_some() && targets.is_some() {
+        eprintln!("error: --profiles and --targets are mutually exclusive");
+        process::exit(1);
+    }
+
     let source = read_source(filename);
 
     if let Some(list) = profiles {
         cmd_check_profiles(filename, &source, output, &list, lint_overrides);
+        return;
+    }
+
+    // Multi-target verification (phase-10): `--targets=` wins; absent,
+    // consult the discovered manifest's `[build].targets` (walking
+    // upward from the file's own directory, same discovery rule as
+    // `karac run`). An empty/undeclared list keeps the single-pass
+    // default below — check under the active (`native`) target.
+    let targets = targets.or_else(|| {
+        let declared = manifest_build_targets_for(filename, output);
+        if declared.is_empty() {
+            None
+        } else {
+            Some(declared)
+        }
+    });
+    if let Some(list) = targets {
+        cmd_check_targets(filename, &source, output, &list, lint_overrides);
         return;
     }
 
@@ -4233,6 +4290,252 @@ fn cmd_check_profiles(
             blocks.join(","),
             !any_failed,
         );
+    }
+
+    if any_failed {
+        process::exit(1);
+    }
+}
+
+/// Manifest-side trigger for multi-target check: walk upward from the
+/// checked file's own directory (the `karac run` discovery rule —
+/// the file's filesystem location is the stable identity, not the
+/// cwd) and return the discovered manifest's `[build].targets`.
+/// No manifest found → empty (single-file scripts outside any project
+/// keep the single-pass default). A malformed manifest is a hard error
+/// — same posture as `karac run`'s discovery.
+fn manifest_build_targets_for(filename: &str, output: OutputMode) -> Vec<String> {
+    let file_dir = std::path::Path::new(filename)
+        .parent()
+        .map(|p| {
+            if p.as_os_str().is_empty() {
+                std::path::PathBuf::from(".")
+            } else {
+                p.to_path_buf()
+            }
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    match manifest::discover_project_root(&file_dir) {
+        Some(root) => match manifest::load_from_root(&root) {
+            Ok(m) => m.build_targets,
+            Err(e) => {
+                emit_manifest_error(&e, output);
+                process::exit(1);
+            }
+        },
+        None => Vec::new(),
+    }
+}
+
+/// Normalize a rendered `DiagnosticJson` entry for cross-target
+/// comparison by dropping its run-local `"id":"dN"` field (always the
+/// first field — see `DiagnosticJson::add`). An entry unique to one
+/// target shifts every subsequent id in that run, so raw string
+/// equality would misclassify otherwise-identical diagnostics.
+fn strip_diag_id(entry: &str) -> String {
+    let Some(rest) = entry.strip_prefix("{\"id\":\"") else {
+        return entry.to_string();
+    };
+    match rest.find("\",") {
+        Some(idx) => format!("{{{}", &rest[idx + 2..]),
+        None => entry.to_string(),
+    }
+}
+
+/// Multi-target check driver (phase-10, design.md § Cross-target
+/// Compilation > `karac check` Under Multiple Targets). Runs the full
+/// type-check + effect-check pipeline once per target, parameterizing
+/// the target-provided resource set each time via
+/// `target::set_active_target` — which also re-parameterizes
+/// `#[target(...)]` absence filtering and tombstone diagnostics, so
+/// each pass sees exactly the item set and gate that target's build
+/// would see. Diagnostics are tagged with the producing target;
+/// diagnostics identical on EVERY target are deduplicated into a
+/// shared "all targets" group (they're target-agnostic bugs, not
+/// target-specific) — text and JSON modes only; JSONL streams
+/// per-target between `target_start`/`target_complete` markers and
+/// leaves dedup to the consumer, mirroring the profiles driver.
+/// Bounded by construction: the target set is closed at four.
+fn cmd_check_targets(
+    filename: &str,
+    source: &str,
+    output: OutputMode,
+    targets: &[String],
+    lint_overrides: crate::lints::CliLintOverrides,
+) {
+    let mut any_failed = false;
+
+    if let OutputMode::Jsonl = output {
+        for target in targets {
+            crate::target::set_active_target(target)
+                .expect("target names validated at parse/manifest load");
+            emit_jsonl_event(
+                "target_start",
+                &format!("\"target\":{}", json_string(target)),
+            );
+            let mut pipeline =
+                Pipeline::new(filename, source).with_lint_overrides(lint_overrides.clone());
+            run_pipeline_jsonl(&mut pipeline);
+            let total = pipeline.total_errors();
+            if total > 0 {
+                any_failed = true;
+            }
+            emit_jsonl_event(
+                "target_complete",
+                &format!(
+                    "\"target\":{},\"success\":{},\"total_errors\":{}",
+                    json_string(target),
+                    total == 0,
+                    total,
+                ),
+            );
+        }
+        if any_failed {
+            process::exit(1);
+        }
+        return;
+    }
+
+    // Text + JSON: run every target first, collecting both rendered
+    // text blocks and JSON entries per target, then split shared vs
+    // target-specific. Each mode dedups over its own rendering — text
+    // over the rendered block (phase + span + message), JSON over the
+    // entry normalized for its run-local `"id"` counter (an entry
+    // unique to one target shifts every later id, so raw string
+    // equality would under-dedup). The splits can differ at the
+    // margin (JSON carries typecheck warnings text mode doesn't);
+    // each is consistent within its own output.
+    struct TargetRun {
+        target: String,
+        total_errors: usize,
+        text_blocks: Vec<String>,
+        json_entries: Vec<String>,
+    }
+    let mut runs: Vec<TargetRun> = Vec::new();
+    for target in targets {
+        crate::target::set_active_target(target)
+            .expect("target names validated at parse/manifest load");
+        let mut pipeline =
+            Pipeline::new(filename, source).with_lint_overrides(lint_overrides.clone());
+        pipeline.run_all_checks();
+        let total = pipeline.total_errors();
+        if total > 0 {
+            any_failed = true;
+        }
+        runs.push(TargetRun {
+            target: target.clone(),
+            total_errors: total,
+            text_blocks: render_text_diagnostics(&pipeline),
+            json_entries: collect_diagnostics(&pipeline).entries,
+        });
+    }
+
+    // A diagnostic is target-agnostic when its rendered block appears
+    // on every target. Set semantics — exact duplicate blocks within
+    // one target collapse, which is already redundant output. With a
+    // single requested target there is nothing to compare against, so
+    // everything stays target-tagged.
+    let shared: Vec<String> = if runs.len() > 1 {
+        runs[0]
+            .text_blocks
+            .iter()
+            .filter(|block| runs[1..].iter().all(|r| r.text_blocks.contains(block)))
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let shared_set: std::collections::HashSet<&str> = shared.iter().map(|s| s.as_str()).collect();
+
+    match output {
+        OutputMode::Text => {
+            if !shared.is_empty() {
+                eprintln!("── all targets ──");
+                for block in &shared {
+                    eprintln!("{block}");
+                }
+            }
+            for (idx, run) in runs.iter().enumerate() {
+                if idx > 0 || !shared.is_empty() {
+                    eprintln!();
+                }
+                eprintln!("── target: {} ──", run.target);
+                for block in &run.text_blocks {
+                    if shared_set.contains(block.as_str()) {
+                        continue;
+                    }
+                    eprintln!("{block}");
+                }
+                if run.total_errors > 0 {
+                    eprintln!(
+                        "{} error(s) under target '{}'.",
+                        run.total_errors, run.target
+                    );
+                } else {
+                    eprintln!("All checks passed under target '{}'.", run.target);
+                }
+            }
+        }
+        OutputMode::Json => {
+            // Shared entries are reported once (drawn from the first
+            // target's run, ids included); per-target arrays carry the
+            // remainder. Dedup key: the entry minus its run-local id.
+            let shared_keys: std::collections::HashSet<String> = if runs.len() > 1 {
+                runs[0]
+                    .json_entries
+                    .iter()
+                    .map(|e| strip_diag_id(e))
+                    .filter(|key| {
+                        runs[1..]
+                            .iter()
+                            .all(|r| r.json_entries.iter().any(|e| strip_diag_id(e) == *key))
+                    })
+                    .collect()
+            } else {
+                std::collections::HashSet::new()
+            };
+            let shared_json: Vec<&String> = runs
+                .first()
+                .map(|r| {
+                    r.json_entries
+                        .iter()
+                        .filter(|e| shared_keys.contains(&strip_diag_id(e)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let blocks: Vec<String> = runs
+                .iter()
+                .map(|run| {
+                    let entries: Vec<&String> = run
+                        .json_entries
+                        .iter()
+                        .filter(|e| !shared_keys.contains(&strip_diag_id(e)))
+                        .collect();
+                    format!(
+                        "{{\"target\":{},\"success\":{},\"total_errors\":{},\"diagnostics\":[{}]}}",
+                        json_string(&run.target),
+                        run.total_errors == 0,
+                        run.total_errors,
+                        entries
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    )
+                })
+                .collect();
+            println!(
+                "{{\"targets\":[{}],\"shared_diagnostics\":[{}],\"success\":{}}}",
+                blocks.join(","),
+                shared_json
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+                !any_failed,
+            );
+        }
+        OutputMode::Jsonl => unreachable!("handled above"),
     }
 
     if any_failed {
@@ -4518,6 +4821,7 @@ fn cmd_build(
         cmd_check(
             filename,
             output,
+            None,
             None,
             concurrency_report,
             simd_report,
