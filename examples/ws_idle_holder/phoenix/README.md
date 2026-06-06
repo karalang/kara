@@ -132,18 +132,53 @@ BENCH_EXTRA_ARGS="--ws-path /socket/websocket?vsn=2.0.0 --phx-join room:bench" \
 > `mix compile` inside that window would time out. `run_server.sh` runs
 > `mix run --no-halt` (no compile), so `mix compile` must have run first.
 
-## At-scale results
+## At-scale results (landed 2026-06-06)
 
-**NOT YET RUN.** This comparator is prepped + locally validated; the
-50K / 250K / 250K-no-presence rig runs await a user-provisioned box (per
-the bench-day rig-spend sign-off discipline). Expected ~10–20 KB/conn
-with presence. Results table lands here after the rig run, mirroring the
-Go comparator's format.
+Ran on a fresh 16-vCPU AWS Graviton / 61 GB box, co-located client+server
+over loopback. Elixir 1.17.3 / OTP 25, Phoenix 1.7.x, in-process Erlang
+`:ssl`, `+Q 2000000 +P 8000000`, `--hold-secs 10`.
 
-Scope for #67: **idle density only** — 50K (linearity) + 250K (headline)
-+ 250K with `PRESENCE=off` (framework-overhead sidebar). Active-traffic
-echo is out of scope here (the harness's echo path speaks raw WS frames,
-not Phoenix's channel-event wire format).
+**Headline = presence-OFF (clean idle Channels + TLS hold):**
+
+| scale | established | per-conn | RSS | connect p50 / p99 |
+|---|---|---|---|---|
+| **250K** | 250,000 / 0 | **102.8 KiB** (105,267 B) | 25.9 GB | 10.7 / 17.9 ms |
+| 50K (linearity) | 50,000 / 0 | 104.7 KiB (107,204 B) | 5.44 GB | 10.5 / 18.0 ms |
+
+Linearity **−1.8 %** (flat, scale-invariant → no 1M escalation, despite
+Phoenix being the flagged escalation candidate).
+
+**Headline density:** Kāra ~12.1 KB/conn → **Kāra is 8.69× denser than
+Phoenix**, which is the **heaviest comparator measured** — 2.37× Go
+(43.4 KB) and ~3.7× Rust (27.9 KB). The cost is Erlang `:ssl` (several
+processes + per-socket buffers per conn) plus a transport **and** channel
+process per conn, none shared. The famous "Phoenix holds 2M connections"
+figure was plain `ws://`, no Channels, no Presence, BEAM-tuned — a much
+lighter config than this real-world default. (Honest counter-axis:
+Phoenix connect p50 ~11 ms beats Kāra's ~41 ms architectural floor;
+density is the headline.)
+
+**Presence-ON is a caveated upper bound, not the headline.**
+`Presence.track` broadcasts a `presence_diff` to every member of the topic
+on every join — O(N²) server→client traffic that the idle (non-draining)
+client backs up server-side:
+
+| run (50K) | per-conn | vs OFF | clean? |
+|---|---|---|---|
+| presence OFF | 104.7 KiB | — | ✓ true idle hold |
+| presence ON | 188.3 KiB | +83.6 KiB | ✗ undrained `presence_diff` backpressure |
+
+Production shards presence across topics and real clients drain diffs;
+this single-topic idle harness does neither, so +83.6 KiB/conn is a
+methodology-specific upper bound, not steady-state presence cost. 250K
+presence-ON was not run (confounded + ~47 GiB near the box ceiling).
+
+Scope for #67 was **idle density only** — 50K (linearity) + 250K
+(headline) + 50K `PRESENCE=off`/`on`. Active-traffic echo is out of scope
+(the harness echo path speaks raw WS frames, not Phoenix channel-event
+framing).
+
+Raw JSON: `docs/investigations/phoenix_idle_{250k_nopresence,50k_nopresence,50k_presence}.json`.
 
 ### Reproduce — turnkey rig recipe
 

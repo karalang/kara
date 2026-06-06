@@ -68,8 +68,10 @@ alongside; this file is **what we measured and what it means**, not
 
 > **Status:** _in progress_. Kāra 1M + 2M and Rust 1M + 2M numbers are
 > landed (credibility-comparator head-to-head at the ceiling is
-> complete). **Go (first commercial comparator) landed 2026-06-06 —
-> 44.4 KB/conn, 3.66× Kāra, linearity +2.5%.** The remaining commercial +
+> complete). **Go landed 2026-06-06 — 44.4 KB/conn, 3.66× Kāra, linearity
+> +2.5%. Phoenix Channels landed 2026-06-06 — 102.8 KB/conn (presence-off,
+> clean idle), 8.69× Kāra, linearity −1.8%; the heaviest comparator
+> measured (Erlang `:ssl` + a process per conn).** The remaining commercial +
 > stretch comparators are pending — see the
 > [Status / measurement matrix](#status--measurement-matrix) below.
 > Until a row's status is `landed`, treat the cells as placeholders.
@@ -87,7 +89,7 @@ alongside; this file is **what we measured and what it means**, not
 |---|---|---|---|---|---|---|
 | **Kāra** | self | **12.1 KB** | 1.00× (baseline) | 1M + 2M landed (post-fix) | landed @ 2M | [§Kāra](#kāra) |
 | Rust (rustls + tokio) | credibility | 27.9 KB | **2.30×** | 1M + 2M landed | landed @ 2M | [§Rust](#rust-rustls--tokio) |
-| Phoenix Channels (Elixir) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #67) | pending | [§Phoenix](#phoenix-channels-elixir) |
+| Phoenix Channels (Elixir) | commercial | 102.8 KB | **8.69×** | 250K + 50K landed (2026-06-06), −1.8% linearity | landed @ 250K | [§Phoenix](#phoenix-channels-elixir) |
 | Java / Netty | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #68) | pending | [§Java/Netty](#java--netty) |
 | Go (gorilla/websocket) | commercial | 43.4 KB | **3.66×** | 250K + 50K landed (2026-06-06), +2.5% linearity | landed @ 250K | [§Go](#go-gorillawebsocket) |
 | .NET / ASP.NET Core (Linux) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #71) | pending | [§.NET Linux](#net--aspnet-core-linux) |
@@ -157,6 +159,27 @@ numbers land — see the discipline guards in that section.
   total-system delta separately measured for Kāra/Rust); the userspace ratio
   and the instance-tier consequence are measured/derived directly._ _Caveats:
   raw gorilla + `crypto/tls`, no framework overhead — see [§Go](#go-gorillawebsocket)._
+
+- **Kāra vs Phoenix** _(Kāra 250K landed; Phoenix 250K + 50K landed
+  2026-06-06)_: against the runtime whose reputation *is* connection
+  density, Kāra holds each idle connection in **8.69×** less userspace
+  memory (12.1 KB vs **102.8 KB/conn**, presence-off clean idle hold,
+  scale-invariant −1.8% 50K→250K). Phoenix is the **heaviest comparator
+  measured** — heavier than Go (2.37×) and Rust (3.69×) — because real-world
+  Phoenix pairs Erlang `:ssl` (several processes + per-socket buffers per
+  connection) with a transport **and** channel process per conn, none
+  shared. **Production-unit cost at 250K:** Phoenix's ~25.9 GiB measured
+  userspace working set puts it on a **32 GiB `m7g.2xlarge`** where Kāra
+  fits an **8 GiB `m7g.large`** — **two tiers down → ~75% infra cost** off
+  the largest density gap in the comparator set. _The "2M connections on
+  one box" Phoenix legend is a lighter config (plain `ws://`, no Channels
+  join, no Presence, BEAM-tuned); this is the real-world Channels+TLS
+  default. The combination claim (density + native AOT + static
+  ownership/effects + no GC/BEAM ops surface) is the backstop, but here
+  Kāra wins on raw density by an order of magnitude and does not need it._
+  _Caveats: in-process TLS (apples-to-apples; some fleets offload TLS to a
+  LB) and the presence-ON backpressure confound — see
+  [§Phoenix](#phoenix-channels-elixir)._
 
 ---
 
@@ -247,8 +270,9 @@ sized box for its real-world deployment shape:
 
 | comparator family | instance | vCPU | RAM | arch | rationale |
 |---|---|---|---|---|---|
-| Kāra / Rust / Phoenix / Java / .NET Linux / Node | `r8g.4xlarge` | 16 (Graviton4) | 128 GB | arm64 | matches the Kāra & Rust 1M/2M baseline rig; cheap RAM headroom for the 2M target |
+| Kāra / Rust / Java / .NET Linux / Node | `r8g.4xlarge` | 16 (Graviton4) | 128 GB | arm64 | matches the Kāra & Rust 1M/2M baseline rig; cheap RAM headroom for the 2M target |
 | Go _(landed 2026-06-06)_ | `m8g.4xlarge` | 16 (Graviton4) | 61 GB | arm64 | same 16-vCPU Graviton4 class as the baseline; 250K Go fits ~10.6 GiB so 61 GB is ample. Per-conn density is RAM/ISA-independent (established cross-ISA), so the smaller RAM tier does not affect the head-to-head |
+| Phoenix _(landed 2026-06-06)_ | 16-vCPU Graviton, 61 GB | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go; 250K presence-off fits ~25.9 GiB so 61 GB holds it. Per-conn density is RAM/ISA-independent, so the RAM tier does not affect the head-to-head. (250K presence-ON was *not* run — confounded by `presence_diff` backpressure and ~47 GiB extrapolated, near the box ceiling.) |
 | .NET Windows | `m7i.4xlarge` | 16 (Intel x86) | 64 GB | x86_64 | SChannel is x86-default on Windows Server; matched vCPU; 64 GB is sufficient for 1M target |
 | Cross-platform confirmation _(x86, post-fix — landed 2026-06-02)_ | `c7i.8xlarge` | 32 (Intel x86) | 64 GB | x86_64 | Working-handler Kāra 1M: **12,112 B/conn**, within −0.02 % of arm64 — density is ISA-identical, not Graviton-specific. Reproduces the cross-ISA p50 floor (44.2 ms). Supersedes the pre-fix 7,725 B read. `c7i.8xlarge` over `.4xlarge` — co-located 1M client+server needs >32 GB |
 
@@ -374,11 +398,18 @@ number with the deviation rather than retuning to remove it._
   (TLS 1.2 + 1.3, no client auth, single cert). The extra weight over
   Rust is structural, not a config artifact — a goroutine per blocked
   `ReadMessage` + `crypto/tls`'s per-conn record buffers, none shared.
-- **Phoenix Channels** _(pending — wip task #67):_ framework
-  overhead expected for presence + pubsub broadcast tracking. We
-  measure with presence **on** (production default) and **off** (raw
-  Channels) per the wip-bench-day decision; the framework-overhead
-  delta gets reported as a sub-row in the §Phoenix section.
+- **Phoenix Channels** _(landed 2026-06-06):_ real-world Phoenix
+  **Channels** (joined channel + channel process per conn) over
+  **in-process** Erlang `:ssl` — **102.8 KB/conn** (presence-off clean
+  idle hold, 8.69× Kāra; the heaviest comparator measured). Two caveats
+  carry the framing: (1) **in-process TLS** is the apples-to-apples basis
+  (all comparators terminate TLS in-process), though some Phoenix fleets
+  offload TLS to a load balancer; (2) **presence-ON is not headlined** —
+  `Presence.track`'s `presence_diff` broadcast generates O(N²)
+  server→client traffic that an idle non-draining client backs up, so the
+  +83.6 KB/conn presence delta is an undrained-backpressure upper bound
+  (prod shards presence topics), not steady-state. Full breakdown in the
+  [§Phoenix section](#phoenix-channels-elixir).
 - **Java / Netty** _(pending — wip task #68):_ G1GC defaults vs
   ZGC — measured with both; G1 is the broad-deployment default,
   ZGC the modern recommendation. Framework: raw Netty pipeline, no
@@ -644,59 +675,152 @@ same network, same client driver).
 
 ### Phoenix Channels (Elixir)
 
-> _Pending — wip task #67. Sub-checkboxes in `wip-bench-day.md`._
+- **Status:** `landed @ 250K + 50K` (2026-06-06). The rhetorically
+  critical comparator — Phoenix/BEAM is the runtime most often cited as
+  the gold standard for idle-connection density. **Result: it is the
+  *heaviest* comparator measured.**
+- **Build:** `examples/ws_idle_holder/phoenix/`, a minimal Phoenix
+  Channels app (`UserSocket → BenchChannel(room:*) → Presence.track`),
+  `mix deps.get && mix compile`, deps pinned in `mix.lock`.
+- **Stack:** Elixir 1.17.3 / Erlang OTP 25, Phoenix 1.7.x Channels (the
+  real-world Elixir config — Discord/Pinterest-tier, **not** raw Cowboy),
+  Cowboy transport (`Phoenix.Endpoint.Cowboy2Adapter`). The client speaks
+  the Phoenix v2 join protocol: WS upgrade at `/socket/websocket?vsn=2.0.0`,
+  then a `phx_join` to `room:bench` acked by the `ok` `phx_reply` before a
+  connection counts as established (so the channel process actually exists).
+- **Hardware:** 16-vCPU AWS Graviton, 61 GB — same 16-vCPU Graviton class
+  as the Go run; fresh box. (250K presence-off fits ~25.9 GiB; 61 GB ample.
+  Per-conn density is RAM/ISA-independent — established cross-ISA — so the
+  head-to-head stays valid.)
+- **TLS:** **in-process** via Erlang `:ssl` (OpenSSL-backed), TLS 1.2 + 1.3,
+  no client auth, single cert — same self-signed CN=localhost fixture as
+  every other comparator. See the [TLS-offload caveat](#phoenix-caveats)
+  below — in-process TLS is the apples-to-apples choice (Kāra/Rust/Go all
+  terminate TLS in-process too).
+- **BEAM tuning:** prod defaults except `+Q 2000000` (max ports — the
+  65536 default caps below 250K conns) and `+P 8000000` (max processes —
+  each conn spawns a transport + channel process). The Channels socket
+  uses `timeout: :infinity` to disable the idle-heartbeat close (a
+  liveness setting; density-neutral). No allocator/scheduler tuning.
+- **Scale:** 250K headline + 50K linearity. Despite the wip flag that
+  Phoenix was the likeliest 1M-escalation candidate (BEAM heap warm-up),
+  per-conn proved **flat** (−1.8% drift) — no escalation needed.
 
-- **Status:** pending.
-- **Stack target:** Elixir 1.17 LTS, Erlang/OTP 27, Phoenix 1.7,
-  `:cowboy_websocket` under the hood. Two configurations:
-  - **Production default:** Phoenix Channels with `Presence` on,
-    PubSub broadcast tracking on. This is what a real Phoenix
-    deployment looks like.
-  - **Raw Channels:** Presence off, PubSub disabled. Tells us the
-    framework overhead delta.
-- **Hardware:** `r8g.4xlarge`; fresh box.
-- **TLS:** OpenSSL via Erlang `:ssl`; matched cipher suite + cert
-  fixture.
-- **Scale:** 250K headline + 50K linearity sub-curve (per
-  [§Scale per comparator](#scale-per-comparator)). **Phoenix is the
-  most likely candidate to trigger the linearity-escalation gate**
-  — BEAM heap pre-allocation has a non-constant warm-up shape. If
-  50K vs 250K per-conn-bytes drift > 5%, we add a 1M Phoenix run
-  before publishing the ratio.
+**The headline is the presence-OFF (raw Channels + TLS) idle hold.**
+Presence-ON is *not* a clean idle measurement (see
+[the presence sidebar](#phoenix-presence-sidebar)); the idle-holder
+benchmark measures memory at rest, and presence injects server→client
+traffic an idle client cannot drain.
 
-**Expected range (from public data):** 5–10 KB/conn. Phoenix is
-the density-king comparator and the most rhetorically dangerous —
-the WhatsApp/Discord lineage. If Phoenix matches Kāra within ~20%,
-the framing shifts to the [combination claim](#commercial-reframe-lens):
-**density + static types + single-binary deploy + no BEAM ops
-surface**, not "Kāra wins on density alone."
+**Idle-hold @ 250K — presence OFF (landed, 2026-06-06):**
 
-**Sub-rows to fill:**
+| metric | value | notes |
+|---|---|---|
+| established | 250,000 / 250,000 | 0 failed |
+| per-conn bytes | **~105,267 B (102.8 KiB)** | server-RSS delta / N (203,168 → 25,903,100 KiB) |
+| connect p50 | 10.7 ms | Erlang `:ssl` handshake; slower than Go (~3 ms), faster than Kāra's ~41 ms floor |
+| connect p99 | 17.9 ms | tight tail |
+| hold | `--hold-secs 10` | extended so the BEAM allocator reaches steady state (see caveats) |
 
-**Headline measurements @ 250K:**
+**Linearity check @ 50K — presence OFF (landed, 2026-06-06):**
 
-| metric | Phoenix (Presence on) | Raw Channels | notes |
+| metric | Phoenix @ 50K | drift vs 250K | gate |
 |---|---|---|---|
-| established | TBD | TBD | |
-| per-conn bytes | TBD | TBD | |
-| connect mean | TBD | TBD | |
-| framework overhead | (Phoenix − raw) | — | |
+| established | 50,000 / 50,000 (0 failed) | — | — |
+| per-conn bytes | 107,204 B (104.7 KiB) | **−1.8 %** (104.7 → 102.8 KiB) | < 5 % → **publish, no 1M escalation** ✓ |
+| connect p50 / p99 | 10.5 / 18.0 ms | — | — |
 
-**Linearity check @ 50K:**
+- Raw JSON: `docs/investigations/phoenix_idle_250k_nopresence.json`,
+  `docs/investigations/phoenix_idle_50k_nopresence.json`,
+  `docs/investigations/phoenix_idle_50k_presence.json`.
+- Acceptance criteria (all met for the presence-OFF headline):
+  1. `established == N` AND `failed == 0` at both scales. ✓
+  2. 50K→250K `per_conn_bytes` drift < 5 % (−1.8 %) → linear, publish at
+     250K without a 1M escalation. ✓
+  3. `dmesg` unreadable without root on this box (`Operation not
+     permitted`); 0 connect failures at both scales is the backstop signal
+     that the listen backlog held.
 
-| metric | Phoenix (Presence on) @ 50K | drift vs 250K | gate |
+**Head-to-head with Kāra @ 250K (presence-OFF Phoenix):**
+
+| metric | Kāra | Phoenix | winner |
 |---|---|---|---|
-| per-conn bytes | TBD | TBD | < 5% → publish; ≥ 5% → escalate to 1M |
+| established / failed | 250,000 / 0 | 250,000 / 0 | tie |
+| `connect.p50_ms` | ~41 (arch. floor) | **10.7** | Phoenix |
+| `connect.p99_ms` | tail varies | **17.9** | mixed¹ |
+| **`per_conn_bytes`** | **~12,114** (post-fix idle) | **105,267** | **Kāra (8.69×)** |
 
-**Caveats to document on landing:**
+> ¹ As with Go and Rust, Phoenix's connect *latency* beats Kāra's known
+> architectural p50 floor (~41 ms,
+> [phase-6](../../../docs/implementation_checklist/phase-6-runtime.md));
+> density is the headline metric, and there Kāra wins decisively.
 
-- BEAM RSS accounting differs from a tokio-based server's RSS in
-  subtle ways (BEAM pre-allocates a process heap; reductions are
-  not RSS but they're real). The methodology section's per-conn-bytes
-  definition is still server-RSS delta / N — same formula — but
-  the **shape** of the curve in the first 10K conns is different.
-  Document any BEAM-specific tuning (`+P`, `+Q`, `+K true`,
-  `+sbwt none`) used to reach the target.
+**What this proves.** Phoenix — the runtime whose whole reputation is
+idle-connection density (the WhatsApp/Discord/"2M connections" lineage) —
+holds each idle connection in **102.8 KiB** under its real-world config
+(Channels + in-process TLS). That is **8.7× the Kāra density** (12.1 KB)
+and makes Phoenix **heavier than every other comparator measured**:
+2.37× Go (43.4 KB) and ~3.7× Rust (27.9 KB). The famous "2M idle
+connections on one box" figure was plain `ws://` (no TLS), no Channels
+join, no Presence, and BEAM-tuned — a fundamentally lighter config than
+the one a real Phoenix product ships. The dominant cost here is Erlang
+`:ssl` (several processes + per-socket record buffers per connection),
+compounded by a transport process **and** a channel process per
+connection — none of that state shared. Kāra's TLS lives in a shared
+per-binding structure with per-conn references, which is the
+architectural reason it holds an order-of-magnitude lead. Connect latency
+favors Phoenix (~11 ms vs Kāra's ~41 ms floor) — the same multi-axis
+tradeoff seen against Go and Rust.
+
+<a id="phoenix-presence-sidebar"></a>
+**Presence sidebar — why presence-ON is a caveated upper bound, not the
+headline.** `Phoenix.Presence.track` broadcasts a `presence_diff` to
+**every** member of the topic on **every** join — O(N²) server→client
+traffic in a single `room:bench`. The idle-holder client never reads
+after the join, so those diffs back up in server-side send buffers and
+transport-process mailboxes. The result measures *undrained backpressure*,
+not steady-state presence memory:
+
+| run (50K) | per-conn bytes | vs presence-OFF | clean? |
+|---|---|---|---|
+| presence OFF (headline) | 104.7 KiB | — | ✓ true idle hold |
+| presence ON | 188.3 KiB | +83.6 KiB | ✗ inflated by undrained `presence_diff` |
+
+A production deployment **shards presence across many topics** (per-room,
+not one global topic), and a real client **drains** incoming diffs — both
+of which this idle, single-topic harness deliberately does not do. So
++83.6 KiB/conn is an upper bound peculiar to this methodology, not a
+steady-state presence cost. (Presence-ON connect latency also degrades —
+p50 22.8 / p99 57.5 ms vs 10.5 / 18.0 — consistent with the broadcast
+storm.) 250K presence-ON was not run: it would be both confounded and
+near the box's 61 GB ceiling (~47 GB extrapolated).
+
+<a id="phoenix-caveats"></a>
+**Caveats:**
+
+- **Real-world-vs-purist:** this is Phoenix **Channels** (joined channel +
+  channel process per conn) — the real Elixir prod default (Discord,
+  Pinterest, Bleacher Report), per the
+  [apples-to-apples discipline](#real-world-configuration-over-apples-to-apples-purism).
+  Raw `:cowboy_websocket` with no channel layer would be lighter; it is
+  not how production Phoenix apps are written, and is out of scope.
+- **In-process TLS vs offload:** the 102.8 KiB includes Erlang `:ssl`
+  in-process. Many high-scale Phoenix fleets terminate TLS at a load
+  balancer and run the BEAM on plain `ws://`, which would move the `:ssl`
+  cost out of the measured process. In-process TLS is nonetheless the
+  correct apples-to-apples basis here — **every** comparator
+  (Kāra/rustls, Rust/rustls, Go/`crypto/tls`) terminates TLS in-process,
+  so the comparison holds the same work constant. Quantifying the exact
+  `:ssl` share would need a plain-`ws://` run, which the TLS-only harness
+  does not currently support; noted as future work, not a blocker.
+- **BEAM RSS shape + hold time:** BEAM grows allocator carriers in large
+  chunks and GCs per-process lazily, so the first few thousand conns look
+  inflated (the N=2K smoke read ~200 KiB/conn — pure prealloc noise). The
+  per-conn-bytes definition is the same server-RSS-delta / N as every
+  other comparator; the Phoenix runs use `--hold-secs 10` (vs the bare-WS
+  comparators' 1 s) so the VM reaches steady state before RSS is sampled.
+  This affects *when* RSS is read, not *how much* is allocated — the −1.8%
+  50K→250K linearity confirms the steady-state per-conn is stable.
 
 ### Java / Netty
 
@@ -1217,7 +1341,7 @@ their role's headline scale (`250K` or `100K`).
 |---|---|---|---|---|---|---|---|
 | Kāra | self | n/a (multi-scale ladder) | **1M landed (post-fix, 2026-06-01)** _(x86 1M re-read landed post-fix 2026-06-02)_ | **2M landed (post-fix, 2026-06-01)** | **250K + 1M landed (B3, 2026-06-05)** — 12,126 B/conn, p50 0.12 ms realistic; burst p50 ~5 ms; 1M held 0-failed, 8.23M echoed | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `docs/investigations/demo1_m3_1m_postfix_datalayout.json`; 2M: `docs/investigations/demo1_m3_2m_postfix_datalayout.json`; x86 1M (post-fix): `docs/investigations/demo1_m3_1m_x86_postfix.json`; x86 1M (pre-fix, historical): `docs/investigations/demo1_m3_1m_x86.json`; active-traffic: `docs/investigations/active_250k_kara-250k-{realistic,sync}_stageA.json`, `demo1_1m_active_realistic_b3.json`, `demo1_1m_active_crossbox_b3.json`; burst sweep: `burst_isolated_{baseline,b1,b2,b3}.json` |
 | Rust | credibility | n/a (tracks Kāra) | 1M landed | **2M landed (2026-05-30)** | **250K landed (2026-06-02)** — 28,034 B/conn, p50 0.04 ms realistic; burst ~1.6 ms | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `rust-1m.json`; 2M: `rust-2m.json` (mirror pending); active-traffic: `docs/investigations/active_250k_rust-250k-{realistic,sync}_stageA.json` |
-| Phoenix Channels | commercial | pending (#67) | 250K pending (#67) | n/a unless gate escalates | pending | TBD | TBD |
+| Phoenix Channels | commercial | **50K landed (2026-06-06)** — 107,204 B/conn, −1.8% drift | **250K landed (2026-06-06)** — 105,267 B/conn (presence-off clean idle), p50 10.7 ms (8.69× Kāra; heaviest measured) | n/a (gate passed: −1.8% < 5%, no 1M escalation) | n/a (idle-hold density comparator; presence-ON confounded by `presence_diff` backpressure — caveated upper bound, not headlined) | `scripts/run_250k.sh` + `scripts/run_50k.sh` (`BENCH_EXTRA_ARGS` + `PRESENCE` env) | `docs/investigations/phoenix_idle_{250k_nopresence,50k_nopresence,50k_presence}.json` |
 | Java / Netty | commercial | pending (#68) | 250K pending (#68) | n/a unless gate escalates | pending | TBD | TBD |
 | Go | commercial | **50K landed (2026-06-06)** — 43,311 B/conn, +2.5% drift | **250K landed (2026-06-06)** — 44,386 B/conn, p50 3.37 ms (3.66× Kāra) | n/a (gate passed: +2.5% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` | `docs/investigations/go_idle_{250k,50k}.json` |
 | .NET (Linux) | commercial | pending (#71) | 250K pending (#71) | n/a unless gate escalates | pending | TBD | TBD |
@@ -1236,6 +1360,30 @@ their role's headline scale (`250K` or `100K`).
 
 ## Change log
 
+- **2026-06-06 (Phoenix comparator landed — the rhetorically critical row):**
+  ran the Phoenix Channels comparator (Elixir 1.17.3 / OTP 25, Phoenix 1.7.x
+  Channels + Presence, Cowboy transport, in-process Erlang `:ssl`) on a fresh
+  16-vCPU Graviton / 61 GB box, co-located client+server over loopback. The
+  client speaks the Phoenix v2 join protocol (`phx_join` → `ok` `phx_reply`).
+  **Headline = presence-OFF clean idle hold: 250K 250,000 / 0 failed, 105,267
+  B/conn (102.8 KiB), connect p50 10.7 / p99 17.9 ms; 50K 50,000 / 0 failed,
+  107,204 B/conn — linearity −1.8 %** (< 5 % gate → published at 250K, no 1M
+  escalation, despite Phoenix being the flagged escalation candidate).
+  **Kāra holds 8.69× the density** (12.1 KB vs 102.8 KB) — Phoenix is the
+  **heaviest comparator measured** (2.37× Go, 3.69× Rust), the cost of Erlang
+  `:ssl` + a transport + channel process per conn. **Presence-ON is NOT
+  headlined:** `Presence.track`'s `presence_diff` broadcast is O(N²)
+  server→client traffic an idle client can't drain, so the 50K presence-ON
+  read (188.3 KiB, +83.6 KiB) is an undrained-backpressure upper bound, not
+  steady-state (prod shards presence topics); 250K presence-ON not run
+  (confounded + ~47 GiB near box ceiling). Inverts the wip plan's
+  "presence-ON = headline" assumption (which presumed presence ≈ +2 KB).
+  Harness gained `--ws-path` + `--phx-join` (commit `1fbb2cf4`); run scripts
+  gained `BENCH_EXTRA_ARGS` + `PRESENCE` pass-through. Updated: §Phoenix (full
+  landed tables + head-to-head + presence sidebar + caveats), TL;DR row, both
+  status matrices, hardware table (own Graviton/61 GB row), commercial-reframe
+  (Kāra vs Phoenix, ~75% infra / two tiers down), consolidated caveats, top
+  banner. Raw JSON: `docs/investigations/phoenix_idle_{250k_nopresence,50k_nopresence,50k_presence}.json`.
 - **2026-06-06 (Go comparator landed — first commercial-tier row):** ran the Go
   comparator (`gorilla/websocket` v1.5.3 + pure-Go `crypto/tls`, idiomatic
   `net/http` `ServeTLS`) on a fresh `m8g.4xlarge` (16-vCPU Graviton4, 61 GB),
