@@ -220,15 +220,17 @@ fn main() {
 }
 "#,
         );
-        // The extern declaration's signature now includes the `i32`
-        // spawn-site id as the third arg.
+        // The extern declaration's signature: branches ptr, count i64,
+        // spawn-site id i32, and the parent-cancel ptr (phase-6 line 475,
+        // null at top level).
         assert!(
-            ir.contains("declare void @karac_par_run(ptr, i64, i32)"),
-            "extern decl should be (ptr, i64, i32); got:\n{ir}"
+            ir.contains("declare void @karac_par_run(ptr, i64, i32, ptr)"),
+            "extern decl should be (ptr, i64, i32, ptr); got:\n{ir}"
         );
         // Two call sites — one with spawn_site_id 0, one with 1.
         // Inkwell emits the actual call as
-        // `call void @karac_par_run(ptr ..., i64 ..., i32 0)`.
+        // `call void @karac_par_run(ptr ..., i64 ..., i32 0, ptr null)`
+        // (the spawn-site id is now followed by the parent-cancel ptr).
         let calls: Vec<&str> = ir
             .lines()
             .filter(|l| l.contains("call void @karac_par_run"))
@@ -243,10 +245,10 @@ fn main() {
         let mut seen_zero = false;
         let mut seen_one = false;
         for c in &calls {
-            if c.contains("i32 0)") {
+            if c.contains("i32 0, ptr") {
                 seen_zero = true;
             }
-            if c.contains("i32 1)") {
+            if c.contains("i32 1, ptr") {
                 seen_one = true;
             }
         }
@@ -258,6 +260,56 @@ fn main() {
         assert!(
             seen_one,
             "expected one call with spawn_site_id `i32 1`; calls:\n{:?}",
+            calls
+        );
+    }
+
+    /// Phase-6 line 475 — nested cancellation cascade wiring. A `par` block
+    /// nested inside an outer branch must pass the *enclosing* branch's
+    /// cancel flag as `karac_par_run`'s `parent_cancel` arg, so the runtime
+    /// join can cascade an outer cancel inward. The top-level `par` passes
+    /// `ptr null` (no enclosing region). We assert both: a null parent at the
+    /// top level, and a non-null (`ptr %...`) parent at the nested call.
+    #[test]
+    fn test_nested_par_passes_enclosing_branch_cancel_as_parent() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    par {
+        par {
+            println(1);
+            println(2);
+        }
+        println(3);
+    }
+}
+"#,
+        );
+        let calls: Vec<&str> = ir
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| l.contains("call void @karac_par_run"))
+            .collect();
+        assert_eq!(
+            calls.len(),
+            2,
+            "expected one outer + one nested karac_par_run; got {}: {:?}",
+            calls.len(),
+            calls
+        );
+        // Top-level call: parent_cancel is null.
+        assert!(
+            calls.iter().any(|c| c.ends_with("ptr null)")),
+            "the top-level par must pass `ptr null` as parent_cancel; calls:\n{:?}",
+            calls
+        );
+        // Nested call: parent_cancel is the enclosing branch's cancel ptr
+        // (an SSA value `ptr %...`), NOT null.
+        assert!(
+            calls.iter().any(|c| c.ends_with("ptr %cancel)")
+                || (c.contains("ptr %") && !c.ends_with("ptr null)"))),
+            "the nested par must pass the enclosing branch's cancel ptr (non-null) as \
+             parent_cancel; calls:\n{:?}",
             calls
         );
     }

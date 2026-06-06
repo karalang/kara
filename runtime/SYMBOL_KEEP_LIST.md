@@ -66,7 +66,7 @@ verify none gets stripped.
 
 | Symbol | Signature (C ABI) | Purpose |
 |---|---|---|
-| `karac_par_run` | `unsafe extern "C" fn(branches: *const KaracBranch, count: usize)` | `par {}` block executor — fixed-size thread pool, fail-fast cancellation. |
+| `karac_par_run` | `unsafe extern "C" fn(branches: *const KaracBranch, count: usize, spawn_site_id: u32, parent_cancel: *const AtomicBool)` | `par {}` block executor — fixed-size thread pool, fail-fast cancellation. `parent_cancel` is the enclosing branch's cancel flag (null at top level) for the nested-cancellation cascade (phase-6 line 475). |
 | `karac_error_trace_push` | `unsafe extern "C" fn(file_ptr: *const u8, file_len: usize, line: u32, col: u32)` | Push a frame onto the global `?` error-return trace at every `?` failure site. |
 | `karac_error_trace_clear` | `extern "C" fn()` | Reset the global `?` error-return trace at every `?` success site. |
 | `karac_provider_push` / `karac_provider_pop` / `karac_provider_lookup` / `karac_provider_set_stack_head` / `karac_provider_get_stack_head` | Provider-stack ops | Per-thread `with` block provider injection. Codegen emits push/pop bracketing every `with` scope; `lookup` resolves resource accesses; the get/set head pair lets `par {}` workers inherit the parent thread's provider stack. |

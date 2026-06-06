@@ -868,16 +868,33 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_store(elem_ptr, entry).unwrap();
         }
 
-        // 6. Call karac_par_run(branches, count, par_id).
+        // 6. Call karac_par_run(branches, count, par_id, parent_cancel).
         //    `par_id` (Debugger Contract slice 4) was minted via
         //    `record_spawn_site` above; the runtime uses it to populate
         //    `KaracFrame::spawn_site_id` for slice 5's enumeration surface.
+        //    `parent_cancel` (phase-6 line 475) is the *enclosing* branch's
+        //    cancel flag when this `par` is nested inside another parallel
+        //    region — `self.branch_cancel_ptr` is still the enclosing
+        //    branch's pointer here (the inner branch fns saved/restored it
+        //    around their own bodies in `emit_par_branch_fn` above). The
+        //    runtime's join loop polls it so an outer cancel cascades into
+        //    this region. Null at the top level (not inside any branch).
         let count = i64_type.const_int(stmts.len() as u64, false);
         let par_id_val = self.context.i32_type().const_int(par_id as u64, false);
+        let ptr_type = self.context.ptr_type(AddressSpace::default());
+        let parent_cancel = match self.branch_cancel_ptr {
+            Some(p) => p,
+            None => ptr_type.const_null(),
+        };
         self.builder
             .build_call(
                 self.karac_par_run_fn,
-                &[branches_alloca.into(), count.into(), par_id_val.into()],
+                &[
+                    branches_alloca.into(),
+                    count.into(),
+                    par_id_val.into(),
+                    parent_cancel.into(),
+                ],
                 "__par_run",
             )
             .unwrap();

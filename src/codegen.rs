@@ -2229,6 +2229,10 @@ impl<'ctx> Codegen<'ctx> {
                 BasicMetadataTypeEnum::from(ptr_type),
                 BasicMetadataTypeEnum::from(i64_type),
                 BasicMetadataTypeEnum::from(i32_type),
+                // parent_cancel: enclosing branch's cancel flag for the
+                // nested-cancellation cascade (phase-6 line 475); null at the
+                // top level. See `emit_par_run`'s call site.
+                BasicMetadataTypeEnum::from(ptr_type),
             ],
             false,
         );

@@ -1036,6 +1036,7 @@ pub unsafe extern "C" fn karac_par_run(
     branches: *const KaracBranch,
     count: usize,
     spawn_site_id: u32,
+    parent_cancel: *const AtomicBool,
 ) {
     if count == 0 {
         return;
@@ -1081,9 +1082,33 @@ pub unsafe extern "C" fn karac_par_run(
     }
     p.cv.notify_all();
 
-    // Wait for all tasks to complete. While waiting, opportunistically
-    // help by executing pending tasks — protects nested `karac_par_run`
-    // calls from pool exhaustion.
+    // Wait for all tasks to complete, work-helping while we wait and
+    // propagating an enclosing cancellation inward (see `par_join_wait`).
+    par_join_wait(&call, p, parent_cancel);
+}
+
+/// Block until `call.remaining` hits zero, opportunistically executing
+/// pending pool tasks while waiting so a nested `karac_par_run` from a pool
+/// worker can't exhaust the pool / deadlock.
+///
+/// **Nested cancellation cascade (phase-6 line 475).** When `parent_cancel`
+/// is non-null this region is running *inside* an enclosing parallel region
+/// (codegen passes the enclosing branch's cancel flag; the top-level call
+/// passes null). The loop polls `parent_cancel` and, when the parent has
+/// cancelled, flips *this* region's own `cancel`. The nested branches then
+/// observe it at their next compiler-inserted effect-boundary check and
+/// fail-fast — so an outer cancellation cascades inward through the *same*
+/// cooperative mechanism, with no special cross-scope machinery (design.md
+/// § Parallel Failure and Cleanup — "Cancellation cascades into nested
+/// regions"). Because a busy nested branch in a pure-ish loop may never
+/// signal `notify`, the nested wait uses a short `wait_timeout` so the
+/// parent flag is observed even while every nested task is still running
+/// (otherwise an unbounded inner loop would let an outer cancel hang
+/// forever). The top-level call (null parent) keeps the plain blocking
+/// `wait` — no polling overhead on the common path. Worst-case cascade
+/// latency is the poll cadence plus the inner effect-boundary distance,
+/// summed along the nesting path, matching the spec's stated bound.
+unsafe fn par_join_wait(call: &Arc<ParCall>, p: &Arc<Pool>, parent_cancel: *const AtomicBool) {
     loop {
         // Done?
         {
@@ -1091,6 +1116,11 @@ pub unsafe extern "C" fn karac_par_run(
             if *r == 0 {
                 return;
             }
+        }
+        // Cascade: an enclosing cancellation becomes this region's
+        // cancellation, observed by nested branches at their next check.
+        if !parent_cancel.is_null() && (*parent_cancel).load(Ordering::Relaxed) {
+            call.cancel.store(true, Ordering::Relaxed);
         }
         // Try to help.
         let next_task = {
@@ -1101,13 +1131,22 @@ pub unsafe extern "C" fn karac_par_run(
             execute_task(task);
             continue;
         }
-        // Nothing to help with — block until a task we dispatched
-        // signals completion.
+        // Nothing to help with — block until a task we dispatched signals
+        // completion. When nested (parent_cancel set), bound the block with
+        // a short timeout so we re-poll the parent flag even if no nested
+        // task signals in the meantime.
         let r = call.remaining.lock().unwrap_or_else(|e| e.into_inner());
         if *r == 0 {
             return;
         }
-        let _r = call.notify.wait(r).unwrap_or_else(|e| e.into_inner());
+        if parent_cancel.is_null() {
+            let _r = call.notify.wait(r).unwrap_or_else(|e| e.into_inner());
+        } else {
+            let _r = call
+                .notify
+                .wait_timeout(r, std::time::Duration::from_millis(1))
+                .unwrap_or_else(|e| e.into_inner());
+        }
     }
 }
 
@@ -5823,7 +5862,7 @@ mod tests {
             .collect();
 
         unsafe {
-            karac_par_run(branches.as_ptr(), branches.len(), 42);
+            karac_par_run(branches.as_ptr(), branches.len(), 42, std::ptr::null());
         }
 
         let slots = capture.slots.lock().unwrap();
@@ -5893,7 +5932,12 @@ mod tests {
                 })
                 .collect();
             unsafe {
-                karac_par_run(inner_branches.as_ptr(), inner_branches.len(), 99);
+                karac_par_run(
+                    inner_branches.as_ptr(),
+                    inner_branches.len(),
+                    99,
+                    std::ptr::null(),
+                );
             }
             // Keep payloads alive for the duration of the inner call.
             drop(inner_payloads);
@@ -5908,7 +5952,12 @@ mod tests {
             ctx: &payload as *const _ as *mut c_void,
         }];
         unsafe {
-            karac_par_run(outer_branches.as_ptr(), outer_branches.len(), 7);
+            karac_par_run(
+                outer_branches.as_ptr(),
+                outer_branches.len(),
+                7,
+                std::ptr::null(),
+            );
         }
 
         let outer_addr = captures
@@ -5924,6 +5973,92 @@ mod tests {
                 "inner worker's parent should match outer worker's frame address"
             );
         }
+    }
+
+    /// Phase-6 line 475 — nested cancellation cascade. `par_join_wait`, when
+    /// given a non-null `parent_cancel`, must flip the region's own `cancel`
+    /// once the parent cancels, so nested branches observe it cooperatively.
+    /// Tested directly (no spinning branch / pool-grab race): a side thread
+    /// sets the parent flag, confirms the join propagated it to the region's
+    /// `cancel`, then releases the join by completing the lone outstanding
+    /// task.
+    #[test]
+    fn par_join_wait_propagates_parent_cancel_into_region() {
+        let call = Arc::new(ParCall {
+            cancel: AtomicBool::new(false),
+            remaining: Mutex::new(1), // one outstanding "task"
+            notify: Condvar::new(),
+            spawn_site_id: 0,
+            parent_addr: 0,
+            track_frames: false,
+        });
+        let parent = Arc::new(AtomicBool::new(false));
+        let p = pool();
+
+        let side = {
+            let call = Arc::clone(&call);
+            let parent = Arc::clone(&parent);
+            thread::spawn(move || {
+                // Let the join settle into its poll loop, then fire the
+                // outer cancel.
+                thread::sleep(std::time::Duration::from_millis(20));
+                parent.store(true, Ordering::Release);
+                // Give the ≤1ms poll time to observe + propagate.
+                thread::sleep(std::time::Duration::from_millis(50));
+                assert!(
+                    call.cancel.load(Ordering::Acquire),
+                    "par_join_wait did not propagate the parent cancel into the region",
+                );
+                // Release the join.
+                {
+                    let mut r = call.remaining.lock().unwrap_or_else(|e| e.into_inner());
+                    *r = 0;
+                }
+                call.notify.notify_all();
+            })
+        };
+
+        // Blocks until the side thread zeroes `remaining`; meanwhile it polls
+        // `parent` and flips `call.cancel`.
+        unsafe {
+            par_join_wait(&call, p, Arc::as_ptr(&parent));
+        }
+        side.join().unwrap();
+        assert!(call.cancel.load(Ordering::Acquire));
+    }
+
+    /// Phase-6 line 473 — completion wins cancellation. A task already
+    /// running is never aborted by the cancel flag: `execute_task` checks
+    /// the flag only at pickup, so a branch that sets the flag mid-body
+    /// (modeling a sibling fail-fast firing while this branch is past its
+    /// last effect-boundary check) still runs to its end. Real work is not
+    /// retroactively converted to `Cancelled`.
+    #[test]
+    fn par_run_running_branch_completes_despite_cancel() {
+        struct Ctx {
+            ran_to_end: AtomicBool,
+        }
+        unsafe extern "C" fn branch(ctx: *mut c_void, cancel: *const AtomicBool) {
+            let c = &*(ctx as *const Ctx);
+            // Fire the region's cancel mid-run (as a sibling's fail-fast
+            // would). A running task must NOT be torn down by this.
+            (*cancel).store(true, Ordering::Relaxed);
+            c.ran_to_end.store(true, Ordering::Release);
+        }
+        let ctx = Ctx {
+            ran_to_end: AtomicBool::new(false),
+        };
+        let branches = [KaracBranch {
+            func: branch,
+            ctx: &ctx as *const _ as *mut c_void,
+        }];
+        unsafe {
+            karac_par_run(branches.as_ptr(), branches.len(), 0, std::ptr::null());
+        }
+        assert!(
+            ctx.ran_to_end.load(Ordering::Acquire),
+            "a running branch was aborted by a mid-run cancel — completion-wins violated",
+        );
     }
 
     /// Long-running par block holds workers at a barrier so the main
@@ -5979,7 +6114,12 @@ mod tests {
             // SAFETY: payloads / branches outlive this thread (joined
             // before the test function returns).
             unsafe {
-                karac_par_run(branches_addr as *const KaracBranch, count, 11);
+                karac_par_run(
+                    branches_addr as *const KaracBranch,
+                    count,
+                    11,
+                    std::ptr::null(),
+                );
             }
         });
 
@@ -6095,7 +6235,7 @@ mod tests {
             },
         ];
         unsafe {
-            karac_par_run(branches.as_ptr(), branches.len(), 0);
+            karac_par_run(branches.as_ptr(), branches.len(), 0, std::ptr::null());
         }
 
         let tags = capture.tags.lock().unwrap();
