@@ -34,7 +34,7 @@ they mean* did not. This is where that work lives.
 Cross-refs:
 - Bench harness scaffolding: `ea1d26d`. Verification run: `4f7b72d`.
   HTTP handler ABI trampoline (predecessor): `5f4cbcc`.
-- Design record: [`docs/demo_ideas.md § Slice E`](../demo_ideas.md).
+- Design record: [`docs/dogfooding.md § Slice E`](../dogfooding.md).
   The "Out of scope" → "Closing the Kāra-vs-Rust gap" sub-section
   enumerates a 3-step closure path *for the trampoline overhead* (F3-
   conditional). This investigation covers the same gap from a
@@ -231,7 +231,7 @@ hyper `Request` → Kāra `Request` (heap-allocates wrapper, copies path
 bytes into a fresh `String`), runs handler, Kāra `Response` → hyper
 `Response`. Per-request heap traffic + value-type packing/unpacking.
 
-**Why this is suspect #2.** The design record at `demo_ideas.md §
+**Why this is suspect #2.** The design record at `dogfooding.md §
 Slice E` "Out of scope" already enumerates the closure path here:
 (1) borrowed accessors → (2) inline trampoline → (3) `#[repr(C)]`
 Request. That ranking suggests the design author already suspected
@@ -440,7 +440,7 @@ inclusive ≈ 27%, but its self-time is < 0.5%). The trampoline is
 count is high — but it's not where time is spent. **H2 and H3 are
 behind H1's noise floor; addressing them before H1 would yield
 diminishing returns.** The 3-step closure path enumerated in
-`docs/demo_ideas.md § Slice E` "Out of scope" remains a valid
+`docs/dogfooding.md § Slice E` "Out of scope" remains a valid
 follow-up but is not the highest-impact next step.
 
 **H4 / H5 status.** Neither was confirmed nor killed by this probe;
@@ -542,7 +542,7 @@ but their ranking changes now that we have post-fix data.)*
    replace with a lock-free MPMC queue (crossbeam-deque) and re-bench.
 3. **Handler trampoline overhead (original H2).** Still on the
    call path of every request. The closure path enumerated in
-   `docs/demo_ideas.md § Slice E` "Out of scope" remains valid —
+   `docs/dogfooding.md § Slice E` "Out of scope" remains valid —
    borrowed accessors first, inline trampoline second. Probe: a no-
    op-handler bench gives the trampoline-only ceiling.
 4. **`block_in_place` + tokio worker churn.** The hyper service
@@ -649,7 +649,7 @@ mid-end passes that should fire trivially on this IR).
 
 **This subsumes H2 / H3 / H4 entirely.** The "Out of scope —
 closing the Kāra-vs-Rust gap" path enumerated in
-[`docs/demo_ideas.md § Slice E`](../demo_ideas.md) — borrowed
+[`docs/dogfooding.md § Slice E`](../dogfooding.md) — borrowed
 accessors → inline trampoline → `#[repr(C)]` Request — would not
 have moved the needle in this configuration. The probes show:
 

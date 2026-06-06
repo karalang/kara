@@ -34,7 +34,7 @@ infers the parallel structure purely from effect annotations.
 
 ## The demo-shape gap
 
-The canonical Parallax demo (per `docs/demo_ideas.md § Demo 1`) is
+The canonical Parallax demo (per `docs/dogfooding.md § Demo 1`) is
 *fan-out + join* — multiple parallel reads whose results are joined
 into a result struct (`build_dashboard(profile, orders, notif,
 recommended)`). Slice 2's `group_defines_binding_used_outside` gate

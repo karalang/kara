@@ -149,7 +149,7 @@ the distinction.
 
 ## See also
 
-- [`docs/demo_ideas.md § Demo 2`](../../docs/demo_ideas.md) — the
+- [`docs/dogfooding.md § Demo 2`](../../docs/dogfooding.md) — the
   demo's design storyboard.
 - [`examples/parallax/`](../parallax/) — sister demo (auto-concurrency).
   Parallax + Mend together are the minimum viable showcase.

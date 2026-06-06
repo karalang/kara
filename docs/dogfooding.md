@@ -1,13 +1,23 @@
-# Kāra Demo Products
+# Kāra Dogfooding Projects
 
-Post-Phase 10 showcase ideas. The compiler is self-hosting, LLVM backend is
-live, auto-concurrency runtime works, WASM and GPU targets compile. The question
-is: what do you build *with* it to prove the language to an outside audience?
+The V1 program roster. Each entry is a real product built *in* Kāra — not a toy
+— that serves two jobs at once: it **dogfoods the compiler** to surface bugs and
+harden the language under real load, and it **proves a differentiating
+capability** to an outside audience. These are not a post-launch backlog and
+they are not "ideas": **building them is part of getting to a V1 launch.** The
+list grows as new sharp edges are found — it does not shrink.
 
-Each demo is selected to showcase a differentiating capability that other
-languages cannot replicate without significantly more programmer effort. The
-audience is: other language designers, systems programmers, AI researchers, and
-early adopters.
+The dogfooding purpose is load-bearing. A demo's job is not only to look good in
+a recording; it is to exercise a real slice of the language hard enough that the
+gaps, friction, and miscompiles fall out (cf. `feedback_katas_are_bug_finders`,
+`feedback_no_workarounds_fix_compiler` — when a project hits a `karac` wall, the
+fix is in the compiler, and the project's shape is the test case). Each program
+is selected to showcase a capability other languages cannot replicate without
+significantly more programmer effort. The audience is: other language designers,
+systems programmers, AI researchers, and early adopters.
+
+Sequencing below (the build order) is about *when within the pre-launch runway*
+each is built, not whether it ships before or after launch — all are V1-scope.
 
 ---
 
@@ -17,7 +27,7 @@ early adopters.
 - [Tier 1 — Must-Build](#tier-1--must-build-core-story-highest-impact) — Parallax, Mend, Slipstream
 - [Tier 2 — High-Value](#tier-2--high-value-compelling-story-focused-audience) — Cartographer, Husk, Weave, Chronicle
 - [Tier 3 — Domain-Specific](#tier-3--domain-specific-strong-for-specific-audiences) — Relay, Forge, Iris
-- [Launch Sequence](#launch-sequence)
+- [Build Sequence](#build-sequence)
 - [Reusable Scaffolding](#reusable-scaffolding)
 
 ---
@@ -388,21 +398,27 @@ special tooling. The complexity is in selecting good examples. Bonus: use this
 pipeline to process real public data (census data, stock prices) so the demo
 has realistic inputs.
 
-**This is the data-engineering flagship** (the data-pipeline demo previously
-tracked as "Flagship Demo 3" in `docs/implementation_checklist/phase-6-runtime.md`;
-**demoted to post-launch 2026-06-06** to match this catalog's launch sequence,
-where the data pipeline lands at Month 3 rather than Day 1). The phase-6 stub
-framed a **runtime-exercising variant** worth keeping in scope here: a
-Kafka → S3 → DuckDB-shape pipeline over the same v1 runtime (`Pool[T]`, TLS,
-`std.tracing`) — a service-shaped alternative to the batch-CSV ETL above. That
-variant doubles as the verification artifact for the v64 second-order-positive
-claim (backend-first investment compounds into the data-engineering persona):
-the same `Pool[T]` + TLS + tracing surface built for the server demos is reused
-wholesale, so the data-eng story is cheap incremental engineering on top of the
-v1 runtime rather than a separate build-out. Either shape (refinement-typed CSV
-ETL, or the live Kafka→S3→DuckDB service) works; the CSV form is the cheaper
-"correctness by construction" cut, the service form the "your backend runtime
-already covers data-eng" cut.
+**This is the data-engineering flagship.** It is V1-scope, sequenced into the
+pre-launch runway after the server demos (build order, not a post-launch
+deferral). Two shapes are in play and either qualifies:
+
+- **Refinement-typed CSV ETL** (the form sketched above) — the cheaper
+  "correctness by construction" cut. Pure Kāra, no FFI; the dogfooding value is
+  hammering refinement types + contracts + effect inference together on a real
+  multi-stage transform.
+- **Live Kafka → S3 → DuckDB service** — a runtime-exercising variant over the
+  same V1 runtime (`Pool[T]`, TLS, `std.tracing`), a service-shaped alternative
+  to the batch ETL. This shape doubles as the verification artifact for the
+  backend-first-compounds claim: the `Pool[T]` + TLS + tracing surface built for
+  the server demos is reused wholesale, so the data-eng story is cheap
+  incremental engineering on top of the V1 runtime rather than a separate
+  build-out — and it dogfoods that runtime surface under sustained streaming
+  load, which the request/response demos don't.
+
+(This is the demo formerly tracked as "Flagship Demo 3" in
+`docs/implementation_checklist/phase-6-runtime.md`; that checklist tracks the
+runtime-gating server demos, so the data-pipeline design lives here in the
+roster while remaining V1-scope.)
 
 ---
 
@@ -515,23 +531,27 @@ glue, canvas rendering) and keeping the native / WASM comparison honest.
 
 ---
 
-## Launch Sequence
+## Build Sequence
 
-Build in this order:
+All of these are V1-scope — the ordering is *when within the pre-launch runway*
+each is built, not whether it ships before or after launch. Build in this order;
+the "Ready when" column notes the compiler capability each is gated on.
 
-| Phase | Demo | Why now |
-|---|---|---|
-| Day 1 (pre-launch) | **Demo 2: Mend** | Cheapest to build. Makes the AI-first thesis real. Sets the tone. |
-| Month 1 | **Demo 1: Parallax** | Broadest appeal. Every backend engineer relates to fan-out + join. |
-| Month 2 | **Demo 4: Cartographer** | Teaches the effect system visually. Reduces onboarding friction for new users. |
-| Month 3 | **Demo 6: Weave** | Correctness story for data engineers. Complements the concurrency story. |
-| Month 4 | **Demo 7: Chronicle** | Self-hosting milestone. Marks Kāra as "a real language." |
-| Month 3 (CPU) | **Demo 3: Slipstream** | Visually striking, instantly explainable. CPU demo unblocked after Phase 11 (long-tail stdlib + FFI). GPU path added later without changing Kāra source. |
-| When hardware gaps land | **Demo 5: Husk** | Systems credibility. Requires v8 features. |
+| Order | Project | Ready when | Why this slot |
+|---|---|---|---|
+| 1 | **Demo 2: Mend** | Now (structured JSON output exists) | Cheapest to build. Makes the AI-first thesis real. Sets the tone. |
+| 2 | **Demo 1: Parallax** | Auto-par codegen + HTTP FFI (done) | Broadest appeal. Every backend engineer relates to fan-out + join. |
+| 3 | **Demo 4: Cartographer** | `karac query` effect/concurrency surface | Teaches the effect system visually. Reduces onboarding friction for new users. |
+| 4 | **Demo 6: Weave** | Refinement types + contracts (CSV cut); `Pool[T]` + TLS + tracing (service cut) | Correctness story for data engineers. Complements the concurrency story. |
+| 5 | **Demo 7: Chronicle** | Self-hosting (Phase 10/12) | Self-hosting milestone. Marks Kāra as "a real language." |
+| 6 | **Demo 3: Slipstream** | CPU path after Phase 11 (long-tail stdlib + FFI); GPU path added later with no Kāra-source change | Visually striking, instantly explainable. |
+| 7 | **Demo 5: Husk** | Hardware gaps from v8 (`#[repr]`, `#[interrupt]`, inline asm, `no_std`) | Systems credibility. Validates the `kernel` profile. |
 
 **Parallax** and **Mend** together are the minimum viable showcase — they
-cover the two core theses (auto-concurrency, AI-first) with achievable effort.
-Everything else layers on top.
+cover the two core theses (auto-concurrency, AI-first) with achievable effort,
+and they're the earliest to land. Everything else layers on top within the same
+pre-launch runway; the roster is not exhaustive and grows as dogfooding surfaces
+new capabilities worth proving.
 
 ---
 

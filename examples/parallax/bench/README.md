@@ -2,7 +2,7 @@
 
 Side-by-side `GET /dashboard/<user_id>` throughput across **Kāra**,
 **Rust**, **Go**, and **Node.js** — the recordable artifact for Demo 1
-([`docs/demo_ideas.md § Demo 1: Parallax`](../../../docs/demo_ideas.md)).
+([`docs/dogfooding.md § Demo 1: Parallax`](../../../docs/dogfooding.md)).
 
 Each impl serves the same canonical fan-out + join workload: four
 provider "fetches" per request, each carrying `reads(R_i)` on a
@@ -451,7 +451,7 @@ Five impls, five idioms for the same problem.
 
 ## Out of scope (deferred to follow-ups)
 
-Per the design lock at [`docs/demo_ideas.md § Slice E`](../../../docs/demo_ideas.md):
+Per the design lock at [`docs/dogfooding.md § Slice E`](../../../docs/dogfooding.md):
 
 - TLS, HTTP/2, WebSockets — Phase 11.
 - Real database FFI (Postgres / MySQL / Redis) — Phase 11. Demo uses
@@ -464,7 +464,7 @@ Per the design lock at [`docs/demo_ideas.md § Slice E`](../../../docs/demo_idea
 
 ## See also
 
-- [`docs/demo_ideas.md § Demo 1: Parallax`](../../../docs/demo_ideas.md) —
+- [`docs/dogfooding.md § Demo 1: Parallax`](../../../docs/dogfooding.md) —
   the demo's design storyboard + Slice E settled-design-fork record
   (F1–F5 + Rust addition).
 - [`examples/parallax/`](../) — the multi-file source-of-truth Parallax

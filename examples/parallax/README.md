@@ -5,7 +5,7 @@ sequential code, the compiler runs it concurrently.
 
 ## What it demonstrates
 
-The canonical fan-out + join shape (`docs/demo_ideas.md § Demo 1`) —
+The canonical fan-out + join shape (`docs/dogfooding.md § Demo 1`) —
 four typed effect resources, four provider implementations, and a
 `get_dashboard(user_id)` function whose four `let` bindings the
 compiler auto-parallelizes into a single concurrent group, joined
@@ -104,7 +104,7 @@ headline output.
   three-resource fan-out without join.
 - `tests/parallax.rs` — IR-shape, concurrency, end-to-end, and
   (ignore-gated) wall-clock benchmark coverage.
-- `docs/demo_ideas.md § Demo 1` — the demo's design storyboard.
+- `docs/dogfooding.md § Demo 1` — the demo's design storyboard.
 
 ## Implementation notes
 

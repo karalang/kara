@@ -69,7 +69,7 @@ Cross-refs:
   ceiling and rule out runtime / `karac_par_run` / frame-tracking
   as remaining bottlenecks.
 - Slice E "Out of scope — closing the Kāra-vs-Rust gap" path at
-  [`docs/demo_ideas.md § Slice E`](../demo_ideas.md). H2 / H3 from
+  [`docs/dogfooding.md § Slice E`](../dogfooding.md). H2 / H3 from
   that section are this investigation's H2 / H3.
 - HTTP handler ABI trampoline (predecessor): commit `5f4cbcc`. The
   shipped trampoline shape is what the hypotheses below mutate.
@@ -205,7 +205,7 @@ allocator becomes hot.
    135 K ceiling, H2 is real.
 
 **Mitigation.** Three-step closure path enumerated in
-`docs/demo_ideas.md § Slice E` "Out of scope":
+`docs/dogfooding.md § Slice E` "Out of scope":
 - (i) **Borrowed accessors** — `req.path() -> ref StringSlice`
   returning a view into hyper's request buffer, no allocation.
   Requires threading hyper's request lifetime through Kāra's
@@ -487,7 +487,7 @@ quality-of-implementation improvement.
    (allocator isn't the bottleneck). At 100 K+ rps it would
    matter.
 2. **Borrowed accessors with lifetime threading** — the full
-   design from `demo_ideas.md § Slice E` "Out of scope". Adds
+   design from `dogfooding.md § Slice E` "Out of scope". Adds
    `ref StringSlice` to Kāra's borrow checker and lifetime-
    threads hyper's request through the FFI boundary. Big
    surface; payoff is at high-throughput / no-work shapes,

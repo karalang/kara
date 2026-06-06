@@ -230,7 +230,7 @@ katas do.
 - **[docs/roadmap.md](docs/roadmap.md)** — Compiler implementation plan, phase by phase.
 - **[docs/implementation_checklist/](docs/implementation_checklist/)** — Items to validate, benchmark, or revisit during specific phases.
 - **[docs/deferred.md](docs/deferred.md)** — Committed designs for deferred features (P1: decided/non-breaking, P2: speculative).
-- **[docs/demo_ideas.md](docs/demo_ideas.md)** — Programs that showcase Kāra's differentiating features.
+- **[docs/dogfooding.md](docs/dogfooding.md)** — The V1 dogfooding roster: real programs built in Kāra that surface bugs, harden the language, and prove its differentiating features.
 
 ## Project Status
 

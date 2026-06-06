@@ -113,7 +113,7 @@ pub enum Command {
         /// human-readable concurrency analysis to stdout alongside the
         /// binary build. Pairs with the auto-par execution path landed
         /// in Slice A to make the compiler's reasoning visible alongside
-        /// the speedup. See `docs/demo_ideas.md:80-88` for the locked
+        /// the speedup. See `docs/dogfooding.md:90-98` for the locked
         /// output shape.
         concurrency_report: bool,
         /// `--simd-report=verbose` (phase-7-codegen.md line 308, slice 5b):

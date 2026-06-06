@@ -42,7 +42,7 @@ HTTP layer. Worth ~1 slice of effort.
 Cross-refs:
 - Bench harness scaffolding: `ea1d26d`. Verification run:
   `4f7b72d`. Pool fix: `3953a14`. Codegen O2: `280ce2d`.
-- Slice E design lock: [`docs/demo_ideas.md § Slice E`](../demo_ideas.md).
+- Slice E design lock: [`docs/dogfooding.md § Slice E`](../dogfooding.md).
 - Parallax perf investigation: [`parallax_perf.md`](parallax_perf.md).
   The codegen O2 work surfaced gap **G1** (optimization-eaten
   busy_loops) which made the headline numbers no longer apples-to-

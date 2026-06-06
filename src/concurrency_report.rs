@@ -8,7 +8,7 @@
 //! is a sibling text channel for human readers, not a parallel data
 //! extraction pass.
 //!
-//! Output shape (locked by `docs/demo_ideas.md:80-88`):
+//! Output shape (locked by `docs/dogfooding.md:90-98`):
 //!
 //! ```text
 //! function process_request:
