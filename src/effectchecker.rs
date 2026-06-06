@@ -160,6 +160,13 @@ pub struct EffectError {
     pub kind: EffectErrorKind,
     /// Optional structured payload — currently only populated for E0404.
     pub subtype_trace: Option<EffectSubtypeTrace>,
+    /// Machine-applicable edit, when one can be derived (today: the
+    /// E0412 receiver rewrite `self` → `ref self`). Same currency as
+    /// the resolver's and ownership checker's fixes — `karac fix`
+    /// applies the edit verbatim and `--output=json` surfaces it as
+    /// the `replacement` payload. Boxed for the same sparse-payload
+    /// reason as `ResolveError::replacement`.
+    pub replacement: Option<Box<crate::resolver::TextEdit>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -235,6 +242,16 @@ pub enum EffectErrorKind {
     /// across tasks, so a public function carrying that effect raises
     /// no synchronisation concern.
     PubFnSyntheticResource,
+    /// An `effect resource R: Trait` method whose declared `with`
+    /// clause mentions `R` but omits `writes(R)`, while its receiver
+    /// mode (bare `self` or `mut ref self`) makes every `R.method(...)`
+    /// call site infer `writes(R)` via the dispatch seed. The
+    /// declaration is unsatisfiable as written — no caller can ever
+    /// see the reads-only contract it promises, and every public
+    /// caller is forced to declare `writes(R)` it never asked for.
+    /// Fires at the trait method definition (the root cause) with a
+    /// machine-applicable `ref self` receiver rewrite.
+    ResourceReceiverContradiction,
 }
 
 impl std::fmt::Display for EffectError {
@@ -871,6 +888,7 @@ impl<'a> EffectChecker<'a> {
                     span: decl.span.clone(),
                     kind: EffectErrorKind::CircularEffectGroup,
                     subtype_trace: None,
+                    replacement: None,
                 });
             }
             self.expanded_groups
@@ -905,6 +923,7 @@ impl<'a> EffectChecker<'a> {
                                 span: decl.span.clone(),
                                 kind: EffectErrorKind::UndefinedEffectGroup,
                                 subtype_trace: None,
+                                replacement: None,
                             });
                             continue;
                         }
@@ -1056,6 +1075,7 @@ impl<'a> EffectChecker<'a> {
                             span: effects.span.clone(),
                             kind: EffectErrorKind::UndefinedEffectGroup,
                             subtype_trace: None,
+                            replacement: None,
                         });
                     }
                 }

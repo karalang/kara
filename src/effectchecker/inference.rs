@@ -18,7 +18,54 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::*;
 use crate::token::Span;
 
-use super::{tarjan_scc, DeclaredEffects, Effect, EffectOrigin, EffectSet};
+use super::{
+    tarjan_scc, DeclaredEffects, Effect, EffectError, EffectErrorKind, EffectOrigin, EffectSet,
+};
+
+/// E0412 predicate: does this declared `with` clause mention `resource`
+/// under some verb while omitting `writes(resource)`? Returns the
+/// `/`-joined verb names that do mention it (for the diagnostic text),
+/// or `None` when there is no contradiction. Clauses containing groups,
+/// `with _`, or effect variables are skipped conservatively — any of
+/// those could expand to `writes(resource)` after resolution, so no
+/// definition-site contradiction can be proven.
+fn clause_verbs_on_resource_without_writes(
+    effects: Option<&EffectList>,
+    resource: &str,
+) -> Option<String> {
+    let effects = effects?;
+    let mut mentioned: Vec<&'static str> = Vec::new();
+    for item in &effects.items {
+        match item {
+            EffectItem::Verb(v) => {
+                if !v.resources.iter().any(|r| r.path.join(".") == resource) {
+                    continue;
+                }
+                match v.kind {
+                    EffectVerbKind::Writes => return None,
+                    EffectVerbKind::Reads => mentioned.push("reads"),
+                    EffectVerbKind::Sends => mentioned.push("sends"),
+                    EffectVerbKind::Receives => mentioned.push("receives"),
+                    EffectVerbKind::Allocates => mentioned.push("allocates"),
+                    // Execution verbs / panics / user-defined verbs
+                    // don't promise a read-only resource contract —
+                    // mentioning the resource through them isn't the
+                    // contradiction this check targets.
+                    _ => {}
+                }
+            }
+            EffectItem::Group(_) | EffectItem::Polymorphic | EffectItem::Variable(_) => {
+                return None;
+            }
+        }
+    }
+    if mentioned.is_empty() {
+        None
+    } else {
+        mentioned.dedup();
+        Some(mentioned.join("/"))
+    }
+}
 
 impl<'a> super::EffectChecker<'a> {
     /// Seed `inferred_effects` for the synthetic `Resource.method` keys
@@ -34,10 +81,25 @@ impl<'a> super::EffectChecker<'a> {
     /// repro that motivated this seed (and the v1 surface) only
     /// exercises the direct provider trait.
     pub(crate) fn seed_resource_trait_dispatch_effects(&mut self, builtin_span: &Span) {
-        // Collect (trait_name → Vec<(method_name, SelfParam)>) once so
-        // each resource that names that trait can reuse the lookup.
-        let mut trait_methods: HashMap<String, Vec<(String, SelfParam)>> = HashMap::new();
-        for item in &self.program.items {
+        // Collect the per-trait method facts once so each resource that
+        // names that trait can reuse the lookup. Alongside the receiver
+        // mode (which decides the seeded verb), carry the declared
+        // `with` clause plus the trait/receiver spans so the E0412
+        // contradiction check below can fire at the definition site
+        // with a machine-applicable receiver rewrite.
+        struct SeedMethod {
+            trait_name: String,
+            name: String,
+            self_param: SelfParam,
+            self_span: Option<Span>,
+            span: Span,
+            effects: Option<EffectList>,
+        }
+        let mut trait_methods: HashMap<String, Vec<SeedMethod>> = HashMap::new();
+        // Copy the `&'a Program` out of `self` so the walk below can
+        // push onto `self.errors` without holding a `&self` borrow.
+        let program = self.program;
+        for item in &program.items {
             let t = match item {
                 Item::TraitDef(t) => t,
                 _ => continue,
@@ -51,12 +113,19 @@ impl<'a> super::EffectChecker<'a> {
                     trait_methods
                         .entry(t.name.clone())
                         .or_default()
-                        .push((m.name.clone(), sp.clone()));
+                        .push(SeedMethod {
+                            trait_name: t.name.clone(),
+                            name: m.name.clone(),
+                            self_param: sp.clone(),
+                            self_span: m.self_span.clone(),
+                            span: m.span.clone(),
+                            effects: m.effects.clone(),
+                        });
                 }
             }
         }
 
-        for item in &self.program.items {
+        for item in &program.items {
             let r = match item {
                 Item::EffectResource(r) => r,
                 _ => continue,
@@ -67,12 +136,54 @@ impl<'a> super::EffectChecker<'a> {
             let Some(methods) = trait_methods.get(trait_name) else {
                 continue;
             };
-            for (method_name, self_param) in methods {
-                let verb = match self_param {
+            for m in methods {
+                let verb = match m.self_param {
                     SelfParam::Ref => EffectVerbKind::Reads,
                     SelfParam::MutRef | SelfParam::Owned => EffectVerbKind::Writes,
                 };
-                let key = format!("{}.{}", r.name, method_name);
+                // E0412: the receiver seeds `writes(R)` on every
+                // `R.method(...)` call site, but the method's declared
+                // `with` clause promises a non-writes contract on R.
+                // The declaration can never hold — flag the definition
+                // (the root cause) instead of letting each caller trip
+                // over E0400 with no path back here.
+                if verb == EffectVerbKind::Writes {
+                    if let Some(declared) =
+                        clause_verbs_on_resource_without_writes(m.effects.as_ref(), &r.name)
+                    {
+                        let receiver = match m.self_param {
+                            SelfParam::Owned => "self",
+                            SelfParam::MutRef => "mut ref self",
+                            SelfParam::Ref => unreachable!("ref self seeds reads"),
+                        };
+                        let span = m.self_span.clone().unwrap_or_else(|| m.span.clone());
+                        self.errors.push(EffectError {
+                            message: format!(
+                                "trait method '{}.{}' declares {}({}) but its `{}` \
+                                 receiver makes every '{}.{}' call infer writes({}); \
+                                 change the receiver to `ref self` or declare writes({})",
+                                m.trait_name,
+                                m.name,
+                                declared,
+                                r.name,
+                                receiver,
+                                r.name,
+                                m.name,
+                                r.name,
+                                r.name,
+                            ),
+                            span: span.clone(),
+                            kind: EffectErrorKind::ResourceReceiverContradiction,
+                            subtype_trace: None,
+                            replacement: Some(Box::new(crate::resolver::TextEdit {
+                                offset: span.offset,
+                                length: span.length,
+                                replacement: "ref self".to_string(),
+                            })),
+                        });
+                    }
+                }
+                let key = format!("{}.{}", r.name, m.name);
                 let mut set = EffectSet::new();
                 set.add(
                     Effect {
@@ -412,6 +523,7 @@ impl<'a> super::EffectChecker<'a> {
                 span,
                 kind: super::EffectErrorKind::ForbiddenEffectInContract,
                 subtype_trace: None,
+                replacement: None,
             });
         }
     }

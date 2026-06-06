@@ -4802,6 +4802,77 @@ fn test_fix_applies_multiple_corrections_in_one_file() {
 }
 
 #[test]
+fn test_fix_applies_e0412_receiver_rewrite() {
+    // E0412: resource trait method with a bare `self` receiver but a
+    // reads-only declared clause. `karac fix` applies the effect
+    // checker's `ref self` rewrite at the trait definition; the file
+    // then checks clean (the receiver now seeds reads(Cfg), matching
+    // the declaration).
+    let path = fix_scratch_file(
+        "e0412",
+        "pub effect resource Cfg: Config;\n\
+         pub trait Config { fn get(self, k: i64) -> i64 with reads(Cfg); }\n",
+    );
+    let out = karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "fix failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("applied 1 fix"), "stdout: {stdout}");
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("fn get(ref self, k: i64)"),
+        "expected `self` -> `ref self`, got: {rewritten}"
+    );
+    let recheck = karac_bin()
+        .args(["check", path.to_str().unwrap(), "--output=json"])
+        .output()
+        .unwrap();
+    let recheck_stdout = String::from_utf8_lossy(&recheck.stdout);
+    assert!(
+        recheck.status.success() && recheck_stdout.contains("\"diagnostics\":[]"),
+        "post-fix check must be clean; got: {recheck_stdout}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_json_e0412_carries_replacement_payload() {
+    // The E0412 JSON diagnostic carries the machine-applicable
+    // `replacement` payload (same shape as resolver/ownership fixes)
+    // so IDE quick-fix and agent consumers can apply it without
+    // re-deriving the span.
+    let tmp_dir = std::env::temp_dir();
+    let fixture = tmp_dir.join(format!("karac_test_e0412_json_{}.kara", std::process::id()));
+    std::fs::write(
+        &fixture,
+        "pub effect resource Cfg: Config;\n\
+         pub trait Config { fn get(self, k: i64) -> i64 with reads(Cfg); }\n",
+    )
+    .expect("write fixture");
+    let out = karac_bin()
+        .args(["check", fixture.to_str().unwrap(), "--output=json"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"code\":\"E0412\""),
+        "JSON output should carry E0412; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"replacement\":{\"offset\":") && stdout.contains("\"text\":\"ref self\""),
+        "JSON output should carry the receiver rewrite payload; got: {stdout}"
+    );
+    let _ = std::fs::remove_file(&fixture);
+}
+
+#[test]
 fn test_fix_help_text_lists_dry_run() {
     let out = karac_bin().args(["fix", "--help"]).output().unwrap();
     assert!(out.status.success());

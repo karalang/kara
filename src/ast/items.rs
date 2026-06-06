@@ -656,6 +656,12 @@ pub struct TraitMethod {
     pub name: String,
     pub generic_params: Option<GenericParams>,
     pub self_param: Option<SelfParam>,
+    /// Source span of the receiver tokens (`self`, `ref self`,
+    /// `mut ref self`) when `self_param` is present. Lets diagnostics
+    /// that fire on the receiver mode (E0412 resource-receiver
+    /// contradiction) attach a machine-applicable edit replacing
+    /// exactly the receiver text.
+    pub self_span: Option<Span>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
     pub effects: Option<EffectList>,

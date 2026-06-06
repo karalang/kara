@@ -295,7 +295,7 @@ impl super::Parser {
 
         self.expect(&Token::LeftParen)?;
         self.fn_context_stack.push(FnContext::Function);
-        let (self_param, params) = self.parse_fn_params()?;
+        let (self_param, _self_span, params) = self.parse_fn_params()?;
         self.fn_context_stack.pop();
         self.expect(&Token::RightParen)?;
 
@@ -883,12 +883,18 @@ impl super::Parser {
         overrides
     }
 
-    pub(super) fn parse_fn_params(&mut self) -> Option<(Option<SelfParam>, Vec<Param>)> {
+    /// The middle tuple element is the receiver's source span (see
+    /// [`Self::try_parse_self_param`]) — `None` when there is no
+    /// receiver.
+    pub(super) fn parse_fn_params(
+        &mut self,
+    ) -> Option<(Option<SelfParam>, Option<Span>, Vec<Param>)> {
         let mut self_param = None;
+        let mut self_span = None;
         let mut params = Vec::new();
 
         if self.check(&Token::RightParen) {
-            return Some((None, params));
+            return Some((None, None, params));
         }
 
         // Check for self parameter
@@ -897,10 +903,11 @@ impl super::Parser {
             || self.check(&Token::Ref)
             || self.check(&Token::Mut)
         {
-            if let Some(sp) = self.try_parse_self_param() {
+            if let Some((sp, sp_span)) = self.try_parse_self_param() {
                 self_param = Some(sp);
+                self_span = Some(sp_span);
                 if !self.eat(&Token::Comma) {
-                    return Some((self_param, params));
+                    return Some((self_param, self_span, params));
                 }
             }
         }
@@ -917,11 +924,16 @@ impl super::Parser {
             }
         }
 
-        Some((self_param, params))
+        Some((self_param, self_span, params))
     }
 
-    fn try_parse_self_param(&mut self) -> Option<SelfParam> {
+    /// Returns the receiver mode plus the span covering exactly the
+    /// receiver tokens (from the first receiver token through `self`),
+    /// so receiver-mode diagnostics can attach a machine-applicable
+    /// edit over the verbatim receiver text.
+    fn try_parse_self_param(&mut self) -> Option<(SelfParam, Span)> {
         let saved = self.pos;
+        let start = self.current_span();
 
         // own self — rejected under 2A; bare `self` is the owned/consuming receiver.
         if self.eat(&Token::Own) {
@@ -931,7 +943,7 @@ impl super::Parser {
                      Bare `self` is the owned/consuming receiver; \
                      `ref self` and `mut ref self` are the two borrow forms.",
                 );
-                return Some(SelfParam::Owned);
+                return Some((SelfParam::Owned, self.span_from(&start)));
             }
             self.pos = saved;
             return None;
@@ -939,13 +951,13 @@ impl super::Parser {
 
         // self (bare — owned/consuming receiver under 2A)
         if self.eat(&Token::SelfValue) {
-            return Some(SelfParam::Owned);
+            return Some((SelfParam::Owned, self.span_from(&start)));
         }
 
         // mut ref self
         if self.eat(&Token::Mut) {
             if self.eat(&Token::Ref) && self.eat(&Token::SelfValue) {
-                return Some(SelfParam::MutRef);
+                return Some((SelfParam::MutRef, self.span_from(&start)));
             }
             self.pos = saved;
             return None;
@@ -954,7 +966,7 @@ impl super::Parser {
         // ref self
         if self.eat(&Token::Ref) {
             if self.eat(&Token::SelfValue) {
-                return Some(SelfParam::Ref);
+                return Some((SelfParam::Ref, self.span_from(&start)));
             }
             self.pos = saved;
             return None;

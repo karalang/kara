@@ -98,6 +98,7 @@ impl<'a> super::EffectChecker<'a> {
                                 span: span.clone(),
                                 kind: EffectErrorKind::MissingEffectDeclaration,
                                 subtype_trace: None,
+                                replacement: None,
                             });
                         }
                     }
@@ -149,6 +150,7 @@ impl<'a> super::EffectChecker<'a> {
                                     span: span.clone(),
                                     kind: EffectErrorKind::MissingEffectDeclaration,
                                     subtype_trace: None,
+                                    replacement: None,
                                 });
                             }
                         }
@@ -185,6 +187,7 @@ impl<'a> super::EffectChecker<'a> {
                                     span: span.clone(),
                                     kind: EffectErrorKind::MissingEffectDeclaration,
                                     subtype_trace: None,
+                                    replacement: None,
                                 });
                             }
                         }
@@ -205,6 +208,7 @@ impl<'a> super::EffectChecker<'a> {
                                     span: span.clone(),
                                     kind: EffectErrorKind::OverDeclaredEffect,
                                     subtype_trace: None,
+                                    replacement: None,
                                 });
                             }
                         }
@@ -258,6 +262,7 @@ impl<'a> super::EffectChecker<'a> {
                                     span: span.clone(),
                                     kind: EffectErrorKind::MissingEffectDeclaration,
                                     subtype_trace: None,
+                                    replacement: None,
                                 });
                             }
                         }
@@ -277,6 +282,7 @@ impl<'a> super::EffectChecker<'a> {
                     span: span.clone(),
                     kind: EffectErrorKind::MissingEffectDeclaration,
                     subtype_trace: None,
+                    replacement: None,
                 });
             }
         }
@@ -360,6 +366,7 @@ impl<'a> super::EffectChecker<'a> {
                             span: method.span.clone(),
                             kind: EffectErrorKind::ImplExceedsTraitCeiling,
                             subtype_trace: None,
+                            replacement: None,
                         });
                     }
                 }
@@ -437,6 +444,7 @@ impl<'a> super::EffectChecker<'a> {
                             span: m.span.clone(),
                             kind: EffectErrorKind::TraitDefaultExceedsCeiling,
                             subtype_trace: None,
+                            replacement: None,
                         });
                     }
                 }

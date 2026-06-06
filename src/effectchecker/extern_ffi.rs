@@ -114,6 +114,7 @@ impl<'a> super::EffectChecker<'a> {
                         span: e.span.clone(),
                         kind: EffectErrorKind::ProfileViolation,
                         subtype_trace: None,
+                        replacement: None,
                     });
                 }
             }
@@ -206,6 +207,7 @@ impl<'a> super::EffectChecker<'a> {
                 span: span.clone(),
                 kind: EffectErrorKind::FfiLintHint,
                 subtype_trace: None,
+                replacement: None,
             });
         }
 
@@ -235,6 +237,7 @@ impl<'a> super::EffectChecker<'a> {
                 span: span.clone(),
                 kind: EffectErrorKind::FfiLintHint,
                 subtype_trace: None,
+                replacement: None,
             });
         }
     }

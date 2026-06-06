@@ -2774,8 +2774,11 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                     ("E0410", "error")
                 }
                 crate::effectchecker::EffectErrorKind::TargetGateViolation => ("E0411", "error"),
+                crate::effectchecker::EffectErrorKind::ResourceReceiverContradiction => {
+                    ("E0412", "error")
+                }
             };
-            let extra_json = err.subtype_trace.as_ref().map(|t| {
+            let subtype_json = err.subtype_trace.as_ref().map(|t| {
                 let slot = json_string_list(&t.slot_effects);
                 let arg = json_string_list(&t.argument_effects);
                 let offending = json_string_list(&t.offending_effects);
@@ -2787,6 +2790,24 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                     "\"effect-subset-fail\":{{\"slot\":{slot},\"argument\":{arg},\"offending\":{offending}{signature_json}}}"
                 )
             });
+            // Surface the machine-applicable replacement (when present)
+            // alongside the structured subtype trace — same payload shape
+            // as the resolver/ownership `replacement` field, so `karac
+            // fix` and IDE quick-fix consumers handle all three phases
+            // uniformly. The two never co-occur today (trace ⇒ E0404,
+            // replacement ⇒ E0412) but the merge is future-proof.
+            let replacement_json = err.replacement.as_deref().map(|r| {
+                format!(
+                    "\"replacement\":{{\"offset\":{},\"length\":{},\"text\":{}}}",
+                    r.offset,
+                    r.length,
+                    json_string(&r.replacement),
+                )
+            });
+            let extra_json = match (subtype_json, replacement_json) {
+                (Some(a), Some(b)) => Some(format!("{a},{b}")),
+                (a, b) => a.or(b),
+            };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
                 severity,
@@ -7225,6 +7246,13 @@ fn cmd_fix(filename: &str, dry_run: bool) {
     if let Some(ref r) = pipeline.resolved {
         edits.extend(
             r.errors
+                .iter()
+                .filter_map(|e| e.replacement.as_deref().cloned()),
+        );
+    }
+    if let Some(ref ef) = pipeline.effects {
+        edits.extend(
+            ef.errors
                 .iter()
                 .filter_map(|e| e.replacement.as_deref().cloned()),
         );

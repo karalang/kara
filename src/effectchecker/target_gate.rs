@@ -200,6 +200,7 @@ impl<'a> super::EffectChecker<'a> {
                     span: span.clone(),
                     kind: EffectErrorKind::TargetGateViolation,
                     subtype_trace: None,
+                    replacement: None,
                 });
             }
         }

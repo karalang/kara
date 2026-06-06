@@ -264,6 +264,7 @@ impl<'a> super::EffectChecker<'a> {
                                 span: arg.value.span.clone(),
                                 kind: EffectErrorKind::EffectVariableConflict,
                                 subtype_trace: None,
+                                replacement: None,
                             });
                         }
                     }

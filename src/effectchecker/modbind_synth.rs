@@ -298,6 +298,7 @@ impl<'a> super::EffectChecker<'a> {
                 span: par_span.clone(),
                 kind: super::EffectErrorKind::ModuleBindingWriteInPar,
                 subtype_trace: None,
+                replacement: None,
             });
         }
     }
@@ -387,6 +388,7 @@ impl<'a> super::EffectChecker<'a> {
                     span: span.clone(),
                     kind: super::EffectErrorKind::PubFnSyntheticResource,
                     subtype_trace: None,
+                    replacement: None,
                 });
             }
         }

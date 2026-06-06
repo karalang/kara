@@ -111,6 +111,7 @@ impl super::EffectChecker<'_> {
                 span: f.span.clone(),
                 kind: EffectErrorKind::ProfileIncompatibleEffect,
                 subtype_trace: None,
+                replacement: None,
             });
         }
     }

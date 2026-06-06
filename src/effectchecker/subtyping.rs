@@ -215,6 +215,7 @@ impl<'a> super::EffectChecker<'a> {
                             offending_effects: offending_str.clone(),
                             monomorphized_signature: monomorphized.clone(),
                         }),
+                        replacement: None,
                     });
                 }
             }

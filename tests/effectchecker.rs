@@ -6388,6 +6388,118 @@ fn test_missing_resource_effect_under_declared_policy_diagnosed() {
     );
 }
 
+// ── E0412: resource-receiver contradiction ────────────────────────
+//
+// An `effect resource R: Trait` method whose declared `with` clause
+// mentions R without writes(R), while its receiver mode (bare `self`
+// or `mut ref self`) seeds writes(R) on every `R.method(...)` call
+// site. The declaration is unsatisfiable as written — the diagnostic
+// fires at the trait method definition (the root cause, not the
+// N call sites that would otherwise each trip E0400) and carries a
+// machine-applicable `ref self` receiver rewrite for `karac fix`.
+
+#[test]
+fn test_resource_receiver_contradiction_owned_self_reads_only() {
+    let source = "pub effect resource Cfg: Config;\n\
+                  pub trait Config { fn get(self, k: i64) -> i64 with reads(Cfg); }";
+    let errors = effectcheck_errors(source);
+    let err = errors
+        .iter()
+        .find(|e| e.kind == EffectErrorKind::ResourceReceiverContradiction)
+        .unwrap_or_else(|| {
+            panic!(
+                "expected ResourceReceiverContradiction; got: {:?}",
+                errors
+                    .iter()
+                    .map(|e| (&e.kind, &e.message))
+                    .collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        err.message.contains("Config.get")
+            && err.message.contains("reads(Cfg)")
+            && err.message.contains("`self` receiver")
+            && err.message.contains("ref self"),
+        "message should name the method, the declared verb, the receiver, \
+         and the fix; got: {}",
+        err.message
+    );
+    let edit = err
+        .replacement
+        .as_deref()
+        .expect("E0412 must carry a machine-applicable receiver rewrite");
+    assert_eq!(edit.replacement, "ref self");
+    assert_eq!(
+        &source[edit.offset..edit.offset + edit.length],
+        "self",
+        "edit span must cover exactly the receiver text"
+    );
+}
+
+#[test]
+fn test_resource_receiver_contradiction_mut_ref_self_reads_only() {
+    let source = "pub effect resource Cfg: Config;\n\
+                  pub trait Config { fn get(mut ref self, k: i64) -> i64 with reads(Cfg); }";
+    let errors = effectcheck_errors(source);
+    let err = errors
+        .iter()
+        .find(|e| e.kind == EffectErrorKind::ResourceReceiverContradiction)
+        .expect("expected ResourceReceiverContradiction for mut ref self");
+    assert!(
+        err.message.contains("`mut ref self` receiver"),
+        "message: {}",
+        err.message
+    );
+    let edit = err.replacement.as_deref().expect("rewrite expected");
+    assert_eq!(edit.replacement, "ref self");
+    assert_eq!(
+        &source[edit.offset..edit.offset + edit.length],
+        "mut ref self",
+        "edit span must cover the full receiver form"
+    );
+}
+
+#[test]
+fn test_resource_receiver_ref_self_reads_only_is_clean() {
+    // `ref self` seeds reads(R) — the reads-only declaration holds.
+    effectcheck_ok(
+        "pub effect resource Cfg: Config;\n\
+         pub trait Config { fn get(ref self, k: i64) -> i64 with reads(Cfg); }",
+    );
+}
+
+#[test]
+fn test_resource_receiver_owned_self_with_declared_writes_is_clean() {
+    // Declaring writes(R) alongside the owned receiver is consistent —
+    // consuming the provider is an intentional write-grade operation.
+    effectcheck_ok(
+        "pub effect resource Cfg: Config;\n\
+         pub trait Config { fn take(self, k: i64) -> i64 with writes(Cfg); }",
+    );
+}
+
+#[test]
+fn test_resource_receiver_owned_self_without_clause_is_clean() {
+    // No declared clause → nothing promised, nothing contradicted; the
+    // dispatch seed's writes(R) is simply the inferred truth.
+    effectcheck_ok(
+        "pub effect resource Cfg: Config;\n\
+         pub trait Config { fn take(self, k: i64) -> i64; }",
+    );
+}
+
+#[test]
+fn test_resource_receiver_clause_on_other_resource_is_clean() {
+    // The clause mentions a different resource — no promise about Cfg
+    // is broken by the receiver-implied writes(Cfg).
+    effectcheck_ok(
+        "pub effect resource Cfg: Config;\n\
+         pub effect resource Log: Logger;\n\
+         pub trait Logger { fn log(mut ref self, msg: String); }\n\
+         pub trait Config { fn get(self, k: i64) -> i64 with reads(Log); }",
+    );
+}
+
 // ── Module-level `let mut` synthetic per-binding resources ────────
 //
 // Phase-8 mod-let slice 6 (design.md §1322 + §1330). Every
