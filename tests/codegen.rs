@@ -10080,6 +10080,141 @@ fn main() {
         compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen failed")
     }
 
+    // ── RC elision phase A (ownership/elision.rs) ──────────────────
+    //
+    // Trivial intra-fn single-owner shared bindings skip the
+    // dec/zero-test/drop-fn scope-exit dance: the let-site queues
+    // `FreeSharedElided` (unconditional null-guarded free). Design
+    // record: phase-7-codegen.md § "RC elision for provably-
+    // single-owner `shared struct` values".
+
+    #[test]
+    fn test_ir_rc_elision_scratch_binding_frees_without_dec() {
+        let ir = ir_for_with_ownership(
+            r#"
+shared struct Stats { mut count: i64, mut total: i64 }
+fn main() {
+    let s = Stats { count: 0, total: 0 };
+    s.total = s.total + 5;
+    println(s.total);
+}
+"#,
+        );
+        let body = function_body(&ir, "main").expect("main body");
+        assert!(
+            body.contains("elide_free_do"),
+            "elided binding should free via the FreeSharedElided arm; main:\n{body}"
+        );
+        assert!(
+            !body.contains("s_rc_cleanup"),
+            "elided binding must not take the RcDec path; main:\n{body}"
+        );
+        // The rc=1 header store stays (layout uniformity — design
+        // decision 2); only the count OPERATIONS are elided.
+        assert!(
+            body.contains("rc_alloc"),
+            "allocation keeps the rc header; main:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_ir_rc_elision_aliased_binding_keeps_rc_dec() {
+        // Control: the alias disqualifies, so the binding keeps the
+        // conventional RcDec cleanup and never takes the elided free.
+        let ir = ir_for_with_ownership(
+            r#"
+shared struct Stats { mut count: i64, mut total: i64 }
+fn main() {
+    let s = Stats { count: 0, total: 0 };
+    let t = s;
+    println(t.total);
+}
+"#,
+        );
+        let body = function_body(&ir, "main").expect("main body");
+        assert!(
+            body.contains("s_rc_cleanup"),
+            "aliased binding must keep the RcDec cleanup; main:\n{body}"
+        );
+        assert!(
+            !body.contains("s_elide_cleanup"),
+            "aliased binding must not take the elided free; main:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_rc_elision_scratch_loop() {
+        // Per-iteration elided scratch object: field writes, ref-self
+        // methods, a read-only declared-owned callee (inferred Ref —
+        // the would-be-mode gate), and a ref-arg callee. Exact total
+        // proves value correctness; the ASAN sibling proves the frees
+        // balance.
+        let out = run_program_with_ownership(
+            r#"
+shared struct Stats { mut count: i64, mut total: i64, active: bool }
+fn reader(s: ref Stats) -> i64 {
+    s.total
+}
+fn read_only(s: Stats) -> i64 {
+    s.count
+}
+impl Stats {
+    fn bump(mut ref self, n: i64) {
+        self.count = self.count + 1;
+        self.total = self.total + n;
+    }
+    fn snapshot(ref self) -> i64 {
+        self.total
+    }
+}
+fn main() {
+    let mut grand = 0;
+    let mut iter = 0;
+    while iter < 64 {
+        let s = Stats { count: 0, total: 0, active: true };
+        s.bump(3);
+        s.bump(4);
+        grand = grand + s.snapshot() + reader(s) + read_only(s);
+        iter = iter + 1;
+    }
+    println(grand);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // per iter: snapshot 7 + reader 7 + read_only(count) 2 = 16
+            assert_eq!(out.trim(), "1024");
+        }
+    }
+
+    #[test]
+    fn test_e2e_rc_elision_conditional_binding_null_guard() {
+        // The elided let sits in a conditional branch — when skipped,
+        // the slot carries the entry-block null sentinel and the
+        // FreeSharedElided arm's null-guard must skip the free.
+        let out = run_program_with_ownership(
+            r#"
+shared struct Stats { mut count: i64, mut total: i64 }
+fn main() {
+    let mut grand = 0;
+    let mut iter = 0;
+    while iter < 8 {
+        if iter > 3 {
+            let s = Stats { count: iter, total: iter * 2 };
+            grand = grand + s.total;
+        }
+        iter = iter + 1;
+    }
+    println(grand);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // iters 4..7: 8+10+12+14 = 44
+            assert_eq!(out.trim(), "44");
+        }
+    }
+
     #[test]
     fn test_ir_par_block_arc_promoted_binding_uses_atomic_rc() {
         // Trigger 1 (branch-divergent re-use) flags `d` as RC-fallback; the

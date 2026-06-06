@@ -1600,9 +1600,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         let ptr = val.into_pointer_value();
                         self.emit_refcount_inc(var_name, info.heap_type, ptr);
                     }
-                    // Track for scope-exit cleanup.
+                    // Track for scope-exit cleanup. RC-elided bindings
+                    // (ownership phase-A elision — refcount provably
+                    // never exceeds 1, no heap fields, no user Drop)
+                    // queue an unconditional free instead of the
+                    // dec/zero-test/drop walk. The analysis only elides
+                    // struct-literal births, so the `!is_fresh` inc arm
+                    // above never fires for them.
                     let ptr = val.into_pointer_value();
-                    self.track_rc_var(var_name, ptr, info.heap_type);
+                    if self.is_elided_binding(var_name) {
+                        self.track_elided_shared_var(var_name, ptr);
+                    } else {
+                        self.track_rc_var(var_name, ptr, info.heap_type);
+                    }
                 }
                 // RC-fallback boxing: heap-box non-shared bindings flagged by the ownership checker.
                 // Skipped for Vec/String bindings (their inner buffers need separate cleanup),

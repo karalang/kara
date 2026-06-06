@@ -3228,6 +3228,47 @@ fn main() {
     }
 
     #[test]
+    fn asan_rc_elision_scratch_loop_repeat() {
+        // RC elision phase A: per-iteration elided scratch objects.
+        // The elided cleanup is an unconditional free — ASAN catches
+        // a free of a still-referenced object (analysis unsound) and
+        // LeakSanitizer (linux CI) catches a skipped free. Includes a
+        // conditional-branch let (null-guard path) and the read-only
+        // declared-owned callee (the inferred-Ref would-be-mode gate).
+        assert_clean_asan_run(
+            r#"
+shared struct Stats { mut count: i64, mut total: i64 }
+fn read_only(s: Stats) -> i64 {
+    s.count
+}
+impl Stats {
+    fn bump(mut ref self, n: i64) {
+        self.count = self.count + 1;
+        self.total = self.total + n;
+    }
+}
+fn main() {
+    let mut grand = 0;
+    let mut iter = 0;
+    while iter < 100 {
+        let s = Stats { count: 0, total: 0 };
+        s.bump(iter);
+        grand = grand + s.total + read_only(s);
+        if iter > 50 {
+            let extra = Stats { count: 1, total: iter };
+            grand = grand + extra.total;
+        }
+        iter = iter + 1;
+    }
+    println(grand);
+}
+"#,
+            &["8725"],
+            "rc_elision_scratch_loop_repeat",
+        );
+    }
+
+    #[test]
     fn asan_option_shared_niche_abi_convergence_repeat() {
         // Niche call ABI for `Option[shared T]` signatures (Slice 1,
         // 2026-06-05) + the explicit-return alias compensation it

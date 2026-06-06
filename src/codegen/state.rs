@@ -198,6 +198,22 @@ pub(crate) struct SoaLayout {
 /// The `scope_cleanup_actions` stack holds one `Vec` per scope frame;
 /// each frame accumulates these in push order and drains in reverse.
 pub(crate) enum CleanupAction<'ctx> {
+    /// Unconditionally free an RC-elided `shared struct` binding
+    /// (ownership phase-A elision — `src/ownership/elision.rs`; design
+    /// record in phase-7-codegen.md). The analysis proved the binding's
+    /// refcount never exceeds 1 and its type has no heap-owning fields
+    /// and no user Drop, so scope exit frees the heap object directly —
+    /// no dec, no zero-test, no drop-fn dispatch. Null-guarded exactly
+    /// like `RcDec` (the let may sit in a skipped conditional branch,
+    /// where the slot carries the entry-block null sentinel).
+    FreeSharedElided {
+        /// Binding name — reloads the current pointer from the slot at
+        /// drain time (mirrors `RcDec`; elided bindings are never
+        /// reassigned, but the reload keeps the two arms uniform).
+        name: String,
+        /// Fallback pointer if the variable is no longer in scope.
+        ptr: PointerValue<'ctx>,
+    },
     /// Decrement the refcount of a `shared struct` value.
     RcDec {
         /// Variable name — used to reload the current pointer value in case

@@ -19,6 +19,7 @@ mod borrow;
 mod capture_body;
 mod closure_escape;
 mod concurrent_shared;
+mod elision;
 mod expr_check;
 mod par_capture_classify;
 mod par_helpers;
@@ -33,6 +34,8 @@ mod rc_promote;
 // rewrite. L215b3 adds `ConsumerRewriteTypeCtx` so the migrate tool can
 // thread typecheck-derived data (inferred-binding discovery + mutating-
 // method-call classifier) when the full pipeline succeeded.
+pub use elision::ElisionBlocked;
+
 pub(crate) use concurrent_shared::{
     build_consumer_rewrite_edits_in_program, build_consumer_rewrite_edits_with_mut_fields,
     build_fix_diff_edits, build_fix_diff_edits_with_field_kinds, classify_field_wrap_kinds,
@@ -665,6 +668,16 @@ pub struct OwnershipCheckResult {
     /// active vs suppressed fallbacks and surface AI-agent over-use of
     /// `#[allow]` (vs restructuring for zero-cost ownership).
     pub suppressed_rc_fn_keys: HashSet<String>,
+    /// RC elision phase A (see `src/ownership/elision.rs` and the
+    /// phase-7 tracker design record): per-function sets of shared
+    /// bindings whose refcount provably never exceeds 1 — codegen
+    /// replaces their scope-exit `RcDec` with an unconditional free.
+    /// Keyed by fn key (bare name / `Type.method`).
+    pub elided_bindings: HashMap<String, HashSet<String>>,
+    /// Why phase-A candidates were rejected — recorded as data for
+    /// phase-B/C corpus tuning and a future `karac explain` surface
+    /// (design decision 5: record now, surface later).
+    pub elision_blocked: HashMap<String, Vec<ElisionBlocked>>,
     /// Multi-edit `fix_diff` envelope keyed by the diagnostic's primary
     /// span — phase-7 line 197 follow-up. `ConcurrentSharedStruct` and
     /// `ConcurrentPlainStruct` populate this with the per-`mut`-field
@@ -798,6 +811,9 @@ pub struct OwnershipChecker<'a> {
     /// Function keys where RC notes are suppressed via `#[allow(rc_fallback)]`.
     /// Consulted after Phase 2 when emitting flavor-annotated notes.
     pub(crate) suppressed_rc_fn_keys: HashSet<String>,
+    /// RC elision phase A output — populated by `compute_elision`.
+    pub(crate) elided_bindings: HashMap<String, HashSet<String>>,
+    pub(crate) elision_blocked: HashMap<String, Vec<ElisionBlocked>>,
     /// `fix_diff` envelope sidecar — phase-7 line 197 follow-up. Keyed
     /// by the diagnostic's primary `SpanKey`, value is the list of
     /// machine-applicable `TextEdit`s. Populated only by the
@@ -934,6 +950,8 @@ impl<'a> OwnershipChecker<'a> {
             current_function: String::new(),
             suppress_rc_notes: false,
             suppressed_rc_fn_keys: HashSet::new(),
+            elided_bindings: HashMap::new(),
+            elision_blocked: HashMap::new(),
             error_fix_diffs: HashMap::new(),
             binding_type_names: HashMap::new(),
             binding_types: HashMap::new(),
@@ -969,6 +987,7 @@ impl<'a> OwnershipChecker<'a> {
         self.enforce_rc_budget();
         self.check_concurrent_shared_struct();
         self.classify_par_capture_modes();
+        self.compute_elision();
 
         // Build representations: parameter modes first, then overlay RC/Arc
         // for any binding (parameter or local) flagged by Phase 1/2.
@@ -1026,6 +1045,8 @@ impl<'a> OwnershipChecker<'a> {
             slice_borrow_sources: self.slice_borrow_sources,
             queries: Vec::new(),
             suppressed_rc_fn_keys: self.suppressed_rc_fn_keys,
+            elided_bindings: self.elided_bindings,
+            elision_blocked: self.elision_blocked,
             error_fix_diffs: self.error_fix_diffs,
         }
     }

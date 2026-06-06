@@ -497,6 +497,19 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// RC-elided sibling of `track_rc_var` (ownership phase-A elision):
+    /// queues an unconditional null-guarded `free` instead of the
+    /// dec/zero-test/drop dance. No drop-fn synthesis — elision-eligible
+    /// types have no heap-owning fields, so there is nothing to walk.
+    pub(super) fn track_elided_shared_var(&mut self, name: &str, ptr: PointerValue<'ctx>) {
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeSharedElided {
+                name: name.to_string(),
+                ptr,
+            });
+        }
+    }
+
     /// Emit a `store null, slot` at the top of the current function's
     /// entry block (after any allocas, before any body code). Used by
     /// `track_rc_var` to ensure body-local shared-struct slots whose
@@ -1290,6 +1303,39 @@ impl<'ctx> super::Codegen<'ctx> {
         i64_t: inkwell::types::IntType<'ctx>,
     ) {
         match action {
+            CleanupAction::FreeSharedElided { name, ptr } => {
+                // Mirror RcDec's reload + null-guard, then free directly:
+                // the elision analysis proved rc can never exceed 1 and
+                // the type holds no heap fields, so the whole
+                // dec/zero-test/drop-fn dance collapses to `free`.
+                let current_ptr = if let Some(slot) = self.variables.get(name) {
+                    self.builder
+                        .build_load(ptr_ty, slot.ptr, &format!("{}_elide_cleanup", name))
+                        .unwrap()
+                        .into_pointer_value()
+                } else {
+                    *ptr
+                };
+                let null = ptr_ty.const_null();
+                let is_null = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, current_ptr, null, "elide_is_null")
+                    .unwrap();
+                let skip_bb = self.context.append_basic_block(fn_val, "elide_free_skip");
+                let do_bb = self.context.append_basic_block(fn_val, "elide_free_do");
+                let join_bb = self.context.append_basic_block(fn_val, "elide_free_join");
+                self.builder
+                    .build_conditional_branch(is_null, skip_bb, do_bb)
+                    .unwrap();
+                self.builder.position_at_end(do_bb);
+                self.builder
+                    .build_call(self.free_fn, &[current_ptr.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(join_bb).unwrap();
+                self.builder.position_at_end(skip_bb);
+                self.builder.build_unconditional_branch(join_bb).unwrap();
+                self.builder.position_at_end(join_bb);
+            }
             CleanupAction::RcDec {
                 name,
                 ptr,

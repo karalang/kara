@@ -1569,6 +1569,13 @@ pub(super) struct Codegen<'ctx> {
     /// Per-function RC-fallback binding names populated from `OwnershipCheckResult`.
     /// Function name → set of binding names that need heap-boxing + refcount.
     pub(crate) rc_fallback_fns: HashMap<String, HashSet<String>>,
+    /// RC elision phase A (`src/ownership/elision.rs`; design record in
+    /// phase-7-codegen.md): per-function sets of shared bindings whose
+    /// refcount provably never exceeds 1. The let-site queues a
+    /// `FreeSharedElided` cleanup (unconditional null-guarded free)
+    /// instead of `RcDec` for these. Keyed by fn key (bare name /
+    /// `Type.method`), matching `current_fn_name`.
+    pub(crate) elided_bindings: HashMap<String, HashSet<String>>,
     /// Per-function Arc-promoted binding names — the subset of `rc_fallback_fns`
     /// flagged by the ownership pass as crossing a `par {}` thread boundary.
     /// Inc/dec on these bindings emits atomic LLVM operations (`atomicrmw add` /
@@ -3717,6 +3724,7 @@ impl<'ctx> Codegen<'ctx> {
             used_data_globals: Vec::new(),
             branch_cancel_ptr: None,
             rc_fallback_fns: HashMap::new(),
+            elided_bindings: HashMap::new(),
             arc_fallback_fns: HashMap::new(),
             rc_fallback_heap_types: HashMap::new(),
             closure_capture_paths: HashMap::new(),
@@ -3832,6 +3840,11 @@ impl<'ctx> Codegen<'ctx> {
             self.arc_fallback_fns
                 .insert(fn_name.clone(), arc_set.clone());
         }
+        // RC elision phase A: per-fn elided-binding sets. Consulted by
+        // the let-stmt shared arm via `is_elided_binding`.
+        for (fn_name, names) in &ow.elided_bindings {
+            self.elided_bindings.insert(fn_name.clone(), names.clone());
+        }
         // Disjoint-capture slice 4: per-closure capture-path mode set
         // (slice 2 output). Drives the per-path env-struct layout in
         // `compile_closure` when the closure expression's `SpanKey` is
@@ -3943,6 +3956,18 @@ impl<'ctx> Codegen<'ctx> {
 
     fn is_rc_fallback_binding(&self, name: &str) -> bool {
         self.rc_fallback_fns
+            .get(&self.current_fn_name)
+            .is_some_and(|set| set.contains(name))
+    }
+
+    /// True iff `name` is an RC-elided shared binding in the current
+    /// function (ownership phase-A elision). The let-site routes these
+    /// to `track_elided_shared_var` (unconditional free) instead of
+    /// `track_rc_var`. Nested-fn compiles (closures, par branches)
+    /// never see elided names — the analysis blocks any candidate
+    /// mentioned inside those regions.
+    fn is_elided_binding(&self, name: &str) -> bool {
+        self.elided_bindings
             .get(&self.current_fn_name)
             .is_some_and(|set| set.contains(name))
     }
