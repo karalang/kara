@@ -80,6 +80,7 @@ pub(crate) struct CoroIntrinsics {
     coro_id: Declared,
     coro_size_i64: Declared,
     coro_begin: Declared,
+    coro_save: Declared,
     coro_suspend: Declared,
     coro_free: Declared,
     coro_end: Declared,
@@ -133,6 +134,16 @@ impl CoroIntrinsics {
         );
         let coro_size_i64 = declare_fn(c"llvm.coro.size.i64", i64_ty, &mut []);
         let coro_begin = declare_fn(c"llvm.coro.begin", ptr_ty, &mut [token_ty, ptr_ty]);
+        // `llvm.coro.save` marks the point after which the coroutine may be
+        // resumed — potentially on another thread. It MUST precede any code that
+        // publishes the handle to a resumer; here that is the `register_fd` which
+        // hands the parked record to the reactor. Its token feeds the matching
+        // `coro.suspend`, telling CoroSplit to commit the frame's resume state at
+        // the save point rather than at the suspend. Without it (a `token none`
+        // suspend), the reactor can resume+destroy the frame after `register_fd`
+        // but before the worker finishes committing the suspend — a cross-thread
+        // use-after-free of the coroutine frame. See `emit_coro_park_suspend`.
+        let coro_save = declare_fn(c"llvm.coro.save", token_ty, &mut [ptr_ty]);
         let coro_suspend = declare_fn(c"llvm.coro.suspend", i8_ty, &mut [token_ty, i1_ty]);
         let coro_free = declare_fn(c"llvm.coro.free", ptr_ty, &mut [token_ty, ptr_ty]);
         let coro_end = declare_fn(c"llvm.coro.end", i1_ty, &mut [ptr_ty, i1_ty, token_ty]);
@@ -156,6 +167,7 @@ impl CoroIntrinsics {
             coro_id,
             coro_size_i64,
             coro_begin,
+            coro_save,
             coro_suspend,
             coro_free,
             coro_end,
@@ -210,12 +222,34 @@ impl CoroIntrinsics {
         self.call(builder, self.coro_begin, &mut [id, alloc], c"hdl")
     }
 
+    /// `%save = call token @llvm.coro.save(ptr %hdl)`. Emit immediately before
+    /// the code that publishes the handle to a resumer (the I/O `register_fd`),
+    /// and feed the returned token to [`suspend_after_save`]. This is the LLVM
+    /// contract for "the coroutine may be resumed on another thread before the
+    /// `coro.suspend` is reached" — it commits the frame's resume state here
+    /// rather than at the suspend, closing the cross-thread resume/destroy race.
+    unsafe fn save(&self, builder: &Builder<'_>, hdl: LLVMValueRef) -> LLVMValueRef {
+        self.call(builder, self.coro_save, &mut [hdl], c"save")
+    }
+
     /// `%sp = call i8 @llvm.coro.suspend(token none, i1 final)`. The i8 result
     /// drives the resume switch (0 = resume, 1 = destroy, default = suspend).
+    /// Use for suspends that are NOT published cross-thread before they execute
+    /// — the final suspend (reached synchronously inside the resumer, which then
+    /// destroys on the same thread) and the self-contained demo coroutine.
     unsafe fn suspend(&self, builder: &Builder<'_>, is_final: bool) -> LLVMValueRef {
         let none = self.token_none();
         let final_flag = LLVMConstInt(self.i1_ty, is_final as u64, 0);
         self.call(builder, self.coro_suspend, &mut [none, final_flag], c"sp")
+    }
+
+    /// `%sp = call i8 @llvm.coro.suspend(token %save, i1 false)`. The token comes
+    /// from a preceding [`save`]; pairing them tells CoroSplit the suspend may be
+    /// resumed any time after the save point. Always non-final (a cross-thread
+    /// I/O park is never the coroutine's final suspend).
+    unsafe fn suspend_after_save(&self, builder: &Builder<'_>, save: LLVMValueRef) -> LLVMValueRef {
+        let final_flag = LLVMConstInt(self.i1_ty, 0, 0);
+        self.call(builder, self.coro_suspend, &mut [save, final_flag], c"sp")
     }
 
     /// Free the coro frame on the cleanup edge: `free(coro.free(%id, %hdl))`.
@@ -623,6 +657,12 @@ pub(super) unsafe fn build_demo_park_coroutine<'ctx>(
         .unwrap();
     builder.build_store(state_field, hdl_pv).unwrap();
 
+    // `coro.save` before the publish — the cross-thread-resume contract the
+    // production leaf relies on (see `emit_coro_park_suspend`). Its token feeds
+    // the suspend below so CoroSplit commits the resume state at the save point,
+    // before `register_fd` can hand this frame to a resumer.
+    let save_tok = intr.save(builder, hdl);
+
     let dir = i8t.const_int(0, false);
     let token = builder
         .build_call(register_fd, &[fd.into(), dir.into(), slot.into()], "token")
@@ -635,7 +675,7 @@ pub(super) unsafe fn build_demo_park_coroutine<'ctx>(
         .unwrap();
     builder.build_store(token_field, token).unwrap();
 
-    let sp = IntValue::new(intr.suspend(builder, false));
+    let sp = IntValue::new(intr.suspend_after_save(builder, save_tok));
     builder
         .build_switch(
             sp,
@@ -808,6 +848,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .expect("karac_runtime_scheduler_start_dispatcher declared in Codegen::new");
         self.builder.build_call(start_disp, &[], "").unwrap();
 
+        // Mark the cross-thread resume point BEFORE `register_fd` publishes this
+        // coroutine's handle to the reactor. `register_fd` inserts the parked
+        // record into the (sharded) event loop and wakes its poller; under load
+        // the fd is often immediately ready, so the dispatcher thread can claim
+        // and resume — and on completion DESTROY (free) — this frame before the
+        // worker thread running the ramp reaches the `coro.suspend` below. The
+        // `coro.save` token (fed to `suspend_after_save`) makes CoroSplit commit
+        // the frame's resume state here, at the save point, so a resume any time
+        // after `register_fd` operates on a fully-suspended frame. Without it the
+        // `token none` suspend committed that state at the suspend instruction,
+        // leaving a window where the dispatcher freed the frame while the worker
+        // was still writing the suspend index into it — the cross-thread frame
+        // use-after-free the `ws_idle_holder` reconnect storm hit on glibc.
+        let save_tok = unsafe { ctx.intr.save(&self.builder, ctx.hdl.as_value_ref()) };
+
         let register_fd = self
             .module
             .get_function("karac_runtime_event_loop_register_fd")
@@ -866,7 +921,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `ctx.cleanup_bb` directly, because here the fd is still registered and
         // the heap locals live across this park are still owned by the frame —
         // both must be torn down before the frame is freed (A2 slice 4).
-        let sp = unsafe { IntValue::new(ctx.intr.suspend(&self.builder, false)) };
+        let sp = unsafe { IntValue::new(ctx.intr.suspend_after_save(&self.builder, save_tok)) };
         let resume_bb = self
             .context
             .append_basic_block(fn_val, &format!("kara.coro.resume.{n}"));
@@ -1239,5 +1294,82 @@ mod tests {
         module
             .verify()
             .unwrap_or_else(|e| panic!("post-split module invalid: {}", e.to_string()));
+    }
+
+    /// Regression for the cross-thread coroutine-frame use-after-free (the
+    /// `ws_idle_holder` reconnect-storm crash). The park leaf publishes the
+    /// frame to the reactor via `register_fd`, after which another thread (the
+    /// dispatcher) may resume and DESTROY the frame. LLVM's contract is that the
+    /// suspend point must be marked with `llvm.coro.save` *before* that publish,
+    /// and the matching `coro.suspend` must consume the save token (not `token
+    /// none`) — otherwise CoroSplit commits the frame's resume state at the
+    /// suspend instruction, leaving a window where the resumer frees the frame
+    /// while the parking thread is still writing it. This asserts the frontend
+    /// emits that shape on the pre-split IR (the intrinsic is lowered away by
+    /// CoroSplit, so the guard must read the IR before the pipeline runs).
+    #[test]
+    fn park_coroutine_saves_before_publish_for_cross_thread_resume() {
+        let context = Context::create();
+        let module = context.create_module("coro_park_save");
+        let builder = context.create_builder();
+
+        unsafe {
+            build_demo_park_coroutine(&context, &module, &builder);
+        }
+
+        module
+            .verify()
+            .unwrap_or_else(|e| panic!("pre-split module invalid: {}", e.to_string()));
+
+        let ramp_ir = module
+            .get_function("demo_park_coro")
+            .expect("demo park coro fn")
+            .print_to_string()
+            .to_string();
+
+        // (1) A `coro.save` is emitted, and it dominates the publish: the
+        //     `@llvm.coro.save` call line precedes the `@__demo_register_fd`
+        //     call line in the ramp.
+        let save_idx = ramp_ir
+            .lines()
+            .position(|l| l.contains("@llvm.coro.save"))
+            .unwrap_or_else(|| {
+                panic!("park leaf must emit @llvm.coro.save; ramp IR:\n{}", ramp_ir)
+            });
+        let publish_idx = ramp_ir
+            .lines()
+            .position(|l| l.contains("@__demo_register_fd"))
+            .expect("register_fd call must be in the ramp");
+        assert!(
+            save_idx < publish_idx,
+            "coro.save must precede the register_fd publish (else the resumer can \
+             race the suspend); save@{save_idx} publish@{publish_idx}\nramp IR:\n{}",
+            ramp_ir
+        );
+
+        // (2) The non-final `coro.suspend` consumes the save token, not `token
+        //     none`. Capture the SSA name `coro.save` defines, then assert the
+        //     suspend that switches the resume edge passes it as its first arg.
+        let save_line = ramp_ir
+            .lines()
+            .find(|l| l.contains("@llvm.coro.save"))
+            .expect("coro.save line");
+        let save_ssa = save_line
+            .trim_start()
+            .split(" = ")
+            .next()
+            .map(str::trim)
+            .filter(|s| s.starts_with('%'))
+            .unwrap_or_else(|| panic!("coro.save must define an SSA token; line: {save_line}"));
+        let suspend_line = ramp_ir
+            .lines()
+            .find(|l| l.contains("@llvm.coro.suspend") && !l.contains("i1 true"))
+            .expect("non-final coro.suspend line");
+        assert!(
+            suspend_line.contains(&format!("token {save_ssa}")),
+            "non-final coro.suspend must consume the coro.save token ({save_ssa}), \
+             not `token none`; suspend line: {suspend_line}\nramp IR:\n{}",
+            ramp_ir
+        );
     }
 }
