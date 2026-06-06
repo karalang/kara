@@ -26,14 +26,18 @@ use inkwell::OptimizationLevel;
 ///
 /// See design.md § Runtime Distribution.
 pub fn link_executable(obj_path: &str, exe_path: &str) -> Result<(), String> {
-    if crate::target::active_target() == "wasm_wasi" {
+    if crate::target::active_target_is_wasm() {
         return link_wasm_executable(obj_path, exe_path);
     }
     link_executable_impl(obj_path, exe_path, &[])
 }
 
 /// Link a wasm32 object into a WASI command module (phase-10 WASM build
-/// path, `--target=wasm_wasi`).
+/// path, `--target=wasm_wasi` and `--target=wasm_browser` — browser
+/// modules are wasip1 modules whose WASI surface the generated JS glue
+/// polyfills; `host fn` imports stay undefined here by design, carrying
+/// explicit `wasm-import-module` attributes that wasm-ld turns into
+/// import entries instead of undefined-symbol errors).
 ///
 /// Inputs, in link order:
 ///   1. `crt1-command.o` — wasi-libc's `_start` (enters at the
@@ -466,25 +470,27 @@ pub(super) fn resolve_runtime_path(prefer_min: bool) -> Result<String, String> {
 
 /// The C-allocator symbol codegen declares for RC/heap allocation, by
 /// target. Native: libc `malloc` (size arg is i64 = size_t on every
-/// 64-bit native target). `wasm_wasi`: `__karac_malloc64`, the wasm
+/// 64-bit native target). wasm targets: `__karac_malloc64`, the wasm
 /// runtime's 64-bit-size shim over wasi-libc `malloc` — wasm32's
 /// `size_t` is i32 and wasm traps on signature-mismatched calls, so
 /// declaring libc `malloc` with the i64 signature karac IR uses would
 /// fault at the first allocation (`RuntimeError: unreachable,
 /// signature_mismatch:malloc`). See `runtime/src/wasm_alloc.rs`.
 pub(super) fn c_malloc_symbol() -> &'static str {
-    match crate::target::active_target() {
-        "wasm_wasi" => "__karac_malloc64",
-        _ => "malloc",
+    if crate::target::active_target_is_wasm() {
+        "__karac_malloc64"
+    } else {
+        "malloc"
     }
 }
 
 /// CStr form of [`c_malloc_symbol`] for the llvm-sys raw-FFI declare
 /// path (`coro.rs`).
 pub(super) fn c_malloc_symbol_cstr() -> &'static std::ffi::CStr {
-    match crate::target::active_target() {
-        "wasm_wasi" => c"__karac_malloc64",
-        _ => c"malloc",
+    if crate::target::active_target_is_wasm() {
+        c"__karac_malloc64"
+    } else {
+        c"malloc"
     }
 }
 
@@ -495,18 +501,20 @@ pub(super) fn c_malloc_symbol_cstr() -> &'static std::ffi::CStr {
 /// (the eba48194 lesson: an unset/wrong layout under-allocates coro
 /// frames).
 pub(super) fn create_target_machine() -> Result<TargetMachine, String> {
-    match crate::target::active_target() {
-        "wasm_wasi" => create_wasm_target_machine(),
-        _ => create_native_target_machine(),
+    if crate::target::active_target_is_wasm() {
+        create_wasm_target_machine()
+    } else {
+        create_native_target_machine()
     }
 }
 
-/// Target machine for `--target=wasm_wasi`: wasm32 with the WASI
-/// preview-1 OS tag — matches rustc's `wasm32-wasip1` llvm-target and
-/// the triple the runtime archive (`libkarac_runtime_wasm.a`) is built
-/// for. CPU baseline `generic` (MVP wasm — SIMD-128 lowering is the
-/// separate phase-10 entry). Static reloc: `wasm-ld` links a
-/// non-relocatable module; PIC is only for shared-library wasm.
+/// Target machine for the wasm targets (`wasm_wasi`, `wasm_browser` —
+/// both wasip1 modules in v1): wasm32 with the WASI preview-1 OS tag —
+/// matches rustc's `wasm32-wasip1` llvm-target and the triple the
+/// runtime archive (`libkarac_runtime_wasm.a`) is built for. CPU
+/// baseline `generic` (MVP wasm — SIMD-128 lowering is the separate
+/// phase-10 entry). Static reloc: `wasm-ld` links a non-relocatable
+/// module; PIC is only for shared-library wasm.
 fn create_wasm_target_machine() -> Result<TargetMachine, String> {
     Target::initialize_webassembly(&InitializationConfig::default());
 

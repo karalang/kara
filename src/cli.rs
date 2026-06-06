@@ -4210,13 +4210,14 @@ fn cmd_check_profiles(
 /// Classify a `--target` value and activate it when it names a v1
 /// compilation target (phase-10 WASM build path).
 ///
-/// - v1 names: `native` and `wasm_wasi` are buildable today — the name is
-///   installed as the process-wide active target (see
+/// - v1 names: `native`, `wasm_wasi`, and `wasm_browser` are buildable —
+///   the name is installed as the process-wide active target (see
 ///   `target::set_active_target`) so `#[target(...)]` absence semantics,
 ///   tombstone diagnostics, and the E0411 target gate all key on it.
-///   `wasm_browser` (needs the bindings/JS-glue follow-up) and `gpu`
-///   (kernels are dispatched from a host program, not standalone built)
-///   are rejected loudly rather than silently producing a native binary.
+///   `wasm_browser` additionally emits the `<stem>.js` ES-module glue
+///   next to the `.wasm` (see `wasm_glue`). `gpu` (kernels are
+///   dispatched from a host program, not standalone built) is rejected
+///   loudly rather than silently producing a native binary.
 /// - Anything else is a rustc-style triple — project mode's manifest
 ///   `[target.<triple>.*]` overlay selector — and leaves the active
 ///   target at `native`.
@@ -4225,14 +4226,6 @@ fn cmd_check_profiles(
 fn resolve_build_target(target: Option<&str>) -> &'static str {
     match target {
         Some(name) if crate::target::is_v1_target_name(name) => match name {
-            "wasm_browser" => {
-                eprintln!(
-                    "error: `--target=wasm_browser` is not buildable yet — the browser \
-                     bindings/JS-glue path is a phase-10 follow-up. `--target=wasm_wasi` \
-                     builds a headless WASM module today."
-                );
-                process::exit(1);
-            }
             "gpu" => {
                 eprintln!(
                     "error: `--target=gpu` is not a standalone build target — GPU kernels \
@@ -4285,7 +4278,7 @@ fn cmd_build(
     let _ = no_proxy;
     #[cfg(feature = "llvm")]
     {
-        let is_wasm = build_target == "wasm_wasi";
+        let is_wasm = build_target == "wasm_wasi" || build_target == "wasm_browser";
         let source = read_source(filename);
         let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
         pipeline.resolve();
@@ -4442,9 +4435,34 @@ fn cmd_build(
             }
             Ok(()) => {
                 let _ = std::fs::remove_file(&obj_path);
+                // Browser builds ship a companion ES-module glue file:
+                // host fn import plumbing (`kara_host` namespace) + the
+                // WASI preview-1 polyfill the wasip1 module needs in a
+                // browser/node host. See `wasm_glue` (design.md § Host
+                // Functions, browser-WASM lowering).
+                let glue_path = if build_target == "wasm_browser" {
+                    let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
+                    let glue = crate::wasm_glue::render_glue(&host_fns, &exe_path);
+                    let path = format!("{exe_name}.js");
+                    if let Err(e) = std::fs::write(&path, glue) {
+                        eprintln!("error: failed to write JS glue {path}: {e}");
+                        process::exit(1);
+                    }
+                    Some(path)
+                } else {
+                    None
+                };
                 match output {
-                    OutputMode::Text => println!("Built: {exe_path}"),
-                    OutputMode::Json => println!("{{\"status\":\"ok\",\"output\":\"{exe_path}\"}}"),
+                    OutputMode::Text => match &glue_path {
+                        Some(js) => println!("Built: {exe_path} + {js}"),
+                        None => println!("Built: {exe_path}"),
+                    },
+                    OutputMode::Json => match &glue_path {
+                        Some(js) => println!(
+                            "{{\"status\":\"ok\",\"output\":\"{exe_path}\",\"glue\":\"{js}\"}}"
+                        ),
+                        None => println!("{{\"status\":\"ok\",\"output\":\"{exe_path}\"}}"),
+                    },
                     OutputMode::Jsonl => unreachable!(),
                 }
             }
@@ -4742,11 +4760,11 @@ fn cmd_build_project(
     // native binary under a wasm flag. Triples pass through to the
     // manifest `[target.<triple>.*]` overlay merge below unchanged.
     let build_target = resolve_build_target(target);
-    if build_target == "wasm_wasi" {
+    if build_target == "wasm_wasi" || build_target == "wasm_browser" {
         eprintln!(
-            "error: `--target=wasm_wasi` is single-file-only today — project-mode WASM \
+            "error: `--target={build_target}` is single-file-only today — project-mode WASM \
              builds (dist/wasm/<pkg>.wasm) are a phase-10 follow-up. Build the entry \
-             file directly: karac build <file.kara> --target=wasm_wasi"
+             file directly: karac build <file.kara> --target={build_target}"
         );
         process::exit(1);
     }

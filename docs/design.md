@@ -12593,7 +12593,7 @@ A `host fn` declaration names a function **provided by the compilation host** �
 `host fn` is one layer higher. The declaration is target-neutral; the compiler lowers:
 
 - **Native:** to an `extern "C"` call of the same signature (identical code path to a plain `extern`).
-- **Browser-WASM:** to a WASM `import` entry, with compiler-generated JS glue (wasm-bindgen-compatible calling convention so existing JS tooling works).
+- **Browser-WASM:** to a WASM `import` entry under the **`kara_host`** import-module namespace, with compiler-generated JS glue (wasm-bindgen-compatible calling convention so existing JS tooling works). Shipped — see "Browser-WASM lowering (v1 shape)" below.
 - **Server-WASM (WASI / Component Model):** to a WIT-backed Component Model call when runtime support is stable; to a generated C-ABI + shim pair in the interim. The user-facing `host fn` surface is stable across that migration.
 
 A library author declares a browser API once as `host fn`; the same source file compiles against all three targets.
@@ -12647,10 +12647,19 @@ Opaque handles do **not** participate in Kāra's RC. A handle is a scalar; copyi
 | Target | Lowering |
 |---|---|
 | Native | `extern "C"` call (identical code path to a hand-written `extern "C"` with the same signature). |
-| Browser-WASM | WASM `import` entry + generated JS glue (wasm-bindgen-compatible calling convention). |
+| Browser-WASM | WASM `import` entry under the `kara_host` namespace + generated JS glue (wasm-bindgen-compatible calling convention). Shipped — v1 shape below. |
 | Server-WASM (WASI / Component Model) | WIT-backed Component Model call when runtime stable; generated C-ABI shim in the interim. |
 
 The lowering layer lives in the compiler (Phase 10). The user-facing `host fn` surface is stable across all three paths; migration from C-ABI-shim to Component Model for server-WASM is non-breaking at the source level.
+
+### Browser-WASM lowering (v1 shape)
+
+`karac build <file>.kara --target=wasm_browser` emits `<stem>.wasm` plus `<stem>.js`, a zero-dependency ES-module glue file. The committed v1 decisions:
+
+- **Browser modules are wasm32-wasip1 modules.** The browser target reuses the `wasm_wasi` module flavor — same runtime archive, allocator unification, and entry-shim chain — and the generated glue supplies a minimal console-backed WASI preview-1 polyfill (`fd_write` → `console.log`/`console.error`, `proc_exit`, clock, randomness via `crypto.getRandomValues`; un-polyfilled syscalls throw loudly by name). A WASI-free `wasm32-unknown-unknown` flavor is a possible post-v1 refinement; the glue API is the stability boundary, not the module flavor.
+- **`kara_host` is the import-module namespace** for every `host fn` — a stable contract. The glue maps the user's implementation object onto it and rejects instantiation loudly (naming the functions) when an implementation is missing; hand-rolled hosts that skip the glue instantiate with `{ kara_host: {...}, wasi_snapshot_preview1: {...} }`. Plain `extern "C"` declarations do **not** get import entries — an unresolved one stays a hard link error.
+- **JS boundary types:** `i64`/`u64`/`isize`/`usize` cross as `BigInt`; every other legal scalar (including wasm32 pointers) is a JS number. Opaque handles cross **at their declared scalar width** — an i32-field handle is a number, an i64-field handle a BigInt. Strings cross as `(ptr, len)` scalar pairs; the glue exports `readString(memory, ptr, len)`, and every host implementation receives one trailing context argument `{ memory, readString }` so string params decode without plumbing the memory export by hand.
+- **Loader compatibility:** the glue's default loader is `new URL("<stem>.wasm", import.meta.url)` — the asset-reference pattern vite / webpack / esbuild / rollup rewrite without custom configuration — with a `node:fs` branch for `file:` URLs (the same glue runs under node ≥ 18) and a compile-from-bytes fallback when a server mis-types the wasm MIME. `instantiate(hostImpls, opts)` accepts `opts.module` / `opts.bytes` to bypass the loader; `run(hostImpls)` drives `_start` and swallows a clean exit.
 
 ---
 

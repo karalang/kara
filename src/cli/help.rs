@@ -238,12 +238,15 @@ OPTIONS:
                             Implies --no-proxy (the redundant note is
                             suppressed). See the OFFLINE section below.
     --target=<name|triple>  Compilation target. A v1 target NAME
-                            (native, wasm_wasi; wasm_browser and gpu
-                            are recognized but not yet buildable)
+                            (native, wasm_wasi, wasm_browser; gpu is
+                            recognized but not standalone-buildable)
                             selects the cross-compile target:
                             `--target=wasm_wasi` emits `<stem>.wasm`,
-                            a WASI preview-1 command module
-                            (single-file mode only today). Any other
+                            a WASI preview-1 command module;
+                            `--target=wasm_browser` emits `<stem>.wasm`
+                            plus `<stem>.js` ES-module glue (host fn
+                            imports + WASI polyfill) for browser hosts
+                            (both single-file mode only today). Any other
                             value is a target TRIPLE selecting which
                             `[target.<triple>.*]` overlay merges onto
                             the manifest (dependencies, dev-
@@ -269,9 +272,14 @@ TARGETS:
     the per-target provided-resource effect gate (E0411), codegen,
     and the link step all key on it. `--target=wasm_wasi` builds a
     headless WASM module (`<stem>.wasm`, runnable under wasmtime /
-    node:wasi); it requires the wasm runtime archive
-    (`libkarac_runtime_wasm.a`) and a wasm linker (wasm-ld or
-    rust-lld; override with KARAC_WASM_LD).
+    node:wasi). `--target=wasm_browser` builds the same wasip1
+    module flavor plus `<stem>.js` ES-module glue: every `host fn`
+    becomes a WASM import under the `kara_host` namespace the glue
+    wires to your implementations, and the glue's inline WASI
+    polyfill replaces the WASI host (works in browsers and node;
+    bundlers need no custom loader). Both require the wasm runtime
+    archive (`libkarac_runtime_wasm.a`) and a wasm linker (wasm-ld
+    or rust-lld; override with KARAC_WASM_LD).
 
     Any other `--target=<triple>` value selects the active target
     triple for overlay merge. Any `[target.\"<triple>\".dependencies]`,

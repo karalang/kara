@@ -84,6 +84,7 @@ pub mod typechecker;
 pub mod unsafe_lint;
 pub mod use_classifier;
 pub mod walker;
+pub mod wasm_glue;
 
 use crate::ast::Program;
 use crate::concurrency::{ConcurrencyAnalysis, ConcurrencyChecker};

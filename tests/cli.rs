@@ -10523,25 +10523,17 @@ fn wasm_build_skip_reason(stderr: &str) -> Option<&'static str> {
     None
 }
 
-/// `--target=wasm_browser` and `--target=gpu` are recognized v1 names
-/// that are not buildable yet — both reject loudly instead of silently
-/// emitting a native binary under a cross-target flag.
+/// `--target=gpu` is a recognized v1 name that is not standalone-
+/// buildable (kernels are dispatched from a host program) — it rejects
+/// loudly instead of silently emitting a native binary under a
+/// cross-target flag. (`wasm_browser` became buildable with the
+/// phase-10 "host fn lowering — browser-WASM" slice; see the
+/// `wasm_browser_*` tests below.)
 #[test]
-fn target_flag_unbuildable_v1_names_rejected() {
+fn target_flag_gpu_rejected() {
     let tmp = wasm_test_dir("reject");
     let path = tmp.join("p.kara");
     std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
-
-    let out = karac_bin()
-        .args(["build", path.to_str().unwrap(), "--target=wasm_browser"])
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success());
-    assert!(
-        stderr.contains("wasm_browser") && stderr.contains("not buildable yet"),
-        "expected the wasm_browser rejection, got: {stderr}",
-    );
 
     let out = karac_bin()
         .args(["build", path.to_str().unwrap(), "--target=gpu"])
@@ -10716,6 +10708,258 @@ fn main() {
         node_stdout, "42\n610\nwasm\n",
         "wasm output must match native semantics (and pick the \
          #[target(wasm_wasi)] item); stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// ── Phase-10: browser-WASM build path (`--target=wasm_browser`) ─────
+//
+// Browser builds emit the same wasip1 module flavor as `wasm_wasi`
+// plus a `<stem>.js` ES-module glue file (host fn import plumbing
+// under the `kara_host` namespace + an inline WASI preview-1
+// polyfill). Same infrastructure skips as the wasi tests above.
+
+/// Project-mode `--target=wasm_browser` rejects with the single-file
+/// pointer, mirroring the `wasm_wasi` rejection (the dist/wasm layout
+/// belongs to the artifact-emission entries).
+#[test]
+fn target_flag_wasm_browser_project_mode_rejected() {
+    let tmp = wasm_test_dir("bproj");
+    let out = karac_bin()
+        .args(["build", "--target=wasm_browser"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("single-file-only")
+            && stderr.contains("karac build <file.kara> --target=wasm_browser"),
+        "expected the project-mode wasm_browser rejection, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A `wasm_browser` build emits BOTH artifacts — `<stem>.wasm` and the
+/// `<stem>.js` glue — and the glue is generated even for a program
+/// declaring no host fns (empty `DECLARED_IMPORTS`; the WASI polyfill
+/// is what makes a plain wasip1 module run in a browser host at all).
+#[test]
+fn wasm_browser_build_emits_wasm_and_js() {
+    let tmp = wasm_test_dir("bemit");
+    let path = tmp.join("plain.kara");
+    std::fs::write(&path, "fn main() {\n    println(\"hello\");\n}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_browser"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_browser_build_emits_wasm_and_js — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm_browser build failed: {stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("Built: plain.wasm + plain.js"),
+        "Built line must name both artifacts, got: {stdout}",
+    );
+    assert!(tmp.join("plain.wasm").exists(), "missing .wasm artifact");
+    let glue = std::fs::read_to_string(tmp.join("plain.js")).expect("missing .js glue");
+    assert!(
+        glue.contains("const DECLARED_IMPORTS = [];"),
+        "no-host-fn program must bake an empty import list",
+    );
+    assert!(
+        glue.contains("wasi_snapshot_preview1"),
+        "glue must carry the WASI polyfill",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// E0411 differential: `FileSystem` is in `wasm_wasi`'s provided set
+/// but NOT in `wasm_browser`'s — a program reaching it from `main`
+/// aborts the browser build with the targeted diagnostic and produces
+/// no artifacts (neither `.wasm` nor `.js`).
+#[test]
+fn wasm_browser_build_aborts_on_target_gate_violation() {
+    let tmp = wasm_test_dir("bgate");
+    let path = tmp.join("gated.kara");
+    std::fs::write(
+        &path,
+        "pub fn save() with writes(FileSystem) {\n    let _x = 1;\n}\n\n\
+         fn main() {\n    save();\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_browser"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_browser_build_aborts_on_target_gate_violation — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(!out.status.success(), "gate violation must abort: {stderr}");
+    assert!(
+        stderr.contains("E0411")
+            && stderr.contains("`wasm_browser` does not provide resource 'FileSystem'"),
+        "expected the E0411 target-gate abort, got: {stderr}",
+    );
+    assert!(
+        !tmp.join("gated.wasm").exists() && !tmp.join("gated.js").exists(),
+        "no artifact may be produced on a gate violation",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Full browser-path E2E: `host fn` declarations become WASM import
+/// entries under `kara_host`, and the emitted JS glue runs the module
+/// under node ≥ 18 (same WebAssembly + ES-module surface as a
+/// browser; the glue's default loader takes its `file:` branch).
+/// Asserts, in one harness run:
+///   - i64 params/returns cross as BigInt, values correct BOTH
+///     directions across three chained calls (21 → 42 → 84);
+///   - every host impl receives the trailing `ctx` argument
+///     (`{ memory, readString }`);
+///   - `WebAssembly.Module.imports` lists `kara_host.report` — the
+///     import-entry assertion lives here (the karac subprocess owns
+///     its process-global active target; an in-process IR test would
+///     race parallel codegen tests);
+///   - `readString` decodes a (ptr, len) pair (synthetic memory — the
+///     language has no pointer-producer surface yet, so a Kāra-side
+///     string passing E2E is blocked on Phase-8 `as_ptr`; see the
+///     phase-10 tracker);
+///   - missing host impls reject loudly BEFORE any wasm runs, naming
+///     the missing fn;
+///   - `println` output routes through the polyfill's fd_write to the
+///     console.
+#[test]
+fn wasm_browser_build_and_run_e2e() {
+    let tmp = wasm_test_dir("be2e");
+    let path = tmp.join("hosted.kara");
+    std::fs::write(
+        &path,
+        r#"
+effect resource Reporter;
+
+host fn report(x: i64) -> i64 with writes(Reporter);
+host fn log_str(ptr: *const u8, len: i64) with writes(Reporter);
+
+fn main() {
+    let doubled = report(21);
+    let tripled = report(doubled);
+    report(tripled);
+    println("done");
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_browser"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_browser_build_and_run_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm_browser build failed: {stderr}");
+    assert!(tmp.join("hosted.wasm").exists(), "missing .wasm artifact");
+    assert!(tmp.join("hosted.js").exists(), "missing .js glue");
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run, readString } from "./hosted.js";
+import { readFile } from "node:fs/promises";
+
+// Missing-impl loudness: instantiation must reject BEFORE any wasm
+// runs, naming the absent host fn.
+let missingCaught = "";
+try {
+  await run({ report: (x) => x });
+} catch (e) {
+  missingCaught = e.message;
+}
+if (!missingCaught.includes("log_str")) {
+  throw new Error("missing-impl error must name log_str, got: " + missingCaught);
+}
+
+const calls = [];
+await run({
+  report(x, ctx) {
+    if (typeof x !== "bigint") throw new Error("i64 must arrive as BigInt");
+    if (!ctx || typeof ctx.readString !== "function" || !ctx.memory) {
+      throw new Error("trailing ctx argument missing");
+    }
+    calls.push(x);
+    return x * 2n;
+  },
+  log_str(ptr, len, ctx) {
+    console.log("log_str:", ctx.readString(ptr, len));
+  },
+});
+if (calls.length !== 3 || calls[0] !== 21n || calls[1] !== 42n || calls[2] !== 84n) {
+  throw new Error("bad call sequence: " + calls.map(String).join(","));
+}
+
+// Import-entry assertion: kara_host.report must be a genuine WASM
+// import. (log_str is declared but never called, so wasm-ld may GC it
+// from the import section — the glue contract still requires its impl.)
+const mod = await WebAssembly.compile(await readFile("./hosted.wasm"));
+const karaImports = WebAssembly.Module.imports(mod).filter(
+  (i) => i.module === "kara_host",
+);
+if (!karaImports.some((i) => i.name === "report" && i.kind === "function")) {
+  throw new Error(
+    "kara_host.report import entry missing: " + JSON.stringify(karaImports),
+  );
+}
+
+// readString against synthetic memory (no Kāra-side pointer producer
+// yet — Phase-8 as_ptr; see the phase-10 tracker entry).
+const synth = { buffer: new TextEncoder().encode("xxhello").buffer };
+if (readString(synth, 2, 5) !== "hello") throw new Error("readString broken");
+
+console.log("E2E_OK");
+"#,
+    )
+    .unwrap();
+
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_browser_build_and_run_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "glue harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        node_stdout.contains("done\n"),
+        "println must route through the polyfill's fd_write: {node_stdout}",
+    );
+    assert!(
+        node_stdout.contains("E2E_OK"),
+        "harness assertions failed: stdout={node_stdout} stderr={node_stderr}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }

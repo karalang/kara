@@ -69,6 +69,16 @@ pub fn set_active_target(name: &str) -> Result<(), String> {
     }
 }
 
+/// Is the active target one of the two WASM module targets? Both
+/// produce wasm32-wasip1 modules in v1 (`wasm_browser` is a wasip1
+/// module whose WASI surface is polyfilled by the generated JS glue —
+/// design.md § Host Functions), so the codegen driver's wasm decisions
+/// (target machine, link path, allocator symbol, entry shim) key on
+/// this predicate rather than on either name.
+pub fn active_target_is_wasm() -> bool {
+    matches!(active_target(), "wasm_wasi" | "wasm_browser")
+}
+
 /// Is `name` one of the closed v1 target names? The `--target` flag's
 /// value space is shared with rustc-style triples (manifest
 /// `[target.<triple>.*]` overlay selection); this predicate is how the

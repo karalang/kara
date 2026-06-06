@@ -3579,6 +3579,30 @@ impl<'ctx> super::Codegen<'ctx> {
         // attributes win on conflict via order (block first, item last).
         self.apply_linker_attrs(fn_val, block_attrs);
         self.apply_linker_attrs(fn_val, &ext.attributes);
+
+        // `host fn` on the browser target lowers to a genuine WASM
+        // *import* entry under the stable `kara_host` module namespace
+        // (design.md § Host Functions). The explicit import attributes
+        // are also what lets wasm-ld accept the symbol staying
+        // undefined — the JS host provides it at instantiation. Plain
+        // `extern "C"` declarations deliberately get no attributes, so
+        // an unresolved one is still a loud undefined-symbol link
+        // error; `host fn` on wasm_wasi likewise stays a plain extern
+        // until the server-WASM lowering (C-ABI shim / Component
+        // Model) lands.
+        if ext.abi == "host" && crate::target::active_target() == "wasm_browser" {
+            use inkwell::attributes::AttributeLoc;
+            fn_val.add_attribute(
+                AttributeLoc::Function,
+                self.context
+                    .create_string_attribute("wasm-import-module", "kara_host"),
+            );
+            fn_val.add_attribute(
+                AttributeLoc::Function,
+                self.context
+                    .create_string_attribute("wasm-import-name", &ext.name),
+            );
+        }
     }
 }
 

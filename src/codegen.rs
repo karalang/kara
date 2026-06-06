@@ -4549,13 +4549,14 @@ impl<'ctx> Codegen<'ctx> {
             .map_err(|e| format!("Module verification failed: {}", e))
     }
 
-    /// `--target=wasm_wasi` entry-point shim: `i32 @__main_void()` that
-    /// calls `i32 @main()`. No-op on every other target, and when no
-    /// `main` exists in the module (library-shaped programs / REPL cells
+    /// WASM entry-point shim (`--target=wasm_wasi` / `wasm_browser` —
+    /// both wasip1 command modules): `i32 @__main_void()` that calls
+    /// `i32 @main()`. No-op on every other target, and when no `main`
+    /// exists in the module (library-shaped programs / REPL cells
     /// — `main_symbol_override` renames the entry, and a wasm REPL JIT
     /// doesn't exist, so the literal-`main` lookup is the right key).
     fn emit_wasm_entry_shim(&mut self) -> Result<(), String> {
-        if crate::target::active_target() != "wasm_wasi" {
+        if !crate::target::active_target_is_wasm() {
             return Ok(());
         }
         let Some(main_fn) = self.module.get_function("main") else {
