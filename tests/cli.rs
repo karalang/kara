@@ -10712,6 +10712,198 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Server-WASM `host fn` lowering E2E (phase-10): on `wasm_wasi`,
+/// `host fn` declarations lower to the same `kara_host` import entries
+/// as the browser target — the interim "C-ABI call + thin shim" shape,
+/// where the embedder's hand-rolled import object IS the shim. No JS
+/// glue is emitted; the WASI host instantiates with
+/// `{ ...wasi.getImportObject(), kara_host: {...} }` (the hand-rolled
+/// pattern design.md § Host Functions documents). Asserts:
+///   - `WebAssembly.Module.imports` lists `kara_host.report` and
+///     `kara_host.log_str` (the import-entry assertion lives in this
+///     subprocess test — an in-process `set_active_target` would race
+///     parallel codegen tests);
+///   - i64 crosses as BigInt and the host's answer flows back into
+///     guest arithmetic (report(21) → 42 printed by the guest);
+///   - a real guest string crosses as `(ptr, len)`: ptr arrives as a
+///     JS number (wasm32 pointers are i32-width scalars), i64 len as
+///     BigInt, and the host decodes it byte-exactly from instance
+///     memory — non-ASCII UTF-8 (`ā`) included;
+///   - guest `println` still routes through genuine WASI fd_write
+///     alongside the host-fn traffic.
+#[test]
+fn wasm_wasi_host_fn_e2e() {
+    let tmp = wasm_test_dir("we2e-host");
+    let path = tmp.join("hosted_wasi.kara");
+    std::fs::write(
+        &path,
+        r#"
+effect resource Reporter;
+
+host fn report(x: i64) -> i64 with writes(Reporter);
+host fn log_str(ptr: *const u8, len: i64) with writes(Reporter);
+
+fn main() {
+    let doubled = report(21);
+    println(doubled);
+    let msg = c"server-side k\u{101}ra guest";
+    log_str(msg.as_ptr(), msg.len());
+    println("done");
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_wasi_host_fn_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm_wasi build failed: {stderr}");
+    let wasm_path = tmp.join("hosted_wasi.wasm");
+    assert!(wasm_path.exists(), "missing .wasm artifact");
+    assert!(
+        !tmp.join("hosted_wasi.js").exists(),
+        "wasm_wasi must not emit JS glue — the embedder hand-rolls imports",
+    );
+
+    let runner = tmp.join("run_host.mjs");
+    std::fs::write(
+        &runner,
+        r#"import { readFile } from "node:fs/promises";
+import { WASI } from "node:wasi";
+import { argv, exit } from "node:process";
+
+const wasm = await WebAssembly.compile(await readFile(argv[2]));
+
+// Import-entry assertion: both host fns must be genuine kara_host
+// imports (both are called from the guest, so both must survive
+// wasm-ld import-section GC).
+const karaImports = WebAssembly.Module.imports(wasm).filter(
+  (i) => i.module === "kara_host",
+);
+if (!karaImports.some((i) => i.name === "report" && i.kind === "function")) {
+  throw new Error(
+    "kara_host.report import entry missing: " + JSON.stringify(karaImports),
+  );
+}
+if (!karaImports.some((i) => i.name === "log_str" && i.kind === "function")) {
+  throw new Error(
+    "kara_host.log_str import entry missing: " + JSON.stringify(karaImports),
+  );
+}
+
+const wasi = new WASI({ version: "preview1", args: [], env: {} });
+let instance;
+const kara_host = {
+  report(x) {
+    if (typeof x !== "bigint") throw new Error("i64 must arrive as BigInt, got " + typeof x);
+    return x * 2n;
+  },
+  log_str(ptr, len) {
+    // wasm32 pointers are i32-width scalars → JS number; i64 len → BigInt.
+    if (typeof ptr !== "number") throw new Error("ptr must arrive as number, got " + typeof ptr);
+    if (typeof len !== "bigint") throw new Error("i64 len must arrive as BigInt, got " + typeof len);
+    const bytes = new Uint8Array(instance.exports.memory.buffer, ptr, Number(len));
+    console.log("host saw: " + new TextDecoder().decode(bytes));
+  },
+};
+instance = await WebAssembly.instantiate(wasm, {
+  ...wasi.getImportObject(),
+  kara_host,
+});
+exit(wasi.start(instance));
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&runner)
+        .arg(&wasm_path)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_wasi_host_fn_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "wasm module failed under node:wasi + kara_host: stdout={node_stdout} stderr={node_stderr}",
+    );
+    // `contains`, not exact-order equality: guest lines arrive via WASI
+    // fd_write, the host line via console.log — both synchronous on a
+    // pipe, but interleaving is not a contract worth pinning.
+    assert!(
+        node_stdout.contains("42\n"),
+        "host i64 answer must flow back into guest arithmetic: {node_stdout}",
+    );
+    assert!(
+        node_stdout.contains("host saw: server-side kāra guest"),
+        "(ptr, len) string must decode byte-exactly on the host: {node_stdout}",
+    );
+    assert!(
+        node_stdout.contains("done\n"),
+        "guest println must still route through WASI fd_write: {node_stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The differential the host-fn lowering must preserve: a plain
+/// `extern "C"` declaration gets NO import attributes, so an
+/// unresolved one is still a loud undefined-symbol link error on
+/// `wasm_wasi` — only `host fn` opts into staying undefined as a
+/// `kara_host` import. (Guards against the lowering condition ever
+/// widening from the host ABI to all externs.)
+#[test]
+fn wasm_wasi_extern_c_stays_loud_undefined() {
+    let tmp = wasm_test_dir("we2e-extc");
+    let path = tmp.join("loud.kara");
+    std::fs::write(
+        &path,
+        r#"
+unsafe extern "C" {
+    fn karac_test_totally_absent_symbol(x: i64) -> i64;
+}
+
+fn main() {
+    println(karac_test_totally_absent_symbol(1));
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_wasi_extern_c_stays_loud_undefined — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        !out.status.success(),
+        "an unresolved extern \"C\" must fail the wasm link",
+    );
+    assert!(
+        stderr.contains("karac_test_totally_absent_symbol"),
+        "link error must name the undefined symbol: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 // ── Phase-10: browser-WASM build path (`--target=wasm_browser`) ─────
 //
 // Browser builds emit the same wasip1 module flavor as `wasm_wasi`

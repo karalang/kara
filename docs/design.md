@@ -12594,7 +12594,7 @@ A `host fn` declaration names a function **provided by the compilation host** �
 
 - **Native:** to an `extern "C"` call of the same signature (identical code path to a plain `extern`).
 - **Browser-WASM:** to a WASM `import` entry under the **`kara_host`** import-module namespace, with compiler-generated JS glue (wasm-bindgen-compatible calling convention so existing JS tooling works). Shipped — see "Browser-WASM lowering (v1 shape)" below.
-- **Server-WASM (WASI / Component Model):** to a WIT-backed Component Model call when runtime support is stable; to a generated C-ABI + shim pair in the interim. The user-facing `host fn` surface is stable across that migration.
+- **Server-WASM (WASI / Component Model):** to the same WASM `import` entry under `kara_host` as the browser target — the interim C-ABI shape, where the embedder's import object is the thin shim. No glue file is generated; the WASI embedder provides the implementations at instantiation. Shipped — see "Server-WASM lowering (v1 shape)" below. A WIT-backed Component Model lowering replaces this when runtime support is stable; the user-facing `host fn` surface is stable across that migration.
 
 A library author declares a browser API once as `host fn`; the same source file compiles against all three targets.
 
@@ -12648,9 +12648,9 @@ Opaque handles do **not** participate in Kāra's RC. A handle is a scalar; copyi
 |---|---|
 | Native | `extern "C"` call (identical code path to a hand-written `extern "C"` with the same signature). |
 | Browser-WASM | WASM `import` entry under the `kara_host` namespace + generated JS glue (wasm-bindgen-compatible calling convention). Shipped — v1 shape below. |
-| Server-WASM (WASI / Component Model) | WIT-backed Component Model call when runtime stable; generated C-ABI shim in the interim. |
+| Server-WASM (WASI / Component Model) | WASM `import` entry under the `kara_host` namespace, implementations supplied by the embedder at instantiation (the interim C-ABI shape). Shipped — v1 shape below. WIT-backed Component Model call replaces it when runtime support is stable. |
 
-The lowering layer lives in the compiler (Phase 10). The user-facing `host fn` surface is stable across all three paths; migration from C-ABI-shim to Component Model for server-WASM is non-breaking at the source level.
+The lowering layer lives in the compiler (Phase 10). The user-facing `host fn` surface is stable across all three paths; migration from the interim import-entry shape to Component Model for server-WASM is non-breaking at the source level.
 
 ### Browser-WASM lowering (v1 shape)
 
@@ -12660,6 +12660,15 @@ The lowering layer lives in the compiler (Phase 10). The user-facing `host fn` s
 - **`kara_host` is the import-module namespace** for every `host fn` — a stable contract. The glue maps the user's implementation object onto it and rejects instantiation loudly (naming the functions) when an implementation is missing; hand-rolled hosts that skip the glue instantiate with `{ kara_host: {...}, wasi_snapshot_preview1: {...} }`. Plain `extern "C"` declarations do **not** get import entries — an unresolved one stays a hard link error.
 - **JS boundary types:** `i64`/`u64`/`isize`/`usize` cross as `BigInt`; every other legal scalar (including wasm32 pointers) is a JS number. Opaque handles cross **at their declared scalar width** — an i32-field handle is a number, an i64-field handle a BigInt. Strings cross as `(ptr, len)` scalar pairs; the glue exports `readString(memory, ptr, len)`, and every host implementation receives one trailing context argument `{ memory, readString }` so string params decode without plumbing the memory export by hand.
 - **Loader compatibility:** the glue's default loader is `new URL("<stem>.wasm", import.meta.url)` — the asset-reference pattern vite / webpack / esbuild / rollup rewrite without custom configuration — with a `node:fs` branch for `file:` URLs (the same glue runs under node ≥ 18) and a compile-from-bytes fallback when a server mis-types the wasm MIME. `instantiate(hostImpls, opts)` accepts `opts.module` / `opts.bytes` to bypass the loader; `run(hostImpls)` drives `_start` and swallows a clean exit.
+
+### Server-WASM lowering (v1 shape)
+
+`karac build <file>.kara --target=wasm_wasi` lowers `host fn` declarations to the **same `kara_host` import entries** as the browser target — one contract, both WASM targets. This is the interim "C-ABI + shim" lowering the migration plan named: a core-wasm import entry *is* a C-ABI call resolved by the host, and the embedder-side implementation is the thin shim. The committed v1 decisions:
+
+- **No glue file.** Server-WASM hosts are heterogeneous (wasmtime, node, jco, edge runtimes) and each has a first-class import-object/linker surface already; generated glue would pick a winner. The embedder instantiates with both namespaces — `WebAssembly.instantiate(mod, { ...wasi.getImportObject(), kara_host: {...} })` under node, `linker.func_wrap("kara_host", "<name>", ...)` under wasmtime.
+- **Boundary types are core-wasm types.** The contract is the module's import signatures: i64/u64/isize/usize as wasm `i64`, everything else (including wasm32 pointers) as `i32`/`f32`/`f64` scalars; strings cross as `(ptr, len)` pairs read from the exported linear memory. How those surface in the host language is the host's convention (JS hosts: `i64` ↔ `BigInt`, pointers as numbers — same as the browser glue documents), not part of the Kāra contract.
+- **`extern "C"` differential preserved:** plain `extern "C"` declarations get no import entries on either WASM target — an unresolved one stays a hard undefined-symbol link error. Only `host fn` opts into host-provided resolution.
+- **Component Model migration path:** when WIT/Component-Model runtime support is production-ready, this lowering swaps to WIT-backed calls at the single compiler site that attaches the import attributes. Source-level `host fn` declarations and their effect contracts are unchanged by that swap.
 
 ---
 

@@ -1087,7 +1087,7 @@ host fn fetch_begin(url_ptr: *const u8, url_len: i64) -> RequestHandle
 
 (`ElementHandle` / `RequestHandle` are opaque-handle newtypes; strings cross as `(ptr, len)` pairs — `ref String` and owned non-`Copy` returns are rejected by the restriction above.)
 
-Target-neutral at the source level; the compiler lowers to `extern "C"` on native, WASM imports on browser-WASM, and WIT-backed Component Model (or C-ABI shim) on server-WASM.
+Target-neutral at the source level; the compiler lowers to `extern "C"` on native and to `kara_host` WASM import entries on both WASM targets (browser hosts implement them via the generated JS glue, server-WASM embedders via their import object / linker; a WIT-backed Component Model lowering replaces the server-WASM shape when runtime support is stable — design.md § Host Functions).
 
 ---
 

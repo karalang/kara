@@ -3661,17 +3661,25 @@ impl<'ctx> super::Codegen<'ctx> {
         self.apply_linker_attrs(fn_val, block_attrs);
         self.apply_linker_attrs(fn_val, &ext.attributes);
 
-        // `host fn` on the browser target lowers to a genuine WASM
+        // `host fn` on EITHER wasm target lowers to a genuine WASM
         // *import* entry under the stable `kara_host` module namespace
         // (design.md § Host Functions). The explicit import attributes
         // are also what lets wasm-ld accept the symbol staying
-        // undefined — the JS host provides it at instantiation. Plain
+        // undefined — the host provides it at instantiation: the
+        // generated JS glue on `wasm_browser`, the embedder's
+        // hand-rolled `{ kara_host: {...} }` import object on
+        // `wasm_wasi` (wasmtime `Linker::func_wrap("kara_host", ...)`,
+        // node `WebAssembly.instantiate(mod, { ...wasi, kara_host })`).
+        // This IS the tracker's interim "C-ABI call + thin shim"
+        // server-WASM lowering: a core-wasm import entry is exactly a
+        // C-ABI call resolved by the host, and the embedder-side impl
+        // is the thin shim. The Component Model migration (WIT-backed
+        // calls, post-v1) swaps the lowering at this one site without
+        // touching the source-level `host fn` surface. Plain
         // `extern "C"` declarations deliberately get no attributes, so
         // an unresolved one is still a loud undefined-symbol link
-        // error; `host fn` on wasm_wasi likewise stays a plain extern
-        // until the server-WASM lowering (C-ABI shim / Component
-        // Model) lands.
-        if ext.abi == "host" && crate::target::active_target() == "wasm_browser" {
+        // error on both wasm targets.
+        if ext.abi == "host" && crate::target::active_target_is_wasm() {
             use inkwell::attributes::AttributeLoc;
             fn_val.add_attribute(
                 AttributeLoc::Function,
