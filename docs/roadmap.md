@@ -890,7 +890,7 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
 
 ## Phase 11: Standard Library — Long-Tail
 
-**Goal:** Domain-specific stdlib that programs need beyond the floor — numerical/data-science stack, security types, embedded primitives, plus codegen IR optimization. **End of this phase = v1 release.** The split from [Phase 8](#phase-8-standard-library--floor) lets v1 ship semantically locked (after Phase 9) and target-complete (after Phase 10) before the long-tail lands. Co-locating the long-tail with target work pays off concretely: the numerical stack composes with the GPU call-site backend, embedded primitives co-design with the embedded target, and WASM portability is already proven for new modules. **v64 reshape (2026-05-09):** the backend-platform stdlib bundle (`std.http`, TLS, WebSocket, etc.) was lifted into Phase 8 floor — see [Phase 8 § Backend Platform](#backend-platform-v64-lifted) — leaving Phase 11 narrowly scoped to the numerical / data-science / security / embedded long-tail.
+**Goal:** Domain-specific stdlib that programs need beyond the floor — numerical/data-science stack, security types, embedded primitives, plus codegen IR optimization. **End of this phase = v1 release.** The split from [Phase 8](#phase-8-standard-library--floor) lets v1 ship semantically locked (after Phase 9) and target-complete (after Phase 10) before the long-tail lands. Co-locating the long-tail with target work pays off concretely: the numerical stack composes with the GPU call-site backend, embedded primitives co-design with the embedded target, and WASM portability is already proven for new modules. **v64 reshape (2026-05-09):** the backend-platform stdlib bundle (`std.http`, TLS, WebSocket, etc.) was lifted into Phase 8 floor — see [Phase 8 § Backend Platform](#backend-platform-v64-lifted) — leaving Phase 11 narrowly scoped to the numerical / data-science / security / embedded long-tail. Working tracker: [`implementation_checklist/phase-11-stdlib-longtail.md`](implementation_checklist/phase-11-stdlib-longtail.md) (physically reorganized out of the Phase 8 tracker, 2026-06-06).
 
 ### `f16` / `bf16` Numeric Primitives
 - [ ] Reserve `f16` and `bf16` as lexer-level keywords in v1 (compile error if used as identifiers — prevents future source-breaking rename).
@@ -905,7 +905,7 @@ See `design.md § f16 / bf16 Implementation` for full design shape.
 
 ### Numerical and data-science stdlib
 
-Semantics in `design.md § Numerical Types`, `§ Numeric Semantics > Literal-involved promotion`. Implementation tasks in `implementation_checklist/ § Numerical and data-science stdlib (Phase 11 — long-tail)`.
+Semantics in `design.md § Numerical Types`, `§ Numeric Semantics > Literal-involved promotion`. Implementation tasks in [`implementation_checklist/phase-11-stdlib-longtail.md § Numerical and data-science stdlib`](implementation_checklist/phase-11-stdlib-longtail.md#numerical-and-data-science-stdlib).
 
 **Type system (forcing functions).**
 - [ ] `Tensor[T, Shape]` — shape-typed N-D container with static + dynamic (`?`) dims. Q1 (1A).
