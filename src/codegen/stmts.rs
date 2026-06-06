@@ -1146,7 +1146,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // returns true only when every branch tail is itself a
                 // fresh-ref source. Plain `Call` / `MethodCall` /
                 // `StructLiteral` match the base case directly.
-                let is_fresh_construction = rhs_yields_fresh_ref(value);
+                let is_fresh_construction = self.rhs_yields_fresh_ref(value);
                 let rhs_is_fstring = matches!(&value.kind, ExprKind::InterpolatedStringLit(_));
                 // Thread the binding's Vec element type through to
                 // `Vec.with_capacity(n)` in the RHS — the zero-arg
@@ -1459,10 +1459,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.track_rc_var(var_name, ptr, info.heap_type);
                 }
                 // RC-fallback boxing: heap-box non-shared bindings flagged by the ownership checker.
-                // Skipped for Vec/String bindings (their inner buffers need separate cleanup).
+                // Skipped for Vec/String bindings (their inner buffers need separate cleanup),
+                // and for `Option[shared T]` bindings: the inner node is already RC-managed
+                // (capture-inc / assign inc-dec / scope-exit RcDecOption), and every
+                // `var_option_shared_heap` codegen path GEPs the binding's slot as a raw
+                // 4-word Option struct — boxing redirects the slot to a `{rc, Option}` heap
+                // ptr those paths know nothing about, so the Option-assign arm smashes the
+                // 8-byte slot with a 32-byte store (prepend-builder `head = Some(node)`
+                // segfault) and the tag reads decode a heap address as the discriminant.
                 let val = if let PatternKind::Binding(var_name) = &pattern.kind {
                     let is_vec = self.vec_elem_types.contains_key(var_name.as_str());
-                    if shared_info.is_none() && !is_vec && self.is_rc_fallback_binding(var_name) {
+                    if shared_info.is_none()
+                        && shared_option_info.is_none()
+                        && !is_vec
+                        && self.is_rc_fallback_binding(var_name)
+                    {
                         let val_ty = val.get_type();
                         let heap_type = self
                             .context
@@ -1861,7 +1872,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Same recursive tail-shape walk as the Let arm — covers
                 // `x = if cond { make_a() } else { make_b() };` and the
                 // `Match` / `IfLet` / `Block` equivalents.
-                let rhs_is_fresh = rhs_yields_fresh_ref(value);
+                let rhs_is_fresh = self.rhs_yields_fresh_ref(value);
                 let rhs_is_fstring = matches!(&value.kind, ExprKind::InterpolatedStringLit(_));
                 let val = self.compile_expr(value)?;
                 // Consume the f-string acc staging slot once compile_expr
@@ -1886,12 +1897,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.try_store_module_binding(name, val) {
                         return Ok(());
                     }
-                    // For shared types: rc_dec old value, rc_inc new value
-                    // (only when the RHS is not itself a fresh-ref source).
+                    // For shared types, the ARC setter rule: retain new →
+                    // store → release old. The release MUST run last —
+                    // when the new value is reachable *through* the old one
+                    // (the canonical list-walk `node = node.next`), dec'ing
+                    // the old ref first drops the chain and frees the new
+                    // node before its inc, UAF. Same ordering bug class as
+                    // the `Option[shared T]` field-store fix (25442e73);
+                    // this is the variable-assign sibling.
                     if let Some(type_name) = self.var_type_names.get(name).cloned() {
                         if let Some(info) = self.shared_types.get(&type_name).cloned() {
                             if let Some(slot) = self.variables.get(name).copied() {
-                                // rc_dec old pointer
+                                // Save the old pointer before overwriting.
                                 let old_ptr = self
                                     .builder
                                     .build_load(
@@ -1901,23 +1918,28 @@ impl<'ctx> super::Codegen<'ctx> {
                                     )
                                     .unwrap()
                                     .into_pointer_value();
-                                self.emit_refcount_dec(name, info.heap_type, old_ptr);
                                 // rc_inc new pointer — only when the RHS
-                                // is an alias of an existing tracked ref.
+                                // is an alias of an existing tracked ref
+                                // (fresh sources already carry their +1).
                                 if !rhs_is_fresh {
                                     let new_ptr = val.into_pointer_value();
                                     self.emit_refcount_inc(name, info.heap_type, new_ptr);
                                 }
                                 self.builder.build_store(slot.ptr, val).unwrap();
+                                // rc_dec old pointer, after the new ref is
+                                // counted and stored.
+                                self.emit_refcount_dec(name, info.heap_type, old_ptr);
                                 return Ok(());
                             }
                         }
                     }
                     // `Option[shared T]` Assign — symmetric to the
                     // plain shared-T arm above, but operating on the
-                    // Option struct's tag + w0 inner pointer:
-                    //   1. Load the old slot, branch on tag; if Some,
-                    //      dec the old inner pointer.
+                    // Option struct's tag + w0 inner pointer, with the
+                    // same ARC setter ordering (retain new → store →
+                    // release old):
+                    //   1. Save the old slot's inner pointer (null when
+                    //      the old tag is None).
                     //   2. Store the new Option value.
                     //   3. If the RHS is not a fresh-ref source
                     //      (i.e., not a `Some(...)` literal or other
@@ -1925,10 +1947,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     //      +1 transfer; see the let-stmt comment for
                     //      the +1 handshake), branch on the new
                     //      tag; if Some, inc the new inner pointer.
-                    // Without this, `mut next_a: Option[Node]` styled
-                    // reassignments (recursive kata: `next_a = n.next;`)
-                    // strand the old ref and over-decrement at scope
-                    // exit, hanging the program on chain access.
+                    //   4. Dec the saved old inner pointer, if non-null.
+                    // Without the inc/dec pair, `mut next_a: Option[Node]`
+                    // styled reassignments (recursive kata: `next_a =
+                    // n.next;`) strand the old ref and over-decrement at
+                    // scope exit, hanging the program on chain access.
+                    // The release-LAST ordering matters when the new
+                    // value is reachable through the old one (list-walk
+                    // `cur = node.next` where `node` aliases `cur`'s
+                    // head): dec'ing old first drops the whole chain and
+                    // frees the new node before its inc — UAF. Same bug
+                    // class as the field-store fix (25442e73); this is
+                    // the variable-assign sibling.
                     if let Some(heap_type) = self.var_option_shared_heap.get(name.as_str()).copied()
                     {
                         if let Some(slot) = self.variables.get(name.as_str()).copied() {
@@ -1942,7 +1972,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .unwrap_or(1);
                             let some_tag_const = i64_t.const_int(some_tag, false);
                             let fn_val = self.current_fn.unwrap();
-                            // ── Step 1: dec old inner if old is Some. ──
+                            // ── Step 1: save the old inner pointer. The
+                            //    tag/w0 loads are unconditional (loads of
+                            //    our own slot are always safe); a select
+                            //    collapses "old is None" and "old inner
+                            //    is null" into one null sentinel so the
+                            //    deferred release below needs a single
+                            //    null-check branch. A None slot's w0 may
+                            //    be undef — the select keeps that garbage
+                            //    from ever being dereferenced.
                             let old_tag_ptr = self
                                 .builder
                                 .build_struct_gep(option_ty, slot.ptr, 0, "opt.assign.old.tag.p")
@@ -1961,15 +1999,6 @@ impl<'ctx> super::Codegen<'ctx> {
                                     "opt.assign.old.is_some",
                                 )
                                 .unwrap();
-                            let old_do_bb =
-                                self.context.append_basic_block(fn_val, "opt.assign.old.do");
-                            let old_skip_bb = self
-                                .context
-                                .append_basic_block(fn_val, "opt.assign.old.skip");
-                            self.builder
-                                .build_conditional_branch(old_is_some, old_do_bb, old_skip_bb)
-                                .unwrap();
-                            self.builder.position_at_end(old_do_bb);
                             let old_w0_ptr = self
                                 .builder
                                 .build_struct_gep(option_ty, slot.ptr, 1, "opt.assign.old.w0.p")
@@ -1983,22 +2012,16 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .builder
                                 .build_int_to_ptr(old_w0, ptr_ty, "opt.assign.old.inner")
                                 .unwrap();
-                            let old_is_null = self
+                            let old_eff = self
                                 .builder
-                                .build_is_null(old_inner, "opt.assign.old.is_null")
-                                .unwrap();
-                            let old_real_do_bb = self
-                                .context
-                                .append_basic_block(fn_val, "opt.assign.old.real_do");
-                            self.builder
-                                .build_conditional_branch(old_is_null, old_skip_bb, old_real_do_bb)
-                                .unwrap();
-                            self.builder.position_at_end(old_real_do_bb);
-                            self.emit_refcount_dec(name, heap_type, old_inner);
-                            self.builder
-                                .build_unconditional_branch(old_skip_bb)
-                                .unwrap();
-                            self.builder.position_at_end(old_skip_bb);
+                                .build_select(
+                                    old_is_some,
+                                    old_inner,
+                                    ptr_ty.const_null(),
+                                    "opt.assign.old.eff",
+                                )
+                                .unwrap()
+                                .into_pointer_value();
                             // ── Step 2: store the new Option value. ──
                             self.builder.build_store(slot.ptr, val).unwrap();
                             // ── Step 3: inc new inner if RHS is an
@@ -2076,6 +2099,24 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .unwrap();
                                 self.builder.position_at_end(new_skip_bb);
                             }
+                            // ── Step 4: release the saved old inner, now
+                            //    that the new ref is counted and stored.
+                            let old_is_null = self
+                                .builder
+                                .build_is_null(old_eff, "opt.assign.old.is_null")
+                                .unwrap();
+                            let old_dec_bb = self
+                                .context
+                                .append_basic_block(fn_val, "opt.assign.old.dec");
+                            let done_bb =
+                                self.context.append_basic_block(fn_val, "opt.assign.done");
+                            self.builder
+                                .build_conditional_branch(old_is_null, done_bb, old_dec_bb)
+                                .unwrap();
+                            self.builder.position_at_end(old_dec_bb);
+                            self.emit_refcount_dec(name, heap_type, old_eff);
+                            self.builder.build_unconditional_branch(done_bb).unwrap();
+                            self.builder.position_at_end(done_bb);
                             return Ok(());
                         }
                     }
@@ -2782,53 +2823,79 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 }
 
-/// Recurse into branching tail expressions to decide whether the RHS of a
-/// shared-type `let` / `Assign` already delivers a freshly-owned ref
-/// (callee move-out for `Call` / `MethodCall`, or `emit_rc_alloc` for
-/// `StructLiteral`). The receive-site `rc_inc` must be skipped exactly
-/// when this returns `true`; otherwise the refcount lands at 2 for a
-/// genuinely fresh value and leaks one ref per crossing (same shape as
-/// bug #8 receive-side, but for `If` / `Match` / `IfLet` / `Block` /
-/// `LabeledBlock` / `Unsafe` tails that nest the fresh-ref source one
-/// level deeper than the outer `ExprKind` reveals).
-///
-/// Conservative on mixed-shape branches: returns `false` when ANY branch
-/// tail aliases an existing ref (`Identifier` / `FieldAccess` / `Index`
-/// / etc.), so the receive site still incs. The fresh-tail branches in
-/// that mix will double-inc (leaking +1 on those paths) — same behavior
-/// as before this helper — but the aliasing branch is preserved
-/// correctly. Per-branch inc emission would require lowering the
-/// receive-inc into each tail block; deferred to a future slice.
-pub(super) fn rhs_yields_fresh_ref(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::StructLiteral { .. } | ExprKind::Call { .. } | ExprKind::MethodCall { .. } => {
-            true
-        }
-        ExprKind::Block(block)
-        | ExprKind::Unsafe(block)
-        | ExprKind::LabeledBlock { body: block, .. } => block
-            .final_expr
-            .as_deref()
-            .is_some_and(rhs_yields_fresh_ref),
-        ExprKind::If {
-            then_block,
-            else_branch,
-            ..
-        }
-        | ExprKind::IfLet {
-            then_block,
-            else_branch,
-            ..
-        } => {
-            then_block
+impl<'ctx> super::Codegen<'ctx> {
+    /// Recurse into branching tail expressions to decide whether the RHS of a
+    /// shared-type `let` / `Assign` already delivers a freshly-owned ref
+    /// (callee move-out for `Call` / `MethodCall`, or `emit_rc_alloc` for
+    /// `StructLiteral`). The receive-site `rc_inc` must be skipped exactly
+    /// when this returns `true`; otherwise the refcount lands at 2 for a
+    /// genuinely fresh value and leaks one ref per crossing (same shape as
+    /// bug #8 receive-side, but for `If` / `Match` / `IfLet` / `Block` /
+    /// `LabeledBlock` / `Unsafe` tails that nest the fresh-ref source one
+    /// level deeper than the outer `ExprKind` reveals).
+    ///
+    /// `unwrap()` / `expect()` on an Option/Result receiver are the
+    /// deliberate exception to the "MethodCall ⇒ fresh" rule: their
+    /// lowering (`try_compile_option_result_method`) only re-extracts the
+    /// receiver aggregate's payload words — for a `shared T` payload
+    /// that's a borrowing alias with NO +1 transfer. Classifying them as
+    /// fresh skipped the receive-inc while `track_rc_var` still queued the
+    /// scope-exit dec, so each `let node = cur.unwrap();` over-dec'd the
+    /// chain by one (the list-walk kata shape freed the list out from
+    /// under its own cursor). Discriminated via the typechecker-populated
+    /// `method_unwrap_inner_types` side-table (keyed by the MethodCall
+    /// span — the same key `try_compile_option_result_method` reads) so a
+    /// user-defined `.unwrap()` on a non-Option/Result type keeps callee
+    /// move-out semantics.
+    ///
+    /// Conservative on mixed-shape branches: returns `false` when ANY branch
+    /// tail aliases an existing ref (`Identifier` / `FieldAccess` / `Index`
+    /// / etc.), so the receive site still incs. The fresh-tail branches in
+    /// that mix will double-inc (leaking +1 on those paths) — same behavior
+    /// as before this helper — but the aliasing branch is preserved
+    /// correctly. Per-branch inc emission would require lowering the
+    /// receive-inc into each tail block; deferred to a future slice.
+    pub(super) fn rhs_yields_fresh_ref(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::MethodCall { method, .. }
+                if matches!(method.as_str(), "unwrap" | "expect")
+                    && self
+                        .method_unwrap_inner_types
+                        .contains_key(&(expr.span.offset, expr.span.length)) =>
+            {
+                false
+            }
+            ExprKind::StructLiteral { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::MethodCall { .. } => true,
+            ExprKind::Block(block)
+            | ExprKind::Unsafe(block)
+            | ExprKind::LabeledBlock { body: block, .. } => block
                 .final_expr
                 .as_deref()
-                .is_some_and(rhs_yields_fresh_ref)
-                && else_branch.as_deref().is_some_and(rhs_yields_fresh_ref)
+                .is_some_and(|e| self.rhs_yields_fresh_ref(e)),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                then_block
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|e| self.rhs_yields_fresh_ref(e))
+                    && else_branch
+                        .as_deref()
+                        .is_some_and(|e| self.rhs_yields_fresh_ref(e))
+            }
+            ExprKind::Match { arms, .. } => {
+                !arms.is_empty() && arms.iter().all(|arm| self.rhs_yields_fresh_ref(&arm.body))
+            }
+            _ => false,
         }
-        ExprKind::Match { arms, .. } => {
-            !arms.is_empty() && arms.iter().all(|arm| rhs_yields_fresh_ref(&arm.body))
-        }
-        _ => false,
     }
 }

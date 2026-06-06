@@ -4101,6 +4101,146 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_option_shared_walk_unwrap_cursor() {
+        // Regression for TWO coupled walk-cursor refcount bugs
+        // (2026-06-05, from the wip-shared-struct-codegen-followups
+        // bug-#2 re-verification):
+        //
+        // 1. `Option[shared T]` variable-assign ordering: `cur =
+        //    node.next` released the old inner BEFORE retaining the new
+        //    one. When the new value is reachable through the old (the
+        //    canonical list walk), the old head's drop freed the next
+        //    node out from under the store — UAF / trap. Variable-assign
+        //    sibling of the field-store fix (25442e73); same ARC setter
+        //    rule (retain new → store → release old).
+        // 2. `let node = cur.unwrap()` classified the MethodCall RHS as
+        //    a fresh +1 source (`rhs_yields_fresh_ref`), skipping the
+        //    receive-inc — but unwrap's lowering only re-extracts the
+        //    payload words (a borrowing alias), while `track_rc_var`
+        //    still queued the scope-exit dec. One over-dec per
+        //    iteration.
+        //
+        // Pre-fix: trap before printing (the chain frees itself from
+        // under the cursor on the first `cur = node.next`).
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn make() -> Option[ListNode] {
+    let mut head = ListNode { val: 1, next: None };
+    let second = ListNode { val: 2, next: None };
+    head.next = Some(second);
+    Some(head)
+}
+fn main() {
+    let mut cur = make();
+    let mut sum = 0;
+    while cur.is_some() {
+        let node = cur.unwrap();
+        sum = sum + node.val;
+        cur = node.next;
+    }
+    println(sum);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3");
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_shared_chain_through_call_result_arg() {
+        // The wip-doc "bug #2" repro shape: a call-result
+        // `Option[shared T]` temporary passed directly as an owned arg
+        // (`ident(make())`), where the callee returns a chain aliasing
+        // that param. The arg-side carries the callee's +1 directly into
+        // the param slot; the Identifier-tail return retain (426b8dc3)
+        // balances the callee's scope-exit dec. Pre-walk-fix this
+        // printed garbage (the walk bugs corrupted the returned chain);
+        // the let-bound workaround form is covered implicitly by the
+        // suite's other walks.
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn make() -> Option[ListNode] {
+    let mut head = ListNode { val: 1, next: None };
+    let second = ListNode { val: 2, next: None };
+    head.next = Some(second);
+    Some(head)
+}
+fn ident(head: Option[ListNode]) -> Option[ListNode] {
+    head
+}
+fn main() {
+    let mut cur = ident(make());
+    let mut sum = 0;
+    while cur.is_some() {
+        let node = cur.unwrap();
+        sum = sum + node.val;
+        cur = node.next;
+    }
+    println(sum);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3");
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_shared_prepend_builder_not_rc_boxed() {
+        // Regression for the RC-fallback boxing / `Option[shared T]`
+        // collision (2026-06-05). The ownership checker flags the
+        // prepend-builder's `head` (captured into `ListNode { next:
+        // head }`, then reassigned) for RC fallback; the let-site boxing
+        // then redirected the binding's slot to a `{rc, Option}` heap
+        // ptr — but every `var_option_shared_heap` path (Option-assign,
+        // arg-share inc, scope-exit RcDecOption) addresses the slot as a
+        // raw 4-word Option struct. The Option-assign arm smashed the
+        // 8-byte slot with a 32-byte store (segfault); the tag reads
+        // decoded a heap address as the discriminant. Option[shared]
+        // bindings are now excluded from boxing (the inner node already
+        // has its own RC discipline).
+        //
+        // MUST run through `run_program_with_ownership` — the plain
+        // `run_program` passes no ownership result, so the RC-fallback
+        // set is empty and the boxing path never fires.
+        let out = run_program_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = 0;
+    while i < n {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i + 1;
+    }
+    head
+}
+fn walk(head: Option[ListNode]) -> i64 {
+    let mut cur = head;
+    let mut sum = 0;
+    while cur.is_some() {
+        let node = cur.unwrap();
+        sum = sum + node.val;
+        cur = node.next;
+    }
+    sum
+}
+fn main() {
+    let chain = make(100);
+    println(walk(chain));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "4950");
+        }
+    }
+
+    #[test]
     fn test_e2e_bug8_call_chain_field_assoc_call() {
         // Sibling shape: associated-function call (`Node.make()`)
         // returning a shared struct, then bare `.val` access. The

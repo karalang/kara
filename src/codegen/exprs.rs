@@ -1106,7 +1106,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Fresh values (`Some(node)`, call move-out) already own
                     // their ref — skip via `rhs_yields_fresh_ref`.
                     if let Some(inner_heap) = opt_inner_heap {
-                        if !crate::codegen::stmts::rhs_yields_fresh_ref(&field_init.value) {
+                        if !self.rhs_yields_fresh_ref(&field_init.value) {
                             self.emit_rc_inc_for_captured_option(val, inner_heap);
                         }
                     }

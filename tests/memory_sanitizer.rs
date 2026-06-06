@@ -2879,4 +2879,97 @@ fn main() {
             "shared_list_build_remove_repeat",
         );
     }
+
+    #[test]
+    fn asan_option_shared_walk_unwrap_cursor_repeat() {
+        // Regression for the walk-cursor refcount pair (2026-06-05):
+        // (1) `Option[shared T]` variable-assign released the old inner
+        // BEFORE retaining the new — `cur = node.next` freed the chain
+        // out from under the cursor (UAF); (2) `let node = cur.unwrap()`
+        // skipped the receive-inc (MethodCall misclassified as a fresh
+        // +1 source) while still queueing the scope-exit dec — one
+        // over-dec per iteration. Build + walk + drop repeated so a leak
+        // (inverse failure: over-retain) trips LeakSanitizer too.
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn make() -> Option[ListNode] {
+    let mut head = ListNode { val: 1, next: None };
+    let second = ListNode { val: 2, next: None };
+    head.next = Some(second);
+    Some(head)
+}
+fn walk(head: Option[ListNode]) -> i64 {
+    let mut cur = head;
+    let mut sum = 0;
+    while cur.is_some() {
+        let node = cur.unwrap();
+        sum = sum + node.val;
+        cur = node.next;
+    }
+    sum
+}
+fn main() {
+    let mut total: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 64i64 {
+        total = total + walk(make());
+        k = k + 1i64;
+    }
+    println(total);
+}
+"#,
+            &["192"],
+            "option_shared_walk_unwrap_cursor_repeat",
+        );
+    }
+
+    #[test]
+    fn asan_option_shared_prepend_builder_rc_fallback_repeat() {
+        // Regression for the RC-fallback boxing / `Option[shared T]`
+        // collision (2026-06-05). The ownership checker flags the
+        // prepend-builder's `head` for RC fallback; boxing redirected
+        // the slot to a `{rc, Option}` heap ptr that the Option-assign /
+        // arg-share / scope-exit paths misread as a raw Option struct
+        // (32-byte store into the 8-byte slot — stack smash, then UAF
+        // on the decoded-garbage tag). Option[shared] bindings are now
+        // excluded from boxing. MUST run via the ownership-loaded
+        // harness — the plain run never populates the RC-fallback set.
+        assert_clean_asan_run_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = 0;
+    while i < n {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i + 1;
+    }
+    head
+}
+fn walk(head: Option[ListNode]) -> i64 {
+    let mut cur = head;
+    let mut sum = 0;
+    while cur.is_some() {
+        let node = cur.unwrap();
+        sum = sum + node.val;
+        cur = node.next;
+    }
+    sum
+}
+fn main() {
+    let mut total: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 32i64 {
+        let chain = make(50);
+        total = total + walk(chain);
+        k = k + 1i64;
+    }
+    println(total);
+}
+"#,
+            "option_shared_prepend_builder_rc_fallback_repeat",
+        );
+    }
 }

@@ -460,9 +460,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     false
                 };
+                // `Option[shared T]` params are excluded for the same reason
+                // as the let-site boxing skip in stmts.rs: the inner node is
+                // already RC-managed and the `var_option_shared_heap` paths
+                // address the slot as a raw Option struct — boxing it
+                // redirects the slot to a heap ptr those paths misread.
+                let is_option_shared_param = self
+                    .option_inner_shared_type_for_type_expr(&param.ty)
+                    .is_some();
                 if !is_ref_param
                     && !is_vec_param
                     && !is_shared_param
+                    && !is_option_shared_param
                     && self.is_rc_fallback_binding(&param_name)
                 {
                     let val_ty = param_val.get_type();
