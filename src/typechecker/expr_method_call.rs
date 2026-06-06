@@ -795,6 +795,9 @@ impl<'a> super::TypeChecker<'a> {
                     .filter_map(|a| match a {
                         GenericArg::Type(t) => Some(self.lower_type_expr(t, &[])),
                         GenericArg::Const(_) => None,
+                        // Shape args are ignored for dispatch (Dim/Shape
+                        // kind system lands in Phase 11 Q1).
+                        GenericArg::Shape(_) => None,
                     })
                     .collect();
                 self.method_callee_types.insert(

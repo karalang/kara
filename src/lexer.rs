@@ -81,11 +81,16 @@ impl<'a> Lexer<'a> {
                 }
             }
 
-            // Dot / DotDot / DotDotEq
+            // Dot / DotDot / DotDotEq / DotDotDot
             b'.' => {
                 if self.match_char(b'.') {
                     if self.match_char(b'=') {
                         self.make_spanned(Token::DotDotEq)
+                    } else if self.match_char(b'.') {
+                        // `...` — variadic shape splice (syntax.md § SHAPE_LIT).
+                        // Maximal munch: `...` never split into `..` + `.`,
+                        // matching the grammar's single-token treatment.
+                        self.make_spanned(Token::DotDotDot)
                     } else {
                         self.make_spanned(Token::DotDot)
                     }

@@ -1089,6 +1089,8 @@ impl<'a> super::TypeChecker<'a> {
                         // aren't part of the documented placeholder
                         // surface — leave the slot unsubstituted.
                         crate::ast::GenericArg::Const(_) => None,
+                        // Shape args likewise — no placeholder rendering.
+                        crate::ast::GenericArg::Shape(_) => None,
                     })
                     .collect()
             })

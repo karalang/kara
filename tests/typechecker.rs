@@ -22881,3 +22881,23 @@ fn never_coerces_into_unit_annotation() {
     // let x: () = todo() — Never coerces to any annotated type.
     typecheck_ok("fn f() { let x: () = todo(); let _ = x; }");
 }
+// ── Shape-literal grammar (Phase 11 Q2) — v1 stub diagnostic ────────
+
+#[test]
+fn test_shape_literal_generic_arg_not_implemented_yet() {
+    // The grammar parses (syntax.md § SHAPE_LIT); the Dim/Shape kind
+    // system is the next Phase 11 slice. Until it lands, a shape literal
+    // in generic-arg position is rejected at the use site with a pointer
+    // — mirroring the try-block / trait-alias not-yet pattern.
+    let errors = typecheck_errors(
+        "struct Tensor { x: i64 }\n\
+         fn f(t: Tensor[f64, [3, 4]]) { }\n\
+         fn main() {}\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("shape-kinded generics are not implemented yet")),
+        "{errors:?}",
+    );
+}

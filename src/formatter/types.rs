@@ -74,6 +74,28 @@ impl super::Formatter {
             match arg {
                 GenericArg::Type(t) => self.format_type_expr(t),
                 GenericArg::Const(e) => self.format_expr(e),
+                GenericArg::Shape(s) => self.format_shape_lit(s),
+            }
+        }
+        self.write_str("]");
+    }
+
+    /// Render a shape literal: `[3, 4, ?]`, `[...S, M]` — dims separated
+    /// by `, `, `?` for dynamic dims, `...NAME` for variadic splices
+    /// (syntax.md § SHAPE_LIT).
+    pub(super) fn format_shape_lit(&mut self, lit: &ShapeLit) {
+        self.write_str("[");
+        for (i, dim) in lit.dims.iter().enumerate() {
+            if i > 0 {
+                self.write_str(", ");
+            }
+            match dim {
+                ShapeDim::Const(e) => self.format_expr(e),
+                ShapeDim::Dynamic { .. } => self.write_str("?"),
+                ShapeDim::Splice { name, .. } => {
+                    self.write_str("...");
+                    self.write_str(name);
+                }
             }
         }
         self.write_str("]");

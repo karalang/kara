@@ -212,6 +212,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let elem_ty_expr = match &args[0] {
             GenericArg::Type(t) => t,
             GenericArg::Const(_) => return None,
+            GenericArg::Shape(_) => return None,
         };
         let size = match &args[1] {
             GenericArg::Const(expr) => match &expr.kind {
@@ -247,6 +248,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     return None;
                 }
             }
+            GenericArg::Shape(_) => return None,
         };
         let elem_ty = self.llvm_type_for_type_expr(elem_ty_expr);
         Some(elem_ty.array_type(size).into())
@@ -272,6 +274,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let elem_ty_expr = match &args[0] {
             GenericArg::Type(t) => t,
             GenericArg::Const(_) => return None,
+            GenericArg::Shape(_) => return None,
         };
         let size = match &args[1] {
             GenericArg::Const(expr) => match &expr.kind {
@@ -298,6 +301,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     return None;
                 }
             }
+            GenericArg::Shape(_) => return None,
         };
         let elem_ty = self.llvm_type_for_type_expr(elem_ty_expr);
         let vec_ty = match elem_ty {
@@ -538,6 +542,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 match &args[0] {
                     GenericArg::Type(t) => Some(self.llvm_type_for_type_expr(t)),
                     GenericArg::Const(_) => None,
+                    GenericArg::Shape(_) => None,
                 }
             }
             TypeKind::MutSlice(element) => Some(self.llvm_type_for_type_expr(element)),

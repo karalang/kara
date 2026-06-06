@@ -1675,3 +1675,38 @@ fn test_reserved_fragment_specifier_fn_with_non_year_suffix_accepts() {
     assert_eq!(tokens[1], ident("expr_v2"));
     assert_eq!(tokens[2], Token::LeftParen);
 }
+
+// ── Shape-literal grammar (Phase 11 Q2): `...` variadic-splice token ──
+
+#[test]
+fn test_dotdotdot_lexes_as_single_token() {
+    let tokens = tokens_only("...");
+    assert_eq!(tokens[0], Token::DotDotDot);
+    assert_eq!(tokens.len(), 2); // + EOF
+}
+
+#[test]
+fn test_dotdotdot_followed_by_identifier() {
+    let tokens = tokens_only("...S");
+    assert_eq!(tokens[0], Token::DotDotDot);
+    assert_eq!(tokens[1], ident("S"));
+}
+
+#[test]
+fn test_dotdot_and_dotdoteq_unaffected_by_dotdotdot() {
+    // `..` and `..=` keep lexing as before — maximal munch only fires
+    // on a third consecutive dot.
+    let tokens = tokens_only("0..10");
+    assert!(tokens.contains(&Token::DotDot));
+    assert!(!tokens.contains(&Token::DotDotDot));
+    let tokens = tokens_only("0..=10");
+    assert!(tokens.contains(&Token::DotDotEq));
+    assert!(!tokens.contains(&Token::DotDotDot));
+}
+
+#[test]
+fn test_four_dots_lex_as_dotdotdot_plus_dot() {
+    let tokens = tokens_only("....");
+    assert_eq!(tokens[0], Token::DotDotDot);
+    assert_eq!(tokens[1], Token::Dot);
+}

@@ -154,6 +154,9 @@ impl<'a> super::TypeChecker<'a> {
                         // — the parser accepts them but `Type::Existential`
                         // has no representation for const arguments today.
                         GenericArg::Const(_) => None,
+                        // Shape args on trait paths have no meaning until
+                        // the Dim/Shape kind system lands (Phase 11 Q1).
+                        GenericArg::Shape(_) => None,
                     })
                     .collect();
                 Type::Existential {
@@ -295,6 +298,26 @@ impl<'a> super::TypeChecker<'a> {
                             );
                             None
                         }
+                        // v1 stub: the shape-literal grammar parses
+                        // (syntax.md § SHAPE_LIT) but the Dim/Shape kind
+                        // system is the next Phase 11 slice — reject at
+                        // the use site with a pointer, mirroring the
+                        // try-block / trait-alias not-yet pattern.
+                        GenericArg::Shape(lit) => {
+                            let target = type_name.unwrap_or("this type");
+                            self.type_error(
+                                format!(
+                                    "shape literal generic argument on '{}' is recognized \
+                                     but shape-kinded generics are not implemented yet — \
+                                     the Dim/Shape kind system and `Tensor[T, Shape]` land \
+                                     with the Phase 11 numerical stdlib",
+                                    target
+                                ),
+                                lit.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            None
+                        }
                     })
                     .collect()
             })
@@ -429,6 +452,7 @@ impl<'a> super::TypeChecker<'a> {
         let element_ty = match &args[0] {
             GenericArg::Type(t) => self.lower_type_expr(t, generic_scope),
             GenericArg::Const(_) => return None,
+            GenericArg::Shape(_) => return None,
         };
         let size: ConstArg = match &args[1] {
             GenericArg::Const(expr) => match &expr.kind {
@@ -494,6 +518,7 @@ impl<'a> super::TypeChecker<'a> {
                     return None;
                 }
             }
+            GenericArg::Shape(_) => return None,
         };
         Some(Type::Array {
             element: Box::new(element_ty),
@@ -525,6 +550,7 @@ impl<'a> super::TypeChecker<'a> {
         let element_ty = match &args[0] {
             GenericArg::Type(t) => self.lower_type_expr(t, generic_scope),
             GenericArg::Const(_) => return None,
+            GenericArg::Shape(_) => return None,
         };
         // Element-type constraint: the element must satisfy the built-in
         // `Numeric` trait. A type-param `T` in scope is permitted — the bound
@@ -597,6 +623,7 @@ impl<'a> super::TypeChecker<'a> {
                     return None;
                 }
             }
+            GenericArg::Shape(_) => return None,
         };
         Some(Type::Vector {
             element: Box::new(element_ty),
@@ -646,6 +673,7 @@ impl<'a> super::TypeChecker<'a> {
         let element_ty = match &args[0] {
             GenericArg::Type(t) => self.lower_type_expr(t, generic_scope),
             GenericArg::Const(_) => return None,
+            GenericArg::Shape(_) => return None,
         };
         Some(Type::Slice {
             element: Box::new(element_ty),

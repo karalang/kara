@@ -90,6 +90,39 @@ pub struct TraitBound {
 pub enum GenericArg {
     Type(TypeExpr),
     Const(Expr),
+    /// A shape literal — `[3, 4, ?]`, `[...S, M]` — in generic-argument
+    /// position (e.g., `Tensor[f64, [3, 4, ?]]`). Legal only as a generic
+    /// arg whose target kind is Shape; never a standalone type. See
+    /// syntax.md § SHAPE_LIT and design.md § Numerical Types > Tensor.
+    Shape(ShapeLit),
+}
+
+/// A shape literal: a type-level list of dims constructing a Shape-kinded
+/// generic argument. Shape literals do not nest — a dim is a const
+/// expression, a `?`, or a `...IDENT` variadic splice, never another
+/// shape literal (syntax.md § SHAPE_LIT).
+#[derive(Debug, Clone)]
+pub struct ShapeLit {
+    pub dims: Vec<ShapeDim>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum ShapeDim {
+    /// Const-expression dim — static at compile time: an integer literal
+    /// (`3`), a Dim-kinded generic param (`N`), or a module-level integer
+    /// constant. Arithmetic on shape params (`[A + B]`) parses but is
+    /// deferred to v1.5 at the typechecker (roadmap § Phase 11 Q2).
+    /// Boxed to keep the enum small next to the marker variants.
+    Const(Box<Expr>),
+    /// `?` — dynamic dim marker; the dim is determined at runtime. Reuses
+    /// the expression-level question-mark token; legal only inside a shape
+    /// literal (context disambiguates — outside shape position `?` remains
+    /// the try operator, syntax.md §5.21).
+    Dynamic { span: Span },
+    /// `...IDENT` — variadic shape splice binding the remainder of the
+    /// shape (`Tensor[T, [...S, M]]`).
+    Splice { name: String, span: Span },
 }
 
 // ── Where Clauses ────────────────────────────────────────────────

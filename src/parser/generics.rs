@@ -433,6 +433,19 @@ impl super::Parser {
             if self.check(&Token::RightBracket) {
                 break;
             }
+            // Shape literal args: a `[` starting a generic argument is a
+            // SHAPE_LIT (`Tensor[f64, [3, 4, ?]]`) — no other generic-arg
+            // form begins with `[` (syntax.md § GENERIC_ARG). Dims are
+            // const expressions, `?` dynamic-dim markers, or `...IDENT`
+            // variadic splices; shape literals do not nest.
+            if self.check(&Token::LeftBracket) {
+                let lit = self.parse_shape_literal()?;
+                args.push(GenericArg::Shape(lit));
+                if !self.eat(&Token::Comma) {
+                    break;
+                }
+                continue;
+            }
             // Const expression args: integer literals, negative integers, bool literals,
             // character literals, and `Identifier OP ...` shapes (e.g. `Array[T, N + 1]`)
             // where the operator following the identifier disambiguates a const-arg
@@ -492,5 +505,84 @@ impl super::Parser {
         }
         self.expect(&Token::RightBracket)?;
         Some(args)
+    }
+
+    /// Parse a shape literal in generic-argument position:
+    /// `"[" SHAPE_ELEM { "," SHAPE_ELEM } "]"` where a SHAPE_ELEM is a
+    /// const expression (`3`, `N`), a `?` dynamic-dim marker, or a
+    /// `...IDENT` variadic splice (syntax.md § SHAPE_LIT). Caller has
+    /// checked (not consumed) the leading `[`. Shape literals require at
+    /// least one dim and never nest.
+    pub(crate) fn parse_shape_literal(&mut self) -> Option<ShapeLit> {
+        let start = self.current_span();
+        self.expect(&Token::LeftBracket)?;
+        let mut dims = Vec::new();
+        loop {
+            if self.check(&Token::RightBracket) {
+                break;
+            }
+            match self.peek_token() {
+                // `?` — dynamic dim. Inside a shape literal the token is a
+                // dim marker, not the expression-level try operator
+                // (context disambiguates; syntax.md §5.21 is unaffected).
+                Token::Question => {
+                    let span = self.current_span();
+                    self.advance();
+                    dims.push(ShapeDim::Dynamic { span });
+                }
+                // `...IDENT` — variadic shape splice.
+                Token::DotDotDot => {
+                    let splice_start = self.current_span();
+                    self.advance();
+                    match self.peek_token() {
+                        Token::Identifier { name, .. } => {
+                            let name = name.clone();
+                            self.advance();
+                            dims.push(ShapeDim::Splice {
+                                name,
+                                span: self.span_from(&splice_start),
+                            });
+                        }
+                        _ => {
+                            self.error(
+                                "expected identifier after `...` in shape literal — a variadic \
+                                 splice names a Shape-kinded parameter, e.g. `[...S, M]`",
+                            );
+                            return None;
+                        }
+                    }
+                }
+                // Nested shape literal — explicitly rejected per grammar.
+                Token::LeftBracket => {
+                    self.error(
+                        "shape literals do not nest — a dim is a const expression, `?`, or a \
+                         `...IDENT` splice, never another shape literal",
+                    );
+                    return None;
+                }
+                // Const-expression dim: integer literal, Dim-kinded param
+                // name, module-level constant, or (parsed-but-deferred)
+                // arithmetic like `N + 1`.
+                _ => {
+                    let expr = self.parse_expression()?;
+                    dims.push(ShapeDim::Const(Box::new(expr)));
+                }
+            }
+            if !self.eat(&Token::Comma) {
+                break;
+            }
+        }
+        if dims.is_empty() {
+            self.error(
+                "shape literal requires at least one dimension — `[]` is not a valid shape \
+                 (a rank-0 scalar is just `T`)",
+            );
+            return None;
+        }
+        self.expect(&Token::RightBracket)?;
+        Some(ShapeLit {
+            dims,
+            span: self.span_from(&start),
+        })
     }
 }

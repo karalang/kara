@@ -64,6 +64,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             const_subst.insert(param.name.clone(), cv);
                         }
                     }
+                    // Shape args never reach mono — the typechecker's
+                    // v1 stub rejects shape-kinded generics before
+                    // codegen runs. Benign skip rather than unreachable!
+                    // so a bypassed-typecheck path cannot panic here.
+                    GenericArg::Shape(_) => {}
                 }
             }
         }

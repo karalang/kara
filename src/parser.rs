@@ -599,6 +599,16 @@ fn write_type_for_diagnostic(ty: &TypeExpr, out: &mut String) {
                         match arg {
                             crate::ast::GenericArg::Type(t) => write_type_for_diagnostic(t, out),
                             crate::ast::GenericArg::Const(_) => out.push('_'),
+                            crate::ast::GenericArg::Shape(s) => {
+                                out.push('[');
+                                for (j, _) in s.dims.iter().enumerate() {
+                                    if j > 0 {
+                                        out.push_str(", ");
+                                    }
+                                    out.push('_');
+                                }
+                                out.push(']');
+                            }
                         }
                     }
                     out.push(']');
@@ -686,6 +696,16 @@ fn write_type_for_diagnostic(ty: &TypeExpr, out: &mut String) {
                     match arg {
                         crate::ast::GenericArg::Type(t) => write_type_for_diagnostic(t, out),
                         crate::ast::GenericArg::Const(_) => out.push('_'),
+                        crate::ast::GenericArg::Shape(s) => {
+                            out.push('[');
+                            for (j, _) in s.dims.iter().enumerate() {
+                                if j > 0 {
+                                    out.push_str(", ");
+                                }
+                                out.push('_');
+                            }
+                            out.push(']');
+                        }
                     }
                 }
                 out.push(']');
@@ -713,6 +733,16 @@ fn write_type_for_diagnostic(ty: &TypeExpr, out: &mut String) {
                     match arg {
                         crate::ast::GenericArg::Type(t) => write_type_for_diagnostic(t, out),
                         crate::ast::GenericArg::Const(_) => out.push('_'),
+                        crate::ast::GenericArg::Shape(s) => {
+                            out.push('[');
+                            for (j, _) in s.dims.iter().enumerate() {
+                                if j > 0 {
+                                    out.push_str(", ");
+                                }
+                                out.push('_');
+                            }
+                            out.push(']');
+                        }
                     }
                 }
                 out.push(']');

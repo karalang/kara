@@ -1769,6 +1769,7 @@ fn format_generic_args(
         match a {
             GenericArg::Type(t) => format_type_expr_with_subs(t, type_subs, var_bindings, out),
             GenericArg::Const(_) => out.push_str("/* const */"),
+            GenericArg::Shape(_) => out.push_str("/* shape */"),
         }
     }
     out.push(']');

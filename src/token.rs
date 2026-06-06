@@ -168,6 +168,7 @@ pub enum Token {
     Dot,              // .
     DotDot,           // ..
     DotDotEq,         // ..=
+    DotDotDot,        // ... (variadic shape splice — syntax.md § SHAPE_LIT)
     QuestionDot,      // ?.
     QuestionQuestion, // ??
     Arrow,            // ->

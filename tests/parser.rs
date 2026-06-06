@@ -10304,3 +10304,165 @@ fn target_attr_empty_args_rejected() {
         "{errs:?}",
     );
 }
+
+// ── Shape-literal grammar (Phase 11 Q2) — syntax.md § SHAPE_LIT ─────
+//
+// `[const_expr_or_? {, const_expr_or_?}]` in generic-argument position,
+// `?` dynamic dims, `...IDENT` variadic splices. Shape literals never
+// nest and require at least one dim. The Dim/Shape kind system (Q1) is
+// a separate slice — these tests pin the grammar only.
+
+/// Extract the generic args of the first param's path type of fn `f`.
+fn first_param_generic_args(program: &Program) -> Vec<GenericArg> {
+    let func = program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(f) if f.name == "f" => Some(f),
+            _ => None,
+        })
+        .expect("fn f not found");
+    let TypeKind::Path(ref path) = func.params[0].ty.kind else {
+        panic!("expected first param to be a path type");
+    };
+    path.generic_args.clone().expect("expected generic args")
+}
+
+#[test]
+fn test_shape_literal_static_dims() {
+    let program = parse_ok("fn f(t: Tensor[f64, [3, 4]]) { }\nfn main() {}\n");
+    let args = first_param_generic_args(&program);
+    assert_eq!(args.len(), 2);
+    assert!(matches!(args[0], GenericArg::Type(_)));
+    let GenericArg::Shape(ref lit) = args[1] else {
+        panic!("expected second generic arg to be a shape literal");
+    };
+    assert_eq!(lit.dims.len(), 2);
+    assert!(matches!(
+        &lit.dims[0],
+        ShapeDim::Const(e) if matches!(e.kind, ExprKind::Integer(3, _))
+    ));
+    assert!(matches!(
+        &lit.dims[1],
+        ShapeDim::Const(e) if matches!(e.kind, ExprKind::Integer(4, _))
+    ));
+}
+
+#[test]
+fn test_shape_literal_dynamic_dim() {
+    let program = parse_ok("fn f(t: Tensor[f64, [3, 4, ?]]) { }\nfn main() {}\n");
+    let args = first_param_generic_args(&program);
+    let GenericArg::Shape(ref lit) = args[1] else {
+        panic!("expected shape literal");
+    };
+    assert_eq!(lit.dims.len(), 3);
+    assert!(matches!(&lit.dims[2], ShapeDim::Dynamic { .. }));
+}
+
+#[test]
+fn test_shape_literal_variadic_splice() {
+    let program = parse_ok("fn f(t: Tensor[f64, [...S, M]]) { }\nfn main() {}\n");
+    let args = first_param_generic_args(&program);
+    let GenericArg::Shape(ref lit) = args[1] else {
+        panic!("expected shape literal");
+    };
+    assert_eq!(lit.dims.len(), 2);
+    assert!(matches!(&lit.dims[0], ShapeDim::Splice { name, .. } if name == "S"));
+    assert!(matches!(&lit.dims[1], ShapeDim::Const(_)));
+}
+
+#[test]
+fn test_shape_literal_identifier_dim() {
+    // A Dim-kinded param name (or module const) as a dim parses as a
+    // const-expression dim; kind checking is Q1's job.
+    let program = parse_ok("fn f(t: Tensor[f64, [N, 4]]) { }\nfn main() {}\n");
+    let args = first_param_generic_args(&program);
+    let GenericArg::Shape(ref lit) = args[1] else {
+        panic!("expected shape literal");
+    };
+    assert!(matches!(
+        &lit.dims[0],
+        ShapeDim::Const(e) if matches!(&e.kind, ExprKind::Identifier(n) if n == "N")
+    ));
+}
+
+#[test]
+fn test_shape_literal_single_dim() {
+    let program = parse_ok("fn f(t: Tensor[f64, [768]]) { }\nfn main() {}\n");
+    let args = first_param_generic_args(&program);
+    let GenericArg::Shape(ref lit) = args[1] else {
+        panic!("expected shape literal");
+    };
+    assert_eq!(lit.dims.len(), 1);
+}
+
+#[test]
+fn test_shape_literal_in_return_type() {
+    let program =
+        parse_ok("fn f(t: Tensor[f64, [3]]) -> Tensor[f64, [3, 3]] { t }\nfn main() {}\n");
+    let func = program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(f) if f.name == "f" => Some(f),
+            _ => None,
+        })
+        .expect("fn f not found");
+    let ret = func.return_type.as_ref().expect("return type");
+    let TypeKind::Path(ref path) = ret.kind else {
+        panic!("expected path return type");
+    };
+    let args = path.generic_args.as_ref().expect("generic args");
+    let GenericArg::Shape(ref lit) = args[1] else {
+        panic!("expected shape literal in return type");
+    };
+    assert_eq!(lit.dims.len(), 2);
+}
+
+#[test]
+fn test_shape_literal_empty_rejected() {
+    let (_, errors) = parse_with_errors("fn f(t: Tensor[f64, []]) { }\nfn main() {}\n");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("at least one dimension")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_shape_literal_nested_rejected() {
+    let (_, errors) = parse_with_errors("fn f(t: Tensor[f64, [[3], 4]]) { }\nfn main() {}\n");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("shape literals do not nest")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_shape_literal_splice_without_identifier_rejected() {
+    let (_, errors) = parse_with_errors("fn f(t: Tensor[f64, [..., 4]]) { }\nfn main() {}\n");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("expected identifier after `...`")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_question_outside_shape_position_unchanged() {
+    // `?` stays the expression-level try operator outside shape literals.
+    parse_ok("fn g() -> Option[i64] { None }\nfn f() -> Option[i64] { let x = g()?; Some(x) }\nfn main() {}\n");
+}
+
+#[test]
+fn test_array_const_args_unaffected_by_shape_literals() {
+    // Array[T, N] const-arg parsing keeps its existing route — a bare
+    // integer in generic-arg position is a const arg, not a shape.
+    let program = parse_ok("fn f(t: Array[f64, 3]) { }\nfn main() {}\n");
+    let args = first_param_generic_args(&program);
+    assert!(matches!(args[1], GenericArg::Const(_)));
+}

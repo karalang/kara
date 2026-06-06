@@ -89,6 +89,12 @@ impl<'a> super::Resolver<'a> {
                     match arg {
                         GenericArg::Type(ty) => self.resolve_type_expr(ty),
                         GenericArg::Const(expr) => self.resolve_expr(expr),
+                        GenericArg::Shape(_) => {
+                            // Shape-literal dims resolve under the Dim/Shape kind
+                            // system (Phase 11 Q1) — identifiers inside a shape literal
+                            // name Dim-kinded / variadic shape params the resolver
+                            // cannot see until that lands; deliberately not walked.
+                        }
                     }
                 }
                 if let Some(list) = use_effects {
@@ -107,6 +113,12 @@ impl<'a> super::Resolver<'a> {
                     match arg {
                         GenericArg::Type(ty) => self.resolve_type_expr(ty),
                         GenericArg::Const(expr) => self.resolve_expr(expr),
+                        GenericArg::Shape(_) => {
+                            // Shape-literal dims resolve under the Dim/Shape kind
+                            // system (Phase 11 Q1) — identifiers inside a shape literal
+                            // name Dim-kinded / variadic shape params the resolver
+                            // cannot see until that lands; deliberately not walked.
+                        }
                     }
                 }
             }
@@ -130,6 +142,12 @@ impl<'a> super::Resolver<'a> {
                 match arg {
                     GenericArg::Type(ty) => self.resolve_type_expr(ty),
                     GenericArg::Const(expr) => self.resolve_expr(expr),
+                    GenericArg::Shape(_) => {
+                        // Shape-literal dims resolve under the Dim/Shape kind
+                        // system (Phase 11 Q1) — identifiers inside a shape literal
+                        // name Dim-kinded / variadic shape params the resolver
+                        // cannot see until that lands; deliberately not walked.
+                    }
                 }
             }
         }
@@ -152,6 +170,12 @@ impl<'a> super::Resolver<'a> {
                 match arg {
                     GenericArg::Type(ty) => self.resolve_type_expr(ty),
                     GenericArg::Const(expr) => self.resolve_expr(expr),
+                    GenericArg::Shape(_) => {
+                        // Shape-literal dims resolve under the Dim/Shape kind
+                        // system (Phase 11 Q1) — identifiers inside a shape literal
+                        // name Dim-kinded / variadic shape params the resolver
+                        // cannot see until that lands; deliberately not walked.
+                    }
                 }
             }
         }
