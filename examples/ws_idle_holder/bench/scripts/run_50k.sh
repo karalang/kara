@@ -17,8 +17,18 @@
 # - server-bin: absolute path to the server binary under test — the Kāra
 #   demo (examples/ws_idle_holder/ws_idle_holder, via `karac build`), the
 #   Rust comparator, or a commercial comparator binary, e.g. the Go impl
-#   (examples/ws_idle_holder/go/ws-idle-holder-go, via `go build`).
+#   (examples/ws_idle_holder/go/ws-idle-holder-go, via `go build`) or the
+#   Phoenix launcher (examples/ws_idle_holder/phoenix/run_server.sh).
 # - output.json: optional, defaults to "<basename>-50k.json" in cwd.
+#
+# Optional env:
+# - BENCH_EXTRA_ARGS: extra flags appended to the bench invocation, for
+#   comparators that need a non-default handshake. Bare-WS comparators
+#   (Kāra/Rust/Go) leave it unset. Phoenix Channels needs:
+#     BENCH_EXTRA_ARGS="--ws-path /socket/websocket?vsn=2.0.0 --phx-join room:bench"
+# - PRESENCE: forwarded to the spawned server's environment (the bench
+#   inherits this script's env and passes it through). The Phoenix
+#   comparator reads PRESENCE=off to run the presence-disabled sidebar.
 #
 # Prereq: scripts/ec2_setup.sh (sysctls + loopback aliases + nofile
 # limits.d). This script also calls `ulimit -n 200000` inline as a safety
@@ -73,10 +83,17 @@ done
 # margin).
 ulimit -n 200000 2>/dev/null || true
 
+# Optional per-comparator extra flags (e.g. Phoenix's --ws-path/--phx-join).
+# Split via `read -ra` (not unquoted expansion) so the `?vsn=` query string
+# is not glob-expanded and values with no embedded spaces stay intact.
+read -ra EXTRA <<< "${BENCH_EXTRA_ARGS:-}"
+
 echo "[run_50k] server-bin  : $SERVER_BIN"
 echo "[run_50k] bench-bin   : $BENCH_BIN"
 echo "[run_50k] output      : $OUTPUT"
 echo "[run_50k] ulimit -n   : $(ulimit -n)"
+echo "[run_50k] extra-args  : ${BENCH_EXTRA_ARGS:-<none>}"
+echo "[run_50k] presence    : ${PRESENCE:-<server default>}"
 echo "[run_50k] starting at : $(date -u +%FT%TZ)"
 echo
 
@@ -87,6 +104,7 @@ echo
     --churn-rounds 0 \
     --connect-timeout-ms 30000 \
     --source-ips "$SOURCE_IPS" \
+    "${EXTRA[@]}" \
     | tee "$OUTPUT"
 
 echo

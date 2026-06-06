@@ -108,6 +108,31 @@ struct Args {
     /// global tick. Lets the active-traffic latency be read under
     /// realistic arrival vs. a worst-case synchronized burst.
     stagger_arrival: bool,
+    /// Request-line path for the WS upgrade `GET <path> HTTP/1.1`.
+    /// Default `/` matches the bare-WS comparators (Kāra/Rust/Go), whose
+    /// servers upgrade at the root. Phoenix mounts its Channels transport
+    /// at `/socket/websocket?vsn=2.0.0`, so the Phoenix comparator passes
+    /// that path. Purely the handshake target — does not change framing.
+    ws_path: String,
+    /// Phoenix Channels join topic. When set, after the WS upgrade the
+    /// client sends a Phoenix v2 `phx_join` frame for this topic and
+    /// waits for the `phx_reply` ok ack before counting the connection as
+    /// established. This is what engages the channel + Presence layer: a
+    /// bare idle socket would measure only Phoenix's transport, not
+    /// Channels+presence (the real-world Elixir prod config). `None`
+    /// (default) = no join, byte-identical to the bare-WS comparators.
+    phx_join: Option<String>,
+}
+
+/// Per-connection handshake configuration threaded into `establish`.
+/// Owned (not borrowed) because each spawned connection task moves its
+/// own copy across the `tokio::spawn` boundary — the same reason `addr`
+/// is cloned per connection. Both fields are tiny, so the per-conn clone
+/// is negligible even at 250K scale.
+#[derive(Clone)]
+struct Handshake {
+    ws_path: String,
+    phx_join: Option<String>,
 }
 
 impl Default for Args {
@@ -131,6 +156,8 @@ impl Default for Args {
             msg_rate: 1.0,
             handshake_qps_secs: 0,
             stagger_arrival: false,
+            ws_path: "/".to_string(),
+            phx_join: None,
         }
     }
 }
@@ -181,6 +208,14 @@ HANDSHAKE-QPS (reconnect-storm; mutually exclusive with the idle hold):
   --handshake-qps-secs <N>  open+close as fast as --concurrency allows for N
                             seconds; report sustained TLS+WS handshakes/sec  (default 0=off)
 
+PHOENIX CHANNELS (engages the Channels + Presence layer; bare-WS comparators omit both):
+  --ws-path <path>          WS upgrade request path           (default /)
+                            Phoenix: /socket/websocket?vsn=2.0.0
+  --phx-join <topic>        after upgrade, send a Phoenix v2 phx_join for
+                            <topic> and await the ok phx_reply before the
+                            conn counts as established (engages Presence).
+                            e.g. room:bench                   (default off)
+
   -h, --help                this help
 "
 }
@@ -215,6 +250,8 @@ fn parse_args() -> Result<Args, BoxErr> {
             "--msg-rate" => a.msg_rate = next()?.parse()?,
             "--stagger-arrival" => a.stagger_arrival = true,
             "--handshake-qps-secs" => a.handshake_qps_secs = next()?.parse()?,
+            "--ws-path" => a.ws_path = next()?,
+            "--phx-join" => a.phx_join = Some(next()?),
             "-h" | "--help" => {
                 eprint!("{}", usage());
                 std::process::exit(0);
@@ -325,6 +362,7 @@ async fn establish(
     addr: &str,
     server_name: ServerName<'static>,
     source_ip: Option<&str>,
+    hs: &Handshake,
 ) -> Result<Tls, BoxErr> {
     let tcp = match source_ip {
         // Bind a specific loopback source IP so this connection draws
@@ -341,9 +379,10 @@ async fn establish(
     let mut tls = connector.connect(server_name, tcp).await?;
 
     let req = format!(
-        "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
+        "GET {} HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
          Connection: Upgrade\r\nSec-WebSocket-Key: {WS_KEY}\r\n\
-         Sec-WebSocket-Version: 13\r\n\r\n"
+         Sec-WebSocket-Version: 13\r\n\r\n",
+        hs.ws_path
     );
     tls.write_all(req.as_bytes()).await?;
     tls.flush().await?;
@@ -371,6 +410,26 @@ async fn establish(
     if !status_line.contains("101") {
         return Err(format!("expected 101 Switching Protocols, got: {status_line:?}").into());
     }
+
+    // Phoenix Channels join. Presence only engages once a client has
+    // joined a channel, so for the Phoenix comparator a bare idle socket
+    // would measure the transport alone — not Channels+presence, the
+    // real-world Elixir config (#67). We send the v2-serializer join
+    // frame and wait for the `ok` reply so the connection is counted as
+    // established only after the channel process + presence entry exist.
+    if let Some(topic) = hs.phx_join.as_deref() {
+        // Phoenix v2 wire format: [join_ref, ref, topic, event, payload].
+        let join = format!(r#"["1","1","{topic}","phx_join",{{}}]"#);
+        ws_send_text_masked(&mut tls, join.as_bytes()).await?;
+        let reply = ws_read_frame(&mut tls).await?;
+        let reply = String::from_utf8_lossy(&reply);
+        // Reply: [..,"phx_reply",{"status":"ok","response":{}}]. Accept on
+        // the phx_reply event + ok status; surface anything else verbatim.
+        if !(reply.contains("phx_reply") && reply.contains("\"status\":\"ok\"")) {
+            return Err(format!("phx_join to {topic:?} not acked: {reply}").into());
+        }
+    }
+
     Ok(tls)
 }
 
@@ -387,6 +446,7 @@ async fn open_batch(
     concurrency: usize,
     connect_timeout: Duration,
     source_ips: &[String],
+    hs: &Handshake,
 ) -> (Vec<Tls>, Vec<f64>, usize, Vec<String>) {
     let sem = Arc::new(Semaphore::new(concurrency));
     let mut handles = Vec::with_capacity(count);
@@ -395,6 +455,7 @@ async fn open_batch(
         let connector = connector.clone();
         let addr = addr.to_string();
         let sni = server_name.clone();
+        let hs = hs.clone();
         // Round-robin the source IP by connection index so the load is
         // even across the pool; None when no --source-ips were given.
         let src_ip = if source_ips.is_empty() {
@@ -407,7 +468,7 @@ async fn open_batch(
             let t0 = Instant::now();
             match timeout(
                 connect_timeout,
-                establish(&connector, &addr, sni, src_ip.as_deref()),
+                establish(&connector, &addr, sni, src_ip.as_deref(), &hs),
             )
             .await
             {
@@ -640,6 +701,7 @@ async fn run_handshake_qps(
     connect_timeout: Duration,
     source_ips: &[String],
     duration: Duration,
+    hs: &Handshake,
 ) -> (usize, usize, Vec<f64>) {
     let deadline = Instant::now() + duration;
     let sem = Arc::new(Semaphore::new(concurrency));
@@ -662,13 +724,14 @@ async fn run_handshake_qps(
             Some(source_ips[idx % source_ips.len()].clone())
         };
         idx += 1;
+        let hs = hs.clone();
         let (completed, failed, lats) = (completed.clone(), failed.clone(), lats.clone());
         tokio::spawn(async move {
             let _permit = permit; // released on task end
             let t0 = Instant::now();
             match timeout(
                 connect_timeout,
-                establish(&connector, &addr, sni, src_ip.as_deref()),
+                establish(&connector, &addr, sni, src_ip.as_deref(), &hs),
             )
             .await
             {
@@ -913,6 +976,13 @@ async fn main() -> Result<(), BoxErr> {
 
     let rss_before = server_pid.and_then(read_rss_kb);
     let connect_timeout = Duration::from_millis(args.connect_timeout_ms);
+    // Per-connection handshake config (WS path + optional Phoenix join),
+    // shared read-only across every establish() — cloned per task inside
+    // the open_batch / qps loops.
+    let hs = Handshake {
+        ws_path: args.ws_path.clone(),
+        phx_join: args.phx_join.clone(),
+    };
 
     // Handshake-QPS (reconnect-storm) mode: skip the idle hold entirely.
     // Open+immediately-close connections as fast as --concurrency allows
@@ -932,6 +1002,7 @@ async fn main() -> Result<(), BoxErr> {
             connect_timeout,
             &args.source_ips,
             Duration::from_secs(args.handshake_qps_secs),
+            &hs,
         )
         .await;
         let elapsed = storm_start.elapsed().as_secs_f64();
@@ -1000,6 +1071,7 @@ async fn main() -> Result<(), BoxErr> {
         args.concurrency,
         connect_timeout,
         &args.source_ips,
+        &hs,
     )
     .await;
     let established = held.len();
@@ -1115,6 +1187,7 @@ async fn main() -> Result<(), BoxErr> {
                 args.concurrency,
                 connect_timeout,
                 &args.source_ips,
+                &hs,
             )
             .await;
             re_failed += f;
