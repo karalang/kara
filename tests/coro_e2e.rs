@@ -196,6 +196,35 @@ mod tests {
         }
     "#;
 
+    /// Slice 5c-4 (defer-on-cancel): a spawned coroutine parked on an idle
+    /// `accept` with a user `defer { println(9); }` registered *before* the park
+    /// (so it is live across the suspend). `tg.cancel()` + the cancel-sweep tear
+    /// the coroutine down at the park; the per-park destroy edge must now run the
+    /// `defer` body (`9` on stdout) — proving cancel routes through the error-path
+    /// cleanup drain, not just the heap-drop drain. The post-park body
+    /// (`buf.len()` ⇒ `3`) must stay ABSENT (torn down at the park), and `7`
+    /// proves main's scope-exit join woke. Discriminating signal: `defer` on a
+    /// torn-down coroutine fires ONLY if the destroy edge drains user defers, so
+    /// observing `9` is the load-bearing assertion for this slice.
+    const CANCEL_DEFER_SRC: &str = r#"
+        fn serve_buf(listener: TcpListener) {
+            let mut buf: Vec[i64] = Vec.new();
+            buf.push(1);
+            buf.push(2);
+            buf.push(3);
+            defer { println(9); }
+            let _stream = listener.accept().unwrap();
+            println(buf.len());
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            let mut tg = TaskGroup.new();
+            tg.spawn(|| serve_buf(listener));
+            tg.cancel();
+            println(7);
+        }
+    "#;
+
     /// Owned-user-`Drop` coroutine-param leak regression (the `ws_idle_holder`
     /// connection-reap leak class, minimized). `serve_one` is coroutine-compiled
     /// (it parks on `accept`) and takes an **owned** param `c: Conn` whose
@@ -1190,6 +1219,56 @@ mod tests {
             lines.iter().any(|l| l == "7"),
             "main did not reach its post-cancel line under ASAN — the group join \
              hung; stdout lines: {lines:?}"
+        );
+    }
+
+    /// Slice 5c-4: user `defer` fires when a parked coroutine is cancelled. The
+    /// destroy edge routes through the error-path cleanup drain, so a `defer`
+    /// live across the park runs on teardown. `9` present ⇒ defer fired; `3`
+    /// absent ⇒ the post-park body did not run (torn down at the park); `7`
+    /// present ⇒ main's join woke. A destroy edge that drained only heap drops
+    /// (pre-5c-4 behaviour) would NOT print `9`.
+    #[test]
+    fn coroutine_taskgroup_cancel_runs_user_defer() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_cancel_defer_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(CANCEL_DEFER_SRC, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let (exit_status, lines) = run_cancel_until_exit(&exe_path, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "cancel binary exited non-success {exit_status:?}; stdout lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "9"),
+            "the cancelled coroutine did not run its `defer` body (expected `9`) — \
+             the destroy edge skipped user defers; stdout lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "7"),
+            "main did not reach its post-cancel line — the group join hung; \
+             stdout lines: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l == "3"),
+            "the cancelled coroutine ran its post-park body (buf.len()==3) — it \
+             should have been torn down at the park; stdout lines: {lines:?}"
         );
     }
 

@@ -594,7 +594,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // one to drop. Make the coroutine the owner instead — register
                 // owned user-`Drop` params here so `emit_scope_cleanup` runs
                 // their `Drop` on body-end completion and
-                // `emit_coro_destroy_edge_drops` runs it on the per-park
+                // `emit_coro_destroy_edge_cleanup` runs it on the per-park
                 // destroy/cancel edge. Every caller of a coroutine fn suppresses
                 // its own drop of the owned arg (`call_dispatch` /
                 // `method_call`), keeping it a single drop — without that

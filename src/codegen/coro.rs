@@ -986,9 +986,11 @@ impl<'ctx> super::Codegen<'ctx> {
         //      frame-resident parked record; freeing the frame without this
         //      dangles it (the dispatcher would deref freed memory on the next
         //      readiness poll). MUST precede the frame free.
-        //   2. drop the heap locals live across this park — the set a cancel
-        //      here would otherwise leak. CoroSplit spills each to the frame
-        //      because they are used on this (post-suspend) edge.
+        //   2. run the Kāra-level cancel cleanup live across this park — the
+        //      heap locals a cancel here would otherwise leak (CoroSplit spills
+        //      each to the frame because they are used on this post-suspend
+        //      edge) PLUS the user `defer` / `errdefer` blocks (slice 5c-4),
+        //      via the error-path drain (`emit_coro_destroy_edge_cleanup`).
         //   3. `park_slot_signal` the completion slot (slice 5c) — a cancelled
         //      coroutine never reaches its normal `coro_return` signal, so
         //      without this the waiter (`park_slot_wait` inline, or the
@@ -1003,9 +1005,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // Deregister-vs-drops-vs-signal order is immaterial (independent); the
         // frame free strictly follows all three.
         self.builder.position_at_end(destroy_bb);
-        // Restore the pre-suspend active span first, so any user-`Drop` run by
-        // `emit_coro_destroy_edge_drops` below logs under the coroutine's span
-        // rather than the resuming worker's.
+        // Restore the pre-suspend active span first, so any user-`Drop` or
+        // user-`defer` body run by `emit_coro_destroy_edge_cleanup` below logs
+        // under the coroutine's span rather than the resuming worker's.
         self.emit_coro_restore_active_span(active_span_slot, i64_ty);
         let token_field_d = self
             .builder
@@ -1019,7 +1021,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(deregister_fd, &[fd.into(), token_d.into()], "")
             .unwrap();
-        self.emit_coro_destroy_edge_drops();
+        self.emit_coro_destroy_edge_cleanup();
         let signal_fn = self
             .module
             .get_function("karac_runtime_park_slot_signal")

@@ -1117,55 +1117,52 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Emit the heap-local drops for a coroutine **destroy/cancel edge** (A2
-    /// slice 4 — `docs/spikes/network-async-coroutine-transform.md` § 7 slice
-    /// 4). Called from `emit_coro_park_suspend`'s per-park destroy block, where
-    /// the live `scope_cleanup_actions` stack is exactly the set of locals live
-    /// across that suspend — so a coroutine destroyed *while parked here* frees
-    /// exactly the heap a mid-flight cancel would otherwise leak (Vec read
-    /// buffers, String, Map/file handles, RC-fallback boxes, struct/enum drops,
-    /// user `Drop` impls).
+    /// Emit the full Kāra-level cleanup for a coroutine **destroy/cancel edge**
+    /// (A2 slice 4 heap drops + slice 5c-4 defer-on-cancel —
+    /// `docs/spikes/network-async-coroutine-transform.md` § 7). Called from
+    /// `emit_coro_park_suspend`'s per-park destroy block, where the live
+    /// `scope_cleanup_actions` stack is exactly the set of locals + `defer` /
+    /// `errdefer` blocks live across that suspend — so a coroutine destroyed
+    /// *while parked here* frees exactly the heap a mid-flight cancel would
+    /// otherwise leak (Vec read buffers, String, Map/file handles, RC-fallback
+    /// boxes, struct/enum drops, user `Drop` impls) **and** runs the user
+    /// `defer` / `errdefer` blocks the cancel would otherwise swallow.
     ///
-    /// Mirrors [`Self::emit_scope_cleanup`]'s whole-stack LIFO drain, with two
-    /// deliberate differences:
-    ///   * It skips **both** `UserDefer` and `UserErrDefer`. These are
-    ///     scope-exit *control-flow* constructs, not heap ownership; their
-    ///     bodies must not be re-compiled onto every park's destroy edge, and
-    ///     defer-on-cancel semantics are out of scope until the slice-5 cancel
-    ///     work wires a real teardown trigger. (`emit_scope_cleanup` runs
-    ///     `UserDefer` on the normal-completion path; that asymmetry is the
-    ///     documented v1 limitation — a destroyed-mid-flight coroutine drops its
-    ///     heap but does not run user `defer` blocks.)
-    ///   * The frame is **not** freed here — the shared `cleanup_bb`
-    ///     (`coro.free`) the destroy block branches into does that. This only
-    ///     runs the Kāra-level drops.
+    /// **Cancel is an error-path exit.** This routes through the same
+    /// [`Self::emit_scope_cleanup_for_error_path`] the `par {}` cooperative-
+    /// cancel path uses (`emit_branch_cancel_check`, `par_blocks.rs`) and that
+    /// the interpreter's `ExitPath::Cancelled` mirrors: errdefers drain in
+    /// phase 1 (LIFO across frames), then drops + defers in phase 2. That
+    /// satisfies design.md § *Panic During Suspend* rule 1 ("the task's `defer`
+    /// blocks, `errdefer` blocks, and RC-counted drops execute in standard
+    /// reverse construction order") and keeps coroutine cancellation behaviour
+    /// identical to `par`-branch cancellation. As with `par`, the binding form
+    /// `errdefer(e) { ... }` has no materialized `e = Cancelled` payload at a
+    /// cancel exit (no `Err` value is constructed — cancel is a flag); that is
+    /// the same cross-cutting design gap `par` carries, not coroutine-specific.
     ///
-    /// Each remaining action goes through the same `emit_cleanup_action_at` the
-    /// normal path uses, so it inherits the null-guards / conditional-init
-    /// handling (e.g. `RcDec`'s null-sentinel skip) verbatim. The
-    /// completion-path drops and these destroy-edge drops are on mutually
-    /// exclusive control-flow paths (a coroutine either runs to completion —
-    /// body-end `emit_scope_cleanup` drops, then parks at the final suspend
-    /// whose destroy edge is free-only — or is destroyed at a park, reaching
-    /// this drain), so no value is dropped twice.
-    pub(super) fn emit_coro_destroy_edge_drops(&mut self) {
-        let vec_ty = self.vec_struct_type();
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let i64_t = self.context.i64_type();
-        let fn_val = self.current_fn.unwrap();
-
-        for frame_idx in (0..self.scope_cleanup_actions.len()).rev() {
-            let n = self.scope_cleanup_actions[frame_idx].len();
-            for action_idx in (0..n).rev() {
-                if matches!(
-                    &self.scope_cleanup_actions[frame_idx][action_idx],
-                    CleanupAction::UserDefer(_) | CleanupAction::UserErrDefer { .. }
-                ) {
-                    continue;
-                }
-                self.emit_cleanup_action_at(frame_idx, action_idx, fn_val, vec_ty, ptr_ty, i64_t);
-            }
-        }
+    /// **Recursion suppression.** A user `defer` / `errdefer` body may contain
+    /// an effectful call (`defer { println(..); }`). When this coroutine is
+    /// itself compiled inside a `par {}` branch, `branch_cancel_ptr` is set, so
+    /// that call's `compile_call` → `emit_branch_cancel_check` re-entry would
+    /// walk `scope_cleanup_actions` again and re-encounter the SAME actions
+    /// (still in their frames), recursing forever at compile time. Save + null +
+    /// restore `branch_cancel_ptr` across the drain — exactly as the `par`
+    /// cancel-exit does — so nested cancel-checks inside cleanup bodies no-op.
+    ///
+    /// The frame is **not** freed here — the shared `cleanup_bb` (`coro.free`)
+    /// the destroy block branches into does that; this only runs the Kāra-level
+    /// cleanup. Each action goes through the same `emit_cleanup_action_at` the
+    /// normal path uses, inheriting null-guards / conditional-init handling
+    /// (e.g. `RcDec`'s null-sentinel skip). The completion-path cleanup and
+    /// these destroy-edge actions are on mutually exclusive control-flow paths
+    /// (a coroutine either runs to completion — body-end `emit_scope_cleanup`,
+    /// then parks at the final suspend whose destroy edge is free-only — or is
+    /// destroyed at a park, reaching this drain), so nothing runs twice.
+    pub(super) fn emit_coro_destroy_edge_cleanup(&mut self) {
+        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        self.emit_scope_cleanup_for_error_path();
+        self.branch_cancel_ptr = saved_cancel_ptr;
     }
 
     /// Error-exit drain. Per design.md § *Drop ordering within a branch*,
