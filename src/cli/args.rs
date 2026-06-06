@@ -1394,12 +1394,26 @@ fn parse_query_command(args: &[String]) -> Command {
 ///   - `src/foo.kara:42-58`      → FileRange (inclusive)
 ///   - `src/foo.kara:my_fn`      → Function (bare)
 ///   - `src/foo.kara:Type.method`→ Function (qualified)
+///   - `C:\proj\foo.kara:my_fn`  → Function (Windows drive prefix)
 fn parse_affected_by_target(raw: &str) -> (String, crate::call_graph::TargetSpec) {
-    // The `:` separator divides a file path from an optional
-    // qualifier. Windows-style absolute paths use `C:` too — but
-    // that's not a v1 platform concern (Kāra single-file mode is
-    // unix-style today).
-    let Some(colon) = raw.find(':') else {
+    // The `:` separator divides a file path from an optional qualifier.
+    // A Windows drive prefix (`C:\` / `C:/`) also contains a colon —
+    // skip it before searching, or `C:\proj\x.kara:my_fn` splits into
+    // file `C` (surfaced by windows CI: `error: cannot read 'C'`,
+    // run 27050468497). The prefix shape is pinned to
+    // `<ascii-alpha>:<slash>` so a relative unix path like `a:b`
+    // keeps its existing first-colon split.
+    let bytes = raw.as_bytes();
+    let search_from = if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        2
+    } else {
+        0
+    };
+    let Some(colon) = raw[search_from..].find(':').map(|i| i + search_from) else {
         return (
             raw.to_string(),
             crate::call_graph::TargetSpec::File(raw.to_string()),
@@ -1449,4 +1463,65 @@ fn parse_affected_by_target(raw: &str) -> (String, crate::call_graph::TargetSpec
         file.to_string(),
         crate::call_graph::TargetSpec::Function(name),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_affected_by_target;
+    use crate::call_graph::TargetSpec;
+
+    /// Pure string parsing — the Windows drive-prefix cases run (and
+    /// regress) on every host, not just windows CI.
+    #[test]
+    fn affected_by_target_parse_matrix() {
+        // Unix forms (pre-existing behavior, unchanged).
+        assert!(matches!(
+            parse_affected_by_target("src/foo.kara").1,
+            TargetSpec::File(f) if f == "src/foo.kara"
+        ));
+        assert!(matches!(
+            parse_affected_by_target("src/foo.kara:42").1,
+            TargetSpec::FileRange(f, 42, 42) if f == "src/foo.kara"
+        ));
+        assert!(matches!(
+            parse_affected_by_target("src/foo.kara:42-58").1,
+            TargetSpec::FileRange(f, 42, 58) if f == "src/foo.kara"
+        ));
+        assert!(matches!(
+            parse_affected_by_target("src/foo.kara:my_fn").1,
+            TargetSpec::Function(n) if n == "my_fn"
+        ));
+        // `::` module convention collapses to the `.` call-graph key.
+        assert!(matches!(
+            parse_affected_by_target("src/foo.kara:m::my_fn").1,
+            TargetSpec::Function(n) if n == "m.my_fn"
+        ));
+
+        // Windows drive prefixes: the drive colon is not a separator.
+        // (windows CI run 27050468497: `C:\...\x.kara:middle` parsed as
+        // file `C`.)
+        assert!(matches!(
+            parse_affected_by_target(r"C:\proj\x.kara").1,
+            TargetSpec::File(f) if f == r"C:\proj\x.kara"
+        ));
+        let (file, spec) = parse_affected_by_target(r"C:\proj\x.kara:middle");
+        assert_eq!(file, r"C:\proj\x.kara");
+        assert!(matches!(spec, TargetSpec::Function(n) if n == "middle"));
+        assert!(matches!(
+            parse_affected_by_target("c:/proj/x.kara:42").1,
+            TargetSpec::FileRange(f, 42, 42) if f == "c:/proj/x.kara"
+        ));
+        assert!(matches!(
+            parse_affected_by_target(r"D:\x.kara:10-20").1,
+            TargetSpec::FileRange(f, 10, 20) if f == r"D:\x.kara"
+        ));
+
+        // A bare `x:y` (no slash after the colon) keeps the original
+        // first-colon split — only the pinned `<alpha>:<slash>` shape
+        // is treated as a drive prefix.
+        assert!(matches!(
+            parse_affected_by_target("a:b").1,
+            TargetSpec::Function(n) if n == "b"
+        ));
+    }
 }

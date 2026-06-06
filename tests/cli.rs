@@ -4412,9 +4412,15 @@ fn main() {
         "expected a bool instance entry; got {json}",
     );
     assert!(json.contains("\"effects\":[]"));
-    // Site is a string in design.md schema form, not an object.
+    // Site is a string in design.md schema form, not an object. The
+    // expected prefix is JSON-escaped (`\` → `\\`) so the assertion
+    // also holds on Windows, where the temp path contains backslashes
+    // that the JSON renderer escapes (no-op on unix paths).
     assert!(
-        json.contains(&format!("\"site\":\"{}:", path.to_str().unwrap())),
+        json.contains(&format!(
+            "\"site\":\"{}:",
+            path.to_str().unwrap().replace('\\', "\\\\")
+        )),
         "expected site rendered as `<file>:<line>:<col>` string; got {json}",
     );
     // Totals line up — one generic, two instances overall.
