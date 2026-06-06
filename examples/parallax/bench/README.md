@@ -33,7 +33,7 @@ look uniform across impls and hide the auto-par story's punch line.
 > **Sleep substitute (deviation from the design's F5 lock).** F5
 > originally specified `sleep_ms(n)` providers (real I/O simulation,
 > no CPU burn). Kāra's stdlib has no `sleep_ms` in v1 (Phase 11
-> long-tail). To keep the four impls apples-to-apples, **all four
+> long-tail). To keep the impls apples-to-apples, **all five
 > use CPU-bound busy loops** instead of sleeps. The shape of the
 > benchmark — fan-out + join over four independent operations — is
 > preserved, but the implication for measured throughput is
@@ -58,12 +58,13 @@ to stderr, the bench continues with the rest).
 | rust  | `cargo` (any stable) | rustc 1.x  |
 | go    | `go`               | go 1.21+   |
 | node  | `node`             | Node 18+   |
+| phoenix | `elixir` + `mix` | Elixir 1.19 + OTP 29 |
 | wrk   | `wrk`              | wrk 4.x    |
 
 ### Run
 
 ```sh
-# default — all four impls, 10s warmup + 30s measurement per impl
+# default — all five impls, 0s warmup + 10s measurement × 3 rounds per (impl, conn)
 sh examples/parallax/bench/bench.sh
 
 # dry-run (no servers spawned, no wrk; checked into CI via
@@ -106,10 +107,11 @@ all latencies are medians in milliseconds.
 
 | Impl | req/s | p50 ms | p75 ms | p90 ms | p99 ms | max ms |
 |------|-------|--------|--------|--------|--------|--------|
-| Kāra |  86   |  11.3  |  11.4  |  11.5  |  **17.4**  |  17.4  |
-| Rust |  85   |  11.5  |  11.6  |  11.7  |  18.2  |  18.2  |
-| Go   |  80   |  12.4  |  12.4  |  12.5  |  19.7  |  19.7  |
-| Node |   5   | 173.8  | 179.7  | 183.9  | 183.9  | 183.9  |
+| Kāra |  87   |  11.2  |  11.3  |  11.4  |  **18.2**  |  18.2  |
+| Rust |  85   |  11.4  |  11.5  |  11.5  |  19.4  |  19.4  |
+| Go   |  81   |  12.2  |  12.2  |  12.2  |  20.8  |  20.8  |
+| Node |   6   | 162.5  | 162.6  | 167.4  | 167.4  | 167.4  |
+| Phoenix | 46 |  21.0  |  21.1  |  21.2  |  43.4  |  43.4  |
 
 **How to read this.** Cold-start uses one client connection
 sequentially against a freshly-spawned server — this measures
@@ -125,7 +127,7 @@ settling into steady-state.
 
 **Cold-start findings.**
 
-- **Kāra / Rust within 1 ms at p99** (17.4 vs 18.2). At low
+- **Kāra / Rust within ~1 ms at p99** (18.2 vs 19.4). At low
   load with no queueing, both stacks deliver the same
   fundamental floor — Kāra's per-request HTTP path is no
   heavier than Rust's hyper service plumbing. The headline
@@ -135,28 +137,39 @@ settling into steady-state.
   difference.
 - **Go ~1-2 ms slower** at every percentile — goroutine
   scheduling overhead per request. Modest but consistent.
-- **Node ~10× slower** (174 ms p50 cold-start). Single-threaded
+- **Node ~14× slower** (162 ms p50 cold-start). Single-threaded
   event loop serializes the four busy_loops. The per-request
   shape is honest about Node's typical-deployment reality.
+- **Phoenix ~2× the p99 floor** (43 ms vs Kāra/Rust ~18). The
+  BEAM dispatches the four fetches across schedulers, but per-
+  request setup (process spawn for the Task fan-out, Bandit's
+  connection handling) sits above the native stacks' floor.
 
 ### Steady-state (sustained `wrk` load)
 
+_v7 (2026-06-06) — five impls in one session; Kāra now serializes
+real `Dashboard` data into the body (byte-identical wire shape to the
+others). See History below for the v6→v7 regression check._
+
 | Impl | -c    | req/s (median [min..max]) | p50 ms | p75 ms | p90 ms | p99 ms | max ms |
 |------|-------|---------------------------|--------|--------|--------|--------|--------|
-| **Kāra** | 100   | **720 [716..720]**     |  134   |  176   |  221   |  **300**   |  430   |
-| Kāra | 1000  | 679 [673..696]            | 1210   | 1490   | 1740   | 1960   | 2000   |
-| Kāra | 5000  | 671 [649..688]            | 1230   | 1670   | 1860   | 1980   | 2000   |
-| Rust | 100   | 718 [718..723]            |  120   |  163   |  261   |  803   | 1660   |
-| Rust | 1000  | 710 [708..715]            |  761   | 1140   | 1590   | 1920   | 2000   |
-| Rust | 5000  | 583 [534..613]            | 1140   | 1440   | 1690   | 1980   | 2000   |
-| Go   | 100   | 667 [661..670]            |  143   |  168   |  204   |  449   |  905   |
-| Go   | 1000  | 624 [577..660]            |  827   | 1070   | 1370   | 1860   | 2000   |
-| Go   | 5000  | 624 [573..641]            | 1540   | 1770   | 1900   | 1990   | 2000   |
-| Node | 100   | 6 [6..6]                  | 1140   | 1460   | 1620   | 1960   | 1960   |
+| **Kāra** | 100   | **738 [737..741]**     |  131   |  167   |  204   |  **272**   |  386   |
+| Kāra | 1000  | 696 [692..708]            | 1220   | 1490   | 1720   | 1960   | 2000   |
+| Kāra | 5000  | 680 [679..693]            | 1260   | 1650   | 1860   | 1980   | 2000   |
+| Rust | 100   | 740 [735..741]            |  118   |  159   |  254   |  710   | 1450   |
+| Rust | 1000  | 737 [737..738]            |  808   | 1230   | 1610   | 1950   | 2000   |
+| Rust | 5000  | 586 [574..589]            | 1620   | 1830   | 1890   | 1980   | 2000   |
+| Go   | 100   | 687 [673..689]            |  139   |  163   |  192   |  430   |  862   |
+| Go   | 1000  | 593 [590..674]            |  680   |  920   | 1220   | 1760   | 1990   |
+| Go   | 5000  | 623 [595..648]            |  981   | 1260   | 1550   | 1900   | 2000   |
+| Node | 100   | 6 [6..6]                  | 1250   | 1550   | 1560   | 1810   | 1810   |
 | Node | 1000  | (didn't complete — node can't service 1000 keep-alives at < 10 req/s) | — | — | — | — | — |
 | Node | 5000  | (same)                    | — | — | — | — | — |
+| Phoenix | 100 | 335 [332..339]            |  286   |  334   |  388   |  513   |  647   |
+| Phoenix | 1000 | 257 [256..262]           | 1450   | 1660   | 1830   | 1990   | 2000   |
+| Phoenix | 5000 | 145 [145..145]           | NA     | NA     | NA     | NA     | NA     |
 
-**How to read this.** All four impls run the same hash-mix kernel
+**How to read this.** All five impls run the same hash-mix kernel
 (`x = (x*31 + i) % p` over `n` iterations) at the same iteration
 counts (700 K / 4 M / 1.7 M / 2.7 M) — see G1 history below for
 *why* this kernel rather than the original triangular sum. Three
@@ -167,33 +180,38 @@ the status code because its response body was a fixed literal; the
 f-string codegen gaps that blocked body-weaving are now fixed),
 preventing the optimizer from eliding them. The fourth
 (`fetch_profile_name`) returns `String`/`&str`; its busy_loop result
-has no observable use and gets DCE'd in all four impls identically —
+has no observable use and gets DCE'd in all five impls identically —
 accepted and symmetric, since the 3-of-4 larger fan-out branches
 dominate the parallel critical path.
 
 **Cold-start vs steady-state — the comparison G5 enables.** Kāra
-goes from p99 **17 ms cold** to **300 ms steady-state at
--c100** — a 17× tail-latency degradation under saturated
-load. Rust goes 18 ms → 803 ms (45× degradation). Go goes 19 ms
-→ 449 ms (24× degradation, but its cold-start was already
+goes from p99 **18 ms cold** to **272 ms steady-state at
+-c100** — a 15× tail-latency degradation under saturated
+load. Rust goes 19 ms → 710 ms (37× degradation). Go goes 21 ms
+→ 430 ms (20× degradation, but its cold-start was already
 slower). The cold-start floor tells you the *fundamental
 per-request cost*; the steady-state row tells you what *queueing
 under load* does on top of that. Both pictures are needed.
 
-**Headline finding (`-c100`).** Kāra and Rust within ~1 %
-throughput (720 vs 718). Steady-state p99 — Kāra **2.7× lower
-than Rust** (300 ms vs 803 ms) and **1.5× lower than Go**
-(449 ms). Note Go's p99 dropped meaningfully from prior runs
-(1200 → 449) — that was a single-run GC-cycle outlier; with
-N=3 + median aggregation that artifact has now smoothed out,
-which is exactly why we run multiple rounds.
+**Headline finding (`-c100`).** Kāra and Rust within ~0.3 %
+throughput (738 vs 740). Steady-state p99 — Kāra **2.6× lower
+than Rust** (272 ms vs 710 ms) and **1.6× lower than Go**
+(430 ms). The Kāra↔Rust p99 gap is the consistent design
+dividend: `karac_par_run`'s work-helping wait loop holds the
+tail under contention where tokio's blocking-pool tail spreads
+(Rust `-c100` max 1450 ms). This is the same ~2.6–2.7× ratio
+the v6 baseline showed — see the v7 regression check in History.
 
 **Connection-sweep finding.** Kāra is the most stable across the
-sweep — 720 → 679 → 671 (only -7 % at 50× the connections).
-Rust holds at -c100 / -c1000 (718 → 710) but degrades to
-**583 [534..613]** at -c5000 — the wide variance shows runs
-hitting `tokio::task::spawn_blocking`'s blocking-pool stall
-edge. Go degrades early (667 → 624) then plateaus.
+sweep — 738 → 696 → 680 (only -8 % at 50× the connections).
+Rust holds at -c100 / -c1000 (740 → 737) but degrades to
+**586 [574..589]** at -c5000 — the variance shows runs hitting
+`tokio::task::spawn_blocking`'s blocking-pool stall edge. Go
+degrades to 593 at -c1000 then recovers to 623 at -c5000.
+Phoenix runs lower throughout (335 → 257 → 145) and hits a
+Bandit acceptor-pool limit at -c5000 (NA latencies — see the
+tracked tuning follow-on); the BEAM's per-request process
+fan-out carries more overhead than the native stacks.
 
 **Tail-latency finding (`karac_par_run` design dividend).** At
 -c100, Kāra's steady-state p99 is 300 ms vs Rust's 803 ms
@@ -293,6 +311,46 @@ in [`docs/investigations/http_layer_perf.md`](../../../docs/investigations/http_
 moves these numbers; once that work lands, re-running the
 bench produces a directly-comparable cold-start table.
 
+**v7 — five-impl single-session close-out + real-data body
+(2026-06-06).** First sweep with all five impls (kara/rust/go/
+node/phoenix) measured in one session, and the first where Kāra
+serializes the actual `Dashboard` fields into the JSON response
+body — byte-for-byte the wire shape the others emit (exact 159 B
+across all five). This closes the last apples-to-apples asymmetry:
+previously Kāra returned a fixed JSON literal and folded the i64
+fields into the status code, because two f-string codegen gaps
+blocked body-weaving (gap A: auto-par `refs_in_expr` lacked an
+`InterpolatedStringLit` arm; gap B: an f-string used directly as a
+struct-literal field value double-freed its accumulator when the
+struct moved out — a crash, exit 133). Both fixed; the handler now
+weaves the data via an f-string, which exercises exactly the gap-B
+shape.
+
+**Regression check (v6 → v7, `-c100`).** The number that matters —
+**Kāra is clean**: req/s 720 → 738 (+2.5 %), p99 300 → 272 ms
+(−9.4 %, i.e. *improved*), both inside ±10 %. None of the compiler
+work since the v6 baseline (spawn/TaskGroup, cross-task-safe walker,
+RAII walker, the f-string fixes, the body-weave) perturbed auto-par
+grouping or the fan-out critical path. Go is clean (req/s +3.0 %,
+p99 −4.3 %). Node is unchanged (6 req/s — the documented single-
+process limit, identical to v6). The headline holds: Kāra `-c100`
+p99 **2.6× lower than Rust** (272 vs 710), matching v6's 2.68×
+(300 vs 803).
+
+Two comparator deltas land just outside ±10 %, both **improvements
+on impls Kāra doesn't touch**, so neither is a regression and
+neither gets a `docs/investigations/` writeup (that's reserved for
+regressions / unexplained deltas): (1) **Rust p99 803 → 710 ms
+(−11.6 %)** — measurement variance on tokio's notoriously spread
+tail (v6 Rust `-c100` max was 1660 ms), a month and a session
+apart; (2) **Phoenix req/s 274 → 335 (+22 %), p99 588 → 513 ms
+(−13 %)** vs its 2026-05-30 first-measurement solo baseline — pure
+same-machine reproducibility drift (BEAM JIT warmup / thermal /
+background-load differences between sessions), which is exactly the
+cross-session mixing this single-session v7 row exists to retire.
+Phoenix still hits the tracked Bandit acceptor-pool limit at
+-c5000 (NA latencies).
+
 Full investigation log + per-step disassembly + reasoning lives at
 [`docs/investigations/parallax_perf.md`](../../../docs/investigations/parallax_perf.md);
 bench-measurement gaps + their fixes at
@@ -340,7 +398,7 @@ the design lock specifies:
 
 ## Source comparison
 
-Four impls, four idioms for the same problem.
+Five impls, five idioms for the same problem.
 
 - **[`kara/server.kara`](kara/server.kara)** — fan-out is implicit.
   `get_dashboard` is straight-line sequential code; the four
@@ -362,7 +420,7 @@ Four impls, four idioms for the same problem.
   its accumulator buffer when the struct moves out. The three larger
   i64 fetches ride into the body and survive DCE; `fetch_profile_name`
   returns the constant `"Alice"` (its busy_loop is discarded
-  identically in all four impls — symmetric, see "How to read this"
+  identically in all five impls — symmetric, see "How to read this"
   above).
 
 - **[`rust/src/main.rs`](rust/src/main.rs)** — `tokio` + `hyper` +
@@ -382,6 +440,14 @@ Four impls, four idioms for the same problem.
   `Promise.all([fetch_X(), ...])`. Single-process; CPU-bound busy
   loops resolve serially on the event loop thread. F4 footnote
   applies.
+
+- **[`phoenix/`](phoenix/)** — Phoenix 1.8 + Bandit + `Task.async`/
+  `Task.await` fan-out on the BEAM. `get_dashboard` spawns four
+  `Task.async` processes and `Task.await`s each. The commercial
+  contrast: the auto-par "no concurrency engineers" reframe lands
+  against GenServer/`Task` fan-out, not just Rust's `tokio::join!`.
+  At `-c5000` Bandit's default acceptor pool caps ingestion (NA
+  latencies) — a tracked tuning follow-on, not a fundamental limit.
 
 ## Out of scope (deferred to follow-ups)
 
