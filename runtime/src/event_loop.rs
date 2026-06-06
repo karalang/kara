@@ -6067,7 +6067,9 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "tls")]
+    // `all(unix, …)` mirrors the helper's own gate — its only consumer is
+    // the unix-gated TLS handshake pool, so it doesn't exist on Windows.
+    #[cfg(all(unix, feature = "tls"))]
     #[test]
     fn test_ws_max_pending_from_raw_parse_matrix() {
         // Off by default (unset → unbounded).
@@ -6724,6 +6726,8 @@ mod tests {
         close_fd(server_fd);
     }
 
+    // Mirrors the helper's `#[cfg(unix)]` gate (`/dev/urandom` reader).
+    #[cfg(unix)]
     #[test]
     fn test_ws_generate_mask_key_is_nonzero_and_varies() {
         // Defensive: the mask key generator should produce
