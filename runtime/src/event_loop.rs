@@ -696,14 +696,72 @@ pub unsafe extern "C" fn karac_runtime_event_loop_poll(
     }
     // Synchronous single-thread fallback (tests / embedding). Production
     // never takes this path — codegen starts the background poller +
-    // dispatcher, which short-circuits above. Because each shard owns its own
-    // epoll, one thread cannot block-wait on all shards at once, so we sweep
-    // every shard non-blocking and, if nothing is ready and the caller allowed
-    // waiting, fall back to bounded blocking slices across shards until a
-    // wakeup arrives or the deadline elapses. A pending cross-thread `wake()`
-    // (which wakes every shard) cuts a slice short, so the loop stays
-    // responsive without busy-spinning.
-    let loops = event_loops();
+    // dispatcher, which short-circuits above.
+    unsafe { poll_shards(event_loops(), max_wait, wakeups_out, max_wakeups) }
+}
+
+/// Write `wakeups` (from shard `shard`) into the caller buffer at offset
+/// `*n`, bounded by `max_wakeups`. Excess wakeups are dropped — documented
+/// [`karac_runtime_event_loop_poll`] behavior.
+///
+/// # Safety
+///
+/// Same contract as [`karac_runtime_event_loop_poll`]: `wakeups_out` must be
+/// writable for `max_wakeups` elements.
+unsafe fn write_wakeups_out(
+    wakeups_out: *mut KaracWakeup,
+    n: &mut usize,
+    max_wakeups: usize,
+    shard: usize,
+    wakeups: Vec<Wakeup>,
+) {
+    for w in wakeups {
+        if *n >= max_wakeups {
+            break;
+        }
+        // SAFETY: caller's contract — `wakeups_out` is writable for
+        // `max_wakeups` elements; we write at offset `*n < max_wakeups`.
+        unsafe {
+            wakeups_out.add(*n).write(KaracWakeup {
+                token: pack_token(shard, w.token.0),
+                parked: w.parked,
+                direction: w.direction as u8,
+            });
+        }
+        *n += 1;
+    }
+}
+
+/// Sweep-and-wait poll over an explicit shard slice — the synchronous
+/// fallback body of [`karac_runtime_event_loop_poll`], parameterized over
+/// `loops` so tests can drive it against a private single-shard loop.
+///
+/// Because each shard owns its own epoll, one thread cannot block-wait on
+/// all shards at once, so we sweep every shard non-blocking and, if nothing
+/// is ready and the caller allowed waiting, fall back to bounded blocking
+/// slices across shards until a wakeup arrives or the deadline elapses. A
+/// pending cross-thread `wake()` (which wakes every shard) cuts a slice
+/// short, so the loop stays responsive without busy-spinning.
+///
+/// **The blocking slice delivers.** `run_once` is the readiness sink: mio's
+/// epoll/kqueue registrations are edge-triggered, so whichever `run_once`
+/// call observes an event *consumes* it — there is no queue behind it
+/// (Stage B3 removed it) and the kernel will not re-report the edge. The
+/// blocking slice therefore writes its wakeups into the caller buffer
+/// exactly like the sweep does. Discarding them (the Stage B2 regression)
+/// silently lost any readiness that fired while its own shard was the one
+/// blocking — `poll` then waited out its full deadline and returned 0.
+///
+/// # Safety
+///
+/// Same contract as [`karac_runtime_event_loop_poll`]: `wakeups_out` must be
+/// writable for `max_wakeups` elements.
+unsafe fn poll_shards(
+    loops: &[Arc<EventLoop>],
+    max_wait: Option<Duration>,
+    wakeups_out: *mut KaracWakeup,
+    max_wakeups: usize,
+) -> usize {
     // Per-slice blocking budget when waiting: small enough that the sweep
     // re-checks all shards promptly, large enough to avoid a hot spin.
     const SLICE: Duration = Duration::from_millis(20);
@@ -723,21 +781,8 @@ pub unsafe extern "C" fn karac_runtime_event_loop_poll(
                 Ok(w) => w,
                 Err(_) => continue,
             };
-            for w in wakeups {
-                if n >= max_wakeups {
-                    break;
-                }
-                // SAFETY: caller's contract — `wakeups_out` is writable for
-                // `max_wakeups` elements; we write at offset `n < max_wakeups`.
-                unsafe {
-                    wakeups_out.add(n).write(KaracWakeup {
-                        token: pack_token(shard, w.token.0),
-                        parked: w.parked,
-                        direction: w.direction as u8,
-                    });
-                }
-                n += 1;
-            }
+            // SAFETY: forwarding the caller's buffer contract.
+            unsafe { write_wakeups_out(wakeups_out, &mut n, max_wakeups, shard, wakeups) };
         }
         if n > 0 {
             return n;
@@ -748,14 +793,22 @@ pub unsafe extern "C" fn karac_runtime_event_loop_poll(
         }
         // Nothing ready yet and waiting is allowed: block on one shard for a
         // bounded slice (rotating so every shard gets blocking attention),
-        // capped by any remaining deadline, then re-sweep.
+        // capped by any remaining deadline. Anything this blocking call
+        // returns is delivered — see "The blocking slice delivers" above.
         let slice = match deadline {
             Some(d) => SLICE.min(d.saturating_duration_since(Instant::now())),
             None => SLICE,
         };
         if !loops.is_empty() {
-            let _ = loops[rotate % loops.len()].run_once(Some(slice));
+            let shard = rotate % loops.len();
+            if let Ok(wakeups) = loops[shard].run_once(Some(slice)) {
+                // SAFETY: forwarding the caller's buffer contract.
+                unsafe { write_wakeups_out(wakeups_out, &mut n, max_wakeups, shard, wakeups) };
+            }
             rotate += 1;
+            if n > 0 {
+                return n;
+            }
         }
     }
 }
@@ -4334,6 +4387,66 @@ mod tests {
             elapsed < Duration::from_millis(100),
             "non-blocking poll should return immediately, took {elapsed:?}"
         );
+    }
+
+    /// Regression (Stage B2, CI run 27048824708): the synchronous poll
+    /// fallback's *blocking* slice used to discard the wakeups its
+    /// `run_once` returned. mio registrations are edge-triggered, so
+    /// readiness that fired while the fd's own shard was the one blocking
+    /// was consumed and lost — `poll` then waited out its full deadline
+    /// and returned 0 (the `ffi_round_trip_register_poll_deregister_wake`
+    /// failure mode; 1-in-shard-count odds per run, which is why ubuntu's
+    /// 4-core runners hit it and 18-core dev machines rarely did).
+    ///
+    /// Drive `poll_shards` against a private single-shard loop with the
+    /// connect delayed past the first non-blocking sweep, so the readiness
+    /// can *only* be observed by a blocking slice — deterministic
+    /// regardless of machine core count, no FFI guard needed.
+    #[test]
+    fn poll_blocking_slice_delivers_wakeups_observed_mid_slice() {
+        let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let mut listener = TcpListener::bind(bind_addr).unwrap();
+        let local = listener.local_addr().unwrap();
+
+        let ev = Arc::new(EventLoop::new().unwrap());
+        let marker: u64 = 0xB10C_51CE_DE11_4E25;
+        let parked = std::ptr::addr_of!(marker) as *mut c_void;
+        let token = ev
+            .register(&mut listener, IoDirection::Read, None, parked)
+            .unwrap();
+
+        // Fire readiness ~60ms in: the first non-blocking sweep (t≈0)
+        // sees nothing, so only a 20ms blocking slice can observe it.
+        let connector = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(60));
+            let _stream = std::net::TcpStream::connect(local).unwrap();
+            thread::sleep(Duration::from_millis(50));
+        });
+
+        let loops = [Arc::clone(&ev)];
+        let mut buf: [KaracWakeup; 4] = std::array::from_fn(|_| KaracWakeup {
+            token: 0,
+            parked: std::ptr::null_mut(),
+            direction: 0,
+        });
+        let n = unsafe {
+            poll_shards(
+                &loops,
+                Some(Duration::from_secs(2)),
+                buf.as_mut_ptr(),
+                buf.len(),
+            )
+        };
+        assert!(
+            n >= 1,
+            "expected the blocking slice to deliver the wakeup, got {n}"
+        );
+        let w = &buf[0];
+        assert_eq!(w.token, pack_token(0, token.0));
+        assert_eq!(w.parked, parked);
+        assert_eq!(w.direction, IoDirection::Read as u8);
+
+        connector.join().unwrap();
     }
 
     // ── Parked-task ABI (Phase 6 line 17 slice 2) ─────────────────────
