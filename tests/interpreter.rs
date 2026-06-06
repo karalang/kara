@@ -497,6 +497,42 @@ fn test_vec_nested_indexed_write_round_trip() {
 }
 
 #[test]
+fn test_field_index_write_round_trip_plain_and_shared() {
+    // `obj.field[i] = val` — the write half of the kata-133-audit
+    // FieldAccess-rooted indexing bug (2026-06-06). Pre-fix, the
+    // interpreter's set_index hit the catch-all `_ => return` arm for
+    // FieldAccess targets and SILENTLY no-op'd the store (the program
+    // ran but printed the stale value); codegen errored "Index
+    // assignment target must be a variable". Both now route through:
+    // the interpreter evals the field access (Value::Array clones the
+    // Arc, aliasing the field's storage), codegen goes through
+    // `lower_field_access_ptr` + a synth identifier. Plain and shared
+    // structs both covered.
+    let out = run_no_errors(
+        r#"
+        struct Holder { tag: i64, mut items: Vec[i64] }
+        shared struct Cell { mut vals: Vec[i64] }
+        fn main() {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(41);
+            v.push(42);
+            let mut h = Holder { tag: 7, items: v };
+            h.items[0] = 99;
+            println(h.items[0]);
+            println(h.items[1]);
+
+            let mut w: Vec[i64] = Vec.new();
+            w.push(5);
+            let c = Cell { vals: w };
+            c.vals[0] = 6;
+            println(c.vals[0]);
+        }
+    "#,
+    );
+    assert_eq!(out, "99\n42\n6\n");
+}
+
+#[test]
 fn test_vec_with_capacity_untyped_let_inference_from_push() {
     // `let mut v = Vec.with_capacity(n); v.push(x);` — no annotation
     // on the let; element type is inferred from the downstream push.

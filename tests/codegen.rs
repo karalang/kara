@@ -8679,6 +8679,85 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_field_index_read_plain_and_shared() {
+        // FieldAccess-rooted index READ (`obj.field[i]`) — kata-133-audit
+        // bug, 2026-06-05: previously the generic index tail compiled the
+        // field access to a struct VALUE (Vec's `{ptr,len,cap}`) in a temp
+        // alloca and died on "Index operator applied to non-array type",
+        // for plain AND shared structs alike (the interpreter handled
+        // both). Now routed through `lower_field_access_ptr` (the FR-slice
+        // helper) + a synth identifier, so the existing identifier-keyed
+        // Vec dispatch handles it — covering plain structs, shared
+        // structs, `ref` params (deref shape), and `outer[i].field[j]`.
+        let out = run_program(
+            r#"
+struct Holder { tag: i64, mut items: Vec[i64] }
+shared struct Cell { mut vals: Vec[i64] }
+fn read_ref(h: ref Holder) -> i64 { h.items[1] }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(41);
+    v.push(42);
+    let h = Holder { tag: 7, items: v };
+    println(h.items[0]);
+    println(read_ref(h));
+
+    let mut w: Vec[i64] = Vec.new();
+    w.push(5);
+    let c = Cell { vals: w };
+    println(c.vals[0]);
+
+    let mut outer: Vec[Holder] = Vec.new();
+    let mut v2: Vec[i64] = Vec.new();
+    v2.push(10);
+    v2.push(20);
+    outer.push(Holder { tag: 1, items: v2 });
+    println(outer[0].items[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["41", "42", "5", "20"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_field_index_store_plain_and_shared() {
+        // FieldAccess-rooted index STORE (`obj.field[i] = v`) — the write
+        // half of the kata-133-audit bug. Previously fell to the "Index
+        // assignment target must be a variable" gate in
+        // `compile_index_store`; the interpreter SILENTLY no-op'd the same
+        // shape (`set_index`'s catch-all `_ => return` arm) — both fixed
+        // in the same slice. Mirrors the read test's struct-kind coverage.
+        let out = run_program(
+            r#"
+struct Holder { tag: i64, mut items: Vec[i64] }
+shared struct Cell { mut vals: Vec[i64] }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(41);
+    v.push(42);
+    let mut h = Holder { tag: 7, items: v };
+    h.items[0] = 99;
+    println(h.items[0]);
+    println(h.items[1]);
+
+    let mut w: Vec[i64] = Vec.new();
+    w.push(5);
+    let c = Cell { vals: w };
+    c.vals[0] = 6;
+    println(c.vals[0]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["99", "42", "6"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_option_unwrap_map_get_primitive() {
         // Slice OR (2026-05-16): `Option[T].unwrap()` dispatch lowering.
         // The receiver here is a `MethodCall` (`m.get(k)`), exercising

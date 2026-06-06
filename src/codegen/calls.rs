@@ -161,41 +161,27 @@ impl<'ctx> super::Codegen<'ctx> {
         result
     }
 
-    /// Slice FR (2026-05-16): field-receiver method dispatch. Sibling to
-    /// `compile_indexed_receiver_method` (MR slice) for the
-    /// `outer.field.method(...)` shape. The outer must be a named
-    /// variable bound to a struct (shared or plain) so we can recover
-    /// the struct name from `var_type_names` and the per-field LLVM /
-    /// `TypeExpr` info from the declaration registries. Returns
-    /// `Ok(None)` when the shape isn't a known struct field — caller
-    /// falls through to the regular dispatch.
-    ///
-    /// Locked design choices (FR1–FR4, sibling to MR1–MR5):
-    /// - FR1 receiver-shape early dispatch at the top of
-    ///   `compile_method_call`.
-    /// - FR2 routes by struct kind (shared via heap-GEP, plain via
-    ///   slot-GEP), not by method name.
-    /// - FR3 synth identifier `__field_elem_<n>` bound to the field
-    ///   pointer with the field's TypeExpr-derived registries
-    ///   populated through `register_var_from_type_expr`; both
-    ///   read-only and mutating methods flow through the same path
-    ///   because the field pointer aliases the parent storage.
-    /// - FR4 chained `outer.a.b.method()` is rejected with a clear
-    ///   diagnostic — bind the inner field to a temporary first.
-    pub(super) fn try_compile_field_receiver_method(
+    /// Resolve `inner.field` to the field's storage pointer + LLVM type +
+    /// declared `TypeExpr`, for FieldAccess-rooted receivers. Shared by
+    /// `try_compile_field_receiver_method` (the `obj.field.method(...)` FR
+    /// slice) and `compile_index`'s FieldAccess arm (`obj.field[i]`), so the
+    /// struct-kind routing (shared heap-GEP incl. phase-D headerless layout
+    /// vs plain slot-GEP vs `ref` param deref) and the `outer[i].field`
+    /// indexed-inner shape live in exactly one place. `ctx` is the
+    /// diagnostic label naming the consuming construct (e.g. `method 'push'`
+    /// or `index expression`). Returns `Ok(None)` when the shape isn't a
+    /// known struct field — callers fall through to their regular dispatch.
+    pub(super) fn lower_field_access_ptr(
         &mut self,
         inner: &Expr,
         field: &str,
-        method: &str,
-        args: &[CallArg],
-        call_span: &crate::token::Span,
-    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        ctx: &str,
+    ) -> Result<Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>, TypeExpr)>, String> {
         // FR4: reject chained field receivers up front.
         if matches!(inner.kind, ExprKind::FieldAccess { .. }) {
             return Err(format!(
-                "codegen: chained field receivers (`a.b.c.{}(...)`) are deferred to v1.x; \
-                 bind the inner field to a temporary first",
-                method
+                "codegen: chained field receivers (`a.b.c…`) are deferred to v1.x; \
+                 bind the inner field to a temporary first ({ctx})"
             ));
         }
         // Recover the struct type name + the receiver-pointer the field
@@ -221,8 +207,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .copied()
                     .ok_or_else(|| {
                         format!(
-                            "codegen: field-receiver method '{}' — outer '{}' has no slot",
-                            method, outer_name
+                            "codegen: field-receiver {} — outer '{}' has no slot",
+                            ctx, outer_name
                         )
                     })?;
                 // For shared structs, the slot stores the heap-pointer
@@ -267,9 +253,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 if matches!(container.kind, ExprKind::Index { .. }) {
                     return Err(format!(
                         "codegen: chained indexed field receivers \
-                         (`a[i][j].field.{}(...)`) are deferred to v1.x; \
-                         bind the intermediate element first",
-                        method
+                         (`a[i][j].field…`) are deferred to v1.x; \
+                         bind the intermediate element first ({ctx})"
                     ));
                 }
                 let outer_name = match &container.kind {
@@ -294,30 +279,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 // via the same per-container helper the MR-slice
                 // indexed-receiver arm uses. Bounds-check goes through
                 // `emit_panic` on OOB and leaves the builder on the OK BB.
-                let (elem_ptr, _elem_ll_ty) = if self
-                    .vec_elem_types
-                    .contains_key(outer_name.as_str())
-                {
-                    self.lower_indexed_elem_ptr_vec(&outer_name, index)?
-                } else if self.slice_elem_types.contains_key(outer_name.as_str()) {
-                    self.lower_indexed_elem_ptr_slice(&outer_name, index)?
-                } else {
-                    let slot = self
+                let (elem_ptr, _elem_ll_ty) =
+                    if self.vec_elem_types.contains_key(outer_name.as_str()) {
+                        self.lower_indexed_elem_ptr_vec(&outer_name, index)?
+                    } else if self.slice_elem_types.contains_key(outer_name.as_str()) {
+                        self.lower_indexed_elem_ptr_slice(&outer_name, index)?
+                    } else {
+                        let slot = self
                             .variables
                             .get(outer_name.as_str())
                             .copied()
                             .ok_or_else(|| {
                                 format!(
-                                    "codegen: indexed-field-receiver method '{}' — outer '{}' has no slot",
-                                    method, outer_name
+                                    "codegen: indexed-field-receiver {} — outer '{}' has no slot",
+                                    ctx, outer_name
                                 )
                             })?;
-                    if let BasicTypeEnum::ArrayType(_) = slot.ty {
-                        self.lower_indexed_elem_ptr_array(slot, index)?
-                    } else {
-                        return Ok(None);
-                    }
-                };
+                        if let BasicTypeEnum::ArrayType(_) = slot.ty {
+                            self.lower_indexed_elem_ptr_array(slot, index)?
+                        } else {
+                            return Ok(None);
+                        }
+                    };
                 // For shared-struct elements, the element slot stores the
                 // heap-pointer handle; load it to get the receiver-pointer
                 // the field GEP indexes into. For plain-struct elements,
@@ -378,8 +361,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get_field_type_at_index(field_idx as u32 + base)
                 .ok_or_else(|| {
                     format!(
-                        "codegen: field-receiver method '{}' on '{}.{}' — field LLVM type missing",
-                        method, type_name, field
+                        "codegen: field-receiver {} on '{}.{}' — field LLVM type missing",
+                        ctx, type_name, field
                     )
                 })?;
             (fp, fty)
@@ -397,8 +380,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get_field_type_at_index(field_idx as u32)
                 .ok_or_else(|| {
                     format!(
-                        "codegen: field-receiver method '{}' on '{}.{}' — field LLVM type missing",
-                        method, type_name, field
+                        "codegen: field-receiver {} on '{}.{}' — field LLVM type missing",
+                        ctx, type_name, field
                     )
                 })?;
             (fp, fty)
@@ -406,6 +389,43 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         };
 
+        Ok(Some((field_ptr, field_ll_ty, field_te)))
+    }
+
+    /// Slice FR (2026-05-16): field-receiver method dispatch. Sibling to
+    /// `compile_indexed_receiver_method` (MR slice) for the
+    /// `outer.field.method(...)` shape. The outer must be a named
+    /// variable bound to a struct (shared or plain) so we can recover
+    /// the struct name from `var_type_names` and the per-field LLVM /
+    /// `TypeExpr` info from the declaration registries. Returns
+    /// `Ok(None)` when the shape isn't a known struct field — caller
+    /// falls through to the regular dispatch.
+    ///
+    /// Locked design choices (FR1–FR4, sibling to MR1–MR5):
+    /// - FR1 receiver-shape early dispatch at the top of
+    ///   `compile_method_call`.
+    /// - FR2 routes by struct kind (shared via heap-GEP, plain via
+    ///   slot-GEP), not by method name.
+    /// - FR3 synth identifier `__field_elem_<n>` bound to the field
+    ///   pointer with the field's TypeExpr-derived registries
+    ///   populated through `register_var_from_type_expr`; both
+    ///   read-only and mutating methods flow through the same path
+    ///   because the field pointer aliases the parent storage.
+    /// - FR4 chained `outer.a.b.method()` is rejected with a clear
+    ///   diagnostic — bind the inner field to a temporary first.
+    pub(super) fn try_compile_field_receiver_method(
+        &mut self,
+        inner: &Expr,
+        field: &str,
+        method: &str,
+        args: &[CallArg],
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some((field_ptr, field_ll_ty, field_te)) =
+            self.lower_field_access_ptr(inner, field, &format!("method '{method}'"))?
+        else {
+            return Ok(None);
+        };
         // Mint a fresh synth identifier and populate its registries so
         // the recursive dispatch sees a regular Identifier-receiver flow.
         let synth = format!("__field_elem_{}", self.indexed_elem_counter);

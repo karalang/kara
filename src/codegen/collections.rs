@@ -747,6 +747,59 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_nested_index_read(inner, inner_idx, index);
         }
 
+        // Field-access-rooted indexing (`h.items[i]`, `node.neighbors[i]`,
+        // incl. shared-struct receivers and `outer[i].field[j]`): resolve
+        // the field's storage pointer + TypeExpr via the FR-slice helper,
+        // mint a synth identifier with the field's registries populated,
+        // and recurse so the identifier-keyed dispatch above (Vec / Slice /
+        // Map / generic Array) handles the actual index. Without this arm
+        // the generic tail compiles the field access to a struct VALUE
+        // (e.g. Vec's `{ptr,len,cap}`) in a temp alloca and dies on
+        // "Index operator applied to non-array type" — the kata-133-audit
+        // bug (2026-06-05). `Ok(None)` (unknown struct/field shape) falls
+        // through to the existing paths unchanged.
+        if let ExprKind::FieldAccess {
+            object: inner,
+            field,
+        } = &object.kind
+        {
+            if let Some((field_ptr, field_ll_ty, field_te)) =
+                self.lower_field_access_ptr(inner, field, "index expression")?
+            {
+                let synth = format!("__field_elem_{}", self.indexed_elem_counter);
+                self.indexed_elem_counter += 1;
+                self.variables.insert(
+                    synth.clone(),
+                    super::state::VarSlot {
+                        ptr: field_ptr,
+                        ty: field_ll_ty,
+                    },
+                );
+                self.register_var_from_type_expr(&synth, &field_te);
+                let synth_expr = Expr {
+                    kind: ExprKind::Identifier(synth.clone()),
+                    span: object.span.clone(),
+                };
+                let result = self.compile_index(&synth_expr, index);
+
+                // Clean up synth registrations (same set as the FR slice).
+                self.variables.remove(&synth);
+                self.vec_elem_types.remove(&synth);
+                self.slice_elem_types.remove(&synth);
+                self.var_elem_type_exprs.remove(&synth);
+                self.var_type_names.remove(&synth);
+                self.map_key_types.remove(&synth);
+                self.map_val_types.remove(&synth);
+                self.map_key_type_names.remove(&synth);
+                self.map_key_type_exprs.remove(&synth);
+                self.set_elem_types.remove(&synth);
+                self.set_elem_type_names.remove(&synth);
+                self.set_elem_type_exprs.remove(&synth);
+
+                return result;
+            }
+        }
+
         // Slice variable indexing: before the fast-path alloca lookup, check
         // whether the object is a slice variable. Slices use a 2-field
         // `{ptr, len}` representation and dispatch to a dedicated path.
@@ -1599,6 +1652,56 @@ impl<'ctx> super::Codegen<'ctx> {
                     return self
                         .compile_nested_vec_vec_index_store(outer_name, outer_idx, index, val);
                 }
+            }
+        }
+
+        // Field-access-rooted index store (`h.items[i] = v`,
+        // `node.neighbors[i] = n`, incl. shared-struct receivers):
+        // resolve the field's storage pointer via the FR-slice helper,
+        // mint a synth identifier, and recurse — exact mirror of
+        // `compile_index`'s FieldAccess arm on the read side. Without
+        // this arm the store falls to the "must be a variable" gate
+        // below. (The interpreter had the same write gap, silently
+        // no-op'ing the store — fixed in the same slice.)
+        if let ExprKind::FieldAccess {
+            object: inner,
+            field,
+        } = &object.kind
+        {
+            if let Some((field_ptr, field_ll_ty, field_te)) =
+                self.lower_field_access_ptr(inner, field, "index-store expression")?
+            {
+                let synth = format!("__field_elem_{}", self.indexed_elem_counter);
+                self.indexed_elem_counter += 1;
+                self.variables.insert(
+                    synth.clone(),
+                    super::state::VarSlot {
+                        ptr: field_ptr,
+                        ty: field_ll_ty,
+                    },
+                );
+                self.register_var_from_type_expr(&synth, &field_te);
+                let synth_expr = Expr {
+                    kind: ExprKind::Identifier(synth.clone()),
+                    span: object.span.clone(),
+                };
+                let result = self.compile_index_store(&synth_expr, index, val);
+
+                // Clean up synth registrations (same set as the FR slice).
+                self.variables.remove(&synth);
+                self.vec_elem_types.remove(&synth);
+                self.slice_elem_types.remove(&synth);
+                self.var_elem_type_exprs.remove(&synth);
+                self.var_type_names.remove(&synth);
+                self.map_key_types.remove(&synth);
+                self.map_val_types.remove(&synth);
+                self.map_key_type_names.remove(&synth);
+                self.map_key_type_exprs.remove(&synth);
+                self.set_elem_types.remove(&synth);
+                self.set_elem_type_names.remove(&synth);
+                self.set_elem_type_exprs.remove(&synth);
+
+                return result;
             }
         }
 

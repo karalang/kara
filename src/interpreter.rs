@@ -1793,6 +1793,15 @@ impl<'a> Interpreter<'a> {
                 (v, name.clone())
             }
             ExprKind::Index { .. } => (self.eval_expr_inner(object), "<nested>".to_string()),
+            // Field-access-rooted store (`h.items[i] = v`, incl. shared-
+            // struct receivers): eval the field access — `Value::Array`
+            // clones the `Arc<RwLock<Vec<Value>>>`, so the write through
+            // the returned rc aliases the field's storage, same mechanism
+            // as the nested-index arm above. Previously `_ => return`
+            // swallowed this shape SILENTLY (the assignment no-op'd) —
+            // surfaced by the kata-133-audit codegen fix's probe,
+            // 2026-06-06.
+            ExprKind::FieldAccess { .. } => (self.eval_expr_inner(object), "<field>".to_string()),
             _ => return,
         };
         let (target_value, label) = target;
