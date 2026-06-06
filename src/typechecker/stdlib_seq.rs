@@ -625,4 +625,144 @@ impl<'a> super::TypeChecker<'a> {
             ),
         }
     }
+
+    /// `Vec[T]` / `VecDeque[T]` read-accessor and in-place-mutator method
+    /// dispatch — the seq-surface counterpart to `infer_slice_method`.
+    ///
+    /// `Vec` carries no stdlib impl block, so any method not caught by the
+    /// scattered intercepts in `infer_method_call` (`push` / `pop` /
+    /// `remove` / `iter` / `clone` / `sort_by` / …) fell through to the
+    /// bottom-of-function `Type::Error` silent-prelude path. For read
+    /// accessors that *return a used value* (`len`, `get`, `first`, …) that
+    /// poison `Error` is universally `check_assignable`-compatible, so e.g.
+    /// `let s: String = v.len()` typechecked clean and only failed (or
+    /// silently misbehaved) downstream — a real soundness hole. This routes
+    /// those methods to their true return types, mirroring the `Slice[T]`
+    /// surface so `Vec` and `Slice` type identically.
+    ///
+    /// Returns `None` for any method this dispatcher doesn't own, so the
+    /// caller falls through to the generic impl-search / prelude path
+    /// unchanged (preserving Vec's partially-implicit method surface — a
+    /// user trait impl on `Vec[T]`, a typo, etc.). Mutability for the
+    /// in-place mutators (`sort` / `reverse` / `fill` / `swap`) is enforced
+    /// at the binding layer, not here — same rule the `sort_by` intercept
+    /// relies on — so there is no `mut`-gate, unlike `infer_slice_method`.
+    pub(super) fn infer_vec_method(
+        &mut self,
+        element: &Type,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<Type> {
+        let elem = element.clone();
+        let option_elem = Type::Named {
+            name: "Option".to_string(),
+            args: vec![elem.clone()],
+        };
+        let option_i64 = Type::Named {
+            name: "Option".to_string(),
+            args: vec![Type::Int(IntSize::I64)],
+        };
+        let slice_elem = Type::Slice {
+            element: Box::new(elem.clone()),
+            mutable: false,
+        };
+        let vec_slice = Type::Named {
+            name: "Vec".to_string(),
+            args: vec![slice_elem.clone()],
+        };
+        let vec_elem = Type::Named {
+            name: "Vec".to_string(),
+            args: vec![elem.clone()],
+        };
+
+        let result = match method {
+            // ── Read accessors (return a used value) ──────────────
+            "len" => {
+                self.expect_no_args("Vec.len", args, span);
+                Type::Int(IntSize::I64)
+            }
+            "is_empty" => {
+                self.expect_no_args("Vec.is_empty", args, span);
+                Type::Bool
+            }
+            "first" | "last" => {
+                self.expect_no_args(&format!("Vec.{}", method), args, span);
+                option_elem
+            }
+            "get" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                }
+                option_elem
+            }
+            "contains" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&elem, &at, arg.value.span.clone());
+                }
+                Type::Bool
+            }
+            "binary_search" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&elem, &at, arg.value.span.clone());
+                }
+                option_i64
+            }
+            "split_at" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                }
+                Type::Tuple(vec![slice_elem.clone(), slice_elem])
+            }
+            "chunks" | "windows" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                }
+                vec_slice
+            }
+            // ── In-place mutators (binding-layer mut-checked) ─────
+            "sort" | "reverse" => {
+                self.expect_no_args(&format!("Vec.{}", method), args, span);
+                Type::Unit
+            }
+            "sorted" => {
+                self.expect_no_args("Vec.sorted", args, span);
+                vec_elem
+            }
+            "fill" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&elem, &at, arg.value.span.clone());
+                }
+                Type::Unit
+            }
+            "swap" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                }
+                Type::Unit
+            }
+            // Any other method: fall through to the generic dispatch.
+            _ => return None,
+        };
+        Some(result)
+    }
+
+    /// Emit a `WrongNumberOfArgs` diagnostic if `args` is non-empty, for a
+    /// method that takes none. Shared by the no-arg arms of `infer_vec_method`.
+    fn expect_no_args(&mut self, what: &str, args: &[CallArg], span: &Span) {
+        if !args.is_empty() {
+            self.type_error(
+                format!("{}() takes no arguments", what),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+        }
+    }
 }

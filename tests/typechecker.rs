@@ -724,6 +724,98 @@ fn test_clone_arity_error() {
     );
 }
 
+// ── Vec read-accessor return types (soundness: no `Type::Error` poison) ──
+//
+// Regression for the bug where `Vec[T]`'s read accessors (`len`, `get`,
+// `first`, …) carried no typechecker dispatch and fell through to the
+// silent-prelude `Type::Error` path. Because `Error` is universally
+// `check_assignable`-compatible, `Stdout.println(v.len())` against a
+// `String` param — and `let s: String = v.len()` — typechecked clean.
+// `infer_vec_method` now returns the real types, mirroring `Slice[T]`.
+
+#[test]
+fn test_vec_len_is_i64_not_poison() {
+    // `v.len()` is `i64` and must NOT silently coerce to `String`.
+    let errors = typecheck_errors(
+        "fn takes_string(s: String) {}\n\
+         fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             takes_string(v.len());\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected TypeMismatch passing v.len() (i64) as String, got {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_vec_len_used_as_i64_ok() {
+    // The flip side: `v.len()` is genuinely usable as `i64`.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             let n: i64 = v.len();\n\
+         }",
+    );
+}
+
+#[test]
+fn test_vec_read_accessor_return_types_ok() {
+    // Each accessor resolves to its true type (i64 / bool / Option[T]).
+    typecheck_ok(
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             let _n: i64 = v.len();\n\
+             let _e: bool = v.is_empty();\n\
+             let _g: Option[i64] = v.get(0);\n\
+             let _f: Option[i64] = v.first();\n\
+             let _l: Option[i64] = v.last();\n\
+             let _c: bool = v.contains(1);\n\
+             let _b: Option[i64] = v.binary_search(1);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_vec_get_returns_option_not_poison() {
+    // `v.get(i)` is `Option[T]`; assigning it to a bare `T` must error
+    // (previously the `Error` poison let `let x: i64 = v.get(0)` pass).
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             let _x: i64 = v.get(0);\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected TypeMismatch assigning Option[i64] (v.get) to i64, got {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_vec_get_index_arg_must_be_int() {
+    // The index argument is typechecked as `i64` — a String index errors.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             let _g = v.get(\"oops\");\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected TypeMismatch on String index to v.get, got {:?}",
+        errors
+    );
+}
+
 #[test]
 fn test_vec_clone_through_borrow_returns_owned() {
     // `clone()` on a `ref Vec[T]` borrow returns the owned `Vec[T]`.

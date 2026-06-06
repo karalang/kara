@@ -1691,6 +1691,42 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `Vec[T]` / `VecDeque[T]` read-accessor + in-place-mutator surface
+        // (`len`, `is_empty`, `get`, `first`, `last`, `contains`,
+        // `binary_search`, `split_at`, `chunks`, `windows`, `sort`,
+        // `reverse`, `sorted`, `fill`, `swap`). Vec has no stdlib impl block,
+        // so without this intercept these methods fell through to the
+        // bottom-of-function `Type::Error` silent-prelude path — and for the
+        // value-returning accessors (`len` etc.) that poison `Error` is
+        // universally assignable, so `Stdout.println(v.len())` against a
+        // `String` param, `let s: String = v.len()`, and friends typechecked
+        // clean (the reported soundness hole). Routed here so `Vec` types
+        // identically to `Slice`. `infer_vec_method` returns `None` for any
+        // method it doesn't own, leaving the generic impl-search / prelude
+        // fall-through below untouched (preserving user trait impls on Vec
+        // and the typo-stays-silent prelude behaviour).
+        let vec_elem_for_dispatch: Option<Type> = match &obj_ty {
+            Type::Named { name, args }
+                if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+            {
+                Some(args[0].clone())
+            }
+            Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                Type::Named { name, args }
+                    if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                {
+                    Some(args[0].clone())
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(elem) = vec_elem_for_dispatch {
+            if let Some(ty) = self.infer_vec_method(&elem, method, args, span) {
+                return ty;
+            }
+        }
+
         // Strip outer `ref` / `mut ref` to get the named receiver per
         // design.md § Method Resolution Step 1 (autoref candidates `T`,
         // `ref T`, `mut ref T` collapse to the same name lookup; the
