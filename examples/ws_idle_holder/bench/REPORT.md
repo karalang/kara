@@ -73,8 +73,11 @@ alongside; this file is **what we measured and what it means**, not
 > clean idle), 8.69× Kāra, linearity −1.8%; the heaviest comparator
 > measured (Erlang `:ssl` + a process per conn). Java/Netty landed 2026-06-06 —
 > 14.4 KB/conn (balanced heap, 1.19× Kāra) / ~12.8 KB marginal (1.06×); the
-> second-densest stack and Kāra's closest competitor.** The remaining
-> commercial + stretch comparators are pending — see the
+> second-densest stack and Kāra's closest competitor. .NET/ASP.NET Core
+> (Linux) landed 2026-06-06 — 52.9 KB/conn, 4.47× Kāra, linearity −1.4%; the
+> second-*heaviest* stack (between Go and Phoenix), and — unlike the JVM — a
+> real per-conn cost, not a GC-heap dial (Server↔Workstation GC delta ~2%).**
+> The remaining commercial + stretch comparators are pending — see the
 > [Status / measurement matrix](#status--measurement-matrix) below.
 > Until a row's status is `landed`, treat the cells as placeholders.
 
@@ -94,7 +97,7 @@ alongside; this file is **what we measured and what it means**, not
 | Phoenix Channels (Elixir) | commercial | 102.8 KB | **8.69×** | 250K + 50K landed (2026-06-06), −1.8% linearity | landed @ 250K | [§Phoenix](#phoenix-channels-elixir) |
 | Java / Netty | commercial | 14.4 KB¹ | **1.19×** | 250K + 50K landed (2026-06-06) | landed @ 250K | [§Java/Netty](#java--netty) |
 | Go (gorilla/websocket) | commercial | 43.4 KB | **3.66×** | 250K + 50K landed (2026-06-06), +2.5% linearity | landed @ 250K | [§Go](#go-gorillawebsocket) |
-| .NET / ASP.NET Core (Linux) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #71) | pending | [§.NET Linux](#net--aspnet-core-linux) |
+| .NET / ASP.NET Core (Linux) | commercial | 52.9 KB² | **4.47×** | 250K + 50K landed (2026-06-06), −1.4% linearity | landed @ 250K | [§.NET Linux](#net--aspnet-core-linux) |
 | .NET / ASP.NET Core (Windows) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #72) | pending | [§.NET Windows](#net--aspnet-core-windows) |
 | Node.js (ws) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #73) | pending | [§Node](#nodejs-ws) |
 | SignalR _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #74) | stretch | [§SignalR](#signalr-stretch) |
@@ -107,6 +110,14 @@ alongside; this file is **what we measured and what it means**, not
 > `-Xmx`-independent intrinsics are the **marginal slope ~12.8 KB (1.06×)**
 > and the **live set ~8–10 KB** (below Kāra). It is the second-densest stack
 > measured — see [§Java/Netty](#java--netty) for the full dial.
+
+> ² **.NET (Linux)** is the JVM's mirror image: the CLR's Server GC also
+> commits heap lazily, but here the per-conn RSS is **not** a dial — it is
+> *real* live memory. The marginal slope (~52.7 KB) ≈ the absolute (52.9 KB),
+> linearity is −1.4 %, and swapping Server→Workstation GC moves it ~2 %. So
+> 52.9 KB / **4.47×** is the honest per-conn cost, not a tunable. .NET is the
+> second-*heaviest* stack (between Go and Phoenix) — see
+> [§.NET Linux](#net--aspnet-core-linux).
 
 > **All density figures are working-handler, post-fix.** The Kāra **1M and 2M**
 > per-conn (12.1 KB, −0.03 % drift) and the **2.30×** ratio were re-measured
@@ -211,6 +222,26 @@ numbers land — see the discipline guards in that section.
   (tcnative is a non-default opt-in); heap-dial + GC-config nuance — see
   [§Java/Netty](#java--netty)._
 
+- **Kāra vs .NET (Linux)** _(Kāra 250K landed; .NET 250K + 50K landed
+  2026-06-06)_: Kāra holds each connection in **4.47×** less userspace memory
+  (12.1 KB vs **52.9 KB/conn**, server-RSS at 250K; .NET's per-conn cost is
+  linear, −1.4% drift 50K→250K). Unlike the JVM next door, this is **not** a
+  GC dial to argue around — Server↔Workstation GC moves it ~2% and the marginal
+  slope equals the absolute, so 52.9 KB is genuine live per-conn memory
+  (`SslStream` buffers + Kestrel pipe segments + WS state, none pooled).
+  **Production-unit cost at 250K:** .NET's ~12.7 GiB measured userspace working
+  set plus the ~3.3 KB/conn kernel socket buffer both stacks pay puts .NET on a
+  **16 GiB `m7g.xlarge`** where Kāra fits an **8 GiB `m7g.large`** — the same
+  "one tier down → ~50% infra cost" (~$473/yr vs ~$946/yr per 250K unit,
+  us-east-1 1-yr RI) as the Go and Rust reframes, off a density gap larger than
+  either (4.47× vs Go's 3.66× / Rust's 2.30×). _The combination claim (native
+  AOT + static ownership/effects + single-binary deploy + no CLR/GC ops
+  surface) is the backstop, but here Kāra wins on raw density outright._ _The
+  kernel-buffer share is the inherited ~3.3 KB/conn estimate; the userspace
+  ratio and the instance-tier consequence are measured/derived directly._
+  _Caveats: raw Kestrel + `UseWebSockets()` (no SignalR); in-process OpenSSL
+  TLS — see [§.NET Linux](#net--aspnet-core-linux)._
+
 ---
 
 ## How to read this report
@@ -300,7 +331,8 @@ sized box for its real-world deployment shape:
 
 | comparator family | instance | vCPU | RAM | arch | rationale |
 |---|---|---|---|---|---|
-| Kāra / Rust / .NET Linux / Node | `r8g.4xlarge` | 16 (Graviton4) | 128 GB | arm64 | matches the Kāra & Rust 1M/2M baseline rig; cheap RAM headroom for the 2M target |
+| Kāra / Rust / Node | `r8g.4xlarge` | 16 (Graviton4) | 128 GB | arm64 | matches the Kāra & Rust 1M/2M baseline rig; cheap RAM headroom for the 2M target |
+| .NET Linux _(landed 2026-06-06)_ | 16-vCPU Graviton, 61 GB | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go/Phoenix/Netty; 250K .NET fits ~12.7 GiB so 61 GB is ample. Per-conn density is RAM/ISA-independent, so the smaller RAM tier does not affect the head-to-head |
 | Java _(landed 2026-06-06)_ | 16-vCPU Graviton, 61 GB | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go/Phoenix; all Netty runs fit (250K `-Xmx24g` over-commit peaked ~5.5 GiB, balanced `-Xmx4g` ~3.7 GiB). Per-conn density is RAM/ISA-independent, so the RAM tier does not affect the head-to-head |
 | Go _(landed 2026-06-06)_ | `m8g.4xlarge` | 16 (Graviton4) | 61 GB | arm64 | same 16-vCPU Graviton4 class as the baseline; 250K Go fits ~10.6 GiB so 61 GB is ample. Per-conn density is RAM/ISA-independent (established cross-ISA), so the smaller RAM tier does not affect the head-to-head |
 | Phoenix _(landed 2026-06-06)_ | 16-vCPU Graviton, 61 GB | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go; 250K presence-off fits ~25.9 GiB so 61 GB holds it. Per-conn density is RAM/ISA-independent, so the RAM tier does not affect the head-to-head. (250K presence-ON was *not* run — confounded by `presence_diff` backpressure and ~47 GiB extrapolated, near the box ceiling.) |
@@ -455,12 +487,18 @@ number with the deviation rather than retuning to remove it._
   default) is the headline; ZGC trades memory for pause latency (higher RSS
   reservation, same live set) and is a sidebar, not the density read. Full
   breakdown in the [§Java/Netty section](#java--netty).
-- **.NET ASP.NET Core (Linux)** _(pending — wip task #71):_
-  OpenSSL TLS (not SChannel); .NET 9 LTS; raw Kestrel WebSocket
-  middleware. SignalR is a separate stretch row (#74).
+- **.NET ASP.NET Core (Linux)** _(landed 2026-06-06):_ in-process Kestrel
+  HTTPS over **OpenSSL** (not SChannel); .NET 8 LTS; raw Kestrel +
+  `UseWebSockets()` echo middleware (no SignalR — that is stretch row #74).
+  Three framing notes: (1) Server GC is the prod default and the headline, but
+  — unlike the JVM — per-conn RSS is **not** a dial (Server↔Workstation GC
+  delta ~2 %, marginal slope ≈ absolute), so 52.9 KiB is real live memory; (2)
+  in-process TLS is the apples-to-apples basis (a TLS-offload LB moves TLS
+  state off the box); (3) measured on .NET 8 LTS (.NET 9 is current STS). Full
+  breakdown in the [§.NET Linux section](#net--aspnet-core-linux).
 - **.NET ASP.NET Core (Windows)** _(pending — wip task #72):_
   SChannel TLS (the production-default stack on Windows Server);
-  .NET 9 LTS; raw Kestrel WebSocket middleware. The Linux/Windows
+  .NET 8 LTS; raw Kestrel WebSocket middleware. The Linux/Windows
   delta is itself a result — it tells us how much of the .NET
   number is the framework vs the OS TLS substrate.
 
@@ -1063,33 +1101,119 @@ Rust.
 
 ### .NET / ASP.NET Core (Linux)
 
-> _Pending — wip task #71._
+- **Status:** `landed @ 250K + 50K` (2026-06-06). **Result: the second-
+  *heaviest* comparator measured — ~52.9 KiB/conn, heavier than Go, lighter
+  than only Phoenix. And — unlike the JVM — the number is *real*, not a
+  GC-heap dial: it survives a GC-mode swap within ~2%.**
+- **Build:** `examples/ws_idle_holder/dotnet/`, raw ASP.NET Core Kestrel +
+  `app.UseWebSockets()` echo middleware (no SignalR), self-contained publish
+  → the rig needs no .NET install. WS upgrade at `/` (bare-WS — no harness
+  changes).
+- **Stack:** .NET 8.0.421 LTS (`net8.0`), `WebApplication.CreateSlimBuilder`,
+  Kestrel HTTPS via `ConfigureKestrel` + `UseWebSockets()` echo middleware —
+  the lean ASP.NET Core WS prod default, no SignalR/MVC/Blazor.
+- **Hardware:** 16-vCPU AWS Graviton, 61 GB (m8g-class) — same class as the
+  Go/Phoenix/Netty runs; fresh box.
+- **TLS:** **in-process** Kestrel HTTPS over **OpenSSL** (the Linux .NET
+  default), TLS 1.2 + 1.3, no client auth, single self-signed cert (shared
+  fixture, re-imported via PKCS#12 for the .NET 8 `X509Certificate2` API).
+- **GC:** Server GC (`ServerGarbageCollection=true`, the ASP.NET Core Web SDK
+  prod default) is the headline; Workstation GC was run as a sidebar.
+- **Scale:** 250K headline + 50K linearity.
 
-- **Status:** pending.
-- **Stack target:** .NET 9 LTS on Linux (Ubuntu 24.04 arm64);
-  Kestrel WebSocket middleware (no SignalR layer); OpenSSL for TLS
-  (the Linux .NET default).
-- **Hardware:** `r8g.4xlarge`; fresh box.
-- **TLS:** OpenSSL via .NET; matched cipher + cert.
-- **Scale:** 250K headline + 50K linearity sub-curve (per
-  [§Scale per comparator](#scale-per-comparator)).
+**Methodology note — .NET is *not* a heap dial (the opposite of Netty).**
+The JVM's RSS is dominated by `-Xmx`-dependent GC heap-commit, so Netty's
+per-conn number is a dial reported at a balanced point. .NET's Server GC
+*also* commits heap lazily, so the same skepticism applies — but the data
+refutes it here: the 50K→250K RSS-delta/N drift is **−1.4 %** (Netty's was
+−32 %), the **marginal slope ≈ the absolute per-conn**, and swapping Server
+GC → Workstation GC (single heap, aggressive return-to-OS) moves the 50K
+figure by only **~2 %**. All three are signatures of memory that is
+**genuinely live per connection**, not committed-but-unused heap. So unlike
+the JVM, the headline RSS-delta/N *is* the honest per-conn cost.
 
-**Expected range (from public data):** 15–30 KB/conn on Linux.
+**Idle-hold @ 250K — Server GC (landed, 2026-06-06):**
+
+| metric | value | notes |
+|---|---|---|
+| established | 250,000 / 250,000 | 0 failed |
+| per-conn bytes | **54,125 (52.9 KiB)** | RSS-delta / N; server RSS 12.66 GiB |
+| marginal slope | **~52.7 KiB/conn** | (RSS₂₅₀ₖ − RSS₅₀ₖ)/200K — ≈ the absolute, i.e. linear |
+| GC-mode delta @ 50K | **~2 %** (Server vs Workstation) | proves it is live memory, not heap slack |
+| connect p50 / p99 | 4.6 / 15.0 ms (@ 50K) | beats Kāra's ~41 ms architectural floor |
+
+**Linearity @ 50K (Server GC):** 54,869 B/conn (53.6 KiB). The 50K→250K
+RSS-delta/N drift is **−1.4 %** — well inside the 5 % gate, so the per-conn
+cost is linear and **no 1M escalation** is triggered. (Contrast the JVM,
+whose −32 % "drift" was a fixed heap base amortizing; .NET has no such large
+fixed base to amortize, which is *why* its number is both higher and flatter.)
+
+**GC-mode sidebar @ 50K:**
+
+| GC mode | per-conn | vs Server GC |
+|---|---|---|
+| **Server GC** (prod default) | 53.6 KiB | headline |
+| Workstation GC (`DOTNET_gcServer=0`) | 52.5 KiB | −2.0 % |
+
+> Workstation GC — single heap, eager return-to-OS — lands *within 2 %* of
+> Server GC. If the ~53 KiB were GC over-commit (as on the JVM), Workstation
+> GC would have collapsed it. It doesn't, because the memory is held live by
+> open connections: per-conn `SslStream` read/write buffers + Kestrel
+> `System.IO.Pipelines` input/output segments (pinned `MemoryPool` blocks) +
+> the WebSocket frame buffer + connection context — none pooled across conns.
+
+- Raw JSON: `docs/investigations/dotnet_linux_{250k,50k}.json` (Server GC),
+  `dotnet_linux_50k_wks.json` (Workstation GC sidebar).
+- Acceptance: `established == N` AND `failed == 0` at every scale/GC mode
+  (all three runs 0-failed). ✓
+
+**Head-to-head with Kāra @ 250K:**
+
+| metric | Kāra | .NET (Linux) | winner |
+|---|---|---|---|
+| established / failed | 250,000 / 0 | 250,000 / 0 | tie |
+| `connect.p50_ms` | ~41 (arch. floor) | **4.6** | .NET |
+| **`per_conn_bytes`** | **~12,114** | ~54,125 | **Kāra (4.47×)** |
+| marginal per-conn | ~12,114 | ~53,939 | **Kāra (4.45×)** |
+
+**What this proves.** Raw ASP.NET Core Kestrel WebSockets cost **~52.9 KiB
+per idle connection** — **4.47× Kāra** — making .NET the **second-heaviest
+stack measured**, between Go (43.4 KiB) and Phoenix (102.8 KiB), and well
+above Rust (27.9) and Netty (14.4). The decisive methodological finding is
+that this is a *real* number, not a heap dial: marginal slope ≈ absolute,
+−1.4 % linearity, and a ~2 % Server↔Workstation GC delta all confirm the
+memory is genuinely live per-conn (SslStream buffers + Kestrel pipe segments
++ WS state, none pooled). This is the cleaner mirror image of the Netty
+result: where the JVM's RSS overstated a small live set (a dial to tune
+down), the CLR's RSS *is* the live set — there is no knob that recovers it.
+Connect latency favors .NET (~4.6 ms p50 vs Kāra's ~41 ms floor), the same
+multi-axis tradeoff seen across the set.
 
 **Caveats:**
 
-- GC mode: server GC (`ServerGarbageCollection=true`) is the
-  prod-default; document if we deviate.
-- Linux .NET deploys are a smaller share of .NET fleets than Windows
-  but a growing one (container/k8s-native deploys). The Linux number
-  + the Windows number jointly answer "what does .NET cost?".
+- **Real-world-vs-purist:** raw Kestrel + `UseWebSockets()` (no SignalR) —
+  the lean high-density ASP.NET Core WS default. SignalR is a separate stretch
+  row (#74) and folds in framework overhead on top of this floor.
+- **In-process TLS:** Kestrel HTTPS over OpenSSL (the Linux .NET default,
+  zero extra dependency). In-process TLS is the apples-to-apples basis (every
+  comparator terminates TLS in-process); a TLS-offload LB deployment would
+  move TLS state off the app box.
+- **GC mode reported at the prod default + characterized:** Server GC
+  (`ServerGarbageCollection=true`, the Web SDK default) is the headline; the
+  Workstation-GC sidebar is shown precisely to demonstrate the per-conn cost
+  is GC-mode-invariant (unlike the JVM's `-Xmx` dial). `DOTNET_GCHeapHardLimit`
+  can cap committed heap but cannot reclaim memory live connections hold, so it
+  would not lower the per-conn figure here.
+- **.NET 8 vs 9:** measured on .NET 8 LTS (`net8.0`); .NET 9 is current STS.
+  The Windows row (#72) reuses this stack on SChannel — the Linux/Windows
+  delta isolates OS-TLS-substrate cost from runtime cost.
 
 ### .NET / ASP.NET Core (Windows)
 
 > _Pending — wip task #72._
 
 - **Status:** pending.
-- **Stack target:** .NET 9 LTS on Windows Server 2022;
+- **Stack target:** .NET 8 LTS on Windows Server 2022;
   Kestrel WebSocket middleware; SChannel for TLS (the Windows
   Server prod-default).
 - **Hardware:** `m7i.4xlarge` (16 vCPU Intel x86, 64 GB RAM,
@@ -1144,7 +1268,7 @@ scale but rarely the choice for density-critical fleets.
 > _Pending — wip task #74. Stretch row — not blocking v1 claim._
 
 - **Status:** pending, stretch.
-- **Stack target:** ASP.NET Core SignalR on top of .NET 9 (Linux);
+- **Stack target:** ASP.NET Core SignalR on top of .NET 8 (Linux);
   exposes the framework-overhead delta over raw Kestrel WebSocket
   middleware.
 - **Scale:** 100K headline + 50K linearity sub-curve (per
@@ -1397,13 +1521,13 @@ _From `feedback_commercial_reframe_lens` memory._
 
 ### Pending reframes (deferred — data not yet in this report)
 
-- **Kāra vs Phoenix:** _Deferred until §Phoenix lands._ If Phoenix
-  matches Kāra within ~20%, the reframe pivots to the combination
-  claim (density + static types + single-binary deploy + no BEAM
-  ops surface), not a pure density win.
-- **Kāra vs Java/Netty:** _Deferred until §Java/Netty lands._
-  Expected to be the strongest dollarized story given the JVM TAM.
-- **Kāra vs Go / .NET / Node:** _Deferred per-row._
+- **Kāra vs Phoenix / Java/Netty / Go / .NET (Linux):** _Landed
+  2026-06-06 — see the [Commercial reframe](#commercial-reframe--populated-as-each-row-lands)
+  bullets above, which carry the per-row dollarized stories._ (Phoenix:
+  8.69× density, two tiers down; Java/Netty: combination claim, not a
+  box-count cut; Go: one tier down; .NET: 4.47× density, one tier down.)
+- **Kāra vs Node:** _Deferred until §Node lands (#73)._
+- **Stretch rows (SignalR / socket.io / Python):** _Deferred per-row._
 
 ---
 
@@ -1441,7 +1565,7 @@ their role's headline scale (`250K` or `100K`).
 | Phoenix Channels | commercial | **50K landed (2026-06-06)** — 107,204 B/conn, −1.8% drift | **250K landed (2026-06-06)** — 105,267 B/conn (presence-off clean idle), p50 10.7 ms (8.69× Kāra; heaviest measured) | n/a (gate passed: −1.8% < 5%, no 1M escalation) | n/a (idle-hold density comparator; presence-ON confounded by `presence_diff` backpressure — caveated upper bound, not headlined) | `scripts/run_250k.sh` + `scripts/run_50k.sh` (`BENCH_EXTRA_ARGS` + `PRESENCE` env) | `docs/investigations/phoenix_idle_{250k_nopresence,50k_nopresence,50k_presence}.json` |
 | Java / Netty | commercial | **50K landed (2026-06-06)** — 21.2 KB/conn balanced `-Xmx800m` (RSS=GC-heap dial; marginal slope flat) | **250K landed (2026-06-06)** — 14.4 KB/conn balanced `-Xmx4g` (1.19× Kāra); marginal ~12.8 KB (1.06×), live ~8–10 KB; 2nd-densest stack | n/a (marginal slope flat; RSS-delta/N drift is fixed-JVM-base, not per-conn) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` (`JAVA_OPTS` heap/GC + `BENCH_EXTRA_ARGS` env) | `docs/investigations/netty_g1_{250k,50k}_balanced.json`, `netty_g1_{250k,50k}_xmx24g.json`, `netty_zgc_250k.json` |
 | Go | commercial | **50K landed (2026-06-06)** — 43,311 B/conn, +2.5% drift | **250K landed (2026-06-06)** — 44,386 B/conn, p50 3.37 ms (3.66× Kāra) | n/a (gate passed: +2.5% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` | `docs/investigations/go_idle_{250k,50k}.json` |
-| .NET (Linux) | commercial | pending (#71) | 250K pending (#71) | n/a unless gate escalates | pending | TBD | TBD |
+| .NET (Linux) | commercial | **50K landed (2026-06-06)** — 54,869 B/conn Server GC, −1.4% drift; Workstation-GC sidebar 53,781 B (−2.0%, proves live-not-dial) | **250K landed (2026-06-06)** — 54,125 B/conn (52.9 KiB) Server GC, marginal slope ≈ absolute (4.47× Kāra; 2nd-heaviest measured) | n/a (gate passed: −1.4% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` (Server GC default; `DOTNET_gcServer=0` for the Workstation sidebar) | `docs/investigations/dotnet_linux_{250k,50k,50k_wks}.json` |
 | .NET (Windows) | commercial | pending (#72) | 250K pending (#72) | n/a | pending | TBD | TBD |
 | Node.js | commercial | pending (#73) | 250K pending (#73) | n/a unless gate escalates | pending | TBD | TBD |
 | SignalR _(stretch)_ | stretch | pending (#74) | 100K pending (#74) | n/a | pending | TBD | TBD |
@@ -1457,6 +1581,32 @@ their role's headline scale (`250K` or `100K`).
 
 ## Change log
 
+- **2026-06-06 (.NET/ASP.NET Core Linux comparator landed — the JVM's mirror
+  image):** ran the raw-Kestrel comparator (.NET 8.0.421, `net8.0`,
+  `WebApplication.CreateSlimBuilder` + `UseWebSockets()` echo middleware,
+  in-process Kestrel HTTPS over OpenSSL, WS at `/`) on a fresh 16-vCPU
+  Graviton / 61 GB box, co-located over loopback; self-contained
+  `linux-arm64` publish (rig needs no .NET). **250K: 250,000 / 0 failed,
+  54,125 B/conn (52.9 KiB), server RSS 12.66 GiB; 50K: 50,000 / 0 failed,
+  54,869 B/conn — linearity −1.4 %** (< 5 % gate → no 1M escalation).
+  **Key finding: the opposite of the JVM.** Server GC also commits heap
+  lazily, but the per-conn RSS is **not** a dial — marginal slope (~52.7 KiB)
+  ≈ absolute, and a Workstation-GC sidebar (`DOTNET_gcServer=0`) lands at
+  53,781 B (50K), **within ~2 %** of Server GC. All three signatures prove the
+  ~53 KiB is **genuine live per-conn memory** (SslStream buffers + Kestrel
+  pipe segments + WS state, none pooled), not committed-but-unused heap.
+  **Kāra holds 4.47× the density** (12.1 KB vs 52.9 KB) — .NET is the
+  **second-heaviest comparator measured**, between Go (43.4) and Phoenix
+  (102.8), above Rust (27.9) and Netty (14.4). Connect p50 4.6 ms (beats
+  Kāra's ~41 ms floor). Reframe = the standard "one tier down → ~50 % infra
+  cost" (16 GiB → 8 GiB tier), off a larger density gap than Go/Rust. Prep
+  (comparator + self-contained-publish recipe) landed `4c6bf47a`; run scripts
+  already supported it (bare-WS, no harness changes). Updated: §.NET Linux
+  (full landed tables + methodology note + GC-mode sidebar + head-to-head +
+  caveats), TL;DR row + footnote², both status matrices, hardware row (own
+  Graviton/61 GB row), commercial-reframe, consolidated caveats, top banner;
+  phase-6 entry; dotnet/README results. Raw JSON:
+  `docs/investigations/dotnet_linux_{250k,50k,50k_wks}.json`.
 - **2026-06-06 (Java/Netty comparator landed — Kāra's closest density competitor):**
   ran the raw-Netty comparator (OpenJDK 21.0.11, Netty 4.1.115, in-process JDK
   JSSE `SSLEngine`, WS at `/`) on a fresh 16-vCPU Graviton / 61 GB box,

@@ -40,17 +40,19 @@ folded into the per-conn number; this is the lean .NET prod default.
   and run. `run_server.sh` execs the bundled binary in place, so the
   harness-spawned PID is the measured process (correct RSS).
 
-### Expect a GC-heap dial (like the JVM)
+### GC-heap dial — anticipated, but it did NOT materialize
 
-.NET's Server GC commits heap per core and reclaims lazily, so — exactly as
-with the [Netty comparator](../java/README.md) — the JVM/CLR's **RSS is
-dominated by GC heap-commit**, not purely by per-connection live memory. The
-harness's `per_conn_bytes = RSS-delta / N` will therefore be heap-policy-
-influenced; the honest reads are the **marginal slope** and the post-GC
-**live set** (`DOTNET_GCHeapHardLimit` / `GCHeapAffinitizeMask` are the .NET
-analogs of the JVM `-Xmx` dial). The at-scale writeup reports those rather
-than a single RSS number — see the §.NET section of `bench/REPORT.md` when it
-lands.
+Going in, the concern was that .NET's Server GC (per-core heaps, lazy
+reclaim) would make `per_conn_bytes = RSS-delta / N` a `-Xmx`-style dial like
+the [Netty comparator](../java/README.md), where the JVM's RSS is dominated by
+GC heap-commit rather than live memory. **The measurement refutes this for
+.NET** (see [At-scale results](#at-scale-results)): 50K→250K drift is −1.4 %,
+the marginal slope ≈ the absolute per-conn, and a Workstation-GC cross-check
+(`DOTNET_gcServer=0`) lands within ~2 % of Server GC. All three show the
+~53 KiB is **genuinely live per-connection memory** (SslStream buffers +
+Kestrel pipe segments + WS state, none pooled), not committed-but-unused heap
+— so the raw RSS-delta/N *is* the honest per-conn density here, the clean
+mirror image of the JVM dial.
 
 ## Usage
 
@@ -68,12 +70,31 @@ cargo run --release -- \
 
 ## At-scale results
 
-**NOT YET RUN.** Prepped + locally validated; the 50K / 250K rig runs await a
-user-provisioned box (per the bench-day rig-spend sign-off discipline).
-Because the rig payload is a **self-contained** bundle, no .NET install is
-needed there — publish `linux-arm64` locally and scp the folder. Expected
-~15–30 KB/conn (with the GC-heap-dial caveat above). Results land here after
-the run, mirroring the Go/Netty/Phoenix format.
+**Landed 2026-06-06** on a fresh 16-vCPU Graviton / 61 GB box, co-located
+client+server over loopback, .NET 8.0.421 self-contained `linux-arm64` bundle,
+Server GC (`ServerGarbageCollection=true`, the ASP.NET Core Web SDK default).
+
+| scale | GC | established / failed | per-conn | connect p50 / p99 |
+|---|---|---|---|---|
+| **250K (headline)** | Server | 250,000 / 0 | **54,125 B (52.9 KiB)** | — |
+| 50K (linearity) | Server | 50,000 / 0 | 54,869 B (53.6 KiB) | 4.6 / 15.0 ms |
+| 50K (sidebar) | Workstation | 50,000 / 0 | 53,781 B (52.5 KiB) | 4.7 / 40.1 ms |
+
+- **Linearity −1.4 %** (50K→250K, Server GC) — inside the 5 % gate, no 1M
+  escalation. **Marginal slope ~52.7 KiB ≈ the absolute per-conn.**
+- **The number is real, not a GC-heap dial — the opposite of the JVM.** The
+  GC-heap-dial caveat below *anticipated* a JVM-style dial; the data refutes
+  it. Slope ≈ absolute, −1.4 % drift, and a **~2 % Server↔Workstation GC
+  delta** all show the ~53 KiB is genuinely live per-conn memory (`SslStream`
+  buffers + Kestrel pipe segments + WS state, none pooled), not committed-but-
+  unused heap. So the headline RSS-delta/N *is* the honest per-conn cost.
+- **Headline: Kāra holds 4.47× the density** (12,114 B vs 54,125 B). .NET is
+  the **second-heaviest comparator measured**, between Go (43.4 KiB) and
+  Phoenix (102.8 KiB), above Rust (27.9) and Netty (14.4).
+- Raw JSON: `docs/investigations/dotnet_linux_{250k,50k,50k_wks}.json`.
+
+Full tables, head-to-head, and caveats: **§.NET Linux in `bench/REPORT.md`**
+(the authoritative record).
 
 ### Reproduce — turnkey rig recipe
 
@@ -97,12 +118,15 @@ DOTNET="$(cd ../../dotnet && pwd)/run_server.sh"
 #    terminating the instance.
 ```
 
-> **GC-heap dial:** if 50K→250K `per_conn_bytes` drift exceeds 5% (likely, as
-> with the JVM), report the marginal slope + a post-GC live-set read
-> (`dotnet-gcdump` / `DOTNET_GCHeapHardLimit`) rather than the raw RSS, and a
-> balanced-heap deployment point — do not treat raw RSS-delta/N as the
-> per-conn density. The small-N smoke (~87 KiB/conn at N=500) is CLR warm-up
-> noise, not density.
+> **GC-heap dial — anticipated, but it did NOT materialize (see results
+> above).** The concern was that Server GC's lazy heap-commit would make
+> RSS-delta/N a `-Xmx`-style dial as on the JVM. It isn't: 50K→250K drift is
+> −1.4 % (well under 5 %), the marginal slope ≈ the absolute, and a
+> Workstation-GC sidebar lands within ~2 % — so the per-conn RSS is genuinely
+> live memory, and the raw RSS-delta/N *is* the per-conn density here. The
+> Workstation-GC cross-check (`DOTNET_gcServer=0`) is the cheap way to confirm
+> live-vs-slack; run it if a future re-measure shows drift creeping past 5 %.
+> The small-N smoke (~87 KiB/conn at N=500) is CLR warm-up noise, not density.
 
 ## Local validation (macOS, .NET 8.0.421)
 
