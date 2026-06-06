@@ -1146,6 +1146,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     if niche_inner.is_some() {
                         self.niche_store_option_field(field_ptr, val);
                     } else {
+                        // Width coercion at the field-init boundary —
+                        // a default-width literal against a narrower
+                        // declared field would store 8 bytes over the
+                        // narrow slot, corrupting neighboring fields.
+                        // See `coerce_to_struct_field_ty`.
+                        let val =
+                            self.coerce_to_struct_field_ty(info.heap_type, (idx + 1) as u32, val);
                         self.builder.build_store(field_ptr, val).unwrap();
                     }
                     // Capture-inc for a non-fresh `Option[shared T]` field
@@ -1182,6 +1189,11 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut agg = st.get_undef();
             for (idx, field_init) in fields.iter().enumerate() {
                 let val = self.compile_expr(&field_init.value)?;
+                // Width coercion at the field-init boundary — inserting
+                // a default-width literal into a narrower member builds
+                // a malformed aggregate that reads back as garbage. See
+                // `coerce_to_struct_field_ty`.
+                let val = self.coerce_to_struct_field_ty(st, idx as u32, val);
                 agg = self
                     .builder
                     .build_insert_value(agg, val, idx as u32, "field")

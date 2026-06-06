@@ -544,6 +544,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                                     &format!("sh_idx_{}_ptr", field),
                                                 )
                                                 .unwrap();
+                                            // Field-store width coercion —
+                                            // see `coerce_to_struct_field_ty`.
+                                            let new_val = self.coerce_to_struct_field_ty(
+                                                info.heap_type,
+                                                (idx + 1) as u32,
+                                                new_val,
+                                            );
                                             self.builder.build_store(field_ptr, new_val).unwrap();
                                         }
                                     }
@@ -650,6 +657,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                             return Ok(());
                                         }
                                     }
+                                    // Field-store width coercion — see
+                                    // `coerce_to_struct_field_ty`.
+                                    let new_val = self.coerce_to_struct_field_ty(
+                                        info.heap_type,
+                                        (idx + 1) as u32,
+                                        new_val,
+                                    );
                                     self.builder.build_store(field_ptr, new_val).unwrap();
                                 }
                             }
@@ -673,6 +687,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             .builder
                             .build_struct_gep(struct_ty, ptr, idx, &format!("ref_{}_ptr", field))
                             .unwrap();
+                        // Field-store width coercion — see
+                        // `coerce_to_struct_field_ty`.
+                        let new_val = self.coerce_to_struct_field_ty(struct_ty, idx, new_val);
                         self.builder.build_store(field_ptr, new_val).unwrap();
                         return Ok(());
                     }
@@ -687,6 +704,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let BasicValueEnum::StructValue(sv) = obj_val {
                     let field_idx = self.field_index_for(object, field);
                     if let Some(idx) = field_idx {
+                        // Field-store width coercion — see
+                        // `coerce_to_struct_field_ty`.
+                        let new_val = self.coerce_to_struct_field_ty(sv.get_type(), idx, new_val);
                         let updated = self
                             .builder
                             .build_insert_value(sv, new_val, idx, field)
@@ -1346,6 +1366,52 @@ impl<'ctx> super::Codegen<'ctx> {
                         .get(n.as_str())
                         .map(|s| is_uint_name(s.as_str()))
                         .unwrap_or(false);
+                }
+                false
+            }
+            // Method-call result — impl methods register their return
+            // type under the synth `Type.method` key (see
+            // `make_impl_method_function`); resolve the receiver's
+            // type name and look the qualified key up. Same -56 print
+            // symptom as the free-fn arm, method shape (2026-06-06).
+            ExprKind::MethodCall { object, method, .. } => {
+                let recv_ty = match &object.kind {
+                    ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()),
+                    ExprKind::SelfValue => self.var_type_names.get("self"),
+                    _ => None,
+                };
+                if let Some(ty) = recv_ty {
+                    return self
+                        .fn_return_type_names
+                        .get(&format!("{ty}.{method}"))
+                        .map(|s| is_uint_name(s.as_str()))
+                        .unwrap_or(false);
+                }
+                false
+            }
+            // Struct-field read — the declared field TypeExpr carries
+            // the signedness (`println(s.b)` for a `u8` field).
+            ExprKind::FieldAccess { object, field } => {
+                let recv_ty = match &object.kind {
+                    ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()),
+                    ExprKind::SelfValue => self.var_type_names.get("self"),
+                    _ => None,
+                };
+                if let Some(ty) = recv_ty {
+                    if let (Some(names), Some(tes)) = (
+                        self.struct_field_names.get(ty),
+                        self.struct_field_type_exprs.get(ty),
+                    ) {
+                        if let Some(idx) = names.iter().position(|n| n == field) {
+                            if let Some(TypeKind::Path(p)) = tes.get(idx).map(|te| &te.kind) {
+                                return p
+                                    .segments
+                                    .last()
+                                    .map(|s| is_uint_name(s.as_str()))
+                                    .unwrap_or(false);
+                            }
+                        }
+                    }
                 }
                 false
             }
@@ -2158,6 +2224,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into()
             }
             _ => val,
+        }
+    }
+
+    /// Boundary coercion for a struct-field store/insert: coerce a
+    /// scalar value to the aggregate's declared field type. Without
+    /// this, `S { b: 200 }` against `struct S { b: u8 }` built the
+    /// aggregate with the raw i64 literal in an i8 member — a
+    /// malformed constant that slips past verification under opaque
+    /// pointers and reads back as garbage (the `s.b` → 0 repro,
+    /// 2026-06-06) — and the shared-struct heap path stored 8 bytes
+    /// over a 1-byte field, corrupting neighbors. No-op when the
+    /// index is out of range or either side is non-scalar.
+    pub(super) fn coerce_to_struct_field_ty(
+        &self,
+        agg_ty: inkwell::types::StructType<'ctx>,
+        field_index: u32,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        match agg_ty.get_field_type_at_index(field_index) {
+            Some(ft) => self.coerce_scalar_to_type(val, ft),
+            None => val,
         }
     }
 

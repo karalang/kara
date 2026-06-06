@@ -33185,4 +33185,53 @@ fn main() {
             );
         }
     }
+
+    #[test]
+    fn test_e2e_sub64_struct_field_widths_and_print_signedness() {
+        // The field-store leg of the boundary-coercion family
+        // (follow-up to the ret/call/binop fix): a default-width
+        // literal against a narrower declared field built a malformed
+        // aggregate (plain struct — `s.b` read back 0) or stored 8
+        // bytes over a 1-byte heap slot (shared struct — corrupting
+        // the NEIGHBOR field, hence the `tail` integrity pins). Covers
+        // struct-literal init, field assignment, mut-ref-param store,
+        // and shared-struct init + assignment. The 200/199 values
+        // double as print-signedness pins for the FieldAccess and
+        // MethodCall arms of `expr_is_unsigned_int` (u8 results
+        // sign-extended to -56 before those arms existed).
+        let out = run_program(
+            "struct S { mut b: u8, mut tail: i64 }\n\
+             \n\
+             shared struct Sh { mut b: u8, mut tail: i64 }\n\
+             \n\
+             impl S {\n\
+                 fn get_b(self) -> u8 {\n        return self.b;\n    }\n\
+             }\n\
+             \n\
+             fn poke(s: mut ref S) {\n    s.b = 201;\n}\n\
+             \n\
+             fn main() {\n\
+                 let mut s = S { b: 1, tail: 7 };\n\
+                 s.b = 200;\n\
+                 println(s.b);\n\
+                 println(s.tail);\n\
+                 println(s.get_b());\n\
+                 poke(mut s);\n\
+                 println(s.b);\n\
+                 let sh = Sh { b: 200, tail: 9 };\n\
+                 println(sh.b);\n\
+                 sh.b = 199;\n\
+                 println(sh.b);\n\
+                 println(sh.tail);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "200\n7\n200\n201\n200\n199\n9\n",
+                "narrow struct fields must store at their declared width \
+                 (neighbor fields intact) and print with their declared \
+                 signedness",
+            );
+        }
+    }
 }
