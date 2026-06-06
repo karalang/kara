@@ -495,9 +495,12 @@ fn cluster_blocks_cursor_in_link_value_position() {
 }
 
 #[test]
-fn cluster_blocks_member_type_parameter() {
-    // The cluster type entering via a parameter means non-local chains
-    // of the same type exist — poison.
+fn cluster_coexists_with_member_type_parameter() {
+    // Phase C1a: a member-type param no longer poisons by presence.
+    // The flow walls keep `seed` foreign (it can't join membership,
+    // can't be link-stored, and full RC covers it); the fn-local
+    // chain still clusters. Headerless demotes — the param is a
+    // signature mention of the member type.
     let src = format!(
         "{NODE}\
          fn extend(seed: ListNode) -> i64 {{\n\
@@ -512,7 +515,136 @@ fn cluster_blocks_member_type_parameter() {
          }}"
     );
     let r = analyze(&src);
-    assert!(cluster_root(&r, "extend").is_none());
+    assert_eq!(
+        cluster_root(&r, "extend").as_deref(),
+        Some("dummy"),
+        "clusters: {:?}",
+        r.elided_clusters
+    );
+    let c = &r.elided_clusters["extend"][0];
+    assert!(!c.headerless, "param sig mention must demote headerless");
+}
+
+#[test]
+fn cluster_param_walls_add_two_numbers_shape() {
+    // Kata #2's exact builder: member-type params walked via if-let,
+    // a canonical-triple loop append, RootLink tail. C1a + C1b
+    // compose: the cluster forms, builds count-free (b2), and the
+    // chain transfers out through `dummy.next`.
+    let src = format!(
+        "{NODE}\
+         fn add_two_numbers(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let mut tail = dummy;\n\
+             let mut a = l1;\n\
+             let mut b = l2;\n\
+             let mut carry: i64 = 0;\n\
+             loop {{\n\
+                 let mut s: i64 = carry;\n\
+                 let mut done = true;\n\
+                 if let Some(n) = a {{\n\
+                     s = s + n.val;\n\
+                     a = n.next;\n\
+                     done = false;\n\
+                 }}\n\
+                 if let Some(n) = b {{\n\
+                     s = s + n.val;\n\
+                     b = n.next;\n\
+                     done = false;\n\
+                 }}\n\
+                 if done and s == 0 {{\n\
+                     break;\n\
+                 }}\n\
+                 let node = ListNode {{ val: s % 10, next: None }};\n\
+                 tail.next = Some(node);\n\
+                 tail = node;\n\
+                 carry = s / 10;\n\
+             }}\n\
+             dummy.next\n\
+         }}\n\
+         fn main() {{\n\
+             let x = ListNode {{ val: 7, next: None }};\n\
+             let y = ListNode {{ val: 5, next: None }};\n\
+             let r = add_two_numbers(Some(x), Some(y));\n\
+             if r.is_some() {{ println(r.unwrap().val); }}\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert_eq!(
+        cluster_root(&r, "add_two_numbers").as_deref(),
+        Some("dummy"),
+        "clusters: {:?}",
+        r.elided_clusters
+    );
+    let c = &r.elided_clusters["add_two_numbers"][0];
+    assert!(c.b2, "canonical triple must recognize as b2");
+    assert_eq!(c.returned, karac::ownership::ReturnedChain::RootLink);
+    assert!(!c.headerless);
+}
+
+#[test]
+fn cluster_blocks_param_spliced_into_link() {
+    // A param value in link-store position is a non-fresh store —
+    // the splice wall. No cluster forms.
+    let src = format!(
+        "{NODE}\
+         fn graft(seed: ListNode) -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             dummy.next = Some(seed);\n\
+             dummy.val\n\
+         }}\n\
+         fn main() {{\n\
+             let s = ListNode {{ val: 9, next: None }};\n\
+             println(graft(s));\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(cluster_root(&r, "graft").is_none());
+}
+
+#[test]
+fn cluster_blocks_fresh_node_stored_under_param() {
+    // A fresh cluster node stored under a param-rooted place escapes
+    // the cluster (default-deny Identifier arm) — the free-walk would
+    // double-free it against the param chain's RC drop.
+    let src = format!(
+        "{NODE}\
+         fn leak_into(seed: ListNode) -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let node = ListNode {{ val: 1, next: None }};\n\
+             dummy.next = Some(node);\n\
+             let node2 = ListNode {{ val: 2, next: None }};\n\
+             seed.next = Some(node2);\n\
+             dummy.val\n\
+         }}\n\
+         fn main() {{\n\
+             let s = ListNode {{ val: 9, next: None }};\n\
+             println(leak_into(s));\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(cluster_root(&r, "leak_into").is_none());
+}
+
+#[test]
+fn cluster_blocks_param_name_shadowing_cluster_name() {
+    // A param sharing a cluster binding's name — the name-keyed
+    // analysis could misattribute; the shadow check still poisons.
+    let src = format!(
+        "{NODE}\
+         fn run(node: ListNode) -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let node = ListNode {{ val: 1, next: None }};\n\
+             dummy.next = Some(node);\n\
+             dummy.val\n\
+         }}\n\
+         fn main() {{\n\
+             let s = ListNode {{ val: 9, next: None }};\n\
+             println(run(s));\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(cluster_root(&r, "run").is_none());
 }
 
 #[test]

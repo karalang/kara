@@ -793,6 +793,12 @@ impl<'a> OwnershipChecker<'a> {
 //   (or `= None`); each fresh node in at most ONE such site.
 // - `is_some()` / `is_none()` on option cursors: anywhere.
 // - primitive field reads/writes on bare bindings: anywhere.
+// - member-type PARAMS coexist (C1a): they never poison by presence —
+//   the rules above wall them out of the cluster from both sides
+//   (they can't join membership, can't be link-stored [non-fresh],
+//   and a fresh node stored under a param hits default-deny). Param
+//   values keep full RC; a param name colliding with a cluster name
+//   poisons via the shadow check.
 // - EVERYTHING else mentioning a cluster name blocks the whole
 //   cluster: calls, method receivers/args, returns/tails, `Some(x)`
 //   outside a link store, match/if-let, closures, par/lock regions,
@@ -1004,13 +1010,20 @@ impl<'a> OwnershipChecker<'a> {
                 saw_boundary_region: false,
                 annotation_mentions_member: false,
             };
-            // Param names of the member type poison immediately — a
-            // param-rooted chain is not fn-local.
-            for p in &f.params {
-                if type_expr_mentions(&p.ty, &member) {
-                    scan.poison("cluster type enters via parameter", &p.span);
-                }
-            }
+            // Phase C1a: member-type params do NOT poison. The flow
+            // walls keep them strictly foreign to the cluster:
+            // membership only admits fresh link-None literals /
+            // aliases / link-reads / unwraps OF CLUSTER BINDINGS, the
+            // link store requires its value ∈ `fresh` (param splice →
+            // "non-fresh" poison), a cluster name reaching any other
+            // position (incl. `param.link = Some(fresh)`'s RHS) hits
+            // the default-deny Identifier arm, and a param name
+            // colliding with a cluster name poisons via
+            // `shadow_names` below. Phase D demotes automatically: a
+            // param of the member type is a signature mention, so
+            // `program_leaks_member_type` already forces headered
+            // layout program-wide.
+            //
             // Pass 1: grow membership from lets, in declaration order.
             self.cluster_collect_block(&f.body, &mut scan);
             // Shadow check: any cluster name also bound by a non-let
@@ -1755,23 +1768,7 @@ fn is_member_literal_link_none(value: &Expr, member: &str, link_field: &str) -> 
     })
 }
 
-fn type_expr_mentions(te: &TypeExpr, name: &str) -> bool {
-    match &te.kind {
-        TypeKind::Path(p) => {
-            p.segments.last().map(String::as_str) == Some(name)
-                || p.generic_args.as_ref().is_some_and(|args| {
-                    args.iter().any(|a| match a {
-                        GenericArg::Type(t) => type_expr_mentions(t, name),
-                        _ => false,
-                    })
-                })
-        }
-        TypeKind::Ref(inner) | TypeKind::MutRef(inner) => type_expr_mentions(inner, name),
-        _ => false,
-    }
-}
-
-/// Phase-D deep variant of `type_expr_mentions`: recurses through every
+/// Phase-D deep type mention scan: recurses through every
 /// type-carrying `TypeKind` shape (tuples, arrays, pointers, fn types,
 /// slices, weak refs, impl/dyn generic args). Unknown / future variants
 /// answer `true` — a missed mention is a layout-corruption hazard, so

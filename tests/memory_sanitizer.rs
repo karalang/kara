@@ -3447,6 +3447,91 @@ fn main() {
     }
 
     #[test]
+    fn asan_param_coexisting_builders_repeat() {
+        // Phase C1a under ASAN: kata #2's exact pipeline — C1b
+        // builders feed a param-walking adder whose own cluster
+        // transfers out (member-type params coexist with the cluster,
+        // keeping full RC). A wall failure has both signatures: a
+        // param node entering the cluster double-frees against its RC
+        // drop; a fresh node leaking under a param chain over-frees on
+        // the param's dec-walk. 200 iterations, exact total pins the
+        // arithmetic (342+465=807 → digit sum 15 → 3000).
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn from_three(a: i64, b: i64, c: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 0;
+    while i < 3 {
+        let mut v = a;
+        if i == 1 { v = b; }
+        if i == 2 { v = c; }
+        let node = ListNode { val: v, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    dummy.next
+}
+fn add_two_numbers(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+    let mut carry: i64 = 0;
+    loop {
+        let mut s: i64 = carry;
+        let mut done = true;
+        if let Some(n) = a {
+            s = s + n.val;
+            a = n.next;
+            done = false;
+        }
+        if let Some(n) = b {
+            s = s + n.val;
+            b = n.next;
+            done = false;
+        }
+        if done and s == 0 {
+            break;
+        }
+        let node = ListNode { val: s % 10, next: None };
+        tail.next = Some(node);
+        tail = node;
+        carry = s / 10;
+    }
+    dummy.next
+}
+fn sum_chain(head: Option[ListNode]) -> i64 {
+    let mut sum = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 200 {
+        let l1 = from_three(2, 4, 3);
+        let l2 = from_three(5, 6, 4);
+        let r = add_two_numbers(l1, l2);
+        total = total + sum_chain(r);
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+            &["3000"],
+            "param_coexisting_builders_repeat",
+        );
+    }
+
+    #[test]
     fn asan_option_shared_niche_abi_convergence_repeat() {
         // Niche call ABI for `Option[shared T]` signatures (Slice 1,
         // 2026-06-05) + the explicit-return alias compensation it
