@@ -10178,13 +10178,15 @@ fn test_migrate_default_atomic_when_only_bare_assigns() {
 /// first use ("variable 'fetch' not found").
 ///
 /// NOTE (target gate): this program calls `paint()` (writes(Display))
-/// from `main`, which `karac check`/`build` now reject on native — the
-/// test runs via `karac run`, which deliberately skips effect checking
-/// (lenient script path; typecheck is warnings-only there too). The
-/// run-mode leniency decision has its own phase-10 tracker entry. `Pipeline::resolve` now
+/// from `main`, which `karac check`/`build` reject on native — the
+/// test runs via `karac run`, where the phase-10 run-leniency decision
+/// (2026-06-06) downgrades effect findings (E0411 included) to
+/// `warning[effect]` lines and keeps executing, mirroring the
+/// typecheck treatment on the lenient script path. `Pipeline::resolve`
 /// expands gated imports into the real baked items
 /// (`prelude::expand_gated_stdlib_imports`); this pins the full
-/// run path: import + effect-clause use + calling the fetch stub body.
+/// run path: import + effect-clause use + calling the fetch stub body,
+/// plus the warn-don't-abort half of the leniency decision.
 #[test]
 fn std_web_single_file_run_executes_gated_imports() {
     let tmp = std::env::temp_dir().join(format!(
@@ -10227,6 +10229,140 @@ fn main() {
     assert!(
         stdout.contains("stub: std.web.net.fetch: host-call lowering not wired yet"),
         "fetch stub body should execute and surface its message: {stdout}",
+    );
+    assert!(
+        stderr.contains("warning[effect]")
+            && stderr.contains("does not provide resource 'Display'"),
+        "the E0411 target-gate finding should surface as a warning under run: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// ── Phase-10: `karac run` effect-violation leniency (warn + execute) ─
+
+/// The run-leniency decision (phase-10 tracker, 2026-06-06): `karac run`
+/// runs the effect checker but downgrades its findings to
+/// `warning[effect]` stderr lines — static-contract violations (types,
+/// effects) warn on the lenient script path; the program still executes
+/// and exits 0. `karac check` keeps rejecting the same program (the
+/// documented run/check asymmetry).
+#[test]
+fn run_effect_violation_warns_and_executes() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-run-effect-warn-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("effwarn.kara");
+    let src = r#"
+effect resource Db;
+
+fn touch() with writes(Db) {
+}
+
+pub fn api() {
+    touch()
+}
+
+fn main() {
+    api();
+    println("ran anyway");
+}
+"#;
+    std::fs::write(&path, src).unwrap();
+
+    let out = karac_bin()
+        .args(["run", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "effect violations must not abort `karac run`; stdout={stdout} stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("ran anyway"),
+        "program should execute past the effect violation: {stdout}",
+    );
+    assert!(
+        stderr.contains("warning[effect]")
+            && stderr.contains("public function 'api' performs effects [writes(Db)]"),
+        "the E0400 finding should surface as warning[effect] on stderr: {stderr}",
+    );
+
+    // The asymmetry half: `karac check` rejects the same program.
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "`karac check` must keep rejecting the program `karac run` warns on",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The abort tier of the same decision: RAII-across-yield violations
+/// break execution-soundness/teardown guarantees (like provider escape),
+/// so they abort `karac run` rather than warn. This gate existed in
+/// `cmd_run` but was vacuously green before the run-leniency slice —
+/// `raii_across_yield_check` keys off `Program.state_struct_layouts` /
+/// `yield_points`, which only `Pipeline::effectcheck` populates, and
+/// `cmd_run` never invoked it. This pins the gate's liveness.
+#[test]
+fn run_raii_across_yield_violation_aborts() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-run-raii-abort-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("raiirun.kara");
+    let src = r#"
+shared struct Hub {
+    id: i64,
+}
+
+pub fn fetch_data() with sends(Network) receives(Network) {
+}
+
+fn driver(h: Hub) {
+    fetch_data();
+}
+
+fn main() {
+    let h = Hub { id: 1 };
+    driver(h);
+    println("should not print");
+}
+"#;
+    std::fs::write(&path, src).unwrap();
+
+    let out = karac_bin()
+        .args(["run", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "RAII-across-yield must abort `karac run`; stdout={stdout} stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_RAII_ACROSS_YIELD]"),
+        "abort should carry the RAII diagnostic: {stderr}",
+    );
+    assert!(
+        !stdout.contains("should not print"),
+        "the program must not execute past the RAII gate: {stdout}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }

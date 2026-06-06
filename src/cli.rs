@@ -3668,6 +3668,19 @@ fn cmd_run(
     // Type-check (non-fatal for interpreter)
     pipeline.typecheck();
     pipeline.lower();
+    // Effect-check (non-fatal — phase-10 run-leniency decision,
+    // 2026-06-06). `karac run` is the lenient script path: violations
+    // of *static contracts* (typecheck, effects — including E0411
+    // target-gate findings) downgrade to warnings and the program
+    // still executes; only violations that break *execution-soundness/
+    // teardown guarantees* (provider escape, RAII-across-yield below)
+    // abort. Running the pass here is also load-bearing for two
+    // consumers that read its outputs on this path: `raii_check`
+    // (keys off `Program.state_struct_layouts` / `yield_points`,
+    // populated by `Pipeline::effectcheck` — without this call the
+    // run-path RAII gate below was vacuously green) and the
+    // `missing_track_caller` lint (reads `pipeline.effects`).
+    pipeline.effectcheck();
 
     if output == OutputMode::Text {
         // Print type warnings to stderr
@@ -3675,6 +3688,23 @@ fn cmd_run(
             for err in &t.errors {
                 eprintln!(
                     "warning[typecheck]: {}:{}:{}: {}",
+                    filename, err.span.line, err.span.column, err.message
+                );
+            }
+        }
+        // Print effect findings to stderr, mirroring the typecheck
+        // treatment: hard effect errors downgrade to `warning[effect]`
+        // on this path; FFI lint hints keep their `note[effect]`
+        // severity (same split as `print_text_diagnostics`).
+        if let Some(ref e) = pipeline.effects {
+            for err in &e.errors {
+                let label = if err.kind == EffectErrorKind::FfiLintHint {
+                    "note[effect]"
+                } else {
+                    "warning[effect]"
+                };
+                eprintln!(
+                    "{label}: {}:{}:{}: {}",
                     filename, err.span.line, err.span.column, err.message
                 );
             }
@@ -3833,7 +3863,10 @@ fn cmd_run(
     // contract as provider_escape: the network-event-loop state-machine
     // transform can't soundly lower a function that would leak resources
     // under cooperative cancellation, so the run path aborts rather
-    // than proceeds to the interpreter.
+    // than proceeds to the interpreter. (This gate only became live on
+    // the run path with the `effectcheck()` call above — the check keys
+    // off `state_struct_layouts`/`yield_points`, which nothing populated
+    // here before the phase-10 run-leniency slice.)
     pipeline.raii_check();
     if let Some(ref raii) = pipeline.raii_errors {
         if !raii.is_empty() {

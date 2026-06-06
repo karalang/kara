@@ -10118,6 +10118,15 @@ The `#[target(...)]` attribute marks an item as compiled **only** when the curre
 
 When a package declares multiple targets in its build configuration, `karac check` type-checks and effect-checks the source tree **once per target**, parameterizing the target-provided resource set each time. Diagnostics are tagged with the target that produced them. This is bounded because the target set is closed (four targets in v1).
 
+#### `karac run` Leniency — Warn vs. Abort (decided 2026-06-06)
+
+`karac run` is the lenient script path, and its gate tiering is a deliberate decision, not an accident of which passes happen to execute:
+
+- **Static-contract violations warn and the program runs.** Typecheck errors and effect-checker findings — undeclared public effects (E0400), over-declarations, profile violations, *and* target-gate findings (E0411) — print as `warning[typecheck]` / `warning[effect]` lines on stderr (FFI hints keep `note[effect]`), and execution proceeds with exit 0. These contracts protect *consumers* of the code; the tree-walk interpreter doesn't need them to execute the script in front of it. (E0411 specifically: `run` always executes on native via the interpreter, so a target-foreign resource reachable from `main` just means a stub or runtime error — e.g. `std.web.net.fetch`'s honest stub — which is legitimate script-mode exploration.)
+- **Execution-soundness violations abort.** Provider-rooted resource escape (E0600) and RAII-across-yield (`E_RAII_ACROSS_YIELD`) break the language's test-isolation, teardown, and cancellation guarantees — running anyway would execute a program whose semantics the language doesn't stand behind. These exit 1 before the interpreter starts, same as `check`/`build`.
+
+`karac check` and `karac build` remain the strict surfaces: every tier above is a hard error there (modulo `build`'s documented native-effects-non-fatal posture, which hardens to abort on WASM targets where the violation would otherwise resurface as a link error). The asymmetry is the same one every scripting-capable compiled language navigates — `run` answers "what does this script do?", `check` answers "is this code correct?".
+
 #### CPU Baseline Targeting
 
 Within a single `native` target, karac maintains a **per-target-triple CPU baseline table** that mirrors `rustc`'s target-spec defaults. LLVM's `"generic"` setting emits ARMv8.0-A on aarch64 and the original AMD64 baseline on x86_64 — conservative but appropriate for fleets with high CPU variance. On targets where the hardware is curated (notably `aarch64-apple-darwin`, where every shipping device is Apple Silicon M1 or newer), the generic baseline is strictly worse than the platform-specific baseline with no portability benefit.
