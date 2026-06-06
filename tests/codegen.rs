@@ -10507,6 +10507,147 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_fresh_return_someroot_builder_is_count_free() {
+        // Phase C1b SomeRoot: `Some(head)` at fn tail transfers the
+        // whole b2 cluster — the builder emits ZERO count ops and ZERO
+        // cleanups (no cw_loop, no decs; the chain leaves at rc==1 per
+        // node straight from rc_alloc and the caller's ordinary
+        // dec-drop owns it). Allocation stays HEADERED (rc_alloc, not
+        // hl_alloc) — the chain crosses the fn boundary.
+        let ir = ir_for_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build(n: i64) -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    let mut i = 2;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    Some(head)
+}
+fn main() {
+    let out = build(5);
+    if out.is_some() { println(out.unwrap().val); }
+}
+"#,
+        );
+        let body = function_body(&ir, "build").expect("fn body");
+        assert!(
+            !body.contains("rc_inc") && !body.contains("rc_dec"),
+            "SomeRoot builder must be count-free; body:\n{body}"
+        );
+        assert!(
+            !body.contains("cw_loop") && !body.contains("rc_cleanup"),
+            "SomeRoot root queues no cleanup; body:\n{body}"
+        );
+        assert!(
+            body.contains("rc_alloc") && !body.contains("hl_alloc"),
+            "returned chain stays headered; body:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_ir_fresh_return_rootlink_frees_root_only() {
+        // Phase C1b RootLink: `dummy.next` at fn tail transfers the
+        // chain; the root header node frees ALONE at scope exit (the
+        // FreeSharedElided shape — `elide_free` blocks, no cw_loop)
+        // and the tail link load carries no compensating inner inc.
+        let ir = ir_for_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build(n: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 1;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    dummy.next
+}
+fn main() {
+    let out = build(5);
+    if out.is_some() { println(out.unwrap().val); }
+}
+"#,
+        );
+        let body = function_body(&ir, "build").expect("fn body");
+        assert!(
+            !body.contains("rc_inc") && !body.contains("rc_dec"),
+            "RootLink builder must be count-free (incl. no tail compensation inc); body:\n{body}"
+        );
+        assert!(
+            body.contains("elide_free") && !body.contains("cw_loop"),
+            "RootLink root frees alone (no walk); body:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_fresh_return_builders_walk_and_drop() {
+        // Both C1b shapes end-to-end, repeated: caller walks the
+        // returned chain and drops it via the ordinary dec-drop — a
+        // transfer miscount is a deterministic UAF (over-dec) or a
+        // wrong sum (leak reuses garbage).
+        let out = run_program_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build_someroot(n: i64) -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    let mut i = 2;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    Some(head)
+}
+fn build_rootlink(n: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 1;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    dummy.next
+}
+fn sum_chain(head: Option[ListNode]) -> i64 {
+    let mut sum = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 64 {
+        total = total + sum_chain(build_someroot(50));
+        total = total + sum_chain(build_rootlink(50));
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+        );
+        // 64 * (1275 + 1275) = 163200.
+        assert_eq!(out.as_deref(), Some("163200\n"));
+    }
+
+    #[test]
     fn test_ir_cluster_root_takes_free_walk() {
         // Phase B1 WITHOUT B2: the root cleanup is the link-following
         // free-walk (cw_loop) while cursors keep their RcDec (they

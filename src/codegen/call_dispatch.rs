@@ -1483,6 +1483,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`Vec[SharedStruct]`, plain `fn f() -> SharedT { let n = …; n }`).
         if let Some(type_name) = self.var_type_names.get(var_name).cloned() {
             if let Some(info) = self.shared_types.get(type_name.as_str()).cloned() {
+                // C1b SomeRoot: `Some(<root>)` at fn tail is the
+                // sanctioned structural transfer — the root queued NO
+                // cleanup (the whole b2 count-free cluster leaves at
+                // rc==1 per node), so the balancing inc this arm
+                // normally emits (against the source's queued dec)
+                // has nothing to balance and would leak one ref on
+                // every chain head. The analysis guarantees this tail
+                // is the root's only consumer position.
+                if self
+                    .cluster_root_info(var_name)
+                    .is_some_and(|(_, _, mode)| mode == crate::ownership::ReturnedChain::SomeRoot)
+                {
+                    return;
+                }
                 if apply_shared_transfer {
                     if let Ok(loaded) = self.builder.build_load(ptr_ty, slot.ptr, "move.rc.load") {
                         let p = loaded.into_pointer_value();

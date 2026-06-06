@@ -800,6 +800,28 @@ impl<'a> OwnershipChecker<'a> {
 //   reassignment. Unknown constructs poison (same discipline as
 //   phase A).
 
+/// Phase C1b: how a cluster's chain leaves its function. Both
+/// returning forms are sound ONLY under `b2` — the count-free build
+/// means every node leaves the builder at rc==1 straight from
+/// `rc_alloc`, so the caller's ordinary dec-drop (or a future
+/// C1c free-walk adoption) composes without any compensation. A
+/// B1-only cluster with a sanctioned return shape is therefore not a
+/// cluster at all (the escape stands; full RC).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReturnedChain {
+    /// Not returned — the root free-walks (B1) at scope exit.
+    No,
+    /// Function final expr is `<root>.<link>` — the dummy-header
+    /// builder (kata #2's `add_two_numbers` returns `dummy.next`).
+    /// The root header node frees ALONE at scope exit; the chain
+    /// transfers out through the loaded link at rc==1 per node.
+    RootLink,
+    /// Function final expr is `Some(<root>)` — the bare-root builder
+    /// (kata #2's `from_array`). No root cleanup at all; the entire
+    /// cluster transfers to the caller.
+    SomeRoot,
+}
+
 /// A phase-B1 cluster eligible for the root free-walk. `bindings`
 /// records the full cluster-local name set (root + fresh nodes +
 /// cursors) — B1's codegen only consumes `root`/`member_type`/
@@ -848,6 +870,11 @@ pub struct ElidedCluster {
     /// optimization: a headerless node has no rc word, so any count op
     /// that slipped through would corrupt the first field.
     pub headerless: bool,
+    /// Phase C1b fresh-return summary — see `ReturnedChain`. Non-`No`
+    /// only when `b2` (count-free build is the precondition for the
+    /// structural rc==1 transfer). A returned cluster is never
+    /// `headerless` (the chain crosses the fn boundary headered).
+    pub returned: ReturnedChain,
 }
 
 /// Cluster-binding role during the scan.
@@ -1005,8 +1032,42 @@ impl<'a> OwnershipChecker<'a> {
                     &f.span,
                 );
             }
-            // Pass 2: verify every use (default-deny).
-            self.cluster_verify_block(&f.body, ClusterCtx::default(), &mut scan);
+            // Phase C1b: detect the sanctioned fresh-return tail shape
+            // BEFORE pass 2 (the verify would otherwise poison it as
+            // an escape). Only the function body's final expression
+            // qualifies — statement-position `return`s of cluster
+            // values keep poisoning via the default-deny Identifier
+            // arm, so a fn with both a tail return and a mid-fn escape
+            // never forms a cluster.
+            let mut returned = ReturnedChain::No;
+            if let (Some(root), Some(fe)) = (scan.root.as_deref(), f.body.final_expr.as_ref()) {
+                returned = match &fe.kind {
+                    ExprKind::FieldAccess { object, field }
+                        if field == &scan.link_field
+                            && matches!(&object.kind, ExprKind::Identifier(n) if n == root) =>
+                    {
+                        ReturnedChain::RootLink
+                    }
+                    ExprKind::Call { callee, args }
+                        if args.len() == 1
+                            && matches!(&callee.kind, ExprKind::Identifier(c) if c == "Some")
+                            && matches!(&args[0].value.kind, ExprKind::Identifier(n) if n == root) =>
+                    {
+                        ReturnedChain::SomeRoot
+                    }
+                    _ => ReturnedChain::No,
+                };
+            }
+            // Pass 2: verify every use (default-deny). The sanctioned
+            // tail expr is skipped — it is the one allowed escape.
+            for stmt in &f.body.stmts {
+                self.cluster_verify_stmt(stmt, ClusterCtx::default(), &mut scan);
+            }
+            if returned == ReturnedChain::No {
+                if let Some(e) = &f.body.final_expr {
+                    self.cluster_verify_expr(e, ClusterCtx::default(), &mut scan);
+                }
+            }
             if scan.poisoned.is_none() && scan.root.is_some() && scan.any_link {
                 let root = scan.root.clone().unwrap();
                 let b2_roles = recognize_b2(f, &scan);
@@ -1014,6 +1075,15 @@ impl<'a> OwnershipChecker<'a> {
                     Some(fresh) => (true, fresh.clone()),
                     None => (false, HashSet::new()),
                 };
+                // C1b soundness gate: a returned chain transfers at
+                // rc==1 per node ONLY because the b2 count-free build
+                // never inflates the counts. Without b2 the link-store
+                // retains would leave rc==2 nodes that the caller's
+                // dec-drop leaks — so the escape stands and no cluster
+                // forms at all (today's full-RC behavior).
+                if returned != ReturnedChain::No && !b2 {
+                    continue;
+                }
                 let mut bare_cursors = HashSet::new();
                 let mut option_cursors = HashSet::new();
                 if b2 {
@@ -1038,6 +1108,7 @@ impl<'a> OwnershipChecker<'a> {
                 // headered T can cross this fn's boundary in either
                 // direction). Demotion is invisible to B1/B2.
                 let headerless = b2
+                    && returned == ReturnedChain::No
                     && !scan.free_member_literal
                     && !scan.saw_boundary_region
                     && !scan.annotation_mentions_member
@@ -1052,6 +1123,7 @@ impl<'a> OwnershipChecker<'a> {
                     bare_cursors,
                     option_cursors,
                     headerless,
+                    returned,
                 });
             }
         }

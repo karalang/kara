@@ -1580,7 +1580,8 @@ pub(super) struct Codegen<'ctx> {
     /// name, link user-field index). The let-site swaps the root's
     /// cleanup for `FreeClusterWalk`. Cursors and fresh nodes keep
     /// their standard cleanups (drop-side-only consumption).
-    pub(crate) elided_cluster_roots: HashMap<String, HashMap<String, (String, usize)>>,
+    pub(crate) elided_cluster_roots:
+        HashMap<String, HashMap<String, (String, usize, crate::ownership::ReturnedChain)>>,
     /// Phase B2 build-side elision: fn key → cluster binding →
     /// role/cluster record. Populated only for clusters whose analysis
     /// `b2` flag is set (displacement-free canonical shapes). Consulted
@@ -3891,7 +3892,10 @@ impl<'ctx> Codegen<'ctx> {
                 .entry(fn_name.clone())
                 .or_default();
             for c in clusters {
-                entry.insert(c.root.clone(), (c.member_type.clone(), c.link_field_index));
+                entry.insert(
+                    c.root.clone(),
+                    (c.member_type.clone(), c.link_field_index, c.returned),
+                );
             }
             for c in clusters {
                 if !c.b2 {
@@ -4052,9 +4056,15 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     /// Phase-B1 cluster-root lookup for the current function: returns
-    /// (member type name, link user-field index) when `name` is a
-    /// cluster root whose cleanup takes the free-walk.
-    fn cluster_root_info(&self, name: &str) -> Option<(String, usize)> {
+    /// (member type name, link user-field index, C1b return mode) when
+    /// `name` is a cluster root. Mode `No` → the cleanup takes the
+    /// free-walk; `RootLink` → root-only free (the chain transfers out
+    /// through the sanctioned tail link read); `SomeRoot` → no cleanup
+    /// at all (the whole cluster transfers to the caller).
+    fn cluster_root_info(
+        &self,
+        name: &str,
+    ) -> Option<(String, usize, crate::ownership::ReturnedChain)> {
         self.elided_cluster_roots
             .get(&self.current_fn_name)
             .and_then(|m| m.get(name))

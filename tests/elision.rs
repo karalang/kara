@@ -430,7 +430,13 @@ fn cluster_blocks_chain_escaping_to_call() {
 }
 
 #[test]
-fn cluster_blocks_returned_chain() {
+fn cluster_returned_chain_is_sanctioned_rootlink() {
+    // Pre-C1b this shape was a blocked escape (`dummy.next` returned).
+    // C1b sanctions exactly this tail: the single outside-loop store
+    // is b2, so the chain transfers structurally at rc==1 per node and
+    // the root header frees alone. (The unsanctioned variants stay
+    // blocked — see `fresh_return_requires_b2` /
+    // `fresh_return_mid_fn_return_still_poisons`.)
     let src = format!(
         "{NODE}\
          fn build() -> Option[ListNode] {{\n\
@@ -442,7 +448,9 @@ fn cluster_blocks_returned_chain() {
          fn main() {{ let c = build(); if c.is_some() {{ println(1); }} }}"
     );
     let r = analyze(&src);
-    assert!(cluster_root(&r, "build").is_none());
+    let c = &r.elided_clusters["build"][0];
+    assert!(c.b2);
+    assert_eq!(c.returned, karac::ownership::ReturnedChain::RootLink);
 }
 
 #[test]
@@ -881,4 +889,162 @@ fn headerless_demoted_by_type_alias_to_member() {
     let c = &r.elided_clusters["build_and_sum"][0];
     assert!(c.b2);
     assert!(!c.headerless, "alias resolving to member demotes D");
+}
+
+// ── Phase C1b — fresh-return cluster summary ────────────────────
+
+const SOMEROOT_BUILDER: &str = "fn build(n: i64) -> Option[ListNode] {\n\
+     let head = ListNode { val: 1, next: None };\n\
+     let mut tail = head;\n\
+     let mut i = 2;\n\
+     while i <= n {\n\
+         let node = ListNode { val: i, next: None };\n\
+         tail.next = Some(node);\n\
+         tail = node;\n\
+         i = i + 1;\n\
+     }\n\
+     Some(head)\n\
+ }\n\
+ fn main() {\n\
+     let out = build(5);\n\
+     if out.is_some() { println(out.unwrap().val); }\n\
+ }";
+
+const ROOTLINK_BUILDER: &str = "fn build(n: i64) -> Option[ListNode] {\n\
+     let dummy = ListNode { val: 0, next: None };\n\
+     let mut tail = dummy;\n\
+     let mut i = 1;\n\
+     while i <= n {\n\
+         let node = ListNode { val: i, next: None };\n\
+         tail.next = Some(node);\n\
+         tail = node;\n\
+         i = i + 1;\n\
+     }\n\
+     dummy.next\n\
+ }\n\
+ fn main() {\n\
+     let out = build(5);\n\
+     if out.is_some() { println(out.unwrap().val); }\n\
+ }";
+
+#[test]
+fn fresh_return_someroot_accepted() {
+    let src = format!("{NODE}{SOMEROOT_BUILDER}");
+    let r = analyze(&src);
+    let c = &r.elided_clusters["build"][0];
+    assert!(c.b2, "builder is the canonical triple");
+    assert_eq!(c.returned, karac::ownership::ReturnedChain::SomeRoot);
+    assert!(
+        !c.headerless,
+        "returned cluster is never headerless (chain crosses the fn boundary headered)"
+    );
+}
+
+#[test]
+fn fresh_return_rootlink_accepted() {
+    let src = format!("{NODE}{ROOTLINK_BUILDER}");
+    let r = analyze(&src);
+    let c = &r.elided_clusters["build"][0];
+    assert!(c.b2);
+    assert_eq!(c.returned, karac::ownership::ReturnedChain::RootLink);
+    assert!(!c.headerless);
+}
+
+#[test]
+fn fresh_return_requires_b2() {
+    // The if-wrapped store breaks the adjacent triple (b2 rejected,
+    // B1-shape only) — a returned chain without the count-free build
+    // would leak (link-store retains leave rc==2 nodes), so NO cluster
+    // forms at all and full RC stands.
+    let src = format!(
+        "{NODE}fn build(n: i64) -> Option[ListNode] {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let mut tail = dummy;\n\
+             let mut i = 1;\n\
+             while i <= n {{\n\
+                 let node = ListNode {{ val: i, next: None }};\n\
+                 if i > 0 {{\n\
+                     tail.next = Some(node);\n\
+                     tail = node;\n\
+                 }}\n\
+                 i = i + 1;\n\
+             }}\n\
+             dummy.next\n\
+         }}\n\
+         fn main() {{\n\
+             let out = build(5);\n\
+             if out.is_some() {{ println(out.unwrap().val); }}\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(
+        !r.elided_clusters.contains_key("build"),
+        "returned + !b2 must form no cluster; got {:?}",
+        r.elided_clusters.get("build")
+    );
+}
+
+#[test]
+fn fresh_return_mid_fn_return_still_poisons() {
+    // A statement-position `return Some(head)` is NOT the sanctioned
+    // tail shape — the default-deny Identifier escape stands and no
+    // cluster forms.
+    let src = format!(
+        "{NODE}fn build(n: i64) -> Option[ListNode] {{\n\
+             let head = ListNode {{ val: 1, next: None }};\n\
+             let mut tail = head;\n\
+             let mut i = 2;\n\
+             while i <= n {{\n\
+                 let node = ListNode {{ val: i, next: None }};\n\
+                 tail.next = Some(node);\n\
+                 tail = node;\n\
+                 i = i + 1;\n\
+             }}\n\
+             if n > 3 {{\n\
+                 return Some(head);\n\
+             }}\n\
+             None\n\
+         }}\n\
+         fn main() {{\n\
+             let out = build(5);\n\
+             if out.is_some() {{ println(out.unwrap().val); }}\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(
+        !r.elided_clusters.contains_key("build"),
+        "mid-fn return must poison; got {:?}",
+        r.elided_clusters.get("build")
+    );
+}
+
+#[test]
+fn fresh_return_some_of_cursor_rejected() {
+    // `Some(<cursor>)` at tail is NOT sanctioned (only the root) —
+    // returning the tail cursor would alias mid-chain and the root's
+    // cleanup semantics wouldn't match. The escape poisons.
+    let src = format!(
+        "{NODE}fn build(n: i64) -> Option[ListNode] {{\n\
+             let head = ListNode {{ val: 1, next: None }};\n\
+             let mut tail = head;\n\
+             let mut i = 2;\n\
+             while i <= n {{\n\
+                 let node = ListNode {{ val: i, next: None }};\n\
+                 tail.next = Some(node);\n\
+                 tail = node;\n\
+                 i = i + 1;\n\
+             }}\n\
+             Some(tail)\n\
+         }}\n\
+         fn main() {{\n\
+             let out = build(5);\n\
+             if out.is_some() {{ println(out.unwrap().val); }}\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(
+        !r.elided_clusters.contains_key("build"),
+        "Some(cursor) tail must poison; got {:?}",
+        r.elided_clusters.get("build")
+    );
 }

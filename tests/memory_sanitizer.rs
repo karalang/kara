@@ -3384,6 +3384,69 @@ fn main() {
     }
 
     #[test]
+    fn asan_fresh_return_builders_repeat() {
+        // Phase C1b fresh-return transfer under ASAN: both sanctioned
+        // tail shapes (SomeRoot `Some(head)` and RootLink `dummy.next`)
+        // hand the b2 count-free chain to the caller at rc==1 per node.
+        // A missed suppression (tail compensation inc / Some transfer
+        // inc) leaks every chain head; an over-eager root cleanup
+        // (free-walk instead of root-only / none) is an immediate ASAN
+        // double-free when the caller's dec-drop walks the chain.
+        // 100 iterations x two 100-node chains; sum(1..=100) = 5050.
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build_someroot(n: i64) -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    let mut i = 2;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    Some(head)
+}
+fn build_rootlink(n: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 1;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    dummy.next
+}
+fn sum_chain(head: Option[ListNode]) -> i64 {
+    let mut sum = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 100 {
+        total = total + sum_chain(build_someroot(100));
+        total = total + sum_chain(build_rootlink(100));
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+            &["1010000"],
+            "fresh_return_builders_repeat",
+        );
+    }
+
+    #[test]
     fn asan_option_shared_niche_abi_convergence_repeat() {
         // Niche call ABI for `Option[shared T]` signatures (Slice 1,
         // 2026-06-05) + the explicit-return alias compensation it

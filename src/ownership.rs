@@ -34,7 +34,7 @@ mod rc_promote;
 // rewrite. L215b3 adds `ConsumerRewriteTypeCtx` so the migrate tool can
 // thread typecheck-derived data (inferred-binding discovery + mutating-
 // method-call classifier) when the full pipeline succeeded.
-pub use elision::{ElidedCluster, ElisionBlocked};
+pub use elision::{ElidedCluster, ElisionBlocked, ReturnedChain};
 
 pub(crate) use concurrent_shared::{
     build_consumer_rewrite_edits_in_program, build_consumer_rewrite_edits_with_mut_fields,

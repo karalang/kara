@@ -118,9 +118,27 @@ impl<'ctx> super::Codegen<'ctx> {
             // still holding the receiver severed the caller's list), and
             // its ref-root addressing wrote through the un-deref'd param
             // slot into the caller's stack frame.
-            ExprKind::FieldAccess { .. } => {
+            ExprKind::FieldAccess { object, field } => {
                 let v = self.compile_expr(expr)?;
-                self.share_option_shared_field_ref_for_arg(expr, v);
+                // C1b RootLink: `<root>.<link>` at fn tail is the
+                // sanctioned structural transfer — the b2 count-free
+                // build left every chain node at rc==1 straight from
+                // rc_alloc, the root's cleanup frees ONLY the header
+                // node, and the loaded link carries the chain out
+                // owning that rc==1. The compensating loaded-inner inc
+                // below would inflate the transfer to rc==2 (leak).
+                let structural_transfer = matches!(&object.kind, ExprKind::Identifier(n)
+                if self.cluster_root_info(n).is_some_and(|(member, link_idx, mode)| {
+                    mode == crate::ownership::ReturnedChain::RootLink
+                        && self
+                            .struct_field_names
+                            .get(&member)
+                            .and_then(|ns| ns.get(link_idx))
+                            .is_some_and(|ln| ln == field)
+                }));
+                if !structural_transfer {
+                    self.share_option_shared_field_ref_for_arg(expr, v);
+                }
                 Ok(v)
             }
             _ => self.compile_expr(expr),
@@ -1727,10 +1745,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     let ptr = val.into_pointer_value();
                     if self.is_elided_binding(var_name) {
                         self.track_elided_shared_var(var_name, ptr);
-                    } else if let Some((member_type, link_idx)) = self.cluster_root_info(var_name) {
-                        // Phase-B1 cluster root: link-following
-                        // free-walk instead of the dec/drop-fn walk.
-                        self.track_cluster_root_var(var_name, ptr, &member_type, link_idx);
+                    } else if let Some((member_type, link_idx, returned)) =
+                        self.cluster_root_info(var_name)
+                    {
+                        use crate::ownership::ReturnedChain;
+                        match returned {
+                            // Phase-B1 cluster root: link-following
+                            // free-walk instead of the dec/drop-fn walk.
+                            ReturnedChain::No => {
+                                self.track_cluster_root_var(var_name, ptr, &member_type, link_idx);
+                            }
+                            // C1b RootLink: the chain transfers out via
+                            // the sanctioned tail link read; only the
+                            // root header node itself is freed at scope
+                            // exit. FreeSharedElided is exactly that
+                            // shape (reload by name, null-guard, free —
+                            // no dec, no field walk).
+                            ReturnedChain::RootLink => {
+                                self.track_elided_shared_var(var_name, ptr);
+                            }
+                            // C1b SomeRoot: the entire cluster
+                            // transfers to the caller at rc==1 per node
+                            // (b2 count-free build) — no cleanup at all.
+                            ReturnedChain::SomeRoot => {}
+                        }
                     } else if !b2_skip {
                         self.track_rc_var(var_name, ptr, info.heap_type);
                     }
