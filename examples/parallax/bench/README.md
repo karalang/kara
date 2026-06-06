@@ -1,8 +1,8 @@
 # Parallax three-language benchmark
 
 Side-by-side `GET /dashboard/<user_id>` throughput across **Kāra**,
-**Rust**, **Go**, and **Node.js** — the recordable artifact for Demo 1
-([`docs/dogfooding.md § Demo 1: Parallax`](../../../docs/dogfooding.md)).
+**Rust**, **Go**, and **Node.js** — the recordable artifact for Parallax
+([`docs/dogfooding.md § Parallax`](../../../docs/dogfooding.md)).
 
 Each impl serves the same canonical fan-out + join workload: four
 provider "fetches" per request, each carrying `reads(R_i)` on a
@@ -464,7 +464,7 @@ Per the design lock at [`docs/dogfooding.md § Slice E`](../../../docs/dogfoodin
 
 ## See also
 
-- [`docs/dogfooding.md § Demo 1: Parallax`](../../../docs/dogfooding.md) —
+- [`docs/dogfooding.md § Parallax`](../../../docs/dogfooding.md) —
   the demo's design storyboard + Slice E settled-design-fork record
   (F1–F5 + Rust addition).
 - [`examples/parallax/`](../) — the multi-file source-of-truth Parallax

@@ -563,7 +563,7 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 
 ### Parallax-lite — first ground-truth measurement workload
 
-Parallax-lite is a stripped-down precursor to Demo 1 (Parallax — Auto-Concurrency API Gateway, see `docs/dogfooding.md`) — same shape (HTTP server, providers for upstream services, fan-out + join), narrower surface (one upstream instead of four, single resource per endpoint). It is the first program in the codebase with non-trivial Provider-Rooted Resources + auto-concurrency + (likely) RC fallback in one place — the right shape to ground-truth the spec's quantitative claims. Two measurements feed off the same workload:
+Parallax-lite is a stripped-down precursor to Parallax (the Auto-Concurrency API Gateway, see `docs/dogfooding.md`) — same shape (HTTP server, providers for upstream services, fan-out + join), narrower surface (one upstream instead of four, single resource per endpoint). It is the first program in the codebase with non-trivial Provider-Rooted Resources + auto-concurrency + (likely) RC fallback in one place — the right shape to ground-truth the spec's quantitative claims. Two measurements feed off the same workload:
 
 - [ ] **Cumulative Cost Surface validation.** Run `karac query cost-summary` against Parallax-lite to validate the static-count surface specified in `design.md § Performance Diagnostics > Cumulative Cost Surface`. Discrepancies between the table's order-of-magnitude estimates and observed counts feed back as edits to the table. Runtime attribution (sampling-profiler-driven %wall-clock against the same workload) lands as a separate post-v1 step; the static-count form ships in Phase 5.3.
 

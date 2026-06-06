@@ -19,16 +19,46 @@ systems programmers, AI researchers, and early adopters.
 Sequencing below (the build order) is about *when within the pre-launch runway*
 each is built, not whether it ships before or after launch — all are V1-scope.
 
+**Projects are keyed by name, not number.** The roster reorders and grows
+without renumbering, and a name never collides with the *separate* launch-track
+numbering used in `docs/roadmap.md` / `phase-6-runtime.md` ("Flagship Demo 1/2/3"
+= idle-holder / Parallax / data-pipeline), which is a different namespace.
+
 ---
 
 ## Contents
 
+- [Roster](#roster) — the at-a-glance status table (single bookkeeping surface)
 - [Demo planning](#demo-planning) — five pillars + practical filters
 - [Tier 1 — Must-Build](#tier-1--must-build-core-story-highest-impact) — Parallax, Mend, Slipstream
 - [Tier 2 — High-Value](#tier-2--high-value-compelling-story-focused-audience) — Cartographer, Husk, Weave, Chronicle
 - [Tier 3 — Domain-Specific](#tier-3--domain-specific-strong-for-specific-audiences) — Relay, Forge, Iris
 - [Build Sequence](#build-sequence)
 - [Reusable Scaffolding](#reusable-scaffolding)
+- [Adding a project](#adding-a-project) — the entry template
+- Appendix — Parallax bench design lock (Slice E)
+
+---
+
+## Roster
+
+At-a-glance status. **This table is the single bookkeeping surface** — to add a
+project, add one row here and one row to [Build Sequence](#build-sequence); the
+per-project sections below hold the design. Status legend: ✅ shipped ·
+🔨 in progress · ⬜ planned.
+
+| Project | Proves | Status | Built when (gate) | Tier |
+|---|---|---|---|---|
+| **Parallax** | Auto-concurrency without `async`/coloring (fan-out + join) | ✅ shipped | auto-par codegen + HTTP FFI | 1 |
+| **Mend** | AI-first: structured compiler output as a machine fix-loop | ✅ shipped | `karac … --output=json` + `karac fix` | 1 |
+| **Slipstream** | Auto-concurrency + SoA layout + one source on CPU/GPU | ⬜ planned | Phase 11 (CPU) · Phase 10 (GPU) | 1 |
+| **Cartographer** | Effect graph as a live architecture artifact | ⬜ planned | `karac query` effect/concurrency surface | 2 |
+| **Husk** | `kernel` profile — no heap/panic/std, MMIO, ISRs | ⬜ planned | v8 hardware gaps (`#[repr]`, `#[interrupt]`, asm) | 2 |
+| **Weave** | Refinement types + contracts + effects together | ⬜ planned | refinement+contracts (CSV) · `Pool[T]`+TLS+tracing (service) | 2 |
+| **Chronicle** | Self-hosting; Kāra's own tooling explains Kāra | ⬜ planned | Phase 10/12 self-hosting | 2 |
+| **Relay** | Effect-driven event-loop networking (no `async fn`) | ⬜ planned | Phase 6 v1.1 network event loop | 3 |
+| **Forge** | `embedded` profile firmware on a real MCU | ⬜ planned | v8 hardware gaps | 3 |
+| **Iris** | One source → native + WASM, no port | ⬜ planned | Phase 10 WASM target | 3 |
 
 ---
 
@@ -59,7 +89,7 @@ On top of the pillar lens, every demo should also pass these practical filters:
 
 ## Tier 1 — Must-Build (core story, highest impact)
 
-### Demo 1: Parallax — Auto-Concurrency API Gateway
+### Parallax — Auto-Concurrency API Gateway
 
 **Primary capability:** Auto-concurrency without `async fn` or function coloring.
 
@@ -105,33 +135,14 @@ the decision *visible and auditable*, which no other language offers.
 **Effort:** Medium. HTTP server layer needed (FFI or a thin Kāra wrapper).
 Benchmark harness is straightforward.
 
-#### Slice E — Three-language benchmark harness ✓ Landed 2026-05-09 (scaffolding `ea1d26d`; verification run `4f7b72d`)
-
-Demo 1's recordable artifact: side-by-side `GET /dashboard/:user_id` benchmark across Kāra, Rust, Go, and Node. Predecessor: HTTP handler ABI trampoline (`5f4cbcc`). Slices A (`ab611d3`), B (`3c3d87b`), C (`f5c7b31`), D (`502250a`), F (`91768f2`) all shipped 2026-05-09 — Slice E is the final piece that makes Demo 1 recordable. Sub-steps (a)–(f) shipped as scaffolding (`ea1d26d`) on 2026-05-09; sub-step (g) verification run executed on Apple M5 Pro 2026-05-09 — table at `examples/parallax/bench/README.md` populated with measured req/s + p99 across all four impls.
-
-**Settled design forks (2026-05-09).**
-
-- **F1 — Recording artifact.** Markdown throughput table at `examples/parallax/bench/README.md` + checked-in `bench.sh` reproducer. Engineers believe code, not videos; a rerunnable script is the highest-credibility artifact. Asciinema cast and video walkthrough are post-v1 polish — additive, not gating.
-- **F2 — Load distribution.** `wrk` Lua script generates random uniform user IDs in `1..1000`. Provides realistic-looking traffic in the recording without affecting throughput numbers (providers use `sleep_ms(n)`, not real lookups, so there's nothing to cache).
-- **F3 — Win condition.** Measure first; frame post-hoc based on actual numbers. No defensive bar pre-baked. If results disappoint, that's a diagnostic signal for follow-up perf investigation, not a story to pre-rationalize.
-- **F4 — Cross-language fairness controls.** Tokio worker count for Kāra and Rust matches `GOMAXPROCS` (= CPU count); Go uses default `GOMAXPROCS`; Node runs single-process (faithful to the language's default deployment reality); same hardware, sequential `wrk` runs (10s warmup + 30s measurement per impl). README footnotes Node's single-process choice and notes that cluster mode would scale ~Nx at the cost of process orchestration.
-- **F5 — Provider delays.** Asymmetric: 2/5/8/12 ms per provider. Total sequential ~27ms; total parallel ~12ms (waiting on the slowest). Asymmetry surfaces the "join waits on slowest provider" property in the trace narration.
-- **Rust added to comparison cohort 2026-05-09.** Extends the original Go+Node staging entry to a 4-way comparison. Rust (tokio + hyper + `tokio::join!()`) is the natural perf ceiling and uses the same runtime stack as Kāra, so the Kāra-vs-Rust gap measures Kāra's value-type ABI + trampoline overhead vs raw Rust. Single 4-way table per F3 — let the data tell the story rather than pre-splitting cross-paradigm vs implementation-overhead framings.
-- **Demo location.** `examples/parallax/bench/{kara,rust,go,node}/` with top-level `bench.sh` and `README.md`. Same compiler repo (matches the existing `examples/parallax_lite/` precedent). Reproduction is opt-in (not part of `cargo test`); `bench.sh` graceful-degrades when language toolchains are missing (skip-with-stderr-notice pattern from `tests/memory_sanitizer.rs::KARAC_SKIP_ASAN_TESTS`).
-
-**Out of scope (deferred to follow-ups).**
-
-- TLS, HTTP/2, WebSockets — Phase 11.
-- Real database FFI (Postgres / MySQL / Redis) — Phase 11 long-tail. Demo uses `sleep_ms(n)` providers + in-memory state.
-- Cluster-mode Node — footnoted in README; not implemented in v1 bench.
-- Asciinema cast / video walkthrough — post-v1 polish if shareability benefits warrant it.
-- Multi-user load patterns (Zipf, sticky-session) — random uniform is enough to exercise per-request fan-out; richer load shapes are a follow-up if perf investigation calls for it.
-- Splitting Parallax bench into a standalone repo (`parallax-bench/`) for shareable cloning — premature; same-repo until a real reason to split surfaces.
-- **Closing the Kāra-vs-Rust gap (resolved 2026-05-10 — measure-first paid off).** F3 said *measure first*, then frame post-hoc. Did that. Three rounds of measurement + investigation (`docs/investigations/parallax_perf.md`, `docs/investigations/http_layer_perf.md`, `docs/investigations/bench_robustness.md`) established that **the apparent Kāra-vs-Rust delta on the original Parallax bench was largely a measurement artifact** — both runtimes' release codegen was DCE-eliding the busy_loops, so v1-v3 numbers compared HTTP-dispatch overhead, not the fan-out work the bench was designed around. Once the bench was made apples-to-apples (G1 — hash-mix kernel + observable fold, `5ef2ea6`), Kāra and Rust converged to within ~3 % on throughput at -c100 (715 vs 720 rps), with Kāra **2.6× lower p99** (300 ms vs 803 ms) at saturated load thanks to `karac_par_run`'s work-helping wait loop. The original closure path — borrowed accessors → inline trampoline → `#[repr(C)]` Request — was specced as the way to close a *trampoline-overhead* gap, and the trampoline isn't the bottleneck on this bench's CPU-saturated shape (probed in `http_layer_perf.md`: H1 `block_in_place` ~7 % rps gain at saturation, H2 step 1 null result at our scale). Those four follow-ups are still meaningful for a *plaintext-throughput* bench shape (no busy_loops, just return `"OK"`) where HTTP-layer overhead dominates — tracked in [`phase-7-codegen.md`](../docs/implementation_checklist/phase-7-codegen.md) "HTTP FFI closure path" entry, picked up when either a plaintext bench is built or an unrelated need touches the HTTP FFI surface.
+**Bench & build history:** the three-language benchmark harness, its settled
+design forks, and the Kāra-vs-Rust measurement story are recorded in the
+**Parallax bench design lock (Slice E)** appendix at the end of this doc, and in
+[`examples/parallax/bench/README.md`](../examples/parallax/bench/README.md).
 
 ---
 
-### Demo 2: Mend — AI Writes Kāra
+### Mend — AI Writes Kāra
 
 **Primary capability:** AI-first tooling — structured compiler output as a
 machine-readable feedback loop.
@@ -178,7 +189,7 @@ examples that show the interesting cases without being contrived.
 
 ---
 
-### Demo 3: Slipstream — Interactive Wind Tunnel
+### Slipstream — Interactive Wind Tunnel
 
 **Primary capability:** Auto-concurrency of sequential code; layout blocks for
 cache-efficient SoA access; same code runs on CPU and GPU.
@@ -264,7 +275,7 @@ changing the Kāra source — only the dispatch call changes.
 
 ## Tier 2 — High-Value (compelling story, focused audience)
 
-### Demo 4: Cartographer — Effect Graph Visualizer
+### Cartographer — Effect Graph Visualizer
 
 **Primary capability:** `karac query` as a developer tool; effect types as
 architecture documentation.
@@ -295,7 +306,7 @@ Kāra to WASM so the tool runs in-browser without a server.
 
 ---
 
-### Demo 5: Husk — Minimal Kernel
+### Husk — Minimal Kernel
 
 **Primary capability:** `kernel` profile — no heap, no panics, no std, inline
 assembly, MMIO, interrupt handlers.
@@ -344,7 +355,7 @@ demo is the validation test for those features.
 
 ---
 
-### Demo 6: Weave — Data Pipeline with Verifiable Invariants
+### Weave — Data Pipeline with Verifiable Invariants
 
 **Primary capability:** Refinement types + contracts + effect types together.
 
@@ -422,7 +433,7 @@ roster while remaining V1-scope.)
 
 ---
 
-### Demo 7: Chronicle — Compiler Written in Itself
+### Chronicle — Compiler Written in Itself
 
 **Primary capability:** Self-hosting — Phase 10 is complete; the compiler is
 the demo.
@@ -457,7 +468,7 @@ right query examples and building a good presentation layer.
 
 ## Tier 3 — Domain-Specific (strong for specific audiences)
 
-### Demo 8: Relay — High-Performance Network Proxy
+### Relay — High-Performance Network Proxy
 
 **Audience:** Infrastructure engineers, performance-focused backend developers.
 
@@ -474,12 +485,12 @@ written as if it's sequential; the compiler manages the event loop.
 programmer still has to think about goroutine lifecycle. In Kāra, the effect
 system drives routing — you never write goroutine-management code.
 
-**Effort:** Medium. Builds on the HTTP server from Demo 1. The interesting
+**Effort:** Medium. Builds on the HTTP server from Parallax. The interesting
 part is the benchmark setup and comparison (wrk, hey, or equivalent).
 
 ---
 
-### Demo 9: Forge — Embedded Sensor Logger
+### Forge — Embedded Sensor Logger
 
 **Audience:** Embedded systems engineers, hardware developers.
 
@@ -506,7 +517,7 @@ is the integration test for the embedded story.
 
 ---
 
-### Demo 10: Iris — Browser Image Editor
+### Iris — Browser Image Editor
 
 **Audience:** Web developers, WASM users.
 
@@ -539,13 +550,13 @@ the "Ready when" column notes the compiler capability each is gated on.
 
 | Order | Project | Ready when | Why this slot |
 |---|---|---|---|
-| 1 | **Demo 2: Mend** | Now (structured JSON output exists) | Cheapest to build. Makes the AI-first thesis real. Sets the tone. |
-| 2 | **Demo 1: Parallax** | Auto-par codegen + HTTP FFI (done) | Broadest appeal. Every backend engineer relates to fan-out + join. |
-| 3 | **Demo 4: Cartographer** | `karac query` effect/concurrency surface | Teaches the effect system visually. Reduces onboarding friction for new users. |
-| 4 | **Demo 6: Weave** | Refinement types + contracts (CSV cut); `Pool[T]` + TLS + tracing (service cut) | Correctness story for data engineers. Complements the concurrency story. |
-| 5 | **Demo 7: Chronicle** | Self-hosting (Phase 10/12) | Self-hosting milestone. Marks Kāra as "a real language." |
-| 6 | **Demo 3: Slipstream** | CPU path after Phase 11 (long-tail stdlib + FFI); GPU path added later with no Kāra-source change | Visually striking, instantly explainable. |
-| 7 | **Demo 5: Husk** | Hardware gaps from v8 (`#[repr]`, `#[interrupt]`, inline asm, `no_std`) | Systems credibility. Validates the `kernel` profile. |
+| 1 | **Mend** | Now (structured JSON output exists) | Cheapest to build. Makes the AI-first thesis real. Sets the tone. |
+| 2 | **Parallax** | Auto-par codegen + HTTP FFI (done) | Broadest appeal. Every backend engineer relates to fan-out + join. |
+| 3 | **Cartographer** | `karac query` effect/concurrency surface | Teaches the effect system visually. Reduces onboarding friction for new users. |
+| 4 | **Weave** | Refinement types + contracts (CSV cut); `Pool[T]` + TLS + tracing (service cut) | Correctness story for data engineers. Complements the concurrency story. |
+| 5 | **Chronicle** | Self-hosting (Phase 10/12) | Self-hosting milestone. Marks Kāra as "a real language." |
+| 6 | **Slipstream** | CPU path after Phase 11 (long-tail stdlib + FFI); GPU path added later with no Kāra-source change | Visually striking, instantly explainable. |
+| 7 | **Husk** | Hardware gaps from v8 (`#[repr]`, `#[interrupt]`, inline asm, `no_std`) | Systems credibility. Validates the `kernel` profile. |
 
 **Parallax** and **Mend** together are the minimum viable showcase — they
 cover the two core theses (auto-concurrency, AI-first) with achievable effort,
@@ -561,8 +572,70 @@ Build these once; they serve multiple demos:
 
 | Scaffold | Used by |
 |---|---|
-| HTTP server / client layer (thin FFI over hyper or similar) | Demo 1, 3, 8 |
-| `karac --output=json` visualization harness | Demo 2, 4, 7 |
-| WASM → browser integration boilerplate | Demo 4, 10 |
-| Benchmark harness (wrk, criterion, perf) | Demo 1, 3, 8 |
-| QEMU boot scaffolding | Demo 5, 9 |
+| HTTP server / client layer (thin FFI over hyper or similar) | Parallax, Slipstream, Relay |
+| `karac --output=json` visualization harness | Mend, Cartographer, Chronicle |
+| WASM → browser integration boilerplate | Cartographer, Iris |
+| Benchmark harness (wrk, criterion, perf) | Parallax, Slipstream, Relay |
+| QEMU boot scaffolding | Husk, Forge |
+
+---
+
+## Adding a project
+
+The roster grows. To add a project:
+
+1. Add one row to [Roster](#roster) — name, what it proves, status, gate, tier.
+2. Add one row to [Build Sequence](#build-sequence) in its build-order slot.
+3. Add a design section under the matching tier, keyed by **name** (no number),
+   using this shape:
+
+```markdown
+### <Name> — <one-line title>
+
+**Primary capability:** <the one differentiator this project proves>
+
+**What it is:** <2–4 sentences — the concrete artifact>
+
+**What the demo shows:** <numbered list of the observable moments>
+
+**Why it's compelling:** <the peer/buyer takeaway in one paragraph>
+
+**Effort:** <Small | Medium | Large — plus the gating capability>
+```
+
+Keep entries **design-shaped**. Execution status, bench numbers, and build
+history belong in the phase checklists, the per-example `README.md`, or an
+appendix (see the Parallax bench design lock below) — not inline in the entry,
+so entries stay uniform and easy to add.
+
+---
+
+## Appendix — Parallax bench design lock (Slice E)
+
+Relocated out of the Parallax entry to keep roster entries uniform. This is the
+"§ Slice E" design lock referenced from `examples/parallax/bench/README.md` and
+the `docs/investigations/` perf docs.
+
+#### Slice E — Three-language benchmark harness ✓ Landed 2026-05-09 (scaffolding `ea1d26d`; verification run `4f7b72d`)
+
+Parallax's recordable artifact: side-by-side `GET /dashboard/:user_id` benchmark across Kāra, Rust, Go, and Node. Predecessor: HTTP handler ABI trampoline (`5f4cbcc`). Slices A (`ab611d3`), B (`3c3d87b`), C (`f5c7b31`), D (`502250a`), F (`91768f2`) all shipped 2026-05-09 — Slice E is the final piece that makes Parallax recordable. Sub-steps (a)–(f) shipped as scaffolding (`ea1d26d`) on 2026-05-09; sub-step (g) verification run executed on Apple M5 Pro 2026-05-09 — table at `examples/parallax/bench/README.md` populated with measured req/s + p99 across all four impls.
+
+**Settled design forks (2026-05-09).**
+
+- **F1 — Recording artifact.** Markdown throughput table at `examples/parallax/bench/README.md` + checked-in `bench.sh` reproducer. Engineers believe code, not videos; a rerunnable script is the highest-credibility artifact. Asciinema cast and video walkthrough are post-v1 polish — additive, not gating.
+- **F2 — Load distribution.** `wrk` Lua script generates random uniform user IDs in `1..1000`. Provides realistic-looking traffic in the recording without affecting throughput numbers (providers use `sleep_ms(n)`, not real lookups, so there's nothing to cache).
+- **F3 — Win condition.** Measure first; frame post-hoc based on actual numbers. No defensive bar pre-baked. If results disappoint, that's a diagnostic signal for follow-up perf investigation, not a story to pre-rationalize.
+- **F4 — Cross-language fairness controls.** Tokio worker count for Kāra and Rust matches `GOMAXPROCS` (= CPU count); Go uses default `GOMAXPROCS`; Node runs single-process (faithful to the language's default deployment reality); same hardware, sequential `wrk` runs (10s warmup + 30s measurement per impl). README footnotes Node's single-process choice and notes that cluster mode would scale ~Nx at the cost of process orchestration.
+- **F5 — Provider delays.** Asymmetric: 2/5/8/12 ms per provider. Total sequential ~27ms; total parallel ~12ms (waiting on the slowest). Asymmetry surfaces the "join waits on slowest provider" property in the trace narration.
+- **Rust added to comparison cohort 2026-05-09.** Extends the original Go+Node staging entry to a 4-way comparison. Rust (tokio + hyper + `tokio::join!()`) is the natural perf ceiling and uses the same runtime stack as Kāra, so the Kāra-vs-Rust gap measures Kāra's value-type ABI + trampoline overhead vs raw Rust. Single 4-way table per F3 — let the data tell the story rather than pre-splitting cross-paradigm vs implementation-overhead framings.
+- **Demo location.** `examples/parallax/bench/{kara,rust,go,node}/` with top-level `bench.sh` and `README.md`. Same compiler repo (matches the existing `examples/parallax_lite/` precedent). Reproduction is opt-in (not part of `cargo test`); `bench.sh` graceful-degrades when language toolchains are missing (skip-with-stderr-notice pattern from `tests/memory_sanitizer.rs::KARAC_SKIP_ASAN_TESTS`).
+
+**Out of scope (deferred to follow-ups).**
+
+- TLS, HTTP/2, WebSockets — Phase 11.
+- Real database FFI (Postgres / MySQL / Redis) — Phase 11 long-tail. Demo uses `sleep_ms(n)` providers + in-memory state.
+- Cluster-mode Node — footnoted in README; not implemented in v1 bench.
+- Asciinema cast / video walkthrough — post-v1 polish if shareability benefits warrant it.
+- Multi-user load patterns (Zipf, sticky-session) — random uniform is enough to exercise per-request fan-out; richer load shapes are a follow-up if perf investigation calls for it.
+- Splitting Parallax bench into a standalone repo (`parallax-bench/`) for shareable cloning — premature; same-repo until a real reason to split surfaces.
+- **Closing the Kāra-vs-Rust gap (resolved 2026-05-10 — measure-first paid off).** F3 said *measure first*, then frame post-hoc. Did that. Three rounds of measurement + investigation (`docs/investigations/parallax_perf.md`, `docs/investigations/http_layer_perf.md`, `docs/investigations/bench_robustness.md`) established that **the apparent Kāra-vs-Rust delta on the original Parallax bench was largely a measurement artifact** — both runtimes' release codegen was DCE-eliding the busy_loops, so v1-v3 numbers compared HTTP-dispatch overhead, not the fan-out work the bench was designed around. Once the bench was made apples-to-apples (G1 — hash-mix kernel + observable fold, `5ef2ea6`), Kāra and Rust converged to within ~3 % on throughput at -c100 (715 vs 720 rps), with Kāra **2.6× lower p99** (300 ms vs 803 ms) at saturated load thanks to `karac_par_run`'s work-helping wait loop. The original closure path — borrowed accessors → inline trampoline → `#[repr(C)]` Request — was specced as the way to close a *trampoline-overhead* gap, and the trampoline isn't the bottleneck on this bench's CPU-saturated shape (probed in `http_layer_perf.md`: H1 `block_in_place` ~7 % rps gain at saturation, H2 step 1 null result at our scale). Those four follow-ups are still meaningful for a *plaintext-throughput* bench shape (no busy_loops, just return `"OK"`) where HTTP-layer overhead dominates — tracked in [`phase-7-codegen.md`](../docs/implementation_checklist/phase-7-codegen.md) "HTTP FFI closure path" entry, picked up when either a plaintext bench is built or an unrelated need touches the HTTP FFI surface.
