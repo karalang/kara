@@ -3331,6 +3331,59 @@ fn main() {
     }
 
     #[test]
+    fn asan_headerless_cluster_repeat() {
+        // Phase D headerless members under ASAN: the type-pure
+        // canonical builder allocates 16-byte nodes (no rc word) and
+        // the root free-walk geps the SHIFTED link slot — a missed
+        // layout conversion at any consumer site reads/writes 8 bytes
+        // off and trips ASAN heap-buffer-overflow immediately; a
+        // free-walk against the wrong slot is a wild-pointer free.
+        // 100 iterations x 100 nodes; sum(1..=100) = 5050 per call.
+        // Mixed-layout half: `lone()` uses the same type headered
+        // (free literal, no cluster) in the same binary.
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build_and_sum(n: i64) -> i64 {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 1;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    let mut sum = 0;
+    let mut cur = dummy.next;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn lone() -> i64 {
+    let a = ListNode { val: 3, next: None };
+    a.val
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 100 {
+        total = total + build_and_sum(100);
+        total = total + lone();
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+            &["505300"],
+            "headerless_cluster_repeat",
+        );
+    }
+
+    #[test]
     fn asan_option_shared_niche_abi_convergence_repeat() {
         // Niche call ABI for `Option[shared T]` signatures (Slice 1,
         // 2026-06-05) + the explicit-return alias compensation it

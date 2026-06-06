@@ -1146,19 +1146,28 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(&storage_ty) = self.union_types.get(name) {
             return self.compile_union_init(name, storage_ty, fields);
         }
-        // Shared struct: heap-allocate with refcount header.
+        // Shared struct: heap-allocate with refcount header — unless
+        // phase-D headerless layout applies to this (fn, type), in
+        // which case the rc word is omitted entirely (no header slot,
+        // no rc=1 store) and field GEPs use the twin type at base 0.
         if let Some(info) = self.shared_types.get(name).cloned() {
             if !info.is_enum {
-                let ptr = self.emit_rc_alloc(info.heap_type);
+                let (gep_ty, base) = self.shared_gep_layout(name, info.heap_type);
+                let ptr = if base == 0 {
+                    self.emit_headerless_alloc(gep_ty)
+                } else {
+                    self.emit_rc_alloc(info.heap_type)
+                };
                 for (idx, field_init) in fields.iter().enumerate() {
                     let val = self.compile_expr(&field_init.value)?;
-                    // Fields start at index 1 (index 0 is the refcount).
+                    // Fields start at index `base` (0 headerless;
+                    // 1 headered — index 0 is the refcount).
                     let field_ptr = self
                         .builder
                         .build_struct_gep(
-                            info.heap_type,
+                            gep_ty,
                             ptr,
-                            (idx + 1) as u32,
+                            idx as u32 + base,
                             &format!("field_{}", field_init.name),
                         )
                         .unwrap();
@@ -1184,8 +1193,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // declared field would store 8 bytes over the
                         // narrow slot, corrupting neighboring fields.
                         // See `coerce_to_struct_field_ty`.
-                        let val =
-                            self.coerce_to_struct_field_ty(info.heap_type, (idx + 1) as u32, val);
+                        let val = self.coerce_to_struct_field_ty(gep_ty, idx as u32 + base, val);
                         self.builder.build_store(field_ptr, val).unwrap();
                     }
                     // Capture-inc for a non-fresh `Option[shared T]` field

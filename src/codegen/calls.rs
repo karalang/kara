@@ -362,18 +362,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(i) if !i.is_enum => i,
                 _ => return Ok(None),
             };
+            // Phase-D layout: headerless members GEP the twin at the
+            // un-shifted user index (see `shared_gep_layout`).
+            let (gep_ty, base) = self.shared_gep_layout(&type_name, info.heap_type);
             let fp = self
                 .builder
                 .build_struct_gep(
-                    info.heap_type,
+                    gep_ty,
                     receiver_ptr,
-                    (field_idx + 1) as u32,
+                    field_idx as u32 + base,
                     &format!("fr_sh_{}", field),
                 )
                 .unwrap();
-            let fty = info
-                .heap_type
-                .get_field_type_at_index((field_idx + 1) as u32)
+            let fty = gep_ty
+                .get_field_type_at_index(field_idx as u32 + base)
                 .ok_or_else(|| {
                     format!(
                         "codegen: field-receiver method '{}' on '{}.{}' — field LLVM type missing",

@@ -1587,6 +1587,19 @@ pub(super) struct Codegen<'ctx> {
     /// by the let-site shared/option arms, both Assign arms, and the
     /// dedicated link-store fast path.
     pub(crate) elided_b2_bindings: HashMap<String, HashMap<String, state::B2Binding>>,
+    /// Phase D headerless cluster density: fn key → member type name →
+    /// link user-field index, for clusters whose analysis `headerless`
+    /// flag is set (b2 + dual type-purity gate — see
+    /// `ElidedCluster::headerless`). Within such a fn, every value of
+    /// the member type is provably a cluster member, so the heap
+    /// layout is keyed per `(fn, type)`: allocation drops the 8-byte
+    /// rc header (`emit_headerless_alloc`), and every member-field GEP
+    /// routes through `shared_gep_layout` to pick the headerless twin
+    /// struct type at field base 0 instead of `heap_type` at base one.
+    /// The link index rides along for the lazy niche-shape check in
+    /// `headerless_here` (a non-niche link would make the free-walk's
+    /// RcDec fallback reachable — structurally excluded by demoting).
+    pub(crate) headerless_fns: HashMap<String, HashMap<String, usize>>,
     /// Per-function Arc-promoted binding names — the subset of `rc_fallback_fns`
     /// flagged by the ownership pass as crossing a `par {}` thread boundary.
     /// Inc/dec on these bindings emits atomic LLVM operations (`atomicrmw add` /
@@ -3748,6 +3761,7 @@ impl<'ctx> Codegen<'ctx> {
             elided_bindings: HashMap::new(),
             elided_cluster_roots: HashMap::new(),
             elided_b2_bindings: HashMap::new(),
+            headerless_fns: HashMap::new(),
             arc_fallback_fns: HashMap::new(),
             rc_fallback_heap_types: HashMap::new(),
             closure_capture_paths: HashMap::new(),
@@ -3900,6 +3914,15 @@ impl<'ctx> Codegen<'ctx> {
                     b2_entry.insert(n.clone(), mk(state::B2Role::OptionCursor));
                 }
             }
+            // Phase D: headerless member layout for this (fn, type).
+            for c in clusters {
+                if c.headerless {
+                    self.headerless_fns
+                        .entry(fn_name.clone())
+                        .or_default()
+                        .insert(c.member_type.clone(), c.link_field_index);
+                }
+            }
         }
         // Disjoint-capture slice 4: per-closure capture-path mode set
         // (slice 2 output). Drives the per-path env-struct layout in
@@ -4043,6 +4066,55 @@ impl<'ctx> Codegen<'ctx> {
         self.elided_b2_bindings
             .get(&self.current_fn_name)
             .and_then(|m| m.get(name))
+    }
+
+    /// Phase D: true when values of `type_name` use the headerless
+    /// layout in the current function. Two lazy demotions on top of
+    /// the analysis flag: coroutine fns (their bodies re-emit under
+    /// ramp/resume splitting — untested layout territory) and a
+    /// non-niche link slot (would make the free-walk's RcDec fallback
+    /// reachable against a header that does not exist).
+    pub(crate) fn headerless_here(&self, type_name: &str) -> bool {
+        let Some(link_idx) = self
+            .headerless_fns
+            .get(&self.current_fn_name)
+            .and_then(|m| m.get(type_name))
+        else {
+            return false;
+        };
+        if self.is_coroutine_compiled(&self.current_fn_name) {
+            return false;
+        }
+        self.niche_field_inner_heap_type(type_name, *link_idx)
+            .is_some()
+    }
+
+    /// Phase D layout resolution for shared-struct member-field access:
+    /// `(struct type to GEP with, heap index base for user field 0)`.
+    /// Headered: `(heap_type, 1)` — index 0 is the rc word. Headerless:
+    /// `(twin, 0)` where the twin is `heap_type` minus the rc slot
+    /// (anonymous struct types are uniqued by LLVM, so rebuilding per
+    /// call site is free). Every site that GEPs / allocs member fields
+    /// MUST route through this helper — the centralization is what
+    /// keeps the two layouts from ever mixing on one object. The only
+    /// deliberate exceptions are the `sh_call_` / `sh_idx_` field
+    /// paths (call-result and collection-element receivers): those
+    /// receiver shapes are structurally impossible for a headerless
+    /// type (the purity gate excludes calls returning the type and any
+    /// collection mention), and a headered GEP is correct for every
+    /// value that CAN reach them.
+    pub(crate) fn shared_gep_layout(
+        &self,
+        type_name: &str,
+        heap_type: inkwell::types::StructType<'ctx>,
+    ) -> (inkwell::types::StructType<'ctx>, u32) {
+        if self.headerless_here(type_name) {
+            let fields: Vec<inkwell::types::BasicTypeEnum<'ctx>> =
+                heap_type.get_field_types().into_iter().skip(1).collect();
+            (self.context.struct_type(&fields, false), 0)
+        } else {
+            (heap_type, 1)
+        }
     }
 
     /// True when `name` is a non-owning B2 binding (fresh node or

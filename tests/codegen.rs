@@ -10309,10 +10309,12 @@ fn main() {
     #[test]
     fn test_ir_b2_build_loop_is_count_free() {
         // Phase B2: in the canonical append builder, the entire build
-        // loop + walk emit ZERO refcount operations — the only count
-        // op left in the function is the rc=1 header store inside
-        // rc_alloc. Pinned by name: the inc/dec helpers emit
-        // `rc_inc`/`rc_dec` value names; the b2 paths emit none.
+        // loop + walk emit ZERO refcount operations. (Under phase D,
+        // which this type-pure program also qualifies for, even the
+        // rc=1 header store is gone — see the headerless pins below;
+        // this test pins the B2 count-op contract by name: the
+        // inc/dec helpers emit `rc_inc`/`rc_dec` value names; the b2
+        // paths emit none.)
         let ir = ir_for_with_ownership(
             r#"
 shared struct ListNode { val: i64, mut next: Option[ListNode] }
@@ -10354,6 +10356,153 @@ fn main() { println(build_and_sum(5)); }
         assert!(
             !body.contains("rc_cleanup") && !body.contains("opt_rc_cleanup"),
             "no cursor cleanups under b2; body:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_ir_headerless_cluster_alloc_drops_rc_header() {
+        // Phase D: the canonical b2 builder in a type-pure program
+        // allocates members WITHOUT the 8-byte rc header — `hl_alloc`
+        // (malloc of the twin size, no rc=1 store) replaces `rc_alloc`
+        // everywhere in the fn, while the b2 link store and the root's
+        // free-walk still engage against the shifted layout. With this,
+        // the build loop emits ZERO refcount-related instructions: no
+        // header store, no count ops, just malloc + field stores.
+        let ir = ir_for_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build_and_sum(n: i64) -> i64 {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 1;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    let mut sum = 0;
+    let mut cur = dummy.next;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn main() { println(build_and_sum(5)); }
+"#,
+        );
+        let body = function_body(&ir, "build_and_sum").expect("fn body");
+        assert!(
+            body.contains("hl_alloc"),
+            "headerless alloc should engage; body:\n{body}"
+        );
+        assert!(
+            !body.contains("rc_alloc") && !body.contains("rc_ptr"),
+            "no headered alloc / rc=1 store may remain; body:\n{body}"
+        );
+        assert!(
+            body.contains("b2.link.slot") && body.contains("cw_loop"),
+            "b2 link store + free-walk still engage; body:\n{body}"
+        );
+        // The twin layout is `{ i64, ptr }` (16 bytes): the link GEP
+        // against it must address field index 1 of a 2-field struct,
+        // never index 2 of the 3-field headered `{ i64, i64, ptr }`.
+        assert!(
+            body.contains("getelementptr inbounds { i64, ptr }"),
+            "member GEPs must use the headerless twin; body:\n{body}"
+        );
+        assert!(
+            !body.contains("getelementptr inbounds { i64, i64, ptr }"),
+            "no headered member GEP may remain in the cluster fn; body:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_headerless_member_primitive_field_write() {
+        // Primitive field writes on cluster members are an allowed
+        // shape (`cluster_verify_assign` falls through to the generic
+        // prim-write scan) and compile through the `sh_{field}_ptr`
+        // store site — which must GEP the headerless twin when phase D
+        // engages. A missed conversion writes 8 bytes high (into the
+        // link slot) and the walk would chase a corrupted pointer.
+        let out = run_program_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build_and_sum(n: i64) -> i64 {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 1;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    dummy.val = 1000;
+    tail.val = tail.val + 7;
+    let mut sum = dummy.val;
+    let mut cur = dummy.next;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn main() { println(build_and_sum(5)); }
+"#,
+        );
+        // 1000 (dummy.val) + 1+2+3+4 + (5+7) = 1022.
+        assert_eq!(out.as_deref(), Some("1022\n"));
+    }
+
+    #[test]
+    fn test_ir_headerless_and_headered_same_type_coexist() {
+        // Phase D keys the layout per (fn, type): the cluster fn goes
+        // headerless while another fn using the same type (a free
+        // literal in `main` — no cluster there) stays on the headered
+        // layout with standard RC. The two never exchange values
+        // (program purity guarantees no signature mentions the type),
+        // so both layouts are simultaneously correct in one binary.
+        let ir = ir_for_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build_and_sum(n: i64) -> i64 {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 1;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    let mut sum = 0;
+    let mut cur = dummy.next;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn main() {
+    let lone = ListNode { val: 7, next: None };
+    println(build_and_sum(5) + lone.val);
+}
+"#,
+        );
+        let build = function_body(&ir, "build_and_sum").expect("build body");
+        let main = function_body(&ir, "main").expect("main body");
+        assert!(
+            build.contains("hl_alloc") && !build.contains("rc_alloc"),
+            "cluster fn must be headerless; body:\n{build}"
+        );
+        assert!(
+            main.contains("rc_alloc") && !main.contains("hl_alloc"),
+            "non-cluster fn must stay headered; body:\n{main}"
         );
     }
 

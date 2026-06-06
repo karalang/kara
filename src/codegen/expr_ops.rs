@@ -352,23 +352,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 let ptr = self.compile_expr(object)?.into_pointer_value();
                 if let Some(names) = self.struct_field_names.get(&type_name) {
                     if let Some(idx) = names.iter().position(|n| n == field) {
-                        // Fields start at heap index 1 (index 0 is refcount).
+                        // Fields start at heap index `base` — 1 past
+                        // the refcount, or 0 for a phase-D headerless
+                        // member (see `shared_gep_layout`).
+                        let (gep_ty, base) = self.shared_gep_layout(&type_name, info.heap_type);
                         let field_ptr = self
                             .builder
                             .build_struct_gep(
-                                info.heap_type,
+                                gep_ty,
                                 ptr,
-                                (idx + 1) as u32,
+                                idx as u32 + base,
                                 &format!("sh_{}", field),
                             )
                             .unwrap();
                         if self.niche_field_inner_heap_type(&type_name, idx).is_some() {
                             return Ok(self.niche_load_option_field(field_ptr, field));
                         }
-                        let field_ty = info
-                            .heap_type
-                            .get_field_type_at_index((idx + 1) as u32)
-                            .unwrap();
+                        let field_ty = gep_ty.get_field_type_at_index(idx as u32 + base).unwrap();
                         return Ok(self.builder.build_load(field_ty, field_ptr, field).unwrap());
                     }
                 }
@@ -588,12 +588,21 @@ impl<'ctx> super::Codegen<'ctx> {
                             let ptr = self.compile_expr(object)?.into_pointer_value();
                             if let Some(names) = self.struct_field_names.get(&type_name) {
                                 if let Some(idx) = names.iter().position(|n| n == field) {
+                                    // Phase-D layout: headerless members
+                                    // GEP the twin at base 0. Only
+                                    // primitive-field stores can reach
+                                    // here for a headerless type — link
+                                    // stores are intercepted by the b2
+                                    // fast path before the generic
+                                    // Assign compile.
+                                    let (gep_ty, base) =
+                                        self.shared_gep_layout(&type_name, info.heap_type);
                                     let field_ptr = self
                                         .builder
                                         .build_struct_gep(
-                                            info.heap_type,
+                                            gep_ty,
                                             ptr,
-                                            (idx + 1) as u32,
+                                            idx as u32 + base,
                                             &format!("sh_{}_ptr", field),
                                         )
                                         .unwrap();
@@ -660,8 +669,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // Field-store width coercion — see
                                     // `coerce_to_struct_field_ty`.
                                     let new_val = self.coerce_to_struct_field_ty(
-                                        info.heap_type,
-                                        (idx + 1) as u32,
+                                        gep_ty,
+                                        idx as u32 + base,
                                         new_val,
                                     );
                                     self.builder.build_store(field_ptr, new_val).unwrap();

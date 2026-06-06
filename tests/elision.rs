@@ -725,3 +725,160 @@ fn b2_rejects_unlinked_fresh_node() {
     let c = &r.elided_clusters["run"][0];
     assert!(!c.b2, "never-linked fresh node must not be b2");
 }
+
+// ── Phase D — headerless member layout (b2 + dual purity gate) ──
+
+#[test]
+fn headerless_on_canonical_builder() {
+    let src = format!("{NODE}{CANONICAL_BUILDER}");
+    let r = analyze(&src);
+    let c = &r.elided_clusters["build_and_sum"][0];
+    assert!(c.b2);
+    assert!(
+        c.headerless,
+        "canonical builder in a pure program should be headerless"
+    );
+}
+
+#[test]
+fn headerless_demoted_by_fn_signature_mentioning_member() {
+    // An (unused) fn whose signature mentions the member type could
+    // carry a headered value across a fn boundary — program-level
+    // purity demotes D while keeping b2.
+    let src = format!("{NODE}fn touch(n: ListNode) -> i64 {{ n.val }}\n{CANONICAL_BUILDER}");
+    let r = analyze(&src);
+    let c = &r.elided_clusters["build_and_sum"][0];
+    assert!(c.b2, "signature leak must not affect b2");
+    assert!(!c.headerless, "fn signature mentioning member demotes D");
+}
+
+#[test]
+fn headerless_demoted_by_other_struct_field_mentioning_member() {
+    let src = format!("{NODE}struct Holder {{ n: Option[ListNode] }}\n{CANONICAL_BUILDER}");
+    let r = analyze(&src);
+    let c = &r.elided_clusters["build_and_sum"][0];
+    assert!(c.b2);
+    assert!(
+        !c.headerless,
+        "foreign struct field mentioning member demotes D"
+    );
+}
+
+#[test]
+fn headerless_demoted_by_free_member_literal() {
+    // A member literal outside cluster-let position (here: inside a
+    // tuple RHS) is a layout hazard — demote D, keep b2.
+    let src = format!(
+        "{NODE}fn build_and_sum(n: i64) -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let mut tail = dummy;\n\
+             let mut i = 1;\n\
+             while i <= n {{\n\
+                 let node = ListNode {{ val: i, next: None }};\n\
+                 tail.next = Some(node);\n\
+                 tail = node;\n\
+                 i = i + 1;\n\
+             }}\n\
+             let pair = (ListNode {{ val: 9, next: None }}, 1);\n\
+             let mut sum = pair.1;\n\
+             let mut cur = dummy.next;\n\
+             while cur.is_some() {{\n\
+                 let x = cur.unwrap();\n\
+                 sum = sum + x.val;\n\
+                 cur = x.next;\n\
+             }}\n\
+             sum\n\
+         }}\n\
+         fn main() {{ println(build_and_sum(5)); }}"
+    );
+    let r = analyze(&src);
+    let c = &r.elided_clusters["build_and_sum"][0];
+    assert!(c.b2, "free literal must not affect b2");
+    assert!(!c.headerless, "free member literal demotes D");
+}
+
+#[test]
+fn headerless_demoted_by_annotation_mentioning_member() {
+    let src = format!(
+        "{NODE}fn build_and_sum(n: i64) -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let mut tail = dummy;\n\
+             let mut i = 1;\n\
+             while i <= n {{\n\
+                 let node = ListNode {{ val: i, next: None }};\n\
+                 tail.next = Some(node);\n\
+                 tail = node;\n\
+                 i = i + 1;\n\
+             }}\n\
+             let z: Option[ListNode] = None;\n\
+             let mut sum = 0;\n\
+             if z.is_some() {{ sum = 1; }}\n\
+             let mut cur = dummy.next;\n\
+             while cur.is_some() {{\n\
+                 let x = cur.unwrap();\n\
+                 sum = sum + x.val;\n\
+                 cur = x.next;\n\
+             }}\n\
+             sum\n\
+         }}\n\
+         fn main() {{ println(build_and_sum(5)); }}"
+    );
+    let r = analyze(&src);
+    let c = &r.elided_clusters["build_and_sum"][0];
+    assert!(c.b2, "annotation must not affect b2");
+    assert!(!c.headerless, "annotation mentioning member demotes D");
+}
+
+#[test]
+fn headerless_demoted_by_closure_in_fn() {
+    let src = format!(
+        "{NODE}fn build_and_sum(n: i64) -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let mut tail = dummy;\n\
+             let mut i = 1;\n\
+             while i <= n {{\n\
+                 let node = ListNode {{ val: i, next: None }};\n\
+                 tail.next = Some(node);\n\
+                 tail = node;\n\
+                 i = i + 1;\n\
+             }}\n\
+             let bump = |v: i64| v + 0;\n\
+             let mut sum = 0;\n\
+             let mut cur = dummy.next;\n\
+             while cur.is_some() {{\n\
+                 let x = cur.unwrap();\n\
+                 sum = sum + bump(x.val);\n\
+                 cur = x.next;\n\
+             }}\n\
+             sum\n\
+         }}\n\
+         fn main() {{ println(build_and_sum(5)); }}"
+    );
+    let r = analyze(&src);
+    let c = &r.elided_clusters["build_and_sum"][0];
+    assert!(c.b2, "closure presence must not affect b2");
+    assert!(!c.headerless, "boundary region (closure) demotes D");
+}
+
+#[test]
+fn headerless_demoted_by_impl_on_member_type() {
+    let src = format!(
+        "{NODE}impl ListNode {{ fn value(ref self) -> i64 {{ self.val }} }}\n{CANONICAL_BUILDER}"
+    );
+    let r = analyze(&src);
+    let c = &r.elided_clusters["build_and_sum"][0];
+    assert!(c.b2);
+    assert!(
+        !c.headerless,
+        "impl on the member type demotes D (coarse v1)"
+    );
+}
+
+#[test]
+fn headerless_demoted_by_type_alias_to_member() {
+    let src = format!("{NODE}type Link = ListNode;\n{CANONICAL_BUILDER}");
+    let r = analyze(&src);
+    let c = &r.elided_clusters["build_and_sum"][0];
+    assert!(c.b2);
+    assert!(!c.headerless, "alias resolving to member demotes D");
+}

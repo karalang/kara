@@ -833,6 +833,21 @@ pub struct ElidedCluster {
     /// B2 roles: `Option[T]` link-read cursors. No count ops, no
     /// `RcDecOption`, plain-store reassignment.
     pub option_cursors: HashSet<String>,
+    /// Phase D: headerless member layout approved. True only when `b2`
+    /// holds AND the member type passes the dual purity gate: (a)
+    /// fn-level — no free (non-cluster-let) member literals, no
+    /// boundary regions (closure/par/lock/defer) anywhere in the fn,
+    /// no type annotation mentioning the member type; (b) program-
+    /// level — no other declared type/signature/alias in the program
+    /// mentions the member type, so no headered `T` value can ever
+    /// enter (or leave) this function. Under the gate, codegen may key
+    /// the heap layout per `(fn, member_type)`: members are allocated
+    /// WITHOUT the 8-byte rc header (`malloc(size - 8)`, field GEPs at
+    /// user index instead of `idx + 1`) and the root's free-walk geps
+    /// the shifted link slot. b2 is a structural precondition, not an
+    /// optimization: a headerless node has no rc word, so any count op
+    /// that slipped through would corrupt the first field.
+    pub headerless: bool,
 }
 
 /// Cluster-binding role during the scan.
@@ -867,6 +882,23 @@ struct ClusterScan {
     /// cluster poisons on intersection.
     shadow_names: HashSet<String>,
     poisoned: Option<(String, Span)>,
+    /// Phase D fn-purity flags (demote headerless, keep B1/B2). Set
+    /// during the verify walk — it is the complete default-deny
+    /// enumeration, so piggybacking here costs no new walker.
+    /// A member-type struct literal in any position other than a
+    /// cluster-let RHS (those return early in `cluster_verify_stmt`;
+    /// assign/link-store literal shapes poison outright).
+    free_member_literal: bool,
+    /// Any closure / par / lock / defer region exists in the fn — its
+    /// body compiles under a different fn key, so a member literal or
+    /// layout-sensitive access inside would disagree with the outer
+    /// fn's per-(fn, type) layout decision.
+    saw_boundary_region: bool,
+    /// Some `let` / `let-else` / uninit annotation mentions the member
+    /// type — an annotated non-cluster binding of `T` (or a container
+    /// of `T`) could hold a headered value the per-type keying would
+    /// then mis-GEP.
+    annotation_mentions_member: bool,
 }
 
 impl ClusterScan {
@@ -941,6 +973,9 @@ impl<'a> OwnershipChecker<'a> {
                 any_link: false,
                 shadow_names: HashSet::new(),
                 poisoned: None,
+                free_member_literal: false,
+                saw_boundary_region: false,
+                annotation_mentions_member: false,
             };
             // Param names of the member type poison immediately — a
             // param-rooted chain is not fn-local.
@@ -996,6 +1031,17 @@ impl<'a> OwnershipChecker<'a> {
                         }
                     }
                 }
+                // Phase D: dual purity gate on top of b2. The fn-level
+                // flags were gathered during the verify walk; the
+                // program-level scan proves no other declared type /
+                // signature / alias mentions the member type (so no
+                // headered T can cross this fn's boundary in either
+                // direction). Demotion is invisible to B1/B2.
+                let headerless = b2
+                    && !scan.free_member_literal
+                    && !scan.saw_boundary_region
+                    && !scan.annotation_mentions_member
+                    && !self.program_leaks_member_type(&member);
                 out.push(ElidedCluster {
                     root,
                     member_type: member,
@@ -1005,6 +1051,7 @@ impl<'a> OwnershipChecker<'a> {
                     fresh_linked,
                     bare_cursors,
                     option_cursors,
+                    headerless,
                 });
             }
         }
@@ -1206,7 +1253,14 @@ impl<'a> OwnershipChecker<'a> {
 
     fn cluster_verify_stmt(&self, stmt: &Stmt, ctx: ClusterCtx, scan: &mut ClusterScan) {
         match &stmt.kind {
-            StmtKind::Let { pattern, value, .. } => {
+            StmtKind::Let {
+                pattern, value, ty, ..
+            } => {
+                if let Some(te) = ty {
+                    if type_expr_mentions_deep(te, &scan.member_type) {
+                        scan.annotation_mentions_member = true;
+                    }
+                }
                 let is_cluster_let = matches!(&pattern.kind, PatternKind::Binding(n)
                     if scan.bindings.contains_key(n.as_str()));
                 if is_cluster_let && self.classify_cluster_rhs(value, scan).is_some() {
@@ -1225,13 +1279,26 @@ impl<'a> OwnershipChecker<'a> {
                 self.cluster_verify_expr(value, ctx, scan);
             }
             StmtKind::LetElse {
-                value, else_block, ..
+                value,
+                else_block,
+                ty,
+                ..
             } => {
+                if let Some(te) = ty {
+                    if type_expr_mentions_deep(te, &scan.member_type) {
+                        scan.annotation_mentions_member = true;
+                    }
+                }
                 self.cluster_verify_expr(value, ctx, scan);
                 self.cluster_verify_block(else_block, ctx, scan);
             }
-            StmtKind::LetUninit { .. } => {}
+            StmtKind::LetUninit { ty, .. } => {
+                if type_expr_mentions_deep(ty, &scan.member_type) {
+                    scan.annotation_mentions_member = true;
+                }
+            }
             StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                scan.saw_boundary_region = true;
                 self.cluster_verify_block(body, ClusterCtx { boundary: true }, scan);
             }
             StmtKind::Assign { target, value } => {
@@ -1420,9 +1487,11 @@ impl<'a> OwnershipChecker<'a> {
 
             // Boundary regions: any cluster mention inside blocks.
             ExprKind::Closure { body, .. } => {
+                scan.saw_boundary_region = true;
                 self.cluster_verify_expr(body, ClusterCtx { boundary: true }, scan);
             }
             ExprKind::Par(b) | ExprKind::Lock { body: b, .. } => {
+                scan.saw_boundary_region = true;
                 self.cluster_verify_block(b, ClusterCtx { boundary: true }, scan);
             }
 
@@ -1537,7 +1606,17 @@ impl<'a> OwnershipChecker<'a> {
                     self.cluster_verify_expr(v, ctx, scan);
                 }
             }
-            ExprKind::StructLiteral { fields, .. } => {
+            ExprKind::StructLiteral { path, fields, .. } => {
+                // Phase D fn-purity: every sanctioned member-literal
+                // position is consumed before descent (cluster-let RHS
+                // returns early in `cluster_verify_stmt`; assign /
+                // link-store literal shapes poison), so a member
+                // literal reaching the generic walk is free-floating —
+                // a headered-vs-headerless layout hazard. Harmless to
+                // B1/B2 (it can never be linked), so demote D only.
+                if path.last().map(String::as_str) == Some(scan.member_type.as_str()) {
+                    scan.free_member_literal = true;
+                }
                 for f in fields {
                     self.cluster_verify_expr(&f.value, ctx, scan);
                 }
@@ -1617,6 +1696,129 @@ fn type_expr_mentions(te: &TypeExpr, name: &str) -> bool {
         }
         TypeKind::Ref(inner) | TypeKind::MutRef(inner) => type_expr_mentions(inner, name),
         _ => false,
+    }
+}
+
+/// Phase-D deep variant of `type_expr_mentions`: recurses through every
+/// type-carrying `TypeKind` shape (tuples, arrays, pointers, fn types,
+/// slices, weak refs, impl/dyn generic args). Unknown / future variants
+/// answer `true` — a missed mention is a layout-corruption hazard, so
+/// the helper fails toward "mentions" (demote headerless, keep B1/B2).
+fn type_expr_mentions_deep(te: &TypeExpr, name: &str) -> bool {
+    let args_mention = |args: &Vec<GenericArg>| {
+        args.iter().any(|a| match a {
+            GenericArg::Type(t) => type_expr_mentions_deep(t, name),
+            _ => false,
+        })
+    };
+    match &te.kind {
+        TypeKind::Path(p) => {
+            p.segments.last().map(String::as_str) == Some(name)
+                || p.generic_args.as_ref().is_some_and(&args_mention)
+        }
+        TypeKind::Tuple(ts) => ts.iter().any(|t| type_expr_mentions_deep(t, name)),
+        TypeKind::Array { element, .. } => type_expr_mentions_deep(element, name),
+        TypeKind::Pointer { inner, .. }
+        | TypeKind::Ref(inner)
+        | TypeKind::MutRef(inner)
+        | TypeKind::MutSlice(inner)
+        | TypeKind::Weak(inner) => type_expr_mentions_deep(inner, name),
+        TypeKind::FnType {
+            params,
+            return_type,
+            ..
+        } => {
+            params.iter().any(|t| type_expr_mentions_deep(t, name))
+                || return_type
+                    .as_ref()
+                    .is_some_and(|t| type_expr_mentions_deep(t, name))
+        }
+        TypeKind::ImplTrait { args, .. } | TypeKind::Dyn { args, .. } => args_mention(args),
+        TypeKind::Unit | TypeKind::Error => false,
+    }
+}
+
+impl<'a> OwnershipChecker<'a> {
+    /// Phase-D program purity: true when any declared type, signature,
+    /// alias, or module-level binding in the program mentions `member`
+    /// — i.e. a headered `member` value could cross a function boundary
+    /// (in either direction) through a declared surface, which would
+    /// break per-`(fn, type)` headerless layout keying. Function and
+    /// test BODIES are deliberately not scanned: a `member` value
+    /// constructed inside another fn stays headered AND stays inside
+    /// that fn unless some declared surface (scanned here) lets it out.
+    fn program_leaks_member_type(&self, member: &str) -> bool {
+        let m = member;
+        let param_or_ret = |params: &Vec<Param>, ret: &Option<TypeExpr>| {
+            params.iter().any(|p| type_expr_mentions_deep(&p.ty, m))
+                || ret.as_ref().is_some_and(|t| type_expr_mentions_deep(t, m))
+        };
+        for item in &self.program.items {
+            let leaks = match item {
+                Item::Function(g) => param_or_ret(&g.params, &g.return_type),
+                Item::StructDef(s) => {
+                    s.name != m && s.fields.iter().any(|f| type_expr_mentions_deep(&f.ty, m))
+                }
+                Item::UnionDef(u) => u.fields.iter().any(|f| type_expr_mentions_deep(&f.ty, m)),
+                Item::EnumDef(e) => e.variants.iter().any(|v| match &v.kind {
+                    VariantKind::Unit => false,
+                    VariantKind::Tuple(ts) => ts.iter().any(|t| type_expr_mentions_deep(t, m)),
+                    VariantKind::Struct(fs) => fs.iter().any(|f| type_expr_mentions_deep(&f.ty, m)),
+                }),
+                Item::TraitDef(t) => t.items.iter().any(|ti| match ti {
+                    TraitItem::Method(tm) => param_or_ret(&tm.params, &tm.return_type),
+                    // Assoc-type declarations carry bounds, not
+                    // concrete types; the concrete leak surface is the
+                    // impl-side binding (scanned below).
+                    TraitItem::AssocType(_) => false,
+                }),
+                Item::ImplBlock(imp) => {
+                    // Coarse v1: ANY impl whose target mentions the
+                    // member type demotes (its methods receive
+                    // headered `self`); plus method sigs and GAT
+                    // bindings on impls of other types.
+                    type_expr_mentions_deep(&imp.target_type, m)
+                        || imp.items.iter().any(|ii| match ii {
+                            ImplItem::Method(f) => param_or_ret(&f.params, &f.return_type),
+                            ImplItem::AssocType(b) => type_expr_mentions_deep(&b.ty, m),
+                        })
+                }
+                Item::ExternFunction(ef) => param_or_ret(&ef.params, &ef.return_type),
+                Item::ExternBlock(eb) => eb.items.iter().any(|ei| match ei {
+                    ExternItem::Function(ef) => param_or_ret(&ef.params, &ef.return_type),
+                    _ => false,
+                }),
+                Item::ConstDecl(c) => type_expr_mentions_deep(&c.ty, m),
+                Item::ModuleBinding(mb) => mb
+                    .ty
+                    .as_ref()
+                    .is_some_and(|t| type_expr_mentions_deep(t, m)),
+                // Aliases can smuggle the member under another name
+                // past every other check — any alias that RESOLVES to
+                // mention the member demotes outright.
+                Item::TypeAlias(ta) => type_expr_mentions_deep(&ta.ty, m),
+                Item::DistinctType(dt) => type_expr_mentions_deep(&dt.base_type, m),
+                // A layout block re-describes a collection's physical
+                // form; one naming the member type implies a foreign
+                // layout authority over it.
+                Item::LayoutDef(ld) => type_expr_mentions_deep(&ld.collection_type, m),
+                // No type-carrying surface that can move a value.
+                Item::TraitAlias(_)
+                | Item::MarkerTrait(_)
+                | Item::EffectResource(_)
+                | Item::EffectGroup(_)
+                | Item::EffectVerbDecl(_)
+                | Item::UseDecl(_)
+                | Item::Import(_)
+                | Item::AliasDecl(_)
+                | Item::IndependentDecl(_)
+                | Item::TestCase(_) => false,
+            };
+            if leaks {
+                return true;
+            }
+        }
+        false
     }
 }
 

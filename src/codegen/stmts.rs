@@ -903,6 +903,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(&b2.member_type)
             .map(|i| i.heap_type)
             .expect("b2 member type registered in shared_types");
+        // Phase-D layout: a headerless member's link slot sits at the
+        // un-shifted user index in the twin type.
+        let (gep_ty, base) = self.shared_gep_layout(&b2.member_type, heap_type);
         let obj_ptr = self
             .builder
             .build_load(ptr_ty, oslot.ptr, &format!("{obj}.b2.link.obj"))
@@ -911,9 +914,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let field_ptr = self
             .builder
             .build_struct_gep(
-                heap_type,
+                gep_ty,
                 obj_ptr,
-                (b2.link_field_index + 1) as u32,
+                b2.link_field_index as u32 + base,
                 "b2.link.slot",
             )
             .unwrap();

@@ -190,6 +190,22 @@ impl<'ctx> super::Codegen<'ctx> {
         ptr
     }
 
+    /// Phase D: allocate a headerless cluster member — `malloc` of the
+    /// twin struct's size, no rc word, no rc=1 store. Callers must hold
+    /// a `shared_gep_layout` result with base 0 for the same type; the
+    /// object is freed by the root's `FreeClusterWalk` (or the member
+    /// orphans into it via the chain), never by any count op.
+    pub(super) fn emit_headerless_alloc(&self, twin: StructType<'ctx>) -> PointerValue<'ctx> {
+        let size = twin.size_of().expect("twin type must be sized");
+        let call = self
+            .builder
+            .build_call(self.malloc_fn, &[size.into()], "hl_alloc")
+            .unwrap();
+        call.try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value()
+    }
+
     /// Increment the reference count of a shared object.
     pub(super) fn emit_rc_inc(&self, heap_type: StructType<'ctx>, ptr: PointerValue<'ctx>) {
         let rc_ptr = self
@@ -1375,7 +1391,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // The free-walk:
                 //   cur = root; while cur != null { n = cur-><link>;
                 //   free(cur); cur = n; }
-                let link_heap_idx = (*link_field_index + 1) as u32;
+                // Phase-D layout: a headerless member's link slot GEPs
+                // the twin at the un-shifted user index (the fallback
+                // above is unreachable headerless — `headerless_here`
+                // requires the niche link). `free` is layout-agnostic.
+                let (gep_ty, base) = self.shared_gep_layout(member_type, heap_type);
+                let link_heap_idx = *link_field_index as u32 + base;
                 let entry_bb = self.builder.get_insert_block().unwrap();
                 let loop_bb = self.context.append_basic_block(fn_val, "cw_loop");
                 let body_bb = self.context.append_basic_block(fn_val, "cw_body");
@@ -1392,7 +1413,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.position_at_end(body_bb);
                 let link_ptr = self
                     .builder
-                    .build_struct_gep(heap_type, cur, link_heap_idx, "cw_link")
+                    .build_struct_gep(gep_ty, cur, link_heap_idx, "cw_link")
                     .unwrap();
                 let next = self
                     .builder
