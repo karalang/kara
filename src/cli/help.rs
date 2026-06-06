@@ -265,6 +265,15 @@ OPTIONS:
                             manifest > host triple. Accepts the space-
                             separated form `--target <triple>` too.
                             See the TARGETS section.
+    --bindings=<mode>       WASM output shape: browser (emit `<stem>.js`
+                            ES-module glue next to the `.wasm`),
+                            component (Component Model; emits the C-ABI
+                            core module only today — WIT emission is a
+                            follow-up), or none (raw `.wasm`, no glue).
+                            Default is inferred from the target:
+                            wasm_browser -> browser, wasm_wasi ->
+                            component. Ignored on non-WASM targets.
+                            Accepts `--bindings <mode>` too.
     --monomorphization-budget=warn:N,error:M
                             Cap per-generic instantiations. After typecheck
                             (before codegen), any generic instantiated >= N

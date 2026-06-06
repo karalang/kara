@@ -42,6 +42,31 @@ pub enum OutputMode {
     Jsonl,
 }
 
+// ── WASM bindings mode ──────────────────────────────────────────
+
+/// `--bindings browser|component|none` — output-shape selector for the
+/// WASM build path (`design.md § Target Build Artifacts`, phase-10
+/// `--bindings` flag entry). The flag has no meaning on non-WASM
+/// targets (it is accepted-but-inert there); on a WASM build the
+/// default is inferred from the target — `wasm_browser` → `Browser`,
+/// `wasm_wasi` → `Component` — because the `--target` choice already
+/// declares the host family (no universal default, no silent
+/// browser-lock-in).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingsMode {
+    /// ES-module JS glue next to the `.wasm` (`<stem>.js` — host fn
+    /// import plumbing + WASI preview-1 polyfill; see `wasm_glue`).
+    Browser,
+    /// Component Model output. Today this emits the C-ABI core module
+    /// only — the WIT-descriptor / embedded-WIT emission via pinned
+    /// `wit-bindgen` is the separate phase-10 "WASM Component Model
+    /// artifact emission" entry.
+    Component,
+    /// Raw `.wasm` only — no glue, no declarations. For users wrapping
+    /// Kāra WASM with custom host integration.
+    None,
+}
+
 // ── Subcommands ─────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -164,6 +189,13 @@ pub enum Command {
         /// shape compatibility with project mode but does not affect
         /// codegen today.
         target: Option<String>,
+        /// `--bindings=browser|component|none`: WASM output-shape
+        /// selector (see [`BindingsMode`]). `None` here means "flag
+        /// omitted" — `cmd_build` infers the mode from the WASM target
+        /// (`wasm_browser` → browser, `wasm_wasi` → component). On a
+        /// non-WASM target the flag is accepted-but-inert, consistent
+        /// with `--offline` / single-file `--target=<triple>` above.
+        bindings: Option<BindingsMode>,
         /// `--monomorphization-budget=warn:N,error:M` (v1.x, single-file
         /// only): per-generic instantiation ceiling enforced after
         /// typecheck. A disabled (all-`None`) budget — the default — skips
@@ -574,6 +606,7 @@ pub fn execute(cmd: Command) {
             enable_hot_swap,
             no_proxy,
             target,
+            bindings,
             monomorphization_budget,
             release,
             lint_overrides,
@@ -586,6 +619,7 @@ pub fn execute(cmd: Command) {
             enable_hot_swap,
             no_proxy,
             target.as_deref(),
+            bindings,
             monomorphization_budget,
             release,
             lint_overrides,
@@ -4593,6 +4627,7 @@ fn cmd_build(
     enable_hot_swap: bool,
     no_proxy: bool,
     target: Option<&str>,
+    bindings: Option<BindingsMode>,
     monomorphization_budget: crate::monomorphization::MonomorphizationBudget,
     release: bool,
     lint_overrides: crate::lints::CliLintOverrides,
@@ -4615,6 +4650,37 @@ fn cmd_build(
     #[cfg(feature = "llvm")]
     {
         let is_wasm = build_target == "wasm_wasi" || build_target == "wasm_browser";
+        // Phase-10 `--bindings` flag: resolve the effective WASM output
+        // shape. Explicit flag wins; omitted, the mode is inferred from
+        // the target (`wasm_browser` → browser, `wasm_wasi` → component
+        // — design.md § Target Build Artifacts: the `--target` choice
+        // already declares the host family, so defaulting off it avoids
+        // silent browser-lock-in). On a non-WASM target the flag is
+        // accepted-but-inert per the tracker entry — there is no glue
+        // concept for a native binary.
+        let effective_bindings = if is_wasm {
+            // Explicitly requested `component` deserves the honest
+            // caveat: the wit-bindgen WIT-descriptor emission is the
+            // separate "WASM Component Model artifact emission" entry,
+            // so today the build produces the C-ABI core module only.
+            // The *inferred* component default (a bare
+            // `--target=wasm_wasi` build) stays silent — that is just
+            // the established wasi output.
+            if bindings == Some(BindingsMode::Component) {
+                eprintln!(
+                    "note: --bindings=component emits the C-ABI core module only today — \
+                     WIT descriptor / Component Model emission is a follow-up \
+                     (design.md § Target Build Artifacts)"
+                );
+            }
+            Some(bindings.unwrap_or(if build_target == "wasm_browser" {
+                BindingsMode::Browser
+            } else {
+                BindingsMode::Component
+            }))
+        } else {
+            None
+        };
         let source = read_source(filename);
         let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
         pipeline.resolve();
@@ -4771,12 +4837,19 @@ fn cmd_build(
             }
             Ok(()) => {
                 let _ = std::fs::remove_file(&obj_path);
-                // Browser builds ship a companion ES-module glue file:
-                // host fn import plumbing (`kara_host` namespace) + the
-                // WASI preview-1 polyfill the wasip1 module needs in a
-                // browser/node host. See `wasm_glue` (design.md § Host
-                // Functions, browser-WASM lowering).
-                let glue_path = if build_target == "wasm_browser" {
+                // Browser-bindings builds ship a companion ES-module
+                // glue file: host fn import plumbing (`kara_host`
+                // namespace) + the WASI preview-1 polyfill the wasip1
+                // module needs in a browser/node host. See `wasm_glue`
+                // (design.md § Host Functions, browser-WASM lowering).
+                // The condition is the resolved bindings mode, not the
+                // target name: `--target=wasm_browser --bindings=none`
+                // suppresses the glue (raw module), and
+                // `--target=wasm_wasi --bindings=browser` opts a wasi
+                // module into it (both wasm targets lower host fns to
+                // the same `kara_host` import entries, so the glue is
+                // target-agnostic).
+                let glue_path = if effective_bindings == Some(BindingsMode::Browser) {
                     let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
                     let glue = crate::wasm_glue::render_glue(&host_fns, &exe_path);
                     let path = format!("{exe_name}.js");
@@ -4808,6 +4881,10 @@ fn cmd_build(
     {
         let _ = build_target;
         let _ = enable_hot_swap;
+        // `--bindings` only shapes WASM artifact emission, which rides
+        // the llvm build path — accepted-but-inert here, consistent
+        // with --offline / --target above.
+        let _ = bindings;
         // `--release` only affects codegen (contract stripping), which the
         // non-llvm fallback doesn't reach — accepted-but-inert, consistent
         // with --offline / --target / --enable-hot-swap above.

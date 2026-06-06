@@ -8,7 +8,7 @@ use crate::scaffold::Template;
 use std::process;
 
 use super::help::{has_help_flag, print_subcommand_help};
-use super::{Command, OutputMode, QueryKind};
+use super::{BindingsMode, Command, OutputMode, QueryKind};
 
 pub fn parse_args(args: &[String]) -> Command {
     if args.len() < 2 {
@@ -361,6 +361,7 @@ fn parse_build_command(args: &[String]) -> Command {
     let mut enable_hot_swap = false;
     let mut no_proxy = false;
     let mut target: Option<String> = None;
+    let mut bindings: Option<BindingsMode> = None;
     let mut monomorphization_budget = crate::monomorphization::MonomorphizationBudget::default();
     let mut release = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
@@ -411,6 +412,21 @@ fn parse_build_command(args: &[String]) -> Command {
             }
             target = Some(val.clone());
             i += 1;
+        } else if let Some(rest) = arg.strip_prefix("--bindings=") {
+            // `--bindings=browser|component|none` — WASM output-shape
+            // selector (phase-10; design.md § Target Build Artifacts).
+            // Validated here at the parse layer so an unknown value is
+            // an error with the valid set listed, regardless of target.
+            bindings = Some(parse_bindings_value(rest));
+        } else if arg == "--bindings" {
+            // Space-separated form, mirroring `--target <triple>` (the
+            // design.md examples write `--bindings browser`).
+            if i + 1 >= args.len() {
+                eprintln!("error: --bindings requires a value. Use browser, component, or none.");
+                process::exit(1);
+            }
+            bindings = Some(parse_bindings_value(&args[i + 1]));
+            i += 1;
         } else if let Some(rest) = arg.strip_prefix("--monomorphization-budget=") {
             // `--monomorphization-budget=warn:N,error:M` (single-file only,
             // v1.x). Reads the same instantiation table as `karac query
@@ -447,6 +463,7 @@ fn parse_build_command(args: &[String]) -> Command {
             enable_hot_swap,
             no_proxy,
             target,
+            bindings,
             monomorphization_budget,
             release,
             lint_overrides,
@@ -466,6 +483,13 @@ fn parse_build_command(args: &[String]) -> Command {
             // through project mode as well (threaded to `run_multi_file_codegen`
             // → `compile_to_object_with_hot_swap`), so it forwards rather than
             // being rejected. Composes with `KARAC_STRIP_CONTRACTS` (OR).
+            //
+            // `bindings` is dropped here: project-mode WASM builds are
+            // rejected with the single-file pointer (`cmd_build_project`),
+            // so project mode is always a non-WASM build today — where
+            // the flag is ignored per the phase-10 `--bindings` entry.
+            // The `dist/wasm/` artifact-emission entries thread it
+            // through when project-mode WASM lands.
             Command::BuildProject {
                 output,
                 offline,
@@ -474,6 +498,25 @@ fn parse_build_command(args: &[String]) -> Command {
                 target,
                 release,
             }
+        }
+    }
+}
+
+/// Parse a `--bindings` value (phase-10 WASM output-shape selector;
+/// `design.md § Target Build Artifacts`). The set is closed at three —
+/// `browser` | `component` | `none` — and an unknown value is a hard
+/// error listing it, so a typo can't silently fall back to the
+/// target-inferred default.
+fn parse_bindings_value(value: &str) -> BindingsMode {
+    match value.trim() {
+        "browser" => BindingsMode::Browser,
+        "component" => BindingsMode::Component,
+        "none" => BindingsMode::None,
+        other => {
+            eprintln!(
+                "error: unknown --bindings value '{other}'. Use browser, component, or none."
+            );
+            process::exit(1);
         }
     }
 }

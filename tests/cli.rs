@@ -11587,3 +11587,207 @@ console.log("E2E_OK");
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// ── Phase-10: `karac build --bindings` flag ─────────────────────────
+//
+// WASM output-shape selector (design.md § Target Build Artifacts).
+// Default is inferred from the target (wasm_browser → browser,
+// wasm_wasi → component — covered implicitly by the emission tests
+// above); these tests cover the explicit spellings, the value
+// validation, and the non-WASM inertness.
+
+/// An unknown `--bindings` value is a parse-level hard error listing
+/// the closed valid set — it must not silently fall back to the
+/// target-inferred default. Fires before any file is read, so no
+/// wasm infrastructure (or even the named file) is needed.
+#[test]
+fn bindings_flag_unknown_value_rejected() {
+    let out = karac_bin()
+        .args(["build", "x.kara", "--bindings=xml"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown --bindings value 'xml'")
+            && stderr.contains("browser, component, or none"),
+        "expected the valid-set listing, got: {stderr}",
+    );
+}
+
+/// Space-separated `--bindings` with no following value rejects
+/// loudly (mirrors `--target`'s missing-value diagnostic).
+#[test]
+fn bindings_flag_missing_value_rejected() {
+    let out = karac_bin()
+        .args(["build", "x.kara", "--bindings"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("--bindings requires a value"),
+        "expected the missing-value diagnostic, got: {stderr}",
+    );
+}
+
+/// `--target=wasm_browser --bindings=none` suppresses the glue: only
+/// the raw `.wasm` is emitted, and the `Built:` line names a single
+/// artifact ("raw" for browser = no `<stem>.js`, per the phase-10
+/// raw-artifact entry).
+#[test]
+fn bindings_none_suppresses_browser_glue() {
+    let tmp = wasm_test_dir("bnone");
+    let path = tmp.join("rawmod.kara");
+    std::fs::write(&path, "fn main() {\n    println(\"hello\");\n}\n").unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: bindings_none_suppresses_browser_glue — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "build failed: {stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("Built: rawmod.wasm") && !stdout.contains("rawmod.js"),
+        "Built line must name only the .wasm, got: {stdout}",
+    );
+    assert!(tmp.join("rawmod.wasm").exists(), "missing .wasm artifact");
+    assert!(
+        !tmp.join("rawmod.js").exists(),
+        "--bindings=none must not emit JS glue",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// `--target=wasm_wasi --bindings browser` (space form, the design.md
+/// spelling) opts a wasi module into the ES-module glue: both wasm
+/// targets lower `host fn` to the same `kara_host` import entries, so
+/// the glue (with its inline WASI polyfill) is target-agnostic.
+#[test]
+fn bindings_browser_on_wasi_emits_glue() {
+    let tmp = wasm_test_dir("bwasi");
+    let path = tmp.join("wglue.kara");
+    std::fs::write(&path, "fn main() {\n    println(\"hello\");\n}\n").unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings",
+            "browser",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: bindings_browser_on_wasi_emits_glue — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "build failed: {stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("Built: wglue.wasm + wglue.js"),
+        "Built line must name both artifacts, got: {stdout}",
+    );
+    let glue = std::fs::read_to_string(tmp.join("wglue.js")).expect("missing .js glue");
+    assert!(
+        glue.contains("wasi_snapshot_preview1"),
+        "glue must carry the WASI polyfill",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Explicit `--bindings=component` succeeds (core module emitted) and
+/// notes that WIT / Component Model emission is a follow-up. The
+/// *inferred* component default — a bare `--target=wasm_wasi` build —
+/// stays silent (asserted via the emission tests above carrying no
+/// such note).
+#[test]
+fn bindings_explicit_component_notes_core_module_only() {
+    let tmp = wasm_test_dir("bcomp");
+    let path = tmp.join("compmod.kara");
+    std::fs::write(&path, "fn main() {\n    println(\"hello\");\n}\n").unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=component",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: bindings_explicit_component_notes_core_module_only — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "build failed: {stderr}");
+    assert!(
+        stderr.contains("core module only") || stderr.contains("C-ABI core module only"),
+        "explicit component must note the WIT follow-up, got: {stderr}",
+    );
+    assert!(tmp.join("compmod.wasm").exists(), "missing .wasm artifact");
+    assert!(
+        !tmp.join("compmod.js").exists(),
+        "component bindings must not emit browser glue",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// `--bindings` on a non-WASM target is accepted-but-inert (the
+/// tracker entry's "ignored on a non-WASM target"): the build
+/// proceeds and no glue appears. Passes on both the llvm path (real
+/// native binary) and the non-llvm check fallback — neither emits a
+/// `.js`.
+#[test]
+fn bindings_ignored_on_non_wasm_target() {
+    let tmp = wasm_test_dir("bnative");
+    let path = tmp.join("natbind.kara");
+    std::fs::write(&path, "fn main() {\n    println(\"hello\");\n}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--bindings=browser"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !out.status.success()
+        && (stderr.contains("link failed") || stderr.contains("codegen failed"))
+    {
+        // Native link can fail in environments without the native runtime
+        // archive — an unrelated cause (the release-strip E2E above skips
+        // the same way). The flag already cleared arg parsing unrejected,
+        // which is half the substance; soft-skip the rest.
+        eprintln!("skip: bindings_ignored_on_non_wasm_target — native link unavailable");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "native build failed: {stderr}");
+    assert!(
+        !tmp.join("natbind.js").exists(),
+        "--bindings must be inert on a non-WASM target",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
