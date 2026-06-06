@@ -7187,7 +7187,7 @@ The `Arc` wrapping is an implementation detail — the programmer passes a plain
 
 **Resource call desugaring.** A call of the form `Db.method(args)` inside a function with `reads(Db)` or `writes(Db)` in its effect set desugars to a vtable call through the current task's top-of-stack provider binding for `Db`. The compiler emits the equivalent of: look up the `Arc<dyn DbProvider>` for resource `Db` in the per-task stack, then invoke `method` through its vtable. This is **runtime dispatch** — the concrete provider type is not known at the call site; the call goes through a thin `Arc` pointer dereference and one vtable indirection, with no monomorphization per provider type.
 
-**Capability requirement.** Calling `Db.method(args)` in a function body contributes `reads(Db)` or `writes(Db)` to the function's inferred effect set (depending on whether the method is declared `reads` or `writes` on the provider trait). For private functions this is inferred automatically. For public functions it must be declared; omitting it is an effect-mismatch compile error — the function body calls into `Db` but the signature does not declare it. There is no separate "capability gate" distinct from effect verification — the declared effect IS the capability.
+**Capability requirement.** Calling `Db.method(args)` in a function body contributes `reads(Db)` or `writes(Db)` to the function's inferred effect set. The verb is derived from the method's **receiver mode** — `ref self` contributes `reads(Db)`; `mut ref self` and bare `self` (consuming) contribute `writes(Db)` — because the receiver mode is what bounds what the method can do to the provider, and conflict analysis must not let two provider-mutating calls run concurrently on the strength of an optimistic clause. A declared `with` clause on the trait method must be consistent with that floor: a method whose receiver implies `writes(Db)` but whose clause mentions `Db` without `writes(Db)` is unsatisfiable as written and is rejected at the trait definition (**E0412**, with a machine-applicable `ref self` rewrite). Clause effects beyond the dispatch verb — e.g. a `writes(Log)` on another resource — propagate to the call site like any callee effect. For private functions all of this is inferred automatically. For public functions it must be declared; omitting it is an effect-mismatch compile error — the function body calls into `Db` but the signature does not declare it. There is no separate "capability gate" distinct from effect verification — the declared effect IS the capability.
 
 **No provider in scope → runtime panic.** If a resource call executes and the per-task provider stack has no binding for `Db` (i.e., no `with_provider[Db]` / `providers {}` block was entered before this call), the runtime panics with a structured diagnostic:
 
@@ -10429,7 +10429,7 @@ $ karac build --output=json
   "diagnostics": [{
     "id": "d1",
     "severity": "error", "primary": true,
-    "code": "E0412", "category": "ownership",
+    "code": "E0500", "category": "ownership",
     "concept": "ownership/move-semantics",
     "file": "src/order.kara", "line": 42, "column": 9,
     "message": "`user` moved on line 38, used again here.",
@@ -10471,7 +10471,7 @@ The JSON document above is the compiler's sole output channel for signal. Four r
 **2. Root-cause grouping via `primary` and `consequence_of`.** Every diagnostic carries `"primary": true | false` and an `"id"`. Consequence diagnostics — those caused by a prior root-cause error, e.g. `user.name` is inaccessible because `user` was moved earlier — carry `"primary": false` and `"consequence_of": "<id>"` pointing at their root. AI agents fix primaries first; consequences often resolve themselves once the root is fixed.
 
 ```json
-{ "id": "d1", "primary": true,  "code": "E0412", "message": "`user` moved on line 38..." }
+{ "id": "d1", "primary": true,  "code": "E0500", "message": "`user` moved on line 38..." }
 { "id": "d2", "primary": false, "consequence_of": "d1",
   "message": "`user.name` not accessible: `user` already moved" }
 ```
