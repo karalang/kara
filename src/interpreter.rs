@@ -1433,6 +1433,34 @@ impl<'a> Interpreter<'a> {
         None
     }
 
+    /// For a qualified path `Enum.Variant`, return `Some(is_unit)` when
+    /// `Enum` is a known enum — in the user program OR a baked-stdlib program
+    /// (`Result`, `Option`, `IoError`, …) — that declares `Variant`, where
+    /// `is_unit` distinguishes a payload-free unit variant from a tuple /
+    /// struct one. `None` when the pair isn't an enum variant, so callers can
+    /// fall through to method / associated-fn dispatch. Backs qualified
+    /// enum-variant construction (`Result.Ok(x)`, `Color.Blue(7)`,
+    /// `Option.Some(v)`) — a form the resolver and codegen accept but the
+    /// interpreter otherwise can't evaluate as a callee path. The generic
+    /// peer of the hand-rolled `Ordering.*` / `Json.*` arms in `eval_call`.
+    fn qualified_enum_variant_is_unit(&self, enum_name: &str, variant: &str) -> Option<bool> {
+        fn scan(items: &[Item], enum_name: &str, variant: &str) -> Option<bool> {
+            items.iter().find_map(|item| match item {
+                Item::EnumDef(e) if e.name == enum_name => e
+                    .variants
+                    .iter()
+                    .find(|v| v.name == variant)
+                    .map(|v| matches!(v.kind, VariantKind::Unit)),
+                _ => None,
+            })
+        }
+        scan(&self.program.items, enum_name, variant).or_else(|| {
+            crate::prelude::STDLIB_PROGRAMS
+                .iter()
+                .find_map(|(_, p)| scan(&p.items, enum_name, variant))
+        })
+    }
+
     /// Read a field from a struct value. Out of line from `eval_expr_inner`
     /// to keep the recursive evaluator's stack frame small.
     fn read_field(&mut self, obj: Value, field: &str, span: &Span) -> Value {

@@ -818,6 +818,36 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Qualified enum-variant constructor: `Result.Ok(x)`, `Color.Blue(7)`,
+        // `Option.Some(v)` — generic over any user-program or baked-stdlib
+        // enum. The resolver and codegen accept this qualified form; without
+        // this arm the interpreter would `eval_expr_inner` the callee path
+        // `Enum.Variant` below, which is neither a binding nor a registered
+        // function, and panic ("path '…' not found"). Peer to the hand-rolled
+        // `Ordering.*` / `Json.*` arms in the segments match above, but
+        // data-driven from the enum's declaration. Placed after the builtin /
+        // `from` / lowered-op / method-dispatch arms so a genuine
+        // `Type.method(...)` (incl. `Enum.assoc_fn(...)`) still wins — a
+        // variant name and a method name never collide on one type.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 {
+                if let Some(is_unit) =
+                    self.qualified_enum_variant_is_unit(&segments[0], &segments[1])
+                {
+                    let data = if is_unit {
+                        EnumData::Unit
+                    } else {
+                        EnumData::Tuple(arg_vals)
+                    };
+                    return Value::EnumVariant {
+                        enum_name: segments[0].clone(),
+                        variant: segments[1].clone(),
+                        data,
+                    };
+                }
+            }
+        }
+
         // Evaluate callee
         let callee_val = self.eval_expr_inner(callee);
         // Callee evaluation can itself fault (e.g. the unwired-path

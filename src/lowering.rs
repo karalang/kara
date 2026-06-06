@@ -330,9 +330,42 @@ impl<'a> Lowerer<'a> {
                 }
             }
             ExprKind::Continue { .. } => {}
-            ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => {
+            ExprKind::Tuple(es) => {
                 for e in es {
                     self.lower_expr(e);
+                }
+            }
+            ExprKind::ArrayLiteral(es) => {
+                for e in es {
+                    self.lower_expr(e);
+                }
+                // A bare `[e1, e2, …]` literal defaults to `Vec[T]` (the
+                // typechecker's synthesis-mode rule); only an `Array[T, N]`
+                // annotation makes it a fixed array. Codegen's
+                // `compile_array_literal` always emits a fixed `[N x T]`
+                // aggregate — correct ONLY for the Array case. For the Vec
+                // default that aggregate is the wrong shape (a `{ptr,len,cap}`
+                // heap Vec is needed), so a `return`/call-arg/`.push` against
+                // it mismatches (LLVM verification failure or a segfault on
+                // the array bytes read as a Vec header). Canonicalize the Vec
+                // case to the `Vec[…]` prefix form, which codegen already
+                // materializes as a real heap-backed Vec via
+                // `compile_vec_prefix_literal`. The fixed-array case (typed
+                // `Array[T, N]`, recorded as `Type::Array`) is left untouched.
+                // Mirror-image of the `Array[…]` → ArrayLiteral
+                // canonicalization in the PrefixCollectionLiteral arm.
+                let is_vec = matches!(
+                    self.tc.expr_types.get(&SpanKey::from_span(&expr.span)),
+                    Some(Type::Named { name, .. }) if name == "Vec"
+                );
+                if is_vec {
+                    if let ExprKind::ArrayLiteral(items) = &mut expr.kind {
+                        let items = std::mem::take(items);
+                        expr.kind = ExprKind::PrefixCollectionLiteral {
+                            type_name: "Vec".to_string(),
+                            items,
+                        };
+                    }
                 }
             }
             ExprKind::RepeatLiteral { value, count, .. } => {

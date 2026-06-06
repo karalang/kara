@@ -5640,17 +5640,17 @@ fn main() {
 
     #[test]
     fn test_ir_array_literal_construction() {
+        // A bare `[…]` literal is `Vec[T]` by the typechecker's synthesis-mode
+        // rule, so it now lowers (via the lowering `ArrayLiteral`→`Vec[…]`
+        // canonicalization) to the `{ptr, i64, i64}` Vec struct — NOT a fixed
+        // `[3 x i64]` array. (Pre-fix it emitted `[3 x i64]`, which segfaulted
+        // on a subsequent `.push` and failed verification on a Vec return.)
+        // The fixed-array lowering is exercised by `test_ir_array_literal_let_binding`
+        // (`let a: Array[i64, 2] = …`) instead.
         let ir = ir_for("fn main() { let a = [10, 20, 30]; }");
-        // Array literal lowers to alloca + store of [3 x i64].
-        // LLVM constant-folds the insertvalue chain into a direct constant store.
         assert!(
-            ir.contains("[3 x i64]"),
-            "expected [3 x i64] type, got:\n{}",
-            ir
-        );
-        assert!(
-            ir.contains("alloca [3 x i64]"),
-            "expected alloca for array, got:\n{}",
+            ir.contains("{ ptr, i64, i64 }"),
+            "expected Vec struct for bare array literal, got:\n{}",
             ir
         );
     }
@@ -5699,11 +5699,13 @@ fn second() -> i64 {
         let ir = ir_for(
             r#"
 fn main() {
-    let mut a = [1, 2, 3];
+    let mut a: Array[i64, 3] = [1, 2, 3];
     a[0] = 42;
 }
 "#,
         );
+        // `Array[i64, 3]` annotation pins the fixed-array store path (bare
+        // `[…]` is now a Vec — see `test_ir_array_literal_construction`).
         assert!(
             ir.contains("arr.store.ptr"),
             "expected store GEP for index assignment, got:\n{}",
@@ -5795,7 +5797,10 @@ fn main() {
 
     #[test]
     fn test_ir_array_len_constant_fold() {
-        let ir = ir_for("fn get_len() -> i64 { let a = [10, 20, 30]; a.len() }");
+        // `Array[i64, 3]` annotation pins the fixed-array `len()` constant
+        // fold (bare `[…]` is now a Vec, whose `len()` loads the len field —
+        // see `test_ir_array_literal_construction`).
+        let ir = ir_for("fn get_len() -> i64 { let a: Array[i64, 3] = [10, 20, 30]; a.len() }");
         assert!(
             ir.contains("ret i64 3"),
             "expected len() constant fold to 3, got:\n{}",
@@ -5857,6 +5862,75 @@ fn main() {
         );
         if let Some(out) = out {
             assert_eq!(out.trim(), "3");
+        }
+    }
+
+    #[test]
+    fn test_e2e_array_literal_as_vec_return_and_consume() {
+        // Bare `[a, b, c]` defaults to `Vec[T]` (typechecker synthesis rule),
+        // but codegen's `compile_array_literal` emits a fixed `[N x T]`
+        // aggregate. The lowering pass now canonicalizes a Vec-typed array
+        // literal to the `Vec[…]` prefix form (real heap Vec). Before that,
+        // returning `[…]` as a `Vec[T]` failed LLVM verification ("Function
+        // return type does not match … ret [3 x i64] … {ptr,i64,i64}") and a
+        // typed-let `[…]` followed by `.push` SEGFAULTED (array bytes read as
+        // a Vec header). This pins the return, call-arg, push, and bare-let
+        // shapes.
+        let out = run_program(
+            r#"
+fn mk() -> Vec[i64] { [1, 2, 3] }
+fn take(v: Vec[i64]) -> i64 { v.len() }
+fn main() {
+    println(mk().len());
+    println(take([4, 5]));
+    let mut v: Vec[i64] = [7, 8, 9];
+    v.push(10);
+    println(v.len());
+    let mut b = [100, 200];
+    b.push(300);
+    println(b.len());
+    let r = mk();
+    let mut s = 0;
+    for x in r { s = s + x; }
+    println(s);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\n2\n4\n3\n6");
+        }
+    }
+
+    #[test]
+    fn test_e2e_array_literal_string_elems_as_vec_return() {
+        // String-element array literal returned as `Vec[String]` — the exact
+        // shape surfaced while testing the ambient `env.args` override.
+        let out = run_program(
+            r#"
+fn names() -> Vec[String] { ["alpha", "beta", "gamma"] }
+fn main() { println(names().len()); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3");
+        }
+    }
+
+    #[test]
+    fn test_e2e_array_annotation_stays_fixed_array() {
+        // The lowering rewrite must NOT touch an `Array[T, N]`-annotated
+        // literal — that stays a fixed-size array (recorded as `Type::Array`,
+        // not `Vec`). Guards against the rewrite over-firing.
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Array[i64, 3] = [11, 22, 33];
+    println(a[0] + a[2]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "44");
         }
     }
 

@@ -974,6 +974,54 @@ fn test_enum_match_tuple_variant() {
 }
 
 #[test]
+fn test_qualified_enum_variant_construction() {
+    // `Enum.Variant(args)` (qualified) construction must work in the
+    // interpreter, peer to the unqualified `Variant(args)` form. The
+    // resolver and codegen accept the qualified form (Json/Ordering even
+    // require it); the interpreter used to `eval_expr_inner` the callee path
+    // `Enum.Variant` and panic ("path '…' not found"). Covers a user enum
+    // tuple variant and the baked-stdlib `Result` / `Option`.
+    assert_eq!(
+        run("enum Color { Red, Blue(i64) }\n\
+             fn main() {\n\
+                 match Color.Blue(7) { Red => println(0), Blue(n) => println(n) }\n\
+             }"),
+        "7\n"
+    );
+    assert_eq!(
+        run("fn main() {\n\
+                 match Result.Ok(5) { Ok(n) => println(n), Err(e) => println(0) }\n\
+             }"),
+        "5\n"
+    );
+    assert_eq!(
+        run("fn main() {\n\
+                 match Option.Some(9) { Some(n) => println(n), None => println(0) }\n\
+             }"),
+        "9\n"
+    );
+}
+
+#[test]
+fn test_qualified_enum_variant_constructor_cross_boundary() {
+    // A method returning a qualified-constructed `Result` whose value is
+    // matched in the caller — the original repro for the interpreter panic.
+    // Also pins that an enum's *associated fn* (`E.make`, not a variant) is
+    // still dispatched as a call, not mistaken for a variant constructor.
+    assert_eq!(
+        run("enum E { A, B(i64) }\n\
+             impl E { fn make() -> E { E.B(3) } }\n\
+             struct W {}\n\
+             impl W { fn g(self) -> Result[i64, String] { Result.Ok(42) } }\n\
+             fn main() {\n\
+                 match (W{}).g() { Ok(n) => println(n), Err(e) => println(0) }\n\
+                 match E.make() { A => println(0), B(n) => println(n) }\n\
+             }"),
+        "42\n3\n"
+    );
+}
+
+#[test]
 fn test_match_wildcard() {
     assert_eq!(
         run("fn describe(x: i64) -> i64 {\n\
