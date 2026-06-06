@@ -988,11 +988,16 @@ impl<'a> super::Interpreter<'a> {
             // typechecker rejects early exits), so no control-flow unwinding of
             // the write-back is needed.
             ExprKind::Lock { mutex, alias, body } => {
-                // Read the `Mutex` value named by the place (`m` or `self.state`).
-                let inner = match self.eval_expr_inner(mutex) {
-                    Value::Mutex(v) => *v,
-                    // Defensive — typechecker guarantees a Mutex place.
-                    other => other,
+                // Resolve the place (`m` or `self.state`) to its shared
+                // `Arc<Mutex<…>>` cell. The `Arc` clone shares the *same* cell
+                // a par-struct field holds across `par {}` branch env clones,
+                // so the lock below is genuinely mutually exclusive between
+                // branches (the prior `Box<Value>` copy raced).
+                let cell = match self.eval_expr_inner(mutex) {
+                    Value::Mutex(c) => c,
+                    // Defensive — typechecker guarantees a Mutex place; wrap a
+                    // stray value in a throwaway cell so the body still runs.
+                    other => std::sync::Arc::new(std::sync::Mutex::new(other)),
                 };
                 // The inner-value binding name: the alias, or (for an
                 // `Identifier` place) the mutex name itself. A field place
@@ -1001,32 +1006,36 @@ impl<'a> super::Interpreter<'a> {
                     ExprKind::Identifier(n) => Some(n.clone()),
                     _ => None,
                 });
+                // Hold the real lock for the whole body — this is what
+                // serialises concurrent `par {}` branches. `guard` borrows the
+                // local `cell` (an `Arc` clone), not `self`, so it can live
+                // across the `self.eval_block_inner(body)` call. Re-locking the
+                // same mutex inside the body deadlocks, matching codegen's real
+                // spinlock (std `Mutex` is not re-entrant).
+                let mut guard = cell.lock().unwrap();
+                let inner = guard.clone();
                 self.env.push_scope();
                 if let Some(ref name) = bind_name {
                     self.env.define(name.clone(), inner);
                 }
-                let result = match self.eval_block_inner(body) {
-                    Ok(v) => v,
-                    Err(cf) => {
-                        self.env.pop_scope();
-                        return self.set_cf(cf);
-                    }
-                };
+                let cf_result = self.eval_block_inner(body);
+                // Read the (possibly mutated) bound value back before popping
+                // the scope, then write it through the guard — the shared cell
+                // is the single source of truth, so there is no separate
+                // write-back to the env slot / field (the place already holds
+                // the same `Arc`). Persist on early exit too, so mutations made
+                // before a `return` / `break` are not lost.
                 let new_inner = bind_name
                     .as_ref()
                     .and_then(|n| self.env.get(n))
                     .unwrap_or(Value::Unit);
                 self.env.pop_scope();
-                // Write the (possibly mutated) value back into the mutex place.
-                let wrapped = Value::Mutex(Box::new(new_inner));
-                match &mutex.kind {
-                    ExprKind::Identifier(name) => self.env.set(name, wrapped),
-                    ExprKind::FieldAccess { object, field } => {
-                        self.set_field(object, field, wrapped);
-                    }
-                    _ => {}
+                *guard = new_inner;
+                drop(guard);
+                match cf_result {
+                    Ok(v) => v,
+                    Err(cf) => self.set_cf(cf),
                 }
-                result
             }
 
             ExprKind::SelfType | ExprKind::PipePlaceholder | ExprKind::Error => Value::Unit,

@@ -3493,6 +3493,59 @@ fn test_par_shared_atomic_reaches_after_par_statement() {
     }
 }
 
+// ── par-shared Mutex: lock-block serialisation (regression) ──
+//
+// Sibling of the Atomic fix above. `Value::Mutex` is `Arc<Mutex<Value>>` and a
+// `lock` block holds the *real* lock for its whole body, so a par struct's
+// Mutex field locked from two `par {}` branches serialises instead of racing.
+// Before that, `Value::Mutex` was a single-threaded `Box<Value>` copied on
+// read and written back, so concurrent branches lost updates / produced empty
+// output. Loops to defeat the old intermittency; exercises the real-threaded
+// `run_program` path. AOT codegen always produced the correct value.
+
+#[test]
+fn test_par_shared_mutex_counter_no_lost_updates() {
+    let src = "par struct Counter { total: Mutex[i64] }\n\
+         impl Counter {\n\
+             fn inc(ref self) { lock self.total t { t = t + 1; } }\n\
+             fn get(ref self) -> i64 { lock self.total t { t } }\n\
+         }\n\
+         fn bump(c: Counter, n: i64) {\n\
+             let mut i = 0;\n\
+             while i < n { c.inc(); i = i + 1; }\n\
+         }\n\
+         fn main() {\n\
+             let c = Counter { total: Mutex.new(0) };\n\
+             par { bump(c, 5000); bump(c, 5000); }\n\
+             println(c.get());\n\
+         }";
+    for iter in 0..30 {
+        assert_eq!(
+            run(src),
+            "10000\n",
+            "par-shared mutex counter, iteration {iter}"
+        );
+    }
+}
+
+#[test]
+fn test_mutex_lock_block_single_threaded_semantics() {
+    // The lock-block bind-and-write-back path must still work outside par:
+    // read the inner value, mutate the alias, write it back.
+    let src = "struct Cell { v: Mutex[i64] }\n\
+         impl Cell {\n\
+             fn get(ref self) -> i64 { lock self.v x { x } }\n\
+             fn add(ref self, d: i64) { lock self.v x { x = x + d; } }\n\
+         }\n\
+         fn main() {\n\
+             let c = Cell { v: Mutex.new(10) };\n\
+             println(c.get());\n\
+             c.add(5);\n\
+             println(c.get());\n\
+         }";
+    assert_eq!(run(src), "10\n15\n");
+}
+
 // ── Ordering / MemoryOrdering Enums ───────────────────────────
 
 #[test]

@@ -176,7 +176,7 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         Value::Int(0)
                     };
-                    return Value::Mutex(Box::new(val));
+                    return Value::Mutex(Arc::new(Mutex::new(val)));
                 }
                 // Debugger Contract slice 5: `std.runtime` introspection
                 // surface (`runtime/stdlib/runtime.kara`). The tree-walk

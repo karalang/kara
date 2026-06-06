@@ -144,9 +144,18 @@ pub enum Value {
     /// live handles single-threaded, so share-on-clone is unobservable
     /// outside the par case it fixes. Same rationale applies to `Mutex`.
     Atomic(Arc<Mutex<Value>>),
-    /// Mutex[T] runtime value (single-threaded: plain cell; `lock` blocks
-    /// bind the inner value as a mutable alias and write it back on exit).
-    Mutex(Box<Value>),
+    /// Mutex[T] runtime value. `Arc<Mutex<...>>` (not `Box`) for the same
+    /// reason as `Atomic` above: a par struct's `Mutex` field is genuinely
+    /// shared across `par {}` branches (which run on real OS threads), and a
+    /// `lock` block holds the *real* lock for the duration of its body, so
+    /// concurrent branches serialise instead of racing on a single-threaded
+    /// cell (the prior `Box<Value>` raced — a par-struct `Mutex` counter
+    /// produced empty output / lost updates under `karac run`). A `lock` block
+    /// binds the inner value as a mutable alias and writes it back into the
+    /// guarded cell on exit. Re-locking the *same* mutex inside its own block
+    /// deadlocks, matching codegen's real spinlock (std `Mutex` is not
+    /// re-entrant). See [`eval_expr`]'s `ExprKind::Lock` arm.
+    Mutex(Arc<Mutex<Value>>),
     /// SortedSet[T: Ord] — B-tree–backed ordered set keyed by OrdValue.
     /// BTreeMap provides O(log n) insert/remove/contains with iteration in
     /// ascending key order. The () value makes it a set (not a map).
@@ -418,7 +427,13 @@ impl PartialEq for Value {
                 let bv = b.lock().unwrap().clone();
                 av == bv
             }
-            (Value::Mutex(a), Value::Mutex(b)) => a == b,
+            (Value::Mutex(a), Value::Mutex(b)) => {
+                // Snapshot each under its own lock (released before the next)
+                // so comparing a mutex to itself can't self-deadlock.
+                let av = a.lock().unwrap().clone();
+                let bv = b.lock().unwrap().clone();
+                av == bv
+            }
             (Value::Map(a), Value::Map(b)) => {
                 a.len() == b.len()
                     && a.iter()
@@ -763,7 +778,7 @@ impl std::fmt::Display for Value {
             Value::TotalFloat32(v) => write!(f, "F32({})", v),
             Value::TotalFloat64(v) => write!(f, "F64({})", v),
             Value::Atomic(v) => write!(f, "Atomic({})", v.lock().unwrap()),
-            Value::Mutex(v) => write!(f, "Mutex({})", v),
+            Value::Mutex(v) => write!(f, "Mutex({})", v.lock().unwrap()),
             Value::SortedSet(set) => {
                 write!(f, "SortedSet{{")?;
                 for (i, k) in set.keys().enumerate() {
