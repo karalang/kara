@@ -781,8 +781,9 @@ gateways), Kāra's **12.1 KB/conn means a single 128 GiB box holds ~11.3M
 conns where Rust OOMs at ~4.9M** — the same 2.30× headroom. Rust's
 pre-fix p50 lead (46 ms vs ~3 ms, ~14×) was **not** an architectural
 floor — it was a Kāra-side Nagle defect, **diagnosed and fixed
-2026-06-06** (§Connect-p50 below); the controlled probe collapses the
-floor to ~6 ms.
+2026-06-06** (§Connect-p50 below); post-fix Kāra runs **1.63 ms p50 at
+250K — now the fastest connect-p50 in the field**, ahead of Rust's
+2.93 ms, so this row's pre-fix p50 lead has since reversed.
 
 **Connect-p50: the "architectural floor" was a missing `TCP_NODELAY` —
 diagnosed + fixed (2026-06-06).** The flat ~41–46 ms Kāra connect-p50
@@ -815,14 +816,46 @@ sets it too (both on → flat ~6 ms). **Fix landed on both halves** —
 server accept paths (`ws_accept_tls`, `ws_accept`, `tls_accept`) and the
 client connect path (`tls_client_connect`).
 
-**Status of the at-scale p50 numbers.** Every p50 figure in the tables
-above (1M/2M/x86, and this head-to-head's 41.0 ms) was measured
-**pre-fix** and stands as the historical record. A post-fix at-scale
-(c=64, 250K+) re-measure is **deferred future work**: the probe proves
-the mechanism and the fix at the per-connection level, but confirming
-the new at-scale p50 *distribution* needs a rig run. The density
-headline — the actual product claim — is unaffected; this is a latency
-fix, orthogonal to per-conn memory.
+**Confirmed at scale (250K, c=64; landed 2026-06-06).** The fix was
+re-measured at the commercial headline scale on a fresh `m8g.4xlarge`
+(16-vCPU Graviton4, 61 GB) — the same box class as the commercial
+comparators, so the post-fix Kāra p50 is apples-to-apples in the
+comparator column. A toggled A/B (server `set_nodelay` env-gated on the
+box so one build serves both legs; the bench client held constant):
+
+| leg | established | p50 | mean | p95 | p99 | max | per-conn | ramp |
+|---|---|---|---|---|---|---|---|---|
+| **250K nodelay OFF** | 250,000 / 0 | **45.01 ms** | 44.04 | 46.97 | 47.92 | 95.94 | 12,146 B | ~210 s |
+| **250K nodelay ON** | 250,000 / 0 | **1.63 ms** | 1.75 | 2.79 | 3.72 | 20.04 | 12,126 B | **~11 s** |
+| 50K nodelay ON (linearity) | 50,000 / 0 | 1.59 ms | 1.83 | 2.85 | 10.97 | 21.56 | 12,133 B | ~3 s |
+
+Three results, all decisive:
+
+1. **The floor was real at scale, not a probe artifact.** The OFF leg
+   reproduces the campaign's 41–46 ms p50 to the millisecond (45.01 ms at
+   250K), matching the 1M/2M/x86 figures in the tables above.
+2. **The fix collapses it 27× — 45.01 → 1.63 ms, 250K / 0 failures.**
+   Post-fix Kāra now holds the **fastest connect-p50 in the entire
+   comparator set**: 1.63 ms vs Rust 2.93 · Go 3.37 · Netty 3.8 · .NET
+   4.6 · Phoenix 10.7. The lone-outlier worst became the field leader.
+   This **supersedes** every per-comparator "connect latency favors X vs
+   Kāra's ~41 ms floor" note below — those compared against the pre-fix
+   floor.
+3. **The Nagle stall was also a hidden establishment-throughput
+   throttle.** At c=64 the 45 ms handshake serialized acceptance to
+   ~1.4K/s; removing it lifts the handshake hop to ~1.6 ms and the 250K
+   ramp drops **~19× (210 s → 11 s, ~40K/s)**. Part of the campaign's
+   "slow ramp / superlinear establishment" story at this scale was this
+   bug, not just held-conn-count effects.
+
+**Density is untouched** (12,126 B/conn at 250K, dead-on the headline) —
+this is a latency fix, orthogonal to per-conn memory. The pre-fix p50
+figures in the tables above stand as the historical record. Raw JSON:
+`docs/investigations/demo1_p50_nodelay_{250k_off,250k_on,50k_on}.json`.
+**Not re-measured post-fix:** the 1M/2M head-to-head p50 distribution
+(the per-conn fix is scale-invariant by construction — proven identical
+OFF at 250K↔1M↔2M — so the 1M/2M post-fix p50 will track the 250K
+1.6 ms hop; a full-ceiling re-run was judged not worth the rig cost).
 
 **Caveats:**
 
