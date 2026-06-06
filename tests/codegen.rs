@@ -27929,6 +27929,7 @@ fn main() with reads(FileSystem) {
             "declare ptr @karac_runtime_taskgroup_new",
             "declare void @karac_runtime_taskgroup_register",
             "declare void @karac_runtime_taskgroup_join_and_free",
+            "declare void @karac_runtime_taskgroup_cancel",
         ] {
             assert!(ir.contains(sym), "expected `{sym}` declaration; ir:\n{ir}");
         }
@@ -27976,6 +27977,35 @@ fn main() with reads(FileSystem) {
         assert!(
             body.contains("call void @karac_runtime_taskgroup_register"),
             "tg.spawn(...) should register the child with the group; body:\n{body}"
+        );
+    }
+
+    /// A2 slice 5b-1: `tg.cancel()` lowers to
+    /// `call void @karac_runtime_taskgroup_cancel` on the group pointer
+    /// recovered from the receiver's `i64 id` (via `inttoptr`).
+    #[test]
+    fn test_taskgroup_cancel_lowers_to_runtime_call() {
+        let src = r#"
+            fn make_zero() -> i64 { 0 }
+            fn driver() {
+                let mut tg = TaskGroup.new();
+                tg.spawn(|| make_zero());
+                tg.cancel();
+            }
+        "#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("declare void @karac_runtime_taskgroup_cancel"),
+            "expected karac_runtime_taskgroup_cancel FFI declaration; ir:\n{ir}"
+        );
+        let body = function_body(&ir, "driver").expect("driver fn must lower");
+        assert!(
+            body.contains("call void @karac_runtime_taskgroup_cancel"),
+            "tg.cancel() should call karac_runtime_taskgroup_cancel; body:\n{body}"
+        );
+        assert!(
+            body.contains("inttoptr"),
+            "tg.cancel() should cast the i64 id back to a pointer; body:\n{body}"
         );
     }
 

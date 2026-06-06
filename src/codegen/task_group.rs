@@ -578,4 +578,44 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         Ok(result)
     }
+
+    /// A2 slice 5b-1 — lower `tg.cancel()` to
+    /// `karac_runtime_taskgroup_cancel(group_ptr)`. Extracts the runtime
+    /// group pointer from `TaskGroup.id` (same `i64 → ptr` cast as
+    /// `lower_taskgroup_spawn`) and calls the FFI, which flips every
+    /// registered child's per-task cancel flag. Returns unit.
+    ///
+    /// Inert at this slice: the flag is set but the dispatcher does not yet
+    /// route it to parked coroutines (slice 5c wires that). See the runtime
+    /// `karac_runtime_taskgroup_cancel` doc + the spike § 6⅞.
+    pub(super) fn lower_taskgroup_cancel(
+        &mut self,
+        tg_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Extract group_ptr from TaskGroup.id (i64 → ptr via inttoptr) — the
+        // same shape lower_taskgroup_spawn uses.
+        let id_int = self
+            .builder
+            .build_extract_value(tg_val.into_struct_value(), 0, "tg.id")
+            .unwrap()
+            .into_int_value();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let group_ptr = self
+            .builder
+            .build_int_to_ptr(id_int, ptr_ty, "tg.ptr")
+            .unwrap();
+
+        let cancel_fn = self
+            .module
+            .get_function("karac_runtime_taskgroup_cancel")
+            .expect("karac_runtime_taskgroup_cancel declared in Codegen::new");
+        let _ = self
+            .builder
+            .build_call(cancel_fn, &[group_ptr.into()], "")
+            .unwrap();
+
+        // `cancel()` returns unit — lowered as `i64 0` per the codegen unit
+        // convention (see types_lowering.rs "unit type → i64 zero").
+        Ok(self.context.i64_type().const_zero().into())
+    }
 }

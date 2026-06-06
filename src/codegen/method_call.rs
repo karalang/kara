@@ -345,6 +345,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 let self_val = self.compile_expr(object)?;
                 return self.lower_taskgroup_spawn(self_val, &args[0].value);
             }
+            // A2 slice 5b-1: `tg.cancel()` — flip every registered child's
+            // per-task cancel flag via karac_runtime_taskgroup_cancel. Inert
+            // until the dispatcher routes the flag to parked coroutines
+            // (slice 5c). Returns unit.
+            if key == "TaskGroup.cancel" && args.is_empty() {
+                let self_val = self.compile_expr(object)?;
+                return self.lower_taskgroup_cancel(self_val);
+            }
             // Phase 6 line 218 slice 4: `h.join()` dispatch. Lowers to
             // `karac_runtime_task_join(handle, &out_slot)` then reads
             // T from the slot. The return type T is recovered from the

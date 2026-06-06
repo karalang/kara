@@ -3306,6 +3306,17 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // `karac_runtime_taskgroup_cancel(group: ptr)` — A2 slice 5b-1.
+        // Flips every registered child's per-task cancel flag. Backs the
+        // user-callable `TaskGroup.cancel()` method. Inert until the
+        // dispatcher routes the per-task flag to parked coroutines (slice 5c).
+        let taskgroup_cancel_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_taskgroup_cancel",
+            taskgroup_cancel_ty,
+            Some(Linkage::External),
+        );
+
         // `karac_runtime_ws_send_text(fd: i32, msg_ptr: *const u8,
         // msg_len: i64) -> i64` — backs the encode + write step
         // inside `WebSocket.send_text`'s codegen lowering. Caller

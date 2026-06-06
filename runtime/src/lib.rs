@@ -231,6 +231,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         scheduler::karac_runtime_taskgroup_new,
         scheduler::karac_runtime_taskgroup_register,
         scheduler::karac_runtime_taskgroup_join_and_free,
+        scheduler::karac_runtime_taskgroup_cancel,
         event_loop::karac_runtime_scheduler_start_dispatcher,
         event_loop::karac_runtime_scheduler_shutdown_dispatcher,
         event_loop::karac_runtime_scheduler_stats_snapshot,

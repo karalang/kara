@@ -657,6 +657,48 @@ pub unsafe extern "C" fn karac_runtime_taskgroup_join_and_free(group: *mut Karac
     drop(Box::from_raw(group));
 }
 
+/// Signal cooperative cancellation to every child task registered with the
+/// group: flips each child handle's per-task `cancel` flag. The user-facing
+/// `TaskGroup.cancel()` method lowers to this. Complements the implicit
+/// fail-fast cancel-on-child-failure (handled at drop) with an explicit,
+/// user-driven trigger.
+///
+/// **A2 slice 5b-1 — landed inert.** This only *sets* the flags. The
+/// coroutine resume shim (`__kara_coro_resume`) already checks the flag and
+/// tears the frame down on its next fd-readiness wakeup, BUT the dispatcher
+/// still passes a process-global never-cancelled flag to `poll_fn` (the
+/// `event_loop.rs` dispatcher loop), so a flipped flag does not yet reach a
+/// parked coroutine. Per-task cancel routing into the dispatcher and a sweep
+/// for idle parked-but-never-ready coroutines are slice 5c. Until then this is
+/// a safe, observable no-op on running tasks — shipped inert so the language
+/// surface + flag plumbing are reviewable in isolation.
+///
+/// # Safety
+///
+/// `group` must be a non-null pointer produced by `karac_runtime_taskgroup_new`
+/// and not already freed. Registered child handles must still be live — they
+/// are: a child is joined+freed only by `karac_runtime_taskgroup_join_and_free`
+/// at group drop, which cannot overlap a `cancel()` call on the same live group.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_taskgroup_cancel(group: *mut KaracTaskGroupHandle) {
+    if group.is_null() {
+        return;
+    }
+    let g = &*group;
+    // Hold the children lock for the flip so a concurrent `register` (a child
+    // closure recursively spawning into the same group) cannot race the walk.
+    let children = g.children.lock().unwrap_or_else(|p| p.into_inner());
+    for &child in children.iter() {
+        if child.is_null() {
+            continue;
+        }
+        // SAFETY: each registered child handle is live for the group's lifetime
+        // (freed only at group drop, exclusive with this call). Same-module
+        // access to the private `cancel` flag.
+        (*child).cancel.store(true, Ordering::Release);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -909,6 +951,58 @@ mod tests {
             karac_runtime_taskgroup_register(g, std::ptr::null_mut());
             // null group + null child are silently skipped.
             karac_runtime_taskgroup_register(std::ptr::null_mut(), std::ptr::null_mut());
+            karac_runtime_taskgroup_join_and_free(g);
+        }
+    }
+
+    #[test]
+    fn taskgroup_cancel_flips_all_child_cancel_flags() {
+        // A2 slice 5b-1: `karac_runtime_taskgroup_cancel` must set the
+        // per-task cancel flag on every registered child. Inert at this slice
+        // (no dispatcher reads it yet), so we assert the flag state directly.
+        let counter = AtomicU32::new(0);
+        unsafe {
+            let group = karac_runtime_taskgroup_new();
+            let mut handles = Vec::new();
+            for _ in 0..8 {
+                let h = karac_runtime_spawn(
+                    inc_counter_wrapper,
+                    &counter as *const AtomicU32 as *mut c_void,
+                    0,
+                    1,
+                );
+                assert!(!h.is_null());
+                // Flags start cleared.
+                assert!(!(*h).cancel.load(AtomicOrdering::Acquire));
+                handles.push(h);
+                karac_runtime_taskgroup_register(group, h);
+            }
+
+            karac_runtime_taskgroup_cancel(group);
+
+            // Every registered child now carries a set cancel flag. The flip is
+            // synchronous under the children lock, independent of whether the
+            // child task has completed — handles stay live until group drop.
+            for &h in &handles {
+                assert!(
+                    (*h).cancel.load(AtomicOrdering::Acquire),
+                    "child cancel flag must be set after taskgroup_cancel"
+                );
+            }
+
+            // Children complete regardless of the inert flag; drop drains+frees.
+            karac_runtime_taskgroup_join_and_free(group);
+        }
+    }
+
+    #[test]
+    fn taskgroup_cancel_null_and_empty_are_no_ops() {
+        unsafe {
+            // Null group: defensive no-op (matches register/join guards).
+            karac_runtime_taskgroup_cancel(std::ptr::null_mut());
+            // Empty group: no children to flip, must not crash, still drains.
+            let g = karac_runtime_taskgroup_new();
+            karac_runtime_taskgroup_cancel(g);
             karac_runtime_taskgroup_join_and_free(g);
         }
     }

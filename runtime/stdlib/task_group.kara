@@ -133,6 +133,28 @@ impl TaskGroup {
     fn spawn[T](mut ref self, f: OnceFn() -> T) -> TaskHandle[T] {
         TaskHandle { task_id: 0 }
     }
+
+    // Signal cooperative cancellation to every child task in the group.
+    // Flips each child's per-task cancel flag; a cooperatively-cancelling
+    // child — or a coroutine handler parked at a network yield — observes
+    // it and tears down at its next suspension point. Complements the
+    // implicit fail-fast cancellation on a child's failure (handled at the
+    // group's drop) with an explicit, user-driven trigger.
+    //
+    // **`ref self`.** Cancellation reads the group to reach its children;
+    // it does not change the group's `id` or its child set, so a shared
+    // borrow suffices (unlike `spawn`, which registers a new child and so
+    // takes `mut ref self`).
+    //
+    // **A2 slice 5b-1.** Lowers to `karac_runtime_taskgroup_cancel(self.id)`.
+    // The language surface + flag plumbing land here; the dispatcher-side
+    // per-task routing that makes a flipped flag actually reach a *parked*
+    // coroutine — plus a sweep for idle parked-but-never-ready ones — is
+    // slice 5c (see docs/spikes/network-async-coroutine-transform.md § 6⅞).
+    #[compiler_builtin]
+    fn cancel(ref self) {
+        // Stub body — codegen replaces via the slice 5b-1 lowering.
+    }
 }
 
 impl[T] TaskHandle[T] {

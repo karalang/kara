@@ -144,6 +144,7 @@ handle. Cross-platform.
 | `karac_runtime_task_join` | `unsafe extern "C" fn(handle: *mut KaracTaskHandle, out_slot: *mut u8) -> u8` | Block until the task reaches a terminal state, memcpy the result into `*out_slot` on `COMPLETED`, free the handle. Returns a `TASK_STATE_*` discriminant (`COMPLETED` = 1, `PANICKED` = 2, `CANCELLED` = 3). |
 | `karac_runtime_task_handle_free` | `unsafe extern "C" fn(handle: *mut KaracTaskHandle)` | Release a handle without joining. Caller must ensure the task has reached a terminal state (e.g. via prior `karac_runtime_task_state` poll). TaskGroup-side cleanup will route through here in slice 5. |
 | `karac_runtime_task_state` | `unsafe extern "C" fn(handle: *const KaracTaskHandle) -> u8` | Non-blocking peek at the task's state. Returns `PENDING` while in flight, or one of the terminal discriminants. |
+| `karac_runtime_taskgroup_cancel` | `unsafe extern "C" fn(group: *mut KaracTaskGroupHandle)` | A2 slice 5b-1. Flip every registered child's per-task `cancel` flag. Backs the user-callable `TaskGroup.cancel()`. Inert until the dispatcher routes the per-task flag to parked coroutines (slice 5c). |
 
 `SpawnFn` typedef: `unsafe extern "C" fn(env: *mut c_void, result_out: *mut u8, cancel: *const AtomicBool)`. Codegen-emitted wrappers read captured environments from `env`, run the user closure body, and memcpy the T-typed return value into `*result_out`.
 
@@ -219,6 +220,7 @@ an explicit keep-list at the codegen end.
   - 1 added 2026-05-25 (slice 9e.2): `karac_runtime_ws_accept` (unix) — phase 6 line 17 slice 9e.2 (stdlib `WebSocket.accept` RFC 6455 §4.2 HTTP upgrade handshake: accept + read HTTP request + SHA-1 + Base64 + write 101 response).
   - 2 added 2026-05-25 (slice 9e.3): `karac_runtime_ws_send_binary` (unix), `karac_runtime_ws_recv_binary` (unix) — phase 6 line 17 slice 9e.3 (binary frame surface + transparent control-frame handling in both `_recv_text` and `_recv_binary`).
   - 2 added 2026-05-26 (slice 9e.4): `karac_runtime_ws_send_text_masked` (unix), `karac_runtime_ws_send_binary_masked` (unix) — phase 6 line 17 slice 9e.4 (client-side masked send + fragmentation reassembly retrofitted into both `_recv_text` and `_recv_binary`).
+  - 1 added 2026-06-06 (A2 slice 5b-1): `karac_runtime_taskgroup_cancel` — cooperative cancellation, language surface + flag plumbing (`TaskGroup.cancel()`). Inert until slice 5c routes the per-task flag into the dispatcher. (The 2026-05-26 audit total above predates the A2 spawn_coro / park_slot / taskgroup symbols and is a dated snapshot, not a live count.)
 - **Total libc `extern "C"` imports:** 1 (`atexit`).
 - **Total private `extern "C"` callbacks:** 1 (`print_trace_at_exit`, registered with `atexit`).
 - **`#[used]` / `#[link_section(…)]` / `#[ctor]` / `#[dtor]`:** none.
