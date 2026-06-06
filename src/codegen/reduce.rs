@@ -448,7 +448,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// be hoisted out of the per-iter check via a one-time preflight at
     /// fn entry. v1 recognizes the pattern:
     ///
-    /// ```ignore
+    /// ```text
     /// let idx = <loop_var> % <positive_int_literal>;  // top-level in body
     /// ...
     /// <captured_vec>[idx]  // anywhere in body, possibly nested in calls
