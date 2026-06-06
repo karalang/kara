@@ -814,6 +814,25 @@ pub struct ElidedCluster {
     /// `link_field_index + 1`.
     pub link_field_index: usize,
     pub bindings: HashSet<String>,
+    /// Phase B2: build-side count-op elision approved. True only for
+    /// the displacement-free shape (see `recognize_b2`): exactly one
+    /// link-store site, either outside every loop or the canonical
+    /// adjacent append triple (`let node = T{..., link: None};
+    /// cursor.link = Some(node); cursor = node;`), every link READ
+    /// strictly after the store region, and no never-linked fresh
+    /// nodes. Under those rules NOTHING is freed before the root's
+    /// scope-exit free-walk, so non-owning (count-free) cursors can
+    /// never dangle and the elided link store is a pure pointer store.
+    pub b2: bool,
+    /// B2 roles (meaningful only when `b2`): the fresh node name(s)
+    /// consumed by the link store. No count ops, no cleanup — their
+    /// object is owned by the chain.
+    pub fresh_linked: HashSet<String>,
+    /// B2 roles: bare `T` cursors (aliases). No count ops, no cleanup.
+    pub bare_cursors: HashSet<String>,
+    /// B2 roles: `Option[T]` link-read cursors. No count ops, no
+    /// `RcDecOption`, plain-store reassignment.
+    pub option_cursors: HashSet<String>,
 }
 
 /// Cluster-binding role during the scan.
@@ -955,11 +974,37 @@ impl<'a> OwnershipChecker<'a> {
             self.cluster_verify_block(&f.body, ClusterCtx::default(), &mut scan);
             if scan.poisoned.is_none() && scan.root.is_some() && scan.any_link {
                 let root = scan.root.clone().unwrap();
+                let b2_roles = recognize_b2(f, &scan);
+                let (b2, fresh_linked) = match &b2_roles {
+                    Some(fresh) => (true, fresh.clone()),
+                    None => (false, HashSet::new()),
+                };
+                let mut bare_cursors = HashSet::new();
+                let mut option_cursors = HashSet::new();
+                if b2 {
+                    for (name, kind) in &scan.bindings {
+                        if name == &root || fresh_linked.contains(name) {
+                            continue;
+                        }
+                        match kind {
+                            ClusterKind::Bare => {
+                                bare_cursors.insert(name.clone());
+                            }
+                            ClusterKind::OptionCursor => {
+                                option_cursors.insert(name.clone());
+                            }
+                        }
+                    }
+                }
                 out.push(ElidedCluster {
                     root,
                     member_type: member,
                     link_field_index: link_idx,
                     bindings: scan.bindings.keys().cloned().collect(),
+                    b2,
+                    fresh_linked,
+                    bare_cursors,
+                    option_cursors,
                 });
             }
         }
@@ -1641,6 +1686,323 @@ fn collect_struct_literal_types(block: &Block, f: &mut impl FnMut(&str)) {
                 collect_struct_literal_types(body, f)
             }
             StmtKind::LetUninit { .. } => {}
+        }
+    }
+}
+
+// ── Phase B2 recognizer ─────────────────────────────────────────
+//
+// Approves build-side count-op elision for a B1-verified cluster when
+// displacement is structurally impossible and no cursor can observe a
+// freed node:
+//
+//   1. exactly ONE link-store site in the function;
+//   2. that site is either (a) outside every loop (it executes at most
+//      once, the target field starts None — fresh literals carry
+//      `link: None` — so nothing is ever displaced), or (b) the
+//      canonical adjacent append TRIPLE inside a loop body:
+//          let <node> = T { ..., link: None };
+//          <cursor>.link = Some(<node>);
+//          <cursor> = <node>;
+//      — the advance immediately after the store means each dynamic
+//      target instance is a freshly appended node whose link is still
+//      None, so the store never displaces;
+//   3. every link READ (option-cursor creation) occurs strictly after
+//      the store region (the loop's exit for (b), the store statement
+//      for (a)) in pre-order statement order — so no alias into the
+//      chain exists while it is still being built;
+//   4. every fresh literal binding is consumed by the link store
+//      (`fresh_unlinked` empty) — never-linked fresh nodes would need
+//      their own mid-scope frees, which a live outer cursor could
+//      observe.
+//
+// Under 1–4 nothing is freed before the root's scope-exit free-walk,
+// so count-free cursors can never dangle, and the elided link store
+// reduces to a single pointer store.
+
+/// Returns `Some(fresh_linked)` when the cluster qualifies for B2.
+fn recognize_b2(f: &Function, scan: &ClusterScan) -> Option<HashSet<String>> {
+    let mut rec = B2Rec {
+        scan,
+        counter: 0,
+        stores: Vec::new(),
+        reads: Vec::new(),
+        loop_depth: 0,
+    };
+    rec.walk_block(&f.body);
+    // Rule 1: exactly one link-store site.
+    if rec.stores.len() != 1 {
+        return None;
+    }
+    let store = &rec.stores[0];
+    // Rule 2: outside loops, or the canonical triple.
+    let region_end = if store.loop_depth == 0 {
+        store.counter
+    } else if store.is_triple {
+        store.loop_exit_counter
+    } else {
+        return None;
+    };
+    // Rule 3: reads strictly after the store region.
+    if rec.reads.iter().any(|&r| r <= region_end) {
+        return None;
+    }
+    // Rule 4: every fresh binding is the linked one.
+    let linked: HashSet<String> = [store.value_name.clone()].into_iter().collect();
+    if scan.fresh.iter().any(|n| !linked.contains(n)) {
+        return None;
+    }
+    Some(linked)
+}
+
+struct StoreSite {
+    counter: usize,
+    loop_depth: usize,
+    is_triple: bool,
+    /// Pre-order counter at the enclosing loop's exit (only meaningful
+    /// when `is_triple`).
+    loop_exit_counter: usize,
+    /// The fresh binding consumed (`Some(<name>)`).
+    value_name: String,
+}
+
+struct B2Rec<'s> {
+    scan: &'s ClusterScan,
+    counter: usize,
+    stores: Vec<StoreSite>,
+    reads: Vec<usize>,
+    loop_depth: usize,
+}
+
+impl B2Rec<'_> {
+    fn walk_block(&mut self, block: &Block) {
+        let stmts = &block.stmts;
+        let mut i = 0;
+        while i < stmts.len() {
+            self.counter += 1;
+            // Triple detection at this position: [let node = lit;
+            // cursor.link = Some(node); cursor = node;]
+            if self.loop_depth > 0 && i + 2 < stmts.len() {
+                if let Some(node) = self.triple_at(&stmts[i], &stmts[i + 1], &stmts[i + 2]) {
+                    let store_counter = self.counter + 1;
+                    self.stores.push(StoreSite {
+                        counter: store_counter,
+                        loop_depth: self.loop_depth,
+                        is_triple: true,
+                        loop_exit_counter: 0, // patched at loop exit
+                        value_name: node,
+                    });
+                    self.counter += 2; // the store + advance stmts
+                    i += 3;
+                    continue;
+                }
+            }
+            self.walk_stmt(&stmts[i]);
+            i += 1;
+        }
+        if let Some(e) = &block.final_expr {
+            self.counter += 1;
+            self.walk_expr(e);
+        }
+    }
+
+    fn triple_at(&self, s0: &Stmt, s1: &Stmt, s2: &Stmt) -> Option<String> {
+        // s0: let <node> = T { ..., link: None };  (a fresh binding)
+        let node = match &s0.kind {
+            StmtKind::Let { pattern, value, .. } => match &pattern.kind {
+                PatternKind::Binding(n)
+                    if self.scan.fresh.contains(n.as_str())
+                        && is_member_literal_link_none(
+                            value,
+                            &self.scan.member_type,
+                            &self.scan.link_field,
+                        ) =>
+                {
+                    n.clone()
+                }
+                _ => return None,
+            },
+            _ => return None,
+        };
+        // s1: <cursor>.link = Some(<node>);
+        match &s1.kind {
+            StmtKind::Assign { target, value } => {
+                let ExprKind::FieldAccess { object, field } = &target.kind else {
+                    return None;
+                };
+                if field != &self.scan.link_field {
+                    return None;
+                }
+                let ExprKind::Identifier(cursor) = &object.kind else {
+                    return None;
+                };
+                if self.scan.kind_of(cursor) != Some(ClusterKind::Bare) {
+                    return None;
+                }
+                match link_value_shape(value) {
+                    LinkValue::SomeIdent(v) if v == node => {}
+                    _ => return None,
+                }
+                // s2: <cursor> = <node>;
+                match &s2.kind {
+                    StmtKind::Assign {
+                        target: t2,
+                        value: v2,
+                    } => {
+                        let (ExprKind::Identifier(t), ExprKind::Identifier(v)) =
+                            (&t2.kind, &v2.kind)
+                        else {
+                            return None;
+                        };
+                        if t == cursor && v == &node {
+                            Some(node)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn walk_stmt(&mut self, stmt: &Stmt) {
+        match &stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                self.note_link_read(value);
+                self.walk_expr(value);
+                if let StmtKind::LetElse { else_block, .. } = &stmt.kind {
+                    self.walk_block(else_block);
+                }
+            }
+            StmtKind::LetUninit { .. } => {}
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => self.walk_block(body),
+            StmtKind::Assign { target, value } => {
+                // A link store OUTSIDE the triple shape (loop or not).
+                if let ExprKind::FieldAccess { object, field } = &target.kind {
+                    if field == &self.scan.link_field {
+                        if let ExprKind::Identifier(obj) = &object.kind {
+                            if self.scan.kind_of(obj) == Some(ClusterKind::Bare) {
+                                let value_name = match link_value_shape(value) {
+                                    LinkValue::SomeIdent(v) => v.to_string(),
+                                    // `= None` resets: treat as a store
+                                    // site with no fresh value — it can
+                                    // displace, so a non-triple loop
+                                    // store of None also disqualifies
+                                    // via rule 2; outside loops it
+                                    // could orphan — disqualify by
+                                    // making rule 1 fail.
+                                    _ => String::new(),
+                                };
+                                self.stores.push(StoreSite {
+                                    counter: self.counter,
+                                    loop_depth: self.loop_depth,
+                                    is_triple: false,
+                                    loop_exit_counter: 0,
+                                    value_name,
+                                });
+                            }
+                        }
+                    }
+                }
+                self.note_link_read(value);
+                self.walk_expr(value);
+            }
+            StmtKind::CompoundAssign { value, .. } => {
+                self.note_link_read(value);
+                self.walk_expr(value);
+            }
+            StmtKind::Expr(e) => self.walk_expr(e),
+        }
+    }
+
+    /// Link reads: `<bare>.link` appearing as a value (option-cursor
+    /// creation). B1 already restricted them to let/assign RHS shapes.
+    fn note_link_read(&mut self, value: &Expr) {
+        if let ExprKind::FieldAccess { object, field } = &value.kind {
+            if field == &self.scan.link_field {
+                if let ExprKind::Identifier(n) = &object.kind {
+                    if self.scan.kind_of(n) == Some(ClusterKind::Bare) {
+                        self.reads.push(self.counter);
+                    }
+                }
+            }
+        }
+    }
+
+    fn walk_expr(&mut self, expr: &Expr) {
+        match &expr.kind {
+            ExprKind::Block(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Par(b)
+            | ExprKind::Lock { body: b, .. }
+            | ExprKind::LabeledBlock { body: b, .. } => self.walk_block(b),
+            ExprKind::Loop { body: b, .. }
+            | ExprKind::While { body: b, .. }
+            | ExprKind::WhileLet { body: b, .. }
+            | ExprKind::For { body: b, .. } => {
+                self.loop_depth += 1;
+                self.walk_block(b);
+                self.loop_depth -= 1;
+                // Patch any triple inside this loop with the exit
+                // counter (the first counter value after the loop).
+                let exit = self.counter;
+                for s in &mut self.stores {
+                    if s.is_triple && s.loop_exit_counter == 0 {
+                        s.loop_exit_counter = exit;
+                    }
+                }
+            }
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.walk_expr(condition);
+                self.walk_block(then_block);
+                if let Some(e) = else_branch {
+                    self.walk_expr(e);
+                }
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                self.walk_expr(value);
+                self.walk_block(then_block);
+                if let Some(e) = else_branch {
+                    self.walk_expr(e);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.walk_expr(scrutinee);
+                for arm in arms {
+                    self.walk_expr(&arm.body);
+                }
+            }
+            ExprKind::Closure { body, .. } => self.walk_expr(body),
+            ExprKind::Binary { left, right, .. } => {
+                self.walk_expr(left);
+                self.walk_expr(right);
+            }
+            ExprKind::Unary { operand, .. } => self.walk_expr(operand),
+            ExprKind::Call { args, .. } => {
+                for a in args {
+                    self.walk_expr(&a.value);
+                }
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                self.walk_expr(object);
+                for a in args {
+                    self.walk_expr(&a.value);
+                }
+            }
+            _ => {}
         }
     }
 }

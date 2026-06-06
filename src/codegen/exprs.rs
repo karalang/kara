@@ -1163,9 +1163,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // like a param), so without this an `Option[shared]`
                     // capture is uncounted → over-dec on return (kata #19).
                     // Fresh values (`Some(node)`, call move-out) already own
-                    // their ref — skip via `rhs_yields_fresh_ref`.
+                    // their ref — skip via `rhs_yields_fresh_ref`. A literal
+                    // `None` init has no inner to count: the inc it used to
+                    // emit was a dead tag-guarded branch (None's w0 is undef,
+                    // tag is constantly 0) — folded away at O2 but noise in
+                    // the IR and in count-free pins; skip it outright.
+                    let init_is_none =
+                        matches!(&field_init.value.kind, ExprKind::Identifier(n) if n == "None");
                     if let Some(inner_heap) = opt_inner_heap {
-                        if !self.rhs_yields_fresh_ref(&field_init.value) {
+                        if !init_is_none && !self.rhs_yields_fresh_ref(&field_init.value) {
                             self.emit_rc_inc_for_captured_option(val, inner_heap);
                         }
                     }

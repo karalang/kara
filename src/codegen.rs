@@ -1581,6 +1581,12 @@ pub(super) struct Codegen<'ctx> {
     /// cleanup for `FreeClusterWalk`. Cursors and fresh nodes keep
     /// their standard cleanups (drop-side-only consumption).
     pub(crate) elided_cluster_roots: HashMap<String, HashMap<String, (String, usize)>>,
+    /// Phase B2 build-side elision: fn key → cluster binding →
+    /// role/cluster record. Populated only for clusters whose analysis
+    /// `b2` flag is set (displacement-free canonical shapes). Consulted
+    /// by the let-site shared/option arms, both Assign arms, and the
+    /// dedicated link-store fast path.
+    pub(crate) elided_b2_bindings: HashMap<String, HashMap<String, state::B2Binding>>,
     /// Per-function Arc-promoted binding names — the subset of `rc_fallback_fns`
     /// flagged by the ownership pass as crossing a `par {}` thread boundary.
     /// Inc/dec on these bindings emits atomic LLVM operations (`atomicrmw add` /
@@ -3731,6 +3737,7 @@ impl<'ctx> Codegen<'ctx> {
             rc_fallback_fns: HashMap::new(),
             elided_bindings: HashMap::new(),
             elided_cluster_roots: HashMap::new(),
+            elided_b2_bindings: HashMap::new(),
             arc_fallback_fns: HashMap::new(),
             rc_fallback_heap_types: HashMap::new(),
             closure_capture_paths: HashMap::new(),
@@ -3852,6 +3859,7 @@ impl<'ctx> Codegen<'ctx> {
             self.elided_bindings.insert(fn_name.clone(), names.clone());
         }
         // RC elision phase B1: cluster roots → free-walk cleanup.
+        // Phase B2: role records for displacement-free clusters.
         for (fn_name, clusters) in &ow.elided_clusters {
             let entry = self
                 .elided_cluster_roots
@@ -3859,6 +3867,27 @@ impl<'ctx> Codegen<'ctx> {
                 .or_default();
             for c in clusters {
                 entry.insert(c.root.clone(), (c.member_type.clone(), c.link_field_index));
+            }
+            for c in clusters {
+                if !c.b2 {
+                    continue;
+                }
+                let b2_entry = self.elided_b2_bindings.entry(fn_name.clone()).or_default();
+                let mk = |role: state::B2Role| state::B2Binding {
+                    role,
+                    member_type: c.member_type.clone(),
+                    link_field_index: c.link_field_index,
+                };
+                b2_entry.insert(c.root.clone(), mk(state::B2Role::Root));
+                for n in &c.fresh_linked {
+                    b2_entry.insert(n.clone(), mk(state::B2Role::Fresh));
+                }
+                for n in &c.bare_cursors {
+                    b2_entry.insert(n.clone(), mk(state::B2Role::BareCursor));
+                }
+                for n in &c.option_cursors {
+                    b2_entry.insert(n.clone(), mk(state::B2Role::OptionCursor));
+                }
             }
         }
         // Disjoint-capture slice 4: per-closure capture-path mode set
@@ -3996,6 +4025,24 @@ impl<'ctx> Codegen<'ctx> {
             .get(&self.current_fn_name)
             .and_then(|m| m.get(name))
             .cloned()
+    }
+
+    /// Phase-B2 role lookup for the current function.
+    fn b2_binding(&self, name: &str) -> Option<&state::B2Binding> {
+        self.elided_b2_bindings
+            .get(&self.current_fn_name)
+            .and_then(|m| m.get(name))
+    }
+
+    /// True when `name` is a non-owning B2 binding (fresh node or
+    /// cursor) — no count ops, no cleanup registration.
+    fn b2_skips_counts(&self, name: &str) -> bool {
+        self.b2_binding(name).is_some_and(|b| {
+            matches!(
+                b.role,
+                state::B2Role::Fresh | state::B2Role::BareCursor | state::B2Role::OptionCursor
+            )
+        })
     }
 
     /// True iff `name` was promoted to Arc in the current function — i.e. it

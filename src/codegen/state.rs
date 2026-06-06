@@ -80,6 +80,34 @@ pub(crate) struct SharedTypeInfo<'ctx> {
     pub(crate) niche_option_fields: Vec<Option<String>>,
 }
 
+/// Phase-B2 build-side elision role for one cluster-local binding
+/// (ownership `src/ownership/elision.rs` § Phase B2). Loaded into
+/// `Codegen::elided_b2_bindings` for clusters whose `b2` flag is set.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum B2Role {
+    /// The cluster root — keeps its B1 `FreeClusterWalk` cleanup; also
+    /// a legal link-store target.
+    Root,
+    /// A fresh node consumed by the single link store: no count ops,
+    /// no cleanup (the chain owns it; the root walk frees it).
+    Fresh,
+    /// Bare `T` cursor: non-owning alias — no receive-inc, no cleanup,
+    /// plain-store reassignment.
+    BareCursor,
+    /// `Option[T]` link-read cursor: non-owning — no alias-acquire inc,
+    /// no `RcDecOption`, plain-store reassignment.
+    OptionCursor,
+}
+
+/// Per-binding B2 record (denormalized cluster info so each codegen
+/// site needs a single lookup).
+#[derive(Clone)]
+pub(crate) struct B2Binding {
+    pub(crate) role: B2Role,
+    pub(crate) member_type: String,
+    pub(crate) link_field_index: usize,
+}
+
 /// Call-ABI niche record for one function (the fn-signature analog of
 /// `niche_option_fields` above — see `Codegen::fn_niche_abi`). `ret`
 /// means the function's LLVM return type is a single nullable `ptr`

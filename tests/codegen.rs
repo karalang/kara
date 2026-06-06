@@ -10216,11 +10216,12 @@ fn main() {
     }
 
     #[test]
-    fn test_ir_cluster_root_takes_free_walk() {
-        // Phase B1: the append-builder's root cleanup is the
-        // link-following free-walk (cw_loop: load next, free, advance)
-        // — no dec, no drop-fn dispatch on the root path. Cursors keep
-        // their RcDec (they drain first).
+    fn test_ir_b2_build_loop_is_count_free() {
+        // Phase B2: in the canonical append builder, the entire build
+        // loop + walk emit ZERO refcount operations — the only count
+        // op left in the function is the rc=1 header store inside
+        // rc_alloc. Pinned by name: the inc/dec helpers emit
+        // `rc_inc`/`rc_dec` value names; the b2 paths emit none.
         let ir = ir_for_with_ownership(
             r#"
 shared struct ListNode { val: i64, mut next: Option[ListNode] }
@@ -10232,6 +10233,61 @@ fn build_and_sum(n: i64) -> i64 {
         let node = ListNode { val: i, next: None };
         tail.next = Some(node);
         tail = node;
+        i = i + 1;
+    }
+    let mut sum = 0;
+    let mut cur = dummy.next;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn main() { println(build_and_sum(5)); }
+"#,
+        );
+        let body = function_body(&ir, "build_and_sum").expect("fn body");
+        assert!(
+            body.contains("b2.link.slot"),
+            "the b2 link-store fast path should engage; body:\n{body}"
+        );
+        assert!(
+            !body.contains("rc_inc") && !body.contains("rc_dec"),
+            "b2 build/walk must be count-free; body:\n{body}"
+        );
+        assert!(
+            body.contains("cw_loop"),
+            "root keeps the B1 free-walk; body:\n{body}"
+        );
+        assert!(
+            !body.contains("rc_cleanup") && !body.contains("opt_rc_cleanup"),
+            "no cursor cleanups under b2; body:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_ir_cluster_root_takes_free_walk() {
+        // Phase B1 WITHOUT B2: the root cleanup is the link-following
+        // free-walk (cw_loop) while cursors keep their RcDec (they
+        // drain first). The store+advance pair is wrapped in an
+        // always-true `if` so the B2 canonical-triple recognizer
+        // rejects (non-adjacent statements inside a loop) — pinning
+        // the B1-only behavior; the fully-recognized b2 sibling is
+        // `test_ir_b2_build_loop_is_count_free`.
+        let ir = ir_for_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build_and_sum(n: i64) -> i64 {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 1;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        if i > 0 {
+            tail.next = Some(node);
+            tail = node;
+        }
         i = i + 1;
     }
     let mut sum = 0;

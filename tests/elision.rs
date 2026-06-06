@@ -607,3 +607,121 @@ fn cluster_second_chain_same_type_keeps_standard_cleanup() {
     let r = analyze(&src);
     assert_eq!(cluster_root(&r, "run").as_deref(), Some("dummy"));
 }
+
+// ── Phase B2 — build-side count elision flag ────────────────────
+
+#[test]
+fn b2_recognizes_canonical_triple() {
+    let src = format!("{NODE}{CANONICAL_BUILDER}");
+    let r = analyze(&src);
+    let c = &r.elided_clusters["build_and_sum"][0];
+    assert!(c.b2, "canonical triple should be b2");
+    assert!(c.fresh_linked.contains("node"));
+    assert!(c.bare_cursors.contains("tail"));
+    assert!(c.bare_cursors.contains("x"));
+    assert!(c.option_cursors.contains("cur"));
+}
+
+#[test]
+fn b2_accepts_single_store_outside_loops() {
+    let src = format!(
+        "{NODE}\
+         fn run() -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let node = ListNode {{ val: 7, next: None }};\n\
+             dummy.next = Some(node);\n\
+             let c = dummy.next;\n\
+             let n2 = c.unwrap();\n\
+             n2.val\n\
+         }}\n\
+         fn main() {{ println(run()); }}"
+    );
+    let r = analyze(&src);
+    let c = &r.elided_clusters["run"][0];
+    assert!(c.b2, "single store outside loops should be b2");
+}
+
+#[test]
+fn b2_rejects_non_adjacent_triple() {
+    // Store + advance separated by control flow inside the loop —
+    // displacement can no longer be ruled out structurally.
+    let src = format!(
+        "{NODE}\
+         fn run(n: i64) -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let mut tail = dummy;\n\
+             let mut i = 0;\n\
+             while i < n {{\n\
+                 let node = ListNode {{ val: i, next: None }};\n\
+                 if i > 0 {{\n\
+                     tail.next = Some(node);\n\
+                     tail = node;\n\
+                 }}\n\
+                 i = i + 1;\n\
+             }}\n\
+             dummy.val\n\
+         }}\n\
+         fn main() {{ println(run(3)); }}"
+    );
+    let r = analyze(&src);
+    let c = &r.elided_clusters["run"][0];
+    assert!(!c.b2, "non-adjacent triple must not be b2 (B1 still ok)");
+}
+
+#[test]
+fn b2_rejects_two_store_sites() {
+    let src = format!(
+        "{NODE}\
+         fn run() -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let a = ListNode {{ val: 10, next: None }};\n\
+             let b = ListNode {{ val: 20, next: None }};\n\
+             dummy.next = Some(a);\n\
+             dummy.next = Some(b);\n\
+             dummy.val\n\
+         }}\n\
+         fn main() {{ println(run()); }}"
+    );
+    let r = analyze(&src);
+    let c = &r.elided_clusters["run"][0];
+    assert!(!c.b2, "two store sites (displacement) must not be b2");
+}
+
+#[test]
+fn b2_rejects_link_read_before_store() {
+    let src = format!(
+        "{NODE}\
+         fn run() -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let early = dummy.next;\n\
+             let node = ListNode {{ val: 7, next: None }};\n\
+             dummy.next = Some(node);\n\
+             if early.is_none() {{ dummy.val }} else {{ node.val }}\n\
+         }}\n\
+         fn main() {{ println(run()); }}"
+    );
+    let r = analyze(&src);
+    // The cluster may or may not survive B1 (node.val in a tail
+    // branch is a prim read — allowed); the b2 flag must be off.
+    if let Some(cs) = r.elided_clusters.get("run") {
+        assert!(!cs[0].b2, "read-before-store must not be b2");
+    }
+}
+
+#[test]
+fn b2_rejects_unlinked_fresh_node() {
+    let src = format!(
+        "{NODE}\
+         fn run() -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let node = ListNode {{ val: 7, next: None }};\n\
+             let lone = ListNode {{ val: 9, next: None }};\n\
+             dummy.next = Some(node);\n\
+             lone.val\n\
+         }}\n\
+         fn main() {{ println(run()); }}"
+    );
+    let r = analyze(&src);
+    let c = &r.elided_clusters["run"][0];
+    assert!(!c.b2, "never-linked fresh node must not be b2");
+}

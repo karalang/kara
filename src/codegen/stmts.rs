@@ -21,7 +21,7 @@ use inkwell::IntPredicate;
 use super::helpers::{
     map_kv_type_exprs, set_inner_type_expr, slice_inner_type_expr, vec_inner_type_expr,
 };
-use super::state::{ReturnSlot, SharedTypeInfo, VarSlot};
+use super::state::{B2Role, ReturnSlot, SharedTypeInfo, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn compile_block(
@@ -829,6 +829,98 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Phase-B2 link-store fast path (see the `StmtKind::Assign` arm):
+    /// `<bare cluster>.link = Some(<fresh>)` / `= None` lowers to one
+    /// pointer store into the niche slot. Returns Ok(true) when the
+    /// store was emitted; Ok(false) falls back to the generic path
+    /// (which is count-correct for every shape, so the fallback is
+    /// always safe).
+    fn try_emit_b2_link_store(&mut self, target: &Expr, value: &Expr) -> Result<bool, String> {
+        let ExprKind::FieldAccess { object, field } = &target.kind else {
+            return Ok(false);
+        };
+        let ExprKind::Identifier(obj) = &object.kind else {
+            return Ok(false);
+        };
+        let Some(b2) = self.b2_binding(obj).cloned() else {
+            return Ok(false);
+        };
+        if matches!(b2.role, B2Role::OptionCursor) {
+            return Ok(false);
+        }
+        // The stored field must be the cluster's link field, and the
+        // link slot must be niche-shaped (single ptr).
+        let link_name = self
+            .struct_field_names
+            .get(&b2.member_type)
+            .and_then(|ns| ns.get(b2.link_field_index))
+            .cloned();
+        if link_name.as_deref() != Some(field.as_str()) {
+            return Ok(false);
+        }
+        if self
+            .niche_field_inner_heap_type(&b2.member_type, b2.link_field_index)
+            .is_none()
+        {
+            return Ok(false);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        // Value: Some(<fresh>) → the fresh binding's heap ptr; None →
+        // null. Anything else falls back.
+        let new_ptr = match &value.kind {
+            ExprKind::Identifier(n) if n == "None" => ptr_ty.const_null(),
+            ExprKind::Call { callee, args } if args.len() == 1 => {
+                let ExprKind::Identifier(c) = &callee.kind else {
+                    return Ok(false);
+                };
+                if c != "Some" {
+                    return Ok(false);
+                }
+                let ExprKind::Identifier(v) = &args[0].value.kind else {
+                    return Ok(false);
+                };
+                let is_fresh = self
+                    .b2_binding(v)
+                    .is_some_and(|b| matches!(b.role, B2Role::Fresh));
+                if !is_fresh {
+                    return Ok(false);
+                }
+                let Some(vslot) = self.variables.get(v.as_str()).copied() else {
+                    return Ok(false);
+                };
+                self.builder
+                    .build_load(ptr_ty, vslot.ptr, &format!("{v}.b2.link.val"))
+                    .unwrap()
+                    .into_pointer_value()
+            }
+            _ => return Ok(false),
+        };
+        let Some(oslot) = self.variables.get(obj.as_str()).copied() else {
+            return Ok(false);
+        };
+        let heap_type = self
+            .shared_types
+            .get(&b2.member_type)
+            .map(|i| i.heap_type)
+            .expect("b2 member type registered in shared_types");
+        let obj_ptr = self
+            .builder
+            .build_load(ptr_ty, oslot.ptr, &format!("{obj}.b2.link.obj"))
+            .unwrap()
+            .into_pointer_value();
+        let field_ptr = self
+            .builder
+            .build_struct_gep(
+                heap_type,
+                obj_ptr,
+                (b2.link_field_index + 1) as u32,
+                "b2.link.slot",
+            )
+            .unwrap();
+        self.builder.build_store(field_ptr, new_ptr).unwrap();
+        Ok(true)
+    }
+
     pub(super) fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         // Slice c-repl.B.5.1: REPL value-snapshot replay short-circuit.
         // When this stmt is a top-level `let <name> = <expr>` whose
@@ -1595,7 +1687,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 // For shared types: rc_inc when copying from another variable (not fresh construction).
                 if let Some((ref var_name, ref info)) = shared_info {
-                    if !is_fresh_construction {
+                    // Phase-B2 non-owning roles (fresh nodes, bare
+                    // cursors): NO receive-inc and NO cleanup — the
+                    // chain owns the object and the root's free-walk is
+                    // the single release point. Nothing is freed before
+                    // scope exit in a b2 cluster (displacement-free
+                    // shapes only), so count-free aliases never dangle.
+                    let b2_skip = self.b2_skips_counts(var_name);
+                    if !is_fresh_construction && !b2_skip {
                         // Copying a shared pointer — increment refcount.
                         let ptr = val.into_pointer_value();
                         self.emit_refcount_inc(var_name, info.heap_type, ptr);
@@ -1614,7 +1713,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // Phase-B1 cluster root: link-following
                         // free-walk instead of the dec/drop-fn walk.
                         self.track_cluster_root_var(var_name, ptr, &member_type, link_idx);
-                    } else {
+                    } else if !b2_skip {
                         self.track_rc_var(var_name, ptr, info.heap_type);
                     }
                 }
@@ -1741,19 +1840,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         if is_nested {
                             self.zero_init_option_slot_in_entry_block(slot.ptr, option_ty);
                         }
-                        self.track_rc_option_var(var_name, slot.ptr, option_ty, info.heap_type);
-                        // Case (d) aliasing acquire: the new binding is a second
-                        // owner of the RHS binding's chain — inc the inner ref so
-                        // the just-queued scope-exit `RcDecOption` is balanced.
-                        // Load the slot back (it now holds the aliased Option
-                        // value) and inc its inner under the standard Some-tag +
-                        // null guard.
-                        if option_alias_needs_inner_inc {
-                            let loaded = self
-                                .builder
-                                .build_load(option_ty, slot.ptr, "opt.alias.inc.load")
-                                .unwrap();
-                            self.emit_option_inner_rc_inc_for_loaded(loaded, info.heap_type);
+                        // Phase-B2 option cursors are non-owning: no
+                        // RcDecOption, no alias-acquire inc — see the
+                        // shared-arm comment above.
+                        if !self.b2_skips_counts(var_name) {
+                            self.track_rc_option_var(var_name, slot.ptr, option_ty, info.heap_type);
+                            // Case (d) aliasing acquire: the new binding is a second
+                            // owner of the RHS binding's chain — inc the inner ref so
+                            // the just-queued scope-exit `RcDecOption` is balanced.
+                            // Load the slot back (it now holds the aliased Option
+                            // value) and inc its inner under the standard Some-tag +
+                            // null guard.
+                            if option_alias_needs_inner_inc {
+                                let loaded = self
+                                    .builder
+                                    .build_load(option_ty, slot.ptr, "opt.alias.inc.load")
+                                    .unwrap();
+                                self.emit_option_inner_rc_inc_for_loaded(loaded, info.heap_type);
+                            }
                         }
                     }
                 }
@@ -2021,6 +2125,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(())
             }
             StmtKind::Assign { target, value } => {
+                // Phase-B2 link-store fast path: `<bare>.link =
+                // Some(<fresh>)` (or `= None`) on a b2 cluster target
+                // collapses to a single pointer store into the niche
+                // slot — no Some-ctor payload inc, no field-store
+                // retain/release. The analysis guarantees the target's
+                // old link is structurally None (displacement-free
+                // shapes only), so there is nothing to release.
+                // Intercepted BEFORE the generic value compile so the
+                // `Some(...)` constructor (which incs shared payloads)
+                // never runs. Falls through on any shape mismatch.
+                if self.try_emit_b2_link_store(target, value)? {
+                    return Ok(());
+                }
                 // Mirror the let-site convention: when the RHS is a
                 // `StructLiteral` (`emit_rc_alloc` returns rc=1) or a
                 // `Call` / `MethodCall` (callee transfers +1 via the
@@ -2068,6 +2185,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(type_name) = self.var_type_names.get(name).cloned() {
                         if let Some(info) = self.shared_types.get(&type_name).cloned() {
                             if let Some(slot) = self.variables.get(name).copied() {
+                                // Phase-B2 bare cursor advance
+                                // (`tail = node`): non-owning alias —
+                                // plain store, no inc/dec dance.
+                                if self.b2_skips_counts(name) {
+                                    self.builder.build_store(slot.ptr, val).unwrap();
+                                    return Ok(());
+                                }
                                 // Save the old pointer before overwriting.
                                 let old_ptr = self
                                     .builder
@@ -2122,6 +2246,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(heap_type) = self.var_option_shared_heap.get(name.as_str()).copied()
                     {
                         if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                            // Phase-B2 option cursor (`cur = x.next` /
+                            // `cur = None`): non-owning — plain store,
+                            // no save/inc/dec.
+                            if self.b2_skips_counts(name) {
+                                self.builder.build_store(slot.ptr, val).unwrap();
+                                return Ok(());
+                            }
                             let option_ty = self.enum_layouts["Option"].llvm_type;
                             let i64_t = self.context.i64_type();
                             let ptr_ty = self.context.ptr_type(AddressSpace::default());
