@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- ws_idle_holder .NET comparator: raw ASP.NET Core Kestrel WebSocket
+       middleware over TLS. The lean .NET prod default (no SignalR — that is
+       the framework-tier stretch comparator). `dotnet publish` produces a
+       self-contained bundle so the rig needs no .NET install. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ws-idle-holder-dotnet</AssemblyName>
+    <!-- Server GC is the ASP.NET Core prod default (throughput-oriented,
+         per-core heaps). Explicit here for the record. Concurrent GC on. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- The shared self-signed TLS fixture, copied next to the binary so it
+       resolves via AppContext.BaseDirectory regardless of cwd. -->
+  <ItemGroup>
+    <Content Include="cert.pem" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="key.pem" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
