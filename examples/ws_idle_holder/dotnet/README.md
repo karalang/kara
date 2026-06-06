@@ -9,9 +9,12 @@ and churn against Kāra. Commercial-tier comparator **#71 (.NET on Linux)**.
 
 .NET is a top-tier enterprise runtime, and ASP.NET Core's Kestrel +
 `UseWebSockets()` middleware is the lean .NET WebSocket prod default. The
-Linux run is the headline (60–70% of new .NET is Linux); a separate
-**#72 (.NET Windows)** run on x86 + SChannel quantifies the OS-TLS-substrate
-delta.
+Linux run is the headline (60–70% of new .NET is Linux). A separate Windows +
+SChannel run (was #72) would have quantified the OS-TLS-substrate delta, but
+it was **cut by decision (2026-06-06)** — Linux is the .NET headline, the
+SChannel-vs-OpenSSL delta is low-value (the Node comparator already supplies a
+second OpenSSL data point next to this one), and an x86 Windows box is the
+costliest run in the suite. See **§.NET Windows in `bench/REPORT.md`**.
 
 ## Real-world-vs-purist caveat
 
@@ -142,4 +145,5 @@ DOTNET="$(cd ../../dotnet && pwd)/run_server.sh"
 - **No SignalR** — raw Kestrel WS middleware only (SignalR is the framework-
   tier stretch comparator #74).
 - **No GC tuning** — Server GC defaults; the heap dial is reported, not tuned.
-- **Linux only here** — the Windows/SChannel run is comparator #72.
+- **Linux only** — the Windows/SChannel run (was #72) was cut by decision
+  (2026-06-06); see §.NET Windows in `bench/REPORT.md`.

@@ -82,7 +82,9 @@ alongside; this file is **what we measured and what it means**, not
 > single-threaded event loop) yet lighter than .NET on the same OpenSSL, and
 > like .NET a real cost, not a dial (`--max-old-space-size` cap moves it
 > +0.07%).**
-> The remaining commercial + stretch comparators are pending — see the
+> The **commercial tier is now complete** (Phoenix, Java/Netty, Go, .NET
+> Linux, Node all landed; .NET Windows cut by decision). Only the optional
+> stretch comparators (SignalR / socket.io / Python) remain pending — see the
 > [Status / measurement matrix](#status--measurement-matrix) below.
 > Until a row's status is `landed`, treat the cells as placeholders.
 
@@ -103,7 +105,7 @@ alongside; this file is **what we measured and what it means**, not
 | Java / Netty | commercial | 14.4 KB¹ | **1.19×** | 250K + 50K landed (2026-06-06) | landed @ 250K | [§Java/Netty](#java--netty) |
 | Go (gorilla/websocket) | commercial | 43.4 KB | **3.66×** | 250K + 50K landed (2026-06-06), +2.5% linearity | landed @ 250K | [§Go](#go-gorillawebsocket) |
 | .NET / ASP.NET Core (Linux) | commercial | 52.9 KB² | **4.47×** | 250K + 50K landed (2026-06-06), −1.4% linearity | landed @ 250K | [§.NET Linux](#net--aspnet-core-linux) |
-| .NET / ASP.NET Core (Windows) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #72) | pending | [§.NET Windows](#net--aspnet-core-windows) |
+| .NET / ASP.NET Core (Windows) | commercial | n/a | n/a | **cut by decision** (was #72) — Linux is the .NET headline; SChannel delta low-value | not run | [§.NET Windows](#net--aspnet-core-windows) |
 | Node.js (ws) | commercial | 40.4 KB | **3.42×** | 250K + 50K landed (2026-06-06), −1.79% linearity | landed @ 250K | [§Node](#nodejs-ws) |
 | SignalR _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #74) | stretch | [§SignalR](#signalr-stretch) |
 | socket.io _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #75) | stretch | [§socket.io](#socketio-stretch) |
@@ -324,8 +326,9 @@ per_conn_bytes = (rss_after_n_held - rss_before_first_conn) / N
 - `rss_before_first_conn` is sampled before the harness sends its
   first SYN.
 - `/proc/<pid>/status` `VmRSS` on Linux; `ps -o rss=` on
-  macOS/BSD/Windows-WSL. Native Windows uses `Get-Process` Working
-  Set; documented in the .NET Windows section.
+  macOS/BSD/Windows-WSL. (Native Windows would use `Get-Process`
+  Working Set, but no native-Windows comparator was run — the .NET
+  Windows row was cut; see [§.NET Windows](#net--aspnet-core-windows).)
 
 Only meaningful at large N. At N < 10K the first-connection overhead
 (TLS session caches, per-thread stacks, RNG state) dominates and the
@@ -365,7 +368,7 @@ sized box for its real-world deployment shape:
 | Java _(landed 2026-06-06)_ | 16-vCPU Graviton, 61 GB | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go/Phoenix; all Netty runs fit (250K `-Xmx24g` over-commit peaked ~5.5 GiB, balanced `-Xmx4g` ~3.7 GiB). Per-conn density is RAM/ISA-independent, so the RAM tier does not affect the head-to-head |
 | Go _(landed 2026-06-06)_ | `m8g.4xlarge` | 16 (Graviton4) | 61 GB | arm64 | same 16-vCPU Graviton4 class as the baseline; 250K Go fits ~10.6 GiB so 61 GB is ample. Per-conn density is RAM/ISA-independent (established cross-ISA), so the smaller RAM tier does not affect the head-to-head |
 | Phoenix _(landed 2026-06-06)_ | 16-vCPU Graviton, 61 GB | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go; 250K presence-off fits ~25.9 GiB so 61 GB holds it. Per-conn density is RAM/ISA-independent, so the RAM tier does not affect the head-to-head. (250K presence-ON was *not* run — confounded by `presence_diff` backpressure and ~47 GiB extrapolated, near the box ceiling.) |
-| .NET Windows | `m7i.4xlarge` | 16 (Intel x86) | 64 GB | x86_64 | SChannel is x86-default on Windows Server; matched vCPU; 64 GB is sufficient for 1M target |
+| .NET Windows _(cut by decision, not run)_ | ~~`m7i.4xlarge`~~ | — | — | ~~x86_64~~ | Was to be an x86 Windows Server box for the SChannel delta; cut 2026-06-06 (Linux is the .NET headline; low-value confirmatory result; see [§.NET Windows](#net--aspnet-core-windows)) |
 | Cross-platform confirmation _(x86, post-fix — landed 2026-06-02)_ | `c7i.8xlarge` | 32 (Intel x86) | 64 GB | x86_64 | Working-handler Kāra 1M: **12,112 B/conn**, within −0.02 % of arm64 — density is ISA-identical, not Graviton-specific. Reproduces the cross-ISA p50 floor (44.2 ms). Supersedes the pre-fix 7,725 B read. `c7i.8xlarge` over `.4xlarge` — co-located 1M client+server needs >32 GB |
 
 **Each comparator gets a fresh box.** No co-tenancy between runs
@@ -382,7 +385,7 @@ Three roles, three scale targets:
 |---|---|---|---|---|
 | **self** | Kāra | 1M + 2M | implicit (multi-scale ladder from M1 → M3) | Kāra's own ceiling story; per-conn-bytes linearity is what unblocks the scale-invariance argument for everyone else |
 | **credibility** | Rust (rustls + tokio) | 1M + 2M | implicit (tracks Kāra) | "Kāra is at least as serious as the modern serious choice" — needs symmetric ceiling probes for the comparison to read as principled, not cherry-picked. Empirical head-to-head at the ceiling beats extrapolated. |
-| **commercial** | Phoenix, Java/Netty, Go, .NET (Linux + Windows), Node | **250K** | 50K | This is the **real-world per-box deployment scale** for production WebSocket fleets — most prod fleets run 50K–250K per box and scale horizontally, not 1M per box. Matches the M2 milestone (#167 in phase-6) and the published per-node densities for Discord/Slack/Pinterest. Per-conn-bytes ratio is scale-invariant (see below), so 250K against 250K produces the same headline ratio as 1M against 1M would, at ~5× less rig effort and ~40% less wall-clock per comparator. |
+| **commercial** | Phoenix, Java/Netty, Go, .NET (Linux), Node | **250K** | 50K | This is the **real-world per-box deployment scale** for production WebSocket fleets — most prod fleets run 50K–250K per box and scale horizontally, not 1M per box. Matches the M2 milestone (#167 in phase-6) and the published per-node densities for Discord/Slack/Pinterest. Per-conn-bytes ratio is scale-invariant (see below), so 250K against 250K produces the same headline ratio as 1M against 1M would, at ~5× less rig effort and ~40% less wall-clock per comparator. |
 | **stretch** | SignalR, socket.io, Python | **100K** | 50K | Stretch rows are completeness, not headline. 100K is high enough that first-conn overhead is negligible (>10K is the floor for per-conn-bytes to be meaningful per the [per-conn-bytes definition](#per-conn-bytes-definition)) and low enough that the setup-to-runtime ratio stays favorable. |
 
 **Scale-invariance argument (load-bearing for the 250K choice):**
@@ -434,9 +437,10 @@ Kāra 2M run:
 - 27 loopback aliases `127.0.0.2..28` so the bench client can spread
   its source-IP load (see `bench/README.md § --source-ips`)
 
-Windows tuning (TBD with the .NET Windows section) does the
-analogous bumps: ephemeral port range, TIME_WAIT recycle window,
-TCP control-block table size.
+(No Windows host tuning was needed — the only Windows-host comparator,
+.NET Windows, was [cut](#net--aspnet-core-windows). On Windows the
+analogous bumps would be ephemeral port range, TIME_WAIT recycle
+window, and TCP control-block table size.)
 
 ### Real-world configuration over apples-to-apples purism
 
@@ -534,11 +538,13 @@ number with the deviation rather than retuning to remove it._
   heap); (2) Node's connect p50 ~50 ms is a single-thread handshake-throughput
   artifact, not a density or steady-state cost; (3) in-process TLS is the
   apples-to-apples basis. Full breakdown in the [§Node.js section](#nodejs-ws).
-- **.NET ASP.NET Core (Windows)** _(pending — wip task #72):_
-  SChannel TLS (the production-default stack on Windows Server);
-  .NET 8 LTS; raw Kestrel WebSocket middleware. The Linux/Windows
-  delta is itself a result — it tells us how much of the .NET
-  number is the framework vs the OS TLS substrate.
+- **.NET ASP.NET Core (Windows)** _(cut by decision 2026-06-06 — was wip
+  task #72):_ deliberately not run. It would have re-measured the same .NET
+  runtime on Windows Server + SChannel to isolate the OS-TLS-substrate delta,
+  but Linux is the .NET headline, the SChannel-vs-OpenSSL delta is low-value
+  (Node already supplies a second OpenSSL data point), and an x86 Windows box
+  is the costliest run in the suite. Full rationale in the
+  [§.NET Windows section](#net--aspnet-core-windows).
 
 ---
 
@@ -1243,44 +1249,36 @@ multi-axis tradeoff seen across the set.
   can cap committed heap but cannot reclaim memory live connections hold, so it
   would not lower the per-conn figure here.
 - **.NET 8 vs 9:** measured on .NET 8 LTS (`net8.0`); .NET 9 is current STS.
-  The Windows row (#72) reuses this stack on SChannel — the Linux/Windows
-  delta isolates OS-TLS-substrate cost from runtime cost.
 
 ### .NET / ASP.NET Core (Windows)
 
-> _Pending — wip task #72._
+> _Not run — cut by decision 2026-06-06 (was wip task #72)._
 
-- **Status:** pending.
-- **Stack target:** .NET 8 LTS on Windows Server 2022;
-  Kestrel WebSocket middleware; SChannel for TLS (the Windows
-  Server prod-default).
-- **Hardware:** `m7i.4xlarge` (16 vCPU Intel x86, 64 GB RAM,
-  Windows Server 2022). 64 GB is well above the 250K headline
-  target; original 1M sizing rationale carried over but unused at
-  the reduced scale.
-- **TLS:** SChannel; matched cipher + cert (within SChannel's
-  configurable surface).
-- **Scale:** 250K headline + 50K linearity sub-curve (per
-  [§Scale per comparator](#scale-per-comparator)). Windows ramp
-  rate may differ from Linux; document if a separate
-  linearity-escalation triggers.
+This comparator was **deliberately not run.** It would have re-measured the
+same .NET runtime on Windows Server + SChannel to isolate the OS-TLS-substrate
+delta vs Linux/OpenSSL. We dropped it for three reasons:
 
-**Expected delta vs Linux .NET:** SChannel and OpenSSL have
-genuinely different per-conn TLS-state shapes. The Linux/Windows
-.NET delta is itself a finding — it tells us "is the .NET overhead
-the runtime or the OS TLS substrate?" — and matters for any buyer
-whose .NET fleet is Windows-Server-default.
+1. **The .NET headline is already locked.** .NET Linux landed at 52.9 KiB /
+   4.47× Kāra, and **Linux is the .NET headline** (the majority of new .NET
+   deploys are Linux). A Windows number does not move the commercial claim
+   (density, infra-cost, "one tier down").
+2. **Low marginal information.** The only thing #72 adds is the SChannel-vs-
+   OpenSSL TLS-state delta, which is almost certainly small (per-conn TLS
+   record buffers are the same order on both stacks) — a likely confirmation,
+   not a headline. And the **Node comparator already gives a second OpenSSL
+   data point** next to .NET Linux, covering most of what the substrate
+   question would have shown.
+3. **Highest cost / lowest payoff of anything left.** It needs an **x86**
+   box (the rest of the cohort is arm64, adding an ISA confound — though we
+   established density is ISA-independent in the [x86 confirmation](#hardware))
+   *and* a **Windows Server** box, materially harder to drive than the Linux
+   runs (SChannel cert handling, `win-x64` publish, RDP/PowerShell tuning,
+   `Get-Process` Working Set vs Linux `VmRSS`). Not worth a fresh Windows x86
+   box for a confirmatory result.
 
-**Caveats:**
-
-- Windows ephemeral port range, TIME_WAIT recycle, and TCP control
-  block table size need tuning even at 250K; document the
-  PowerShell tuning script alongside the run.
-- RSS measurement on Windows is `Get-Process` Working Set; this is
-  the closest analog to Linux `VmRSS` but not identical (Windows
-  Working Set is the working-set subset of resident pages, which is
-  what Linux RSS also measures, but the kernel-side accounting
-  differs in edge cases).
+If a buyer with a Windows-Server-default .NET fleet ever needs it, the
+`net8.0` stack in [`../dotnet/`](../dotnet/) ports to `win-x64` + SChannel with
+no app-code change; the run recipe is the only missing piece.
 
 ### Node.js (ws)
 
@@ -1686,7 +1684,7 @@ their role's headline scale (`250K` or `100K`).
 | Java / Netty | commercial | **50K landed (2026-06-06)** — 21.2 KB/conn balanced `-Xmx800m` (RSS=GC-heap dial; marginal slope flat) | **250K landed (2026-06-06)** — 14.4 KB/conn balanced `-Xmx4g` (1.19× Kāra); marginal ~12.8 KB (1.06×), live ~8–10 KB; 2nd-densest stack | n/a (marginal slope flat; RSS-delta/N drift is fixed-JVM-base, not per-conn) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` (`JAVA_OPTS` heap/GC + `BENCH_EXTRA_ARGS` env) | `docs/investigations/netty_g1_{250k,50k}_balanced.json`, `netty_g1_{250k,50k}_xmx24g.json`, `netty_zgc_250k.json` |
 | Go | commercial | **50K landed (2026-06-06)** — 43,311 B/conn, +2.5% drift | **250K landed (2026-06-06)** — 44,386 B/conn, p50 3.37 ms (3.66× Kāra) | n/a (gate passed: +2.5% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` | `docs/investigations/go_idle_{250k,50k}.json` |
 | .NET (Linux) | commercial | **50K landed (2026-06-06)** — 54,869 B/conn Server GC, −1.4% drift; Workstation-GC sidebar 53,781 B (−2.0%, proves live-not-dial) | **250K landed (2026-06-06)** — 54,125 B/conn (52.9 KiB) Server GC, marginal slope ≈ absolute (4.47× Kāra; 2nd-heaviest measured) | n/a (gate passed: −1.4% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` (Server GC default; `DOTNET_gcServer=0` for the Workstation sidebar) | `docs/investigations/dotnet_linux_{250k,50k,50k_wks}.json` |
-| .NET (Windows) | commercial | pending (#72) | 250K pending (#72) | n/a | pending | TBD | TBD |
+| .NET (Windows) | commercial | n/a | **cut by decision** (was #72) — see [§.NET Windows](#net--aspnet-core-windows); Linux is the .NET headline, SChannel delta low-value, Node already gives a 2nd OpenSSL point | n/a | not run | n/a | n/a |
 | Node.js | commercial | **50K landed (2026-06-06)** — 42,131 B/conn, −1.79% drift; `--max-old-space-size=512` sidebar 42,161 B (+0.07%, proves live-not-dial) | **250K landed (2026-06-06)** — 41,378 B/conn (40.4 KiB), p50 50.8 ms (3.42× Kāra; 4th-densest, denser than Go, lighter than .NET) | n/a (gate passed: −1.79% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` (`--server-bin ../node/run_server.sh`; `NODE_OPTIONS=--max-old-space-size=512` for the heap-cap sidebar) | `docs/investigations/node_linux_{250k,50k,50k_cap}.json` |
 | SignalR _(stretch)_ | stretch | pending (#74) | 100K pending (#74) | n/a | pending | TBD | TBD |
 | socket.io _(stretch)_ | stretch | pending (#75) | 100K pending (#75) | n/a | pending | TBD | TBD |
@@ -1701,6 +1699,19 @@ their role's headline scale (`250K` or `100K`).
 
 ## Change log
 
+- **2026-06-06 (.NET Windows comparator cut by decision):** dropped the planned
+  .NET-on-Windows-Server + SChannel run (was wip #72). Rationale: Linux is the
+  .NET headline (already landed at 52.9 KiB / 4.47× Kāra), the SChannel-vs-
+  OpenSSL TLS-substrate delta is low-value and likely confirmatory (Node
+  already supplies a second OpenSSL data point next to .NET Linux), and an x86
+  Windows Server box is the costliest / most operationally painful run in the
+  suite. Flipped all `pending #72` rows (TL;DR, status matrix, §.NET Windows,
+  hardware table, consolidated caveats, scale-per-comparator, RSS-measurement
+  + host-tuning cross-refs) to "not run — cut by decision," and updated
+  `dotnet/README.md`. The `net8.0` stack ports to `win-x64` + SChannel with no
+  app-code change if a Windows-fleet buyer ever needs it. Closes the Phase 3
+  **commercial** tier (Phoenix, Java/Netty, Go, .NET Linux, Node all landed);
+  only the optional stretch tier (SignalR / socket.io / Python) remains.
 - **2026-06-06 (Node.js `ws` comparator landed — denser than Go, lighter than
   .NET, real not a dial):** ran the raw-`ws` comparator (Node 24.15.0 LTS, `ws`
   8.21.0, in-process `https`/OpenSSL 3.x, single-threaded libuv, single
