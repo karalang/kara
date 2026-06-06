@@ -134,6 +134,18 @@ impl<'a> super::Interpreter<'a> {
                     Err(e) => Some(io_err_value(io_error_from_std(&e))),
                 }
             }
+            "lines" => {
+                // `lines() -> LinesIter[R]`: hand back an iterator over the
+                // same wrapped BufReader (Arc-shared). Rust's `lines()`
+                // consumes the reader; the interpreter shares it, so draining
+                // the iterator advances — and leaves at EOF — the originating
+                // `BufReader`. The per-line reads happen during the for-loop
+                // drain (`eval_expr.rs`'s `Value::LinesIter` arm), which has
+                // no method-call site, so the `reads(FileSystem)` effect is
+                // attributed here at the `lines()` call.
+                self.track_effect("reads(FileSystem)");
+                Some(Value::LinesIter(reader_arc.clone()))
+            }
             _ => None,
         }
     }

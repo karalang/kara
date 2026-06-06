@@ -208,6 +208,14 @@ pub enum Value {
     /// `BufReader.with_capacity`; methods `read_line` / `read_to_string`
     /// / `read` thread through the mutex.
     BufReader(Arc<Mutex<std::io::BufReader<std::fs::File>>>),
+    /// `LinesIter` — the line iterator returned by `BufReader.lines()`.
+    /// Shares the wrapped reader's `Arc<Mutex<std::io::BufReader<…>>>` with
+    /// the originating `BufReader` (Rust's `lines()` consumes the reader;
+    /// the interpreter Arc-shares it instead, so draining the iterator
+    /// advances — and leaves at EOF — the shared BufReader). The for-loop
+    /// drains it one line at a time, yielding `Result[String, IoError]` per
+    /// line. Phase 8 `BufReader[R]` `lines()` slice.
+    LinesIter(Arc<Mutex<std::io::BufReader<std::fs::File>>>),
     /// Aliasing slot used to back a `mut ref |...|` closure capture.
     /// Lives only inside an `Env` scope or a closure's captured-env map;
     /// never reaches user expressions because every path that reads a
@@ -856,6 +864,7 @@ impl std::fmt::Display for Value {
             }
             Value::File(_) => write!(f, "<File>"),
             Value::BufReader(_) => write!(f, "<BufReader>"),
+            Value::LinesIter(_) => write!(f, "<LinesIter>"),
         }
     }
 }
@@ -984,6 +993,7 @@ impl Value {
             Value::Entry { .. } => "Entry",
             Value::File(_) => "File",
             Value::BufReader(_) => "BufReader",
+            Value::LinesIter(_) => "LinesIter",
         }
     }
 

@@ -165,6 +165,10 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // wrap a `File`; `read_line` / `read_to_string` / `read` amortize
     // syscall overhead. See `runtime/stdlib/bufreader.kara`.
     "BufReader",
+    // `LinesIter` — line iterator returned by `BufReader.lines()`; drained
+    // by a `for` loop yielding `Result[String, IoError]` per line. Non-
+    // generic at v1 (concrete element type; wrapped reader erased).
+    "LinesIter",
     // Debugger Contract slice 5: `std.runtime` introspection surface.
     // `Runtime` is the empty-marker host for the three `#[compiler_builtin]`
     // dispatch methods; `ParBlockInfo` / `TaskInfo` / `WaitTarget` are the

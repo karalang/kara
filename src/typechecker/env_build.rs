@@ -411,6 +411,32 @@ impl<'a> super::TypeChecker<'a> {
             },
         );
 
+        // `LinesIter` (phase-8 `BufReader.lines()` slice) — its element type
+        // is concretely `Result[String, IoError]`, so the `Item` binding
+        // carries no `TypeParam` (and `LinesIter` is non-generic at v1). The
+        // baked `struct LinesIter` declaration (bufreader.kara) has no
+        // syntactic `Item` mapping; it lives here like the other built-in
+        // collection element types. Drives `element_type_of` so
+        // `for line in br.lines()` binds `line: Result[String, IoError]`.
+        self.env.impl_assoc_types.insert(
+            ("LinesIter".to_string(), "Item".to_string()),
+            ImplAssocTypeEntry {
+                ty: Type::Named {
+                    name: "Result".to_string(),
+                    args: vec![
+                        Type::Str,
+                        Type::Named {
+                            name: "IoError".to_string(),
+                            args: vec![],
+                        },
+                    ],
+                },
+                gat_params: vec![],
+                param_bound_traits: Vec::new(),
+                where_clause: None,
+            },
+        );
+
         // Range family — typechecker-internal types constructed from
         // `a..b` syntax. Both struct shape and assoc-type mapping
         // registered here.

@@ -4948,6 +4948,96 @@ fn test_bufreader_with_capacity_read_into_slice() {
     let _ = std::fs::remove_file(&tmp);
 }
 
+#[test]
+fn test_bufreader_lines_iterates_and_strips_newlines() {
+    // `for line in br.lines()` yields one Ok(line) per line with the
+    // trailing newline stripped, terminating at EOF.
+    let tmp = std::env::temp_dir().join("karac_test_bufreader_lines.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(&tmp, b"alpha\nbeta\ngamma\n").expect("seed temp");
+    let src = format!(
+        "fn main() {{
+             match File.open(\"{path}\") {{
+                 Ok(f) => {{
+                     let br = BufReader.new(f);
+                     let mut count = 0;
+                     for line in br.lines() {{
+                         match line {{
+                             Ok(s) => {{ println(\"[\" + s + \"]\"); count = count + 1; }}
+                             Err(_) => println(\"read err\"),
+                         }}
+                     }}
+                     println(\"count=\" + count.to_string());
+                 }}
+                 Err(_) => println(\"open err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "[alpha]\n[beta]\n[gamma]\ncount=3\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn test_bufreader_lines_crlf_and_no_trailing_newline() {
+    // CRLF line endings are stripped (\r\n, matching std::io::Lines), and a
+    // final line with no trailing newline is still yielded.
+    let tmp = std::env::temp_dir().join("karac_test_bufreader_lines_crlf.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(&tmp, b"one\r\ntwo\r\nthree").expect("seed temp");
+    let src = format!(
+        "fn main() {{
+             match File.open(\"{path}\") {{
+                 Ok(f) => {{
+                     let br = BufReader.new(f);
+                     for line in br.lines() {{
+                         match line {{
+                             Ok(s) => println(\"[\" + s + \"]\"),
+                             Err(_) => println(\"read err\"),
+                         }}
+                     }}
+                 }}
+                 Err(_) => println(\"open err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "[one]\n[two]\n[three]\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn test_bufreader_lines_empty_file_yields_nothing() {
+    // An empty file produces zero lines (the for-loop body never runs).
+    let tmp = std::env::temp_dir().join("karac_test_bufreader_lines_empty.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(&tmp, b"").expect("seed temp");
+    let src = format!(
+        "fn main() {{
+             match File.open(\"{path}\") {{
+                 Ok(f) => {{
+                     let br = BufReader.new(f);
+                     let mut count = 0;
+                     for line in br.lines() {{
+                         match line {{
+                             Ok(_) => {{ count = count + 1; }}
+                             Err(_) => {{}}
+                         }}
+                     }}
+                     println(\"count=\" + count.to_string());
+                 }}
+                 Err(_) => println(\"open err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "count=0\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
 // ── std.runtime introspection (Debugger Contract slice 5) ─────────────────────
 //
 // The tree-walk interpreter has its own par-block evaluation path and does

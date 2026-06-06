@@ -26,13 +26,31 @@
 // read), so they carry no effect. The read methods carry
 // `reads(FileSystem)`.
 //
-// Interpreter-only MVP. `lines()` (needs a `LinesIter[R]` type),
-// `fill_buf` / `consume` (low-level peek/advance), and the cancel-
-// safety `#[cancel_unsafe_until(...)]` annotation are deferred to
-// follow-on slices — see the `BufReader[R]` entry in
+// Interpreter-only MVP. `fill_buf` / `consume` (low-level peek/advance)
+// and the cancel-safety `#[cancel_unsafe_until(...)]` annotation are
+// deferred to follow-on slices — see the `BufReader[R]` entry in
 // `phase-8-stdlib-floor.md` for the v1 surface + deferral list.
+//
+// **`lines()`.** Returns a `LinesIter` that the `for` loop drains one line
+// at a time, yielding `Result[String, IoError]` per line (the line with its
+// trailing `\n` / `\r\n` stripped, matching Rust's `BufRead::lines`; EOF
+// terminates). `LinesIter`'s element type is registered programmatically
+// (`("LinesIter", "Item") -> Result[String, IoError]` in
+// `env_build.rs::register_compiler_intrinsic_env`) since the baked struct
+// carries no syntactic `Item` binding; the interpreter represents it as
+// `Value::LinesIter` (Arc-sharing the wrapped reader). `LinesIter` is
+// non-generic at v1: its element type is concrete and the wrapped reader
+// type is erased in the interpreter, so a `[R]` parameter would buy nothing
+// (and the resolved-method path doesn't yet substitute an impl-level `R`
+// from the receiver). It can gain a parameter additively when
+// effect-polymorphic readers (Stdin / network streams) land.
 
 struct BufReader[R] { }
+
+// Iterator over the lines of a `BufReader`, yielded by `.lines()`. Empty
+// body — the iteration state is the shared wrapped reader, held on the
+// `Value::LinesIter` interpreter variant.
+struct LinesIter { }
 
 impl[R] BufReader[R] {
     // Wrap `reader` with a default-capacity (8 KiB) internal buffer.
@@ -64,4 +82,13 @@ impl[R] BufReader[R] {
     // bytes; returns the count read (`0` = EOF).
     #[compiler_builtin]
     fn read(ref self, buf: mut Slice[u8]) -> Result[usize, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    // Iterate the reader line by line. The returned `LinesIter` is drained
+    // by a `for` loop, yielding `Result[String, IoError]` per line (trailing
+    // `\n` / `\r\n` stripped; EOF terminates). Carries `reads(FileSystem)` —
+    // the per-line reads happen during iteration, which has no method-call
+    // site of its own, so the effect is attributed here at the `lines()`
+    // call (see `try_eval_bufreader_method`).
+    #[compiler_builtin]
+    fn lines(ref self) -> LinesIter with reads(FileSystem) { LinesIter { } }
 }

@@ -7453,6 +7453,56 @@ fn test_pub_fn_with_reads_filesystem_declared_accepts_bufreader_methods() {
     );
 }
 
+#[test]
+fn test_pub_fn_calling_bufreader_lines_must_declare_reads_filesystem() {
+    // `lines()` carries `reads(FileSystem)` (the per-line reads happen during
+    // iteration; the effect is attributed at the `lines()` call), so a pub fn
+    // iterating it without declaring the effect must fail.
+    let result = effectcheck_full_pipeline(
+        "pub fn dump(br: ref BufReader[File]) {
+             for line in br.lines() {
+                 match line {
+                     Ok(_) => {}
+                     Err(_) => {}
+                 }
+             }
+         }",
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("reads(FileSystem)")),
+        "expected MissingEffectDeclaration for reads(FileSystem); got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_pub_fn_with_reads_filesystem_declared_accepts_bufreader_lines() {
+    let result = effectcheck_full_pipeline(
+        "pub fn dump(br: ref BufReader[File]) with reads(FileSystem) {
+             for line in br.lines() {
+                 match line {
+                     Ok(_) => {}
+                     Err(_) => {}
+                 }
+             }
+         }",
+    );
+    let real_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .collect();
+    assert!(
+        real_errors.is_empty(),
+        "expected clean effectcheck with reads(FileSystem) declared; got: {:?}",
+        real_errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
 // ── Refinement types (phase-9 step 3) ───────────────────────────
 //
 // `x as Refined` is a runtime predicate assertion that panics on

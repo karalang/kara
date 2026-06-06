@@ -766,6 +766,10 @@ impl<'a> EffectChecker<'a> {
                 "BufReader.read_line",
                 "BufReader.read_to_string",
                 "BufReader.read",
+                // `lines()` carries `reads(FileSystem)` too: the per-line
+                // reads happen during iteration (no method-call site of their
+                // own), so the effect is attributed at the `lines()` call.
+                "BufReader.lines",
             ] {
                 let mut set = EffectSet::new();
                 set.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span.clone()));

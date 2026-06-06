@@ -8588,6 +8588,47 @@ fn test_bufreader_read_line_wrong_arg_type_is_error() {
     );
 }
 
+#[test]
+fn test_bufreader_lines_returns_lines_iter() {
+    // br.lines() -> LinesIter[R]; binding it is enough to prove the method
+    // resolves and its return type is known.
+    typecheck_ok(
+        "fn driver() with reads(FileSystem) {
+             match File.open(\"x.txt\") {
+                 Ok(f) => {
+                     let br = BufReader.new(f);
+                     let it = br.lines();
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
+fn test_bufreader_lines_for_loop_binds_result_string() {
+    // `for line in br.lines()` binds `line: Result[String, IoError]` via the
+    // programmatic `("LinesIter", "Item")` mapping, so destructuring `Ok(s)`
+    // gives a String usable where a String is expected (here `println`), and
+    // matching `Err(_)` is exhaustive over `Result`.
+    typecheck_ok(
+        "fn driver() with reads(FileSystem) {
+             match File.open(\"x.txt\") {
+                 Ok(f) => {
+                     let br = BufReader.new(f);
+                     for line in br.lines() {
+                         match line {
+                             Ok(s) => { println(s); }
+                             Err(_) => {}
+                         }
+                     }
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
 // ── std.runtime introspection signatures (Debugger Contract slice 5) ─────────
 //
 // Three Kāra-callable APIs declared in `runtime/stdlib/runtime.kara`. The

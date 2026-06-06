@@ -568,6 +568,41 @@ impl<'a> super::Interpreter<'a> {
                         }
                         drained
                     }
+                    // `LinesIter[R]` (from `BufReader.lines()`) — drain the
+                    // shared reader one line at a time, yielding
+                    // `Result[String, IoError]` per line: `Ok(line)` with the
+                    // trailing `\n` / `\r\n` stripped (matching Rust's
+                    // `BufRead::lines`), `Err` once on a mid-stream read error
+                    // (then terminate), EOF terminates. Eager-materialized like
+                    // the other iterables above; the shared BufReader is left
+                    // at EOF afterward.
+                    Value::LinesIter(rc) => {
+                        use std::io::BufRead;
+                        let mut guard = rc.lock().unwrap();
+                        let mut drained = Vec::new();
+                        loop {
+                            let mut line = String::new();
+                            match guard.read_line(&mut line) {
+                                Ok(0) => break,
+                                Ok(_) => {
+                                    if line.ends_with('\n') {
+                                        line.pop();
+                                        if line.ends_with('\r') {
+                                            line.pop();
+                                        }
+                                    }
+                                    drained.push(super::helpers::io_ok(Value::String(line)));
+                                }
+                                Err(e) => {
+                                    drained.push(super::helpers::io_err_value(
+                                        super::helpers::io_error_from_std(&e),
+                                    ));
+                                    break;
+                                }
+                            }
+                        }
+                        drained
+                    }
                     _ => vec![iter_val],
                 };
                 for item in items {
