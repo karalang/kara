@@ -10404,3 +10404,241 @@ fn target_gate_check_provider_bound_web_resource_passes() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// ── Phase-10: WASM build path (`--target=wasm_wasi`) ────────────
+//
+// The build-path E2E needs three pieces of infrastructure beyond the
+// karac binary: an llvm-enabled build, the wasm runtime archive
+// (`libkarac_runtime_wasm.a` — see CLAUDE.md's three-archive recipe),
+// and a wasm linker + node for the WASI host. Each absence skips with
+// a stderr note rather than failing, mirroring the codegen E2E
+// harness's runtime-archive treatment.
+
+/// Fresh temp dir for one wasm-path test.
+fn wasm_test_dir(tag: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-wasm-{tag}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    tmp
+}
+
+/// Did this `karac build` invocation hit a missing-infrastructure wall
+/// rather than a real failure? Returns the skip reason if so.
+fn wasm_build_skip_reason(stderr: &str) -> Option<&'static str> {
+    if stderr.contains("requires the llvm feature") {
+        return Some("karac built without --features llvm");
+    }
+    if stderr.contains("libkarac_runtime_wasm.a not found") {
+        return Some("wasm runtime archive not built (see CLAUDE.md archive recipe)");
+    }
+    if stderr.contains("no wasm linker found") {
+        return Some("no wasm-ld / rust-lld available");
+    }
+    if stderr.contains("self-contained sysroot not found") {
+        return Some("rustup target wasm32-wasip1 not installed");
+    }
+    None
+}
+
+/// `--target=wasm_browser` and `--target=gpu` are recognized v1 names
+/// that are not buildable yet — both reject loudly instead of silently
+/// emitting a native binary under a cross-target flag.
+#[test]
+fn target_flag_unbuildable_v1_names_rejected() {
+    let tmp = wasm_test_dir("reject");
+    let path = tmp.join("p.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_browser"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("wasm_browser") && stderr.contains("not buildable yet"),
+        "expected the wasm_browser rejection, got: {stderr}",
+    );
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=gpu"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("gpu") && stderr.contains("not a standalone build target"),
+        "expected the gpu rejection, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Project-mode wasm builds (dist/wasm artifact layout) are the
+/// separate artifact-emission entry — `karac build --target=wasm_wasi`
+/// with no file argument rejects with the single-file pointer, and the
+/// check fires before any manifest is read (an empty dir suffices).
+#[test]
+fn target_flag_wasm_wasi_project_mode_rejected() {
+    let tmp = wasm_test_dir("proj");
+    let out = karac_bin()
+        .args(["build", "--target=wasm_wasi"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("single-file-only") && stderr.contains("karac build <file.kara>"),
+        "expected the project-mode wasm rejection, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// E0411 aborts a wasm build: a program whose `main` reaches a host
+/// resource `wasm_wasi` does not provide (browser-only `Display`) must
+/// fail at the effect gate with the targeted diagnostic — not reach the
+/// linker and die on an undefined symbol. Fires before codegen/link, so
+/// only the llvm-fallback skip applies.
+#[test]
+fn wasm_wasi_build_aborts_on_target_gate_violation() {
+    let tmp = wasm_test_dir("gate");
+    let path = tmp.join("gated.kara");
+    std::fs::write(
+        &path,
+        "import std.web.{Display};\n\n\
+         pub fn paint() with writes(Display) {\n    println(\"painting\");\n}\n\n\
+         fn main() {\n    paint();\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_wasi_build_aborts_on_target_gate_violation — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(!out.status.success(), "gate violation must abort: {stderr}");
+    assert!(
+        stderr.contains("E0411")
+            && stderr.contains("`wasm_wasi` does not provide resource 'Display'"),
+        "expected the E0411 target-gate abort, got: {stderr}",
+    );
+    assert!(
+        !tmp.join("gated.wasm").exists(),
+        "no artifact may be produced on a gate violation",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Full build-path E2E: compile a program exercising arithmetic,
+/// Vec/String runtime calls, and `#[target]` selection to a `.wasm`
+/// module, then run it under node's WASI preview-1 host and assert the
+/// output matches the native semantics. Skips gracefully when the wasm
+/// archive, a wasm linker, the wasi sysroot, or node are absent.
+#[test]
+fn wasm_wasi_build_and_run_e2e() {
+    let tmp = wasm_test_dir("e2e");
+    let path = tmp.join("hello_wasm.kara");
+    std::fs::write(
+        &path,
+        r#"
+#[target(wasm_wasi)]
+fn where_am_i() -> String {
+    return "wasm";
+}
+
+#[target(native)]
+fn where_am_i() -> String {
+    return "native";
+}
+
+fn fib(n: i64) -> i64 {
+    if n < 2 { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(40);
+    v.push(2);
+    let mut total = 0;
+    for x in v {
+        total += x;
+    }
+    println(total);
+    println(fib(15));
+    println(where_am_i());
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        .current_dir(&tmp)
+        // The dev-tier fallback must resolve the wasm archive — a
+        // native KARAC_RUNTIME override in the environment would be
+        // honored verbatim and linked into the wasm module.
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_wasi_build_and_run_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm build failed: {stderr}");
+    let wasm_path = tmp.join("hello_wasm.wasm");
+    assert!(
+        wasm_path.exists(),
+        "expected hello_wasm.wasm next to the build cwd",
+    );
+
+    // WASI preview-1 host: node's built-in `node:wasi` module.
+    let runner = tmp.join("run_wasi.mjs");
+    std::fs::write(
+        &runner,
+        "import { readFile } from 'node:fs/promises';\n\
+         import { WASI } from 'node:wasi';\n\
+         import { argv, exit } from 'node:process';\n\
+         const wasi = new WASI({ version: 'preview1', args: [], env: {} });\n\
+         const wasm = await WebAssembly.compile(await readFile(argv[2]));\n\
+         const instance = await WebAssembly.instantiate(wasm, wasi.getImportObject());\n\
+         exit(wasi.start(instance));\n",
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&runner)
+        .arg(&wasm_path)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_wasi_build_and_run_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "wasm module failed under node:wasi: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert_eq!(
+        node_stdout, "42\n610\nwasm\n",
+        "wasm output must match native semantics (and pick the \
+         #[target(wasm_wasi)] item); stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}

@@ -18,21 +18,64 @@
 //! references from active code with "not available on target X" instead
 //! of a bare undefined-name error.
 //!
-//! The current target is [`CURRENT_TARGET`] (`"native"`) until the
-//! `--target` cross-compile flag lands (separate phase-10 entry); both
+//! The current target defaults to [`CURRENT_TARGET`] (`"native"`); the
+//! `--target` flag (phase-10 WASM build path) swaps it process-wide via
+//! [`set_active_target`] before any pass runs. All consumers — both
 //! filter call sites (`cli::Pipeline::resolve` for single-file,
-//! `module::build_program_tree` for project mode) thread it from here so
-//! the flag only has to swap this one source of truth.
+//! `module::build_program_tree` for project mode), the resolver's
+//! tombstone diagnostics, and the effect checker's target gate — read
+//! [`active_target`], so this stays the single source of truth.
 
 use crate::ast::{Attribute, Expr, ExprKind, Item, Program};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The closed v1 target-name set. Order is the canonical listing used in
 /// diagnostics.
 pub const V1_TARGETS: &[&str] = &["native", "wasm_browser", "wasm_wasi", "gpu"];
 
-/// The compilation target every karac build produces today.
+/// The compilation target every karac build produces by default.
 pub const CURRENT_TARGET: &str = "native";
+
+/// Index into [`V1_TARGETS`] of the active compilation target. Index 0
+/// is `"native"` — the default when `--target` is absent. Stored as an
+/// index (not a string) so the getter can hand out `&'static str`
+/// without leaks or locks.
+static ACTIVE_TARGET_IDX: AtomicUsize = AtomicUsize::new(0);
+
+/// The compilation target for this process. Defaults to
+/// [`CURRENT_TARGET`]; `--target=<name>` swaps it once at CLI startup
+/// (before any pipeline pass runs).
+pub fn active_target() -> &'static str {
+    V1_TARGETS[ACTIVE_TARGET_IDX.load(Ordering::Relaxed)]
+}
+
+/// Select the active compilation target by v1 name. Returns `Err` with
+/// the closed-set listing for an unknown name — the CLI surfaces that
+/// verbatim. One target per process: the compiler builds one artifact
+/// per invocation (design.md § Cross-target Compilation — build-matrix
+/// orchestration is a CI concern, not a compiler concern).
+pub fn set_active_target(name: &str) -> Result<(), String> {
+    match V1_TARGETS.iter().position(|t| *t == name) {
+        Some(idx) => {
+            ACTIVE_TARGET_IDX.store(idx, Ordering::Relaxed);
+            Ok(())
+        }
+        None => Err(format!(
+            "unknown target '{}'. Valid targets: {}",
+            name,
+            V1_TARGETS.join(", ")
+        )),
+    }
+}
+
+/// Is `name` one of the closed v1 target names? The `--target` flag's
+/// value space is shared with rustc-style triples (manifest
+/// `[target.<triple>.*]` overlay selection); this predicate is how the
+/// CLI tells the two apart.
+pub fn is_v1_target_name(name: &str) -> bool {
+    V1_TARGETS.contains(&name)
+}
 
 /// Parsed form of one `#[target(...)]` attribute. Per the no-boolean-
 /// logic rule the list is either all positive or all negative — the

@@ -1364,7 +1364,7 @@ impl<'a> super::Resolver<'a> {
                             "'{}' is not available on target `{}` — it is gated to \
                              `#[target({})]`",
                             item.name,
-                            crate::target::CURRENT_TARGET,
+                            crate::target::active_target(),
                             spec,
                         ),
                         span: item.span.clone(),

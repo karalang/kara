@@ -43,6 +43,10 @@ pub mod scheduler;
 #[cfg(feature = "tls")]
 pub mod tls;
 pub mod tracing;
+// Heap unification with wasi-libc `malloc` — wasm archive only; see the
+// module doc for why cross-boundary frees require it.
+#[cfg(all(target_family = "wasm", target_os = "wasi"))]
+mod wasm_alloc;
 
 // LLJIT integration (phase-7 L560 W3, 2026-05-29): when this crate is
 // consumed as an rlib (test-binary `[dev-dependencies]` path under

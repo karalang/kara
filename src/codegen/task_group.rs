@@ -355,7 +355,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .expect("env_struct_ty has a static size");
         let malloc_fn = self
             .module
-            .get_function("malloc")
+            .get_function(crate::codegen::driver::c_malloc_symbol())
             .expect("malloc declared in Codegen::new");
         let heap_env_call = self
             .builder

@@ -139,7 +139,13 @@ impl CoroIntrinsics {
         let coro_resume = declare_fn(c"llvm.coro.resume", void_ty, &mut [ptr_ty]);
         let coro_done = declare_fn(c"llvm.coro.done", i1_ty, &mut [ptr_ty]);
         let coro_destroy = declare_fn(c"llvm.coro.destroy", void_ty, &mut [ptr_ty]);
-        let malloc = declare_fn(c"malloc", ptr_ty, &mut [i64_ty]);
+        // Target-dependent allocator symbol — wasm32 needs the runtime's
+        // 64-bit-size shim; see `driver::c_malloc_symbol`.
+        let malloc = declare_fn(
+            crate::codegen::driver::c_malloc_symbol_cstr(),
+            ptr_ty,
+            &mut [i64_ty],
+        );
         let free = declare_fn(c"free", void_ty, &mut [ptr_ty]);
 
         Self {

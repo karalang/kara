@@ -55,7 +55,7 @@ impl<'a> super::EffectChecker<'a> {
     /// Run the target gate for the current compilation target. Assumes
     /// `infer_effects` has settled.
     pub(crate) fn check_target_gate(&mut self) {
-        let target = crate::target::CURRENT_TARGET;
+        let target = crate::target::active_target();
 
         // Entry points: `main` today (native binaries). Library builds
         // and test entry points are follow-ons recorded in the tracker.

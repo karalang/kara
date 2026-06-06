@@ -2034,9 +2034,19 @@ impl<'ctx> Codegen<'ctx> {
         );
         let snprintf_fn = module.add_function("snprintf", snprintf_type, Some(Linkage::External));
 
-        // Declare malloc and free for RC heap allocation.
+        // Declare malloc and free for RC heap allocation. On wasm32 the
+        // libc `malloc` takes `size_t` = i32, and wasm traps signature
+        // mismatches at the call — so the wasm runtime archive exports a
+        // 64-bit-size shim (`__karac_malloc64`, see
+        // `runtime/src/wasm_alloc.rs`) and codegen declares THAT under the
+        // i64 signature every call site already passes. `free(ptr)` needs
+        // no shim: pointers lower to the right width per the datalayout.
         let malloc_type = ptr_type.fn_type(&[BasicMetadataTypeEnum::from(i64_type)], false);
-        let malloc_fn = module.add_function("malloc", malloc_type, Some(Linkage::External));
+        let malloc_fn = module.add_function(
+            crate::codegen::driver::c_malloc_symbol(),
+            malloc_type,
+            Some(Linkage::External),
+        );
         let free_type = context
             .void_type()
             .fn_type(&[BasicMetadataTypeEnum::from(ptr_type)], false);
@@ -4502,6 +4512,15 @@ impl<'ctx> Codegen<'ctx> {
         }
         self.finalize_hot_swap_table();
 
+        // Phase-10 WASM build path: wasi-libc's `crt1-command.o` enters at
+        // `_start → __main_void`; libc's own (weak, arg-gathering)
+        // `__main_void` chains to `__main_argc_argv`, a symbol clang mints
+        // when compiling C `main` — karac's entry is the literal `main`,
+        // so that chain would end in an undefined-symbol link error.
+        // Defining `__main_void` ourselves keeps libc's member from being
+        // extracted at all: the shim just tail-calls `main()`.
+        self.emit_wasm_entry_shim()?;
+
         // Level 2 crash diagnostics — Part 2: finalize DWARF debug info BEFORE
         // verify. The verifier validates debug metadata, and unresolved
         // temporaries / a missing finalize would make it reject the module.
@@ -4511,6 +4530,36 @@ impl<'ctx> Codegen<'ctx> {
         self.module
             .verify()
             .map_err(|e| format!("Module verification failed: {}", e))
+    }
+
+    /// `--target=wasm_wasi` entry-point shim: `i32 @__main_void()` that
+    /// calls `i32 @main()`. No-op on every other target, and when no
+    /// `main` exists in the module (library-shaped programs / REPL cells
+    /// — `main_symbol_override` renames the entry, and a wasm REPL JIT
+    /// doesn't exist, so the literal-`main` lookup is the right key).
+    fn emit_wasm_entry_shim(&mut self) -> Result<(), String> {
+        if crate::target::active_target() != "wasm_wasi" {
+            return Ok(());
+        }
+        let Some(main_fn) = self.module.get_function("main") else {
+            return Ok(());
+        };
+        let i32_type = self.context.i32_type();
+        let shim = self
+            .module
+            .add_function("__main_void", i32_type.fn_type(&[], false), None);
+        let entry = self.context.append_basic_block(shim, "entry");
+        self.builder.position_at_end(entry);
+        let ret = self
+            .builder
+            .build_call(main_fn, &[], "main_ret")
+            .map_err(|e| format!("wasm entry shim: {e}"))?
+            .try_as_basic_value()
+            .unwrap_basic();
+        self.builder
+            .build_return(Some(&ret))
+            .map_err(|e| format!("wasm entry shim: {e}"))?;
+        Ok(())
     }
 
     /// Bring one baked stdlib `Program`'s surface into codegen — struct +

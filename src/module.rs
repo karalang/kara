@@ -445,7 +445,7 @@ pub fn build_program_tree_with(
         }
         target_tombstones.extend(crate::target::filter_inactive_items_in(
             &mut m.items,
-            crate::target::CURRENT_TARGET,
+            crate::target::active_target(),
         ));
     }
 

@@ -237,16 +237,21 @@ OPTIONS:
                             `./vendor/` from the current resolution.
                             Implies --no-proxy (the redundant note is
                             suppressed). See the OFFLINE section below.
-    --target=<triple>       Active target triple for the build. Selects
-                            which `[target.<triple>.*]` overlay merges
-                            onto the manifest (dependencies, dev-
+    --target=<name|triple>  Compilation target. A v1 target NAME
+                            (native, wasm_wasi; wasm_browser and gpu
+                            are recognized but not yet buildable)
+                            selects the cross-compile target:
+                            `--target=wasm_wasi` emits `<stem>.wasm`,
+                            a WASI preview-1 command module
+                            (single-file mode only today). Any other
+                            value is a target TRIPLE selecting which
+                            `[target.<triple>.*]` overlay merges onto
+                            the manifest (dependencies, dev-
                             dependencies, profile). Precedence:
                             --target=<triple> > [build].target from the
                             manifest > host triple. Accepts the space-
                             separated form `--target <triple>` too.
-                            Single-file mode accepts the flag for shape
-                            compatibility but it has no manifest to
-                            apply against. See the TARGETS section.
+                            See the TARGETS section.
     --monomorphization-budget=warn:N,error:M
                             Cap per-generic instantiations. After typecheck
                             (before codegen), any generic instantiated >= N
@@ -259,8 +264,17 @@ OPTIONS:
     -h, --help              Print this message
 
 TARGETS:
-    `--target=<triple>` selects the active target triple for overlay
-    merge. Any `[target.\"<triple>\".dependencies]`,
+    v1 target names (`native`, `wasm_browser`, `wasm_wasi`, `gpu`)
+    select the COMPILATION target: `#[target(...)]`-gated items,
+    the per-target provided-resource effect gate (E0411), codegen,
+    and the link step all key on it. `--target=wasm_wasi` builds a
+    headless WASM module (`<stem>.wasm`, runnable under wasmtime /
+    node:wasi); it requires the wasm runtime archive
+    (`libkarac_runtime_wasm.a`) and a wasm linker (wasm-ld or
+    rust-lld; override with KARAC_WASM_LD).
+
+    Any other `--target=<triple>` value selects the active target
+    triple for overlay merge. Any `[target.\"<triple>\".dependencies]`,
     `[target.\"<triple>\".dev-dependencies]`, and
     `[target.\"<triple>\".profile]` table that matches the active
     triple is merged into the corresponding base table before dep

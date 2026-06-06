@@ -750,7 +750,7 @@ impl Pipeline {
         // target X" diagnostic at reference sites.
         let target_tombstones = crate::target::filter_inactive_items(
             &mut self.parsed.program,
-            crate::target::CURRENT_TARGET,
+            crate::target::active_target(),
         );
         crate::desugar_program(&mut self.parsed.program);
         // Single-file mode infers the test-file flag from the filename
@@ -4186,6 +4186,50 @@ fn cmd_check_profiles(
     }
 }
 
+/// Classify a `--target` value and activate it when it names a v1
+/// compilation target (phase-10 WASM build path).
+///
+/// - v1 names: `native` and `wasm_wasi` are buildable today — the name is
+///   installed as the process-wide active target (see
+///   `target::set_active_target`) so `#[target(...)]` absence semantics,
+///   tombstone diagnostics, and the E0411 target gate all key on it.
+///   `wasm_browser` (needs the bindings/JS-glue follow-up) and `gpu`
+///   (kernels are dispatched from a host program, not standalone built)
+///   are rejected loudly rather than silently producing a native binary.
+/// - Anything else is a rustc-style triple — project mode's manifest
+///   `[target.<triple>.*]` overlay selector — and leaves the active
+///   target at `native`.
+///
+/// Returns the active v1 target name for the build.
+fn resolve_build_target(target: Option<&str>) -> &'static str {
+    match target {
+        Some(name) if crate::target::is_v1_target_name(name) => match name {
+            "wasm_browser" => {
+                eprintln!(
+                    "error: `--target=wasm_browser` is not buildable yet — the browser \
+                     bindings/JS-glue path is a phase-10 follow-up. `--target=wasm_wasi` \
+                     builds a headless WASM module today."
+                );
+                process::exit(1);
+            }
+            "gpu" => {
+                eprintln!(
+                    "error: `--target=gpu` is not a standalone build target — GPU kernels \
+                     are consumed by a host program via gpu.dispatch (design.md § Target \
+                     Build Artifacts)."
+                );
+                process::exit(1);
+            }
+            buildable => {
+                crate::target::set_active_target(buildable)
+                    .expect("v1 target name membership checked above");
+                crate::target::active_target()
+            }
+        },
+        _ => crate::target::active_target(),
+    }
+}
+
 // CLI dispatch helpers naturally land more flag-shaped arguments
 // than the clippy default; factoring them into a struct here would
 // just move the flag list rather than tighten it.
@@ -4205,14 +4249,22 @@ fn cmd_build(
 ) {
     // Single-file mode runs no dep resolution and reaches no network surface,
     // so `--offline` is silently accepted for ergonomic CLI consistency with
-    // project mode (operators script both via the same flag set). Likewise
-    // `--target` has no manifest to apply against and is accepted-but-inert.
+    // project mode (operators script both via the same flag set).
     let _ = offline;
-    let _ = target;
+    // Phase-10 WASM build path: a `--target` value from the closed v1 name
+    // set (`native`, `wasm_browser`, `wasm_wasi`, `gpu`) selects the
+    // compilation target — it swaps the process-wide active target that
+    // `filter_inactive_items` (`#[target(...)]` absence semantics), the
+    // resolver's tombstone diagnostics, and the effect checker's E0411
+    // target gate all read. Any other value is a rustc-style triple, which
+    // only project mode consumes (manifest `[target.<triple>.*]` overlay
+    // merge) and stays accepted-but-inert in single-file mode.
+    let build_target = resolve_build_target(target);
     emit_no_proxy_note(no_proxy);
     let _ = no_proxy;
     #[cfg(feature = "llvm")]
     {
+        let is_wasm = build_target == "wasm_wasi";
         let source = read_source(filename);
         let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
         pipeline.resolve();
@@ -4293,13 +4345,46 @@ fn cmd_build(
             enforce_monomorphization_budget(&pipeline, &monomorphization_budget, output);
         }
 
+        // Phase-10: effect findings stay non-fatal for native builds (the
+        // long-standing build/check asymmetry, documented at the `karac
+        // run`-vs-effects tracker entry), but a target-gate violation
+        // (E0411) on a wasm build is different in kind — it proves the
+        // program reaches a host resource this target cannot provide, so
+        // letting it through just converts a precise diagnostic into an
+        // undefined-symbol linker error (or silent misbehavior). Abort
+        // with the real message instead.
+        if is_wasm {
+            if let Some(ref effects) = pipeline.effects {
+                let gate_errors: Vec<_> = effects
+                    .errors
+                    .iter()
+                    .filter(|e| e.kind == EffectErrorKind::TargetGateViolation)
+                    .collect();
+                if !gate_errors.is_empty() {
+                    for e in &gate_errors {
+                        eprintln!(
+                            "error[E0411]: {}:{}:{}: {}",
+                            filename, e.span.line, e.span.column, e.message
+                        );
+                    }
+                    process::exit(1);
+                }
+            }
+        }
+
         // Derive output executable name from the source filename.
         let exe_name = std::path::Path::new(filename)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("output");
         let obj_path = format!("/tmp/karac_{exe_name}.o");
-        let exe_path = if cfg!(windows) {
+        let exe_path = if is_wasm {
+            // WASI command module — the artifact is loaded by a wasm
+            // host, never exec'd directly, so it always carries the
+            // extension. (`dist/wasm/<pkg>.wasm` layout is project
+            // mode's concern — the artifact-emission tracker entry.)
+            format!("{exe_name}.wasm")
+        } else if cfg!(windows) {
             format!("{exe_name}.exe")
         } else {
             exe_name.to_string()
@@ -4309,7 +4394,16 @@ fn cmd_build(
             &pipeline.parsed.program,
             &obj_path,
             pipeline.ownership.as_ref(),
-            pipeline.concurrency.as_ref(),
+            // WASM concurrency lowering (sequential default / wasm-threads)
+            // is its own phase-10 entry — until it lands, suppress the
+            // auto-par groups so wasm modules lower sequentially instead of
+            // emitting spawn-site calls into a runtime archive that has no
+            // scheduler.
+            if is_wasm {
+                None
+            } else {
+                pipeline.concurrency.as_ref()
+            },
             Some(filename),
             Some(&source),
             enable_hot_swap,
@@ -4337,6 +4431,7 @@ fn cmd_build(
     }
     #[cfg(not(feature = "llvm"))]
     {
+        let _ = build_target;
         let _ = enable_hot_swap;
         // `--release` only affects codegen (contract stripping), which the
         // non-llvm fallback doesn't reach — accepted-but-inert, consistent
@@ -4619,6 +4714,21 @@ fn cmd_build_project(
     target: Option<&str>,
     release: bool,
 ) {
+    // Phase-10: v1 target names are classified the same way as in
+    // single-file mode, but the wasm project build (super-program codegen
+    // → `dist/wasm/<pkg>.wasm` artifact layout) is the separate "WASM raw
+    // artifact emission" tracker entry — reject loudly rather than emit a
+    // native binary under a wasm flag. Triples pass through to the
+    // manifest `[target.<triple>.*]` overlay merge below unchanged.
+    let build_target = resolve_build_target(target);
+    if build_target == "wasm_wasi" {
+        eprintln!(
+            "error: `--target=wasm_wasi` is single-file-only today — project-mode WASM \
+             builds (dist/wasm/<pkg>.wasm) are a phase-10 follow-up. Build the entry \
+             file directly: karac build <file.kara> --target=wasm_wasi"
+        );
+        process::exit(1);
+    }
     // --offline implies --no-proxy at the contract level (vendor-only walk
     // can't talk to the proxy). Suppress the redundant no-proxy note when
     // both are set so the offline operator sees one clean status line.

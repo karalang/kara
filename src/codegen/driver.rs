@@ -26,7 +26,198 @@ use inkwell::OptimizationLevel;
 ///
 /// See design.md § Runtime Distribution.
 pub fn link_executable(obj_path: &str, exe_path: &str) -> Result<(), String> {
+    if crate::target::active_target() == "wasm_wasi" {
+        return link_wasm_executable(obj_path, exe_path);
+    }
     link_executable_impl(obj_path, exe_path, &[])
+}
+
+/// Link a wasm32 object into a WASI command module (phase-10 WASM build
+/// path, `--target=wasm_wasi`).
+///
+/// Inputs, in link order:
+///   1. `crt1-command.o` — wasi-libc's `_start` (enters at the
+///      `__main_void` shim codegen emitted; see `emit_wasm_entry_shim`).
+///   2. The karac-emitted object.
+///   3. `libkarac_runtime_wasm.a` — the runtime built
+///      `--no-default-features --target wasm32-wasip1` (see
+///      [`resolve_wasm_runtime_path`]).
+///   4. `libc.a` — wasi-libc, from the Rust toolchain's self-contained
+///      sysroot for `wasm32-wasip1` (karac already requires the Rust
+///      toolchain to build the runtime archive, so reusing its sysroot
+///      adds no new dependency; no wasi-sdk install needed).
+///
+/// `wasm-ld` garbage-collects unreferenced sections by default, so the
+/// runtime archive's unused subsystems cost nothing — same effect as
+/// the native path's `-dead_strip`. Stack: 1 MiB (rustc's wasm32
+/// default; wasm-ld's own 64 KiB default is tight for array-heavy Kāra
+/// frames), placed before globals (`--stack-first`) so overflow traps
+/// instead of silently corrupting the data section.
+fn link_wasm_executable(obj_path: &str, exe_path: &str) -> Result<(), String> {
+    let (linker, flavor_args) = resolve_wasm_linker()?;
+    let sysroot = resolve_wasi_self_contained_dir()?;
+    let crt1 = sysroot.join("crt1-command.o");
+    let libc = sysroot.join("libc.a");
+    for (what, p) in [("crt1-command.o", &crt1), ("libc.a", &libc)] {
+        if !p.exists() {
+            return Err(format!(
+                "{} not found at {} — reinstall the wasm32-wasip1 target \
+                 (`rustup target add wasm32-wasip1`)",
+                what,
+                p.display()
+            ));
+        }
+    }
+    let runtime_path = resolve_wasm_runtime_path()?;
+
+    let mut cmd = std::process::Command::new(&linker);
+    cmd.args(&flavor_args);
+    cmd.arg(&crt1);
+    cmd.arg(obj_path);
+    cmd.arg(&runtime_path);
+    cmd.arg(&libc);
+    cmd.args(["-z", "stack-size=1048576", "--stack-first", "-o", exe_path]);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to invoke {}: {}", linker.display(), e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "wasm-ld failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
+/// Locate a wasm-capable linker. Resolution order:
+///   1. `KARAC_WASM_LD` env var — honored verbatim (mirror of
+///      `KARAC_RUNTIME`'s contract).
+///   2. `wasm-ld` on `PATH`.
+///   3. Homebrew LLVM's `wasm-ld` (macOS: Apple's toolchain ships no
+///      wasm backend driver, brew's llvm/llvm@18 do).
+///   4. The Rust toolchain's `rust-lld` with `-flavor wasm` — present in
+///      every rustup install, so the karac-runtime build prerequisite
+///      already guarantees a working fallback.
+///
+/// Returns the command plus any prefix args the flavor needs.
+fn resolve_wasm_linker() -> Result<(std::path::PathBuf, Vec<String>), String> {
+    if let Some(p) = std::env::var_os("KARAC_WASM_LD") {
+        return Ok((std::path::PathBuf::from(p), vec![]));
+    }
+    // PATH probe: `wasm-ld --version` exiting zero is the existence check.
+    let on_path = std::process::Command::new("wasm-ld")
+        .arg("--version")
+        .output();
+    if matches!(on_path, Ok(ref o) if o.status.success()) {
+        return Ok((std::path::PathBuf::from("wasm-ld"), vec![]));
+    }
+    for brew in [
+        "/opt/homebrew/opt/llvm/bin/wasm-ld",
+        "/opt/homebrew/opt/llvm@18/bin/wasm-ld",
+        "/usr/local/opt/llvm/bin/wasm-ld",
+        "/usr/local/opt/llvm@18/bin/wasm-ld",
+    ] {
+        if std::path::Path::new(brew).exists() {
+            return Ok((std::path::PathBuf::from(brew), vec![]));
+        }
+    }
+    // rust-lld lives under <sysroot>/lib/rustlib/<host>/bin/.
+    let sysroot = rustc_print(&["--print", "sysroot"])?;
+    let host = rustc_host_triple()?;
+    let rust_lld = std::path::Path::new(sysroot.trim())
+        .join("lib/rustlib")
+        .join(host.trim())
+        .join("bin/rust-lld");
+    if rust_lld.exists() {
+        return Ok((rust_lld, vec!["-flavor".to_string(), "wasm".to_string()]));
+    }
+    Err(
+        "no wasm linker found: set KARAC_WASM_LD, or install one of wasm-ld (PATH / \
+         homebrew llvm) — rust-lld via rustup also works"
+            .to_string(),
+    )
+}
+
+/// The Rust toolchain's self-contained wasi sysroot for `wasm32-wasip1`
+/// (`<target-libdir>/self-contained` — holds `crt1-command.o` and
+/// wasi-libc's `libc.a`).
+fn resolve_wasi_self_contained_dir() -> Result<std::path::PathBuf, String> {
+    let libdir = rustc_print(&["--print", "target-libdir", "--target", "wasm32-wasip1"])?;
+    let dir = std::path::Path::new(libdir.trim()).join("self-contained");
+    if !dir.is_dir() {
+        return Err(format!(
+            "wasm32-wasip1 self-contained sysroot not found at {} — install it with \
+             `rustup target add wasm32-wasip1`",
+            dir.display()
+        ));
+    }
+    Ok(dir)
+}
+
+fn rustc_print(args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("rustc")
+        .args(args)
+        .output()
+        .map_err(|e| format!("failed to invoke rustc {}: {}", args.join(" "), e))?;
+    if !out.status.success() {
+        return Err(format!(
+            "rustc {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn rustc_host_triple() -> Result<String, String> {
+    let verbose = rustc_print(&["-vV"])?;
+    verbose
+        .lines()
+        .find_map(|l| l.strip_prefix("host: "))
+        .map(|s| s.to_string())
+        .ok_or_else(|| "rustc -vV printed no host line".to_string())
+}
+
+/// Resolve the wasm runtime archive. Mirrors [`resolve_runtime_path`]'s
+/// tiers with the `_wasm` artifact name, plus the cargo target-dir
+/// location as a dev convenience (where the documented build command
+/// leaves it before the `cp` step):
+///   1. `KARAC_RUNTIME` — verbatim, same contract as native.
+///   2. Installed: `<karac-bin-dir>/../lib/libkarac_runtime_wasm.a`.
+///   3. Dev: `<workspace>/target/release/libkarac_runtime_wasm.a`.
+///   4. Dev: `<workspace>/target/wasm32-wasip1/release/libkarac_runtime.a`.
+fn resolve_wasm_runtime_path() -> Result<String, String> {
+    if let Ok(p) = std::env::var("KARAC_RUNTIME") {
+        return Ok(p);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(bin_dir) = exe.parent() {
+            let installed = bin_dir.join("../lib/libkarac_runtime_wasm.a");
+            if installed.exists() {
+                return Ok(installed.to_string_lossy().into_owned());
+            }
+        }
+    }
+    let dev_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for rel in [
+        "target/release/libkarac_runtime_wasm.a",
+        "target/wasm32-wasip1/release/libkarac_runtime.a",
+    ] {
+        let p = dev_root.join(rel);
+        if p.exists() {
+            return Ok(p.to_string_lossy().into_owned());
+        }
+    }
+    Err(
+        "libkarac_runtime_wasm.a not found; set KARAC_RUNTIME or build it: \
+         `cargo rustc -p karac-runtime --release --target wasm32-wasip1 \
+         --no-default-features --crate-type staticlib` then copy \
+         target/wasm32-wasip1/release/libkarac_runtime.a to \
+         target/release/libkarac_runtime_wasm.a (see CLAUDE.md / design.md § \
+         Runtime Distribution)"
+            .to_string(),
+    )
 }
 
 /// Link like [`link_executable`], but prepend extra flags to the `cc` invocation
@@ -269,11 +460,73 @@ pub(super) fn resolve_runtime_path(prefer_min: bool) -> Result<String, String> {
     }
 
     Err(
-        "libkarac_runtime.a not found; set KARAC_RUNTIME or build the runtime crate (`cargo rustc -p karac-runtime --release --crate-type staticlib` — NOT plain `cargo build`, which co-emits the rlib and defeats the staticlib's dead-strip; see runtime/Cargo.toml). For the lean compute-only archive also build `--no-default-features` and install it as `libkarac_runtime_min.a` alongside.".to_string(),
+        "libkarac_runtime.a not found; set KARAC_RUNTIME or build the runtime crate (`cargo rustc -p karac-runtime --release --crate-type staticlib` — NOT plain `cargo build`, which co-emits the rlib and defeats the staticlib's dead-strip; see runtime/Cargo.toml). For the lean compute-only archive also build `--no-default-features --features net` and install it as `libkarac_runtime_min.a` alongside.".to_string(),
     )
 }
 
+/// The C-allocator symbol codegen declares for RC/heap allocation, by
+/// target. Native: libc `malloc` (size arg is i64 = size_t on every
+/// 64-bit native target). `wasm_wasi`: `__karac_malloc64`, the wasm
+/// runtime's 64-bit-size shim over wasi-libc `malloc` — wasm32's
+/// `size_t` is i32 and wasm traps on signature-mismatched calls, so
+/// declaring libc `malloc` with the i64 signature karac IR uses would
+/// fault at the first allocation (`RuntimeError: unreachable,
+/// signature_mismatch:malloc`). See `runtime/src/wasm_alloc.rs`.
+pub(super) fn c_malloc_symbol() -> &'static str {
+    match crate::target::active_target() {
+        "wasm_wasi" => "__karac_malloc64",
+        _ => "malloc",
+    }
+}
+
+/// CStr form of [`c_malloc_symbol`] for the llvm-sys raw-FFI declare
+/// path (`coro.rs`).
+pub(super) fn c_malloc_symbol_cstr() -> &'static std::ffi::CStr {
+    match crate::target::active_target() {
+        "wasm_wasi" => c"__karac_malloc64",
+        _ => c"malloc",
+    }
+}
+
+/// Dispatch on the active compilation target (phase-10 `--target`).
+/// `Codegen::new` routes the module's triple + datalayout through this,
+/// so swapping the target machine here re-points the whole emission
+/// path — datalayout included, which `llvm.coro.size` folds against
+/// (the eba48194 lesson: an unset/wrong layout under-allocates coro
+/// frames).
 pub(super) fn create_target_machine() -> Result<TargetMachine, String> {
+    match crate::target::active_target() {
+        "wasm_wasi" => create_wasm_target_machine(),
+        _ => create_native_target_machine(),
+    }
+}
+
+/// Target machine for `--target=wasm_wasi`: wasm32 with the WASI
+/// preview-1 OS tag — matches rustc's `wasm32-wasip1` llvm-target and
+/// the triple the runtime archive (`libkarac_runtime_wasm.a`) is built
+/// for. CPU baseline `generic` (MVP wasm — SIMD-128 lowering is the
+/// separate phase-10 entry). Static reloc: `wasm-ld` links a
+/// non-relocatable module; PIC is only for shared-library wasm.
+fn create_wasm_target_machine() -> Result<TargetMachine, String> {
+    Target::initialize_webassembly(&InitializationConfig::default());
+
+    let triple = inkwell::targets::TargetTriple::create("wasm32-wasip1");
+    let target =
+        Target::from_triple(&triple).map_err(|e| format!("Failed to get wasm32 target: {}", e))?;
+
+    target
+        .create_target_machine(
+            &triple,
+            "generic",
+            "",
+            backend_optimization_level(),
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .ok_or_else(|| "Failed to create wasm32 target machine".to_string())
+}
+
+fn create_native_target_machine() -> Result<TargetMachine, String> {
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| format!("Failed to initialize native target: {}", e))?;
 
