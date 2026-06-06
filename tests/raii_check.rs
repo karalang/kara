@@ -846,3 +846,152 @@ fn user_annotated_type_participates() {
     assert_eq!(sv.soiling_method, "put");
     assert_eq!(sv.clear_method_name, "commit");
 }
+
+// ── Slice 3 — branch-precise flow merging ───────────────────────────
+//
+// These pin the soundness/precision the merge buys over the prior
+// linear single-state walk. Each uses the `Tx` shape from
+// `user_annotated_type_participates`: `put` soils, `commit` clears,
+// `fetch()` is the yield point.
+
+const TX_PREAMBLE: &str = "effect resource Network;
+     pub fn fetch() with sends(Network) receives(Network) {}
+     struct Tx { }
+     impl Tx {
+         #[cancel_unsafe_until(method = \"commit\")]
+         fn put(ref self, k: String, v: String) { }
+         fn commit(ref self) { }
+     }\n";
+
+#[test]
+fn branch_soil_in_one_arm_clear_in_other_then_yield_rejected() {
+    // The false-negative the linear walk had: then-arm soils, else-arm
+    // clears the SAME threaded state, so the post-`if` state read Clean
+    // and the yield was wrongly accepted. With per-arm merge the soil on
+    // the `c == true` path survives → rejected.
+    let src = format!(
+        "{TX_PREAMBLE}
+         fn driver(tx: Tx, c: bool) {{
+             if c {{ tx.put(\"a\", \"b\"); }} else {{ tx.commit(); }}
+             fetch();
+         }}"
+    );
+    let (_p, _t, errors) = run_raii_check(&src);
+    assert_eq!(
+        errors.len(),
+        1,
+        "soil on one arm must survive the merge and be caught at the yield: {:?}",
+        errors,
+    );
+    assert_eq!(errors[0].binding_name, "tx");
+}
+
+#[test]
+fn branch_soil_and_yield_on_disjoint_arms_accepted() {
+    // The false-positive the linear walk had: the then-arm's soil leaked
+    // into the else-arm's state, so the else-arm's yield was wrongly
+    // flagged. The soil and the yield are on mutually-exclusive paths →
+    // accepted.
+    let src = format!(
+        "{TX_PREAMBLE}
+         fn driver(tx: Tx, c: bool) {{
+             if c {{ tx.put(\"a\", \"b\"); }} else {{ fetch(); }}
+         }}"
+    );
+    let (_p, _t, errors) = run_raii_check(&src);
+    assert!(
+        errors.is_empty(),
+        "soil and yield on disjoint arms must not error: {:?}",
+        errors,
+    );
+}
+
+#[test]
+fn branch_both_arms_clear_after_soil_accepted() {
+    // Pre-`if` soil, both arms clear → merge is Clean → yield accepted.
+    // Locks that the merge doesn't spuriously retain a soil both arms drop.
+    let src = format!(
+        "{TX_PREAMBLE}
+         fn driver(tx: Tx, c: bool) {{
+             tx.put(\"a\", \"b\");
+             if c {{ tx.commit(); }} else {{ tx.commit(); }}
+             fetch();
+         }}"
+    );
+    let (_p, _t, errors) = run_raii_check(&src);
+    assert!(
+        errors.is_empty(),
+        "both arms clearing the soil must accept the later yield: {:?}",
+        errors,
+    );
+}
+
+#[test]
+fn match_soil_in_one_arm_then_yield_rejected() {
+    // Match-arm analogue of the if/else false-negative: one arm soils,
+    // another clears; the union retains the soil → yield rejected.
+    let src = format!(
+        "{TX_PREAMBLE}
+         fn driver(tx: Tx, k: i64) {{
+             match k {{
+                 0 => {{ tx.put(\"a\", \"b\"); }}
+                 _ => {{ tx.commit(); }}
+             }}
+             fetch();
+         }}"
+    );
+    let (_p, _t, errors) = run_raii_check(&src);
+    assert_eq!(
+        errors.len(),
+        1,
+        "a soil on any match arm must survive the union and be caught: {:?}",
+        errors,
+    );
+    assert_eq!(errors[0].binding_name, "tx");
+}
+
+#[test]
+fn loop_carried_soil_across_yield_rejected() {
+    // The loop fixpoint: iteration N soils after the yield; iteration N+1
+    // reaches the body-top yield while still soiled. The single-pass walk
+    // missed this (it only saw the first iteration's pre-yield Clean state).
+    let src = format!(
+        "{TX_PREAMBLE}
+         fn driver(tx: Tx, n: i64) {{
+             while n > 0 {{
+                 fetch();
+                 tx.put(\"a\", \"b\");
+             }}
+         }}"
+    );
+    let (_p, _t, errors) = run_raii_check(&src);
+    assert_eq!(
+        errors.len(),
+        1,
+        "a soil carried across a loop iteration must be caught at the body-top yield: {:?}",
+        errors,
+    );
+    assert_eq!(errors[0].binding_name, "tx");
+}
+
+#[test]
+fn loop_clear_at_body_top_accepted() {
+    // The fixpoint must not over-report: a carried soil that the body
+    // top unconditionally clears before the yield is sound to accept.
+    let src = format!(
+        "{TX_PREAMBLE}
+         fn driver(tx: Tx, n: i64) {{
+             while n > 0 {{
+                 tx.commit();
+                 fetch();
+                 tx.put(\"a\", \"b\");
+             }}
+         }}"
+    );
+    let (_p, _t, errors) = run_raii_check(&src);
+    assert!(
+        errors.is_empty(),
+        "clearing the carried soil at the body top must accept the yield: {:?}",
+        errors,
+    );
+}

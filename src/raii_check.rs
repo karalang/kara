@@ -47,16 +47,22 @@
 //! [`StateViolation`] payload describing which method soiled and what
 //! clear method to call before the yield.
 //!
-//! v1 implementation is linear forward flow with no branch merging —
-//! every soiling call met in source-traversal order soils, every
-//! clearing call clears, irrespective of whether the call was inside
-//! an `if` / `match` arm / loop body. This biases toward false
-//! positives over false negatives (a soil in any reachable branch
-//! propagates to the yield, even if the runtime path that would have
-//! reached the yield also cleared). Precise branch merging is a
-//! follow-on; the v1 surface is enough to catch the design.md "File
-//! before fsync" pattern and to enable BufReader to plug in by
-//! annotating its buffer-soiling read methods.
+//! ## Slice 3 — branch-precise flow merging
+//!
+//! The flow is **branch-precise**: each `if` / `if let` arm and each
+//! `match` arm is walked from a clone of the pre-branch state, and the
+//! post-branch state is the may-soiled union across arms (a binding is
+//! Soiled-after iff it is Soiled on *some* arm — see [`merge_states`]).
+//! This is sound where the prior linear single-state walk was not:
+//! `if c { f.write(); } else { f.flush(); } yield` is now correctly
+//! **rejected** (the `c == true` path holds a soiled `File` across the
+//! yield), and mutually-exclusive shapes like `if c { f.write(); } else {
+//! yield; }` are correctly **accepted** (the soil and the yield are on
+//! disjoint paths). Loops run a bounded 2-pass fixpoint
+//! ([`walk_loop_body`]) so a soil carried across iterations is observed at
+//! a body-top yield. Remaining imprecision biases toward false positives
+//! (the sound direction): a per-iteration loop condition is walked once,
+//! and a `break`-mid-body exit state is approximated.
 //!
 //! ## What this module does NOT do (yet)
 //!
@@ -65,12 +71,11 @@
 //!   infrastructure shipped here is type-agnostic (any
 //!   `#[cancel_unsafe_until(method = ...)]` annotated method
 //!   participates), but the stdlib types themselves don't exist yet.
-//!   Tracker: phase 6 line 155 slice 3 (BufReader sub-slice).
-//! - Branch-precise flow analysis — see the "v1 implementation" note
-//!   above; `if c { f.flush(); } else { f.flush(); } yield` correctly
-//!   accepts (both branches clear) but mutually-exclusive shapes like
-//!   `if c { f.write(); } else { f.flush(); } yield` may miss the
-//!   soil in the then-branch.
+//!   Tracker: phase 6 line 155 slice 3b (BufReader sub-slice).
+//! - Guard-soil fall-through — a soiling side effect inside a `match`
+//!   arm guard that then *fails* its match (falling through to a later
+//!   arm) is not threaded into the later arm's entry state. Exotic; left
+//!   to a future slice.
 //! - Soiling via methods on object subexpressions — only
 //!   `Identifier(name).M(...)` and `self.M(...)` are tracked; calls
 //!   through field access (`record.handle.write(...)`), index
@@ -673,6 +678,65 @@ impl StateFlowWalker<'_> {
         }
     }
 
+    /// May-soiled union of two post-branch state maps: a binding is Soiled
+    /// in the result iff it is Soiled in EITHER input. When both arms soil
+    /// the same binding, `a`'s soil metadata (method / span / clear name)
+    /// wins — `emit_for_soiled` dedups per (binding, fn), so the choice is
+    /// immaterial to the diagnostic. Absent ≡ Clean, so a binding Soiled in
+    /// one arm and untouched in the other ends up Soiled (the soiling path
+    /// survives the merge). This is what makes branch handling sound: the
+    /// prior linear walk threaded one mutable map through both arms, so a
+    /// clear in one arm masked a soil in the sibling (false negative) and a
+    /// soil leaked into the sibling's yield checks (false positive).
+    fn merge_states(
+        a: std::collections::HashMap<String, BindingState>,
+        b: std::collections::HashMap<String, BindingState>,
+    ) -> std::collections::HashMap<String, BindingState> {
+        let mut out = a;
+        for (name, sb) in b {
+            if matches!(out.get(&name), Some(BindingState::Soiled { .. })) {
+                continue; // `a` already soils it — keep a's metadata
+            }
+            if matches!(sb, BindingState::Soiled { .. }) {
+                out.insert(name, sb);
+            }
+        }
+        out
+    }
+
+    fn walk_body_opt_pattern(&mut self, pattern: Option<&Pattern>, body: &Block) {
+        match pattern {
+            Some(p) => self.walk_block_with_pattern(p, body),
+            None => self.walk_block(body),
+        }
+    }
+
+    /// Walk a loop body with a bounded 2-pass fixpoint so a soil carried
+    /// across iterations is observed at body-top yields and after the loop.
+    /// Pass 1 from the entry state is the first-iteration view and discovers
+    /// body-end soils; fold those into the loop-head state (`head = entry ⊔
+    /// pass1`); pass 2 re-walks from `head` so a yield near the body top now
+    /// sees a soil left by a prior iteration's tail. The state's per-binding
+    /// lattice has height 1 (Clean → Soiled) and soils are syntactic (a
+    /// soiling call soils regardless of entry), so two passes reach the
+    /// fixpoint. The post-loop state merges `head` (the loop may run zero
+    /// times / exit at the top) with pass 2's body result. Per-binding error
+    /// dedup makes the repeated walk emit at most one diagnostic per binding.
+    ///
+    /// `break`-mid-body exit state and per-iteration condition re-evaluation
+    /// are approximated (the condition is walked once by the caller); both
+    /// are exotic for cancel-unsafe state and left to a future slice.
+    fn walk_loop_body(&mut self, pattern: Option<&Pattern>, body: &Block) {
+        let entry = self.state.clone();
+        self.walk_body_opt_pattern(pattern, body);
+        let pass1 = std::mem::take(&mut self.state);
+        let head = Self::merge_states(entry, pass1);
+        self.state = head.clone();
+        self.walk_body_opt_pattern(pattern, body);
+        let pass2 = std::mem::take(&mut self.state);
+        self.state = Self::merge_states(head, pass2);
+    }
+
     /// Source-level binding name targeted by `expr`, if `expr` is a
     /// shape the slice-3 walker tracks. Returns `Some("self")` for
     /// `SelfValue` receivers, `Some(name)` for identifier receivers,
@@ -883,11 +947,21 @@ impl StateFlowWalker<'_> {
                 then_block,
                 else_branch,
             } => {
+                // The condition runs unconditionally before either arm.
                 self.walk_expr(condition);
+                // Walk each arm from a clone of the pre-branch state, then
+                // merge by union: a binding is Soiled-after-if if it is
+                // Soiled on EITHER arm (slice 3 branch-precise flow). The
+                // `else`-less form's implicit empty path is the unchanged
+                // entry, so a then-only soil still survives the merge.
+                let entry = self.state.clone();
                 self.walk_block(then_block);
+                let then_state = std::mem::replace(&mut self.state, entry);
                 if let Some(eb) = else_branch {
                     self.walk_expr(eb);
                 }
+                let else_state = std::mem::take(&mut self.state);
+                self.state = Self::merge_states(then_state, else_state);
             }
             ExprKind::IfLet {
                 value,
@@ -896,14 +970,27 @@ impl StateFlowWalker<'_> {
                 else_branch,
             } => {
                 self.walk_expr(value);
+                let entry = self.state.clone();
                 self.walk_block_with_pattern(pattern, then_block);
+                let then_state = std::mem::replace(&mut self.state, entry);
                 if let Some(eb) = else_branch {
                     self.walk_expr(eb);
                 }
+                let else_state = std::mem::take(&mut self.state);
+                self.state = Self::merge_states(then_state, else_state);
             }
             ExprKind::Match { scrutinee, arms } => {
                 self.walk_expr(scrutinee);
+                // Each arm runs from the same pre-match state; the post-match
+                // state is the union across all arms (a match is exhaustive,
+                // so the arms are the only paths out). A guard's soiling side
+                // effects on a *failed* arm that falls through to a later arm
+                // are not threaded forward — an exotic shape left to a future
+                // slice (see module doc).
+                let entry = self.state.clone();
+                let mut merged: Option<std::collections::HashMap<String, BindingState>> = None;
                 for arm in arms {
+                    self.state = entry.clone();
                     if let Some(ref g) = arm.guard {
                         let scope_mark = self.scope.len();
                         for (name, span) in arm.pattern.binding_name_spans() {
@@ -915,13 +1002,19 @@ impl StateFlowWalker<'_> {
                         self.scope.truncate(scope_mark);
                     }
                     self.walk_expr_with_pattern(&arm.pattern, &arm.body);
+                    let arm_state = std::mem::take(&mut self.state);
+                    merged = Some(match merged {
+                        None => arm_state,
+                        Some(m) => Self::merge_states(m, arm_state),
+                    });
                 }
+                self.state = merged.unwrap_or(entry);
             }
             ExprKind::While {
                 condition, body, ..
             } => {
                 self.walk_expr(condition);
-                self.walk_block(body);
+                self.walk_loop_body(None, body);
             }
             ExprKind::WhileLet {
                 value,
@@ -930,7 +1023,7 @@ impl StateFlowWalker<'_> {
                 ..
             } => {
                 self.walk_expr(value);
-                self.walk_block_with_pattern(pattern, body);
+                self.walk_loop_body(Some(pattern), body);
             }
             ExprKind::For {
                 pattern,
@@ -939,10 +1032,10 @@ impl StateFlowWalker<'_> {
                 ..
             } => {
                 self.walk_expr(iterable);
-                self.walk_block_with_pattern(pattern, body);
+                self.walk_loop_body(Some(pattern), body);
             }
             ExprKind::Loop { body, .. } | ExprKind::LabeledBlock { body, .. } => {
-                self.walk_block(body)
+                self.walk_loop_body(None, body)
             }
             ExprKind::Closure { .. } => {}
             ExprKind::Return(Some(e)) => self.walk_expr(e),
