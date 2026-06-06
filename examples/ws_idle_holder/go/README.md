@@ -85,14 +85,45 @@ The `--server-bin` flag is identical to the Kāra- and Rust-server
 invocations — the harness reads `BOUND_PORT=<n>` from the spawned
 process's stdout and measures its RSS via `ps -o rss=`.
 
-### Planned at-scale runs (Phase 3)
+### Planned at-scale runs (Phase 3) — turnkey rig recipe
 
 Per the bench-day comparator scale split, the commercial comparators run
-**250K (headline) + 50K (linearity sub-curve)** on a fresh Linux EC2 box
-(`../bench/scripts/ec2_setup.sh` first), with a 1M escalation only if the
-50K→250K `per_conn_bytes` drift exceeds 5%. Expected ~20–30 KB/conn for
-gorilla on Go's goroutine-stack model. scp the JSON to
-`docs/investigations/` and `git add` it immediately after each run.
+**250K (headline) + 50K (linearity sub-curve)** on a fresh Linux EC2 box,
+with a 1M escalation only if the 50K→250K `per_conn_bytes` drift exceeds
+5%. Expected ~20–30 KB/conn for gorilla on Go's goroutine-stack model.
+
+The runners (`../bench/scripts/run_250k.sh`, `run_50k.sh`) are analogues
+of `run_1m.sh` — same flag set, only N / ulimit / source-IP fan-out
+differ. On-box, one-command-per-scale recipe (Ubuntu 24.04 arm64, the AMI
+used for the Kāra 1M verification):
+
+```sh
+# 0. Kernel + nofile + loopback-alias setup (idempotent; needs a fresh
+#    login afterward so the systemd nofile cap actually lifts).
+sudo bash examples/ws_idle_holder/bench/scripts/ec2_setup.sh
+exit   # then SSH back in; verify: ulimit -n  ->  3000000
+
+# 1. Toolchains. ec2_setup.sh does NOT install compilers — only the Go
+#    toolchain is needed for THIS comparator (no karac/runtime build,
+#    since the comparator binary is self-contained):
+sudo snap install go --classic    # or the official tarball; any Go >= 1.21
+
+# 2. Build the comparator + the bench harness on-box:
+( cd examples/ws_idle_holder/go && go build -ldflags="-s -w" -trimpath -o ws-idle-holder-go . )
+( cd examples/ws_idle_holder/bench && cargo build --release )
+
+# 3. Run both scales (JSON is tee'd to ./<basename>-{250k,50k}.json):
+GO_BIN="$(pwd)/examples/ws_idle_holder/go/ws-idle-holder-go"
+examples/ws_idle_holder/bench/scripts/run_250k.sh "$GO_BIN"
+examples/ws_idle_holder/bench/scripts/run_50k.sh  "$GO_BIN"
+```
+
+Then **immediately** scp both JSONs to `docs/investigations/` in the
+local repo and `git add` them — scp is not `git add`, and an untracked
+JSON sitting in `docs/investigations/` while REPORT.md claims it "wasn't
+mirrored" is a documented failure mode. Only after the JSON is committed:
+update REPORT.md's comparator row, the status matrix, the phase-6 entry,
+and this README's numbers section.
 
 ## Local validation (2026-06-05, macOS, N=200 c=64, active echo)
 
