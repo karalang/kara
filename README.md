@@ -15,7 +15,41 @@ Questions, ideas, or design feedback? [Start a GitHub Discussion](https://github
 
 ### AI-First Compiler Interface
 
-All compiler output available as structured JSON with machine-applicable fix diffs. Compiler query API for programmatic access to effect inference, ownership decisions, and concurrency analysis. Canonical formatter for clean semantic diffs.
+The compiler's analyses aren't trapped in human-oriented text — every decision it makes is queryable as JSON.
+
+**Query API.** `karac query <kind> <file>[.<function>]` exposes what the compiler inferred:
+
+| Query | Returns |
+|---|---|
+| `effects` | inferred vs. declared effects, per function |
+| `ownership` | parameter modes, RC fallbacks (with the trigger line), closure captures |
+| `concurrency` | which statements auto-parallelize, and why |
+| `cost-summary` | RC ops, Arc wraps, and perf notes per function or file |
+| `monomorphization` | generic instantiation table — which types, at which sites |
+| `affected-by` | transitive callers/callees/tests of a function or line range |
+| `attributes` | index of namespaced `#[tool::*]` attributes |
+
+Querying the `load_dashboard` example from the next section:
+
+```bash
+$ karac query concurrency dashboard.kara.load_dashboard
+{"function":"load_dashboard","total_statements":3,
+ "parallel_groups":[{"statements":[0,1,2],"reason":"no data or effect dependencies"}]}
+```
+
+**Structured diagnostics with machine-applicable fixes.** `karac check|build|run --output=json` emits diagnostics with phase, error code, span, and — where the compiler knows the answer — the fix as concrete edits:
+
+```json
+{"severity":"error","phase":"resolve","code":"E0100","line":3,"column":13,
+ "message":"undefined name 'totl', did you mean 'total'?",
+ "replacement":{"offset":44,"length":4,"text":"total"}}
+```
+
+`karac fix` applies those edits directly (`--dry-run` to preview). `--output=jsonl` streams build events (`phase_start`, `diagnostic`, `build_complete`, …) so agents can react before the build finishes.
+
+**Explanations on demand.** `karac explain --class=TYPE_MISMATCH` (or `--concept=<name>`) returns the spec-grounded explanation behind any diagnostic class, as text or JSON.
+
+**Canonical source form.** `karac fmt` emits one canonical formatting, so agent-written diffs stay semantic. `karac catalog` emits one JSONL signature record per function/type for cheap codebase indexing.
 
 ### Effect System — No Async/Await, No Colored Functions
 
