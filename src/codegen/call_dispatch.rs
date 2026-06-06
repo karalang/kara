@@ -159,6 +159,15 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(v);
         }
 
+        // Phase-8 line 156 (configurable ambient exporter, codegen half):
+        // `Log.set_exporter(e)` (call-site intercept) plus the
+        // `tracing_{level_enabled,emit_event,set_min_level,reset}` builtins
+        // the rewritten `Log.*` / `Log.set_min_level` / `Log.reset` bodies
+        // lower through, so a compiled `Log.*` honors the ambient config.
+        if let Some(v) = self.try_compile_tracing_config_builtin(callee, args)? {
+            return Ok(v);
+        }
+
         // Const generics slice 1c: `f[8]()` parses as
         // `Call { callee: Index { object: Identifier(name), index: literal }, args }`.
         // The typechecker disambiguation routes through a synthetic

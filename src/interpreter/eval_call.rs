@@ -72,6 +72,21 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Phase-8 line 156 (codegen half): the rewritten `Log.*` bodies gate
+        // on `tracing_level_enabled(rank)` and emit through
+        // `tracing_emit_event(event)`, and `Log.set_min_level` / `Log.reset`
+        // lower to `tracing_set_min_level` / `tracing_reset`. Under the
+        // interpreter the `Log.*`-level config special-cases (drop below
+        // threshold without evaluating the message; route to a registered
+        // sink) are still handled by `try_eval_log_call` below — these
+        // builtin handlers back the *default* fall-through (passing level,
+        // no registered sink, where the `Log.*` body runs) and keep the
+        // builtins consistent if invoked directly. They read/write the same
+        // `tracing_min_level` / `tracing_exporter` state.
+        if let Some(v) = self.try_eval_tracing_config_builtin(callee, args) {
+            return v;
+        }
+
         // Phase-8 line 156 (interpreter half): configurable ambient logging.
         // `Log.set_min_level` / `set_exporter` / `reset` write the ambient
         // state; `Log.{trace,debug,info,warn,error}` consult it (drop below
@@ -1140,6 +1155,65 @@ impl<'a> super::Interpreter<'a> {
     /// A dropped level call does **not** evaluate its message argument — the
     /// standard "don't pay for filtered logs" logging semantic. (Codegen does
     /// not yet honor any of this; a compiled `Log.*` always emits to stdout.)
+    /// Configurable ambient logging builtins (phase-8 line 156). Back the
+    /// `tracing_{level_enabled,emit_event,set_min_level,reset}` builtins the
+    /// rewritten `Log.*` / `Log.set_min_level` / `Log.reset` bodies lower
+    /// through, reading/writing the same `tracing_min_level` /
+    /// `tracing_exporter` state as [`Self::try_eval_log_call`]. Returns
+    /// `None` for any other callee. `Log.set_exporter` is *not* handled here
+    /// — it's intercepted at the `Log.set_exporter` call shape in
+    /// `try_eval_log_call`.
+    fn try_eval_tracing_config_builtin(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+    ) -> Option<Value> {
+        let name = match &callee.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::Path { segments, .. } if segments.len() == 1 => segments[0].as_str(),
+            _ => return None,
+        };
+        match name {
+            "tracing_level_enabled" => {
+                let rank = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                    Some(Value::Int(r)) => r,
+                    _ => return Some(Value::Bool(true)),
+                };
+                Some(Value::Bool(rank >= self.tracing_min_level))
+            }
+            "tracing_set_min_level" => {
+                if let Some(Value::Int(r)) = args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                    self.tracing_min_level = r;
+                }
+                Some(Value::Unit)
+            }
+            "tracing_reset" => {
+                self.tracing_min_level = 0;
+                self.tracing_exporter = None;
+                Some(Value::Unit)
+            }
+            "tracing_emit_event" => {
+                let event = args.first().map(|a| self.eval_expr_inner(&a.value))?;
+                // Registered sink if one is set, else the default
+                // `StdoutExporter` (an empty struct) — the same dispatch the
+                // registered-sink arm of `try_eval_log_call` performs.
+                let sink = self
+                    .tracing_exporter
+                    .clone()
+                    .unwrap_or_else(|| Value::Struct {
+                        name: "StdoutExporter".to_string(),
+                        fields: HashMap::new(),
+                    });
+                let sink_type = self.value_type_name(&sink);
+                if let Some(func) = self.env.get(&format!("{sink_type}.export_event")) {
+                    self.invoke_function_value(func, vec![sink, event]);
+                }
+                Some(Value::Unit)
+            }
+            _ => None,
+        }
+    }
+
     fn try_eval_log_call(&mut self, callee: &Expr, args: &[CallArg]) -> Option<Value> {
         let method = match &callee.kind {
             ExprKind::Path { segments, .. } if segments.len() == 2 && segments[0] == "Log" => {

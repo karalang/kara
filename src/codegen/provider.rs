@@ -13,7 +13,7 @@ use crate::ast::*;
 
 use inkwell::module::Linkage;
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
-use inkwell::AddressSpace;
+use inkwell::{AddressSpace, IntPredicate};
 
 use super::helpers::{impl_target_name, match_with_provider_call};
 
@@ -302,6 +302,237 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         Ok(body_result)
+    }
+
+    /// Phase-8 line 156 (configurable ambient exporter, codegen half).
+    /// Intercept the tracing config/emit builtins that back the lowered
+    /// `Log.*` surface, so a *compiled* `Log.*` honors `Log.set_min_level`
+    /// / `set_exporter` / `reset` (the interpreter half already does — see
+    /// `eval_call.rs::try_eval_log_call`). Returns `Ok(None)` when `callee`
+    /// is none of these (the caller continues normal dispatch).
+    ///
+    /// Mapping of the rewritten `tracing.kara` bodies to this intercept:
+    ///   * `Log.set_exporter(e)` — intercepted at its *call site* (not via
+    ///     the generic Kāra body), so the concrete exporter type is read
+    ///     from the argument AST exactly like `with_provider`'s provider;
+    ///   * `Log.{level}`'s body gates on `tracing_level_enabled(rank)` and
+    ///     emits through `tracing_emit_event(event)`;
+    ///   * `Log.set_min_level`'s body maps the level name to a rank and
+    ///     calls `tracing_set_min_level(rank)`; `Log.reset`'s body calls
+    ///     `tracing_reset()`.
+    pub(super) fn try_compile_tracing_config_builtin(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // `Log.set_exporter(e)`: call-site interception. The concrete
+        // exporter type is inferred from the argument (struct literal or
+        // typed identifier — `infer_provider_type_name`'s shapes), which
+        // sidesteps the generic-`E` monomorphization the body would need.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 && segments[0] == "Log" && segments[1] == "set_exporter" {
+                if args.len() != 1 {
+                    return Ok(None);
+                }
+                return Ok(Some(self.compile_tracing_set_exporter(&args[0].value)?));
+            }
+        }
+
+        let name = match &callee.kind {
+            ExprKind::Identifier(n) => Some(n.as_str()),
+            ExprKind::Path { segments, .. } if segments.len() == 1 => Some(segments[0].as_str()),
+            _ => None,
+        };
+        let Some(name) = name else {
+            return Ok(None);
+        };
+        let unit = self.context.i64_type().const_int(0, false).into();
+
+        match name {
+            // `rank >= process-global min level` → i1 (Kāra `bool`). The
+            // `Log.{level}` body uses this as its `if` condition, so a
+            // filtered level skips even constructing the `LogEvent`.
+            "tracing_level_enabled" if args.len() == 1 => {
+                let rank = self.compile_expr(&args[0].value)?.into_int_value();
+                let min = self
+                    .builder
+                    .build_call(self.karac_tracing_get_min_level_fn, &[], "min_level")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let enabled = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGE, rank, min, "lvl.enabled")
+                    .unwrap();
+                Ok(Some(enabled.into()))
+            }
+            "tracing_emit_event" if args.len() == 1 => {
+                Ok(Some(self.compile_tracing_emit_event(&args[0].value)?))
+            }
+            "tracing_set_min_level" if args.len() == 1 => {
+                let rank = self.compile_expr(&args[0].value)?.into_int_value();
+                self.builder
+                    .build_call(self.karac_tracing_set_min_level_fn, &[rank.into()], "")
+                    .unwrap();
+                Ok(Some(unit))
+            }
+            "tracing_reset" if args.is_empty() => {
+                self.builder
+                    .build_call(self.karac_tracing_reset_fn, &[], "")
+                    .unwrap();
+                Ok(Some(unit))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Lower `Log.set_exporter(e)`: heap-leak the exporter value `e` and
+    /// register `(data_ptr, e_type.export_event)` in the process-global
+    /// sink (`karac_tracing_set_exporter`). The value is leaked for the
+    /// process lifetime, so the stored pointer never dangles — matching
+    /// the runtime contract (`runtime/src/tracing.rs`). Returns unit.
+    fn compile_tracing_set_exporter(
+        &mut self,
+        exporter_expr: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let type_name = self
+            .infer_provider_type_name(exporter_expr)
+            .ok_or_else(|| {
+                "Log.set_exporter: cannot infer concrete exporter type at codegen — supported \
+             shapes are a struct literal or an identifier with a known struct type"
+                    .to_string()
+            })?;
+        let st = *self.struct_types.get(&type_name).ok_or_else(|| {
+            format!("Log.set_exporter: no LLVM struct type for exporter `{type_name}`")
+        })?;
+        let export_fn = self
+            .module
+            .get_function(&format!("{type_name}.export_event"))
+            .ok_or_else(|| {
+                format!(
+                    "Log.set_exporter: `{type_name}.export_event` not declared — `{type_name}` \
+                     must `impl Exporter`"
+                )
+            })?;
+
+        // Heap-allocate a slot for the exporter value (≥1 byte so an empty
+        // exporter struct still yields a unique non-null pointer — null is
+        // the "no sink registered" sentinel), copy the value in, and leak
+        // it. `malloc` takes an i64 size on every karac target.
+        let i64_ty = self.context.i64_type();
+        let size = match st.size_of().and_then(|s| s.get_zero_extended_constant()) {
+            Some(0) | None => i64_ty.const_int(1, false),
+            Some(_) => st.size_of().unwrap(),
+        };
+        let heap = self
+            .builder
+            .build_call(self.malloc_fn, &[size.into()], "exp.box")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let value = self.compile_expr(exporter_expr)?;
+        self.builder.build_store(heap, value).unwrap();
+
+        let fn_ptr = export_fn.as_global_value().as_pointer_value();
+        self.builder
+            .build_call(
+                self.karac_tracing_set_exporter_fn,
+                &[heap.into(), fn_ptr.into()],
+                "",
+            )
+            .unwrap();
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// Lower `tracing_emit_event(event)`: route `event` to the registered
+    /// ambient sink if one is set, else the default `StdoutExporter`.
+    /// Branches on the runtime data pointer (null = no sink): the default
+    /// arm calls `StdoutExporter.export_event` directly; the registered arm
+    /// indirect-calls the stored `export_event` fn-ptr. Both pass `ref self`
+    /// as a pointer and the `LogEvent` by value (the shared lowered
+    /// signature, the same invariant the provider vtable dispatch relies
+    /// on; `export_event` carries no niche-ABI record, so no packing).
+    /// Returns unit.
+    fn compile_tracing_emit_event(
+        &mut self,
+        event_expr: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "tracing_emit_event: no current function".to_string())?;
+        let stdout_export = self
+            .module
+            .get_function("StdoutExporter.export_event")
+            .ok_or_else(|| {
+                "tracing_emit_event: `StdoutExporter.export_event` not declared".to_string()
+            })?;
+        let fn_ty = stdout_export.get_type();
+        let stdout_st = *self.struct_types.get("StdoutExporter").ok_or_else(|| {
+            "tracing_emit_event: no LLVM struct type for `StdoutExporter`".to_string()
+        })?;
+
+        // Compile the event once; both arms consume it (by value).
+        let event = self.compile_expr(event_expr)?;
+
+        let data = self
+            .builder
+            .build_call(self.karac_tracing_get_exporter_data_fn, &[], "exp.data")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let is_none = self.builder.build_is_null(data, "exp.none").unwrap();
+
+        let default_bb = self.context.append_basic_block(fn_val, "emit.default");
+        let registered_bb = self.context.append_basic_block(fn_val, "emit.registered");
+        let cont_bb = self.context.append_basic_block(fn_val, "emit.cont");
+        self.builder
+            .build_conditional_branch(is_none, default_bb, registered_bb)
+            .unwrap();
+
+        // Default sink: a fresh empty `StdoutExporter` (its `export_event`
+        // is stateless, so the slot's contents are irrelevant — only a
+        // valid `ref self` pointer is needed).
+        self.builder.position_at_end(default_bb);
+        let slot = self.create_entry_alloca(fn_val, "emit.stdout", stdout_st.into());
+        self.builder
+            .build_call(
+                stdout_export,
+                &[
+                    BasicMetadataValueEnum::from(slot),
+                    BasicMetadataValueEnum::from(event),
+                ],
+                "",
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // Registered sink: indirect-call the stored `export_event(self, event)`.
+        self.builder.position_at_end(registered_bb);
+        let fn_ptr = self
+            .builder
+            .build_call(self.karac_tracing_get_exporter_fn_fn, &[], "exp.fn")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder
+            .build_indirect_call(
+                fn_ty,
+                fn_ptr,
+                &[
+                    BasicMetadataValueEnum::from(data),
+                    BasicMetadataValueEnum::from(event),
+                ],
+                "emit.dyn",
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        self.builder.position_at_end(cont_bb);
+        Ok(self.context.i64_type().const_int(0, false).into())
     }
 
     /// `with_provider[R]` lowering for a *trait-less* resource overridden by

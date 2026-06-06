@@ -22,16 +22,19 @@
 // active span, not the pre-suspend one. Explicit `.in_span(id)` always
 // overrides the ambient span.
 //
+// **Registered global exporter / sink (phase-8 line 156 — shipped).**
+// `Log.set_exporter(e)` registers a process-global ambient sink (and
+// `Log.set_min_level` a process-global minimum level); subsequent `Log.*`
+// route to it. Honored under both `karac run` (interpreter state) and
+// `karac build` (the process-global runtime config in
+// `runtime/src/tracing.rs` + the `tracing_*` builtin lowerings). See the
+// `Log` namespace below.
+//
 // **Deferred to a follow-up slice (requires compiler integration):**
 //
 //   - **Comptime-driven trace-context plumbing.** The Kāra-native
 //     alternative to Rust's `tracing` proc-macro indirection — also
 //     compiler work.
-//
-//   - **Registered global exporter / sink.** Without thread-locals or
-//     ambient mutable state, the exporter is plumbed by the caller.
-//     A `with_provider`-style ambient exporter is a natural extension
-//     when the network event loop lands.
 //
 // What `v1` ships today: the surface that the v1 user-visible API
 // settles on, plus a `NoOpExporter` default so user code can write
@@ -257,56 +260,73 @@ impl Exporter for StdoutExporter {
 // evaluated), and a registered sink receives the event in place of the
 // default per-call `StdoutExporter`.
 //
-// **`karac run` vs `karac build`.** This config is honored by the
-// interpreter only. The codegen path needs a process-global + dynamic
-// dispatch (the `with_provider`-shape ambient state the spec ties to the
-// network event loop) — deferred — so a *compiled* `Log.*` ignores the
-// config and always emits to stdout. Until the codegen half lands, drive
-// verbosity/sink config under `karac run`, or plumb an exporter value
-// explicitly (`exporter.export_event(LogEvent.info(...))`) for build.
+// **`karac run` and `karac build` both honor this config (phase-8 line
+// 156 fully landed).** The interpreter holds the min level + registered
+// sink on the `Interpreter` struct; the codegen path holds them in
+// process-global runtime state (`runtime/src/tracing.rs`) and routes a
+// compiled `Log.*` through the `tracing_*` builtins below — so the same
+// `set_min_level` / `set_exporter` / `reset` behavior applies under both.
+// (One nuance: the interpreter drops a sub-threshold `Log.*` without
+// evaluating its message argument; the compiled path evaluates the
+// argument the caller built but skips the event + emission. Log messages
+// should be side-effect-free, so this is unobservable in practice.)
 struct Log { }
 
 impl Log {
+    // Each level gates on the process-global minimum level (rank
+    // trace=0 .. error=4) before constructing the event, then routes it
+    // through the ambient sink — the registered exporter if one is set,
+    // else the default `StdoutExporter` (`tracing_emit_event` performs
+    // that branch). `LogEvent.{level}` still auto-stamps the active span.
     fn trace(message: String) {
-        let sink = StdoutExporter {};
-        sink.export_event(LogEvent.trace(message));
+        if tracing_level_enabled(0) { tracing_emit_event(LogEvent.trace(message)); }
     }
 
     fn debug(message: String) {
-        let sink = StdoutExporter {};
-        sink.export_event(LogEvent.debug(message));
+        if tracing_level_enabled(1) { tracing_emit_event(LogEvent.debug(message)); }
     }
 
     fn info(message: String) {
-        let sink = StdoutExporter {};
-        sink.export_event(LogEvent.info(message));
+        if tracing_level_enabled(2) { tracing_emit_event(LogEvent.info(message)); }
     }
 
     fn warn(message: String) {
-        let sink = StdoutExporter {};
-        sink.export_event(LogEvent.warn(message));
+        if tracing_level_enabled(3) { tracing_emit_event(LogEvent.warn(message)); }
     }
 
     fn error(message: String) {
-        let sink = StdoutExporter {};
-        sink.export_event(LogEvent.error(message));
+        if tracing_level_enabled(4) { tracing_emit_event(LogEvent.error(message)); }
     }
 
     // Set the process-global minimum level; `Log.*` below it are dropped.
-    // Order: trace < debug < info < warn < error. An unrecognized name
-    // leaves the threshold unchanged. Empty body: the interpreter
-    // intercepts this call to store the level (see eval_call.rs); under
-    // codegen it is a no-op (the config is interpreter-only for now).
-    fn set_min_level(level: String) { }
+    // Order: trace < debug < info < warn < error. The exact-match `if`s
+    // are mutually exclusive (no `else if` needed): an unrecognized name
+    // matches none and leaves the threshold unchanged. Under codegen these
+    // lower through the `tracing_set_min_level` builtin → the process
+    // global; the interpreter intercepts the `Log.set_min_level` call
+    // itself (eval_call.rs::try_eval_log_call), so this body is dead there.
+    fn set_min_level(level: String) {
+        if level == "trace" { tracing_set_min_level(0); }
+        if level == "debug" { tracing_set_min_level(1); }
+        if level == "info" { tracing_set_min_level(2); }
+        if level == "warn" { tracing_set_min_level(3); }
+        if level == "error" { tracing_set_min_level(4); }
+    }
 
     // Register the ambient sink subsequent `Log.*` route to — e.g.
-    // `NoOpExporter {}` to silence, or a custom `Exporter`. Same
-    // interpreter-only / empty-body intercept story as `set_min_level`.
+    // `NoOpExporter {}` to silence, or a custom `Exporter`. Empty body:
+    // both backends intercept the `Log.set_exporter` call directly (codegen
+    // at the call site, so the concrete exporter type is known from the
+    // argument; interpreter in `try_eval_log_call`), so this never runs.
     fn set_exporter[E: Exporter](exporter: E) { }
 
     // Restore defaults: minimum level `trace` (emit everything) and the
     // default per-call `StdoutExporter` sink. Useful between test cases.
-    fn reset() { }
+    // Lowers through the `tracing_reset` builtin under codegen; the
+    // interpreter intercepts the `Log.reset` call.
+    fn reset() {
+        tracing_reset();
+    }
 }
 
 // ── Ambient active span (phase-8 line 153, Phase 1) ──────────────────
@@ -338,4 +358,38 @@ fn tracing_active_span() -> i64 {
 #[compiler_builtin]
 fn with_span[T](span: ref Span, body: OnceFn() -> T) -> T {
     body()
+}
+
+// ── Configurable ambient logging builtins (phase-8 line 156) ─────────
+//
+// The rewritten `Log.*` / `Log.set_min_level` / `Log.reset` bodies lower
+// through these. All `#[compiler_builtin]`: the compiler intercepts the
+// call sites (codegen → the `karac_tracing_*` process-global config in
+// `runtime/src/tracing.rs`; interpreter → the `Interpreter`'s
+// `tracing_min_level` / `tracing_exporter` fields), so these placeholder
+// bodies never run. `Log.set_exporter` is *not* listed here — it is
+// intercepted at its own call site so the concrete exporter type is read
+// from the argument (the generic `E` is unavailable to a builtin body).
+
+// `true` iff `rank` is at or above the process-global minimum level — the
+// gate the `Log.{level}` bodies check before building/emitting an event.
+#[compiler_builtin]
+fn tracing_level_enabled(rank: i64) -> bool {
+    true
+}
+
+// Route an already-built event to the ambient sink (registered exporter
+// if set, else the default `StdoutExporter`).
+#[compiler_builtin]
+fn tracing_emit_event(event: LogEvent) {
+}
+
+// Set the process-global minimum level by rank (trace=0 .. error=4).
+#[compiler_builtin]
+fn tracing_set_min_level(rank: i64) {
+}
+
+// Restore the default config: minimum level `trace`, no registered sink.
+#[compiler_builtin]
+fn tracing_reset() {
 }

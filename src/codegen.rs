@@ -1772,6 +1772,29 @@ pub(super) struct Codegen<'ctx> {
     /// the body's active span and restore the prior one on exit, and by
     /// par-branch prologues to inherit the parent's active span.
     pub(crate) karac_tracing_set_active_span_fn: FunctionValue<'ctx>,
+    /// Runtime extern: `karac_tracing_get_min_level() -> i64` (phase-8 line
+    /// 156, codegen half). The `tracing_level_enabled(rank)` builtin lowers
+    /// to `rank >= this`, so a compiled `Log.*` honors `Log.set_min_level`.
+    pub(crate) karac_tracing_get_min_level_fn: FunctionValue<'ctx>,
+    /// Runtime extern: `karac_tracing_set_min_level(i64)` (phase-8 line
+    /// 156). The `tracing_set_min_level(rank)` builtin (called from
+    /// `Log.set_min_level`'s lowered body) writes the process-global level.
+    pub(crate) karac_tracing_set_min_level_fn: FunctionValue<'ctx>,
+    /// Runtime extern: `karac_tracing_set_exporter(*const u8, *const u8)`
+    /// (phase-8 line 156). The `tracing_set_exporter(e)` builtin registers
+    /// the heap-leaked exporter value + its `export_event` fn-ptr here.
+    pub(crate) karac_tracing_set_exporter_fn: FunctionValue<'ctx>,
+    /// Runtime extern: `karac_tracing_get_exporter_data() -> *const u8`
+    /// (phase-8 line 156). The `tracing_emit_event` lowering branches on
+    /// this (null → default `StdoutExporter`, else indirect-dispatch).
+    pub(crate) karac_tracing_get_exporter_data_fn: FunctionValue<'ctx>,
+    /// Runtime extern: `karac_tracing_get_exporter_fn() -> *const u8`
+    /// (phase-8 line 156). The registered sink's `export_event` fn-ptr, used
+    /// by the `tracing_emit_event` lowering for the indirect call.
+    pub(crate) karac_tracing_get_exporter_fn_fn: FunctionValue<'ctx>,
+    /// Runtime extern: `karac_tracing_reset()` (phase-8 line 156). Clears
+    /// the min level and registered sink; `Log.reset`'s body lowers to it.
+    pub(crate) karac_tracing_reset_fn: FunctionValue<'ctx>,
     /// LLVM struct type for `ProviderFrame { prev, resource_id, data, vtable }`
     /// — `#[repr(C)]` matches `runtime/src/lib.rs::ProviderFrame`. Consumed
     /// at `with_provider[R]` lowering sites for the alloca'd frame storage
@@ -2280,6 +2303,52 @@ impl<'ctx> Codegen<'ctx> {
         let karac_tracing_set_active_span_fn = module.add_function(
             "karac_tracing_set_active_span",
             karac_tracing_set_active_span_type,
+            Some(Linkage::External),
+        );
+        // Phase-8 line 156 (configurable ambient exporter, codegen half):
+        // the process-global min-level + registered-sink accessors. All
+        // unconditional externs (present in lean + full archives) — safe
+        // for programs that never touch `std.tracing`, exactly like the
+        // active-span pair above. `tracing_level_enabled` reads the level;
+        // `tracing_set_min_level`/`tracing_reset` write config; `set_exporter`
+        // registers a sink; `tracing_emit_event` reads the sink pair.
+        let karac_tracing_get_min_level_type = i64_type.fn_type(&[], false);
+        let karac_tracing_get_min_level_fn = module.add_function(
+            "karac_tracing_get_min_level",
+            karac_tracing_get_min_level_type,
+            Some(Linkage::External),
+        );
+        let karac_tracing_set_min_level_type =
+            context.void_type().fn_type(&[i64_type.into()], false);
+        let karac_tracing_set_min_level_fn = module.add_function(
+            "karac_tracing_set_min_level",
+            karac_tracing_set_min_level_type,
+            Some(Linkage::External),
+        );
+        let karac_tracing_set_exporter_type = context
+            .void_type()
+            .fn_type(&[ptr_type.into(), ptr_type.into()], false);
+        let karac_tracing_set_exporter_fn = module.add_function(
+            "karac_tracing_set_exporter",
+            karac_tracing_set_exporter_type,
+            Some(Linkage::External),
+        );
+        let karac_tracing_get_exporter_data_type = ptr_type.fn_type(&[], false);
+        let karac_tracing_get_exporter_data_fn = module.add_function(
+            "karac_tracing_get_exporter_data",
+            karac_tracing_get_exporter_data_type,
+            Some(Linkage::External),
+        );
+        let karac_tracing_get_exporter_fn_type = ptr_type.fn_type(&[], false);
+        let karac_tracing_get_exporter_fn_fn = module.add_function(
+            "karac_tracing_get_exporter_fn",
+            karac_tracing_get_exporter_fn_type,
+            Some(Linkage::External),
+        );
+        let karac_tracing_reset_type = context.void_type().fn_type(&[], false);
+        let karac_tracing_reset_fn = module.add_function(
+            "karac_tracing_reset",
+            karac_tracing_reset_type,
             Some(Linkage::External),
         );
 
@@ -3790,6 +3859,12 @@ impl<'ctx> Codegen<'ctx> {
             karac_provider_set_stack_head_fn,
             karac_tracing_get_active_span_fn,
             karac_tracing_set_active_span_fn,
+            karac_tracing_get_min_level_fn,
+            karac_tracing_set_min_level_fn,
+            karac_tracing_set_exporter_fn,
+            karac_tracing_get_exporter_data_fn,
+            karac_tracing_get_exporter_fn_fn,
+            karac_tracing_reset_fn,
             provider_frame_ty,
             provider_lookup_result_ty,
             map_key_types: HashMap::new(),

@@ -3408,6 +3408,87 @@ impl<'ctx> super::Codegen<'ctx> {
             self.struct_field_type_names
                 .insert("HttpError".to_string(), vec![Some("String".to_string())]);
         }
+        // Phase-8 line 156 — baked `std.tracing` value structs (`SpanField`,
+        // `Span`, `LogEvent`). Seeded here so a *user* `impl Exporter` whose
+        // method takes one of these by value (`fn export_event(ref self,
+        // event: LogEvent)`) gets the right struct param layout in its
+        // signature. Without this they hit `llvm_type_for_name`'s i64
+        // fall-through — baked stdlib structs aren't fed into `declare_structs`
+        // until the tracing pass (`declare_stdlib_program`), which runs *after*
+        // user functions are declared — and the LLVM verifier rejects the call
+        // with `Call parameter type does not match function signature` (the
+        // same failure the `TcpListener`/`WebSocket` name arms guard against).
+        // Layouts mirror the definitions in `runtime/stdlib/tracing.kara`
+        // (`String` and `Vec[SpanField]` share the `{ptr,i64,i64}` shape, so
+        // `str_ty` stands in for both); LLVM canonicalizes identical literal
+        // struct types, so these unify with the types the tracing pass's
+        // `declare_structs` re-derives — which also (re)fills the field-name /
+        // drop side tables for the tracing program's own body lowering.
+        if !self.struct_types.contains_key("SpanField") {
+            // `SpanField { key: String, value: String }`.
+            let sf_ty = self.context.struct_type(&[str_ty, str_ty], false);
+            self.struct_types.insert("SpanField".to_string(), sf_ty);
+            self.struct_field_names.insert(
+                "SpanField".to_string(),
+                vec!["key".to_string(), "value".to_string()],
+            );
+            self.struct_field_type_names.insert(
+                "SpanField".to_string(),
+                vec![Some("String".to_string()), Some("String".to_string())],
+            );
+        }
+        if !self.struct_types.contains_key("Span") {
+            // `Span { name: String, span_id: i64, parent_id: i64,
+            //         fields: Vec[SpanField] }`.
+            let span_ty = self
+                .context
+                .struct_type(&[str_ty, i64_t.into(), i64_t.into(), str_ty], false);
+            self.struct_types.insert("Span".to_string(), span_ty);
+            self.struct_field_names.insert(
+                "Span".to_string(),
+                vec![
+                    "name".to_string(),
+                    "span_id".to_string(),
+                    "parent_id".to_string(),
+                    "fields".to_string(),
+                ],
+            );
+            self.struct_field_type_names.insert(
+                "Span".to_string(),
+                vec![
+                    Some("String".to_string()),
+                    Some("i64".to_string()),
+                    Some("i64".to_string()),
+                    Some("Vec".to_string()),
+                ],
+            );
+        }
+        if !self.struct_types.contains_key("LogEvent") {
+            // `LogEvent { level: String, message: String,
+            //             fields: Vec[SpanField], span_id: i64 }`.
+            let le_ty = self
+                .context
+                .struct_type(&[str_ty, str_ty, str_ty, i64_t.into()], false);
+            self.struct_types.insert("LogEvent".to_string(), le_ty);
+            self.struct_field_names.insert(
+                "LogEvent".to_string(),
+                vec![
+                    "level".to_string(),
+                    "message".to_string(),
+                    "fields".to_string(),
+                    "span_id".to_string(),
+                ],
+            );
+            self.struct_field_type_names.insert(
+                "LogEvent".to_string(),
+                vec![
+                    Some("String".to_string()),
+                    Some("String".to_string()),
+                    Some("Vec".to_string()),
+                    Some("i64".to_string()),
+                ],
+            );
+        }
         if !self.struct_types.contains_key("RequestBuilder") {
             // Phase-8 line 24 — `RequestBuilder { handle: i64 }`.
             // Single-field opaque handle wrapping a runtime-side

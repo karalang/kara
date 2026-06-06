@@ -31039,6 +31039,124 @@ fn main() {
         assert_eq!(out.as_deref(), Some("done\n"));
     }
 
+    // ── std.tracing — configurable ambient exporter (line 156) E2E ───
+    //
+    // The codegen half of phase-8 line 156: a *compiled* `Log.*` honors
+    // `Log.set_min_level` / `set_exporter` / `reset` via the process-global
+    // runtime config (`runtime/src/tracing.rs`) + the `tracing_*` builtin
+    // lowerings. These mirror the interpreter coverage in
+    // `tests/interpreter.rs` (`test_tracing_log_{min_level_filters,
+    // set_exporter_noop_silences,reset_restores_default,
+    // custom_exporter_receives_events}`), pinning identical behavior under
+    // `karac build` as under `karac run`.
+
+    #[test]
+    fn e2e_tracing_log_min_level_filters_below_threshold() {
+        // `Log.set_min_level("warn")` drops trace/debug/info; warn + error
+        // emit. Proves the compiled level gate consults the runtime global.
+        let out = run_program(
+            r#"fn main() {
+                Log.set_min_level("warn");
+                Log.trace("t");
+                Log.debug("d");
+                Log.info("i");
+                Log.warn("w");
+                Log.error("e");
+            }"#,
+        );
+        assert_eq!(out.as_deref(), Some("[warn] w\n[error] e\n"));
+    }
+
+    #[test]
+    fn e2e_tracing_log_set_exporter_noop_silences() {
+        // Registering `NoOpExporter` routes compiled `Log.*` to its empty
+        // `export_event` (indirect dispatch through the runtime fn-ptr)
+        // instead of stdout — so the program emits nothing.
+        let out = run_program(
+            r#"fn main() {
+                Log.set_exporter(NoOpExporter {});
+                Log.info("i");
+                Log.error("e");
+                println("done");
+            }"#,
+        );
+        assert_eq!(out.as_deref(), Some("done\n"));
+    }
+
+    #[test]
+    fn e2e_tracing_log_reset_restores_default() {
+        // `Log.reset()` clears the min level (and any sink), so a level
+        // dropped before the reset emits to stdout again afterward.
+        let out = run_program(
+            r#"fn main() {
+                Log.set_min_level("error");
+                Log.info("dropped");
+                Log.reset();
+                Log.info("kept");
+            }"#,
+        );
+        assert_eq!(out.as_deref(), Some("[info] kept\n"));
+    }
+
+    #[test]
+    fn e2e_tracing_log_custom_exporter_receives_events() {
+        // A user `Exporter` registered as the ambient sink receives
+        // compiled `Log.*` events via the indirect-dispatch path, rendering
+        // its own format. Also exercises the min-level filter applying
+        // before the custom sink (the dropped `debug` never reaches it) and
+        // `Log.set_exporter`'s call-site type inference for a user struct.
+        let out = run_program(
+            r#"struct Tagging { }
+            impl Exporter for Tagging {
+                fn export_span(ref self, span: Span) { }
+                fn export_event(ref self, event: LogEvent) {
+                    println(f"CUSTOM<{event.level}>: {event.message}");
+                }
+            }
+            fn main() {
+                Log.set_exporter(Tagging {});
+                Log.set_min_level("info");
+                Log.debug("dropped");
+                Log.info("hi");
+                Log.error("bye");
+            }"#,
+        );
+        assert_eq!(
+            out.as_deref(),
+            Some("CUSTOM<info>: hi\nCUSTOM<error>: bye\n"),
+        );
+    }
+
+    #[test]
+    fn e2e_tracing_user_exporter_impl_reads_event_and_span_fields() {
+        // A user `impl Exporter` whose methods take `LogEvent` / `Span` by
+        // value compiles and reads their fields correctly. Regression for a
+        // pre-existing gap surfaced by the line-156 work: the baked tracing
+        // value structs weren't in `struct_types` when user functions were
+        // declared, so `fn export_event(ref self, event: LogEvent)` got an
+        // `i64` param (the `llvm_type_for_name` fall-through) and the call
+        // `t.export_event(LogEvent.info(...))` failed module verification.
+        // `seed_builtin_struct_types` now seeds `SpanField`/`Span`/`LogEvent`
+        // so the by-value param layout matches. Direct (non-registered) calls.
+        let out = run_program(
+            r#"struct Collector { }
+            impl Exporter for Collector {
+                fn export_event(ref self, event: LogEvent) {
+                    println(f"E {event.level}/{event.message}/{event.span_id}");
+                }
+                fn export_span(ref self, span: Span) {
+                    println(f"S {span.name}/{span.span_id}/{span.parent_id}");
+                }
+            }
+            fn main() {
+                let c = Collector {};
+                c.export_event(LogEvent.warn("disk").in_span(3));
+                c.export_span(Span.root("req", 7).child("inner", 9));
+            }"#,
+        );
+        assert_eq!(out.as_deref(), Some("E warn/disk/3\nS inner/9/7\n"),);
+    }
+
     #[test]
     fn e2e_tracing_unused_in_program_emits_no_tracing_bodies() {
         // The usage gate: a program that never touches std.tracing must

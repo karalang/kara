@@ -1062,6 +1062,16 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // names here makes the resolver accept the bare identifiers.
     "with_span",
     "tracing_active_span",
+    // Phase 8 line 156 (configurable ambient exporter) — the builtins the
+    // rewritten `Log.*` / `Log.set_min_level` / `Log.reset` bodies lower
+    // through. Codegen intercepts them to the `karac_tracing_*` process-
+    // global config; the interpreter backs them with its tracing fields.
+    // (`Log.set_exporter` is intercepted at its call site, not as a bare
+    // builtin, so it isn't listed here.)
+    "tracing_level_enabled",
+    "tracing_emit_event",
+    "tracing_set_min_level",
+    "tracing_reset",
 ];
 
 /// Synthetic span used for every stub item the prelude module emits. The
