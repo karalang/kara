@@ -13248,3 +13248,72 @@ fn main() {
     );
     assert_eq!(out, "11\n44\n");
 }
+
+// ── CStr borrowed surface (Phase 8 — design.md § C-String Literals) ──
+//
+// `len` / `is_empty` / `as_bytes` evaluate in tree-walk mode; `as_ptr`
+// is deliberately rejected at eval time (no raw-pointer representation
+// in the interpreter — see Value::CStr's docstring). Interpreter/codegen
+// parity for the value-producing trio is pinned by the codegen E2E
+// (`test_e2e_cstr_len_is_empty_as_bytes` asserts identical output).
+
+#[test]
+fn test_cstr_len_and_is_empty() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let msg = c"hello, world";
+    println(msg.len());
+    let e = c"";
+    println(e.len());
+    if e.is_empty() { println("empty"); }
+    if msg.is_empty() { println("BAD"); } else { println("non-empty"); }
+}
+"#,
+    );
+    assert_eq!(out, "12\n0\nempty\nnon-empty\n");
+}
+
+#[test]
+fn test_cstr_len_excludes_trailing_nul_and_counts_utf8_bytes() {
+    // design.md: `c"hello".len()` is 5, not 6 (the NUL is a codegen
+    // artifact); `c"café"` is the UTF-8 byte count (5), not the char count.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    println(c"hello".len());
+    println(c"caf\u{e9}".len());
+}
+"#,
+    );
+    assert_eq!(out, "5\n5\n");
+}
+
+#[test]
+fn test_cstr_as_bytes_yields_source_bytes() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let bytes = c"abc".as_bytes();
+    println(bytes.len());
+    println(bytes[0]);
+    println(bytes[2]);
+}
+"#,
+    );
+    assert_eq!(out, "3\n97\n99\n");
+}
+
+#[test]
+fn test_cstr_annotated_binding_form() {
+    // The design's canonical annotated form (`let msg: ref CStr = ...`).
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let msg: ref CStr = c"hi";
+    println(msg.len());
+}
+"#,
+    );
+    assert_eq!(out, "2\n");
+}

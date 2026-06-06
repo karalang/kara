@@ -30,6 +30,9 @@ impl<'a> super::Interpreter<'a> {
                     Value::Array(rc) => Value::Int(rc.read().unwrap().len() as i64),
                     Value::Slice { len, .. } => Value::Int(*len as i64),
                     Value::String(s) => Value::Int(s.len() as i64),
+                    // `CStr.len()` — source byte count, excluding the
+                    // trailing NUL (design.md § C-String Literals).
+                    Value::CStr(b) => Value::Int(b.len() as i64),
                     Value::Map(m) => Value::Int(m.len() as i64),
                     Value::SortedSet(s) => Value::Int(s.len() as i64),
                     Value::Set(s) => Value::Int(s.len() as i64),
@@ -313,6 +316,46 @@ impl<'a> super::Interpreter<'a> {
                 }
                 if let Value::Map(ref m) = obj {
                     return Some(Value::Bool(m.is_empty()));
+                }
+                if let Value::CStr(ref b) = obj {
+                    return Some(Value::Bool(b.is_empty()));
+                }
+            }
+            "as_bytes" => {
+                // `CStr.as_bytes() -> Slice[u8]` — the N source bytes,
+                // excluding the trailing NUL. Type-erased `Value::Int`
+                // bytes in fresh storage, the same pattern as
+                // `String.bytes()` above (the return type is read-only
+                // `Slice[u8]`, so the copy is unobservable).
+                if let Value::CStr(ref b) = obj {
+                    let items: Vec<Value> = b.iter().map(|b| Value::Int(*b as i64)).collect();
+                    let len = items.len();
+                    return Some(Value::Slice {
+                        storage: Arc::new(std::sync::RwLock::new(items)),
+                        start: 0,
+                        len,
+                        mutable: false,
+                    });
+                }
+            }
+            "as_ptr" => {
+                // `CStr.as_ptr() -> *const u8` — the tree-walk interpreter
+                // has no raw-pointer representation, and nothing in
+                // interpreted mode can consume one (extern "C" / host fn
+                // bodies are link-time constructs). Reject loudly at the
+                // producer rather than letting a meaningless integer flow
+                // into FFI-shaped code. design.md § Interpreter parity
+                // scope: the interpreter validates semantics; raw-pointer
+                // identity is a compiled-mode (memory representation)
+                // concern.
+                if let Value::CStr(_) = obj {
+                    panic!(
+                        "CStr.as_ptr() at {}:{} is not supported under `karac run`: \
+                         the tree-walk interpreter has no raw-pointer representation \
+                         (pointers exist for FFI/host-fn boundaries, which interpreted \
+                         mode cannot call). Compile with `karac build` instead.",
+                        span.line, span.column
+                    );
                 }
             }
             "first" => {

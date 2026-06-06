@@ -1938,16 +1938,14 @@ fn main() {
     // ── Strict-provenance ptr APIs (line 511 slice 3) ────────────────
     //
     // Codegen lowering for the seven `ptr.*` module functions per
-    // `design.md § Pointer Provenance` (v60 item 20). Under the current
-    // codegen ABI, `*const T` / `*mut T` lower to LLVM `i64` (see the
-    // fallthrough in `llvm_type_for_type_expr`), so all four ptr↔int
-    // operations are identity-shape at the LLVM level — the address
-    // bits round-trip losslessly through the i64 slot. The IR tests
-    // here pin the *function shape* (callable, returns the right type,
-    // does not crash codegen). The provenance-preserving variant — full
-    // LLVM `ptrtoint`/`inttoptr` with `!provenance` metadata — depends
-    // on lifting raw-pointer slots from i64 to LLVM `ptr` type, which
-    // is the deferred refinement noted in the tracker.
+    // `design.md § Pointer Provenance` (v60 item 20). `*const T` /
+    // `*mut T` lower to genuine LLVM `ptr` (the Phase-8 CStr/as_ptr
+    // slice lifted `TypeKind::Pointer` off the historical i64
+    // fall-through in `llvm_type_for_type_expr`), so ptr→usize ops emit
+    // `ptrtoint` and usize→ptr ops emit `inttoptr` — the spec's
+    // provenance shape. The IR tests here pin the *function shape*
+    // (callable, returns the right type, does not crash codegen); the
+    // `!provenance` metadata refinement remains open in the tracker.
 
     #[test]
     fn test_ir_ptr_addr_compiles() {
@@ -2123,6 +2121,99 @@ fn main() {
         let out = run_program(src);
         if let Some(out) = out {
             assert_eq!(out, "1\n");
+        }
+    }
+
+    // ── CStr borrowed surface (Phase 8 — the first pointer-producer) ──
+    //
+    // `c"..."` lowers to a NUL-terminated internal rodata global carried
+    // as a `{ptr, i64}` slice-struct value; `as_ptr` / `len` / `is_empty`
+    // / `as_bytes` are extract/compare ops on that aggregate
+    // (`compile_cstr_method`). design.md § C-String Literals.
+
+    #[test]
+    fn test_ir_cstr_literal_emits_nul_terminated_internal_global() {
+        let ir = ir_for("fn main() { let s = c\"hi\"; println(s.len()); }");
+        // [3 x i8] = 2 source bytes + the compiler-appended NUL.
+        assert!(
+            ir.contains("internal constant [3 x i8] c\"hi\\00\""),
+            "expected NUL-terminated internal rodata global; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_cstr_as_ptr_passes_rodata_pointer_directly() {
+        // The design pins `as_ptr` as a direct rodata pointer — no copy,
+        // no runtime call. The lowering is an extractvalue on the
+        // literal's `{ptr, i64}` aggregate, which LLVM constant-folds on
+        // a literal receiver: the call site receives the `@cstr` global
+        // itself. Also pins the pointer-typed extern param lowering
+        // (`declare void @sink(ptr ...)` — the `TypeKind::Pointer` arm,
+        // not the historical i64 fall-through).
+        let ir = ir_for(
+            "effect resource R;\n\
+             host fn sink(p: *const u8) with writes(R);\n\
+             pub fn main() with writes(R) { sink(c\"x\".as_ptr()); }",
+        );
+        assert!(
+            ir.contains("declare void @sink(ptr"),
+            "pointer param must lower to `ptr`, not i64; got IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("@sink(ptr @cstr"),
+            "as_ptr on a literal should fold to the rodata global at the \
+             call site; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_cstr_len_is_empty_as_bytes() {
+        // Interpreter parity: tests/interpreter.rs pins the same outputs
+        // for the same surface (test_cstr_len_and_is_empty +
+        // test_cstr_as_bytes_yields_source_bytes).
+        let src = r#"
+fn main() {
+    let msg = c"hello, world";
+    println(msg.len());
+    if c"".is_empty() { println("empty"); }
+    let bytes = c"abc".as_bytes();
+    println(bytes.len());
+    println(bytes[0]);
+    println(bytes[2]);
+    let annotated: ref CStr = c"hi";
+    println(annotated.len());
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "12\nempty\n3\n97\n99\n2\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_cstr_as_ptr_feeds_libc_puts() {
+        // The design's flagship FFI example (§ C-String Literals "FFI
+        // handoff"): pass a `c"..."` literal's pointer to libc `puts`
+        // through an `unsafe extern "C"` declaration — declare → as_ptr
+        // → call → link → run, with the host libc consuming the
+        // NUL-terminated bytes. Covers both the binding and
+        // literal-receiver forms.
+        let src = r#"
+effect resource Console;
+
+unsafe extern "C" {
+    fn puts(s: *const u8) -> i32 with writes(Console);
+}
+
+pub fn main() with writes(Console) {
+    let msg: ref CStr = c"hello, world";
+    puts(msg.as_ptr());
+    puts(c"literal receiver".as_ptr());
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "hello, world\nliteral receiver\n");
         }
     }
 

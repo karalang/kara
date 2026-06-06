@@ -10833,10 +10833,14 @@ fn wasm_browser_build_aborts_on_target_gate_violation() {
 ///     import-entry assertion lives here (the karac subprocess owns
 ///     its process-global active target; an in-process IR test would
 ///     race parallel codegen tests);
-///   - `readString` decodes a (ptr, len) pair (synthetic memory — the
-///     language has no pointer-producer surface yet, so a Kāra-side
-///     string passing E2E is blocked on Phase-8 `as_ptr`; see the
-///     phase-10 tracker);
+///   - a real guest string crosses the boundary: the Kāra side passes
+///     `c"..."` through `log_str(msg.as_ptr(), msg.len())` and the host
+///     impl decodes it byte-exactly (non-ASCII UTF-8 included) with
+///     `ctx.readString` — the pointer arrives as a JS number (wasm32
+///     pointers are i32-width scalars), the i64 len as BigInt;
+///   - `readString` also decodes a (ptr, len) pair against synthetic
+///     memory (standalone-helper check, kept from the pre-`as_ptr` era
+///     when no pointer-producer surface existed);
 ///   - missing host impls reject loudly BEFORE any wasm runs, naming
 ///     the missing fn;
 ///   - `println` output routes through the polyfill's fd_write to the
@@ -10857,6 +10861,8 @@ fn main() {
     let doubled = report(21);
     let tripled = report(doubled);
     report(tripled);
+    let msg = c"hello from k\u{101}ra guest";
+    log_str(msg.as_ptr(), msg.len());
     println("done");
 }
 "#,
@@ -10898,6 +10904,7 @@ if (!missingCaught.includes("log_str")) {
 }
 
 const calls = [];
+const logged = [];
 await run({
   report(x, ctx) {
     if (typeof x !== "bigint") throw new Error("i64 must arrive as BigInt");
@@ -10908,16 +10915,24 @@ await run({
     return x * 2n;
   },
   log_str(ptr, len, ctx) {
-    console.log("log_str:", ctx.readString(ptr, len));
+    // wasm32 pointers are i32-width scalars → JS number; i64 len → BigInt.
+    if (typeof ptr !== "number") throw new Error("ptr must arrive as number, got " + typeof ptr);
+    if (typeof len !== "bigint") throw new Error("i64 len must arrive as BigInt, got " + typeof len);
+    logged.push(ctx.readString(ptr, len));
   },
 });
 if (calls.length !== 3 || calls[0] !== 21n || calls[1] !== 42n || calls[2] !== 84n) {
   throw new Error("bad call sequence: " + calls.map(String).join(","));
 }
+// Real guest string through kara_host: c"..." → as_ptr/len → readString.
+// Byte-exact, including the non-ASCII "ā" (multi-byte UTF-8 crosses intact).
+if (logged.length !== 1 || logged[0] !== "hello from kāra guest") {
+  throw new Error("bad log_str round-trip: " + JSON.stringify(logged));
+}
 
-// Import-entry assertion: kara_host.report must be a genuine WASM
-// import. (log_str is declared but never called, so wasm-ld may GC it
-// from the import section — the glue contract still requires its impl.)
+// Import-entry assertion: kara_host.report and kara_host.log_str must
+// both be genuine WASM imports (log_str is now called from the guest,
+// so it must survive wasm-ld import-section GC).
 const mod = await WebAssembly.compile(await readFile("./hosted.wasm"));
 const karaImports = WebAssembly.Module.imports(mod).filter(
   (i) => i.module === "kara_host",
@@ -10927,9 +10942,14 @@ if (!karaImports.some((i) => i.name === "report" && i.kind === "function")) {
     "kara_host.report import entry missing: " + JSON.stringify(karaImports),
   );
 }
+if (!karaImports.some((i) => i.name === "log_str" && i.kind === "function")) {
+  throw new Error(
+    "kara_host.log_str import entry missing: " + JSON.stringify(karaImports),
+  );
+}
 
-// readString against synthetic memory (no Kāra-side pointer producer
-// yet — Phase-8 as_ptr; see the phase-10 tracker entry).
+// readString against synthetic memory (standalone-helper check, kept
+// from the pre-as_ptr era; the real-memory path is asserted above).
 const synth = { buffer: new TextEncoder().encode("xxhello").buffer };
 if (readString(synth, 2, 5) !== "hello") throw new Error("readString broken");
 

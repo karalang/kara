@@ -1588,6 +1588,23 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `CStr` method dispatch — the `c"..."` literal types as `ref CStr`
+        // (see `infer_expr_inner`'s CStringLit arm), so the deref'd
+        // named-receiver shape lands here. `as_ptr` / `len` / `is_empty` /
+        // `as_bytes` per design.md § C-String Literals. The
+        // `method_callee_types` insert mirrors the HTTP arm below: CStr
+        // dispatches through a hardcoded arm (no impl block), and codegen's
+        // `compile_method_call` keys its CStr routing off the recorded
+        // `CStr.<method>` — without it, dispatch falls through to the
+        // user-impl-block lookup, which errors.
+        if let Type::Named { name, .. } = &obj_ty_for_named {
+            if name == "CStr" {
+                self.method_callee_types
+                    .insert(SpanKey::from_span(span), format!("CStr.{}", method));
+                return self.infer_cstr_method(method, args, span);
+            }
+        }
+
         // `Client` / `Response` / `HttpError` / `RequestBuilder` method dispatch.
         if let Type::Named { name, .. } = &obj_ty_for_named {
             if matches!(

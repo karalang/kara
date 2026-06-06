@@ -19166,6 +19166,79 @@ fn c_string_literal_expr_type_records_ref_cstr() {
     );
 }
 
+// ── CStr borrowed-surface methods (Phase 8 — the first pointer-producer)
+//
+// `as_ptr` / `len` / `is_empty` / `as_bytes` per design.md § C-String
+// Literals. `as_ptr() -> *const u8` is the language's first safe
+// pointer-producer; the phase-10 `(ptr, len)` host-fn E2E rides on it.
+
+#[test]
+fn cstr_as_ptr_types_as_const_u8_pointer() {
+    let result =
+        typecheck_ok("fn main() {\n    let s = c\"hi\";\n    let p: *const u8 = s.as_ptr();\n}");
+    assert!(result.errors.is_empty());
+}
+
+#[test]
+fn cstr_len_types_as_i64_and_is_empty_as_bool() {
+    typecheck_ok(
+        "fn main() {\n    let s = c\"hi\";\n    let n: i64 = s.len();\n    let e: bool = s.is_empty();\n}",
+    );
+}
+
+#[test]
+fn cstr_as_bytes_types_as_slice_u8() {
+    typecheck_ok("fn main() {\n    let s = c\"hi\";\n    let b: Slice[u8] = s.as_bytes();\n}");
+}
+
+#[test]
+fn cstr_methods_work_on_literal_receiver_and_annotated_binding() {
+    // Literal receiver + the design's annotated form (`let msg: ref CStr
+    // = c"..."` — requires the scope-0 `CStr` registration).
+    typecheck_ok(
+        "fn main() {\n    let n = c\"abc\".len();\n    let msg: ref CStr = c\"hello\";\n    let p = msg.as_ptr();\n}",
+    );
+}
+
+#[test]
+fn cstr_unknown_method_is_no_method_found_with_candidates() {
+    let errors = typecheck_errors("fn main() {\n    c\"x\".to_uppercase();\n}");
+    let msg = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::NoMethodFound)
+        .map(|e| e.message.clone())
+        .expect("expected NoMethodFound diagnostic");
+    assert!(
+        msg.contains("CStr"),
+        "diagnostic should name the CStr receiver type: {msg}"
+    );
+}
+
+#[test]
+fn cstr_len_rejects_arguments() {
+    let errors = typecheck_errors("fn main() {\n    c\"x\".len(1);\n}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs),
+        "expected WrongNumberOfArgs, got: {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn cstr_as_ptr_feeds_pointer_param_extern_call() {
+    // The (ptr, len) host-fn shape the phase-10 browser E2E exercises.
+    typecheck_ok(
+        "effect resource Reporter;\n\
+         host fn report_str(ptr: *const u8, len: i64) with writes(Reporter);\n\
+         pub fn main() with writes(Reporter) {\n\
+             let msg = c\"hello\";\n\
+             report_str(msg.as_ptr(), msg.len());\n\
+         }",
+    );
+}
+
 // ── Raw pointer construction (line 573 / v60 item 19) ────────────
 //
 // `ptr.const(place)` / `ptr.mut(place)` — Slice 1b: typechecker

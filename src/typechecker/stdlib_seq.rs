@@ -379,6 +379,62 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Infer the return type of a method call on `CStr` (receiver `ref CStr`
+    /// — the type of a `c"..."` literal). The borrowed surface per
+    /// design.md § C-String Literals: `as_ptr` is the language's first safe
+    /// pointer-producer (`*const u8` into the literal's rodata bytes), and
+    /// the introspection trio (`len` / `is_empty` / `as_bytes`) reports the
+    /// source bytes excluding the trailing NUL. The owning `CString` type
+    /// and the `to_string` / `to_string_slice` conversions are the
+    /// remaining Phase-8 surface (tracked in phase-8-stdlib-floor.md).
+    pub(super) fn infer_cstr_method(
+        &mut self,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let require_no_args = |s: &mut Self, name: &str| {
+            if !args.is_empty() {
+                s.type_error(
+                    format!("'{}' takes no arguments", name),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+            }
+        };
+        match method {
+            "as_ptr" => {
+                require_no_args(self, "as_ptr");
+                Type::Pointer {
+                    is_mut: false,
+                    inner: Box::new(Type::UInt(UIntSize::U8)),
+                }
+            }
+            "len" => {
+                require_no_args(self, "len");
+                Type::Int(IntSize::I64)
+            }
+            "is_empty" => {
+                require_no_args(self, "is_empty");
+                Type::Bool
+            }
+            "as_bytes" => {
+                require_no_args(self, "as_bytes");
+                Type::Slice {
+                    element: Box::new(Type::UInt(UIntSize::U8)),
+                    mutable: false,
+                }
+            }
+            _ => self.require_known_method(
+                "CStr",
+                method,
+                &["as_bytes", "as_ptr", "is_empty", "len"],
+                args,
+                span,
+            ),
+        }
+    }
+
     /// Infer the return type of a method call on a `Slice[T]` or `mut Slice[T]`.
     /// Handles the full read-only surface and the mutation-only surface for
     /// `mut Slice[T]`. Called from `infer_method_call` when the object type is

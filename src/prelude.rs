@@ -252,6 +252,15 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // counterpart lives in `PRELUDE_FUNCTIONS` below.
     "TaskGroup",
     "TaskHandle",
+    // `CStr` — the borrowed C-string type produced by `c"..."` literals
+    // (design.md § C-String Literals). Scope-0 so the `let s: ref CStr =
+    // c"..."` annotation form resolves; the type has no constructible
+    // surface (stub struct, no public fields) — values only arise from
+    // the literal form at v1. Method surface (`as_ptr` / `len` /
+    // `is_empty` / `as_bytes`) dispatches through the typechecker's
+    // `infer_cstr_method` arm, not an impl block. The owning `CString`
+    // joins this list when its Phase-8 slice lands.
+    "CStr",
 ];
 
 /// Operator and conversion trait names visible without import. Lets

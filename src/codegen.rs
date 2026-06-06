@@ -1819,6 +1819,16 @@ pub(super) struct Codegen<'ctx> {
     /// `Vec[u8]` iterates per byte. Populated alongside the existing
     /// `vec_elem_types` insertion at every String-registration site.
     pub(crate) string_vars: HashSet<String>,
+    /// Variables whose surface type is `ref CStr` (the `c"..."` literal
+    /// type — design.md § C-String Literals). Physically a `{ptr, i64}`
+    /// slice-struct value: the NUL-terminated rodata pointer plus the
+    /// source byte count (excluding the NUL), which is what makes `len()`
+    /// O(1) per the design. Kept separate from `slice_elem_types` so the
+    /// CStr method surface (`as_ptr` / `as_bytes` / `len` / `is_empty`,
+    /// dispatched in `compile_cstr_method`) doesn't leak onto real
+    /// slices and vice versa. Populated by the `let` RHS/annotation
+    /// heuristics (stmts.rs) and `register_var_from_type_expr` (params).
+    pub(crate) cstr_vars: HashSet<String>,
     /// HTTP handler ABI trampoline (2026-05-09): cache of per-handler-fn
     /// `extern "C"` shims. Key is the user handler's mangled fn name (e.g.
     /// `"handle"`); value is the synthesized shim function. Sharing the
@@ -3776,6 +3786,7 @@ impl<'ctx> Codegen<'ctx> {
             set_elem_type_names: HashMap::new(),
             set_elem_type_exprs: HashMap::new(),
             string_vars: HashSet::new(),
+            cstr_vars: HashSet::new(),
             http_shim_cache: HashMap::new(),
             karac_map_new_fn,
             karac_map_free_fn,

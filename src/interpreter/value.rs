@@ -60,6 +60,15 @@ pub enum Value {
     Bool(bool),
     Char(char),
     String(String),
+    /// `ref CStr` — the value of a `c"..."` literal (design.md § C-String
+    /// Literals). Bytes exclude the trailing NUL (the terminator is a
+    /// codegen-level artifact; `len()` reports the source byte count).
+    /// `Arc` so aliasing a `ref CStr` binding is a refcount bump,
+    /// mirroring the compiled form's thin-reference semantics (a rodata
+    /// pointer). The tree-walk interpreter has no raw-pointer
+    /// representation, so `as_ptr()` is rejected at eval time with a
+    /// pointer at compiled mode (see `try_eval_seq_method`'s CStr arm).
+    CStr(Arc<Vec<u8>>),
     Unit,
     Tuple(Vec<Value>),
     /// Sequence storage shared between the source binding and any live
@@ -644,6 +653,11 @@ impl std::fmt::Display for Value {
             Value::Bool(v) => write!(f, "{}", v),
             Value::Char(v) => write!(f, "{}", v),
             Value::String(v) => write!(f, "{}", v),
+            // Lossy UTF-8 render — `CStr` carries raw bytes, and Display
+            // here is a debug courtesy (the type doesn't coerce to String
+            // at the language level; f-string interpolation rejects it at
+            // typecheck via `type_supports_display`).
+            Value::CStr(bytes) => write!(f, "{}", String::from_utf8_lossy(bytes)),
             Value::Unit => write!(f, "()"),
             Value::Tuple(vals) => {
                 write!(f, "(")?;
@@ -935,6 +949,7 @@ impl Value {
             Value::Bool(_) => "Bool",
             Value::Char(_) => "Char",
             Value::String(_) => "String",
+            Value::CStr(_) => "CStr",
             Value::Unit => "Unit",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",

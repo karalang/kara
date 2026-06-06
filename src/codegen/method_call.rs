@@ -145,6 +145,23 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `CStr` method dispatch (design.md § C-String Literals). The
+        // receiver compiles to the `{ptr, i64}` slice-struct the
+        // CStringLit lowering produces (see `compile_expr`); every method
+        // is an extract/compare on that aggregate, so one helper serves
+        // literal, local-binding, and call-result receivers alike. Keyed
+        // off the typechecker-recorded `CStr.<method>` (the same pattern
+        // as the Vector arm above) — `cstr_vars` exists for *binding*
+        // registration heuristics, not dispatch.
+        if let Some(ref key) = dispatch_key {
+            if matches!(
+                key.as_str(),
+                "CStr.as_ptr" | "CStr.len" | "CStr.is_empty" | "CStr.as_bytes"
+            ) {
+                return self.compile_cstr_method(object, method);
+            }
+        }
+
         // Phase 6 line 17 — stdlib `TcpListener` / `TcpStream`
         // compiler-builtin dispatch. Routes through the lowerings in
         // `src/codegen/tcp.rs`, each of which composes a
@@ -1541,6 +1558,55 @@ impl<'ctx> super::Codegen<'ctx> {
         ))
     }
 
+    /// Lower a `CStr` borrowed-surface method (design.md § C-String
+    /// Literals). The receiver value is the `{ptr, i64}` slice-struct the
+    /// `CStringLit` lowering in `compile_expr` produces: field 0 is the
+    /// NUL-terminated rodata pointer, field 1 the source byte count
+    /// (excluding the NUL). `as_ptr` is the language's first safe
+    /// pointer-producer — it hands out field 0 directly (the FFI/host-fn
+    /// handoff per the design's `puts(msg.as_ptr())` example). `as_bytes`
+    /// returns the receiver aggregate unchanged: `Slice[u8]` shares the
+    /// exact `{ptr, i64}` layout and the NUL stays invisible because the
+    /// recorded len excludes it. Args are validated empty by the
+    /// typechecker (`infer_cstr_method`), so they're not threaded here.
+    fn compile_cstr_method(
+        &mut self,
+        object: &Expr,
+        method: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let recv = self.compile_expr(object)?;
+        let agg = recv.into_struct_value();
+        match method {
+            "as_ptr" => Ok(self
+                .builder
+                .build_extract_value(agg, 0, "cstr.as_ptr")
+                .unwrap()),
+            "len" => Ok(self
+                .builder
+                .build_extract_value(agg, 1, "cstr.len")
+                .unwrap()),
+            "is_empty" => {
+                let len = self
+                    .builder
+                    .build_extract_value(agg, 1, "cstr.len")
+                    .unwrap()
+                    .into_int_value();
+                let zero = self.context.i64_type().const_zero();
+                Ok(self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, len, zero, "cstr.is_empty")
+                    .unwrap()
+                    .into())
+            }
+            "as_bytes" => Ok(recv),
+            _ => Err(format!(
+                "codegen: no handler for CStr method '{}' (typechecker admits \
+                 as_ptr/len/is_empty/as_bytes only — this is a codegen bug)",
+                method
+            )),
+        }
+    }
+
     /// Lower an ambient built-in resource method (`env.set`, `clock.now`).
     ///
     /// A `with_provider[R]` override of an ambient resource is pushed onto
@@ -2920,11 +2986,17 @@ impl<'ctx> super::Codegen<'ctx> {
         args: &[CallArg],
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let i64_ty = self.context.i64_type();
-        // Helper: coerce a compiled receiver / argument value to i64,
-        // regardless of whether it flows as `PointerValue` (rare with
-        // the current ABI but possible for an intermediate result) or
-        // `IntValue`. Matches the same pattern used by
-        // `call_dispatch::coerce_to_i64` for the message-payload path.
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        // Raw pointers lower to genuine LLVM `ptr` since the CStr/as_ptr
+        // slice lifted `TypeKind::Pointer` off the historical i64
+        // fall-through (see `llvm_type_for_type_expr`) — the "deferred
+        // refinement" the original i64-ABI lowering here anticipated.
+        // ptr→usize ops emit `ptrtoint`, usize→ptr ops emit `inttoptr`,
+        // exactly the spec's provenance story (design.md § Pointer
+        // Provenance; the `!provenance` metadata refinement remains
+        // open). The two coercion helpers absorb either value shape so
+        // intermediate results that still flow as integers (e.g. a
+        // usize-typed local) compose with pointer-typed params.
         let to_i64 =
             |this: &mut Self, v: BasicValueEnum<'ctx>, label: &str| -> BasicValueEnum<'ctx> {
                 match v {
@@ -2934,6 +3006,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into(),
                     BasicValueEnum::IntValue(_) => v,
+                    _ => v,
+                }
+            };
+        let to_ptr =
+            |this: &mut Self, v: BasicValueEnum<'ctx>, label: &str| -> BasicValueEnum<'ctx> {
+                match v {
+                    BasicValueEnum::IntValue(iv) => this
+                        .builder
+                        .build_int_to_ptr(iv, ptr_ty, label)
+                        .unwrap()
+                        .into(),
+                    BasicValueEnum::PointerValue(_) => v,
                     _ => v,
                 }
             };
@@ -2952,9 +3036,9 @@ impl<'ctx> super::Codegen<'ctx> {
             //
             // Compile the first arg for side effects only — a
             // provenance-aware lowering would consult `p`'s
-            // `!provenance` metadata to reseat the address bits;
-            // current ABI represents both ptr and usize as i64, so the
-            // result is just `addr` coerced to i64.
+            // `!provenance` metadata to reseat the address bits; until
+            // that metadata lands, the result is just `addr` reseated
+            // into a pointer via `inttoptr`.
             "with_addr" | "with_addr_mut" if args.len() == 2 => {
                 let _ = self.compile_expr(&args[0].value)?;
                 let a = self.compile_expr(&args[1].value)?;
@@ -2963,7 +3047,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     "ptr.with_addr_mut"
                 };
-                Ok(Some(to_i64(self, a, label)))
+                Ok(Some(to_ptr(self, a, label)))
             }
             // addr: usize -> *_ T  (ptr.from_exposed / ptr.from_exposed_mut)
             "from_exposed" | "from_exposed_mut" if args.len() == 1 => {
@@ -2973,7 +3057,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     "ptr.from_exposed_mut"
                 };
-                Ok(Some(to_i64(self, a, label)))
+                Ok(Some(to_ptr(self, a, label)))
             }
             // (field_ptr: *_ F, offset: usize) -> *_ T
             //   (ptr.container_of / ptr.container_of_mut)
@@ -2981,11 +3065,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // Intrusive-DS pointer recovery — subtract the field
             // offset from the field-pointer's address bits. The
             // provenance-preserving lowering the spec describes is
-            // `field_ptr.with_addr(field_ptr.addr() - offset)` — under
-            // the current i64-pointer ABI that collapses to plain
-            // integer subtraction, which is what we emit here. The
-            // `with_addr` and `addr` round-trips are no-ops at the
-            // LLVM level (see slice 3's helper-docstring).
+            // `field_ptr.with_addr(field_ptr.addr() - offset)`, which
+            // is exactly the `ptrtoint` → integer subtract → `inttoptr`
+            // sequence emitted here.
             "container_of" | "container_of_mut" if args.len() == 2 => {
                 let field_ptr_val = self.compile_expr(&args[0].value)?;
                 let offset_val = self.compile_expr(&args[1].value)?;
@@ -3001,23 +3083,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_int_sub(
                         field_ptr_i64.into_int_value(),
                         offset_i64.into_int_value(),
-                        label,
+                        &format!("{label}.bits"),
                     )
                     .unwrap();
-                Ok(Some(result.into()))
+                Ok(Some(to_ptr(self, result.into(), label)))
             }
             // `ptr.const(place)` / `ptr.mut(place)` — raw pointer
             // construction from a place expression (typechecker
             // place-validator gate is upstream — design.md § Raw
-            // Pointer Construction, v60 item 19). Under the i64-
-            // pointer ABI, the result is the place's storage address
-            // coerced to i64. v1 covers the two common shapes:
+            // Pointer Construction, v60 item 19). The result is the
+            // place's storage address as a genuine `ptr` value. v1
+            // covers the two common shapes:
             //  - Identifier place: look up the binding's storage
             //    slot via `get_data_ptr` (handles owned alloca and
-            //    ref-param indirection), then `ptrtoint` to i64.
-            //  - Deref of an already-pointer SSA: the operand's i64
-            //    value *is* the address; emit the operand's compile
-            //    result directly.
+            //    ref-param indirection) — that slot pointer IS the
+            //    result, no cast needed.
+            //  - Deref of an already-pointer SSA: the operand's value
+            //    *is* the address; reseat through `to_ptr` in case it
+            //    still flows as an integer.
             // Field / index / nested-deref places fall through to
             // the generic identifier path via the synth-identifier
             // mechanism if reachable; a focused diagnostic for
@@ -3027,11 +3110,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 match &place.kind {
                     ExprKind::Identifier(name) => {
                         if let Some(ptr) = self.get_data_ptr(name) {
-                            let bits = self
-                                .builder
-                                .build_ptr_to_int(ptr, i64_ty, "ptr.place.addr")
-                                .unwrap();
-                            return Ok(Some(bits.into()));
+                            return Ok(Some(ptr.into()));
                         }
                         // Identifier didn't resolve to a binding (e.g.
                         // a free function name reached here). Fall
@@ -3044,17 +3123,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         operand,
                     } => {
                         let v = self.compile_expr(operand)?;
-                        Ok(Some(to_i64(self, v, "ptr.place.deref")))
+                        Ok(Some(to_ptr(self, v, "ptr.place.deref")))
                     }
                     _ => Ok(None),
                 }
             }
             // `ptr.null[T]()` / `ptr.null_mut[T]()` -> the all-zeroes
-            // pointer (LLVM null). Under the current i64-pointer ABI,
-            // this is the i64 constant 0. The two methods differ only
+            // pointer (LLVM `ptr null`). The two methods differ only
             // in their typechecker-reported return type (`*const T`
             // vs `*mut T`); the codegen value is identical.
-            "null" | "null_mut" if args.is_empty() => Ok(Some(i64_ty.const_int(0, false).into())),
+            "null" | "null_mut" if args.is_empty() => Ok(Some(ptr_ty.const_null().into())),
             // `ptr.dangling[T]()` / `ptr.dangling_mut[T]()` -> a
             // non-null pointer aligned to T's natural alignment, *not*
             // dereferenceable. Spec: design.md § Raw Pointer
@@ -3062,18 +3140,18 @@ impl<'ctx> super::Codegen<'ctx> {
             // `NonNull::dangling` (= `align_of::<T>() as *const T`).
             //
             // T-aware lowering would consult the type argument and
-            // emit `align_of[T]`. The current i64-pointer ABI does
-            // not thread the type argument to this hook, so v1 emits
-            // a fixed alignment of 8 (the max alignment of any built-
-            // in primitive on a 64-bit target — correct for every T
-            // whose alignment is <= 8, conservative for over-aligned
-            // SIMD / `#[repr(align(N))]` types). The actual deref of
-            // a dangling pointer is unsafe and *always* UB; the only
-            // observable property is non-null + alignment, both of
+            // emit `align_of[T]`. The type argument is not threaded to
+            // this hook, so v1 emits a fixed alignment of 8 (the max
+            // alignment of any built-in primitive on a 64-bit target —
+            // correct for every T whose alignment is <= 8, conservative
+            // for over-aligned SIMD / `#[repr(align(N))]` types),
+            // reseated into a `ptr` via constant `inttoptr`. The actual
+            // deref of a dangling pointer is unsafe and *always* UB; the
+            // only observable property is non-null + alignment, both of
             // which hold here. Tracker: phase-5-diagnostics line 573.
-            "dangling" | "dangling_mut" if args.is_empty() => {
-                Ok(Some(i64_ty.const_int(8, false).into()))
-            }
+            "dangling" | "dangling_mut" if args.is_empty() => Ok(Some(
+                i64_ty.const_int(8, false).const_to_pointer(ptr_ty).into(),
+            )),
             // `ptr.is_null[T](p)` -> `p == 0` as bool (i1). The
             // typechecker reports the result as `Type::Bool`; codegen
             // returns an i1 matching how the BinOp::Eq path produces

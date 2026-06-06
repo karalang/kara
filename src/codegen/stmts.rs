@@ -978,6 +978,15 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                             detected = true;
                         }
+                        // `let s: ref CStr = c"..."` — register the cstr
+                        // binding so downstream registration heuristics
+                        // (`as_bytes` slice inference) see it. Method
+                        // dispatch itself keys off the typechecker-recorded
+                        // `CStr.<method>`, not this set.
+                        if Self::is_cstr_type_expr(te) {
+                            self.cstr_vars.insert(var_name.clone());
+                            detected = true;
+                        }
                         if let Some((k_ty, v_ty)) = self.extract_map_kv_types(te) {
                             self.map_key_types.insert(var_name.clone(), k_ty);
                             self.map_val_types.insert(var_name.clone(), v_ty);
@@ -1068,6 +1077,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.vec_elem_types
                             .insert(var_name.clone(), self.context.i8_type().into());
                         self.string_vars.insert(var_name.clone());
+                    }
+                    // Infer `ref CStr` from a `let s = c"..."` RHS — the
+                    // unannotated mirror of the `is_cstr_type_expr` arm
+                    // above (same split as StringLit ↔ `: String`).
+                    if !detected && matches!(&value.kind, ExprKind::CStringLit { .. }) {
+                        self.cstr_vars.insert(var_name.clone());
                     }
                     // Atomic[T] inferred from `let a = Atomic.new(v)` —
                     // the slot stores `v`'s primitive directly (see the

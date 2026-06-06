@@ -81,6 +81,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_struct_value();
                 Ok(agg.into())
             }
+            // `c"..."` — NUL-terminated rodata bytes carried as a `{ptr, i64}`
+            // slice-struct value: field 0 points at the N+1-byte constant
+            // (the compiler-appended NUL is invisible at the surface), field
+            // 1 is the source byte count N, statically known so `len()` is
+            // O(1) per design.md § C-String Literals. `const_string` (not
+            // `build_global_string_ptr`) because the payload is raw bytes —
+            // `\xHH` escapes need not be valid UTF-8. No cap word and no
+            // drop: the literal is `'static` rodata, never freed.
+            ExprKind::CStringLit { bytes, .. } => {
+                let i8_ty = self.context.i8_type();
+                let arr_ty = i8_ty.array_type(bytes.len() as u32 + 1); // +1 NUL
+                let data = self.context.const_string(bytes, true); // null-terminated
+                let data_global = self.module.add_global(arr_ty, None, "cstr");
+                data_global.set_initializer(&data);
+                data_global.set_constant(true);
+                data_global.set_linkage(inkwell::module::Linkage::Internal);
+
+                let slice_ty = self.slice_struct_type();
+                let i64_t = self.context.i64_type();
+                let len = i64_t.const_int(bytes.len() as u64, false);
+                let mut agg = slice_ty.get_undef();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, data_global.as_pointer_value(), 0, "cstr.ptr")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, len, 1, "cstr.len")
+                    .unwrap()
+                    .into_struct_value();
+                Ok(agg.into())
+            }
             ExprKind::InterpolatedStringLit(parts) => {
                 // Build an empty String alloca, then append each part.
                 let vec_ty = self.vec_struct_type();

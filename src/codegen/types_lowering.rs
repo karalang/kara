@@ -171,6 +171,19 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Ref(_) | TypeKind::MutRef(_) => {
                 self.context.ptr_type(AddressSpace::default()).into()
             }
+            // Raw pointers (`*const T` / `*mut T`) are genuine LLVM `ptr`
+            // values. Until `CStr.as_ptr` landed (the first safe
+            // pointer-producer — design.md § C-String Literals), no Kāra
+            // expression ever *produced* a pointer value, so the `_ => i64`
+            // fall-through below silently mis-declared every pointer-typed
+            // extern/host-fn parameter as `i64` — unobservable while
+            // pointer params were declare-only, but a module-verifier
+            // error ("Call parameter type does not match function
+            // signature") the moment a real `ptr` argument reaches the
+            // call. `wasm_glue.rs`'s `JsScalar::Number` mapping for
+            // pointer params already assumed the real `ptr` lowering
+            // (wasm32 pointers are i32-width scalars, not i64).
+            TypeKind::Pointer { .. } => self.context.ptr_type(AddressSpace::default()).into(),
             TypeKind::MutSlice(_) => self.slice_struct_type().into(),
             _ => self.context.i64_type().into(),
         }
@@ -466,6 +479,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // — typechecker has gated the receiver to String.
                 Some(self.context.i8_type().into())
             }
+            ExprKind::MethodCall { method, .. } if method == "as_bytes" => {
+                // `CStr.as_bytes() -> Slice[u8]` (design.md § C-String
+                // Literals). Same fixed-u8 story as `bytes` above —
+                // `as_bytes` is CStr-only at the typechecker layer, and
+                // the value is already the `{ptr, i64}` slice header.
+                Some(self.context.i8_type().into())
+            }
             ExprKind::Index { object, index } => {
                 if matches!(&index.kind, ExprKind::Range { .. }) {
                     self.infer_elem_from_source(object)
@@ -552,6 +572,18 @@ impl<'ctx> super::Codegen<'ctx> {
             path.segments.first().map(|s| s.as_str()) == Some("String")
         } else {
             false
+        }
+    }
+
+    /// True for `CStr` and `ref CStr` type expressions. The `ref` form is
+    /// the surface type of a `c"..."` literal (design.md § C-String
+    /// Literals); the bare form is accepted because the fat `{ptr, i64}`
+    /// value IS the reference — there's no distinct owned layout at v1.
+    pub(super) fn is_cstr_type_expr(te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Path(path) => path.segments.last().map(|s| s.as_str()) == Some("CStr"),
+            TypeKind::Ref(inner) => Self::is_cstr_type_expr(inner),
+            _ => false,
         }
     }
 

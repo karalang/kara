@@ -34,6 +34,11 @@ impl<'a> super::Interpreter<'a> {
             ExprKind::ByteLit(b) => Value::Int(i64::from(*b)),
             ExprKind::StringLit(s) => Value::String(s.clone()),
             ExprKind::MultiStringLit(s) => Value::String(s.clone()),
+            // `c"..."` — bytes exclude the trailing NUL (a codegen-level
+            // artifact; design.md § C-String Literals pins `len()` to the
+            // source byte count). See `Value::CStr`'s doc for the
+            // representation rationale.
+            ExprKind::CStringLit { bytes, .. } => Value::CStr(std::sync::Arc::new(bytes.clone())),
             ExprKind::InterpolatedStringLit(parts) => {
                 let mut result = String::new();
                 for part in parts {
