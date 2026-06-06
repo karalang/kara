@@ -177,12 +177,25 @@ chart set and methodology: **[BENCHMARKS.md](https://github.com/karalang/kara-ka
 raw numbers: **[bench-results.json](https://github.com/karalang/kara-katas/blob/main/bench-results.json)**.
 
 **Sequential lane** (`KARAC_AUTO_PAR=0`) — the headline, apples-to-apples
-against single-threaded Rust/C/Go:
+against single-threaded Rust/C/Go. Each dot is one program; lower is
+faster; everything relative to **Rust = 1.0**.
 
-- **Runtime** ([chart](https://github.com/karalang/kara-katas/blob/main/graphs/runtime-seq.svg)) — Kāra tracks C closely and straddles the Rust baseline: ahead on allocation/RC- and string-heavy kernels, behind on a few tight numeric loops. Go trails on most single-threaded work.
-- **Binary size** ([chart](https://github.com/karalang/kara-katas/blob/main/graphs/binary-seq.svg)) — C-sized (~33 KiB) for most programs, rising to a ~285 KiB floor when the larger runtime surface links. Rust ~14× above C; Go ~70× (runtime + GC in every binary).
+![Runtime, sequential lane — relative to Rust](docs/assets/runtime-seq.svg)
+
+Kāra tracks C closely and straddles the Rust baseline — ahead on
+allocation/RC- and string-heavy kernels, behind on a few tight numeric
+loops. Go trails on most single-threaded work.
+
+![Binary size, sequential lane — relative to Rust, log scale](docs/assets/binary-seq.svg)
+
+C-sized binaries (~33 KiB) for most programs, rising to a ~285 KiB floor
+when the larger runtime surface links. Rust ~14× above C; Go ~70×
+(runtime + GC in every binary).
+
 - **Runtime memory** ([chart](https://github.com/karalang/kara-katas/blob/main/graphs/rss-seq.svg)) — Kāra/C/Rust at parity; Kāra runs leak-free at native footprint. Go's GC heap is 2–8×.
 - **Compile cost** ([time](https://github.com/karalang/kara-katas/blob/main/graphs/compile-elapsed.svg) · [memory](https://github.com/karalang/kara-katas/blob/main/graphs/compile-rss.svg)) — faster than `rustc -O` on every program (~0.55–0.8×) and ~0.3× its peak memory.
+
+<sub>The two charts above are mirrored from kara-katas into [`docs/assets/`](docs/assets) (GitHub doesn't reliably render hotlinked external SVGs). After adding a kata, regenerate them in kara-katas (`python3 scripts/bench-graph.py`) and refresh with [`scripts/sync-bench-charts.sh`](scripts/sync-bench-charts.sh).</sub>
 
 **Auto-parallel lane** (default runtime, reported separately) — Kāra's
 compiler auto-parallelizes dependency-free reductions/maps with no
