@@ -104,6 +104,16 @@ jobs:
   # recipes live in those crates' Cargo.toml headers. Native legs are
   # covered elsewhere: linux/macos/windows by `test` (workspace default
   # `tls`), linux aarch64/armv7 by `cross` above, macOS x86_64 here.
+  #
+  # The cortex-m leg is a NEGATIVE gate (`expect_unsupported`): ring's
+  # curve25519 ARM assembly (x25519-asm-arm.S) is ARM-mode-only and
+  # cortex-m is Thumb-only, so the provider cannot assemble there — an
+  # ISA limitation, not a toolchain gap (the arm-none-eabi sysroot is
+  # installed and headers resolve; the .S file itself rejects -mthumb).
+  # The leg asserts the failure is still exactly ring's C/asm build: it
+  # FAILS LOUDLY if the probe ever starts compiling (ecosystem caught
+  # up — flip to a real gate) or fails for any other reason. Decision
+  # record: phase-10-targets.md § "Embedded TLS provider decision".
   tls-cross:
     name: TLS cross-compile (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
@@ -123,6 +133,7 @@ jobs:
             runner: ubuntu-latest
             target: thumbv7em-none-eabihf
             package: karac-tls-cross-probe-embedded
+            expect_unsupported: true
           - name: macos-x86_64
             runner: macos-latest
             target: x86_64-apple-darwin
@@ -153,11 +164,28 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
 
       - name: Check TLS provider for target
+        if: ${{ !matrix.expect_unsupported }}
         env:
           CC_wasm32_unknown_unknown: clang
           CC_wasm32_wasip1: clang
-          CC_thumbv7em_none_eabihf: arm-none-eabi-gcc
         run: cargo check -p ${{ matrix.package }} --target ${{ matrix.target }}
+
+      - name: Check TLS provider is still known-unsupported (negative gate)
+        if: ${{ matrix.expect_unsupported }}
+        env:
+          CC_thumbv7em_none_eabihf: arm-none-eabi-gcc
+        run: |
+          set -o pipefail
+          if cargo check -p ${{ matrix.package }} --target ${{ matrix.target }} 2>&1 | tee /tmp/tls-cross.log; then
+            echo "::error::${{ matrix.name }}: the TLS provider now COMPILES for ${{ matrix.target }} — the ecosystem caught up. Drop expect_unsupported to flip this leg to a real gate, and resolve the phase-10 'Embedded TLS provider decision' entry."
+            exit 1
+          fi
+          if ! grep -q 'failed to run custom build command for `ring' /tmp/tls-cross.log; then
+            echo "::error::${{ matrix.name }}: probe failed for an UNEXPECTED reason (not ring's C/asm build) — investigate; do not paper over a new failure with this negative gate."
+            tail -50 /tmp/tls-cross.log
+            exit 1
+          fi
+          echo "${{ matrix.name }}: known-unsupported, as documented — ring's ARM-mode asm (x25519-asm-arm.S) cannot assemble for the Thumb-only ${{ matrix.target }}. See phase-10 'Embedded TLS provider decision'."
 
   # Phase-8 line 48 (public-CA trust default). Proves the runtime's
   # `Client.get("https://...")` validates a real CA-signed peer cert
