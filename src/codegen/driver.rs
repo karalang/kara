@@ -501,11 +501,39 @@ pub(super) fn c_malloc_symbol_cstr() -> &'static std::ffi::CStr {
 /// (the eba48194 lesson: an unset/wrong layout under-allocates coro
 /// frames).
 pub(super) fn create_target_machine() -> Result<TargetMachine, String> {
+    create_target_machine_with_cpu(crate::target::target_cpu_override())
+}
+
+/// `cpu_override` swaps the CPU baseline while keeping every other
+/// target-machine parameter (triple, features, reloc model) at the
+/// per-target default — the `--target-cpu` contract (design.md § CPU
+/// Baseline Targeting): widening or narrowing the baseline is the
+/// user's call, the rest of the machine configuration is not.
+/// `--target-features` is the deferred sibling knob.
+fn create_target_machine_with_cpu(cpu_override: Option<&str>) -> Result<TargetMachine, String> {
     if crate::target::active_target_is_wasm() {
-        create_wasm_target_machine()
+        create_wasm_target_machine(cpu_override)
     } else {
-        create_native_target_machine()
+        create_native_target_machine(cpu_override)
     }
+}
+
+/// Print LLVM's supported-CPU table for the active target to stderr
+/// (the `karac build --target-cpu=help` listing, mirroring `rustc -C
+/// target-cpu=help`). Constructing a target machine with the
+/// pseudo-CPU `"help"` makes LLVM's `MCSubtargetInfo` dump the
+/// registry — `Available CPUs for this target:` followed by one
+/// two-space-indented `<name> - <desc>` line per CPU, then the
+/// features table. There is no LLVM-C API for this list (rustc carries
+/// a custom C++ shim); the stderr dump is the only portable channel,
+/// which is also why validation (`validate_target_cpu`) captures it
+/// from a child process instead of in-process.
+pub fn print_target_cpu_listing() {
+    eprintln!(
+        "Supported CPUs for target `{}`:",
+        crate::target::active_target()
+    );
+    let _ = create_target_machine_with_cpu(Some("help"));
 }
 
 /// Target machine for the wasm targets (`wasm_wasi`, `wasm_browser` —
@@ -515,7 +543,7 @@ pub(super) fn create_target_machine() -> Result<TargetMachine, String> {
 /// baseline `generic` (MVP wasm — SIMD-128 lowering is the separate
 /// phase-10 entry). Static reloc: `wasm-ld` links a non-relocatable
 /// module; PIC is only for shared-library wasm.
-fn create_wasm_target_machine() -> Result<TargetMachine, String> {
+fn create_wasm_target_machine(cpu_override: Option<&str>) -> Result<TargetMachine, String> {
     Target::initialize_webassembly(&InitializationConfig::default());
 
     let triple = inkwell::targets::TargetTriple::create("wasm32-wasip1");
@@ -525,7 +553,7 @@ fn create_wasm_target_machine() -> Result<TargetMachine, String> {
     target
         .create_target_machine(
             &triple,
-            "generic",
+            cpu_override.unwrap_or("generic"),
             "",
             backend_optimization_level(),
             RelocMode::Default,
@@ -534,7 +562,7 @@ fn create_wasm_target_machine() -> Result<TargetMachine, String> {
         .ok_or_else(|| "Failed to create wasm32 target machine".to_string())
 }
 
-fn create_native_target_machine() -> Result<TargetMachine, String> {
+fn create_native_target_machine(cpu_override: Option<&str>) -> Result<TargetMachine, String> {
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| format!("Failed to initialize native target: {}", e))?;
 
@@ -543,7 +571,13 @@ fn create_native_target_machine() -> Result<TargetMachine, String> {
         Target::from_triple(&triple).map_err(|e| format!("Failed to get target: {}", e))?;
 
     let triple_str = triple.as_str().to_str().unwrap_or("");
-    let (cpu, features) = default_cpu_and_features(triple_str);
+    // An override swaps the CPU only; the table's default *features*
+    // string stays (rustc's `-C target-cpu` posture — target-spec
+    // features apply regardless of the CPU choice). E.g. on
+    // aarch64-linux, `--target-cpu=neoverse-v1` keeps
+    // `+outline-atomics`.
+    let (default_cpu, features) = default_cpu_and_features(triple_str);
+    let cpu = cpu_override.unwrap_or(default_cpu);
 
     target
         .create_target_machine(
@@ -581,9 +615,11 @@ fn create_native_target_machine() -> Result<TargetMachine, String> {
 /// other shipping compiler produces.
 ///
 /// Override via `--target-cpu` / `KARAC_TARGET_CPU` / `[release] target-cpu`
-/// in `kara.toml` lands as a follow-up (see phase-10-targets.md). The
-/// fallback `("generic", "")` is intentional for unknown triples: better a
-/// portable binary than one that won't load.
+/// in `kara.toml` (precedence in that order) swaps the CPU while keeping
+/// this table's features string — see `create_native_target_machine` and
+/// `cli.rs::apply_target_cpu_override`. The fallback `("generic", "")` is
+/// intentional for unknown triples: better a portable binary than one
+/// that won't load.
 ///
 /// See `design.md § CPU Baseline Targeting`.
 fn default_cpu_and_features(triple: &str) -> (&'static str, &'static str) {
@@ -602,6 +638,93 @@ fn default_cpu_and_features(triple: &str) -> (&'static str, &'static str) {
         (false, true, true, false) => ("core2", ""),
         _ => ("generic", ""),
     }
+}
+
+/// Validate a `--target-cpu` value against LLVM's CPU registry for the
+/// active target. `Err` carries the full user-facing diagnostic
+/// (unknown name + the supported listing — the tracker's `rustc -C
+/// target-cpu=help` mirror).
+///
+/// Mechanism: LLVM-C has no CPU-listing or `has_known_cpu` API, and on
+/// an unknown CPU `createTargetMachine` merely warns on stderr and
+/// falls back to generic — exactly the silent baseline-neutering this
+/// validation exists to close. The registry's only portable channel is
+/// MCSubtargetInfo's stderr dump on the pseudo-CPU `"help"`, so karac
+/// re-invokes itself (`__list-target-cpus <target>`, a hidden argv
+/// handled in `cli/args.rs`) and parses the child's stderr. If the
+/// child can't run or its output doesn't parse (e.g. library consumers
+/// whose `current_exe` is not karac), validation degrades to
+/// pass-through — LLVM's own warn-and-ignore still surfaces the typo
+/// at codegen, just without the hard stop.
+pub fn validate_target_cpu(cpu: &str) -> Result<(), String> {
+    let Some(known) = supported_target_cpus() else {
+        return Ok(());
+    };
+    if known.iter().any(|k| k == cpu) {
+        return Ok(());
+    }
+    Err(format!(
+        "error: unknown CPU '{}' for target `{}`.\nSupported CPUs: {}\nhint: run `karac build --target-cpu=help` for the annotated listing",
+        cpu,
+        crate::target::active_target(),
+        known.join(", "),
+    ))
+}
+
+/// Capture the active target's CPU registry by re-invoking karac with
+/// the hidden `__list-target-cpus` argv and parsing the child's stderr
+/// dump. `None` when the listing is unavailable (spawn failure, non-
+/// karac `current_exe`, non-llvm child) — callers degrade gracefully.
+fn supported_target_cpus() -> Option<Vec<String>> {
+    let exe = std::env::current_exe().ok()?;
+    let out = std::process::Command::new(exe)
+        .args(["__list-target-cpus", crate::target::active_target()])
+        .output()
+        .ok()?;
+    let names = parse_cpu_names_from_help_listing(&String::from_utf8_lossy(&out.stderr));
+    if names.is_empty() {
+        None
+    } else {
+        Some(names)
+    }
+}
+
+/// Extract CPU names from MCSubtargetInfo's `"help"` dump. The shape
+/// (LLVM 18, `MCSubtargetInfo.cpp::Help`):
+///
+/// ```text
+/// Available CPUs for this target:
+///
+///   apple-m1        - Select the apple-m1 processor.
+///   ...
+///
+/// Available features for this target:
+/// ```
+///
+/// Names are the first token of two-space-indented lines between the
+/// CPUs header and the features header; everything else (headers,
+/// blank lines, the `Use +feature…` trailer) is dropped.
+fn parse_cpu_names_from_help_listing(listing: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_cpu_section = false;
+    for line in listing.lines() {
+        if line.starts_with("Available CPUs") {
+            in_cpu_section = true;
+            continue;
+        }
+        if line.starts_with("Available features") {
+            break;
+        }
+        if !in_cpu_section {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("  ") {
+            if let Some(name) = rest.split_whitespace().next() {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
 }
 
 /// Resolve the optimization level used by both the **target machine** (LLVM
@@ -797,7 +920,48 @@ pub(super) fn read_strip_error_trace_env() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_cpu_and_features, symbol_listing_references_tls};
+    use super::{
+        default_cpu_and_features, parse_cpu_names_from_help_listing, symbol_listing_references_tls,
+    };
+
+    #[test]
+    fn cpu_help_listing_parse_extracts_names_and_stops_at_features() {
+        // Canned MCSubtargetInfo "help" dump shape (LLVM 18): names are
+        // the first token of two-space-indented lines between the CPUs
+        // header and the features header; headers, blank lines, and
+        // everything from the features section on (including feature
+        // names, which would otherwise pollute the valid-CPU set) are
+        // dropped.
+        let listing = "\
+Supported CPUs for target `native`:
+Available CPUs for this target:
+
+  apple-m1        - Select the apple-m1 processor.
+  apple-m2        - Select the apple-m2 processor.
+  generic         - Select the generic processor.
+
+Available features for this target:
+
+  aes             - Enable AES support.
+
+Use +feature to enable a feature, or -feature to disable it.
+For example, llc -mcpu=mycpu -mattr=+feature1,-feature2
+";
+        assert_eq!(
+            parse_cpu_names_from_help_listing(listing),
+            vec!["apple-m1", "apple-m2", "generic"],
+        );
+    }
+
+    #[test]
+    fn cpu_help_listing_parse_handles_garbage() {
+        // No CPUs header → nothing parsed (the validate caller treats
+        // an empty parse as "listing unavailable" and passes through).
+        assert!(parse_cpu_names_from_help_listing("").is_empty());
+        assert!(
+            parse_cpu_names_from_help_listing("running 0 tests\n\ntest result: ok.\n").is_empty()
+        );
+    }
 
     #[test]
     fn tls_detection_flags_client_tls_https_ws_symbols() {

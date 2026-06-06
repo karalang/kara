@@ -11791,3 +11791,311 @@ fn bindings_ignored_on_non_wasm_target() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// ── Phase-10: `--target-cpu` override ───────────────────────────────
+//
+// CPU baseline override (design.md § CPU Baseline Targeting).
+// Precedence: `--target-cpu` flag > `KARAC_TARGET_CPU` env >
+// `[release] target-cpu` in kara.toml > the per-target default table.
+// Validation is per-active-target against LLVM's CPU registry; an
+// unknown name is a hard error carrying the supported listing (LLVM's
+// native behavior — warn and silently fall back to generic — is
+// exactly what the validation closes). Validation runs before the
+// pipeline, so most tests here need no runtime archive: a bogus name
+// at any precedence tier fails fast, which also makes tier order
+// observable without inspecting codegen output.
+
+/// Skip helper: the `--target-cpu` surface (help listing + validation)
+/// rides the llvm build path; the non-llvm fallback accepts the flag
+/// inert, so these assertions are vacuous there.
+fn target_cpu_skip_reason(stderr: &str) -> Option<&'static str> {
+    if stderr.contains("requires the llvm feature") {
+        return Some("karac built without --features llvm");
+    }
+    None
+}
+
+/// `--target-cpu=help` prints LLVM's supported-CPU listing for the
+/// active target and exits 0 (mirrors `rustc -C target-cpu=help`) —
+/// in single-file form, and in the no-file project form even outside
+/// any project (the listing needs only the active target, so it's
+/// handled before manifest discovery).
+#[test]
+fn target_cpu_help_lists_cpus() {
+    let tmp = wasm_test_dir("cpuhelp");
+    let path = tmp.join("p.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target-cpu=help"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: target_cpu_help_lists_cpus — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "help listing must exit 0: {stderr}");
+    assert!(
+        stderr.contains("Available CPUs for this target:") && stderr.contains("generic"),
+        "expected LLVM's CPU table on stderr, got: {stderr}",
+    );
+
+    // No-file form, from a directory with no kara.toml anywhere
+    // relevant: still lists and exits 0 (llvm presence established
+    // above, so a manifest-discovery error here would be a real bug).
+    let out = karac_bin()
+        .args(["build", "--target-cpu=help"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success() && stderr.contains("Available CPUs for this target:"),
+        "no-file help form must list project-lessly, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// `--target=wasm_wasi --target-cpu=help` lists the *wasm32* registry
+/// (mvp/generic/bleeding-edge), not the host's — the listing keys on
+/// the active target. Needs no wasm archive/linker: only a target
+/// machine is constructed.
+#[test]
+fn target_cpu_help_is_per_target() {
+    let tmp = wasm_test_dir("cpuwasm");
+    let path = tmp.join("w.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--target-cpu=help",
+        ])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: target_cpu_help_is_per_target — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "help listing must exit 0: {stderr}");
+    assert!(
+        stderr.contains("mvp") && !stderr.contains("apple-m1"),
+        "expected the wasm32 CPU table, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// An unknown CPU name is a hard error listing the supported set —
+/// not LLVM's native warn-and-fall-back-to-generic. Fails fast before
+/// the pipeline, so the named file doesn't even need to parse.
+#[test]
+fn target_cpu_unknown_name_rejected() {
+    let tmp = wasm_test_dir("cpubad");
+    let path = tmp.join("p.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target-cpu=not-a-cpu"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: target_cpu_unknown_name_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown CPU 'not-a-cpu'")
+            && stderr.contains("Supported CPUs:")
+            && stderr.contains("generic"),
+        "expected the unknown-CPU diagnostic with the supported listing, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Empty value rejects at the parse layer (both spellings), before any
+/// llvm machinery — no skip needed.
+#[test]
+fn target_cpu_empty_value_rejected() {
+    for argv in [
+        vec!["build", "x.kara", "--target-cpu="],
+        vec!["build", "x.kara", "--target-cpu"],
+    ] {
+        let out = karac_bin().args(&argv).output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success());
+        assert!(
+            stderr.contains("--target-cpu requires a"),
+            "expected the missing-value diagnostic for {argv:?}, got: {stderr}",
+        );
+    }
+}
+
+/// `KARAC_TARGET_CPU` is consulted when the flag is absent — a bogus
+/// env value fails validation with the env-supplied name.
+#[test]
+fn target_cpu_env_var_consulted() {
+    let tmp = wasm_test_dir("cpuenv");
+    let path = tmp.join("p.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap()])
+        .env("KARAC_TARGET_CPU", "env-bogus-cpu")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: target_cpu_env_var_consulted — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown CPU 'env-bogus-cpu'"),
+        "expected validation of the env-supplied name, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The CLI flag wins over the env var: with both set to (distinct)
+/// bogus names, the diagnostic names the flag's value — proving the
+/// flag tier was consulted first.
+#[test]
+fn target_cpu_cli_flag_beats_env() {
+    let tmp = wasm_test_dir("cpuprec");
+    let path = tmp.join("p.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target-cpu",
+            "cli-bogus-cpu",
+        ])
+        .env("KARAC_TARGET_CPU", "env-bogus-cpu")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: target_cpu_cli_flag_beats_env — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown CPU 'cli-bogus-cpu'") && !stderr.contains("env-bogus-cpu"),
+        "expected the CLI value to win the precedence chain, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// `[release] target-cpu` in a discovered manifest is the lowest
+/// override tier: consulted when flag and env are absent (walk-up from
+/// the built file's directory, the `karac run` discovery rule)…
+#[test]
+fn target_cpu_manifest_tier_consulted() {
+    let tmp = wasm_test_dir("cpumf");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"demo\"\n\n[release]\ntarget-cpu = \"manifest-bogus-cpu\"\n",
+    )
+    .unwrap();
+    let path = tmp.join("p.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap()])
+        .env_remove("KARAC_TARGET_CPU")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: target_cpu_manifest_tier_consulted — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown CPU 'manifest-bogus-cpu'"),
+        "expected validation of the manifest-supplied name, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// …and the env var beats it: same manifest, env set to a distinct
+/// bogus name — the diagnostic names the env value.
+#[test]
+fn target_cpu_env_beats_manifest() {
+    let tmp = wasm_test_dir("cpumfenv");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"demo\"\n\n[release]\ntarget-cpu = \"manifest-bogus-cpu\"\n",
+    )
+    .unwrap();
+    let path = tmp.join("p.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap()])
+        .env("KARAC_TARGET_CPU", "env-bogus-cpu")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: target_cpu_env_beats_manifest — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown CPU 'env-bogus-cpu'") && !stderr.contains("manifest-bogus-cpu"),
+        "expected the env value to beat the manifest tier, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A valid override (`generic` — present in every LLVM target's
+/// registry) passes validation and the build completes end-to-end.
+/// Soft-skips when the native link infrastructure is unavailable, the
+/// `bindings_ignored_on_non_wasm_target` posture.
+#[test]
+fn target_cpu_valid_override_builds() {
+    let tmp = wasm_test_dir("cpuok");
+    let path = tmp.join("cpubuild.kara");
+    std::fs::write(&path, "fn main() {\n    println(\"hello\");\n}\n").unwrap();
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target-cpu=generic"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: target_cpu_valid_override_builds — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    if !out.status.success()
+        && (stderr.contains("link failed") || stderr.contains("codegen failed"))
+    {
+        eprintln!("skip: target_cpu_valid_override_builds — native link unavailable");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "valid override must build: {stderr}");
+    assert!(
+        !stderr.contains("unknown CPU") && !stderr.contains("is not a recognized processor"),
+        "a registry-valid CPU must pass cleanly, got: {stderr}",
+    );
+    assert!(tmp.join("cpubuild").exists(), "missing built binary");
+    let _ = std::fs::remove_dir_all(&tmp);
+}

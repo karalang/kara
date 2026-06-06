@@ -485,6 +485,7 @@ mod tests {
             build_default_target: None,
             build_targets: Vec::new(),
             lints: manifest::ManifestLints::default(),
+            release_target_cpu: None,
             warnings: Vec::new(),
         }
     }

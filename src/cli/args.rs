@@ -66,6 +66,26 @@ pub fn parse_args(args: &[String]) -> Command {
         "update" => parse_update_command(args),
         "explain" => parse_explain_command(args),
         "catalog" => parse_catalog_command(args),
+        // Hidden plumbing for `--target-cpu` validation (phase-10;
+        // design.md § CPU Baseline Targeting). Prints LLVM's
+        // supported-CPU listing for the given v1 target name to stderr
+        // and exits — `karac` re-invokes itself with this argv to
+        // capture the registry, because LLVM-C exposes no CPU-listing
+        // API (the table only surfaces via MCSubtargetInfo's stderr
+        // dump on the pseudo-CPU "help"; rustc ships a custom C++ shim
+        // for the same reason). Not documented in `karac help` — the
+        // user-facing spelling is `karac build --target-cpu=help`.
+        "__list-target-cpus" => {
+            if let Some(name) = args.get(2) {
+                // Best-effort: an unknown name keeps the default
+                // (native) target rather than erroring — the child's
+                // contract is "print a listing or print nothing".
+                let _ = crate::target::set_active_target(name);
+            }
+            #[cfg(feature = "llvm")]
+            crate::codegen::print_target_cpu_listing();
+            process::exit(0);
+        }
         // Bare file path: treat as `karac run <file>`
         other if other.ends_with(".kara") => parse_run_command_from(args, 1),
         other => {
@@ -362,6 +382,7 @@ fn parse_build_command(args: &[String]) -> Command {
     let mut no_proxy = false;
     let mut target: Option<String> = None;
     let mut bindings: Option<BindingsMode> = None;
+    let mut target_cpu: Option<String> = None;
     let mut monomorphization_budget = crate::monomorphization::MonomorphizationBudget::default();
     let mut release = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
@@ -411,6 +432,27 @@ fn parse_build_command(args: &[String]) -> Command {
                 process::exit(1);
             }
             target = Some(val.clone());
+            i += 1;
+        } else if let Some(rest) = arg.strip_prefix("--target-cpu=") {
+            // `--target-cpu=<name|help>` — CPU baseline override
+            // (phase-10; design.md § CPU Baseline Targeting). The value
+            // space is LLVM's per-target CPU registry, so validation
+            // happens in `cmd_build` once the active target is known;
+            // only emptiness is a parse-level error.
+            if rest.trim().is_empty() {
+                eprintln!(
+                    "error: --target-cpu requires a non-empty CPU name (or `help` to list them)"
+                );
+                process::exit(1);
+            }
+            target_cpu = Some(rest.trim().to_string());
+        } else if arg == "--target-cpu" {
+            // Space-separated form, mirroring `--target <triple>`.
+            if i + 1 >= args.len() || args[i + 1].trim().is_empty() {
+                eprintln!("error: --target-cpu requires a CPU name value (or `help` to list them)");
+                process::exit(1);
+            }
+            target_cpu = Some(args[i + 1].trim().to_string());
             i += 1;
         } else if let Some(rest) = arg.strip_prefix("--bindings=") {
             // `--bindings=browser|component|none` — WASM output-shape
@@ -464,6 +506,7 @@ fn parse_build_command(args: &[String]) -> Command {
             no_proxy,
             target,
             bindings,
+            target_cpu,
             monomorphization_budget,
             release,
             lint_overrides,
@@ -496,6 +539,7 @@ fn parse_build_command(args: &[String]) -> Command {
                 enable_hot_swap,
                 no_proxy,
                 target,
+                target_cpu,
                 release,
             }
         }

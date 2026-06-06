@@ -274,6 +274,20 @@ OPTIONS:
                             wasm_browser -> browser, wasm_wasi ->
                             component. Ignored on non-WASM targets.
                             Accepts `--bindings <mode>` too.
+    --target-cpu=<name>     CPU baseline override for codegen (e.g.
+                            `apple-m4`, `x86-64-v3`, `neoverse-v1`).
+                            `--target-cpu=help` lists the supported
+                            CPUs for the active target; any other
+                            unknown name is a hard error carrying that
+                            same listing. Precedence: this flag >
+                            KARAC_TARGET_CPU env var > `[release]
+                            target-cpu` in kara.toml > the per-target
+                            default baseline (aarch64-darwin: apple-m1,
+                            x86_64-linux: x86-64, aarch64-linux:
+                            generic+v8a, x86_64-darwin: core2).
+                            Widening the baseline narrows the deploy
+                            set in exchange for sharper codegen.
+                            Accepts `--target-cpu <name>` too.
     --monomorphization-budget=warn:N,error:M
                             Cap per-generic instantiations. After typecheck
                             (before codegen), any generic instantiated >= N

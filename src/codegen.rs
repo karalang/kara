@@ -76,7 +76,9 @@ use driver::{
     apply_optimization_passes, create_target_machine, read_auto_par_env,
     read_runtime_debug_metadata_env, read_strip_contracts_env, read_strip_error_trace_env,
 };
-pub use driver::{link_executable, link_executable_with_sanitizer};
+pub use driver::{
+    link_executable, link_executable_with_sanitizer, print_target_cpu_listing, validate_target_cpu,
+};
 use helpers::{
     impl_target_name, make_impl_method_function, method_is_compiler_builtin, method_self_is_value,
 };

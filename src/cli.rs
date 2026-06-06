@@ -196,6 +196,18 @@ pub enum Command {
         /// non-WASM target the flag is accepted-but-inert, consistent
         /// with `--offline` / single-file `--target=<triple>` above.
         bindings: Option<BindingsMode>,
+        /// `--target-cpu=<name|help>`: CPU baseline override for codegen
+        /// (phase-10; design.md § CPU Baseline Targeting). `None` here
+        /// means "flag omitted" — `cmd_build` then consults the
+        /// `KARAC_TARGET_CPU` env var, then the discovered manifest's
+        /// `[release] target-cpu`, then the per-target default table in
+        /// `codegen/driver.rs::default_cpu_and_features`. The literal
+        /// value `help` prints LLVM's supported-CPU listing for the
+        /// active target and exits (mirrors `rustc -C target-cpu=help`);
+        /// any other name is validated against that same listing before
+        /// codegen so a typo can't silently fall back to `generic`
+        /// (LLVM's native behavior on an unknown CPU is warn-and-ignore).
+        target_cpu: Option<String>,
         /// `--monomorphization-budget=warn:N,error:M` (v1.x, single-file
         /// only): per-generic instantiation ceiling enforced after
         /// typecheck. A disabled (all-`None`) budget — the default — skips
@@ -240,6 +252,11 @@ pub enum Command {
         /// is `--target=<triple>` > `[build].target` from the manifest
         /// > `build_cache::host_target_triple()`.
         target: Option<String>,
+        /// `--target-cpu=<name|help>` — see `Build.target_cpu` above.
+        /// Same precedence chain; the manifest tier reads the project's
+        /// own `kara.toml` (already loaded for the build) instead of a
+        /// file-relative walk-up.
+        target_cpu: Option<String>,
         /// `--release` — see `Build.release` above. Same debug/release
         /// semantics (strips debug-only runtime checks — contracts today —
         /// not an optimizer toggle) and the same OR-composition with
@@ -607,6 +624,7 @@ pub fn execute(cmd: Command) {
             no_proxy,
             target,
             bindings,
+            target_cpu,
             monomorphization_budget,
             release,
             lint_overrides,
@@ -620,6 +638,7 @@ pub fn execute(cmd: Command) {
             no_proxy,
             target.as_deref(),
             bindings,
+            target_cpu.as_deref(),
             monomorphization_budget,
             release,
             lint_overrides,
@@ -630,6 +649,7 @@ pub fn execute(cmd: Command) {
             enable_hot_swap,
             no_proxy,
             target,
+            target_cpu,
             release,
         } => cmd_build_project(
             output,
@@ -637,6 +657,7 @@ pub fn execute(cmd: Command) {
             enable_hot_swap,
             no_proxy,
             target.as_deref(),
+            target_cpu.as_deref(),
             release,
         ),
         Command::Query {
@@ -4361,6 +4382,74 @@ fn manifest_build_targets_for(filename: &str, output: OutputMode) -> Vec<String>
     }
 }
 
+/// Read the `KARAC_TARGET_CPU` env var — the middle tier of the
+/// `--target-cpu` precedence chain (flag, then env, then `[release]
+/// target-cpu`, then the per-target default table). Empty /
+/// whitespace-only is treated
+/// as unset so `KARAC_TARGET_CPU= karac build …` can neutralize an
+/// outer-scope export without tripping validation.
+#[cfg(feature = "llvm")]
+fn read_target_cpu_env() -> Option<String> {
+    std::env::var("KARAC_TARGET_CPU")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Discover the manifest by walking upward from the built file's own
+/// directory (the `karac run` discovery rule, same shape as
+/// `manifest_build_targets_for` above) and return its `[release]
+/// target-cpu`, if declared. No manifest → `None`. A malformed manifest
+/// is a hard error — but note the caller only reaches this tier when
+/// neither the CLI flag nor the env var supplied a CPU, so explicit
+/// overrides never gain a manifest failure mode.
+#[cfg(feature = "llvm")]
+fn manifest_release_target_cpu_for(filename: &str, output: OutputMode) -> Option<String> {
+    let file_dir = std::path::Path::new(filename)
+        .parent()
+        .map(|p| {
+            if p.as_os_str().is_empty() {
+                std::path::PathBuf::from(".")
+            } else {
+                p.to_path_buf()
+            }
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    match manifest::discover_project_root(&file_dir) {
+        Some(root) => match manifest::load_from_root(&root) {
+            Ok(m) => m.release_target_cpu,
+            Err(e) => {
+                emit_manifest_error(&e, output);
+                process::exit(1);
+            }
+        },
+        None => None,
+    }
+}
+
+/// Act on the resolved `--target-cpu` value (phase-10; design.md § CPU
+/// Baseline Targeting). `None` — the common case — keeps the per-target
+/// default table. The literal `help` prints LLVM's supported-CPU
+/// listing for the active target and exits 0 (`rustc -C
+/// target-cpu=help` mirror). Any other name is validated against that
+/// same listing — LLVM's native behavior on an unknown CPU is
+/// warn-and-fall-back-to-generic, i.e. exactly the silent baseline
+/// neutering the validation closes — then installed process-wide for
+/// the codegen driver's target-machine constructors.
+#[cfg(feature = "llvm")]
+fn apply_target_cpu_override(resolved: Option<String>) {
+    let Some(cpu) = resolved else { return };
+    if cpu == "help" {
+        crate::codegen::print_target_cpu_listing();
+        process::exit(0);
+    }
+    if let Err(msg) = crate::codegen::validate_target_cpu(&cpu) {
+        eprintln!("{msg}");
+        process::exit(1);
+    }
+    crate::target::set_target_cpu_override(&cpu);
+}
+
 /// Normalize a rendered `DiagnosticJson` entry for cross-target
 /// comparison by dropping its run-local `"id":"dN"` field (always the
 /// first field — see `DiagnosticJson::add`). An entry unique to one
@@ -4628,6 +4717,7 @@ fn cmd_build(
     no_proxy: bool,
     target: Option<&str>,
     bindings: Option<BindingsMode>,
+    target_cpu: Option<&str>,
     monomorphization_budget: crate::monomorphization::MonomorphizationBudget,
     release: bool,
     lint_overrides: crate::lints::CliLintOverrides,
@@ -4649,6 +4739,22 @@ fn cmd_build(
     let _ = no_proxy;
     #[cfg(feature = "llvm")]
     {
+        // CPU baseline override (phase-10 `--target-cpu`; design.md §
+        // CPU Baseline Targeting). Precedence: CLI flag >
+        // `KARAC_TARGET_CPU` env > the discovered manifest's
+        // `[release] target-cpu` (walk-up from the file's directory —
+        // the `karac run` discovery rule; only consulted when both
+        // higher tiers are absent, so an explicit flag/env build never
+        // gains a manifest-error failure mode). Runs after
+        // `resolve_build_target` — `help` and validation are
+        // per-active-target — and before any pipeline pass, failing
+        // fast on a typo'd name.
+        apply_target_cpu_override(
+            target_cpu
+                .map(str::to_string)
+                .or_else(read_target_cpu_env)
+                .or_else(|| manifest_release_target_cpu_for(filename, output)),
+        );
         let is_wasm = build_target == "wasm_wasi" || build_target == "wasm_browser";
         // Phase-10 `--bindings` flag: resolve the effective WASM output
         // shape. Explicit flag wins; omitted, the mode is inferred from
@@ -4885,6 +4991,9 @@ fn cmd_build(
         // the llvm build path — accepted-but-inert here, consistent
         // with --offline / --target above.
         let _ = bindings;
+        // `--target-cpu` only parameterizes the LLVM target machine —
+        // accepted-but-inert on the non-llvm check fallback.
+        let _ = target_cpu;
         // `--release` only affects codegen (contract stripping), which the
         // non-llvm fallback doesn't reach — accepted-but-inert, consistent
         // with --offline / --target / --enable-hot-swap above.
@@ -5165,6 +5274,7 @@ fn cmd_build_project(
     enable_hot_swap: bool,
     no_proxy: bool,
     target: Option<&str>,
+    target_cpu: Option<&str>,
     release: bool,
 ) {
     // Phase-10: v1 target names are classified the same way as in
@@ -5181,6 +5291,16 @@ fn cmd_build_project(
              file directly: karac build <file.kara> --target={build_target}"
         );
         process::exit(1);
+    }
+    // `--target-cpu=help` exits before manifest discovery so the
+    // listing works from any directory — it needs only the active
+    // target, not a project. Name validation for a real CPU value waits
+    // until the manifest is loaded (the `[release] target-cpu` tier of
+    // the precedence chain lives there); see below.
+    #[cfg(feature = "llvm")]
+    if target_cpu == Some("help") {
+        crate::codegen::print_target_cpu_listing();
+        process::exit(0);
     }
     // --offline implies --no-proxy at the contract level (vendor-only walk
     // can't talk to the proxy). Suppress the redundant no-proxy note when
@@ -5228,6 +5348,21 @@ fn cmd_build_project(
     // (dep resolution, profile gating, codegen). Always applied with the
     // resolved active triple so the build sees one consistent view.
     let mf = manifest::merge_target_overlay(&raw_manifest, Some(active_target.as_str()));
+
+    // CPU baseline override — same precedence chain as single-file mode
+    // (flag > `KARAC_TARGET_CPU` > `[release] target-cpu`), with the
+    // manifest tier read from the project's own manifest (already
+    // loaded) instead of a file-relative walk-up. Installed before
+    // codegen runs; `help` was handled above, pre-discovery.
+    #[cfg(feature = "llvm")]
+    apply_target_cpu_override(
+        target_cpu
+            .map(str::to_string)
+            .or_else(read_target_cpu_env)
+            .or_else(|| mf.release_target_cpu.clone()),
+    );
+    #[cfg(not(feature = "llvm"))]
+    let _ = target_cpu;
 
     // Phase-7 line 5 sub-item 3 — target gating. Hot-swap requires dynamic
     // symbol resolution at runtime, which embedded and kernel profiles
