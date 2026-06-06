@@ -897,6 +897,31 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) karac_runtime_enter_predicate_fn: FunctionValue<'ctx>,
     pub(crate) karac_runtime_exit_predicate_fn: FunctionValue<'ctx>,
     pub(crate) karac_runtime_panic_prefix_fn: FunctionValue<'ctx>,
+    /// Whether `emit_panic` must read the fault-category prefix from the
+    /// runtime (`karac_runtime_panic_prefix()`) rather than folding it to the
+    /// static `""`. Set at the top of `compile_program`: `true` when the
+    /// program declares any contract (`requires` / `ensures` / `invariant`,
+    /// scanned across free fns, impl methods, trait methods, and struct
+    /// invariants by `program_declares_contracts`) and contracts aren't
+    /// stripped, or when compiling a REPL cell module (`main_symbol_override`
+    /// set — a cell can call contracted functions JIT'd from earlier cells,
+    /// which this module's item scan can't see; per-test `main` modules ride
+    /// the same entry point and signal). When `false`, no predicate bracket
+    /// can ever run in-process, the depth counter is statically 0, and the
+    /// prefix is always `""` — `emit_panic` skips the runtime call, so (a)
+    /// the `karac_runtime_panic_prefix` symbol and the writable thread-local
+    /// `__DATA` page it drags into the link dead-strip from contract-free
+    /// binaries (+16 KiB per binary), and (b) panic landing pads stay
+    /// static-string leaves instead of blocks with a live call (the
+    /// unconditional call regressed a bounds-check-hot loop 1.34× —
+    /// kata-5 longest-palindromic-substring, 2026-06-05). Defaults `true`
+    /// (conservative: any path that bypasses `compile_program` keeps the
+    /// always-correct runtime read).
+    pub(crate) runtime_panic_prefix_needed: bool,
+    /// Monotonic counter naming the per-site outlined panic bodies
+    /// (`__karac_panic_site_<n>`) `emit_panic` creates — see its doc for why
+    /// panic bodies are outlined. `Cell` because `emit_panic` is `&self`.
+    pub(crate) panic_site_counter: std::cell::Cell<u32>,
     /// Set of top-level Atomic[T]-typed bindings whose inner T is `bool`.
     /// The slot itself is widened to `i8` (LLVM atomics reject `i1`); this
     /// set drives the `.load` trunc-to-i1 and `.store` zext-to-i8 wrapping
@@ -3585,6 +3610,8 @@ impl<'ctx> Codegen<'ctx> {
             karac_runtime_enter_predicate_fn,
             karac_runtime_exit_predicate_fn,
             karac_runtime_panic_prefix_fn,
+            runtime_panic_prefix_needed: true,
+            panic_site_counter: std::cell::Cell::new(0),
             atomic_var_inner_is_bool: HashSet::new(),
             current_fn: None,
             printf_fn,
@@ -3955,6 +3982,18 @@ impl<'ctx> Codegen<'ctx> {
     // ── Program / function compilation ───────────────────────────
 
     fn compile_program(&mut self, program: &Program) -> Result<(), String> {
+        // Decide whether `emit_panic` needs the runtime fault-category prefix
+        // before ANY function compiles — the first panic site bakes the
+        // decision in. Contract-free programs (the overwhelmingly common
+        // case) fold the prefix static, dead-stripping the
+        // `karac_runtime_panic_prefix` thread-local's __DATA page and keeping
+        // panic landing pads leaf blocks; see the field doc on
+        // `runtime_panic_prefix_needed` for the measured costs this avoids.
+        // REPL cell modules (`main_symbol_override` set) always keep the
+        // runtime read: a cell can call contracted functions JIT'd from
+        // earlier cells, which this module's item scan cannot see.
+        self.runtime_panic_prefix_needed = self.main_symbol_override.is_some()
+            || (!self.strip_contracts && contracts::program_declares_contracts(program));
         // Level 2 crash diagnostics — Part 2: stand up DWARF debug-info state
         // before any function compiles (no-op unless KARAC_DEBUG_INFO is set and
         // a source filename was threaded in via set_source_filename, which runs

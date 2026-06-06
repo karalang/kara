@@ -23,6 +23,42 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Allocate a new RC heap object: `malloc(sizeof(heap_type))`, store refcount = 1.
     /// Returns a pointer to the heap object.
     pub(super) fn emit_panic(&self, message: &str) {
+        // OUTLINED PANIC BODIES: the printf + exit live in a per-site
+        // zero-arg `internal` function (`__karac_panic_site_<n>`, marked
+        // `cold` + `noinline` + `noreturn`); the panic landing pad in the
+        // enclosing function is just `call @__karac_panic_site_<n>()`. Every
+        // operand (format string, location, fault prefix, message) is a
+        // compile-time constant baked INSIDE the outlined body, so the
+        // landing pad contributes the minimum possible inline cost to the
+        // enclosing function. This matters: the LLVM inline cost model
+        // counts call operands, and growing the panic-site printf from 1
+        // operand to 7 (fault-prefix `8183f6c7` + location `290e454c`,
+        // both 2026-05-31) pushed bounds-check-bearing functions past the
+        // O2 inline threshold — kata-5's `expand` helper stopped inlining
+        // into its caller's hot loop and regressed 1.34× (the un-inlined
+        // copy re-runs two loop-invariant guards per iteration that the
+        // inlined+optimized form hoists). Verified empirically: reverting
+        // the panic printf to its 1-operand form restores inlining; with
+        // outlining the landing pad is cheaper still.
+        let site_id = self.panic_site_counter.get();
+        self.panic_site_counter.set(site_id + 1);
+        let panic_fn = self.module.add_function(
+            &format!("__karac_panic_site_{site_id}"),
+            self.context.void_type().fn_type(&[], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        for attr_name in ["cold", "noinline", "noreturn"] {
+            let kind = inkwell::attributes::Attribute::get_named_enum_kind_id(attr_name);
+            debug_assert!(kind != 0, "{attr_name} attribute kind-id must resolve");
+            panic_fn.add_attribute(
+                inkwell::attributes::AttributeLoc::Function,
+                self.context.create_enum_attribute(kind, 0),
+            );
+        }
+        let body = self.context.append_basic_block(panic_fn, "entry");
+        let b = self.context.create_builder();
+        b.position_at_end(body);
+
         // design.md § Contracts rule 2: the fault-category prefix is decided at
         // RUNTIME by `karac_runtime_panic_prefix()`, which returns
         // `"contract predicate panicked: "` while a contract predicate is on the
@@ -36,14 +72,28 @@ impl<'ctx> super::Codegen<'ctx> {
         // so `message` is a `%s` data argument, not the format string — output
         // is byte-identical to the two historical forms `panic: <msg>` and
         // `panic: contract predicate panicked: <msg>`.
-        let prefix = self
-            .builder
-            .build_call(self.karac_runtime_panic_prefix_fn, &[], "panic_prefix")
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic();
-        let msg = self
-            .builder
+        //
+        // CONTRACT-FREE FOLD: when `compile_program`'s item scan proved no
+        // contract predicate can ever run in this program
+        // (`runtime_panic_prefix_needed == false`), the depth counter is
+        // statically 0 and the prefix is always `""` — fold it to a static
+        // empty string instead of calling the runtime. That leaves
+        // `karac_runtime_panic_prefix` unreferenced, so its thread-local's
+        // writable 16 KiB __DATA page dead-strips from every contract-free
+        // binary (+49% on the lean-binary floor when it crept in). Output is
+        // byte-identical (`%s` of `""`).
+        let prefix: BasicValueEnum<'ctx> = if self.runtime_panic_prefix_needed {
+            b.build_call(self.karac_runtime_panic_prefix_fn, &[], "panic_prefix")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+        } else {
+            b.build_global_string_ptr("\0", "panic_prefix_static")
+                .unwrap()
+                .as_pointer_value()
+                .into()
+        };
+        let msg = b
             .build_global_string_ptr(&format!("{}\0", message), "panic_msg")
             .unwrap();
 
@@ -69,56 +119,54 @@ impl<'ctx> super::Codegen<'ctx> {
         let i32_ty = self.context.i32_type();
         match location {
             Some((file, line, col)) => {
-                let fmt = self
-                    .builder
+                let fmt = b
                     .build_global_string_ptr("panic at %s:%d:%d in %s: %s%s\n\0", "panic_fmt")
                     .unwrap();
-                let file_ptr = self
-                    .builder
+                let file_ptr = b
                     .build_global_string_ptr(&format!("{}\0", file), "panic_file")
                     .unwrap();
-                let fn_ptr = self
-                    .builder
+                let fn_ptr = b
                     .build_global_string_ptr(&format!("{}\0", self.current_fn_name), "panic_fn")
                     .unwrap();
-                self.builder
-                    .build_call(
-                        self.printf_fn,
-                        &[
-                            fmt.as_pointer_value().into(),
-                            file_ptr.as_pointer_value().into(),
-                            i32_ty.const_int(line as u64, false).into(),
-                            i32_ty.const_int(col as u64, false).into(),
-                            fn_ptr.as_pointer_value().into(),
-                            prefix.into(),
-                            msg.as_pointer_value().into(),
-                        ],
-                        "panic_print",
-                    )
-                    .unwrap();
+                b.build_call(
+                    self.printf_fn,
+                    &[
+                        fmt.as_pointer_value().into(),
+                        file_ptr.as_pointer_value().into(),
+                        i32_ty.const_int(line as u64, false).into(),
+                        i32_ty.const_int(col as u64, false).into(),
+                        fn_ptr.as_pointer_value().into(),
+                        prefix.into(),
+                        msg.as_pointer_value().into(),
+                    ],
+                    "panic_print",
+                )
+                .unwrap();
             }
             None => {
-                let fmt = self
-                    .builder
+                let fmt = b
                     .build_global_string_ptr("panic: %s%s\n\0", "panic_fmt")
                     .unwrap();
-                self.builder
-                    .build_call(
-                        self.printf_fn,
-                        &[
-                            fmt.as_pointer_value().into(),
-                            prefix.into(),
-                            msg.as_pointer_value().into(),
-                        ],
-                        "panic_print",
-                    )
-                    .unwrap();
+                b.build_call(
+                    self.printf_fn,
+                    &[
+                        fmt.as_pointer_value().into(),
+                        prefix.into(),
+                        msg.as_pointer_value().into(),
+                    ],
+                    "panic_print",
+                )
+                .unwrap();
             }
         }
         let exit_code = self.context.i32_type().const_int(1, false);
-        self.builder
-            .build_call(self.exit_fn, &[exit_code.into()], "")
-            .unwrap();
+        b.build_call(self.exit_fn, &[exit_code.into()], "").unwrap();
+        b.build_unreachable().unwrap();
+
+        // The landing pad in the enclosing function: one zero-operand call.
+        // Callers of `emit_panic` terminate the block themselves (the
+        // existing contract — most follow with `build_unreachable`).
+        self.builder.build_call(panic_fn, &[], "").unwrap();
     }
 
     pub(super) fn emit_rc_alloc(&self, heap_type: StructType<'ctx>) -> PointerValue<'ctx> {

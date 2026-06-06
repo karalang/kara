@@ -29206,6 +29206,168 @@ fn main() {
         }
     }
 
+    // ── Contracts — contract-free panic-prefix fold ──────────────────
+    //
+    // A program with no contract can never have a non-zero predicate depth,
+    // so `emit_panic` folds the fault-category prefix to the static `""`
+    // instead of calling `karac_runtime_panic_prefix()`. No call → no
+    // relocation → the runtime archive member carrying the thread-local
+    // depth counter is never pulled in, and its writable 16 KiB __DATA page
+    // dead-strips from every contract-free binary; the panic landing pad
+    // stays a static-string leaf (the unconditional call regressed a
+    // bounds-check-hot loop 1.34× — kata-5, 2026-06-05). Contracted
+    // programs keep the runtime read — the feature is correct, only its
+    // unconditional cost was the defect.
+
+    #[test]
+    fn test_ir_contract_free_panic_folds_static_prefix() {
+        // A bounds-checked index is a panic site, but the program declares no
+        // contract: the prefix must fold static — no runtime-prefix call.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    println(v[0]);
+}
+"#,
+        );
+        assert!(
+            !ir.contains("call ptr @karac_runtime_panic_prefix"),
+            "contract-free program must not CALL karac_runtime_panic_prefix"
+        );
+        assert!(
+            ir.contains("panic_prefix_static"),
+            "expected the folded static empty-string prefix at the panic site"
+        );
+    }
+
+    #[test]
+    fn test_ir_panic_bodies_outlined_cold() {
+        // Panic bodies (printf + exit) are outlined into per-site zero-arg
+        // `internal` `cold`+`noinline`+`noreturn` functions; the landing pad
+        // in the enclosing function is a single zero-operand call. This keeps
+        // panic sites near-free for the LLVM inline cost model — growing the
+        // panic-site printf to 7 operands (fault prefix + location, both
+        // 2026-05-31) pushed bounds-check-bearing functions past the O2
+        // inline threshold and regressed kata-5's hot loop 1.34× (the
+        // un-inlined helper re-ran two loop-invariant guards per iteration).
+        let ir = ir_for(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    println(v[0]);
+}
+"#,
+        );
+        assert!(
+            ir.contains("define internal void @__karac_panic_site_0()"),
+            "panic body must be outlined into an internal per-site function"
+        );
+        assert!(
+            ir.contains("call void @__karac_panic_site_0()"),
+            "the landing pad must be a zero-operand call to the outlined body"
+        );
+        // The printf must live in the outlined body, not the landing pad:
+        // the attribute group attached to the site fn carries cold+noinline.
+        let attrs_line = ir
+            .lines()
+            .find(|l| l.starts_with("attributes") && l.contains("cold") && l.contains("noinline"))
+            .unwrap_or("");
+        assert!(
+            attrs_line.contains("noreturn"),
+            "outlined panic body must be cold+noinline+noreturn, got: {attrs_line:?}"
+        );
+    }
+
+    #[test]
+    fn test_ir_contracted_program_keeps_runtime_prefix() {
+        // Any `requires` anywhere in the program keeps the runtime read at
+        // EVERY panic site — a panic in a function the predicate transitively
+        // calls must still categorize as `contract predicate panicked`.
+        let ir = ir_for(
+            r#"
+fn pos(x: i64) -> i64 requires x > 0 { x }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    println(v[0] + pos(1));
+}
+"#,
+        );
+        assert!(
+            ir.contains("call ptr @karac_runtime_panic_prefix"),
+            "a program with a contract must keep the runtime prefix read"
+        );
+    }
+
+    #[test]
+    fn test_ir_contracts_stripped_panic_folds_static_prefix() {
+        // Stripped contracts (release) emit no predicate brackets, so the
+        // prefix folds static even when the source declares contracts.
+        let ir = ir_for_contracts_stripped(
+            r#"
+fn pos(x: i64) -> i64 requires x > 0 { x }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    println(v[0] + pos(1));
+}
+"#,
+        );
+        assert!(
+            !ir.contains("call ptr @karac_runtime_panic_prefix"),
+            "contracts-stripped program must not call karac_runtime_panic_prefix"
+        );
+    }
+
+    #[test]
+    fn test_ir_invariant_keeps_runtime_prefix() {
+        // The scan must see struct `invariant`s too, not just fn contracts.
+        let ir = ir_for(
+            r#"
+struct Counter { n: i64, invariant self.n >= 0 }
+impl Counter { pub fn inc(mut ref self) -> i64 { self.n = self.n + 1; self.n } }
+fn main() { let mut c = Counter { n: 0 }; println(c.inc()); }
+"#,
+        );
+        assert!(
+            ir.contains("call ptr @karac_runtime_panic_prefix"),
+            "a program with a struct invariant must keep the runtime prefix read"
+        );
+    }
+
+    #[test]
+    fn test_ir_repl_cell_keeps_runtime_prefix() {
+        // REPL cell modules always keep the runtime read: a cell can call a
+        // contracted function JIT'd from an EARLIER cell, which this
+        // module's item scan can't see (size/perf are irrelevant under JIT).
+        let mut parsed = karac::parse(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    println(v[0]);
+}
+"#,
+        );
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ir = karac::codegen::compile_to_ir_for_repl_cell(
+            &parsed.program,
+            &std::collections::HashSet::new(),
+            "__karac_repl_cell_main",
+        )
+        .expect("repl-cell codegen failed");
+        assert!(
+            ir.contains("call ptr @karac_runtime_panic_prefix"),
+            "a REPL cell module must keep the runtime prefix read (cross-cell contracts)"
+        );
+    }
+
     // ── std.tracing — emission surface (StdoutExporter) E2E ──────────
     //
     // Proves the baked `std.tracing` surface compiles + links + runs as a

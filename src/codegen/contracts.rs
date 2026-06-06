@@ -261,6 +261,34 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 }
 
+/// Whether `program` declares any contract whose predicate evaluation
+/// `emit_contract_assert` would bracket with the runtime
+/// enter/exit-predicate calls: `requires` / `ensures` on free functions,
+/// impl methods, or trait methods (trait-method contracts are scanned
+/// defensively — propagation to impls lands them on `Function` nodes, but
+/// over-approximation here only keeps the always-correct runtime read), and
+/// `invariant` / `impl invariant` on structs. Refinement predicates
+/// (`type T = U where ...`) are deliberately NOT counted —
+/// `emit_refinement_assert` never brackets enter/exit, so they cannot move
+/// the runtime depth counter. Consumed by `compile_program` to decide
+/// `runtime_panic_prefix_needed` (see that field's doc for the costs a
+/// `false` answer avoids).
+pub(super) fn program_declares_contracts(program: &crate::ast::Program) -> bool {
+    program.items.iter().any(|item| match item {
+        Item::Function(f) => !f.requires.is_empty() || !f.ensures.is_empty(),
+        Item::StructDef(s) => !s.invariants.is_empty() || !s.impl_invariants.is_empty(),
+        Item::ImplBlock(ib) => ib.items.iter().any(|ii| match ii {
+            crate::ast::ImplItem::Method(m) => !m.requires.is_empty() || !m.ensures.is_empty(),
+            crate::ast::ImplItem::AssocType(_) => false,
+        }),
+        Item::TraitDef(t) => t.items.iter().any(|ti| match ti {
+            crate::ast::TraitItem::Method(m) => !m.requires.is_empty() || !m.ensures.is_empty(),
+            crate::ast::TraitItem::AssocType(_) => false,
+        }),
+        _ => false,
+    })
+}
+
 /// Collect the arg expressions of every `old(arg)` occurrence in a contract
 /// expression (mirrors the interpreter / typechecker walkers).
 fn collect_old_args(expr: &Expr, out: &mut Vec<Expr>) {
