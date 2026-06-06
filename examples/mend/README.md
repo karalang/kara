@@ -138,7 +138,14 @@ Ships a Go comparator (`go_buggy.go`) alongside the Python one: both
 incumbents compile-and-ship the race (Go's caught only by the opt-in
 runtime `-race` detector). This is a Python/Go-beating case, **not** a
 Rust-beating one — Rust catches the same class — and `notes.md` is
-explicit about it. Live `claude -p` run + cast: pending.
+explicit about it. Live `claude -p` run verified: like `user_lookup`,
+the model already knows `Atomic` discipline and converges without
+hitting `E0408` (its live friction was Kāra syntax — comma-separated
+effects, call-site `ref` — over 3 iterations). The recorded cast
+(`casts/concurrent_emails.cast`) therefore uses the deterministic
+`--dry-run` canned loop to show the intended `E0408` → `Atomic` lesson;
+`casts/README.md § Why concurrent_emails is a dry-run cast` documents
+the distinction.
 
 ## See also
 

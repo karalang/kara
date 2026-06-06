@@ -7,14 +7,24 @@
 # a recorded cast.
 #
 # Usage:
-#     ./demo.sh <example>
+#     ./demo.sh <example> [mend.py flags…]
 # e.g. ./demo.sh welcome_emails
+#      ./demo.sh concurrent_emails --dry-run   # deterministic canned loop
 
 set -euo pipefail
 
-EXAMPLE="${1:?usage: demo.sh <example>}"
+EXAMPLE="${1:?usage: demo.sh <example> [mend.py flags…]}"
+shift || true
+EXTRA_ARGS=("$@")
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 RUNS_DIR="$REPO/examples/mend/runs"
+
+# Narration adapts to mode: a --dry-run recording replays canned LLM
+# responses deterministically instead of calling the live model.
+MODE_DESC="claude -p writes Kāra"
+for a in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
+    [ "$a" = "--dry-run" ] && MODE_DESC="canned LLM responses replay (dry-run)"
+done
 
 cd "$REPO"
 
@@ -30,12 +40,12 @@ sed -n '/^## Prompt fed to the LLM/,/^##/p' \
     | sed '$d' | sed '1d'
 sleep 1
 echo
-echo "▸ Starting the loop. Each iteration: claude -p writes Kāra,"
-echo "  karac check runs, diagnostics feed back to claude."
+echo "▸ Starting the loop. Each iteration: $MODE_DESC,"
+echo "  karac check runs, diagnostics feed back to the LLM."
 echo
 sleep 1
 
-python3 examples/mend/harness/mend.py "$EXAMPLE" 2>&1
+python3 examples/mend/harness/mend.py "$EXAMPLE" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} 2>&1
 LATEST_RUN="$(ls -1t "$RUNS_DIR" | head -1)"
 RUN_PATH="$RUNS_DIR/$LATEST_RUN"
 

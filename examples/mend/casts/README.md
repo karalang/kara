@@ -7,8 +7,9 @@ representative examples from the corpus.
 
 | Cast                     | Example         | Compiler axis              | Iterations (recorded run) |
 |--------------------------|-----------------|----------------------------|---------------------------|
-| `welcome_emails.cast`    | `welcome_emails` | Ownership (use-after-move on `Vec`) | 3 |
-| `order_status.cast`      | `order_status`   | Pattern interpretation (qualified path → bind, W0237) | 2 |
+| `welcome_emails.cast`    | `welcome_emails` | Ownership (use-after-move on `Vec`) | 3 (live) |
+| `order_status.cast`      | `order_status`   | Pattern interpretation (qualified path → bind, W0237) | 2 (live) |
+| `concurrent_emails.cast` | `concurrent_emails` | Effect / `par`-conflict (shared-counter race, E0408) | 2 (dry-run — see below) |
 | `demo.sh`                | (driver)         | Narrated wrapper around `mend.py` for recording use | — |
 
 The recorded iteration counts are *one observed run each* — the live
@@ -81,6 +82,33 @@ The `welcome_emails` (ownership) and `order_status`
 (pattern-interpretation) examples are the ones with naturally-
 occurring LLM friction that the compiler resolves — those are the
 recordable demo headlines.
+
+## Why `concurrent_emails` is a dry-run cast
+
+`concurrent_emails` behaves like `user_lookup` under **live** Claude:
+the model already knows shared-mutable-state-under-concurrency
+discipline from its priors, so it reaches for `par struct Counter {
+count: Atomic[i64] }` on the first attempt and never writes the naive
+shared-counter that triggers `E0408`. A live run was done (it converged
+in 3 iterations — but on Kāra *syntax* friction: comma-separated effect
+clauses and call-site `ref`, not the concurrency lesson) and the
+transcript is persisted under `runs/`.
+
+To make the cast show the lesson the example exists to teach — the
+`E0408` race rejection and the `Atomic` fix — `concurrent_emails.cast`
+is recorded in **`--dry-run` mode**, which replays the deterministic
+canned responses in `canned_responses.json` (iter 0 = the naive shared
+counter → `E0408`; iter 1 = the `Atomic` fix → clean). The narration
+line states the mode explicitly so the cast is not mistaken for a live
+run. The compiler diagnostics in the cast are real `karac` output; only
+the LLM's two responses are canned. Re-record with:
+
+```sh
+rm -f examples/mend/casts/concurrent_emails.cast
+asciinema rec --idle-time-limit 2 --rows 32 --cols 100 \
+    --command "examples/mend/casts/demo.sh concurrent_emails --dry-run" \
+    examples/mend/casts/concurrent_emails.cast
+```
 
 ## What the cast shows, in narration order
 
