@@ -3447,6 +3447,92 @@ fn main() {
     }
 
     #[test]
+    fn asan_borrowed_param_walks_repeat() {
+        // Phase C2a under ASAN: two long-lived chains walked by a
+        // borrowing adder 200 times. The borrow contract is balanced
+        // per call (caller arg-site head inc / callee exit RcDecOption)
+        // while ALL walk traffic is count-free — an unbalanced cursor
+        // (a stray alias-acquire inc, a counted advance, an over-eager
+        // family cleanup) frees a reused chain mid-loop (ASAN UAF) or
+        // leaks per call (LeakSanitizer / RSS). Exact total pins the
+        // arithmetic: 200*15 + 9 + 15 = 3024.
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn from_three(a: i64, b: i64, c: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 0;
+    while i < 3 {
+        let mut v = a;
+        if i == 1 { v = b; }
+        if i == 2 { v = c; }
+        let node = ListNode { val: v, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    dummy.next
+}
+fn add_two_numbers(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+    let mut carry: i64 = 0;
+    loop {
+        let mut s: i64 = carry;
+        let mut done = true;
+        if let Some(n) = a {
+            s = s + n.val;
+            a = n.next;
+            done = false;
+        }
+        if let Some(n) = b {
+            s = s + n.val;
+            b = n.next;
+            done = false;
+        }
+        if done and s == 0 {
+            break;
+        }
+        let node = ListNode { val: s % 10, next: None };
+        tail.next = Some(node);
+        tail = node;
+        carry = s / 10;
+    }
+    dummy.next
+}
+fn sum_chain(head: Option[ListNode]) -> i64 {
+    let mut sum = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn main() {
+    let l1 = from_three(2, 4, 3);
+    let l2 = from_three(5, 6, 4);
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 200 {
+        let r = add_two_numbers(l1, l2);
+        total = total + sum_chain(r);
+        iter = iter + 1;
+    }
+    total = total + sum_chain(l1) + sum_chain(l2);
+    println(total);
+}
+"#,
+            &["3024"],
+            "borrowed_param_walks_repeat",
+        );
+    }
+
+    #[test]
     fn asan_adopted_builders_repeat() {
         // Phase C1c under ASAN: both adopted-family shapes — the
         // sanctioned match head-read and the non-owning cursor walk —

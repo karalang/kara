@@ -896,6 +896,192 @@ fn adoption_requires_fresh_return_builder() {
     assert!(adopted_cluster(&r, "main").is_none());
 }
 
+// ════════════════════════════════════════════════════════════════
+// Phase C2a — borrowed-param walk families.
+// ════════════════════════════════════════════════════════════════
+
+fn borrowed_cluster<'r>(
+    result: &'r OwnershipCheckResult,
+    fn_name: &str,
+) -> Option<&'r karac::ownership::ElidedCluster> {
+    result
+        .elided_clusters
+        .get(fn_name)
+        .and_then(|v| v.iter().find(|c| c.borrowed))
+}
+
+/// Kata #2's verbatim adder: two walked Option params + its own
+/// literal cluster (b2 triple, RootLink return).
+const ADDER: &str =
+    "fn add_two_numbers(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {\n\
+     let dummy = ListNode { val: 0, next: None };\n\
+     let mut tail = dummy;\n\
+     let mut a = l1;\n\
+     let mut b = l2;\n\
+     let mut carry: i64 = 0;\n\
+     loop {\n\
+         let mut s: i64 = carry;\n\
+         let mut done = true;\n\
+         if let Some(n) = a {\n\
+             s = s + n.val;\n\
+             a = n.next;\n\
+             done = false;\n\
+         }\n\
+         if let Some(n) = b {\n\
+             s = s + n.val;\n\
+             b = n.next;\n\
+             done = false;\n\
+         }\n\
+         if done and s == 0 {\n\
+             break;\n\
+         }\n\
+         let node = ListNode { val: s % 10, next: None };\n\
+         tail.next = Some(node);\n\
+         tail = node;\n\
+         carry = s / 10;\n\
+     }\n\
+     dummy.next\n\
+ }\n\
+ fn main() {\n\
+     let x = ListNode { val: 7, next: None };\n\
+     let y = ListNode { val: 5, next: None };\n\
+     let r = add_two_numbers(Some(x), Some(y));\n\
+     if r.is_some() { println(r.unwrap().val); }\n\
+ }";
+
+#[test]
+fn borrows_walked_option_params_kata2_adder() {
+    // Both params join ONE family (the sibling if-lets share the
+    // pattern-bound `n`); walk cursors take count-skip roles while the
+    // params themselves stay out of the cursor sets (they keep the
+    // balanced entry/exit ownership). The fn's own literal cluster
+    // (RootLink) coexists untouched.
+    let src = format!("{NODE}{ADDER}");
+    let r = analyze(&src);
+    let c = borrowed_cluster(&r, "add_two_numbers").expect("params borrow");
+    assert_eq!(c.borrowed_param_indices, vec![0, 1]);
+    assert!(c.b2);
+    assert!(!c.headerless);
+    assert!(!c.adopted);
+    assert!(c.option_cursors.contains("a") && c.option_cursors.contains("b"));
+    assert!(c.bare_cursors.contains("n"));
+    assert!(
+        !c.option_cursors.contains("l1") && !c.bare_cursors.contains("l1"),
+        "params keep full registration"
+    );
+    let literal = r.elided_clusters["add_two_numbers"]
+        .iter()
+        .find(|c| !c.borrowed)
+        .expect("literal cluster coexists");
+    assert_eq!(literal.root, "dummy");
+    assert_eq!(literal.returned, karac::ownership::ReturnedChain::RootLink);
+}
+
+#[test]
+fn borrow_while_let_walk() {
+    let src = format!(
+        "{NODE}\
+         fn sum(head: Option[ListNode]) -> i64 {{\n\
+             let mut t = 0;\n\
+             let mut cur = head;\n\
+             while cur.is_some() {{\n\
+                 let n = cur.unwrap();\n\
+                 t = t + n.val;\n\
+                 cur = n.next;\n\
+             }}\n\
+             t\n\
+         }}\n\
+         fn main() {{\n\
+             let s = ListNode {{ val: 9, next: None }};\n\
+             println(sum(Some(s)));\n\
+         }}"
+    );
+    let r = analyze(&src);
+    let c = borrowed_cluster(&r, "sum").expect("walked param borrows");
+    assert!(c.option_cursors.contains("cur"));
+    assert!(c.bare_cursors.contains("n"));
+}
+
+#[test]
+fn borrow_rejects_param_passed_to_call() {
+    let src = format!(
+        "{NODE}\
+         fn len(head: Option[ListNode]) -> i64 {{\n\
+             if head.is_some() {{ 1 }} else {{ 0 }}\n\
+         }}\n\
+         fn relay(head: Option[ListNode]) -> i64 {{\n\
+             len(head)\n\
+         }}\n\
+         fn main() {{\n\
+             let s = ListNode {{ val: 9, next: None }};\n\
+             println(relay(Some(s)));\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(borrowed_cluster(&r, "relay").is_none());
+    // `len` itself only does is_some — it borrows fine.
+    assert!(borrowed_cluster(&r, "len").is_some());
+}
+
+#[test]
+fn borrow_rejects_returned_param() {
+    // Returning a borrow would hand the caller a second owner.
+    let src = format!(
+        "{NODE}\
+         fn pass(head: Option[ListNode]) -> Option[ListNode] {{\n\
+             head\n\
+         }}\n\
+         fn main() {{\n\
+             let s = ListNode {{ val: 9, next: None }};\n\
+             let r = pass(Some(s));\n\
+             if r.is_some() {{ println(1); }}\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(borrowed_cluster(&r, "pass").is_none());
+}
+
+#[test]
+fn borrow_rejects_link_store_under_param_chain() {
+    // Grafting a local node under the borrowed chain is a link store
+    // into a read-only family — poison (kata #19\'s remove_nth shape
+    // keeps full RC).
+    let src = format!(
+        "{NODE}\
+         fn graft(head: Option[ListNode]) -> i64 {{\n\
+             if let Some(n) = head {{\n\
+                 let node = ListNode {{ val: 1, next: None }};\n\
+                 n.next = Some(node);\n\
+                 return n.val;\n\
+             }}\n\
+             0\n\
+         }}\n\
+         fn main() {{\n\
+             let s = ListNode {{ val: 9, next: None }};\n\
+             println(graft(Some(s)));\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(borrowed_cluster(&r, "graft").is_none());
+}
+
+#[test]
+fn borrow_rejects_param_rebound_by_let() {
+    let src = format!(
+        "{NODE}\
+         fn shadowed(head: Option[ListNode]) -> i64 {{\n\
+             let head = ListNode {{ val: 1, next: None }};\n\
+             head.val\n\
+         }}\n\
+         fn main() {{\n\
+             let s = ListNode {{ val: 9, next: None }};\n\
+             println(shadowed(Some(s)));\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(borrowed_cluster(&r, "shadowed").is_none());
+}
+
 #[test]
 fn cluster_blocks_prepend_idiom() {
     // Prepend couples the literal link-init to the root reassignment —

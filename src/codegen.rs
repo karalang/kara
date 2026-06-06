@@ -4029,6 +4029,13 @@ impl<'ctx> Codegen<'ctx> {
                         .insert(c.root.clone(), (c.member_type.clone(), c.link_field_index));
                     continue;
                 }
+                // Phase C2a: borrowed-param families have NO root
+                // cleanup of their own (the params keep the balanced
+                // entry/exit ownership) — only their walk cursors take
+                // the count-skip roles below.
+                if c.borrowed {
+                    continue;
+                }
                 entry.insert(
                     c.root.clone(),
                     (c.member_type.clone(), c.link_field_index, c.returned),
@@ -4048,7 +4055,7 @@ impl<'ctx> Codegen<'ctx> {
                 // literal roots — their cleanup dispatch happens via
                 // `adopted_root_info`; only their cursors take the
                 // count-free roles.
-                if !c.adopted {
+                if !c.adopted && !c.borrowed {
                     b2_entry.insert(c.root.clone(), mk(state::B2Role::Root));
                 }
                 for n in &c.fresh_linked {

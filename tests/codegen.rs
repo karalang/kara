@@ -10904,6 +10904,152 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_borrowed_param_walk_is_count_free() {
+        // Phase C2a: kata #2\'s adder body emits ZERO rc_inc anywhere —
+        // the borrowed-family walk cursors skip the alias-acquire and
+        // advance counts (previously the dominant count traffic), the
+        // b2 literal build was already count-free, and option params
+        // carry no entry inc. The params\' balanced exit RcDecOption
+        // stays (the caller\'s arg-site inc transfers ownership per
+        // call) — that residual pair is C2b\'s to remove under the
+        // headerless purity gate.
+        let ir = ir_for_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn add_two_numbers(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+    let mut carry: i64 = 0;
+    loop {
+        let mut s: i64 = carry;
+        let mut done = true;
+        if let Some(n) = a {
+            s = s + n.val;
+            a = n.next;
+            done = false;
+        }
+        if let Some(n) = b {
+            s = s + n.val;
+            b = n.next;
+            done = false;
+        }
+        if done and s == 0 {
+            break;
+        }
+        let node = ListNode { val: s % 10, next: None };
+        tail.next = Some(node);
+        tail = node;
+        carry = s / 10;
+    }
+    dummy.next
+}
+fn main() {
+    let x = ListNode { val: 7, next: None };
+    let y = ListNode { val: 5, next: None };
+    let r = add_two_numbers(Some(x), Some(y));
+    if r.is_some() { println(r.unwrap().val); }
+}
+"#,
+        );
+        let body = function_body(&ir, "add_two_numbers").expect("fn body");
+        assert!(
+            !body.contains("rc_inc") && !body.contains("opt.alias.inc"),
+            "borrowed walk must emit no incs; body:\n{body}"
+        );
+        assert!(
+            body.contains("opt_rc_cleanup"),
+            "params keep the balanced exit dec; body:\n{body}"
+        );
+        assert!(
+            body.contains("elide_free") && !body.contains("cw_loop"),
+            "the literal cluster\'s RootLink transfer is untouched; body:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_borrowed_param_walks_reuse_chains() {
+        // Phase C2a end-to-end: the same two chains are walked by a
+        // borrowing adder 100 times — an unbalanced borrow either
+        // frees a chain mid-loop (wrong sum / UAF) or leaks per call.
+        let out = run_program_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn from_three(a: i64, b: i64, c: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 0;
+    while i < 3 {
+        let mut v = a;
+        if i == 1 { v = b; }
+        if i == 2 { v = c; }
+        let node = ListNode { val: v, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    dummy.next
+}
+fn add_two_numbers(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+    let mut carry: i64 = 0;
+    loop {
+        let mut s: i64 = carry;
+        let mut done = true;
+        if let Some(n) = a {
+            s = s + n.val;
+            a = n.next;
+            done = false;
+        }
+        if let Some(n) = b {
+            s = s + n.val;
+            b = n.next;
+            done = false;
+        }
+        if done and s == 0 {
+            break;
+        }
+        let node = ListNode { val: s % 10, next: None };
+        tail.next = Some(node);
+        tail = node;
+        carry = s / 10;
+    }
+    dummy.next
+}
+fn sum_chain(head: Option[ListNode]) -> i64 {
+    let mut sum = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn main() {
+    let l1 = from_three(2, 4, 3);
+    let l2 = from_three(5, 6, 4);
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 100 {
+        let r = add_two_numbers(l1, l2);
+        total = total + sum_chain(r);
+        iter = iter + 1;
+    }
+    total = total + sum_chain(l1) + sum_chain(l2);
+    println(total);
+}
+"#,
+        );
+        // 100 * 15 + (2+4+3) + (5+6+4) = 1524.
+        assert_eq!(out.as_deref(), Some("1524\n"));
+    }
+
+    #[test]
     fn test_ir_cluster_root_takes_free_walk() {
         // Phase B1 WITHOUT B2: the root cleanup is the link-following
         // free-walk (cw_loop) while cursors keep their RcDec (they

@@ -167,7 +167,13 @@ impl<'a> OwnershipChecker<'a> {
         for item in &self.program.items {
             match item {
                 Item::Function(f) => {
-                    let cs = self.fn_clusters(f);
+                    let mut cs = self.fn_clusters(f);
+                    // Phase C2a: borrowed-param walk families are
+                    // callee-local (no cross-fn dependency) — computed
+                    // in the same walk. Free fns only in v1 (the
+                    // C2b call-site contract keys on bare-Identifier
+                    // callees).
+                    cs.extend(self.fn_borrowed_families(f));
                     if !cs.is_empty() {
                         clusters.insert(f.name.clone(), cs);
                     }
@@ -939,6 +945,24 @@ pub struct ElidedCluster {
     /// instead of the recursive dec-walk. Adopted clusters are never
     /// `headerless` and never `returned`.
     pub adopted: bool,
+    /// Phase C2a borrowed-param family: the family is rooted at the
+    /// fn's bare-owned `Option[T]` PARAMS (all of them — one family
+    /// per (fn, T), so kata #2's `if let Some(n) = a` / `= b` pair
+    /// shares the pattern-bound `n`). The params themselves KEEP their
+    /// balanced entry/exit ownership (caller incs the head at the call
+    /// site, the callee's `RcDecOption` decs it at exit) — only the
+    /// WALK traffic (aliases, cursors, pattern binds, advances) is
+    /// count-free via the b2 roles. Read-only like adopted families;
+    /// nothing is freed mid-scope, so non-owning cursors never dangle,
+    /// and the family queues NO cleanup of its own. The two-sided
+    /// skip of the residual head counts (call-site inc + exit dec) is
+    /// C2b's: it requires the program-purity gate (incl. a
+    /// fn-referenced-as-value scan) that headerless-T needs anyway.
+    pub borrowed: bool,
+    /// Positions (0-based) of the borrowed params in the fn's
+    /// signature — C2b's call-site contract surface; unused by C2a
+    /// codegen.
+    pub borrowed_param_indices: Vec<usize>,
 }
 
 /// Cluster-binding role during the scan.
@@ -999,6 +1023,46 @@ struct ClusterScan {
     /// Some(<binding>) => ..., None/_ => ... }`). `None` = literal
     /// cluster scan (B1/B2 behavior unchanged).
     adopted_root: Option<(String, String)>,
+    /// Phase C2a: this scan grows a BORROWED-PARAM family (roots are
+    /// pre-seeded param names; see `ElidedCluster::borrowed`). Shares
+    /// the family-only membership shapes with adopted scans, plus:
+    /// member-type literals classify as FOREIGN (the fn's own literal
+    /// cluster coexists independently), and the sanctioned
+    /// if-let/while-let bind joins the family.
+    borrowed: bool,
+    /// Names bound by SANCTIONED match/if-let/while-let patterns —
+    /// the one re-bind exception: kata #2 binds `n` in two sibling
+    /// if-lets (one per param chain). A pattern member may be re-bound
+    /// by another sanctioned pattern (each bind is body-scoped and
+    /// count-neutral in codegen); collision with a LET-born member
+    /// still poisons (the name-keyed analysis can't scope those).
+    pattern_members: HashSet<String>,
+}
+
+impl ClusterScan {
+    /// Family scans (adopted call results / borrowed params) share the
+    /// non-literal membership shapes — option-cursor aliasing and the
+    /// sanctioned read-only pattern binds — and the read-only rule
+    /// (every link store poisons).
+    fn is_family(&self) -> bool {
+        self.adopted_root.is_some() || self.borrowed
+    }
+
+    /// Join a sanctioned-pattern bound name as a Bare member. Re-binds
+    /// are allowed ONLY between sanctioned patterns (each bind is
+    /// body-scoped; codegen's pattern binding is count-neutral);
+    /// collision with a let-born member poisons — the name-keyed
+    /// analysis cannot scope that shadowing.
+    fn insert_pattern_member(&mut self, name: String, span: &Span) {
+        if self.bindings.contains_key(name.as_str()) {
+            if !self.pattern_members.contains(name.as_str()) {
+                self.poison("cluster name bound more than once", span);
+            }
+            return;
+        }
+        self.pattern_members.insert(name.clone());
+        self.bindings.insert(name, ClusterKind::Bare);
+    }
 }
 
 impl ClusterScan {
@@ -1077,6 +1141,8 @@ impl<'a> OwnershipChecker<'a> {
                 saw_boundary_region: false,
                 annotation_mentions_member: false,
                 adopted_root: None,
+                borrowed: false,
+                pattern_members: HashSet::new(),
             };
             // Phase C1a: member-type params do NOT poison. The flow
             // walls keep them strictly foreign to the cluster:
@@ -1206,6 +1272,8 @@ impl<'a> OwnershipChecker<'a> {
                     headerless,
                     returned,
                     adopted: false,
+                    borrowed: false,
+                    borrowed_param_indices: Vec::new(),
                 });
             }
         }
@@ -1264,6 +1332,8 @@ impl<'a> OwnershipChecker<'a> {
                 saw_boundary_region: false,
                 annotation_mentions_member: false,
                 adopted_root: Some((name.clone(), builder.clone())),
+                borrowed: false,
+                pattern_members: HashSet::new(),
             };
             for p in &f.params {
                 for n in p.pattern.binding_names() {
@@ -1329,6 +1399,149 @@ impl<'a> OwnershipChecker<'a> {
                     headerless: false,
                     returned: ReturnedChain::No,
                     adopted: true,
+                    borrowed: false,
+                    borrowed_param_indices: Vec::new(),
+                });
+            }
+        }
+        out
+    }
+
+    /// Phase C2a driver for one function: grow a BORROWED family per
+    /// member type around the fn's bare-owned `Option[T]` params. All
+    /// T-params join one family (all-or-nothing: if any param's uses
+    /// escape the read-only walk set, the whole family poisons and
+    /// every param keeps full RC — exactly today's behavior).
+    ///
+    /// The params themselves keep their balanced entry/exit ownership
+    /// (caller-side head inc, callee exit `RcDecOption`) and are NOT
+    /// given count-skip roles — analysis may even allow `l1 = a`
+    /// cursor re-aims on them, which codegen handles through the
+    /// registered full-RC reassign path. Only the derived walk
+    /// bindings (aliases / cursors / pattern binds) go count-free.
+    fn fn_borrowed_families(&self, f: &Function) -> Vec<ElidedCluster> {
+        // Group eligible params by member type.
+        let mut by_type: HashMap<String, Vec<(String, usize)>> = HashMap::new();
+        for (idx, p) in f.params.iter().enumerate() {
+            let TypeKind::Path(path) = &p.ty.kind else {
+                continue;
+            };
+            if path.segments.last().map(String::as_str) != Some("Option") {
+                continue;
+            }
+            let Some(args) = &path.generic_args else {
+                continue;
+            };
+            if args.len() != 1 {
+                continue;
+            }
+            let GenericArg::Type(inner) = &args[0] else {
+                continue;
+            };
+            let TypeKind::Path(ip) = &inner.kind else {
+                continue;
+            };
+            if ip.generic_args.as_ref().is_some_and(|a| !a.is_empty()) {
+                continue;
+            }
+            let Some(member) = ip.segments.last() else {
+                continue;
+            };
+            if self.cluster_link_struct(member).is_none() {
+                continue;
+            }
+            let PatternKind::Binding(name) = &p.pattern.kind else {
+                continue;
+            };
+            by_type
+                .entry(member.clone())
+                .or_default()
+                .push((name.clone(), idx));
+        }
+        let mut out = Vec::new();
+        for (member, params) in by_type {
+            let Some((link_field, link_idx)) = self.cluster_link_struct(&member) else {
+                continue;
+            };
+            let mut bindings = HashMap::new();
+            for (name, _) in &params {
+                bindings.insert(name.clone(), ClusterKind::OptionCursor);
+            }
+            let mut scan = ClusterScan {
+                member_type: member.clone(),
+                link_field,
+                bindings,
+                fresh: HashSet::new(),
+                linked_once: HashSet::new(),
+                root: Some(params[0].0.clone()),
+                any_link: false,
+                shadow_names: HashSet::new(),
+                poisoned: None,
+                free_member_literal: false,
+                saw_boundary_region: false,
+                annotation_mentions_member: false,
+                adopted_root: None,
+                borrowed: true,
+                pattern_members: HashSet::new(),
+            };
+            // Other params shadow as usual; the family's own roots are
+            // exempt (they ARE params).
+            let own: HashSet<&str> = params.iter().map(|(n, _)| n.as_str()).collect();
+            for p in &f.params {
+                for n in p.pattern.binding_names() {
+                    if !own.contains(n.as_str()) {
+                        scan.shadow_names.insert(n);
+                    }
+                }
+            }
+            self.cluster_collect_block(&f.body, &mut scan);
+            if let Some(shadowed) = scan
+                .bindings
+                .keys()
+                .find(|n| scan.shadow_names.contains(n.as_str()))
+                .cloned()
+            {
+                scan.poison(
+                    &format!("cluster name '{shadowed}' shadowed by a pattern binding"),
+                    &f.span,
+                );
+            }
+            for stmt in &f.body.stmts {
+                self.cluster_verify_stmt(stmt, ClusterCtx::default(), &mut scan);
+            }
+            if let Some(e) = &f.body.final_expr {
+                self.cluster_verify_expr(e, ClusterCtx::default(), &mut scan);
+            }
+            if scan.poisoned.is_none() {
+                let mut bare_cursors = HashSet::new();
+                let mut option_cursors = HashSet::new();
+                for (n, kind) in &scan.bindings {
+                    if own.contains(n.as_str()) {
+                        continue; // params keep full registration
+                    }
+                    match kind {
+                        ClusterKind::Bare => {
+                            bare_cursors.insert(n.clone());
+                        }
+                        ClusterKind::OptionCursor => {
+                            option_cursors.insert(n.clone());
+                        }
+                    }
+                }
+                out.push(ElidedCluster {
+                    root: params[0].0.clone(),
+                    member_type: member,
+                    link_field_index: link_idx,
+                    bindings: scan.bindings.keys().cloned().collect(),
+                    b2: true,
+                    fresh_linked: HashSet::new(),
+                    bare_cursors,
+                    option_cursors,
+                    headerless: false,
+                    returned: ReturnedChain::No,
+                    adopted: false,
+                    borrowed: true,
+                    borrowed_param_indices: params.iter().map(|(_, i)| *i).collect(),
                 });
             }
         }
@@ -1444,9 +1657,22 @@ impl<'a> OwnershipChecker<'a> {
             | ExprKind::While { body: b, .. }
             | ExprKind::LabeledBlock { body: b, .. } => self.cluster_collect_block(b, scan),
             ExprKind::WhileLet {
-                pattern, body: b, ..
+                pattern,
+                value,
+                body: b,
+                ..
+            } => {
+                // Same sanction as IfLet — `while let Some(n) = cur`.
+                if let Some(n) = sanctioned_family_optional_bind(value, pattern, scan) {
+                    scan.insert_pattern_member(n, &pattern.span);
+                } else {
+                    for n in pattern.binding_names() {
+                        scan.shadow_names.insert(n);
+                    }
+                }
+                self.cluster_collect_block(b, scan)
             }
-            | ExprKind::For {
+            ExprKind::For {
                 pattern, body: b, ..
             } => {
                 for n in pattern.binding_names() {
@@ -1466,12 +1692,21 @@ impl<'a> OwnershipChecker<'a> {
             }
             ExprKind::IfLet {
                 pattern,
+                value,
                 then_block,
                 else_branch,
-                ..
             } => {
-                for n in pattern.binding_names() {
-                    scan.shadow_names.insert(n);
+                // Phase C2a: the sanctioned optional bind on a family
+                // option member (`if let Some(n) = a`) promotes `n` to
+                // a Bare member instead of a shadow name — kata #2's
+                // param-walk shape. Non-family if-lets keep today's
+                // shadow behavior.
+                if let Some(n) = sanctioned_family_optional_bind(value, pattern, scan) {
+                    scan.insert_pattern_member(n, &pattern.span);
+                } else {
+                    for n in pattern.binding_names() {
+                        scan.shadow_names.insert(n);
+                    }
                 }
                 self.cluster_collect_block(then_block, scan);
                 if let Some(e) = else_branch {
@@ -1485,12 +1720,8 @@ impl<'a> OwnershipChecker<'a> {
                 // default-deny like any cursor) instead of a shadow
                 // name. Collection is declaration-ordered, so the
                 // scrutinee's option kind is already known here.
-                if let Some(n) = sanctioned_adopted_match(scrutinee, arms, scan) {
-                    if scan.bindings.contains_key(n.as_str()) {
-                        scan.poison("cluster name bound more than once", &expr.span);
-                    } else {
-                        scan.bindings.insert(n, ClusterKind::Bare);
-                    }
+                if let Some(n) = sanctioned_family_match(scrutinee, arms, scan) {
+                    scan.insert_pattern_member(n, &expr.span);
                     for arm in arms {
                         self.cluster_collect_expr(&arm.body, scan);
                     }
@@ -1526,6 +1757,15 @@ impl<'a> OwnershipChecker<'a> {
             ExprKind::StructLiteral { path, .. }
                 if path.last().map(String::as_str) == Some(scan.member_type.as_str()) =>
             {
+                // Phase C2a: borrowed-param scans treat member literals
+                // as FOREIGN — the fn's own literal cluster (e.g.
+                // add_two_numbers' dummy/tail/node triple) coexists
+                // independently; dragging it into the borrow family
+                // would conflate owned build traffic with the
+                // non-owning walk.
+                if scan.borrowed {
+                    return None;
+                }
                 if is_member_literal_link_none(value, &scan.member_type, &scan.link_field) {
                     Some(ClusterKind::Bare)
                 } else {
@@ -1536,16 +1776,15 @@ impl<'a> OwnershipChecker<'a> {
             ExprKind::Identifier(n) if scan.kind_of(n) == Some(ClusterKind::Bare) => {
                 Some(ClusterKind::Bare)
             }
-            // Phase C1c (adopted families only): option-cursor alias —
+            // Phase C1c/C2a (families only): option-cursor alias —
             // `let cur = out;` re-aims a non-owning cursor at the
-            // adopted root (or another option cursor). Sound because
+            // family root (or another option cursor). Sound because
             // the family is read-only: nothing is freed or displaced
-            // before the root's scope-exit walk, so the count-free
-            // copy can never dangle. Literal clusters keep today's
-            // rule (option cursors are born from link reads only).
+            // before the owner's drop, so the count-free copy can
+            // never dangle. Literal clusters keep today's rule
+            // (option cursors are born from link reads only).
             ExprKind::Identifier(n)
-                if scan.adopted_root.is_some()
-                    && scan.kind_of(n) == Some(ClusterKind::OptionCursor) =>
+                if scan.is_family() && scan.kind_of(n) == Some(ClusterKind::OptionCursor) =>
             {
                 Some(ClusterKind::OptionCursor)
             }
@@ -1673,17 +1912,14 @@ impl<'a> OwnershipChecker<'a> {
                         return;
                     }
                     if field == &scan.link_field {
-                        // Phase C1c: adopted families are READ-ONLY.
+                        // Phase C1c/C2a: families are READ-ONLY.
                         // `Some(v)` stores already poison (no fresh
                         // set), but `= None` would also be unsound
                         // here: it severs the chain count-free (the
                         // family's cursors skip release-old), leaking
-                        // the displaced tail past the root's walk.
-                        if scan.adopted_root.is_some() {
-                            scan.poison(
-                                "link store into an adopted (read-only) chain",
-                                &value.span,
-                            );
+                        // the displaced tail past the owner's drop.
+                        if scan.is_family() {
+                            scan.poison("link store into a read-only family chain", &value.span);
                             return;
                         }
                         match link_value_shape(value) {
@@ -1886,12 +2122,19 @@ impl<'a> OwnershipChecker<'a> {
                 }
             }
             ExprKind::IfLet {
+                pattern,
                 value,
                 then_block,
                 else_branch,
-                ..
             } => {
-                self.cluster_verify_expr(value, ctx, scan);
+                // Phase C2a: the sanctioned optional bind — the value
+                // mention is the allowed read (the binding joined the
+                // family in pass 1). Boundary regions keep poisoning.
+                let sanctioned = !ctx.boundary
+                    && sanctioned_family_optional_bind(value, pattern, scan).is_some();
+                if !sanctioned {
+                    self.cluster_verify_expr(value, ctx, scan);
+                }
                 self.cluster_verify_block(then_block, ctx, scan);
                 if let Some(e) = else_branch {
                     self.cluster_verify_expr(e, ctx, scan);
@@ -1903,7 +2146,7 @@ impl<'a> OwnershipChecker<'a> {
                 // binding joined the family in pass 1; its uses verify
                 // below like any cursor's). Guards are absent by
                 // shape; boundary regions keep poisoning.
-                if !ctx.boundary && sanctioned_adopted_match(scrutinee, arms, scan).is_some() {
+                if !ctx.boundary && sanctioned_family_match(scrutinee, arms, scan).is_some() {
                     for arm in arms {
                         self.cluster_verify_expr(&arm.body, ctx, scan);
                     }
@@ -1923,8 +2166,17 @@ impl<'a> OwnershipChecker<'a> {
                 self.cluster_verify_expr(condition, ctx, scan);
                 self.cluster_verify_block(body, ctx, scan);
             }
-            ExprKind::WhileLet { value, body, .. } => {
-                self.cluster_verify_expr(value, ctx, scan);
+            ExprKind::WhileLet {
+                pattern,
+                value,
+                body,
+                ..
+            } => {
+                let sanctioned = !ctx.boundary
+                    && sanctioned_family_optional_bind(value, pattern, scan).is_some();
+                if !sanctioned {
+                    self.cluster_verify_expr(value, ctx, scan);
+                }
                 self.cluster_verify_block(body, ctx, scan);
             }
             ExprKind::For { iterable, body, .. } => {
@@ -2053,12 +2305,12 @@ fn is_member_literal_link_none(value: &Expr, member: &str, link_field: &str) -> 
 /// (count-neutral in codegen: shared pattern bindings are borrowed
 /// aliases — no inc, no per-arm cleanup). Adopted scans only: literal
 /// clusters keep the default-deny on match scrutinees.
-fn sanctioned_adopted_match(
+fn sanctioned_family_match(
     scrutinee: &Expr,
     arms: &[crate::ast::MatchArm],
     scan: &ClusterScan,
 ) -> Option<String> {
-    if scan.adopted_root.is_none() || arms.len() != 2 {
+    if !scan.is_family() || arms.len() != 2 {
         return None;
     }
     match &scrutinee.kind {
@@ -2093,6 +2345,37 @@ fn sanctioned_adopted_match(
         return None;
     }
     some_binding
+}
+
+/// Phase C2a: recognize the sanctioned optional bind on a family
+/// option member — `if let Some(<binding>) = <option member>` /
+/// `while let Some(<binding>) = <option member>`. The binding joins
+/// the family as a Bare member (count-neutral in codegen, like the
+/// match arm's). Family scans only.
+fn sanctioned_family_optional_bind(
+    value: &Expr,
+    pattern: &Pattern,
+    scan: &ClusterScan,
+) -> Option<String> {
+    if !scan.is_family() {
+        return None;
+    }
+    match &value.kind {
+        ExprKind::Identifier(s) if scan.kind_of(s) == Some(ClusterKind::OptionCursor) => {}
+        _ => return None,
+    }
+    match &pattern.kind {
+        PatternKind::TupleVariant { path, patterns }
+            if path.last().map(String::as_str) == Some("Some") && patterns.len() == 1 =>
+        {
+            if let PatternKind::Binding(n) = &patterns[0].kind {
+                Some(n.clone())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Phase-D deep type mention scan: recurses through every
