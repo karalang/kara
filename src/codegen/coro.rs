@@ -631,7 +631,9 @@ pub(super) unsafe fn build_demo_park_coroutine<'ctx>(
 
     // Demo parked-task slot: `{ptr poll_fn, ptr state, i64 token}`. The first
     // two words are the runtime `KaracParkedTask` ABI; the third holds the
-    // registration token (production keeps it in a state-struct field).
+    // registration token (production keeps it in a state-struct field). The
+    // per-task cancel flag lives on the *registration* (`FdState`), not in this
+    // record, so the record ABI is unchanged by slice 5c.
     let parked_ty = context.struct_type(&[ptrt.into(), ptrt.into(), i64t.into()], false);
 
     let entry = context.append_basic_block(func, "entry");
@@ -753,6 +755,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_ty = self.context.i64_type();
+        // Parked record: `{ptr poll_fn, ptr state, i64 token}` — the runtime
+        // `KaracParkedTask` ABI plus the cross-suspend-reloaded token (forces
+        // the record into the coro frame). The per-task cancel flag lives on
+        // the *registration* (`FdState`), passed to `register_fd_cancel` at
+        // park time — not in this record — so the record ABI is unchanged.
         let parked_ty = self
             .context
             .struct_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
@@ -840,6 +847,26 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.build_store(state_field, ctx.hdl).unwrap();
 
+        // cancel field (index 2): the per-task cancel flag read from the bound
+        // completion slot. `karac_runtime_park_slot_cancel_ptr` returns null
+        // when the slot is unbound (the inline / non-spawn drive) — the
+        // dispatcher then falls back to its never-cancelled flag. For a
+        // `spawn_coro`-driven handler the slot is bound to the handle's cancel
+        // flag, so the dispatcher / cancel-sweep hand the coroutine its own.
+        // The flag is bound on the *registration* (`FdState`) via
+        // `register_fd_cancel` below — not stored in the parked record — so the
+        // record ABI stays identical to the non-cancellable / degenerate paths.
+        let cancel_ptr_fn = self
+            .module
+            .get_function("karac_runtime_park_slot_cancel_ptr")
+            .expect("karac_runtime_park_slot_cancel_ptr declared in Codegen::new");
+        let cancel_ptr = self
+            .builder
+            .build_call(cancel_ptr_fn, &[ctx.slot.into()], "kara.coro.cancel_ptr")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+
         // Ensure the dispatcher is up before we register (idempotent bootstrap;
         // the degenerate poll-fn path does the same in its state_0).
         let start_disp = self
@@ -863,15 +890,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // use-after-free the `ws_idle_holder` reconnect storm hit on glibc.
         let save_tok = unsafe { ctx.intr.save(&self.builder, ctx.hdl.as_value_ref()) };
 
+        // Register with the per-task cancel flag bound on the registration, so
+        // the dispatcher / cancel-sweep hand this coroutine its own flag (null
+        // for an unbound slot → never-cancelled fallback).
         let register_fd = self
             .module
-            .get_function("karac_runtime_event_loop_register_fd")
-            .expect("karac_runtime_event_loop_register_fd declared in Codegen::new");
+            .get_function("karac_runtime_event_loop_register_fd_cancel")
+            .expect("karac_runtime_event_loop_register_fd_cancel declared in Codegen::new");
         let token = self
             .builder
             .build_call(
                 register_fd,
-                &[fd.into(), direction.into(), parked.into()],
+                &[
+                    fd.into(),
+                    direction.into(),
+                    parked.into(),
+                    cancel_ptr.into(),
+                ],
                 "kara.coro.token",
             )
             .unwrap()

@@ -161,6 +161,41 @@ mod tests {
         }
     "#;
 
+    /// Slice 5c — **live mid-flight cancellation**. `serve_buf` is a non-blocking
+    /// spawned coroutine handler that parks on `accept` of a listener **no client
+    /// ever connects to** — so it stays parked on an idle fd that will never
+    /// produce a readiness wakeup. `main` immediately `tg.cancel()`s, then the
+    /// `TaskGroup`'s scope-exit drop joins the child. For the join to return
+    /// (rather than hang forever), cancellation must reach the parked coroutine:
+    /// `tg.cancel()` flips the child's flag + requests a dispatcher cancel-sweep,
+    /// which finds the idle parked coroutine, drives `coro.destroy` (the per-park
+    /// destroy edge: deregister fd + drop live heap locals + signal the slot), and
+    /// wakes the joiner. A `Vec[i64]` (`buf`) is live across the park, so the
+    /// destroy edge must free it exactly once — the ASAN gate. `buf.len()` after
+    /// the park is never reached (the coroutine is torn down at the park), so the
+    /// only stdout line is `main`'s `7`: its presence proves the join did NOT hang.
+    /// The cancel may also race *ahead* of the handler reaching its park; the
+    /// register-time race guard (`register_fd_cancel` requesting a sweep when the
+    /// flag is already set) covers that ordering too, so the test is deterministic
+    /// without any sleep.
+    const CANCEL_HANDLER_SRC: &str = r#"
+        fn serve_buf(listener: TcpListener) {
+            let mut buf: Vec[i64] = Vec.new();
+            buf.push(1);
+            buf.push(2);
+            buf.push(3);
+            let _stream = listener.accept().unwrap();
+            println(buf.len());
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            let mut tg = TaskGroup.new();
+            tg.spawn(|| serve_buf(listener));
+            tg.cancel();
+            println(7);
+        }
+    "#;
+
     /// Owned-user-`Drop` coroutine-param leak regression (the `ws_idle_holder`
     /// connection-reap leak class, minimized). `serve_one` is coroutine-compiled
     /// (it parks on `accept`) and takes an **owned** param `c: Conn` whose
@@ -627,6 +662,62 @@ mod tests {
         (exit_status, lines)
     }
 
+    /// Spawn `exe_path`, await its `BOUND_PORT` (proving the listener bound), then
+    /// **never connect** — the spawned handler stays parked on an idle `accept`.
+    /// The binary must still exit within the timeout: it does so only if
+    /// `tg.cancel()` + the dispatcher cancel-sweep tear the parked coroutine down
+    /// and wake the `TaskGroup` join. A hang ⇒ cancellation never reached the idle
+    /// parked coroutine (the slice-5c failure mode). Returns the exit status +
+    /// stdout lines. `asan_options`, when `Some`, is set as `ASAN_OPTIONS`.
+    fn run_cancel_until_exit(
+        exe_path: &Path,
+        asan_options: Option<&str>,
+    ) -> (std::process::ExitStatus, Vec<String>) {
+        let mut cmd = Command::new(exe_path);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(opts) = asan_options {
+            cmd.env("ASAN_OPTIONS", opts);
+        }
+        let mut child = cmd.spawn().expect("failed to spawn coro cancel e2e binary");
+        let stdout = child.stdout.take().expect("child stdout missing");
+        let (rx, join) = spawn_stdout_reader(stdout);
+        // Confirm the listener bound (so the handler genuinely parks on an idle
+        // accept), then deliberately do NOT connect.
+        let port = match rx.recv_timeout(Duration::from_secs(15)) {
+            Ok(p) => p,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("binary did not emit BOUND_PORT line within 15s");
+            }
+        };
+        assert!(port > 0, "BOUND_PORT must be a non-zero ephemeral port");
+
+        let wait_started = Instant::now();
+        let exit_status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if wait_started.elapsed() > Duration::from_secs(15) {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        panic!(
+                            "binary did not exit within 15s — TaskGroup.cancel() did \
+                             not tear down the idle parked coroutine, so the group \
+                             join hung (slice 5c cancel-sweep / per-task routing broken)."
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => panic!("try_wait failed: {e}"),
+            }
+        };
+        let lines = join.join().unwrap_or_default();
+        (exit_status, lines)
+    }
+
     #[test]
     fn coroutine_loop_handler_services_multiple_connections() {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -996,6 +1087,109 @@ mod tests {
             lines.iter().any(|l| l == "1") && lines.iter().any(|l| l == "2"),
             "non-blocking spawned coroutine did not complete under ASAN; \
              stdout lines: {lines:?}"
+        );
+    }
+
+    /// Slice 5c trigger (functional): a spawned coroutine parked on an idle
+    /// `accept` is torn down by `tg.cancel()` + the dispatcher cancel-sweep, so
+    /// the `TaskGroup` join returns instead of hanging. The runner never connects;
+    /// `7` (main's line, printed after `tg.cancel()`, before the scope-exit join)
+    /// reaching stdout proves the join woke. A broken per-task cancel route or a
+    /// missing sweep ⇒ the join hangs ⇒ the runner times out.
+    #[test]
+    fn coroutine_taskgroup_cancel_tears_down_idle_parked_handler() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_cancel_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(CANCEL_HANDLER_SRC, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let (exit_status, lines) = run_cancel_until_exit(&exe_path, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "cancel binary exited non-success {exit_status:?}; stdout lines: {lines:?}"
+        );
+        // `7` proves main's scope-exit TaskGroup join returned (cancellation woke
+        // it); the post-park `buf.len()` line must be ABSENT (the coroutine was
+        // torn down at the park, never running its post-park body).
+        assert!(
+            lines.iter().any(|l| l == "7"),
+            "main did not reach its post-cancel line — the group join hung; \
+             stdout lines: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l == "3"),
+            "the cancelled coroutine ran its post-park body (buf.len()==3) — it \
+             should have been torn down at the park; stdout lines: {lines:?}"
+        );
+    }
+
+    /// Slice 5c trigger (ASAN): same idle-park cancellation, with a `Vec[i64]`
+    /// live across the park. The per-park destroy edge must free it **exactly
+    /// once** — a leak (Linux `detect_leaks=1`) means the destroy edge skipped the
+    /// drop; a double-free (sweep + a stray normal wakeup both invoking `poll_fn`)
+    /// means the one-shot `take_registration` claim failed. Either trips ASAN.
+    #[test]
+    fn coroutine_taskgroup_cancel_idle_parked_handler_under_asan() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        if !asan_available() {
+            eprintln!("skip: ASAN unavailable on this host");
+            return;
+        }
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_cancel_asan_{pid}_{nanos}"));
+
+        if let Err(e) =
+            compile_link_coro(CANCEL_HANDLER_SRC, &exe_path, Some(&["-fsanitize=address"]))
+        {
+            eprintln!("skip: ASAN compile/link failed: {e}");
+            return;
+        }
+        let asan_options = if cfg!(target_os = "macos") {
+            "abort_on_error=0:exitcode=23"
+        } else {
+            "detect_leaks=1:abort_on_error=0:exitcode=23"
+        };
+
+        let (exit_status, lines) = run_cancel_until_exit(&exe_path, Some(asan_options));
+        let _ = std::fs::remove_file(&exe_path);
+
+        // Clean ASAN exit == the heap local live across the park was freed exactly
+        // once on the destroy edge (no leak, no double-free), and the
+        // sweep→destroy→slot-signal→join handoff is UAF-free.
+        assert!(
+            exit_status.success(),
+            "ASAN reported a memory error in the mid-flight-cancel path (exit \
+             {exit_status:?}); stdout lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "7"),
+            "main did not reach its post-cancel line under ASAN — the group join \
+             hung; stdout lines: {lines:?}"
         );
     }
 

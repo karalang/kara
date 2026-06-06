@@ -2904,6 +2904,24 @@ impl<'ctx> Codegen<'ctx> {
             register_fd_ty,
             Some(Linkage::External),
         );
+        // `register_fd_cancel(raw_fd, dir, parked, cancel) -> token` — the
+        // coroutine park-suspend variant that binds a per-task cancel flag on
+        // the registration (slice 5c), so the dispatcher / cancel-sweep hand
+        // the coroutine its own cooperative-cancellation flag.
+        let register_fd_cancel_ty = i64_type.fn_type(
+            &[
+                context.i32_type().into(), // raw_fd
+                context.i8_type().into(),  // direction
+                ptr_type.into(),           // parked task pointer (opaque)
+                ptr_type.into(),           // cancel: *const AtomicBool (null = none)
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_event_loop_register_fd_cancel",
+            register_fd_cancel_ty,
+            Some(Linkage::External),
+        );
         // `take_wakeups(out_buf, max_wakeups, timeout_nanos) -> count`.
         // `karac_park_on_fd`'s state_1 calls this with `timeout_nanos = -1`
         // to block until any wakeup arrives. v1 single-task model: the
@@ -2991,6 +3009,17 @@ impl<'ctx> Codegen<'ctx> {
         module.add_function(
             "karac_runtime_park_slot_free",
             park_slot_unary_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_park_slot_cancel_ptr(slot: ptr) -> ptr` — reads the
+        // slot's bound per-task cancel flag (null if unbound). The coroutine
+        // park-suspend copies the result into the parked record's `cancel`
+        // field so the dispatcher / cancel-sweep hand the coroutine its own
+        // cancellation flag (slice 5c).
+        let park_slot_cancel_ptr_ty = ptr_type.fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_park_slot_cancel_ptr",
+            park_slot_cancel_ptr_ty,
             Some(Linkage::External),
         );
 

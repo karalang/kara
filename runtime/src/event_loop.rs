@@ -36,7 +36,7 @@ use mio::{Events, Interest, Poll, Token};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
 use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 // `AtomicU64` backs `HandshakeStats`, which is part of the TLS handshake
 // pool — gated behind the `tls` feature so the lean archive doesn't carry it.
 #[cfg(all(unix, feature = "tls"))]
@@ -90,6 +90,17 @@ struct FdState {
     /// into the existing per-fd state map without re-shaping it.
     #[allow(dead_code)]
     deadline: Option<Instant>,
+    /// Per-task cancel flag (slice 5c). Bound at register time for a
+    /// `spawn_coro`-driven coroutine (the handler's `cancel: AtomicBool`,
+    /// read off the bound slot via `karac_runtime_park_slot_cancel_ptr`);
+    /// null for the inline / non-spawn drive and for the degenerate
+    /// (non-coroutine) state-machine path. The dispatcher passes it to
+    /// `poll_fn` so a coroutine observes *its own* cancellation, and the
+    /// cancel-sweep reads it here (no parked-record deref) to find idle
+    /// parked-but-never-ready coroutines whose flag has been flipped.
+    /// Lives on the registration, not in the parked record, so the parked
+    /// record ABI is unchanged across the coroutine and degenerate paths.
+    cancel: *const AtomicBool,
 }
 
 // SAFETY: `parked` is a pointer owned by the codegen parking path /
@@ -209,6 +220,21 @@ impl EventLoop {
         deadline: Option<Instant>,
         parked: *mut c_void,
     ) -> io::Result<RegistrationToken> {
+        self.register_with_cancel(source, direction, deadline, parked, std::ptr::null())
+    }
+
+    /// `register` plus a per-task `cancel` flag (slice 5c). The coroutine
+    /// park-suspend passes the handler's cancel flag (read off its bound
+    /// slot); every other caller registers with a null flag via [`register`]
+    /// and falls back to the dispatcher's never-cancelled flag.
+    pub fn register_with_cancel<S: mio::event::Source + ?Sized>(
+        &self,
+        source: &mut S,
+        direction: IoDirection,
+        deadline: Option<Instant>,
+        parked: *mut c_void,
+        cancel: *const AtomicBool,
+    ) -> io::Result<RegistrationToken> {
         // Allocate the token and publish the map entry under the lock, then
         // perform the `epoll_ctl` ADD *without* holding the fds lock. The
         // map entry must exist before the fd is armed (so a readiness wakeup
@@ -233,6 +259,7 @@ impl EventLoop {
                     parked,
                     direction,
                     deadline,
+                    cancel,
                 },
             );
             token
@@ -300,6 +327,81 @@ impl EventLoop {
         fds.by_token
             .remove(&Token(token.0))
             .map(|state| state.parked)
+    }
+
+    /// Like [`take_registration`], but also returns the registration's bound
+    /// per-task `cancel` flag (null if unbound). The dispatcher and the
+    /// cancel-sweep use this so they can hand `poll_fn` the task's own flag.
+    fn take_registration_with_cancel(
+        &self,
+        token: RegistrationToken,
+    ) -> Option<(*mut c_void, *const AtomicBool)> {
+        let mut fds = self.fds.lock().unwrap_or_else(|p| p.into_inner());
+        fds.by_token
+            .remove(&Token(token.0))
+            .map(|state| (state.parked, state.cancel))
+    }
+
+    /// Cancel-sweep phase A — snapshot the tokens of every registration whose
+    /// bound `cancel` flag is set. Reads the flag straight off `FdState` (no
+    /// parked-record deref), and returns *tokens only* (a `Copy` value that
+    /// cannot dangle): phase B re-claims each via [`take_registration_with_cancel`],
+    /// the atomic claim that dedups against a concurrent normal fd-wakeup /
+    /// completion. The `cancel` flag itself lives on the owning handle, which
+    /// outlives the registration, so loading it under the `fds` lock is sound.
+    fn collect_cancelled(&self) -> Vec<RegistrationToken> {
+        let fds = self.fds.lock().unwrap_or_else(|p| p.into_inner());
+        let mut out = Vec::new();
+        for (tok, state) in fds.by_token.iter() {
+            let cancel = state.cancel;
+            // SAFETY: a non-null `cancel` points at the owning handle's flag,
+            // live for the registration's lifetime (the handle is freed only
+            // after the coroutine tears down, which removes this entry first).
+            if !cancel.is_null() && unsafe { (*cancel).load(Ordering::Acquire) } {
+                out.push(RegistrationToken(tok.0));
+            }
+        }
+        out
+    }
+
+    /// Cancel-sweep phase B — for each snapshotted token, claim it via the
+    /// one-shot [`take_registration_with_cancel`] and (only on a win) invoke
+    /// its `poll_fn` with the task's own cancel flag. The flag is set (that is
+    /// why the token was snapshotted), so the resume shim's pre-resume
+    /// cancel-check runs `coro.destroy` → the per-park destroy edge (deregister
+    /// fd + drop live heap locals + signal the completion slot) → returns
+    /// `Ready`, waking the joiner.
+    ///
+    /// Runs with **no lock held**: `poll_fn`'s destroy edge calls `deregister`
+    /// (which wants the `fds` lock) and `park_slot_signal` (which may unblock a
+    /// joiner) — holding `fds` across it would self-deadlock the non-reentrant
+    /// mutex. The collect-then-invoke split is exactly what avoids that.
+    ///
+    /// Race safety: a token whose task completed normally between phase A and
+    /// here is already gone from `by_token`, so the claim returns `None` and we
+    /// skip it — we never deref a stale snapshot pointer (only the `Copy` token
+    /// crosses the lock release). The claim itself does not deref `parked`, so
+    /// passing a token for an already-freed record is safe.
+    fn sweep_cancelled(&self, disp: &SchedulerDispatcher) {
+        for token in self.collect_cancelled() {
+            let (parked, cancel) = match self.take_registration_with_cancel(token) {
+                Some((p, c)) if !p.is_null() => (p, c),
+                _ => continue,
+            };
+            // SAFETY: we won the one-shot claim, so no normal-dispatch path
+            // has signalled/freed this record; it is live for this call.
+            let task = unsafe { &*(parked as *const KaracParkedTask) };
+            let cancel: &AtomicBool = if cancel.is_null() {
+                &disp.cancel
+            } else {
+                // SAFETY: non-null cancel points at the owning handle's flag,
+                // live until the joiner frees the handle (after teardown).
+                unsafe { &*cancel }
+            };
+            let _ = unsafe { (task.poll_fn)(task.state, cancel) };
+            disp.polls.fetch_add(1, Ordering::Relaxed);
+            disp.ready_observations.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Drive the loop once.
@@ -602,6 +704,36 @@ pub extern "C" fn karac_runtime_event_loop_register_fd(
     direction: u8,
     parked: *mut c_void,
 ) -> u64 {
+    register_fd_impl(raw_fd, direction, parked, std::ptr::null())
+}
+
+/// Register a raw fd with a bound per-task `cancel` flag (slice 5c). Same as
+/// [`karac_runtime_event_loop_register_fd`], plus the `cancel: *const
+/// AtomicBool` the dispatcher / cancel-sweep hand the coroutine's `poll_fn` so
+/// it observes *its own* cooperative cancellation. The coroutine park-suspend
+/// reads the flag off its bound completion slot
+/// ([`karac_runtime_park_slot_cancel_ptr`]) and passes it here; a null `cancel`
+/// is equivalent to the plain `register_fd` (never-cancelled fallback).
+///
+/// Unix-only, same as the plain register entry.
+#[cfg(unix)]
+#[no_mangle]
+pub extern "C" fn karac_runtime_event_loop_register_fd_cancel(
+    raw_fd: i32,
+    direction: u8,
+    parked: *mut c_void,
+    cancel: *const AtomicBool,
+) -> u64 {
+    register_fd_impl(raw_fd, direction, parked, cancel)
+}
+
+#[cfg(unix)]
+fn register_fd_impl(
+    raw_fd: i32,
+    direction: u8,
+    parked: *mut c_void,
+    cancel: *const AtomicBool,
+) -> u64 {
     let dir = match direction {
         0 => IoDirection::Read,
         1 => IoDirection::Write,
@@ -611,7 +743,7 @@ pub extern "C" fn karac_runtime_event_loop_register_fd(
     let mut source = mio::unix::SourceFd(&raw_fd);
     let shard = shard_of_fd(raw_fd);
     let ev = &event_loops()[shard];
-    match ev.register(&mut source, dir, None, parked) {
+    match ev.register_with_cancel(&mut source, dir, None, parked, cancel) {
         Ok(token) => {
             // Wake the background poller so it re-evaluates its interest
             // list. Without this, a poller blocked in `run_once(None)`
@@ -644,6 +776,22 @@ pub extern "C" fn karac_runtime_event_loop_register_fd(
                 if let Some(h) = EVENT_LOOP_HANDLES.get().and_then(|hs| hs.get(shard)) {
                     let _ = h.wake();
                 }
+            }
+            // Park-vs-cancel race guard (slice 5c). If this fd is registered for
+            // a coroutine whose `cancel` flag is ALREADY set — a
+            // `TaskGroup.cancel()` that raced the handler reaching its park, so
+            // the cancel sweep ran before this registration existed — the idle
+            // fd would never wake the dispatcher to observe the flag, hanging
+            // the joiner. Request a fresh sweep so the just-parked-but-cancelled
+            // coroutine is torn down promptly. Ordering: the entry is inserted
+            // (under the `fds` lock, released by `register_with_cancel`) before
+            // this `Acquire` load, so either this load sees the flag and we
+            // sweep, or `taskgroup_cancel`'s own later request-sweep observes
+            // the now-present entry — every cancel transition is covered.
+            // SAFETY: a non-null `cancel` points at the owning handle's flag,
+            // live for the duration of the ramp that called this.
+            if !cancel.is_null() && unsafe { (*cancel).load(Ordering::Acquire) } {
+                karac_runtime_request_cancel_sweep();
             }
             pack_token(shard, token.0)
         }
@@ -3604,13 +3752,13 @@ fn ws_drive_upgrade_handshake<S: std::io::Read + std::io::Write>(
 // thread count: you cannot have two threads block on one `mio::Poll`. Tune via
 // `KARAC_REACTOR_SHARDS` (or the back-compat `KARAC_DISPATCHER_THREADS`).
 //
-// **Cancel routing.** v1 ships with a single process-global "never
-// cancelled" `AtomicBool` that the dispatcher passes to each
-// `poll_fn` invocation. Per-par-block cancel routing (so a parked
-// task inside a fail-fast `par {}` observes its block's cancel flag)
-// is later integration work — the FFI surface stays stable because
-// the cancel pointer comes from the task's own state, not from the
-// dispatcher's signature.
+// **Cancel routing.** The dispatcher passes each `poll_fn` the task's
+// *own* `cancel` flag, bound on the registration (`FdState.cancel`,
+// via `register_fd_cancel`) — null falls back to the process-global
+// `disp.cancel` (still "never cancelled"). This is what makes
+// `TaskGroup.cancel()` reach a parked coroutine (slice 5c). The FFI
+// surface stays stable because the cancel pointer rides on the
+// registration, not the dispatcher's signature.
 //
 // **Lifetime convention.** The codegen is responsible for keeping the
 // `KaracParkedTask` alive — and its `state` struct alive — from the
@@ -3622,12 +3770,20 @@ fn ws_drive_upgrade_handshake<S: std::io::Read + std::io::Write>(
 /// can share it with the global slot.
 struct SchedulerDispatcher {
     shutdown: AtomicBool,
-    /// Per-process "never cancelled" flag. v1 placeholder — passed to
-    /// every `poll_fn` invocation. When per-par-block cancel routing
-    /// lands, parked tasks will carry the appropriate per-block flag
-    /// in their `state` struct and `poll_fn` will read it from there
-    /// instead of (or in addition to) this arg.
+    /// Process-global "never cancelled" flag — the fallback the dispatcher
+    /// passes to `poll_fn` when a registration carries no per-task cancel
+    /// flag (`FdState.cancel` null: the inline / non-spawn drive and the
+    /// degenerate state-machine path). A `spawn_coro` coroutine instead
+    /// gets its own handle's flag, routed via `register_fd_cancel` (slice 5c).
     cancel: AtomicBool,
+    /// Per-shard "a cancel-sweep is requested" flags — one `AtomicBool` per
+    /// reactor shard (indexed by `shard`). Set (all shards) by
+    /// [`karac_runtime_request_cancel_sweep`] after `TaskGroup.cancel()`
+    /// flips child flags, then the cross-thread waker unblocks each shard's
+    /// `run_once` so it observes its flag and sweeps. Per-shard (not one
+    /// global bool) so the first shard to `swap(false)` doesn't starve the
+    /// others — each shard independently consumes its own request.
+    sweep_requested: Vec<AtomicBool>,
     /// Counters for test verification + diagnostics. Updated unsynchronized
     /// (Relaxed) — they only need monotonic-write visibility, not strict
     /// ordering against other operations.
@@ -3679,8 +3835,8 @@ fn dispatcher_thread_main(disp: Arc<SchedulerDispatcher>, shard: usize) {
             // after `poll_fn` signals it, strictly after this `take`+invoke, so
             // the pointer is live for the duration of the call. `None` ⇒ the
             // registration was already claimed or deregistered — skip it.
-            let parked = match event_loop.take_registration(w.token) {
-                Some(p) if !p.is_null() => p,
+            let (parked, task_cancel) = match event_loop.take_registration_with_cancel(w.token) {
+                Some((p, c)) if !p.is_null() => (p, c),
                 _ => continue,
             };
             // SAFETY: `take_registration` returned the parked pointer from the
@@ -3689,7 +3845,22 @@ fn dispatcher_thread_main(disp: Arc<SchedulerDispatcher>, shard: usize) {
             // completion, which happens inside this call. We invoke `poll_fn`
             // but never deref `state` ourselves.
             let task = unsafe { &*(parked as *const KaracParkedTask) };
-            let result = unsafe { (task.poll_fn)(task.state, &disp.cancel) };
+            // Per-task cancel routing: hand the coroutine *its own* cancel
+            // flag (bound on its registration via `register_with_cancel`), so
+            // its resume shim observes cancellation. Null when unbound (the
+            // inline / non-spawn drive, and the degenerate state-machine path)
+            // → fall back to the dispatcher's never-cancelled flag, preserving
+            // the pre-routing behavior.
+            let cancel: &AtomicBool = if task_cancel.is_null() {
+                &disp.cancel
+            } else {
+                // SAFETY: a non-null `task_cancel` points at the owning
+                // handle's `cancel` AtomicBool, which outlives the coroutine
+                // (freed by the joiner only after the coroutine completes /
+                // tears down — strictly after this `poll_fn` returns).
+                unsafe { &*task_cancel }
+            };
+            let result = unsafe { (task.poll_fn)(task.state, cancel) };
             disp.polls.fetch_add(1, Ordering::Relaxed);
             match result {
                 0 => {
@@ -3706,6 +3877,16 @@ fn dispatcher_thread_main(disp: Arc<SchedulerDispatcher>, shard: usize) {
                     disp.err_observations.fetch_add(1, Ordering::Relaxed);
                 }
             }
+        }
+        // Drain a cancel-sweep request for THIS shard. Clear-before-snapshot:
+        // `swap(false)` precedes the sweep, so a `cancel` flag flipped during
+        // the sweep re-arms the *next* iteration (its `request_cancel_sweep`
+        // re-sets this flag + re-wakes) rather than being lost. The sweep
+        // proactively tears down cancelled coroutines parked on idle fds that
+        // would otherwise never produce a readiness wakeup — without it,
+        // `TaskGroup.cancel()` + group-drop/join would hang on an idle peer.
+        if disp.sweep_requested[shard].swap(false, Ordering::AcqRel) {
+            event_loop.sweep_cancelled(&disp);
         }
     }
 }
@@ -3726,16 +3907,17 @@ pub extern "C" fn karac_runtime_scheduler_start_dispatcher() -> i32 {
     if slot.is_some() {
         return 0;
     }
+    let n_threads = shard_count();
     let disp = Arc::new(SchedulerDispatcher {
         shutdown: AtomicBool::new(false),
         cancel: AtomicBool::new(false),
+        sweep_requested: (0..n_threads).map(|_| AtomicBool::new(false)).collect(),
         polls: std::sync::atomic::AtomicU64::new(0),
         ready_observations: std::sync::atomic::AtomicU64::new(0),
         err_observations: std::sync::atomic::AtomicU64::new(0),
         pending_observations: std::sync::atomic::AtomicU64::new(0),
         handles: Mutex::new(Vec::new()),
     });
-    let n_threads = shard_count();
     let mut handles = Vec::with_capacity(n_threads);
     // Publish BEFORE spawning so a `register_fd` racing a thread into its first
     // blocking `run_once` still wakes it (see `DISPATCHER_ACTIVE`).
@@ -3751,6 +3933,32 @@ pub extern "C" fn karac_runtime_scheduler_start_dispatcher() -> i32 {
     *disp.handles.lock().unwrap_or_else(|p| p.into_inner()) = handles;
     *slot = Some(disp);
     0
+}
+
+/// Request a cancel-sweep on every reactor shard and wake them. Called by
+/// `karac_runtime_taskgroup_cancel` *after* it flips the child handles'
+/// `cancel` flags, so the Release ordering here publishes those flips to the
+/// sweeping dispatcher (which consumes the request with an `AcqRel` swap).
+///
+/// Sets all shards because a group's children may be parked on any shard. A
+/// flip that lands after a given sweep's snapshot is not lost: every flip is
+/// paired with this call, which re-sets the flags and re-wakes, so a fresh
+/// sweep is guaranteed after the last flip. No-op (cheap) when the dispatcher
+/// isn't running — cancellation of parked coroutines is a dispatcher-mode
+/// feature; the standalone-poller path does not sweep.
+///
+/// Returns 0 on success (including the no-dispatcher no-op).
+#[no_mangle]
+pub extern "C" fn karac_runtime_request_cancel_sweep() -> i32 {
+    if let Some(disp) = lock_scheduler_dispatcher_slot().as_ref() {
+        for f in &disp.sweep_requested {
+            f.store(true, Ordering::Release);
+        }
+    }
+    // Fan out the waker to all shards so each unblocks `run_once` and observes
+    // its request. Harmless if no dispatcher is running (no thread is parked
+    // in `run_once`); the armed waker is drained on next poll / shutdown.
+    karac_runtime_event_loop_wake()
 }
 
 /// Signal the dispatcher to stop, unblock every shard's `run_once` via the
@@ -3876,6 +4084,17 @@ pub unsafe extern "C" fn karac_runtime_scheduler_stats_snapshot(
 pub struct KaracParkSlot {
     done: Mutex<bool>,
     cv: Condvar,
+    /// Per-task cancel flag, bound by `karac_runtime_spawn_coro` to the
+    /// owning `KaracTaskHandle`'s `cancel: AtomicBool`. Null until bound
+    /// (the inline / non-spawn park drive never binds it — its coroutine
+    /// observes the dispatcher's never-cancelled fallback instead). The
+    /// codegen park-suspend reads this through
+    /// [`karac_runtime_park_slot_cancel_ptr`] and stores it in the parked
+    /// record's `cancel` field, so the dispatcher (and the cancel-sweep)
+    /// can hand the coroutine its own flag. `AtomicPtr` (not a plain raw
+    /// field) keeps `KaracParkSlot` `Sync` and lets the bind store through
+    /// a shared `&KaracParkSlot`.
+    cancel: AtomicPtr<AtomicBool>,
 }
 
 /// Allocate a fresh park slot. Returns an owning raw pointer the caller
@@ -3885,7 +4104,50 @@ pub extern "C" fn karac_runtime_park_slot_new() -> *mut KaracParkSlot {
     Box::into_raw(Box::new(KaracParkSlot {
         done: Mutex::new(false),
         cv: Condvar::new(),
+        cancel: AtomicPtr::new(std::ptr::null_mut()),
     }))
+}
+
+/// Bind the slot's per-task cancel flag. Called by
+/// [`karac_runtime_spawn_coro`] with the owning handle's `cancel` flag
+/// before the coroutine ramps. Storing through the `AtomicPtr` is safe
+/// against the shared `&KaracParkSlot` that `wait` / `signal` later take.
+///
+/// # Safety
+///
+/// `slot` must be a live pointer from [`karac_runtime_park_slot_new`];
+/// `cancel` must outlive the coroutine (the handle is freed only by the
+/// joiner, strictly after the coroutine completes / is torn down).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_park_slot_bind_cancel(
+    slot: *mut KaracParkSlot,
+    cancel: *const AtomicBool,
+) {
+    if slot.is_null() {
+        return;
+    }
+    // SAFETY: caller's contract — `slot` is live.
+    let s = unsafe { &*slot };
+    s.cancel.store(cancel as *mut AtomicBool, Ordering::Release);
+}
+
+/// Read the slot's bound per-task cancel flag (null if unbound). The
+/// codegen park-suspend calls this to populate the parked record's
+/// `cancel` field; the dispatcher then hands it to `poll_fn`.
+///
+/// # Safety
+///
+/// `slot` must be a live pointer from [`karac_runtime_park_slot_new`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_park_slot_cancel_ptr(
+    slot: *const KaracParkSlot,
+) -> *const AtomicBool {
+    if slot.is_null() {
+        return std::ptr::null();
+    }
+    // SAFETY: caller's contract — `slot` is live.
+    let s = unsafe { &*slot };
+    s.cancel.load(Ordering::Acquire) as *const AtomicBool
 }
 
 /// Block until the slot is signaled. Returns immediately if it was
@@ -4918,6 +5180,126 @@ mod tests {
         // still pinned. Now safe to drop in test cleanup.
         drop(task);
         drop(state);
+    }
+
+    // ── Slice 5c: cancel-sweep of an idle parked task ──────────────────────
+
+    /// State for the cancel-sweep test. `poll_fn` returns Pending until it is
+    /// invoked with a *set* cancel flag, at which point it records the
+    /// invocation and returns Ready — mirroring the codegen resume shim's
+    /// cancel-check → destroy → signal. `invocations` counts every poll_fn call
+    /// so the test can assert the sweep invokes it exactly once (one-shot claim).
+    #[cfg(unix)]
+    struct CancelSweepState {
+        fd: i32,
+        token: std::sync::atomic::AtomicU64,
+        cancelled: std::sync::atomic::AtomicBool,
+        invocations: std::sync::atomic::AtomicU64,
+    }
+    #[cfg(unix)]
+    unsafe impl Send for CancelSweepState {}
+    #[cfg(unix)]
+    unsafe impl Sync for CancelSweepState {}
+
+    #[cfg(unix)]
+    unsafe extern "C" fn cancel_sweep_poll_fn(
+        state_ptr: *mut c_void,
+        cancel: *const std::sync::atomic::AtomicBool,
+    ) -> u8 {
+        // SAFETY: caller passes the live `*const CancelSweepState`.
+        let st = unsafe { &*(state_ptr as *const CancelSweepState) };
+        st.invocations.fetch_add(1, Ordering::AcqRel);
+        // SAFETY: a non-null cancel is the test's `AtomicBool`, live for the
+        // duration of the test (pinned below).
+        let is_cancelled = !cancel.is_null() && unsafe { (*cancel).load(Ordering::Acquire) };
+        if is_cancelled {
+            // Mirror the destroy edge: deregister + signal completion.
+            let tok = st.token.swap(0, Ordering::AcqRel);
+            if tok != 0 {
+                let _ = karac_runtime_event_loop_deregister_fd(st.fd, tok);
+            }
+            st.cancelled.store(true, Ordering::Release);
+            KaracPollResult::Ready as u8
+        } else {
+            KaracPollResult::Pending as u8
+        }
+    }
+
+    /// The dispatcher cancel-sweep tears down a task parked on an **idle** fd
+    /// (one that never becomes ready, so the normal dispatch loop never visits
+    /// it) once its per-task `cancel` flag is set and a sweep is requested. This
+    /// is the unit-level analog of the `coroutine_taskgroup_cancel_*` E2E tests,
+    /// independent of codegen: it pins (a) per-task cancel routing — `poll_fn`
+    /// receives the flag bound via `register_fd_cancel`, not the dispatcher's
+    /// global — and (b) the sweep reaching an idle registration.
+    #[cfg(unix)]
+    #[test]
+    fn cancel_sweep_tears_down_idle_parked_task() {
+        let _guard = start_scheduler_for_test();
+        use std::os::fd::AsRawFd;
+
+        // An idle listener — bound but with no incoming connection, so its fd
+        // never becomes readable and the dispatcher's normal loop never visits
+        // the parked task. Only the sweep can reach it.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let listener_fd = listener.as_raw_fd();
+
+        let state = Box::new(CancelSweepState {
+            fd: listener_fd,
+            token: std::sync::atomic::AtomicU64::new(0),
+            cancelled: std::sync::atomic::AtomicBool::new(false),
+            invocations: std::sync::atomic::AtomicU64::new(0),
+        });
+        let task = Box::new(KaracParkedTask {
+            poll_fn: cancel_sweep_poll_fn,
+            state: &*state as *const CancelSweepState as *mut c_void,
+        });
+        let task_ptr = &*task as *const KaracParkedTask as *mut c_void;
+
+        // The per-task cancel flag, bound on the registration (the codegen path
+        // does this via the coroutine's slot).
+        let cancel = Box::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_ptr = &*cancel as *const AtomicBool;
+
+        let token =
+            karac_runtime_event_loop_register_fd_cancel(listener_fd, 0, task_ptr, cancel_ptr);
+        assert_ne!(token, 0, "register_fd_cancel should succeed");
+        state.token.store(token, Ordering::Release);
+
+        // No sweep yet: the flag is clear, so even a sweep request would find
+        // nothing. Flip the flag, then request the sweep (the order
+        // `taskgroup_cancel` uses).
+        cancel.store(true, Ordering::Release);
+        let rc = karac_runtime_request_cancel_sweep();
+        assert_eq!(rc, 0, "request_cancel_sweep should succeed");
+
+        // The sweep must drive the idle parked task to its cancelled arm. A
+        // broken sweep (or per-task routing) leaves `cancelled` false → timeout.
+        let start = Instant::now();
+        while !state.cancelled.load(Ordering::Acquire) {
+            if start.elapsed() > Duration::from_secs(2) {
+                panic!("cancel sweep did not tear down the idle parked task within 2s");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        // One-shot claim: the sweep took the registration before invoking
+        // poll_fn, so poll_fn ran exactly once (no double-invoke from a stray
+        // re-sweep). A second request now finds nothing.
+        let _ = karac_runtime_request_cancel_sweep();
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            state.invocations.load(Ordering::Acquire),
+            1,
+            "poll_fn must be invoked exactly once by the sweep (one-shot claim)"
+        );
+
+        // Drop order: nothing else references these now (the registration was
+        // taken + deregistered by the cancelled arm).
+        drop(task);
+        drop(state);
+        drop(cancel);
     }
 
     // ── Stage B3 regression: reap-on-peer-close through an inline,

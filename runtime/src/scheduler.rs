@@ -327,6 +327,19 @@ pub unsafe extern "C" fn karac_runtime_spawn_coro(
     });
     let handle_ptr: *mut KaracTaskHandle = Box::into_raw(handle_box);
 
+    // Bind the slot's per-task cancel flag to this handle's `cancel`, so the
+    // dispatcher (and the cancel-sweep) can hand the coroutine its own flag.
+    // The codegen park-suspend copies it from the slot into the parked record.
+    // SAFETY: `slot` is live (just allocated); `handle_ptr` is the just-leaked
+    // Box — its `cancel` field is stable for the handle's lifetime, which
+    // outlives the coroutine (freed by the joiner after teardown/completion).
+    unsafe {
+        crate::event_loop::karac_runtime_park_slot_bind_cancel(
+            slot,
+            &(*handle_ptr).cancel as *const AtomicBool,
+        );
+    }
+
     let call = Arc::new(ParCall {
         cancel: AtomicBool::new(false),
         remaining: Mutex::new(1),
@@ -663,15 +676,16 @@ pub unsafe extern "C" fn karac_runtime_taskgroup_join_and_free(group: *mut Karac
 /// fail-fast cancel-on-child-failure (handled at drop) with an explicit,
 /// user-driven trigger.
 ///
-/// **A2 slice 5b-1 — landed inert.** This only *sets* the flags. The
-/// coroutine resume shim (`__kara_coro_resume`) already checks the flag and
-/// tears the frame down on its next fd-readiness wakeup, BUT the dispatcher
-/// still passes a process-global never-cancelled flag to `poll_fn` (the
-/// `event_loop.rs` dispatcher loop), so a flipped flag does not yet reach a
-/// parked coroutine. Per-task cancel routing into the dispatcher and a sweep
-/// for idle parked-but-never-ready coroutines are slice 5c. Until then this is
-/// a safe, observable no-op on running tasks — shipped inert so the language
-/// surface + flag plumbing are reviewable in isolation.
+/// **A2 slice 5c — live.** Flips each child's flag, then drives a cancel-sweep
+/// via [`crate::event_loop::karac_runtime_request_cancel_sweep`]. The flag now
+/// reaches the coroutine two ways: the dispatcher hands each `poll_fn` the
+/// task's *own* cancel flag (copied into the parked record from the bound
+/// slot), so a child that becomes fd-ready observes cancellation; and the sweep
+/// proactively tears down children parked on idle fds that would never get a
+/// readiness wakeup. The resume shim (`__kara_coro_resume`) runs `coro.destroy`
+/// → the per-park destroy edge (deregister + RAII drops + slot-signal), so the
+/// group's join wakes. RAII cleanup runs on cancel; user `defer {}`-on-cancel
+/// is a documented fast-follow (the destroy edge still skips `UserDefer`).
 ///
 /// # Safety
 ///
@@ -684,19 +698,30 @@ pub unsafe extern "C" fn karac_runtime_taskgroup_cancel(group: *mut KaracTaskGro
     if group.is_null() {
         return;
     }
-    let g = &*group;
-    // Hold the children lock for the flip so a concurrent `register` (a child
-    // closure recursively spawning into the same group) cannot race the walk.
-    let children = g.children.lock().unwrap_or_else(|p| p.into_inner());
-    for &child in children.iter() {
-        if child.is_null() {
-            continue;
+    {
+        let g = &*group;
+        // Hold the children lock for the flip so a concurrent `register` (a
+        // child closure recursively spawning into the same group) cannot race
+        // the walk. Released before requesting the sweep so the wake path
+        // never couples with the children lock.
+        let children = g.children.lock().unwrap_or_else(|p| p.into_inner());
+        for &child in children.iter() {
+            if child.is_null() {
+                continue;
+            }
+            // SAFETY: each registered child handle is live for the group's
+            // lifetime (freed only at group drop, exclusive with this call).
+            // Same-module access to the private `cancel` flag.
+            (*child).cancel.store(true, Ordering::Release);
         }
-        // SAFETY: each registered child handle is live for the group's lifetime
-        // (freed only at group drop, exclusive with this call). Same-module
-        // access to the private `cancel` flag.
-        (*child).cancel.store(true, Ordering::Release);
     }
+    // Slice 5c trigger: the flags are flipped (Release). Now drive a sweep so a
+    // child parked on an idle fd (no readiness wakeup forthcoming) is torn down
+    // promptly instead of hanging the group's join. `request_cancel_sweep`'s
+    // per-shard stores are Release-ordered after the flag flips above, and the
+    // dispatcher consumes them with an AcqRel swap — so every flipped flag is
+    // visible to the sweep that observes the request.
+    crate::event_loop::karac_runtime_request_cancel_sweep();
 }
 
 #[cfg(test)]
