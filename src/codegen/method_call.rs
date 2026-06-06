@@ -137,6 +137,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "Vector.replace"
                     | "Vector.shuffle"
                     | "Vector.store_masked"
+                    | "Vector.scatter"
             ) {
                 return self.compile_vector_method(object, method, args);
             }
@@ -3729,6 +3730,74 @@ impl<'ctx> super::Codegen<'ctx> {
                         .map_err(|e| format!("store_masked store->skip failed: {e}"))?;
                     // Inactive lane (or fall-through) continues at `skip_bb`.
                     self.builder.position_at_end(skip_bb);
+                }
+                Ok(i64_t.const_zero().into())
+            }
+            // `v.scatter(slice, indices)` — write each lane `v[i]` to
+            // `slice[indices[i]]` (design.md § Portable SIMD, "Gather /
+            // scatter"; the write mirror of `gather`). Every lane is active;
+            // each index is widened to i64 and bounds-checked (`UGE idx, len`,
+            // so a negative signed index also traps) before the store. Returns
+            // unit (`i64 0`).
+            "scatter" => {
+                let slice_val = self.compile_expr(&args[0].value)?.into_struct_value();
+                let data = self
+                    .builder
+                    .build_extract_value(slice_val, 0, "scatter.data")
+                    .map_err(|e| format!("scatter extract data failed: {e}"))?
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_extract_value(slice_val, 1, "scatter.len")
+                    .map_err(|e| format!("scatter extract len failed: {e}"))?
+                    .into_int_value();
+                let indices = self.compile_expr(&args[1].value)?.into_vector_value();
+                let elem_ty = recv.get_type().get_element_type();
+                let i64_t = self.context.i64_type();
+                let fn_val = self.current_fn.unwrap();
+                for i in 0..n {
+                    let lane_idx = i32_t.const_int(i as u64, false);
+                    let raw = self
+                        .builder
+                        .build_extract_element(indices, lane_idx, "scatter.idx")
+                        .map_err(|e| format!("scatter extractelement index failed: {e}"))?
+                        .into_int_value();
+                    let idx = match raw.get_type().get_bit_width().cmp(&64) {
+                        std::cmp::Ordering::Less => self
+                            .builder
+                            .build_int_s_extend(raw, i64_t, "scatter.idx.sx")
+                            .map_err(|e| format!("scatter index sext failed: {e}"))?,
+                        std::cmp::Ordering::Greater => self
+                            .builder
+                            .build_int_truncate(raw, i64_t, "scatter.idx.tr")
+                            .map_err(|e| format!("scatter index truncate failed: {e}"))?,
+                        std::cmp::Ordering::Equal => raw,
+                    };
+                    let oob = self
+                        .builder
+                        .build_int_compare(IntPredicate::UGE, idx, len, "scatter.oob")
+                        .map_err(|e| format!("scatter bounds compare failed: {e}"))?;
+                    let panic_bb = self.context.append_basic_block(fn_val, "scatter.panic");
+                    let ok_bb = self.context.append_basic_block(fn_val, "scatter.ok");
+                    self.builder
+                        .build_conditional_branch(oob, panic_bb, ok_bb)
+                        .map_err(|e| format!("scatter panic branch failed: {e}"))?;
+                    self.builder.position_at_end(panic_bb);
+                    self.emit_panic("scatter: index out of bounds");
+                    self.builder
+                        .build_unreachable()
+                        .map_err(|e| format!("scatter unreachable failed: {e}"))?;
+
+                    self.builder.position_at_end(ok_bb);
+                    let v_i = lane(self, recv, i)?;
+                    let elem_ptr = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, data, &[idx], "scatter.elem.ptr")
+                            .map_err(|e| format!("scatter gep failed: {e}"))?
+                    };
+                    self.builder
+                        .build_store(elem_ptr, v_i)
+                        .map_err(|e| format!("scatter store failed: {e}"))?;
                 }
                 Ok(i64_t.const_zero().into())
             }

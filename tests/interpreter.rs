@@ -12976,6 +12976,26 @@ fn main() {
 }
 
 #[test]
+fn test_vector_scatter_permuted_indices() {
+    // scatter writes slice[indices[i]] = v[i] (parity with codegen).
+    let out = run_no_errors(
+        r#"
+fn fill(xs: mut Slice[i64]) {
+    let v = Vector[i64, 4](10, 20, 30, 40);
+    let idx = Vector[i64, 4](3, 1, 0, 2);
+    v.scatter(xs, idx);
+}
+fn main() {
+    let mut a: Array[i64, 4] = [0, 0, 0, 0];
+    fill(mut a);
+    println(a[0]); println(a[1]); println(a[2]); println(a[3]);
+}
+"#,
+    );
+    assert_eq!(out, "30\n20\n40\n10\n");
+}
+
+#[test]
 fn test_vector_compare_unsigned_mask() {
     // Unsigned compare: 3000000000 (high bit set as i32) is NOT < 10.
     let out = run_no_errors(

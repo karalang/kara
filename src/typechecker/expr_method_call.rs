@@ -3009,6 +3009,113 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Unit
             }
+            // Scatter (design.md § Portable SIMD, "Gather / scatter"):
+            // `v.scatter(slice, indices)` writes each lane `v[i]` to
+            // `slice[indices[i]]` through a `mut Slice[T]`. The destination
+            // must be a mutable slice; `indices` is an integer vector of the
+            // same lane count; every lane is active (no mask) and each index is
+            // bounds-checked at run time. The write mirror of `gather`.
+            "scatter" => {
+                if args.len() != 2 {
+                    self.type_error(
+                        format!(
+                            "'scatter' takes exactly two arguments (slice, indices), found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                    return Type::Unit;
+                }
+                let slice_ty = self.infer_expr(&args[0].value);
+                match &slice_ty {
+                    Type::Slice {
+                        element: arg_elem,
+                        mutable: true,
+                    } => {
+                        if **arg_elem != elem && !matches!(**arg_elem, Type::Error) {
+                            self.type_error(
+                                format!(
+                                    "'scatter' expects a 'mut Slice[{}]' matching the Vector \
+                                     element, found 'mut Slice[{}]'",
+                                    type_display(&elem),
+                                    type_display(arg_elem)
+                                ),
+                                args[0].value.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
+                    }
+                    Type::Slice { mutable: false, .. } => {
+                        self.type_error(
+                            "'scatter' requires a 'mut Slice[T]' destination (the slice must \
+                             be mutable to write into)"
+                                .to_string(),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                    Type::Error => {}
+                    other => {
+                        self.type_error(
+                            format!(
+                                "'scatter' expects a 'mut Slice[{}]' first argument, found '{}'",
+                                type_display(&elem),
+                                type_display(other)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                let idx_ty = self.infer_expr(&args[1].value);
+                match &idx_ty {
+                    Type::Vector {
+                        element: ie,
+                        lanes: il,
+                    } => {
+                        if !matches!(**ie, Type::Int(_) | Type::UInt(_) | Type::Error) {
+                            self.type_error(
+                                format!(
+                                    "'scatter' indices must be an integer vector, found '{}'",
+                                    type_display(&idx_ty)
+                                ),
+                                args[1].value.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        } else if il != lanes {
+                            self.type_error(
+                                format!(
+                                    "'scatter' indices must have the same lane count as the \
+                                     vector ('{}'), found '{}'",
+                                    type_display(&Type::Vector {
+                                        element: Box::new(elem.clone()),
+                                        lanes: lanes.clone(),
+                                    }),
+                                    type_display(&idx_ty)
+                                ),
+                                args[1].value.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
+                    }
+                    Type::Error => {}
+                    other => {
+                        self.type_error(
+                            format!(
+                                "'scatter' indices must be an integer vector, found '{}'",
+                                type_display(other)
+                            ),
+                            args[1].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Unit
+            }
             _ => {
                 self.type_error(
                     format!(
@@ -3016,7 +3123,7 @@ impl<'a> super::TypeChecker<'a> {
                          reduce_sum, reduce_product, reduce_min, reduce_max, \
                          reduce_and, reduce_or, reduce_xor, reverse, \
                          rotate_lanes_left, rotate_lanes_right, replace, shuffle, \
-                         store_masked; select on a Vector[bool, N] mask)",
+                         store_masked, scatter; select on a Vector[bool, N] mask)",
                         method,
                         type_display(&elem)
                     ),

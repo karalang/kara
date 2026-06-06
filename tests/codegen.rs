@@ -31383,6 +31383,123 @@ fn main() {
         );
     }
 
+    // ── Slice 6f — scatter (v.scatter(slice_mut, indices)) ───────────────
+
+    #[test]
+    fn test_vector_scatter_permuted_indices() {
+        // scatter writes slice[indices[i]] = v[i]: v (10,20,30,40) at idx
+        // (3,1,0,2) → a = [30,20,40,10].
+        let out = run_program(
+            r#"
+fn fill(xs: mut Slice[i64]) {
+    let v = Vector[i64, 4](10, 20, 30, 40);
+    let idx = Vector[i64, 4](3, 1, 0, 2);
+    v.scatter(xs, idx);
+}
+fn main() {
+    let mut a: Array[i64, 4] = [0, 0, 0, 0];
+    fill(mut a);
+    println(a[0]); println(a[1]); println(a[2]); println(a[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "30\n20\n40\n10\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_scatter_partial_indices_float() {
+        // Scatter into a subset of slots (indices need not cover the slice);
+        // unwritten slots keep their prior value. Float element type.
+        let out = run_program(
+            r#"
+fn fill(xs: mut Slice[f64]) {
+    let v = Vector[f64, 2](1.5, 2.5);
+    let idx = Vector[i64, 2](0, 2);
+    v.scatter(xs, idx);
+}
+fn main() {
+    let mut a: Array[f64, 3] = [9.0, 9.0, 9.0];
+    fill(mut a);
+    println(a[0]); println(a[1]); println(a[2]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1.5\n9\n2.5\n");
+        }
+    }
+
+    #[test]
+    fn test_vector_scatter_out_of_bounds_panics() {
+        let captured = run_program_capturing(
+            r#"
+fn fill(xs: mut Slice[i64]) {
+    let v = Vector[i64, 4](10, 20, 30, 40);
+    let idx = Vector[i64, 4](0, 1, 9, 2);
+    v.scatter(xs, idx);
+}
+fn main() {
+    let mut a: Array[i64, 4] = [0, 0, 0, 0];
+    fill(mut a);
+    println(a[0]);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("scatter: index out of bounds")
+                    || c.stderr.contains("scatter: index out of bounds"),
+                "expected scatter OOB panic, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_vector_scatter_immutable_slice_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn fill(xs: Slice[i64]) {
+    let v = Vector[i64, 4](10, 20, 30, 40);
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    v.scatter(xs, idx);
+}
+fn main() {
+    let a: Array[i64, 4] = [1, 2, 3, 4];
+    fill(a);
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "scatter destination must be a mut Slice[T]"
+        );
+    }
+
+    #[test]
+    fn test_vector_scatter_non_integer_indices_is_type_error() {
+        let errs = vector_typecheck_errors(
+            r#"
+fn fill(xs: mut Slice[i64]) {
+    let v = Vector[i64, 4](10, 20, 30, 40);
+    let idx = Vector[f64, 4](0.0, 1.0, 2.0, 3.0);
+    v.scatter(xs, idx);
+}
+fn main() {
+    let mut a: Array[i64, 4] = [1, 2, 3, 4];
+    fill(mut a);
+}
+"#,
+        );
+        assert!(
+            !errs.is_empty(),
+            "scatter indices must be an integer vector"
+        );
+    }
+
     // ── Slice 4 — first-class Numeric trait + lane-literal ergonomics ─────
 
     #[test]

@@ -1189,6 +1189,60 @@ impl<'a> super::Interpreter<'a> {
                 }
                 Some(Value::Unit)
             }
+            // `v.scatter(slice, indices)` — write each lane `v[i]` to
+            // `slice[indices[i]]` through the mutable slice's shared storage
+            // (parity with codegen; the write mirror of `gather`). Every lane
+            // is active; each index is bounds-checked (panic on OOB).
+            "scatter" => {
+                let slice_v = self.eval_expr_inner(&args[0].value);
+                let indices_v = self.eval_expr_inner(&args[1].value);
+                let (storage, start, slen) = match slice_v {
+                    Value::Slice {
+                        storage,
+                        start,
+                        len,
+                        ..
+                    } => (storage, start, len),
+                    Value::Array(rc) => {
+                        let len = rc.read().unwrap().len();
+                        (rc, 0, len)
+                    }
+                    other => {
+                        return Some(self.record_runtime_error(
+                            format!(
+                                "scatter expects a mut Slice argument, got `{}`",
+                                other.variant_name()
+                            ),
+                            span,
+                        ))
+                    }
+                };
+                let Value::Vector(indices) = indices_v else {
+                    return Some(self.record_runtime_error(
+                        "scatter expects an integer index vector".to_string(),
+                        span,
+                    ));
+                };
+                let mut guard = storage.write().unwrap();
+                for (lane, idx_v) in lanes.iter().zip(indices.iter()) {
+                    let Value::Int(idx) = idx_v else {
+                        drop(guard);
+                        return Some(self.record_runtime_error(
+                            "scatter index lane must be an integer".to_string(),
+                            span,
+                        ));
+                    };
+                    if *idx < 0 || (*idx as usize) >= slen {
+                        drop(guard);
+                        return Some(self.record_runtime_error(
+                            "scatter: index out of bounds".to_string(),
+                            span,
+                        ));
+                    }
+                    guard[start + *idx as usize] = lane.clone();
+                }
+                Some(Value::Unit)
+            }
             _ => None,
         }
     }
