@@ -219,9 +219,9 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // stay in every archive.
     #[cfg(feature = "net")]
     keep!(karac_runtime_serve_http, karac_runtime_serve_http_static,);
-    // Scheduler + event loop + TCP + WS (pub modules). Gated behind `net`
-    // alongside the modules themselves — the wasm archive
-    // (`--no-default-features`, phase-10) has no mio/tokio substrate.
+    // Scheduler + event loop (pub modules). Gated behind `net` alongside
+    // the modules themselves — the wasm archive (`--no-default-features`,
+    // phase-10) has no mio/tokio substrate.
     #[cfg(feature = "net")]
     keep!(
         scheduler::karac_runtime_spawn,
@@ -238,13 +238,21 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         event_loop::karac_runtime_park_slot_wait,
         event_loop::karac_runtime_park_slot_signal,
         event_loop::karac_runtime_park_slot_free,
-        event_loop::karac_runtime_event_loop_register_fd,
-        event_loop::karac_runtime_event_loop_deregister_fd,
         event_loop::karac_runtime_event_loop_poll,
         event_loop::karac_runtime_event_loop_wake,
         event_loop::karac_runtime_event_loop_start_background_thread,
         event_loop::karac_runtime_event_loop_take_wakeups,
         event_loop::karac_runtime_event_loop_shutdown_background_thread,
+    );
+    // Raw-fd registration + TCP + WS — additionally `unix`-gated: these
+    // FFI fns are `#[cfg(unix)]` at their definitions (mio's `SourceFd`
+    // raw-fd model; Windows IOCP is an explicitly separate slice per the
+    // event_loop.rs module docs), so naming them here on Windows is E0425
+    // — the windows-latest CI redness back through 2026-06-01.
+    #[cfg(all(feature = "net", unix))]
+    keep!(
+        event_loop::karac_runtime_event_loop_register_fd,
+        event_loop::karac_runtime_event_loop_deregister_fd,
         event_loop::karac_runtime_tcp_bind,
         event_loop::karac_runtime_tcp_accept,
         event_loop::karac_runtime_tcp_read,
@@ -266,9 +274,14 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_http_client_get,
         karac_runtime_http_client_post,
         karac_runtime_serve_https,
-        event_loop::karac_runtime_ws_accept_tls,
         tls::karac_runtime_tls_config_new,
         tls::karac_runtime_tls_config_free,
+    );
+    // TLS raw-fd surface — `#[cfg(unix)]` at the definitions, same split
+    // as the net block above.
+    #[cfg(all(feature = "tls", unix))]
+    keep!(
+        event_loop::karac_runtime_ws_accept_tls,
         tls::karac_runtime_tls_listener_bind,
         tls::karac_runtime_tls_accept,
         tls::karac_runtime_tls_client_connect,
