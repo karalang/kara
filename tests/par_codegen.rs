@@ -4575,4 +4575,87 @@ fn main() {
             );
         }
     }
+    // ── Slot-ownership transfer (auto-par, 2026-06-05) ─────────────
+
+    /// A branch that PUBLISHES an ownership-bearing value through a
+    /// return slot must not also free it at branch end. Pre-fix, the
+    /// `let name = "ka" + "ra"; let mut m: Map[String, i64] = Map.new();
+    /// m.insert("a", 1);` shape auto-par'd `String.add` + `Map.new()`
+    /// into one group, and the Map-producing branch ran its queued
+    /// `FreeMapHandle` right after writing the handle into the return
+    /// struct — the parent's `m.insert` was a use-after-free (SIGSEGV
+    /// on a native build from main; surfaced by the phase-10 WASM
+    /// build-path slice's cross-target probes). The fix removes the
+    /// branch-side action and re-registers it against the parent's
+    /// alloca (`SlotOwnership` transfer): the branch fn must contain
+    /// ZERO map frees, the parent exactly one.
+    #[test]
+    fn test_auto_par_map_slot_branch_does_not_free_published_handle() {
+        let ir = ir_for_with_concurrency(
+            r#"
+fn main() {
+    let name = "ka" + "ra";
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a", 1);
+}
+"#,
+        );
+        // The group must actually have fired — otherwise this test
+        // silently validates sequential lowering.
+        assert!(
+            ir.contains("call void @karac_par_run"),
+            "expected the String.add + Map.new group to auto-parallelize; IR:\n{ir}"
+        );
+        let fn_body = |name: &str| -> &str {
+            let start = ir
+                .find(&format!("define void @{name}("))
+                .or_else(|| ir.find(&format!("define i32 @{name}(")))
+                .unwrap_or_else(|| panic!("{name} not found in IR:\n{ir}"));
+            let end = ir[start..].find("\n}").map(|e| start + e).unwrap();
+            &ir[start..end]
+        };
+        for branch in ["__par_branch_0_0", "__par_branch_0_1"] {
+            let frees = fn_body(branch).matches("karac_map_free").count();
+            assert_eq!(
+                frees, 0,
+                "{branch} must not free a slot-published Map handle (ownership \
+                 moved to the parent); IR:\n{ir}"
+            );
+        }
+        let main_frees = fn_body("main").matches("karac_map_free").count();
+        assert_eq!(
+            main_frees, 1,
+            "main must free the moved-in Map handle exactly once at scope exit; IR:\n{ir}"
+        );
+    }
+
+    /// E2E for the same shape: the moved-in Map must be fully usable
+    /// after the join (insert + get) and the sibling branch's String
+    /// binding must survive to its post-join read. Crash = empty/partial
+    /// stdout, so the exact-match assert covers the original SIGSEGV.
+    #[test]
+    fn test_auto_par_map_slot_use_after_join_e2e() {
+        let out = run_program(
+            r#"
+fn main() {
+    let name = "ka" + "ra";
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a", 1);
+    m.insert("b", 2);
+    let b = m.get("b");
+    match b {
+        Some(val) => println(val),
+        None => println(0),
+    }
+    println(name);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "2\nkara\n",
+                "moved-in Map + sibling String slot must both be live after the join"
+            );
+        }
+    }
 }

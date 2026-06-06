@@ -16,7 +16,7 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
 
-use super::state::{CleanupAction, ResultSlot, ReturnSlot, VarSlot};
+use super::state::{CleanupAction, ResultSlot, ReturnSlot, SlotOwnership, VarSlot};
 
 /// Slice 1b/2 (Phase 7 — Par codegen: cancellation and error
 /// propagation, 2026-05-20 / 2026-05-21) return type for
@@ -28,6 +28,14 @@ use super::state::{CleanupAction, ResultSlot, ReturnSlot, VarSlot};
 type ParRunResult<'ctx> = (
     HashMap<String, BasicValueEnum<'ctx>>,
     Option<ParResultSurface<'ctx>>,
+    // Per-slot ownership metadata for bindings whose branch-side
+    // cleanup action was removed because the value moved to the
+    // parent through the return slot — the rebinding sites
+    // re-register cleanup against the parent's alloca from these
+    // records (see `SlotOwnership`). Empty for the 0-/1-stmt
+    // sequential fast paths (the binding compiles directly in the
+    // parent frame there, so ownership never leaves it).
+    HashMap<String, SlotOwnership<'ctx>>,
 );
 
 /// Parent-allocated state surfaced from `emit_par_run` to
@@ -223,7 +231,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // struct type + the `i32` "earliest err idx" cell that branch
         // fns CAS-min'd into. Step 7 uses this to surface the
         // source-order first Err without walking every slot tag.
-        let (slot_values, result_surface) =
+        let (slot_values, result_surface, slot_ownership) =
             self.emit_par_run(&block.stmts, &block.span, &return_slots, &result_slots)?;
 
         // Step 6 — Bind each loaded slot value as a fresh local in the
@@ -256,6 +264,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             .entry(slot.binding_name.clone())
                             .or_insert_with(|| self.context.i64_type().into());
                     }
+                    // Moved-in ownership (Map / File / enum / struct /
+                    // user-Drop / SoA slots): the branch removed its
+                    // cleanup action when it published the value — the
+                    // parent is now the unique owner, so re-register
+                    // the equivalent action against the parent alloca
+                    // (mirrors the auto-par dispatch site).
+                    self.register_slot_ownership(&slot.binding_name, alloca, &slot_ownership);
                 }
             }
         }
@@ -406,6 +421,71 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(phi.as_basic_value())
     }
 
+    /// Re-register a slot binding's transferred cleanup against the
+    /// PARENT's fresh alloca. Counterpart of the branch-side action
+    /// removal in `emit_par_branch_fn` — together they implement
+    /// move-only slot semantics for ownership-bearing slot types
+    /// (Map / File / value-enum / value-struct / user-Drop / SoA):
+    /// the branch publishes and forgets; the parent owns and frees
+    /// exactly once at its scope exit. Shared by both rebinding
+    /// sites (`compile_par_block` Step 6 and the auto-par dispatch
+    /// in `compile_function_body`). No-op for bindings without a
+    /// transfer record (i64 / f64 / Vec / RC slots — the latter two
+    /// have their own suppression/track flows).
+    pub(super) fn register_slot_ownership(
+        &mut self,
+        binding_name: &str,
+        parent_alloca: PointerValue<'ctx>,
+        slot_ownership: &HashMap<String, SlotOwnership<'ctx>>,
+    ) {
+        let Some(transfer) = slot_ownership.get(binding_name) else {
+            return;
+        };
+        let action = match *transfer {
+            SlotOwnership::Map {
+                key_is_vec,
+                val_is_vec,
+                val_shared_heap_type,
+                key_shared_heap_type,
+            } => CleanupAction::FreeMapHandle {
+                map_alloca: parent_alloca,
+                key_is_vec,
+                val_is_vec,
+                val_shared_heap_type,
+                key_shared_heap_type,
+            },
+            SlotOwnership::File => CleanupAction::FreeFileHandle {
+                file_alloca: parent_alloca,
+            },
+            SlotOwnership::Enum { drop_fn } => CleanupAction::EnumDrop {
+                enum_alloca: parent_alloca,
+                drop_fn,
+            },
+            SlotOwnership::Struct { drop_fn } => CleanupAction::StructDrop {
+                struct_alloca: parent_alloca,
+                drop_fn,
+            },
+            SlotOwnership::User { drop_fn } => CleanupAction::UserDrop {
+                binding_name: binding_name.to_string(),
+                binding_ptr: parent_alloca,
+                drop_fn,
+            },
+            SlotOwnership::Soa {
+                soa_struct_ty,
+                num_hot_groups,
+                has_cold,
+            } => CleanupAction::FreeSoaGroups {
+                soa_alloca: parent_alloca,
+                soa_struct_ty,
+                num_hot_groups,
+                has_cold,
+            },
+        };
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(action);
+        }
+    }
+
     /// Lower a list of statements to a `karac_par_run` runtime dispatch.
     ///
     /// Shared between the explicit-`par`-block lowering (`compile_par_block`)
@@ -460,7 +540,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `self.variables` after `compile_stmt` runs, so the caller's
         // outside-of-group reads still resolve.
         if stmts.is_empty() {
-            return Ok((HashMap::new(), None));
+            return Ok((HashMap::new(), None, HashMap::new()));
         }
         if stmts.len() == 1 {
             self.compile_stmt(&stmts[0])?;
@@ -474,7 +554,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     map.insert(slot.binding_name.clone(), v);
                 }
             }
-            return Ok((map, None));
+            return Ok((map, None, HashMap::new()));
         }
 
         // 1. Collect the union of captured variables across all branch statements.
@@ -719,6 +799,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(&crate::resolver::SpanKey::from_span(span))
             .cloned();
         let mut branch_fn_ptrs: Vec<PointerValue<'ctx>> = Vec::with_capacity(stmts.len());
+        // Ownership metadata for slot bindings whose branch-side
+        // cleanup was removed at branch end — each branch fn drains
+        // its own slots' actions into this map; the parent rebinding
+        // sites consume it (returned as ParRunResult's third element).
+        let mut slot_ownership: HashMap<String, SlotOwnership<'ctx>> = HashMap::new();
         for (i, stmt) in stmts.iter().enumerate() {
             // Per-branch slot list: only the slots whose `branch_index`
             // matches this branch flow into `emit_par_branch_fn` for
@@ -749,6 +834,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 branch_result_slot,
                 par_earliest_err_idx,
                 par_modes.as_deref(),
+                &mut slot_ownership,
             )?;
             branch_fn_ptrs.push(fn_ptr);
         }
@@ -836,7 +922,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }),
             _ => None,
         };
-        Ok((slot_values, result_surface))
+        Ok((slot_values, result_surface, slot_ownership))
     }
 
     /// Generate the branch function for a single par-block statement.
@@ -881,6 +967,7 @@ impl<'ctx> super::Codegen<'ctx> {
         branch_result_slot: Option<ResultSlot>,
         par_earliest_err_idx: usize,
         par_capture_modes: Option<&[(String, crate::ownership::ParCaptureMode)]>,
+        slot_ownership: &mut HashMap<String, SlotOwnership<'ctx>>,
     ) -> Result<PointerValue<'ctx>, String> {
         let fn_name = format!("__par_branch_{}_{}", par_id, index);
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -1416,6 +1503,86 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap();
                     let zero = self.context.i64_type().const_int(0, false);
                     let _ = self.builder.build_store(tag_ptr, zero);
+                }
+                // Ownership-bearing handle / payload cleanups (Map /
+                // File / value-enum / value-struct / user-Drop / SoA):
+                // the slot-write above published this binding's value
+                // to the parent, so the branch's queued action must NOT
+                // run — pre-fix it did, and the parent's first use of
+                // the slot value was a use-after-free (segfault on the
+                // `let name = "ka" + "ra"; let mut m = Map.new();
+                // m.insert(..)` auto-par shape: the branch freed the
+                // map handle it had just written into the return
+                // struct). Unlike the Vec / RC suppressions above,
+                // these shapes have no "nothing to drop" sentinel state
+                // a store could install (a UserDrop body is arbitrary
+                // user code), so the action is REMOVED from the frame
+                // and its metadata surfaced through `slot_ownership`;
+                // the parent rebinding sites (auto-par dispatch in
+                // `stmts.rs`, `compile_par_block` Step 6) re-register
+                // the equivalent cleanup against the parent's fresh
+                // alloca — the parent becomes the unique owner, exactly
+                // like the Vec `track_vec_var` re-track.
+                let local_ptr = self.variables.get(&slot.binding_name).map(|v| v.ptr);
+                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                    frame.retain(|action| {
+                        let transfer = match action {
+                            CleanupAction::FreeMapHandle {
+                                map_alloca,
+                                key_is_vec,
+                                val_is_vec,
+                                val_shared_heap_type,
+                                key_shared_heap_type,
+                            } if Some(*map_alloca) == local_ptr => Some(SlotOwnership::Map {
+                                key_is_vec: *key_is_vec,
+                                val_is_vec: *val_is_vec,
+                                val_shared_heap_type: *val_shared_heap_type,
+                                key_shared_heap_type: *key_shared_heap_type,
+                            }),
+                            CleanupAction::FreeFileHandle { file_alloca }
+                                if Some(*file_alloca) == local_ptr =>
+                            {
+                                Some(SlotOwnership::File)
+                            }
+                            CleanupAction::EnumDrop {
+                                enum_alloca,
+                                drop_fn,
+                            } if Some(*enum_alloca) == local_ptr => {
+                                Some(SlotOwnership::Enum { drop_fn: *drop_fn })
+                            }
+                            CleanupAction::StructDrop {
+                                struct_alloca,
+                                drop_fn,
+                            } if Some(*struct_alloca) == local_ptr => {
+                                Some(SlotOwnership::Struct { drop_fn: *drop_fn })
+                            }
+                            CleanupAction::UserDrop {
+                                binding_name,
+                                drop_fn,
+                                ..
+                            } if *binding_name == slot.binding_name => {
+                                Some(SlotOwnership::User { drop_fn: *drop_fn })
+                            }
+                            CleanupAction::FreeSoaGroups {
+                                soa_alloca,
+                                soa_struct_ty,
+                                num_hot_groups,
+                                has_cold,
+                            } if Some(*soa_alloca) == local_ptr => Some(SlotOwnership::Soa {
+                                soa_struct_ty: *soa_struct_ty,
+                                num_hot_groups: *num_hot_groups,
+                                has_cold: *has_cold,
+                            }),
+                            _ => None,
+                        };
+                        match transfer {
+                            Some(t) => {
+                                slot_ownership.insert(slot.binding_name.clone(), t);
+                                false
+                            }
+                            None => true,
+                        }
+                    });
                 }
             }
             // Recursion suppression (par-slice 4 — same shape as the

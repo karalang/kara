@@ -375,7 +375,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // par never has Result-typed branches in slice 1, so
                 // the second tuple element is always `None` here and
                 // we discard it.
-                let (slot_values, _) =
+                let (slot_values, _, slot_ownership) =
                     self.emit_par_run(&group_stmts, &group_span, &return_slots, &[])?;
                 // Slice A (sub-step g): bind each loaded slot value as a
                 // fresh let-binding in the surrounding function-body
@@ -483,6 +483,23 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.vec_elem_types.get(slot.binding_name.as_str()).copied();
                                 self.track_vec_var(alloca, elem_ty);
                             }
+                            // Moved-in ownership (Map / File / enum /
+                            // struct / user-Drop / SoA slots): the
+                            // branch removed its cleanup action when it
+                            // published the value (pre-fix it ran the
+                            // action, freeing the handle/payload the
+                            // parent was about to use — the
+                            // `Map.new()`-in-a-branch UAF). Re-register
+                            // the equivalent action against the
+                            // parent's alloca so the moved-in value is
+                            // freed exactly once at parent scope exit —
+                            // same unique-owner shape as the
+                            // `track_vec_var` re-track above.
+                            self.register_slot_ownership(
+                                &slot.binding_name,
+                                alloca,
+                                &slot_ownership,
+                            );
                         }
                     }
                 }

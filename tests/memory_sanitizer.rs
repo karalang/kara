@@ -168,6 +168,79 @@ mod memory_sanitizer_tests {
         );
     }
 
+    /// Like [`run_under_asan`] but threads the FULL analysis pipeline —
+    /// ownership AND concurrency — into codegen, matching what `karac
+    /// build` ships. The default harness passes `None, None`, under
+    /// which the auto-par lowering (and every RC-fallback path) is dead
+    /// code; the slot-ownership UAF this variant exists to pin
+    /// (Map-handle published through a par return slot, then freed by
+    /// the producing branch) was invisible to it. See the bugs.md
+    /// harness-gap entry for the broader divergence.
+    fn run_under_asan_with_full_pipeline(
+        src: &str,
+        label: &str,
+    ) -> Option<(String, std::process::ExitStatus)> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let mut parsed = karac::parse(src);
+        if !parsed.errors.is_empty() {
+            eprintln!("[{label}] parse errors: {:?}", parsed.errors);
+            return None;
+        }
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let obj_path = format!("/tmp/karac_asan_cc_{}_{}.o", std::process::id(), id);
+        let exe_path = format!("/tmp/karac_asan_cc_{}_{}", std::process::id(), id);
+
+        if let Err(e) = compile_to_object(
+            &parsed.program,
+            &obj_path,
+            Some(&ownership),
+            Some(&analysis),
+        ) {
+            eprintln!("[{label}] compile_to_object failed: {e}");
+            return None;
+        }
+        if let Err(e) =
+            link_executable_with_sanitizer(&obj_path, &exe_path, &["-fsanitize=address"])
+        {
+            eprintln!("[{label}] link_executable_with_sanitizer failed: {e}");
+            let _ = std::fs::remove_file(&obj_path);
+            return None;
+        }
+        let asan_options = if cfg!(target_os = "macos") {
+            "abort_on_error=0:exitcode=23"
+        } else {
+            "detect_leaks=1:abort_on_error=0:exitcode=23"
+        };
+        let output = Command::new(&exe_path)
+            .env("ASAN_OPTIONS", asan_options)
+            .output();
+        let _ = std::fs::remove_file(&obj_path);
+        let _ = std::fs::remove_file(&exe_path);
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                if !out.status.success() {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    eprintln!("[{label}] binary exited non-zero:\n{stderr}");
+                }
+                Some((stdout, out.status))
+            }
+            Err(e) => {
+                eprintln!("[{label}] failed to run binary: {e}");
+                None
+            }
+        }
+    }
+
     /// Assert a program runs cleanly under ASAN and produces the expected
     /// stdout. Skips (prints a notice, passes the test) if the host can't
     /// support ASAN — see `asan_available` for the rationale.
@@ -2976,6 +3049,55 @@ fn main() {
 }
 "#,
             "option_shared_prepend_builder_rc_fallback_repeat",
+        );
+    }
+    // ── Auto-par slot-ownership transfer (2026-06-05) ─────────────
+
+    /// The Map-handle slot-publication UAF: auto-par groups
+    /// `String.add` + `Map.new()`, the Map-producing branch writes the
+    /// handle into the parent's return slot, and pre-fix ALSO ran its
+    /// queued `FreeMapHandle` at branch end — the parent's `m.insert`
+    /// then operated on freed memory (SIGSEGV in release, UAF under
+    /// ASAN). Threads the full pipeline (ownership + concurrency) so
+    /// the auto-par lowering actually fires — the default harness's
+    /// `None, None` compile never reaches this code path.
+    #[test]
+    fn asan_auto_par_map_slot_published_handle_clean() {
+        let label = "auto_par_map_slot_published_handle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan_with_full_pipeline(
+            r#"
+fn main() {
+    let name = "ka" + "ra";
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a", 1);
+    m.insert("b", 2);
+    let b = m.get("b");
+    match b {
+        Some(val) => println(val),
+        None => println(0),
+    }
+    println(name);
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             look for heap-use-after-free on the slot-published Map handle",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["2", "kara"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
         );
     }
 }

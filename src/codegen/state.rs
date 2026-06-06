@@ -477,6 +477,48 @@ pub(crate) enum CleanupAction<'ctx> {
 /// exit — already strands the branch's local destructors, so the slot
 /// store is effectively a bitcopy and the parent's subsequent
 /// `track_*` on the loaded value is the unique cleanup owner).
+/// Ownership metadata for a class-(ii) slot binding whose branch-side
+/// cleanup action was REMOVED at branch end because the value moves to
+/// the parent through the return slot (2026-06-05 fix — pre-fix, the
+/// branch freed the handle/payload it had just published, and the
+/// parent's first use of the slot value was a UAF: observed as a
+/// segfault on `let name = "ka" + "ra"; let mut m: Map[..] = Map.new();
+/// m.insert(..)` whose auto-par group published `m` and then ran the
+/// branch's `FreeMapHandle`). The parent rebinding site re-registers
+/// the equivalent cleanup against ITS fresh alloca using this record,
+/// making the parent the unique owner — same "move-only slot" decision
+/// the Vec `cap = 0` suppression implements for `{ptr, len, cap}`
+/// slots.
+///
+/// `RcDec` / `RcDecOption` / Vec slots stay on the established
+/// branch-side *mutation* suppression (null ptr / zero tag / zero cap)
+/// and are not represented here.
+#[derive(Clone, Copy)]
+pub(crate) enum SlotOwnership<'ctx> {
+    /// `FreeMapHandle` metadata minus the alloca (parent supplies its
+    /// own).
+    Map {
+        key_is_vec: bool,
+        val_is_vec: bool,
+        val_shared_heap_type: Option<StructType<'ctx>>,
+        key_shared_heap_type: Option<StructType<'ctx>>,
+    },
+    /// `FreeFileHandle` — close at parent scope exit.
+    File,
+    /// `EnumDrop` — the cached `__karac_drop_<Enum>` fn.
+    Enum { drop_fn: FunctionValue<'ctx> },
+    /// `StructDrop` — the cached `__karac_drop_struct_<Name>` fn.
+    Struct { drop_fn: FunctionValue<'ctx> },
+    /// `UserDrop` — the cached `karac_drop_<Type>` wrapper.
+    User { drop_fn: FunctionValue<'ctx> },
+    /// `FreeSoaGroups` — per-group buffer frees for SoA-laid-out Vecs.
+    Soa {
+        soa_struct_ty: StructType<'ctx>,
+        num_hot_groups: u32,
+        has_cold: bool,
+    },
+}
+
 #[derive(Clone)]
 pub(crate) struct ReturnSlot<'ctx> {
     /// Source-level binding name produced inside the branch.
