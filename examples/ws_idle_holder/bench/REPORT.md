@@ -71,8 +71,10 @@ alongside; this file is **what we measured and what it means**, not
 > complete). **Go landed 2026-06-06 — 44.4 KB/conn, 3.66× Kāra, linearity
 > +2.5%. Phoenix Channels landed 2026-06-06 — 102.8 KB/conn (presence-off,
 > clean idle), 8.69× Kāra, linearity −1.8%; the heaviest comparator
-> measured (Erlang `:ssl` + a process per conn).** The remaining commercial +
-> stretch comparators are pending — see the
+> measured (Erlang `:ssl` + a process per conn). Java/Netty landed 2026-06-06 —
+> 14.4 KB/conn (balanced heap, 1.19× Kāra) / ~12.8 KB marginal (1.06×); the
+> second-densest stack and Kāra's closest competitor.** The remaining
+> commercial + stretch comparators are pending — see the
 > [Status / measurement matrix](#status--measurement-matrix) below.
 > Until a row's status is `landed`, treat the cells as placeholders.
 
@@ -90,7 +92,7 @@ alongside; this file is **what we measured and what it means**, not
 | **Kāra** | self | **12.1 KB** | 1.00× (baseline) | 1M + 2M landed (post-fix) | landed @ 2M | [§Kāra](#kāra) |
 | Rust (rustls + tokio) | credibility | 27.9 KB | **2.30×** | 1M + 2M landed | landed @ 2M | [§Rust](#rust-rustls--tokio) |
 | Phoenix Channels (Elixir) | commercial | 102.8 KB | **8.69×** | 250K + 50K landed (2026-06-06), −1.8% linearity | landed @ 250K | [§Phoenix](#phoenix-channels-elixir) |
-| Java / Netty | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #68) | pending | [§Java/Netty](#java--netty) |
+| Java / Netty | commercial | 14.4 KB¹ | **1.19×** | 250K + 50K landed (2026-06-06) | landed @ 250K | [§Java/Netty](#java--netty) |
 | Go (gorilla/websocket) | commercial | 43.4 KB | **3.66×** | 250K + 50K landed (2026-06-06), +2.5% linearity | landed @ 250K | [§Go](#go-gorillawebsocket) |
 | .NET / ASP.NET Core (Linux) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #71) | pending | [§.NET Linux](#net--aspnet-core-linux) |
 | .NET / ASP.NET Core (Windows) | commercial | _TBD_ | _TBD_ | 250K headline + 50K linearity (wip #72) | pending | [§.NET Windows](#net--aspnet-core-windows) |
@@ -98,6 +100,13 @@ alongside; this file is **what we measured and what it means**, not
 | SignalR _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #74) | stretch | [§SignalR](#signalr-stretch) |
 | socket.io _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #75) | stretch | [§socket.io](#socketio-stretch) |
 | Python asyncio websockets _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #76) | stretch | [§Python](#python-asyncio-websockets-stretch) |
+
+> ¹ **Java/Netty** is the one stack whose RSS ≠ live set: a JVM's footprint
+> is dominated by GC heap-commit, which is `-Xmx`-dependent. The **14.4 KB /
+> 1.19×** is the RSS at a balanced deployment heap (`-Xmx4g` @ 250K); the
+> `-Xmx`-independent intrinsics are the **marginal slope ~12.8 KB (1.06×)**
+> and the **live set ~8–10 KB** (below Kāra). It is the second-densest stack
+> measured — see [§Java/Netty](#java--netty) for the full dial.
 
 > **All density figures are working-handler, post-fix.** The Kāra **1M and 2M**
 > per-conn (12.1 KB, −0.03 % drift) and the **2.30×** ratio were re-measured
@@ -180,6 +189,27 @@ numbers land — see the discipline guards in that section.
   _Caveats: in-process TLS (apples-to-apples; some fleets offload TLS to a
   LB) and the presence-ON backpressure confound — see
   [§Phoenix](#phoenix-channels-elixir)._
+
+- **Kāra vs Java/Netty** _(Kāra 250K landed; Netty 250K + 50K landed
+  2026-06-06)_: the **closest** comparator — and the one that doesn't reduce
+  to a clean infra-tier story, so it is reframed carefully. Netty's
+  *marginal* per-conn (~12.8 KB) is within ~6% of Kāra (12.1 KB), and its
+  live set (~8–10 KB) is actually below; at a balanced deployment heap
+  (`-Xmx4g`) it holds 250K in ~3.7 GiB (14.4 KB/conn, 1.19× Kāra's ~3.0 GiB).
+  So at 250K both fit the same **8 GiB `m7g.large`** tier — **no instance-
+  tier saving from density alone here**, unlike Go/Rust/Phoenix. The Kāra
+  levers against Java are different and should be led as such: (1) **no JVM
+  fixed base** (Netty carries a multi-GB heap floor, so on small boxes / low
+  conn counts Kāra's effective density lead widens); (2) **no RAM-vs-GC-CPU
+  dial** — Netty's 14.4 KB is a *choice* on a curve from ~8 KB (tight heap,
+  high GC CPU) to ~22–57 KB (loose heap), an operational tax Kāra's no-GC
+  runtime doesn't levy; (3) the **combination claim** (native AOT + static
+  ownership/effects + single-binary deploy + no JVM/GC ops surface) carries
+  the weight where raw density nearly ties. _The buyer takeaway is "Kāra
+  matches the densest mainstream JVM stack with none of the JVM operational
+  surface," not a box-count cut._ _Caveats: in-process JDK JSSE TLS
+  (tcnative is a non-default opt-in); heap-dial + GC-config nuance — see
+  [§Java/Netty](#java--netty)._
 
 ---
 
@@ -270,7 +300,8 @@ sized box for its real-world deployment shape:
 
 | comparator family | instance | vCPU | RAM | arch | rationale |
 |---|---|---|---|---|---|
-| Kāra / Rust / Java / .NET Linux / Node | `r8g.4xlarge` | 16 (Graviton4) | 128 GB | arm64 | matches the Kāra & Rust 1M/2M baseline rig; cheap RAM headroom for the 2M target |
+| Kāra / Rust / .NET Linux / Node | `r8g.4xlarge` | 16 (Graviton4) | 128 GB | arm64 | matches the Kāra & Rust 1M/2M baseline rig; cheap RAM headroom for the 2M target |
+| Java _(landed 2026-06-06)_ | 16-vCPU Graviton, 61 GB | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go/Phoenix; all Netty runs fit (250K `-Xmx24g` over-commit peaked ~5.5 GiB, balanced `-Xmx4g` ~3.7 GiB). Per-conn density is RAM/ISA-independent, so the RAM tier does not affect the head-to-head |
 | Go _(landed 2026-06-06)_ | `m8g.4xlarge` | 16 (Graviton4) | 61 GB | arm64 | same 16-vCPU Graviton4 class as the baseline; 250K Go fits ~10.6 GiB so 61 GB is ample. Per-conn density is RAM/ISA-independent (established cross-ISA), so the smaller RAM tier does not affect the head-to-head |
 | Phoenix _(landed 2026-06-06)_ | 16-vCPU Graviton, 61 GB | 16 (Graviton) | 61 GB | arm64 | same 16-vCPU Graviton class as Go; 250K presence-off fits ~25.9 GiB so 61 GB holds it. Per-conn density is RAM/ISA-independent, so the RAM tier does not affect the head-to-head. (250K presence-ON was *not* run — confounded by `presence_diff` backpressure and ~47 GiB extrapolated, near the box ceiling.) |
 | .NET Windows | `m7i.4xlarge` | 16 (Intel x86) | 64 GB | x86_64 | SChannel is x86-default on Windows Server; matched vCPU; 64 GB is sufficient for 1M target |
@@ -410,10 +441,20 @@ number with the deviation rather than retuning to remove it._
   +83.6 KB/conn presence delta is an undrained-backpressure upper bound
   (prod shards presence topics), not steady-state. Full breakdown in the
   [§Phoenix section](#phoenix-channels-elixir).
-- **Java / Netty** _(pending — wip task #68):_ G1GC defaults vs
-  ZGC — measured with both; G1 is the broad-deployment default,
-  ZGC the modern recommendation. Framework: raw Netty pipeline, no
-  Spring/Vert.x layer (those would be a separate row).
+- **Java / Netty** _(landed 2026-06-06):_ raw Netty 4.1.115 (no
+  Spring/Vert.x) over **in-process** JDK JSSE `SSLEngine` — Kāra's
+  **closest** density competitor and the second-densest stack measured.
+  Reported as a **dial, not a single number**: live set ~8–10 KB/conn
+  (below Kāra), marginal slope **~12.8 KB (1.06× Kāra)**, balanced-heap
+  (`-Xmx4g`) deployment RSS **14.4 KB @ 250K (1.19×)**, up to 22–57 KB under
+  `-Xmx24g` over-commit. Three framing caveats: (1) the JVM carries a multi-
+  GB **fixed heap base** the native stacks don't; (2) per-conn RSS is a
+  **RAM-vs-GC-CPU dial** set by `-Xmx`, so the headline is reported at a
+  balanced point plus the `-Xmx`-independent slope/live-set; (3) **in-process
+  JDK JSSE** TLS (OpenSSL/tcnative is a non-default opt-in). G1 (JDK 21
+  default) is the headline; ZGC trades memory for pause latency (higher RSS
+  reservation, same live set) and is a sidebar, not the density read. Full
+  breakdown in the [§Java/Netty section](#java--netty).
 - **.NET ASP.NET Core (Linux)** _(pending — wip task #71):_
   OpenSSL TLS (not SChannel); .NET 9 LTS; raw Kestrel WebSocket
   middleware. SignalR is a separate stretch row (#74).
@@ -824,55 +865,111 @@ near the box's 61 GB ceiling (~47 GB extrapolated).
 
 ### Java / Netty
 
-> _Pending — wip task #68._
+- **Status:** `landed @ 250K + 50K` (2026-06-06). Largest commercial-TAM
+  comparator. **Result: Kāra's closest density competitor — the second-
+  densest stack measured, ahead of Rust, Go, and Phoenix.**
+- **Build:** `examples/ws_idle_holder/java/`, raw Netty WS-over-TLS idle
+  holder, `mvn package` → shaded fat jar.
+- **Stack:** OpenJDK 21.0.11, raw Netty 4.1.115 (`SslHandler →
+  HttpServerCodec → HttpObjectAggregator → WebSocketServerProtocolHandler →
+  echo`) on `NioEventLoopGroup` — the high-density Java WS prod default, no
+  Spring/Vert.x/Akka. WS upgrade at `/` (bare-WS — no harness changes).
+- **Hardware:** 16-vCPU AWS Graviton, 61 GB — same class as the Go/Phoenix
+  runs; fresh box.
+- **TLS:** **in-process** JDK JSSE `SSLEngine` (`SslProvider.JDK`), TLS
+  1.2 + 1.3, no client auth, single self-signed cert (shared fixture).
+  OpenSSL/tcnative is the non-default perf alternative (caveat below).
+- **GC:** G1 (JDK 21 default) is the headline; ZGC was run as a sidebar.
+- **Scale:** 250K headline + 50K linearity.
 
-- **Status:** pending.
-- **Stack target:** OpenJDK 21 LTS, raw Netty `WebSocketServerProtocolHandler`
-  on top of `NioEventLoopGroup`. No Spring, no Vert.x, no Akka — those
-  are distinct comparator rows (out of scope for v1).
-- **GC configurations:**
-  - **G1GC defaults** (broad-deployment default, what most prod
-    Java fleets ship with).
-  - **ZGC** (modern recommendation for low-pause; meaningful for
-    long-running density workloads where pauses interact with
-    WebSocket keepalive timing).
-- **Hardware:** `r8g.4xlarge`; fresh box.
-- **TLS:** Java JSSE via `SSLEngine`; matched cipher + cert.
-- **Scale:** 250K headline + 50K linearity sub-curve (per
-  [§Scale per comparator](#scale-per-comparator)). JVM heap warm-up
-  is a known non-linearity source; linearity check is load-bearing.
+**Methodology note — why the JVM needs a different read.** Unlike the
+native stacks (Kāra/Rust/Go), where RSS ≈ live set, a JVM's RSS is
+dominated by **GC heap commit**, which is much larger than the live set and
+is `-Xmx`-dependent. The harness's `per_conn_bytes = RSS-delta / N` reports
+wildly different figures depending purely on where G1 committed heap at that
+N (22 KiB/conn at 250K under `-Xmx24g`, 57 KiB at 50K) — that is **not** a
+per-connection property. The honest per-conn reads are the `-Xmx`-
+independent ones: the **marginal RSS slope** and the **post-GC live set**.
 
-**Expected range (from public data):** 20–40 KB/conn. The largest
-**commercial TAM** comparator — every enterprise has JVM fleets
-touching WebSockets somewhere. This is the cleanest dollarized
-cost story when it lands.
+**Per-conn cost is a GC-heap dial, not a single number:**
 
-**Sub-rows to fill:**
-
-**Headline measurements @ 250K:**
-
-| metric | Netty + G1GC | Netty + ZGC | notes |
+| read | 50K | 250K | what it is |
 |---|---|---|---|
-| established | TBD | TBD | |
-| per-conn bytes | TBD | TBD | RSS = JVM RSS, includes heap + Netty buffers |
-| heap (resident) | TBD | TBD | sub-component of total RSS |
-| direct buffers | TBD | TBD | Netty pooled direct mem; sub-component |
-| connect mean | TBD | TBD | |
+| post-GC **live set** | 10.6 KiB | **8.3 KiB** | what the JVM actually needs (`jcmd GC.run` then heap `used` / N) — *below* Kāra |
+| **balanced** RSS (`-Xmx` ~2× live: 800m / 4g) | 21.2 KiB | **14.4 KiB** | a realistic deployment footprint |
+| over-commit RSS (`-Xmx24g`) | 56.7 KiB | 21.6 KiB | G1 grabs heap it never uses (5 GB committed / 2 GB live @ 250K) |
+| ZGC RSS (`-Xmx24g`) | — | 61.7 KiB | ZGC *reserves* even more; a pause-time knob, not a density read |
 
-**Linearity check @ 50K:**
+> **Marginal RSS slope (the scale-invariant per-conn): ~12.8 KiB/conn**,
+> stable across every G1 measurement (50K↔250K, both heaps). ≈ Kāra's
+> 12.1 KiB (**1.06×**). This is the real "cost per additional connection";
+> the rest is a fixed JVM/G1 base (~1–3 GB) the native stacks don't carry.
 
-| metric | Netty + G1GC @ 50K | drift vs 250K | gate |
+**Idle-hold @ 250K — balanced heap `-Xmx4g` (landed, 2026-06-06):**
+
+| metric | value | notes |
+|---|---|---|
+| established | 250,000 / 250,000 | 0 failed |
+| per-conn bytes | **~14.4 KiB** | RSS-delta / N at a realistic deployment heap (3.72 GB total) |
+| marginal slope | **~12.8 KiB/conn** | the `-Xmx`-independent intrinsic (≈ Kāra) |
+| live set | ~8.3 KiB/conn | post-GC heap used / N |
+| connect p50 / p99 | 3.8 / 16.0 ms | beats Kāra's ~41 ms architectural floor |
+
+**Linearity @ 50K (`-Xmx800m`):** 21.2 KiB/conn. The 50K→250K RSS-delta/N
+drift is large (−32%) but is **not** a per-conn non-linearity — it is the
+fixed JVM base + heap headroom amortizing over more connections. The
+**marginal slope is flat at ~12.8 KiB**, so the per-conn cost *is* linear;
+the linearity gate's 1M-escalation trigger does not apply (a 1M run would
+merely dilute the fixed base further, driving the apparent per-conn *down*
+toward the 12.8 marginal — not a meaningful escalation).
+
+- Raw JSON: `docs/investigations/netty_g1_{250k,50k}_balanced.json`
+  (headline), `netty_g1_{250k,50k}_xmx24g.json` (over-commit endpoint),
+  `netty_zgc_250k.json` (ZGC sidebar).
+- Acceptance: `established == N` AND `failed == 0` at every scale/heap/GC
+  combination (all six runs 0-failed). ✓
+
+**Head-to-head with Kāra @ 250K (balanced heap):**
+
+| metric | Kāra | Netty | winner |
 |---|---|---|---|
-| per-conn bytes | TBD | TBD | < 5% → publish; ≥ 5% → escalate to 1M |
+| established / failed | 250,000 / 0 | 250,000 / 0 | tie |
+| `connect.p50_ms` | ~41 (arch. floor) | **3.8** | Netty |
+| **`per_conn_bytes`** (deployment RSS) | **~12,114** | **~14,746** | **Kāra (1.19×)** |
+| marginal per-conn | ~12,114 | ~13,100 | ≈ tie (Kāra 1.06×) |
 
-**Caveats to document on landing:**
+**What this proves.** Java/Netty is **Kāra's closest density competitor** —
+~14.4 KiB/conn at a realistic heap (1.19× Kāra), ~12.8 KiB marginal
+(1.06×), and a live set (~8–10 KiB) that is actually *below* Kāra. It is
+the **second-densest stack measured**, ahead of Rust (27.9 KB), Go
+(43.4 KB), and Phoenix (102.8 KB): JDK JSSE keeps TLS state on a tightly-
+packed, poolable GC heap, where rustls holds heavier per-conn record
+buffers, Go pairs a goroutine with `crypto/tls` buffers, and Phoenix spends
+several `:ssl` processes per conn. The honest asterisks: (1) the JVM carries
+a multi-GB fixed heap base the native stacks don't, so on *small* boxes /
+low conn counts Kāra's lead is larger; (2) Java's RSS is a **RAM-vs-GC-CPU
+dial** (tighten `-Xmx` toward the live set for less RAM but more GC work) —
+a deployment degree of freedom, and a real operational cost, that a native
+no-GC runtime simply doesn't have. Connect latency favors Netty (~4 ms p50
+vs Kāra's ~41 ms floor), the same multi-axis tradeoff seen across the set.
 
-- JVM heap size has to be tuned for the test (`-Xmx` proportional
-  to N); document the heap setting used so a reader can compute
-  "would Kāra also be this large at this heap setting" — Kāra has
-  no heap setting, RSS is what it is.
-- Netty direct-buffer pool size is the load-bearing knob for
-  per-conn cost; document the pool config.
+**Caveats:**
+
+- **Real-world-vs-purist:** raw Netty (no Spring/Vert.x/Akka) — the lean
+  high-density Java WS default; no framework overhead folded in.
+- **In-process TLS:** JDK JSSE `SSLEngine`, the zero-native-dependency
+  default. OpenSSL via `netty-tcnative` is a non-default perf opt-in (faster
+  handshakes, possibly lower TLS memory) — not measured. In-process TLS is
+  the apples-to-apples basis (every comparator terminates TLS in-process).
+- **Heap is a dial, reported at a balanced point:** the headline uses
+  `-Xmx` ≈ 2× live set (`-Xmx4g` @ 250K). Tighter `-Xmx` lowers RSS toward
+  the ~8 KiB live set at the cost of GC CPU; looser inflates it (the
+  `-Xmx24g` row). The marginal slope + live set are reported precisely
+  *because* they don't depend on this choice.
+- **GC config:** G1 (JDK 21 default) is the headline; ZGC trades memory for
+  pause latency (reserves more heap → higher RSS, same ~8–10 KiB live set),
+  so it is not the density read and is shown only as the over-commit-endpoint
+  sidebar.
 
 ### Go (gorilla/websocket)
 
@@ -1342,7 +1439,7 @@ their role's headline scale (`250K` or `100K`).
 | Kāra | self | n/a (multi-scale ladder) | **1M landed (post-fix, 2026-06-01)** _(x86 1M re-read landed post-fix 2026-06-02)_ | **2M landed (post-fix, 2026-06-01)** | **250K + 1M landed (B3, 2026-06-05)** — 12,126 B/conn, p50 0.12 ms realistic; burst p50 ~5 ms; 1M held 0-failed, 8.23M echoed | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `docs/investigations/demo1_m3_1m_postfix_datalayout.json`; 2M: `docs/investigations/demo1_m3_2m_postfix_datalayout.json`; x86 1M (post-fix): `docs/investigations/demo1_m3_1m_x86_postfix.json`; x86 1M (pre-fix, historical): `docs/investigations/demo1_m3_1m_x86.json`; active-traffic: `docs/investigations/active_250k_kara-250k-{realistic,sync}_stageA.json`, `demo1_1m_active_realistic_b3.json`, `demo1_1m_active_crossbox_b3.json`; burst sweep: `burst_isolated_{baseline,b1,b2,b3}.json` |
 | Rust | credibility | n/a (tracks Kāra) | 1M landed | **2M landed (2026-05-30)** | **250K landed (2026-06-02)** — 28,034 B/conn, p50 0.04 ms realistic; burst ~1.6 ms | `scripts/run_1m.sh` + `scripts/run_2m.sh` | 1M: `rust-1m.json`; 2M: `rust-2m.json` (mirror pending); active-traffic: `docs/investigations/active_250k_rust-250k-{realistic,sync}_stageA.json` |
 | Phoenix Channels | commercial | **50K landed (2026-06-06)** — 107,204 B/conn, −1.8% drift | **250K landed (2026-06-06)** — 105,267 B/conn (presence-off clean idle), p50 10.7 ms (8.69× Kāra; heaviest measured) | n/a (gate passed: −1.8% < 5%, no 1M escalation) | n/a (idle-hold density comparator; presence-ON confounded by `presence_diff` backpressure — caveated upper bound, not headlined) | `scripts/run_250k.sh` + `scripts/run_50k.sh` (`BENCH_EXTRA_ARGS` + `PRESENCE` env) | `docs/investigations/phoenix_idle_{250k_nopresence,50k_nopresence,50k_presence}.json` |
-| Java / Netty | commercial | pending (#68) | 250K pending (#68) | n/a unless gate escalates | pending | TBD | TBD |
+| Java / Netty | commercial | **50K landed (2026-06-06)** — 21.2 KB/conn balanced `-Xmx800m` (RSS=GC-heap dial; marginal slope flat) | **250K landed (2026-06-06)** — 14.4 KB/conn balanced `-Xmx4g` (1.19× Kāra); marginal ~12.8 KB (1.06×), live ~8–10 KB; 2nd-densest stack | n/a (marginal slope flat; RSS-delta/N drift is fixed-JVM-base, not per-conn) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` (`JAVA_OPTS` heap/GC + `BENCH_EXTRA_ARGS` env) | `docs/investigations/netty_g1_{250k,50k}_balanced.json`, `netty_g1_{250k,50k}_xmx24g.json`, `netty_zgc_250k.json` |
 | Go | commercial | **50K landed (2026-06-06)** — 43,311 B/conn, +2.5% drift | **250K landed (2026-06-06)** — 44,386 B/conn, p50 3.37 ms (3.66× Kāra) | n/a (gate passed: +2.5% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` | `docs/investigations/go_idle_{250k,50k}.json` |
 | .NET (Linux) | commercial | pending (#71) | 250K pending (#71) | n/a unless gate escalates | pending | TBD | TBD |
 | .NET (Windows) | commercial | pending (#72) | 250K pending (#72) | n/a | pending | TBD | TBD |
@@ -1360,6 +1457,29 @@ their role's headline scale (`250K` or `100K`).
 
 ## Change log
 
+- **2026-06-06 (Java/Netty comparator landed — Kāra's closest density competitor):**
+  ran the raw-Netty comparator (OpenJDK 21.0.11, Netty 4.1.115, in-process JDK
+  JSSE `SSLEngine`, WS at `/`) on a fresh 16-vCPU Graviton / 61 GB box,
+  co-located over loopback. **Key finding: the JVM does not fit RSS-delta/N** —
+  its footprint is dominated by GC heap-commit (`-Xmx`-dependent), so per-conn
+  RSS is a *dial*: live set ~8–10 KB (below Kāra), **marginal slope ~12.8 KB
+  (1.06× Kāra, scale-invariant)**, balanced-heap (`-Xmx4g`) **250K = 14.4 KB/conn
+  (1.19×)**, up to 21.6/56.7 KB under `-Xmx24g` over-commit. **All six runs
+  250,000 or 50,000 / 0 failed.** Connect p50 3.8 ms (beats Kāra's ~41 ms
+  floor). **Java/Netty is the second-densest stack measured** — ahead of Rust
+  (27.9), Go (43.4), Phoenix (102.8): JDK JSSE packs SSL state on a poolable GC
+  heap. The 50K→250K RSS-delta/N drift (−32%) is the fixed JVM base amortizing,
+  not per-conn non-linearity (marginal flat), so no 1M escalation. ZGC sidebar
+  (61.7 KB) reserves more heap, same live set — a pause-time knob, dropped from
+  the headline. Reframe led as "Kāra matches the densest mainstream JVM stack
+  with none of the JVM ops surface (fixed heap base, RAM-vs-GC-CPU dial)," not a
+  box-count cut. Prep (comparator + the `maven-compiler-plugin` pin for apt
+  Maven 3.8.7) landed `4a3b2b31` + `b8d6e8b6`; run scripts already supported it
+  (bare-WS, `JAVA_OPTS`/`BENCH_EXTRA_ARGS` env). Updated: §Java (full dial +
+  head-to-head + caveats), TL;DR row + footnote, both status matrices, hardware
+  row, commercial-reframe, consolidated caveats, top banner; phase-6 entry;
+  java/README results. Raw JSON: `docs/investigations/netty_g1_{250k,50k}_{balanced,xmx24g}.json`,
+  `netty_zgc_250k.json`.
 - **2026-06-06 (Phoenix comparator landed — the rhetorically critical row):**
   ran the Phoenix Channels comparator (Elixir 1.17.3 / OTP 25, Phoenix 1.7.x
   Channels + Presence, Cowboy transport, in-process Erlang `:ssl`) on a fresh

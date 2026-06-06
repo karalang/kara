@@ -83,12 +83,39 @@ JAVA_OPTS="-XX:+UseZGC -XX:+ZGenerational" cargo run --release -- \
 > `java` must be on PATH for `run_server.sh` (the harness inherits the
 > caller's environment and spawns the launcher). JDK 21 LTS.
 
-## At-scale results
+## At-scale results (landed 2026-06-06)
 
-**NOT YET RUN.** Prepped + locally validated; the 50K / 250K (G1, and ZGC
-sidebar) rig runs await a user-provisioned box (per the bench-day rig-spend
-sign-off discipline). Expected ~20–40 KB/conn. Results table lands here
-after the rig run, mirroring the Go/Phoenix comparators' format.
+Ran on a fresh 16-vCPU AWS Graviton / 61 GB box, co-located over loopback.
+OpenJDK 21.0.11, Netty 4.1.115, in-process JDK JSSE.
+
+**The headline finding: a JVM doesn't fit the harness's RSS-delta/N metric.**
+JVM RSS is dominated by GC heap-commit (much larger than the live set,
+`-Xmx`-dependent), so per-conn RSS is a **dial**, not a number:
+
+| read | 50K | 250K | what it is |
+|---|---|---|---|
+| post-GC **live set** | 10.6 KiB | **8.3 KiB** | what the JVM needs (`jcmd GC.run`) — *below* Kāra |
+| **balanced** RSS (`-Xmx` ~2× live) | 21.2 KiB | **14.4 KiB** | a realistic deployment footprint |
+| over-commit RSS (`-Xmx24g`) | 56.7 KiB | 21.6 KiB | G1 grabs heap it never uses |
+| ZGC RSS (`-Xmx24g`) | — | 61.7 KiB | reserves more; pause-time knob, not a density read |
+
+**Marginal RSS slope = ~12.8 KiB/conn** (scale-invariant across every G1
+run) ≈ Kāra's 12.1 KiB (**1.06×**). All six runs established 250,000 /
+50,000 with **0 failed**; connect p50 3.8 ms (beats Kāra's ~41 ms floor).
+
+**Headline density:** Java/Netty is **Kāra's closest density competitor**
+and the **second-densest stack measured** — 14.4 KiB/conn at a balanced
+heap (1.19× Kāra), ~12.8 KiB marginal (1.06×), live set below Kāra — ahead
+of Rust (27.9 KB), Go (43.4 KB), and Phoenix (102.8 KB). JDK JSSE keeps
+SSL state on a tightly-packed, poolable GC heap. The asterisks: the JVM
+carries a multi-GB fixed heap base the native stacks don't, and its RSS is
+a RAM-vs-GC-CPU dial (tighten `-Xmx` for less RAM, more GC CPU) — an
+operational cost a no-GC runtime doesn't have. The 50K→250K RSS-delta/N
+drift (−32%) is that fixed base amortizing, **not** per-conn non-linearity
+(the marginal slope is flat), so no 1M escalation.
+
+Raw JSON: `docs/investigations/netty_g1_{250k,50k}_balanced.json` (headline),
+`netty_g1_{250k,50k}_xmx24g.json` (over-commit endpoint), `netty_zgc_250k.json`.
 
 ### Reproduce — turnkey rig recipe
 
