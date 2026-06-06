@@ -210,11 +210,29 @@ impl<'a> OwnershipChecker<'a> {
                 }
             }
         }
+        // Phase C2a/C2b: borrowed-position summaries (fn → (member
+        // type, positions)) feed the adopted scans' sanctioned-arg
+        // channel.
+        let mut borrow_summaries: HashMap<String, (String, HashSet<usize>)> = HashMap::new();
+        for (fn_key, cs) in &clusters {
+            for c in cs {
+                if c.borrowed {
+                    borrow_summaries.insert(
+                        fn_key.clone(),
+                        (
+                            c.member_type.clone(),
+                            c.borrowed_params.iter().map(|(_, i)| *i).collect(),
+                        ),
+                    );
+                }
+            }
+        }
         if !builder_summaries.is_empty() {
             for item in &self.program.items {
                 match item {
                     Item::Function(f) => {
-                        let acs = self.fn_adopted_clusters(f, &builder_summaries);
+                        let acs =
+                            self.fn_adopted_clusters(f, &builder_summaries, &borrow_summaries);
                         if !acs.is_empty() {
                             clusters.entry(f.name.clone()).or_default().extend(acs);
                         }
@@ -226,7 +244,11 @@ impl<'a> OwnershipChecker<'a> {
                         };
                         for item in &imp.items {
                             if let ImplItem::Method(method) = item {
-                                let acs = self.fn_adopted_clusters(method, &builder_summaries);
+                                let acs = self.fn_adopted_clusters(
+                                    method,
+                                    &builder_summaries,
+                                    &borrow_summaries,
+                                );
                                 if !acs.is_empty() {
                                     clusters
                                         .entry(format!("{}.{}", type_name, method.name))
@@ -240,6 +262,16 @@ impl<'a> OwnershipChecker<'a> {
                 }
             }
         }
+        // Phase C2b: the program-wide headerless-T gate, then the
+        // post-filter — adopted families that used the sanctioned-arg
+        // channel are sound ONLY under headerless-T, so they
+        // deactivate (fall back to full RC) for types that failed.
+        let headerless_types =
+            self.compute_headerless_types(&clusters, &builder_summaries, &borrow_summaries);
+        for cs in clusters.values_mut() {
+            cs.retain(|c| !c.arg_sanctioned || headerless_types.contains_key(&c.member_type));
+        }
+        self.headerless_types = headerless_types;
         self.elided_clusters = clusters;
     }
 
@@ -959,10 +991,27 @@ pub struct ElidedCluster {
     /// C2b's: it requires the program-purity gate (incl. a
     /// fn-referenced-as-value scan) that headerless-T needs anyway.
     pub borrowed: bool,
-    /// Positions (0-based) of the borrowed params in the fn's
-    /// signature — C2b's call-site contract surface; unused by C2a
-    /// codegen.
-    pub borrowed_param_indices: Vec<usize>,
+    /// The borrowed params as `(name, 0-based position)` — C2b's
+    /// contract surface: codegen keys the callee-side exit-dec skip by
+    /// name and the call-site inc skip by position (both gated on the
+    /// member type being program-wide headerless).
+    pub borrowed_params: Vec<(String, usize)>,
+    /// Phase C2b fn-purity bit consumed by the headerless-T coverage
+    /// check. Literal clusters: no free member literals AND no
+    /// boundary regions in the fn (the two layout hazards a cluster
+    /// scan can see). Adopted/borrowed families: no boundary regions
+    /// only — their scans mis-flag sibling literal clusters' literals
+    /// as free (foreign-classified), so the literal rule is owned by
+    /// the literal cluster's own flag.
+    pub fn_pure: bool,
+    /// Phase C2b: this ADOPTED family used the sanctioned-arg channel
+    /// (a member passed at a borrowed position of a summarized
+    /// callee). Sound ONLY under program-wide headerless-T (both
+    /// residual-count skips active); when T fails the gate — in
+    /// analysis OR in codegen's coro/niche reconcile — the family
+    /// deactivates and the binding falls back to full RC (registered
+    /// let → arg-site inc → callee exit dec, today's balance).
+    pub arg_sanctioned: bool,
 }
 
 /// Cluster-binding role during the scan.
@@ -1030,6 +1079,15 @@ struct ClusterScan {
     /// cluster coexists independently), and the sanctioned
     /// if-let/while-let bind joins the family.
     borrowed: bool,
+    /// Phase C2b (adopted scans only): borrowed-position summaries of
+    /// every summarized callee — `fn name → {borrowed positions}` for
+    /// the scan's member type. A family OPTION member passed at such a
+    /// position is the sanctioned-arg channel (the callee borrows; the
+    /// caller-side inc and callee-side exit dec are both skipped under
+    /// headerless-T). Empty for literal/borrowed scans.
+    arg_borrow_positions: HashMap<String, HashSet<usize>>,
+    /// Set when the sanctioned-arg channel fired at least once.
+    used_arg_sanction: bool,
     /// Names bound by SANCTIONED match/if-let/while-let patterns —
     /// the one re-bind exception: kata #2 binds `n` in two sibling
     /// if-lets (one per param chain). A pattern member may be re-bound
@@ -1142,6 +1200,8 @@ impl<'a> OwnershipChecker<'a> {
                 annotation_mentions_member: false,
                 adopted_root: None,
                 borrowed: false,
+                arg_borrow_positions: HashMap::new(),
+                used_arg_sanction: false,
                 pattern_members: HashSet::new(),
             };
             // Phase C1a: member-type params do NOT poison. The flow
@@ -1273,7 +1333,9 @@ impl<'a> OwnershipChecker<'a> {
                     returned,
                     adopted: false,
                     borrowed: false,
-                    borrowed_param_indices: Vec::new(),
+                    borrowed_params: Vec::new(),
+                    fn_pure: !scan.free_member_literal && !scan.saw_boundary_region,
+                    arg_sanctioned: false,
                 });
             }
         }
@@ -1300,6 +1362,7 @@ impl<'a> OwnershipChecker<'a> {
         &self,
         f: &Function,
         summaries: &HashMap<String, (String, usize)>,
+        borrow_summaries: &HashMap<String, (String, HashSet<usize>)>,
     ) -> Vec<ElidedCluster> {
         let mut literal_types = HashSet::new();
         collect_struct_literal_types(&f.body, &mut |type_name| {
@@ -1318,6 +1381,13 @@ impl<'a> OwnershipChecker<'a> {
             let Some((link_field, _)) = self.cluster_link_struct(&member) else {
                 continue;
             };
+            // Borrowed positions of summarized callees, filtered to
+            // this candidate's member type.
+            let arg_borrow_positions: HashMap<String, HashSet<usize>> = borrow_summaries
+                .iter()
+                .filter(|(_, (t, _))| t == &member)
+                .map(|(g, (_, pos))| (g.clone(), pos.clone()))
+                .collect();
             let mut scan = ClusterScan {
                 member_type: member.clone(),
                 link_field,
@@ -1333,6 +1403,8 @@ impl<'a> OwnershipChecker<'a> {
                 annotation_mentions_member: false,
                 adopted_root: Some((name.clone(), builder.clone())),
                 borrowed: false,
+                arg_borrow_positions: arg_borrow_positions.clone(),
+                used_arg_sanction: false,
                 pattern_members: HashSet::new(),
             };
             for p in &f.params {
@@ -1400,7 +1472,9 @@ impl<'a> OwnershipChecker<'a> {
                     returned: ReturnedChain::No,
                     adopted: true,
                     borrowed: false,
-                    borrowed_param_indices: Vec::new(),
+                    borrowed_params: Vec::new(),
+                    fn_pure: !scan.saw_boundary_region,
+                    arg_sanctioned: scan.used_arg_sanction,
                 });
             }
         }
@@ -1482,6 +1556,8 @@ impl<'a> OwnershipChecker<'a> {
                 annotation_mentions_member: false,
                 adopted_root: None,
                 borrowed: true,
+                arg_borrow_positions: HashMap::new(),
+                used_arg_sanction: false,
                 pattern_members: HashSet::new(),
             };
             // Other params shadow as usual; the family's own roots are
@@ -1541,7 +1617,9 @@ impl<'a> OwnershipChecker<'a> {
                     returned: ReturnedChain::No,
                     adopted: false,
                     borrowed: true,
-                    borrowed_param_indices: params.iter().map(|(_, i)| *i).collect(),
+                    borrowed_params: params.clone(),
+                    fn_pure: !scan.saw_boundary_region,
+                    arg_sanctioned: false,
                 });
             }
         }
@@ -2102,9 +2180,37 @@ impl<'a> OwnershipChecker<'a> {
                 self.cluster_verify_expr(index, ctx, scan);
             }
             ExprKind::Call { callee, args } => {
+                // Phase C2b sanctioned-arg channel (adopted scans
+                // only): a family OPTION member passed at a borrowed
+                // position of a summarized callee is an allowed use —
+                // the callee walks it read-only and retains nothing.
+                // Sound only under program-wide headerless-T (the
+                // caller-side inc and callee exit dec are both
+                // skipped); the post-filter and codegen's reconcile
+                // deactivate the family if T fails the gate.
+                let mut sanctioned_idx: HashSet<usize> = HashSet::new();
+                if scan.adopted_root.is_some() && !ctx.boundary {
+                    if let ExprKind::Identifier(g) = &callee.kind {
+                        if let Some(positions) = scan.arg_borrow_positions.get(g.as_str()) {
+                            for (i, a) in args.iter().enumerate() {
+                                if positions.contains(&i)
+                                    && matches!(&a.value.kind, ExprKind::Identifier(n)
+                                        if scan.kind_of(n) == Some(ClusterKind::OptionCursor))
+                                {
+                                    sanctioned_idx.insert(i);
+                                }
+                            }
+                        }
+                    }
+                }
+                if !sanctioned_idx.is_empty() {
+                    scan.used_arg_sanction = true;
+                }
                 self.cluster_verify_expr(callee, ctx, scan);
-                for a in args {
-                    self.cluster_verify_expr(&a.value, ctx, scan);
+                for (i, a) in args.iter().enumerate() {
+                    if !sanctioned_idx.contains(&i) {
+                        self.cluster_verify_expr(&a.value, ctx, scan);
+                    }
                 }
             }
             ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) => {
@@ -2347,6 +2453,232 @@ fn sanctioned_family_match(
     some_binding
 }
 
+/// Phase C2b: exhaustive expression visitor — every `Expr` in a body,
+/// with a flag for direct-call CALLEE position. Serves the two gate
+/// scans that must not miss a position: the fn-as-value scan (a
+/// summarized builder/borrower referenced as a value would create an
+/// unsummarized indirect call site — the residual-count contract
+/// breaks) and the builder-call-site count (every T-builder call must
+/// sit in adopted-let position). Explicit exhaustive match, no
+/// wildcard: a future ExprKind variant must be classified here before
+/// it compiles.
+fn walk_fn_exprs(block: &Block, f: &mut impl FnMut(&Expr, bool)) {
+    fn walk(e: &Expr, is_callee: bool, f: &mut impl FnMut(&Expr, bool)) {
+        f(e, is_callee);
+        match &e.kind {
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::CStringLit { .. }
+            | ExprKind::Bool(_)
+            | ExprKind::Identifier(_)
+            | ExprKind::Path { .. }
+            | ExprKind::SelfValue
+            | ExprKind::SelfType
+            | ExprKind::PipePlaceholder
+            | ExprKind::Continue { .. }
+            | ExprKind::OffsetOf { .. }
+            | ExprKind::Error => {}
+            ExprKind::InterpolatedStringLit(parts) => {
+                for p in parts {
+                    if let ParsedInterpolationPart::Expr(inner) = p {
+                        walk(inner, false, f);
+                    }
+                }
+            }
+            ExprKind::Binary { left, right, .. } | ExprKind::NilCoalesce { left, right } => {
+                walk(left, false, f);
+                walk(right, false, f);
+            }
+            ExprKind::Pipe { left, right } => {
+                // The pipe RHS is call-like but may also be a bare
+                // fn reference — conservatively NOT callee position
+                // (the fn-as-value scan must flag `x |> f`).
+                walk(left, false, f);
+                walk(right, false, f);
+            }
+            ExprKind::Unary { operand, .. } => walk(operand, false, f),
+            ExprKind::Question(inner) | ExprKind::Cast { expr: inner, .. } => walk(inner, false, f),
+            ExprKind::OptionalChain { object, args, .. } => {
+                walk(object, false, f);
+                if let Some(args) = args {
+                    for a in args {
+                        walk(&a.value, false, f);
+                    }
+                }
+            }
+            ExprKind::Call { callee, args } => {
+                walk(callee, true, f);
+                for a in args {
+                    walk(&a.value, false, f);
+                }
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                walk(object, false, f);
+                for a in args {
+                    walk(&a.value, false, f);
+                }
+            }
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                walk(object, false, f)
+            }
+            ExprKind::Index { object, index } => {
+                walk(object, false, f);
+                walk(index, false, f);
+            }
+            ExprKind::Block(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Par(b)
+            | ExprKind::Loop { body: b, .. }
+            | ExprKind::LabeledBlock { body: b, .. } => walk_fn_exprs(b, f),
+            ExprKind::Lock { mutex, body, .. } => {
+                walk(mutex, false, f);
+                walk_fn_exprs(body, f);
+            }
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                walk(condition, false, f);
+                walk_fn_exprs(then_block, f);
+                if let Some(e2) = else_branch {
+                    walk(e2, false, f);
+                }
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                walk(value, false, f);
+                walk_fn_exprs(then_block, f);
+                if let Some(e2) = else_branch {
+                    walk(e2, false, f);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                walk(scrutinee, false, f);
+                for arm in arms {
+                    if let Some(g) = &arm.guard {
+                        walk(g, false, f);
+                    }
+                    walk(&arm.body, false, f);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                walk(condition, false, f);
+                walk_fn_exprs(body, f);
+            }
+            ExprKind::WhileLet { value, body, .. } => {
+                walk(value, false, f);
+                walk_fn_exprs(body, f);
+            }
+            ExprKind::For { iterable, body, .. } => {
+                walk(iterable, false, f);
+                walk_fn_exprs(body, f);
+            }
+            ExprKind::Closure { body, .. } => walk(body, false, f),
+            ExprKind::Return(inner) => {
+                if let Some(inner) = inner {
+                    walk(inner, false, f);
+                }
+            }
+            ExprKind::Break { value, .. } => {
+                if let Some(v) = value {
+                    walk(v, false, f);
+                }
+            }
+            ExprKind::Tuple(es)
+            | ExprKind::ArrayLiteral(es)
+            | ExprKind::PrefixCollectionLiteral { items: es, .. } => {
+                for e2 in es {
+                    walk(e2, false, f);
+                }
+            }
+            ExprKind::RepeatLiteral { value, count, .. } => {
+                walk(value, false, f);
+                walk(count, false, f);
+            }
+            ExprKind::MapLiteral(pairs) => {
+                for (k, v) in pairs {
+                    walk(k, false, f);
+                    walk(v, false, f);
+                }
+            }
+            ExprKind::StructLiteral { fields, .. } => {
+                for fi in fields {
+                    walk(&fi.value, false, f);
+                }
+            }
+            ExprKind::Range { start, end, .. } => {
+                if let Some(st) = start {
+                    walk(st, false, f);
+                }
+                if let Some(en) = end {
+                    walk(en, false, f);
+                }
+            }
+            ExprKind::Providers { body, .. } => walk_fn_exprs(body, f),
+        }
+    }
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Let { value, .. } => walk(value, false, f),
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                walk(value, false, f);
+                walk_fn_exprs(else_block, f);
+            }
+            StmtKind::LetUninit { .. } => {}
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                walk(target, false, f);
+                walk(value, false, f);
+            }
+            StmtKind::Expr(e) => walk(e, false, f),
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => walk_fn_exprs(body, f),
+        }
+    }
+    if let Some(e) = &block.final_expr {
+        walk(e, false, f);
+    }
+}
+
+/// Phase C2b: exact `Option[<member>]` shape test (no nesting, no
+/// generic args on the member) — the only T-mentioning param/return
+/// shape the headerless gate accepts on free fns.
+fn is_exactly_option_of(te: &TypeExpr, member: &str) -> bool {
+    let TypeKind::Path(path) = &te.kind else {
+        return false;
+    };
+    if path.segments.last().map(String::as_str) != Some("Option") {
+        return false;
+    }
+    let Some(args) = &path.generic_args else {
+        return false;
+    };
+    if args.len() != 1 {
+        return false;
+    }
+    let GenericArg::Type(inner) = &args[0] else {
+        return false;
+    };
+    let TypeKind::Path(ip) = &inner.kind else {
+        return false;
+    };
+    ip.segments.last().map(String::as_str) == Some(member)
+        && ip.generic_args.as_ref().is_none_or(|a| a.is_empty())
+}
+
 /// Phase C2a: recognize the sanctioned optional bind on a family
 /// option member — `if let Some(<binding>) = <option member>` /
 /// `while let Some(<binding>) = <option member>`. The binding joins
@@ -2427,14 +2759,39 @@ impl<'a> OwnershipChecker<'a> {
     /// constructed inside another fn stays headered AND stays inside
     /// that fn unless some declared surface (scanned here) lets it out.
     fn program_leaks_member_type(&self, member: &str) -> bool {
+        self.program_member_scan(member, false)
+    }
+
+    /// Phase D / C2b shared program-surface scan. `lenient_free_fns ==
+    /// false` is phase D's rule: ANY signature mention blocks.
+    /// `true` is C2b's: a FREE fn may mention the member as exactly
+    /// `Option[member]` in param/return position (those are the
+    /// borrowed-param / fresh-return channels the per-fn coverage
+    /// check then validates); any other free-fn shape — and any
+    /// method/trait/extern mention in either mode — still blocks.
+    fn program_member_scan(&self, member: &str, lenient_free_fns: bool) -> bool {
         let m = member;
         let param_or_ret = |params: &Vec<Param>, ret: &Option<TypeExpr>| {
             params.iter().any(|p| type_expr_mentions_deep(&p.ty, m))
                 || ret.as_ref().is_some_and(|t| type_expr_mentions_deep(t, m))
         };
+        let lenient_param_or_ret = |params: &Vec<Param>, ret: &Option<TypeExpr>| {
+            params
+                .iter()
+                .any(|p| type_expr_mentions_deep(&p.ty, m) && !is_exactly_option_of(&p.ty, m))
+                || ret
+                    .as_ref()
+                    .is_some_and(|t| type_expr_mentions_deep(t, m) && !is_exactly_option_of(t, m))
+        };
         for item in &self.program.items {
             let leaks = match item {
-                Item::Function(g) => param_or_ret(&g.params, &g.return_type),
+                Item::Function(g) => {
+                    if lenient_free_fns {
+                        lenient_param_or_ret(&g.params, &g.return_type)
+                    } else {
+                        param_or_ret(&g.params, &g.return_type)
+                    }
+                }
                 Item::StructDef(s) => {
                     s.name != m && s.fields.iter().any(|f| type_expr_mentions_deep(&f.ty, m))
                 }
@@ -2498,6 +2855,200 @@ impl<'a> OwnershipChecker<'a> {
             }
         }
         false
+    }
+
+    /// Phase C2b coverage: does `f` confine every value of `t` it
+    /// touches to count-free families? Returns `(touches, covered)`.
+    /// `allow_params` is false for methods (borrowed families are
+    /// free-fn-only in v1 — but a method T-param already failed the
+    /// signature scan, so this is belt-and-suspenders).
+    #[allow(clippy::too_many_arguments)]
+    fn fn_covers_member(
+        &self,
+        f: &Function,
+        fn_key: &str,
+        t: &str,
+        clusters: &HashMap<String, Vec<ElidedCluster>>,
+        builders: &HashMap<String, (String, usize)>,
+        allow_params: bool,
+    ) -> (bool, bool) {
+        let fn_clusters: &[ElidedCluster] = clusters.get(fn_key).map(Vec::as_slice).unwrap_or(&[]);
+        let of_t: Vec<&ElidedCluster> = fn_clusters.iter().filter(|c| c.member_type == t).collect();
+        let mut lits_present = false;
+        collect_struct_literal_types(&f.body, &mut |n| {
+            if n == t {
+                lits_present = true;
+            }
+        });
+        let t_params: Vec<usize> = f
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| type_expr_mentions_deep(&p.ty, t))
+            .map(|(i, _)| i)
+            .collect();
+        let ret_t = f
+            .return_type
+            .as_ref()
+            .is_some_and(|r| type_expr_mentions_deep(r, t));
+        let mut builder_sites = 0usize;
+        walk_fn_exprs(&f.body, &mut |e, _| {
+            if let ExprKind::Call { callee, .. } = &e.kind {
+                if let ExprKind::Identifier(b) = &callee.kind {
+                    if builders.get(b.as_str()).is_some_and(|(m, _)| m == t) {
+                        builder_sites += 1;
+                    }
+                }
+            }
+        });
+        let touches =
+            lits_present || !t_params.is_empty() || ret_t || builder_sites > 0 || !of_t.is_empty();
+        if !touches {
+            return (false, true);
+        }
+        // Literal rule: every T literal sits in a b2 literal cluster
+        // whose fn-purity flags are clean (no free literals, no
+        // boundary regions).
+        let lit_cluster = of_t.iter().find(|c| !c.adopted && !c.borrowed);
+        if lits_present {
+            match lit_cluster {
+                Some(c) if c.b2 && c.fn_pure => {}
+                _ => return (true, false),
+            }
+        }
+        // Return rule: a T-returning fn must be a fresh-return builder.
+        if ret_t {
+            match lit_cluster {
+                Some(c) if c.returned != ReturnedChain::No => {}
+                _ => return (true, false),
+            }
+        }
+        // Param rule: every T-param is covered by the borrowed family.
+        if !t_params.is_empty() {
+            if !allow_params {
+                return (true, false);
+            }
+            let Some(bf) = of_t.iter().find(|c| c.borrowed) else {
+                return (true, false);
+            };
+            if !bf.fn_pure {
+                return (true, false);
+            }
+            let covered: HashSet<usize> = bf.borrowed_params.iter().map(|(_, i)| *i).collect();
+            if t_params.iter().any(|i| !covered.contains(i)) {
+                return (true, false);
+            }
+        }
+        // Builder-call rule: every T-builder call site is an
+        // adopted-root let (count match — the candidate walker only
+        // records let-position sites, and each adoption consumed one).
+        let adopted: Vec<&&ElidedCluster> = of_t.iter().filter(|c| c.adopted).collect();
+        if builder_sites != adopted.len() {
+            return (true, false);
+        }
+        if adopted.iter().any(|c| !c.fn_pure) {
+            return (true, false);
+        }
+        (true, true)
+    }
+
+    /// Phase C2b: the program-wide headerless-T gate (analysis half;
+    /// codegen reconciles against coroutine compilation and link-niche
+    /// shape). Returns `T → (link index, touching fn keys)`.
+    fn compute_headerless_types(
+        &self,
+        clusters: &HashMap<String, Vec<ElidedCluster>>,
+        builders: &HashMap<String, (String, usize)>,
+        borrows: &HashMap<String, (String, HashSet<usize>)>,
+    ) -> HashMap<String, (usize, Vec<String>)> {
+        let mut out = HashMap::new();
+        let types: HashSet<String> = clusters
+            .values()
+            .flatten()
+            .map(|c| c.member_type.clone())
+            .collect();
+        'types: for t in types {
+            let Some((_, link_idx)) = self.cluster_link_struct(&t) else {
+                continue;
+            };
+            // Surface scan with the free-fn Option[T] leniency.
+            if self.program_member_scan(&t, true) {
+                continue;
+            }
+            // The summarized fns whose two-sided contracts the gate
+            // activates — a reference to any of them as a VALUE would
+            // create an unsummarized indirect call site.
+            let protected: HashSet<&str> = builders
+                .iter()
+                .filter(|(_, (m, _))| m == &t)
+                .map(|(k, _)| k.as_str())
+                .chain(
+                    borrows
+                        .iter()
+                        .filter(|(_, (m, _))| m == &t)
+                        .map(|(k, _)| k.as_str()),
+                )
+                .collect();
+            let mut touching: Vec<String> = Vec::new();
+            for item in &self.program.items {
+                match item {
+                    Item::Function(f) => {
+                        let mut fn_as_value = false;
+                        walk_fn_exprs(&f.body, &mut |e, is_callee| {
+                            if let ExprKind::Identifier(n) = &e.kind {
+                                if !is_callee && protected.contains(n.as_str()) {
+                                    fn_as_value = true;
+                                }
+                            }
+                        });
+                        if fn_as_value {
+                            continue 'types;
+                        }
+                        let (touches, covered) =
+                            self.fn_covers_member(f, &f.name, &t, clusters, builders, true);
+                        if touches {
+                            if !covered {
+                                continue 'types;
+                            }
+                            touching.push(f.name.clone());
+                        }
+                    }
+                    Item::ImplBlock(imp) => {
+                        let type_name = match &imp.target_type.kind {
+                            TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+                            _ => continue,
+                        };
+                        for ii in &imp.items {
+                            if let ImplItem::Method(method) = ii {
+                                let key = format!("{}.{}", type_name, method.name);
+                                let mut fn_as_value = false;
+                                walk_fn_exprs(&method.body, &mut |e, is_callee| {
+                                    if let ExprKind::Identifier(n) = &e.kind {
+                                        if !is_callee && protected.contains(n.as_str()) {
+                                            fn_as_value = true;
+                                        }
+                                    }
+                                });
+                                if fn_as_value {
+                                    continue 'types;
+                                }
+                                let (touches, covered) = self
+                                    .fn_covers_member(method, &key, &t, clusters, builders, false);
+                                if touches {
+                                    if !covered {
+                                        continue 'types;
+                                    }
+                                    touching.push(key);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            out.insert(t, (link_idx, touching));
+        }
+        out
     }
 }
 

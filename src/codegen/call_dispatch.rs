@@ -891,7 +891,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // callee's `track_rc_option_var` balances them. Also
             // no-op for non-shared Option[T] params (no entry in
             // `var_option_shared_heap`).
-            self.share_option_shared_ref_for_arg(&a.value);
+            // Phase C2b: borrowed positions of reconciled headerless
+            // callees take no arg inc — the callee borrows (no exit
+            // dec) and the chain has no rc word.
+            let borrow_skip = self.borrowed_arg_skip(&name, i);
+            if !borrow_skip {
+                self.share_option_shared_ref_for_arg(&a.value);
+            }
             // Companion for a FieldAccess arg reading an `Option[shared T]`
             // field of an Identifier/`self`-bound shared struct (`merge(n1.next,
             // l2)` in the recursive merge-two-sorted-lists). The niche field
@@ -903,7 +909,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // through `compile_field_access`'s call-chain branch which already
             // incs, so they are excluded (the object must match
             // `shared_type_for_expr`, i.e. an Identifier/self binding).
-            self.share_option_shared_field_ref_for_arg(&a.value, val);
+            if !borrow_skip {
+                self.share_option_shared_field_ref_for_arg(&a.value, val);
+            }
             compiled_args.push(BasicMetadataValueEnum::from(val));
         }
 

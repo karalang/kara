@@ -11050,6 +11050,188 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_headerless_abi_program_wide() {
+        // Phase C2b: the full kata-#2 pipeline under the program-wide
+        // gate — every ListNode in the program is headerless and every
+        // count op is gone. Builders allocate without the rc word; the
+        // borrowing adder emits ZERO count ops INCLUDING the param
+        // exit decs (skipped two-sidedly with the caller\'s arg incs);
+        // the caller adopts all three call results (l1/l2 via the
+        // sanctioned-arg channel) and drops them by option-guarded
+        // free-walk.
+        let ir = ir_for_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn from_three(a: i64, b: i64, c: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 0;
+    while i < 3 {
+        let mut v = a;
+        if i == 1 { v = b; }
+        if i == 2 { v = c; }
+        let node = ListNode { val: v, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    dummy.next
+}
+fn add_two_numbers(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+    let mut carry: i64 = 0;
+    loop {
+        let mut s: i64 = carry;
+        let mut done = true;
+        if let Some(n) = a {
+            s = s + n.val;
+            a = n.next;
+            done = false;
+        }
+        if let Some(n) = b {
+            s = s + n.val;
+            b = n.next;
+            done = false;
+        }
+        if done and s == 0 {
+            break;
+        }
+        let node = ListNode { val: s % 10, next: None };
+        tail.next = Some(node);
+        tail = node;
+        carry = s / 10;
+    }
+    dummy.next
+}
+fn main() {
+    let l1 = from_three(2, 4, 3);
+    let l2 = from_three(5, 6, 4);
+    let out = add_two_numbers(l1, l2);
+    match out {
+        Some(node) => { println(node.val); }
+        None => {}
+    }
+}
+"#,
+        );
+        let builder = function_body(&ir, "from_three").expect("builder body");
+        assert!(
+            builder.contains("hl_alloc") && !builder.contains("rc_alloc"),
+            "builder allocates headerless; body:\n{builder}"
+        );
+        let adder = function_body(&ir, "add_two_numbers").expect("adder body");
+        assert!(
+            adder.contains("hl_alloc") && !adder.contains("rc_alloc"),
+            "adder\'s own cluster headerless; body:\n{adder}"
+        );
+        assert!(
+            !adder.contains("rc_inc")
+                && !adder.contains("rc_dec")
+                && !adder.contains("opt_rc_cleanup"),
+            "adder fully count-free incl. param exit decs; body:\n{adder}"
+        );
+        let main_body = function_body(&ir, "main").expect("main body");
+        assert!(
+            !main_body.contains("opt.arg.inc"),
+            "borrowed-position args take no inc; body:\n{main_body}"
+        );
+        assert!(
+            main_body.contains("acw_loop"),
+            "adopted results free-walk; body:\n{main_body}"
+        );
+        assert!(
+            !main_body.contains("rc_inc") && !main_body.contains("opt_rc_cleanup"),
+            "caller count-free; body:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_headerless_abi_full_pipeline() {
+        // C2b end-to-end: the whole composition (headerless builders →
+        // borrowed walks → sanctioned-arg adopted holders → free-walk
+        // drops), repeated with chain reuse. A layout disagreement
+        // anywhere mis-GEPs val/next by 8 bytes (wrong sum); a count
+        // op on a headerless node corrupts a field (wrong sum / UAF).
+        let out = run_program_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn from_three(a: i64, b: i64, c: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 0;
+    while i < 3 {
+        let mut v = a;
+        if i == 1 { v = b; }
+        if i == 2 { v = c; }
+        let node = ListNode { val: v, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    dummy.next
+}
+fn add_two_numbers(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+    let mut carry: i64 = 0;
+    loop {
+        let mut s: i64 = carry;
+        let mut done = true;
+        if let Some(n) = a {
+            s = s + n.val;
+            a = n.next;
+            done = false;
+        }
+        if let Some(n) = b {
+            s = s + n.val;
+            b = n.next;
+            done = false;
+        }
+        if done and s == 0 {
+            break;
+        }
+        let node = ListNode { val: s % 10, next: None };
+        tail.next = Some(node);
+        tail = node;
+        carry = s / 10;
+    }
+    dummy.next
+}
+fn sum_chain(head: Option[ListNode]) -> i64 {
+    let mut sum = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn main() {
+    let l1 = from_three(2, 4, 3);
+    let l2 = from_three(5, 6, 4);
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 100 {
+        let r = add_two_numbers(l1, l2);
+        total = total + sum_chain(r);
+        iter = iter + 1;
+    }
+    total = total + sum_chain(l1) + sum_chain(l2);
+    println(total);
+}
+"#,
+        );
+        // 100 * 15 + 9 + 15 = 1524.
+        assert_eq!(out.as_deref(), Some("1524\n"));
+    }
+
+    #[test]
     fn test_ir_cluster_root_takes_free_walk() {
         // Phase B1 WITHOUT B2: the root cleanup is the link-following
         // free-walk (cw_loop) while cursors keep their RcDec (they

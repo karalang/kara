@@ -520,8 +520,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // follow-up notes called out. No-op for Option[T]
                 // where T isn't a shared struct.
                 if let Some((_, info)) = self.option_inner_shared_type_for_type_expr(&param.ty) {
-                    let option_ty = self.enum_layouts["Option"].llvm_type;
-                    self.track_rc_option_var(&param_name, alloca, option_ty, info.heap_type);
+                    // Phase C2b: borrowed-family params of a reconciled
+                    // headerless type skip the exit dec AND the
+                    // var_option_shared_heap registration — the caller
+                    // skipped the arg inc symmetrically
+                    // (`borrowed_arg_skip`), and a headerless node has
+                    // no rc word to touch. Walk traffic was already
+                    // count-free via the C2a family roles.
+                    if !self.borrowed_param_dec_skip(&param_name) {
+                        let option_ty = self.enum_layouts["Option"].llvm_type;
+                        self.track_rc_option_var(&param_name, alloca, option_ty, info.heap_type);
+                    }
                 }
                 // RC-fallback boxing for non-shared, non-Vec parameters flagged by the
                 // ownership checker. The param value is boxed in {i64 rc, T} on the heap

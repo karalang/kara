@@ -780,12 +780,30 @@ fn adoption_kata2_main_escaping_args_rejected_adopting_out() {
          }}"
     );
     let r = analyze(&src);
+    // C2b updated this contract: `consume`'s params BORROW (read-only
+    // walk family), so passing l1/l2 at its borrowed positions is the
+    // sanctioned-arg channel — all three bindings adopt, l1/l2 flagged
+    // arg_sanctioned (active only under the headerless gate, which
+    // this leak-free program passes). Pre-C2b, l1/l2 were rejected as
+    // escapes and only `out` adopted.
     let adopted: Vec<_> = r.elided_clusters["main"]
         .iter()
         .filter(|c| c.adopted)
         .collect();
-    assert_eq!(adopted.len(), 1, "{:?}", r.elided_clusters["main"]);
-    assert_eq!(adopted[0].root, "out");
+    assert_eq!(adopted.len(), 3, "{:?}", r.elided_clusters["main"]);
+    for c in &adopted {
+        assert_eq!(
+            c.arg_sanctioned,
+            c.root != "out",
+            "l1/l2 use the sanctioned-arg channel; out does not: {:?}",
+            c
+        );
+    }
+    assert!(
+        r.headerless_types.contains_key("ListNode"),
+        "the kata-shaped program passes the headerless gate: {:?}",
+        r.headerless_types
+    );
 }
 
 #[test]
@@ -959,7 +977,13 @@ fn borrows_walked_option_params_kata2_adder() {
     let src = format!("{NODE}{ADDER}");
     let r = analyze(&src);
     let c = borrowed_cluster(&r, "add_two_numbers").expect("params borrow");
-    assert_eq!(c.borrowed_param_indices, vec![0, 1]);
+    assert_eq!(
+        c.borrowed_params
+            .iter()
+            .map(|(_, i)| *i)
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
     assert!(c.b2);
     assert!(!c.headerless);
     assert!(!c.adopted);
@@ -1080,6 +1104,100 @@ fn borrow_rejects_param_rebound_by_let() {
     );
     let r = analyze(&src);
     assert!(borrowed_cluster(&r, "shadowed").is_none());
+}
+
+// ════════════════════════════════════════════════════════════════
+// Phase C2b — program-wide headerless-T gate.
+// ════════════════════════════════════════════════════════════════
+
+#[test]
+fn headerless_gate_passes_builder_only_program() {
+    let src = format!(
+        "{NODE}{ADOPT_BUILDER}\
+         fn main() {{\n\
+             let out = build(5);\n\
+             match out {{\n\
+                 Some(node) => {{ println(node.val); }}\n\
+                 None => {{}}\n\
+             }}\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(r.headerless_types.contains_key("ListNode"));
+    let (link_idx, fns) = &r.headerless_types["ListNode"];
+    assert_eq!(*link_idx, 1);
+    assert!(fns.contains(&"build".to_string()) && fns.contains(&"main".to_string()));
+}
+
+#[test]
+fn headerless_gate_rejects_fn_as_value() {
+    // A summarized builder referenced as a VALUE creates an
+    // unsummarized indirect call site — the two-sided residual-count
+    // contract would leak/corrupt. The walker must see every position.
+    let src = format!(
+        "{NODE}{ADOPT_BUILDER}\
+         fn main() {{\n\
+             let f = build;\n\
+             let out = f(5);\n\
+             if out.is_some() {{ println(1); }}\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(!r.headerless_types.contains_key("ListNode"));
+}
+
+#[test]
+fn headerless_gate_rejects_struct_field_holder() {
+    // A foreign struct field can hold a headered-expectation T — the
+    // surface scan (unchanged from phase D minus the fn-sig leniency)
+    // blocks.
+    let src = format!(
+        "{NODE}\
+         struct Holder {{ n: Option[ListNode] }}\n\
+         {ADOPT_BUILDER}\
+         fn main() {{\n\
+             let out = build(5);\n\
+             if out.is_some() {{ println(1); }}\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(!r.headerless_types.contains_key("ListNode"));
+}
+
+#[test]
+fn headerless_gate_rejects_unadopted_builder_call() {
+    // A builder call outside adopted-let position drops its chain
+    // through the full-RC temp path — count traffic on T survives, so
+    // T stays headered.
+    let src = format!(
+        "{NODE}{ADOPT_BUILDER}\
+         fn main() {{\n\
+             let out = build(5);\n\
+             if out.is_some() {{ println(1); }}\n\
+             let pair = (build(2), 1);\n\
+             println(pair.1);\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(!r.headerless_types.contains_key("ListNode"));
+}
+
+#[test]
+fn headerless_gate_rejects_bare_member_param() {
+    // A bare-T param is neither a fresh-return nor a borrowed-option
+    // channel — the lenient sig scan still blocks it.
+    let src = format!(
+        "{NODE}{ADOPT_BUILDER}\
+         fn peek(seed: ListNode) -> i64 {{ seed.val }}\n\
+         fn main() {{\n\
+             let out = build(5);\n\
+             if out.is_some() {{ println(1); }}\n\
+             let s = ListNode {{ val: 3, next: None }};\n\
+             println(peek(s));\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(!r.headerless_types.contains_key("ListNode"));
 }
 
 #[test]

@@ -684,6 +684,15 @@ pub struct OwnershipCheckResult {
     /// traffic is untouched in B1; only the root's cleanup action
     /// changes.
     pub elided_clusters: HashMap<String, Vec<ElidedCluster>>,
+    /// Phase C2b: program-wide headerless-T candidates — member type →
+    /// (link user-field index, every fn key whose body or signature
+    /// touches the type). The ANALYSIS half of the gate passed
+    /// (surface scan with fn-sig leniency, per-fn coverage, the
+    /// fn-as-value scan); codegen reconciles the final set against
+    /// coroutine compilation and link-niche shape — a type dropped
+    /// there deactivates coherently (every consumer keys on the
+    /// reconciled set).
+    pub headerless_types: HashMap<String, (usize, Vec<String>)>,
     /// Multi-edit `fix_diff` envelope keyed by the diagnostic's primary
     /// span — phase-7 line 197 follow-up. `ConcurrentSharedStruct` and
     /// `ConcurrentPlainStruct` populate this with the per-`mut`-field
@@ -821,6 +830,7 @@ pub struct OwnershipChecker<'a> {
     pub(crate) elided_bindings: HashMap<String, HashSet<String>>,
     pub(crate) elision_blocked: HashMap<String, Vec<ElisionBlocked>>,
     pub(crate) elided_clusters: HashMap<String, Vec<ElidedCluster>>,
+    pub(crate) headerless_types: HashMap<String, (usize, Vec<String>)>,
     /// `fix_diff` envelope sidecar — phase-7 line 197 follow-up. Keyed
     /// by the diagnostic's primary `SpanKey`, value is the list of
     /// machine-applicable `TextEdit`s. Populated only by the
@@ -960,6 +970,7 @@ impl<'a> OwnershipChecker<'a> {
             elided_bindings: HashMap::new(),
             elision_blocked: HashMap::new(),
             elided_clusters: HashMap::new(),
+            headerless_types: HashMap::new(),
             error_fix_diffs: HashMap::new(),
             binding_type_names: HashMap::new(),
             binding_types: HashMap::new(),
@@ -1056,6 +1067,7 @@ impl<'a> OwnershipChecker<'a> {
             elided_bindings: self.elided_bindings,
             elision_blocked: self.elision_blocked,
             elided_clusters: self.elided_clusters,
+            headerless_types: self.headerless_types,
             error_fix_diffs: self.error_fix_diffs,
         }
     }

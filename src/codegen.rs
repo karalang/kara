@@ -1611,6 +1611,29 @@ pub(super) struct Codegen<'ctx> {
     /// poisons that). Kept separate from `elided_cluster_roots` so the
     /// literal-cluster let-site/transfer paths never see adopted roots.
     pub(crate) adopted_cluster_roots: HashMap<String, HashMap<String, (String, usize)>>,
+    /// Phase C2b: ANALYSIS-side headerless-T candidates — member type →
+    /// (link index, touching fn keys). Reconciled into
+    /// `headerless_types` in `compile_program` once coroutine keys and
+    /// struct layouts exist (a coro toucher or a non-niche link drops
+    /// the type; every consumer keys on the reconciled set, so a drop
+    /// deactivates the whole composition coherently).
+    pub(crate) headerless_type_candidates: HashMap<String, (usize, Vec<String>)>,
+    /// Phase C2b: the FINAL program-wide headerless set. A member type
+    /// in here has no rc word anywhere — `headerless_here` answers true
+    /// in every fn, builders allocate via `emit_headerless_alloc`, the
+    /// borrowed-param exit decs and call-site arg incs are skipped, and
+    /// the arg-sanctioned adopted families activate.
+    pub(crate) headerless_types: HashSet<String>,
+    /// Phase C2b: adopted families that used the sanctioned-arg channel
+    /// — active ONLY when their member type is in `headerless_types`
+    /// (otherwise the binding falls back to full RC and the ordinary
+    /// arg-inc / exit-dec balance applies).
+    pub(crate) conditional_adopted_roots: HashMap<String, HashMap<String, (String, usize)>>,
+    /// Phase C2b: borrowed-param records per fn — (param name, position,
+    /// member type). Drives the callee-side exit-dec skip (by name, in
+    /// `compile_function`) and the call-site arg-inc skip (by position,
+    /// in the direct-call arg loop) — both gated on `headerless_types`.
+    pub(crate) borrowed_param_skips: HashMap<String, Vec<(String, usize, String)>>,
     /// Per-function Arc-promoted binding names — the subset of `rc_fallback_fns`
     /// flagged by the ownership pass as crossing a `par {}` thread boundary.
     /// Inc/dec on these bindings emits atomic LLVM operations (`atomicrmw add` /
@@ -3883,6 +3906,10 @@ impl<'ctx> Codegen<'ctx> {
             elided_b2_bindings: HashMap::new(),
             headerless_fns: HashMap::new(),
             adopted_cluster_roots: HashMap::new(),
+            headerless_type_candidates: HashMap::new(),
+            headerless_types: HashSet::new(),
+            conditional_adopted_roots: HashMap::new(),
+            borrowed_param_skips: HashMap::new(),
             arc_fallback_fns: HashMap::new(),
             rc_fallback_heap_types: HashMap::new(),
             closure_capture_paths: HashMap::new(),
@@ -4022,8 +4049,16 @@ impl<'ctx> Codegen<'ctx> {
                     // Phase C1c: adopted roots live in their own map —
                     // the literal-cluster let-site / tail-transfer
                     // paths must never see them (the root is Option-
-                    // typed, not a bare member literal).
-                    self.adopted_cluster_roots
+                    // typed, not a bare member literal). C2b: families
+                    // that used the sanctioned-arg channel are
+                    // CONDITIONAL — consulted only when the member
+                    // type survives the headerless reconcile.
+                    let target = if c.arg_sanctioned {
+                        &mut self.conditional_adopted_roots
+                    } else {
+                        &mut self.adopted_cluster_roots
+                    };
+                    target
                         .entry(fn_name.clone())
                         .or_default()
                         .insert(c.root.clone(), (c.member_type.clone(), c.link_field_index));
@@ -4032,8 +4067,16 @@ impl<'ctx> Codegen<'ctx> {
                 // Phase C2a: borrowed-param families have NO root
                 // cleanup of their own (the params keep the balanced
                 // entry/exit ownership) — only their walk cursors take
-                // the count-skip roles below.
+                // the count-skip roles below. C2b records the params
+                // for the conditional residual-count skips.
                 if c.borrowed {
+                    let recs = self
+                        .borrowed_param_skips
+                        .entry(fn_name.clone())
+                        .or_default();
+                    for (pname, pos) in &c.borrowed_params {
+                        recs.push((pname.clone(), *pos, c.member_type.clone()));
+                    }
                     continue;
                 }
                 entry.insert(
@@ -4092,6 +4135,11 @@ impl<'ctx> Codegen<'ctx> {
         // (today's behavior).
         for (k, v) in &ow.par_capture_modes {
             self.par_capture_modes.insert(*k, v.clone());
+        }
+        // Phase C2b: headerless-T candidates (reconciled in
+        // `compile_program` once coro keys + struct layouts exist).
+        for (t, v) in &ow.headerless_types {
+            self.headerless_type_candidates.insert(t.clone(), v.clone());
         }
     }
 
@@ -4226,10 +4274,45 @@ impl<'ctx> Codegen<'ctx> {
     /// adopted cluster root (an `Option[shared T]` builder-call result
     /// whose scope-exit cleanup is the option-guarded free-walk).
     fn adopted_root_info(&self, name: &str) -> Option<(String, usize)> {
-        self.adopted_cluster_roots
+        if let Some(info) = self
+            .adopted_cluster_roots
             .get(&self.current_fn_name)
             .and_then(|m| m.get(name))
+        {
+            return Some(info.clone());
+        }
+        // C2b conditional families (sanctioned-arg users): active only
+        // under the reconciled headerless set — otherwise the binding
+        // falls back to full RC and the ordinary arg-inc / exit-dec
+        // balance applies.
+        self.conditional_adopted_roots
+            .get(&self.current_fn_name)
+            .and_then(|m| m.get(name))
+            .filter(|(t, _)| self.headerless_types.contains(t))
             .cloned()
+    }
+
+    /// Phase C2b: skip the call-site `Option[shared T]` arg inc when
+    /// the callee's param at `position` is a borrowed-family param of
+    /// a reconciled headerless type (the callee's exit dec is skipped
+    /// symmetrically — see `compile_function`'s param registration).
+    fn borrowed_arg_skip(&self, callee: &str, position: usize) -> bool {
+        self.borrowed_param_skips.get(callee).is_some_and(|recs| {
+            recs.iter()
+                .any(|(_, pos, t)| *pos == position && self.headerless_types.contains(t))
+        })
+    }
+
+    /// Phase C2b: the callee-side half — `param_name` of the CURRENT fn
+    /// is a borrowed-family param of a reconciled headerless type, so
+    /// its exit `RcDecOption` is skipped (no caller inc ever happened).
+    fn borrowed_param_dec_skip(&self, param_name: &str) -> bool {
+        self.borrowed_param_skips
+            .get(&self.current_fn_name)
+            .is_some_and(|recs| {
+                recs.iter()
+                    .any(|(n, _, t)| n == param_name && self.headerless_types.contains(t))
+            })
     }
 
     /// Phase-B2 role lookup for the current function.
@@ -4246,6 +4329,13 @@ impl<'ctx> Codegen<'ctx> {
     /// non-niche link slot (would make the free-walk's RcDec fallback
     /// reachable against a header that does not exist).
     pub(crate) fn headerless_here(&self, type_name: &str) -> bool {
+        // Phase C2b: program-wide headerless types answer true in
+        // EVERY fn — the reconcile already excluded coroutine touchers
+        // and non-niche links, and layout uniformity is the invariant
+        // (a per-fn demotion here would mix layouts on one object).
+        if self.headerless_types.contains(type_name) {
+            return true;
+        }
         let Some(link_idx) = self
             .headerless_fns
             .get(&self.current_fn_name)
@@ -4427,6 +4517,26 @@ impl<'ctx> Codegen<'ctx> {
                     self.coro_fn_keys.insert(key.clone());
                 }
             }
+        }
+        // Phase C2b reconcile: a headerless-T candidate survives iff
+        // none of its touching fns compiles as a coroutine (frame
+        // layout authority differs) and the link slot is niched (the
+        // free-walks' dec fallback must stay unreachable). Runs here —
+        // after `declare_structs` (niche tables) and the coro-key
+        // population above, before any function body compiles.
+        let candidates: Vec<(String, (usize, Vec<String>))> = self
+            .headerless_type_candidates
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        for (t, (link_idx, fns)) in candidates {
+            if fns.iter().any(|k| self.is_coroutine_compiled(k)) {
+                continue;
+            }
+            if self.niche_field_inner_heap_type(&t, link_idx).is_none() {
+                continue;
+            }
+            self.headerless_types.insert(t);
         }
         // Slice 8v Phase 2: snapshot the whole `Program` as `Rc<Program>`
         // so the per-mono state-machine emission path triggered from
