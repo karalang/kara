@@ -1,0 +1,3 @@
+# Built comparator binary (produced by `go build`, see README).
+# go.mod + go.sum ARE committed (the dependency lockfile pair).
+ws-idle-holder-go
