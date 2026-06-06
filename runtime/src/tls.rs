@@ -336,6 +336,11 @@ pub unsafe extern "C" fn karac_runtime_tls_accept(
         Ok(p) => p,
         Err(_) => return -1,
     };
+    // Disable Nagle: the TLS handshake is a multi-RTT exchange of small
+    // records, where Nagle×delayed-ACK injects a ~40 ms stall (full
+    // rationale + measurement at `karac_runtime_ws_accept_tls`).
+    // Best-effort — failure only forgoes the latency win.
+    let _ = sock.set_nodelay(true);
 
     let mut conn = match ServerConnection::new(Arc::clone(&cfg.inner)) {
         Ok(c) => c,
@@ -449,6 +454,12 @@ pub unsafe extern "C" fn karac_runtime_tls_client_connect(
         Ok(s) => s,
         Err(e) => return crate::event_loop::net_construct_error_code(&e),
     };
+    // Client half of the handshake-latency fix: disable Nagle so the
+    // client's small handshake / WS-upgrade records aren't withheld
+    // behind the peer's delayed-ACK. The 2×2 probe (REPORT.md §p50)
+    // showed client-side Nagle is what leaves the connect-p50 *tail* at
+    // ~47 ms after the server-side fix clears the median. Best-effort.
+    let _ = sock.set_nodelay(true);
     let mut client_conn = match ClientConnection::new(Arc::new(client_config), server_name) {
         Ok(c) => c,
         Err(_) => return -1,

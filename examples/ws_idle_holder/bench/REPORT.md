@@ -574,7 +574,7 @@ number with the deviation rather than retuning to remove it._
 | **per-conn bytes** | **~12,114 B (12.1 KB)** | server-RSS delta / N; the working handler holds its 4 KB recv buffer + coro frame |
 | server RSS held | 11,832,444 KiB (~11.28 GiB) | RSS delta / N matches per-conn-bytes |
 | connect mean | 82.3 ms | `c=64`, full 1M ramp |
-| connect p50 | 45.9 ms | architectural floor (park/wake path) |
+| connect p50 | 45.9 ms | **pre-fix Nagle floor** — missing `TCP_NODELAY`, not park/wake; diagnosed + fixed 2026-06-06 (§Connect-p50) |
 | connect p95 | 214.1 ms | |
 | connect p99 | 254.8 ms | tail collapsed vs pre-fix 1856 ms — `ec2_setup.sh` sysctls removed the SYN-retransmit cliff |
 | connect max | 480.4 ms | vs pre-fix 2306 ms |
@@ -594,7 +594,7 @@ number with the deviation rather than retuning to remove it._
 | **per-conn bytes** | **~12,111 B (12.1 KB)** | **−0.03 % drift vs 1M (12,114 B) — scale-invariance confirmed at the working figure** |
 | server RSS held | 23,656,544 KiB (~22.56 GiB) | RSS delta / N matches per-conn-bytes |
 | connect mean | 194.5 ms | `c=64`, full 6077 s ramp |
-| connect p50 | 46.0 ms | architectural floor (matches 1M's 45.9 ms) |
+| connect p50 | 46.0 ms | **pre-fix Nagle floor** (matches 1M's 45.9 ms); missing `TCP_NODELAY`, fixed 2026-06-06 (§Connect-p50) |
 | connect p95 | 613.4 ms | tail expansion vs 1M (214 ms) tracks held-conn count |
 | connect p99 | 732.6 ms | |
 | connect max | 1193.7 ms | |
@@ -630,7 +630,7 @@ with Rust's 27.9 KB (which has always included its per-conn task state): a real
 | per-conn bytes | ~7,861 B ‡ pre-fix | 0.19 % drift vs pre-fix 1M — confirms the *linearity shape*, not the headline number |
 | server RSS held | 15,355,328 KiB (~14.65 GiB) | pre-fix (non-executing handler) |
 | connect mean | 214.6 ms | `c=64`, full 6707 s ramp |
-| connect p50 | 41.0 ms | architectural floor |
+| connect p50 | 41.0 ms | pre-fix Nagle floor |
 | connect p95 | 673.9 ms | |
 | connect p99 | 798.2 ms | |
 | connect max | 1204.9 ms | |
@@ -774,17 +774,55 @@ which stays flat. Filed for the active-traffic stress slice
 > §Kāra post-fix 2M table above and are within noise of these.
 
 **What this proves end-to-end.** The multi-dimensional tradeoff:
-**Rust wins throughput and mean (~4 %) + p50 (~14× tighter handshake
-hop)**; **Kāra wins tail (~8–10 % at p95→max) and memory (2.30× on the
-post-fix 1M density)**. For idle-heavy workloads where memory is the
-binding constraint (chat, IoT push, ISP gateways), Kāra's **12.1 KB/conn
-means a single 128 GiB box holds ~11.3M conns where Rust OOMs at
-~4.9M** — the same 2.30× headroom. The 46 ms Kāra p50 vs Rust's ~3 ms
-confirms the [line 287 follow-on
-entry](../../../docs/implementation_checklist/phase-6-runtime.md)'s
-architectural-floor finding is Kāra-side, **not** a workload
-artifact (Rust at the same N c=64 hits ~3 ms — same kernel,
-same network, same client driver).
+**Rust wins throughput and mean (~4 %)**; **Kāra wins tail (~8–10 % at
+p95→max) and memory (2.30× on the post-fix 1M density)**. For idle-heavy
+workloads where memory is the binding constraint (chat, IoT push, ISP
+gateways), Kāra's **12.1 KB/conn means a single 128 GiB box holds ~11.3M
+conns where Rust OOMs at ~4.9M** — the same 2.30× headroom. Rust's
+pre-fix p50 lead (46 ms vs ~3 ms, ~14×) was **not** an architectural
+floor — it was a Kāra-side Nagle defect, **diagnosed and fixed
+2026-06-06** (§Connect-p50 below); the controlled probe collapses the
+floor to ~6 ms.
+
+**Connect-p50: the "architectural floor" was a missing `TCP_NODELAY` —
+diagnosed + fixed (2026-06-06).** The flat ~41–46 ms Kāra connect-p50
+across every at-scale run (1M 45.9 / 2M 46.0 / x86 44.2 ms) was
+previously logged as an "architectural floor (park/wake path)." That
+diagnosis was **wrong**. A controlled loopback handshake-latency probe
+(`tls::tests::handshake_latency_probe` — sequential connects, isolating
+the per-conn floor) on a fresh Graviton box pinned it to **Nagle ×
+delayed-ACK**: the TLS handshake + RFC 6455 upgrade is a multi-round-trip
+exchange of small records, and Kāra — alone in the comparator set —
+never set `TCP_NODELAY`, so a handshake record sat withheld behind an
+unacked segment until the peer's ~40 ms delayed-ACK timer fired. (Rust's
+~3 ms p50 on the same loopback is now explained: `tokio` sets
+`TCP_NODELAY` by default. Same kernel, same network, same client driver
+— the only difference was Nagle.)
+
+2×2 probe, N=500 sequential connects, Linux loopback TLS+WS:
+
+| server nodelay | client nodelay | p50 | p90 | p99 | max |
+|---|---|---|---|---|---|
+| OFF | OFF | **41.93** | 46.99 | 47.15 | 48.04 |
+| **ON** | OFF | **6.01** | 46.97 | 47.05 | 47.91 |
+| ON | ON | 5.96 | 6.07 | 6.20 | 6.30 |
+| OFF | ON | 5.89 | 5.99 | 6.11 | 41.42 |
+
+Leg A reproduces the campaign floor to the millisecond (41.93 ms). The
+server-side `set_nodelay(true)` collapses p50 **7× (→ 6.01 ms)**; the
+residual ~47 ms *tail* is client-side Nagle and clears when the client
+sets it too (both on → flat ~6 ms). **Fix landed on both halves** —
+server accept paths (`ws_accept_tls`, `ws_accept`, `tls_accept`) and the
+client connect path (`tls_client_connect`).
+
+**Status of the at-scale p50 numbers.** Every p50 figure in the tables
+above (1M/2M/x86, and this head-to-head's 41.0 ms) was measured
+**pre-fix** and stands as the historical record. A post-fix at-scale
+(c=64, 250K+) re-measure is **deferred future work**: the probe proves
+the mechanism and the fix at the per-connection level, but confirming
+the new at-scale p50 *distribution* needs a rig run. The density
+headline — the actual product claim — is unaffected; this is a latency
+fix, orthogonal to per-conn memory.
 
 **Caveats:**
 
@@ -870,12 +908,12 @@ traffic an idle client cannot drain.
 | metric | Kāra | Phoenix | winner |
 |---|---|---|---|
 | established / failed | 250,000 / 0 | 250,000 / 0 | tie |
-| `connect.p50_ms` | ~41 (arch. floor) | **10.7** | Phoenix |
+| `connect.p50_ms` | ~41 (pre-fix; §Connect-p50) | **10.7** | Phoenix |
 | `connect.p99_ms` | tail varies | **17.9** | mixed¹ |
 | **`per_conn_bytes`** | **~12,114** (post-fix idle) | **105,267** | **Kāra (8.69×)** |
 
 > ¹ As with Go and Rust, Phoenix's connect *latency* beats Kāra's known
-> architectural p50 floor (~41 ms,
+> pre-fix Nagle p50 floor (~41 ms,
 > [phase-6](../../../docs/implementation_checklist/phase-6-runtime.md));
 > density is the headline metric, and there Kāra wins decisively.
 
@@ -996,7 +1034,7 @@ independent ones: the **marginal RSS slope** and the **post-GC live set**.
 | per-conn bytes | **~14.4 KiB** | RSS-delta / N at a realistic deployment heap (3.72 GB total) |
 | marginal slope | **~12.8 KiB/conn** | the `-Xmx`-independent intrinsic (≈ Kāra) |
 | live set | ~8.3 KiB/conn | post-GC heap used / N |
-| connect p50 / p99 | 3.8 / 16.0 ms | beats Kāra's ~41 ms architectural floor |
+| connect p50 / p99 | 3.8 / 16.0 ms | beats Kāra's ~41 ms pre-fix Nagle floor |
 
 **Linearity @ 50K (`-Xmx800m`):** 21.2 KiB/conn. The 50K→250K RSS-delta/N
 drift is large (−32%) but is **not** a per-conn non-linearity — it is the
@@ -1017,7 +1055,7 @@ toward the 12.8 marginal — not a meaningful escalation).
 | metric | Kāra | Netty | winner |
 |---|---|---|---|
 | established / failed | 250,000 / 0 | 250,000 / 0 | tie |
-| `connect.p50_ms` | ~41 (arch. floor) | **3.8** | Netty |
+| `connect.p50_ms` | ~41 (pre-fix; §Connect-p50) | **3.8** | Netty |
 | **`per_conn_bytes`** (deployment RSS) | **~12,114** | **~14,746** | **Kāra (1.19×)** |
 | marginal per-conn | ~12,114 | ~13,100 | ≈ tie (Kāra 1.06×) |
 
@@ -1109,11 +1147,11 @@ vs Kāra's ~41 ms floor), the same multi-axis tradeoff seen across the set.
 | metric | Kāra | Go | winner |
 |---|---|---|---|
 | established / failed | 250,000 / 0 | 250,000 / 0 | tie |
-| `connect.p50_ms` | ~41 (arch. floor) | **3.37** | Go |
+| `connect.p50_ms` | ~41 (pre-fix; §Connect-p50) | **3.37** | Go |
 | `connect.p99_ms` | ~0.34 (realistic) / tail varies | **9.73** | mixed¹ |
 | **`per_conn_bytes`** | **~12,114** (post-fix idle) | **44,386** | **Kāra (3.66×)** |
 
-> ¹ Kāra's connect *latency* is its known architectural floor (~41 ms
+> ¹ Kāra's connect *latency* is its known pre-fix Nagle floor (~41 ms
 > p50, [phase-6 line 287 follow-on](../../../docs/implementation_checklist/phase-6-runtime.md));
 > Go's net poller collapses the handshake hop the same way Rust's tokio
 > does (~3 ms). Density is the headline metric, and there Kāra wins
@@ -1185,7 +1223,7 @@ the JVM, the headline RSS-delta/N *is* the honest per-conn cost.
 | per-conn bytes | **54,125 (52.9 KiB)** | RSS-delta / N; server RSS 12.66 GiB |
 | marginal slope | **~52.7 KiB/conn** | (RSS₂₅₀ₖ − RSS₅₀ₖ)/200K — ≈ the absolute, i.e. linear |
 | GC-mode delta @ 50K | **~2 %** (Server vs Workstation) | proves it is live memory, not heap slack |
-| connect p50 / p99 | 4.6 / 15.0 ms (@ 50K) | beats Kāra's ~41 ms architectural floor |
+| connect p50 / p99 | 4.6 / 15.0 ms (@ 50K) | beats Kāra's ~41 ms pre-fix Nagle floor |
 
 **Linearity @ 50K (Server GC):** 54,869 B/conn (53.6 KiB). The 50K→250K
 RSS-delta/N drift is **−1.4 %** — well inside the 5 % gate, so the per-conn
@@ -1217,7 +1255,7 @@ fixed base to amortize, which is *why* its number is both higher and flatter.)
 | metric | Kāra | .NET (Linux) | winner |
 |---|---|---|---|
 | established / failed | 250,000 / 0 | 250,000 / 0 | tie |
-| `connect.p50_ms` | ~41 (arch. floor) | **4.6** | .NET |
+| `connect.p50_ms` | ~41 (pre-fix; §Connect-p50) | **4.6** | .NET |
 | **`per_conn_bytes`** | **~12,114** | ~54,125 | **Kāra (4.47×)** |
 | marginal per-conn | ~12,114 | ~53,939 | **Kāra (4.45×)** |
 
@@ -1940,7 +1978,7 @@ their role's headline scale (`250K` or `100K`).
   783 @ 1M — the established superlinear-degradation pattern on
   connection establishment under increasing held-conn count;
   orthogonal to per-conn memory which stayed flat). p50 41.0 ms
-  (matches the known architectural floor from task #65; not a
+  (matches the known pre-fix Nagle floor from task #65; not a
   regression). Surfaced a tuning gap on the bench rig: the prior
   attempt aborted on `fs.file-max = 3000000` (the default `ec2_setup.sh`
   setting); patched to `8000000` in `scripts/ec2_setup.sh` alongside
@@ -1959,7 +1997,7 @@ their role's headline scale (`250K` or `100K`).
   past 1M). Connect tail: `p95=745ms`, `p99=872ms`, `p99.9=1015ms`,
   `max=1336ms` — ~8–10 % wider than Kāra at every tail percentile
   while Rust's p50 stays tight at 2.93 ms (vs Kāra's 41 ms
-  architectural floor). **Headline 3.55× density ratio is now
+  pre-fix Nagle floor). **Headline 3.55× density ratio is now
   empirically scale-invariant at both endpoints** (3.548× at 1M,
   3.548× at 2M); the commercial 250K-vs-250K rows can rely on the
   scale-per-comparator argument without an extrapolation caveat.

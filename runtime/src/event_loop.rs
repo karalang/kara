@@ -2748,6 +2748,12 @@ pub extern "C" fn karac_runtime_ws_accept(listener_fd: i32) -> i32 {
         Err(_) => return -1,
     };
 
+    // Disable Nagle on the accepted socket — same handshake-latency fix
+    // as `karac_runtime_ws_accept_tls`: the plain-TCP WS upgrade is the
+    // same multi-RTT small-record exchange that Nagle×delayed-ACK
+    // stalls. Best-effort.
+    let _ = conn.set_nodelay(true);
+
     // Bound the opening-handshake read so a client that completes
     // the TCP connect but stalls (or dribbles) the HTTP upgrade
     // request can't pin this accept indefinitely (slowloris). Two
