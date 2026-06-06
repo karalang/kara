@@ -35,6 +35,16 @@
   <build>
     <finalName>ws-idle-holder-netty</finalName>
     <plugins>
+      <!-- Pin the compiler plugin explicitly: older Maven (e.g. the 3.8.7
+           apt ships on Ubuntu 24.04) defaults to a pre-3.6 compiler plugin
+           that ignores <maven.compiler.release> and falls back to target 1.5,
+           which fails on JDK 21 ("Target option 5 is no longer supported").
+           A pinned 3.13.0 honors the release property on any Maven. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+      </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
