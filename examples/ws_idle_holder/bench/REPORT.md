@@ -84,7 +84,8 @@ alongside; this file is **what we measured and what it means**, not
 > +0.07%).**
 > The **commercial tier is now complete** (Phoenix, Java/Netty, Go, .NET
 > Linux, Node all landed; .NET Windows cut by decision). Only the optional
-> stretch comparators (SignalR / socket.io / Python) remain pending — see the
+> stretch comparators (SignalR / socket.io / Python) are **deferred
+> (optional), not blocking v1** — see the
 > [Status / measurement matrix](#status--measurement-matrix) below.
 > Until a row's status is `landed`, treat the cells as placeholders.
 
@@ -107,9 +108,9 @@ alongside; this file is **what we measured and what it means**, not
 | .NET / ASP.NET Core (Linux) | commercial | 52.9 KB² | **4.47×** | 250K + 50K landed (2026-06-06), −1.4% linearity | landed @ 250K | [§.NET Linux](#net--aspnet-core-linux) |
 | .NET / ASP.NET Core (Windows) | commercial | n/a | n/a | **cut by decision** (was #72) — Linux is the .NET headline; SChannel delta low-value | not run | [§.NET Windows](#net--aspnet-core-windows) |
 | Node.js (ws) | commercial | 40.4 KB | **3.42×** | 250K + 50K landed (2026-06-06), −1.79% linearity | landed @ 250K | [§Node](#nodejs-ws) |
-| SignalR _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #74) | stretch | [§SignalR](#signalr-stretch) |
-| socket.io _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #75) | stretch | [§socket.io](#socketio-stretch) |
-| Python asyncio websockets _(stretch)_ | stretch | _TBD_ | _TBD_ | 100K headline + 50K linearity (wip #76) | stretch | [§Python](#python-asyncio-websockets-stretch) |
+| SignalR _(stretch)_ | stretch | n/a | n/a | **deferred (optional)** — framework tax over .NET Linux; not blocking v1 | deferred | [§SignalR](#signalr-stretch) |
+| socket.io _(stretch)_ | stretch | n/a | n/a | **deferred (optional)** — framework tax over Node; not blocking v1 | deferred | [§socket.io](#socketio-stretch) |
+| Python asyncio websockets _(stretch)_ | stretch | n/a | n/a | **deferred (optional)**, lean-cut — not blocking v1 | deferred | [§Python](#python-asyncio-websockets-stretch) |
 
 > ¹ **Java/Netty** is the one stack whose RSS ≠ live set: a JVM's footprint
 > is dominated by GC heap-commit, which is `-Xmx`-dependent. The **14.4 KB /
@@ -1381,37 +1382,59 @@ measured — between Rust (27.9 KiB) and Go (43.4 KiB), and notably:
 
 Raw JSON: `docs/investigations/node_linux_{250k,50k,50k_cap}.json`.
 
+> **Stretch tier — deferred (optional) by decision 2026-06-06.** The
+> commercial tier is the complete v1 density story (Kāra is the densest
+> across Go / .NET / JVM / Node / Elixir by 1.19×–8.69×); the stretch
+> comparators below only *reinforce* an already-decisive claim, so they are
+> not blocking v1 and were consciously deferred rather than run now. They are
+> kept (not cut) because SignalR and socket.io have **audience-specific**
+> value — for a buyer whose .NET or Node fleet actually deploys the framework
+> (not raw Kestrel / raw `ws`), "the thing you really run is even heavier" is
+> a real reframe. **Framing guardrail if any of these is ever run:** report
+> the **within-runtime framework tax** (e.g. "socket.io adds Y KB/conn on top
+> of raw `ws` *on the same Node*"), **not** a cross-runtime density headline —
+> a framework bundles rooms/RPC/presence/fallback-transports the bare
+> `ws_idle_holder` demo lacks, so a head-to-head density number would carry
+> the same not-apples-to-apples asterisk that got Phoenix presence-ON
+> de-headlined ([§Phoenix](#phoenix-channels-elixir)).
+
 ### SignalR _(stretch)_
 
-> _Pending — wip task #74. Stretch row — not blocking v1 claim._
+> _Deferred (optional) — was wip task #74. Not blocking v1._
 
-- **Status:** pending, stretch.
-- **Stack target:** ASP.NET Core SignalR on top of .NET 8 (Linux);
-  exposes the framework-overhead delta over raw Kestrel WebSocket
-  middleware.
+- **Status:** deferred (optional). Run only for a SignalR-shop audience,
+  framed as the within-runtime framework tax over the landed
+  [.NET Linux](#net--aspnet-core-linux) baseline (52.9 KiB raw Kestrel).
+- **Stack target (if run):** ASP.NET Core SignalR on top of .NET 8 (Linux);
+  reuses the [`../dotnet/`](../dotnet/) stack. Exposes the framework-overhead
+  delta over raw Kestrel WebSocket middleware.
 - **Scale:** 100K headline + 50K linearity sub-curve (per
   [§Scale per comparator](#scale-per-comparator) — stretch rows
   run at smaller scale than commercial).
 
 ### socket.io _(stretch)_
 
-> _Pending — wip task #75. Stretch row — not blocking v1 claim._
+> _Deferred (optional) — was wip task #75. Not blocking v1._
 
-- **Status:** pending, stretch.
-- **Stack target:** Node.js + `socket.io` server; exposes the
-  framework-overhead delta over raw `ws`.
+- **Status:** deferred (optional). Run only for a socket.io-shop audience,
+  framed as the within-runtime framework tax over the landed
+  [Node.js](#nodejs-ws) baseline (40.4 KiB raw `ws`).
+- **Stack target (if run):** Node.js + `socket.io` server; reuses the
+  [`../node/`](../node/) stack. Exposes the framework-overhead delta over
+  raw `ws`.
 - **Scale:** 100K headline + 50K linearity sub-curve (per
   [§Scale per comparator](#scale-per-comparator)).
 
 ### Python asyncio websockets _(stretch)_
 
-> _Pending — wip task #76. Stretch row — not blocking v1 claim._
+> _Deferred (optional), lean-cut — was wip task #76. Not blocking v1._
 
-- **Status:** pending, stretch.
-- **Stack target:** Python 3.12, `websockets` library, asyncio.
-  Included for completeness; Python is not in the production WS
-  density landscape for any serious deployment but the row exists
-  so we can answer the inevitable "what about Python?" question.
+- **Status:** deferred (optional), lowest priority. Unlike SignalR/socket.io
+  this is a whole new runtime, not a framework-tax delta — but it is a
+  low-TAM, rarely-density-critical choice with a predictable result
+  (single-thread asyncio, ~Node-class or heavier). Kept only to answer the
+  inevitable "what about Python?"; the likely first to be cut.
+- **Stack target (if run):** Python 3.12, `websockets` library, asyncio.
 - **Scale:** 100K headline + 50K linearity sub-curve (per
   [§Scale per comparator](#scale-per-comparator)).
 
@@ -1645,7 +1668,10 @@ _From `feedback_commercial_reframe_lens` memory._
   8.69× density, two tiers down; Java/Netty: combination claim, not a
   box-count cut; Go: one tier down; .NET: 4.47× density, one tier down;
   Node: 3.42× density, one tier down.)
-- **Stretch rows (SignalR / socket.io / Python):** _Deferred per-row._
+- **Stretch rows (SignalR / socket.io / Python):** _Deferred (optional) by
+  decision 2026-06-06 — not blocking v1; reinforcement, not a new pillar. If
+  ever run, frame as the within-runtime framework tax, not a cross-runtime
+  density headline (see [§SignalR/socket.io/Python](#signalr-stretch))._
 
 ---
 
@@ -1686,9 +1712,9 @@ their role's headline scale (`250K` or `100K`).
 | .NET (Linux) | commercial | **50K landed (2026-06-06)** — 54,869 B/conn Server GC, −1.4% drift; Workstation-GC sidebar 53,781 B (−2.0%, proves live-not-dial) | **250K landed (2026-06-06)** — 54,125 B/conn (52.9 KiB) Server GC, marginal slope ≈ absolute (4.47× Kāra; 2nd-heaviest measured) | n/a (gate passed: −1.4% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` (Server GC default; `DOTNET_gcServer=0` for the Workstation sidebar) | `docs/investigations/dotnet_linux_{250k,50k,50k_wks}.json` |
 | .NET (Windows) | commercial | n/a | **cut by decision** (was #72) — see [§.NET Windows](#net--aspnet-core-windows); Linux is the .NET headline, SChannel delta low-value, Node already gives a 2nd OpenSSL point | n/a | not run | n/a | n/a |
 | Node.js | commercial | **50K landed (2026-06-06)** — 42,131 B/conn, −1.79% drift; `--max-old-space-size=512` sidebar 42,161 B (+0.07%, proves live-not-dial) | **250K landed (2026-06-06)** — 41,378 B/conn (40.4 KiB), p50 50.8 ms (3.42× Kāra; 4th-densest, denser than Go, lighter than .NET) | n/a (gate passed: −1.79% < 5%, no 1M escalation) | n/a (idle-hold density comparator) | `scripts/run_250k.sh` + `scripts/run_50k.sh` (`--server-bin ../node/run_server.sh`; `NODE_OPTIONS=--max-old-space-size=512` for the heap-cap sidebar) | `docs/investigations/node_linux_{250k,50k,50k_cap}.json` |
-| SignalR _(stretch)_ | stretch | pending (#74) | 100K pending (#74) | n/a | pending | TBD | TBD |
-| socket.io _(stretch)_ | stretch | pending (#75) | 100K pending (#75) | n/a | pending | TBD | TBD |
-| Python _(stretch)_ | stretch | pending (#76) | 100K pending (#76) | n/a | pending | TBD | TBD |
+| SignalR _(stretch)_ | stretch | deferred (#74) | **deferred (optional)** — framework tax over .NET Linux, run only for a SignalR-shop audience | n/a | deferred | n/a | n/a |
+| socket.io _(stretch)_ | stretch | deferred (#75) | **deferred (optional)** — framework tax over Node, run only for a socket.io-shop audience | n/a | deferred | n/a | n/a |
+| Python _(stretch)_ | stretch | deferred (#76) | **deferred (optional)**, lean-cut — low-TAM, predictable | n/a | deferred | n/a | n/a |
 
 > Task numbers reference `wip-bench-day.md` (uncommitted; lives in
 > repo root). When that file is deleted on ship, the equivalent
@@ -1699,6 +1725,18 @@ their role's headline scale (`250K` or `100K`).
 
 ## Change log
 
+- **2026-06-06 (stretch tier deferred by decision):** SignalR (#74),
+  socket.io (#75), and Python asyncio (#76) marked **deferred (optional), not
+  blocking v1** (Python lean-cut). The commercial tier is the complete v1
+  density story; the stretch comparators only reinforce an already-decisive
+  claim. Kept (not cut) because SignalR/socket.io have audience-specific value
+  for framework-deploying .NET/Node shops. Recorded a **framing guardrail** in
+  each stretch section + the deferred-reframe block: if ever run, report the
+  within-runtime framework tax, not a cross-runtime density headline (avoids
+  the not-apples-to-apples asterisk that de-headlined Phoenix presence-ON).
+  Flipped TL;DR + status-matrix + section blockquotes + banner from
+  "pending/stretch" to "deferred (optional)." **Phase 3 is now effectively
+  wrapped:** commercial tier complete, stretch deferred, .NET Windows cut.
 - **2026-06-06 (.NET Windows comparator cut by decision):** dropped the planned
   .NET-on-Windows-Server + SChannel run (was wip #72). Rationale: Linux is the
   .NET headline (already landed at 52.9 KiB / 4.47× Kāra), the SChannel-vs-
