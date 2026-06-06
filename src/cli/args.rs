@@ -383,6 +383,7 @@ fn parse_build_command(args: &[String]) -> Command {
     let mut target: Option<String> = None;
     let mut bindings: Option<BindingsMode> = None;
     let mut target_cpu: Option<String> = None;
+    let mut target_features: Option<String> = None;
     let mut monomorphization_budget = crate::monomorphization::MonomorphizationBudget::default();
     let mut release = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
@@ -454,6 +455,32 @@ fn parse_build_command(args: &[String]) -> Command {
             }
             target_cpu = Some(args[i + 1].trim().to_string());
             i += 1;
+        } else if let Some(rest) = arg.strip_prefix("--target-features=") {
+            // `--target-features=<+feat,-feat,…|help>` — feature-string
+            // override, the `--target-cpu` sibling (design.md § CPU
+            // Baseline Targeting > Feature-string override). Token
+            // shape and registry membership are validated in
+            // `cmd_build` once the active target is known; only
+            // emptiness is a parse-level error.
+            if rest.trim().is_empty() {
+                eprintln!(
+                    "error: --target-features requires a non-empty feature list \
+                     (e.g. +aes,-sve — or `help` to list them)"
+                );
+                process::exit(1);
+            }
+            target_features = Some(rest.trim().to_string());
+        } else if arg == "--target-features" {
+            // Space-separated form, mirroring `--target-cpu <name>`.
+            if i + 1 >= args.len() || args[i + 1].trim().is_empty() {
+                eprintln!(
+                    "error: --target-features requires a feature list value \
+                     (e.g. +aes,-sve — or `help` to list them)"
+                );
+                process::exit(1);
+            }
+            target_features = Some(args[i + 1].trim().to_string());
+            i += 1;
         } else if let Some(rest) = arg.strip_prefix("--bindings=") {
             // `--bindings=browser|component|none` — WASM output-shape
             // selector (phase-10; design.md § Target Build Artifacts).
@@ -507,6 +534,7 @@ fn parse_build_command(args: &[String]) -> Command {
             target,
             bindings,
             target_cpu,
+            target_features,
             monomorphization_budget,
             release,
             lint_overrides,
@@ -540,6 +568,7 @@ fn parse_build_command(args: &[String]) -> Command {
                 no_proxy,
                 target,
                 target_cpu,
+                target_features,
                 release,
             }
         }

@@ -208,6 +208,18 @@ pub enum Command {
         /// codegen so a typo can't silently fall back to `generic`
         /// (LLVM's native behavior on an unknown CPU is warn-and-ignore).
         target_cpu: Option<String>,
+        /// `--target-features=<+feat,-feat,…|help>`: feature-string
+        /// override, the `--target-cpu` sibling (design.md § CPU
+        /// Baseline Targeting > Feature-string override). Own precedence
+        /// chain resolved independently of the CPU's: this flag, then
+        /// `KARAC_TARGET_FEATURES`, then `[release] target-features`.
+        /// The resolved list appends *after* the per-target default
+        /// features (LLVM resolves duplicates last-wins, so a user
+        /// `-feat` genuinely disables a table default). Every token
+        /// must carry a `+`/`-` prefix and name a feature in LLVM's
+        /// per-target registry — hard error otherwise; `help` prints
+        /// the annotated listing and exits.
+        target_features: Option<String>,
         /// `--monomorphization-budget=warn:N,error:M` (v1.x, single-file
         /// only): per-generic instantiation ceiling enforced after
         /// typecheck. A disabled (all-`None`) budget — the default — skips
@@ -257,6 +269,9 @@ pub enum Command {
         /// own `kara.toml` (already loaded for the build) instead of a
         /// file-relative walk-up.
         target_cpu: Option<String>,
+        /// `--target-features=<list|help>` — see `Build.target_features`
+        /// above. Same project-manifest tier note as `target_cpu`.
+        target_features: Option<String>,
         /// `--release` — see `Build.release` above. Same debug/release
         /// semantics (strips debug-only runtime checks — contracts today —
         /// not an optimizer toggle) and the same OR-composition with
@@ -625,6 +640,7 @@ pub fn execute(cmd: Command) {
             target,
             bindings,
             target_cpu,
+            target_features,
             monomorphization_budget,
             release,
             lint_overrides,
@@ -639,6 +655,7 @@ pub fn execute(cmd: Command) {
             target.as_deref(),
             bindings,
             target_cpu.as_deref(),
+            target_features.as_deref(),
             monomorphization_budget,
             release,
             lint_overrides,
@@ -650,6 +667,7 @@ pub fn execute(cmd: Command) {
             no_proxy,
             target,
             target_cpu,
+            target_features,
             release,
         } => cmd_build_project(
             output,
@@ -658,6 +676,7 @@ pub fn execute(cmd: Command) {
             no_proxy,
             target.as_deref(),
             target_cpu.as_deref(),
+            target_features.as_deref(),
             release,
         ),
         Command::Query {
@@ -4396,15 +4415,32 @@ fn read_target_cpu_env() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Read the `KARAC_TARGET_FEATURES` env var — the middle tier of the
+/// `--target-features` precedence chain (resolved independently of the
+/// CPU chain). Same empty-means-unset contract as `read_target_cpu_env`.
+#[cfg(feature = "llvm")]
+fn read_target_features_env() -> Option<String> {
+    std::env::var("KARAC_TARGET_FEATURES")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Discover the manifest by walking upward from the built file's own
 /// directory (the `karac run` discovery rule, same shape as
-/// `manifest_build_targets_for` above) and return its `[release]
-/// target-cpu`, if declared. No manifest → `None`. A malformed manifest
-/// is a hard error — but note the caller only reaches this tier when
-/// neither the CLI flag nor the env var supplied a CPU, so explicit
-/// overrides never gain a manifest failure mode.
+/// `manifest_build_targets_for` above) and return one `[release]` field
+/// picked by `pick`. No manifest → `None`. A malformed manifest is a
+/// hard error — but note the callers only reach this tier when neither
+/// the CLI flag nor the env var supplied a value, so explicit overrides
+/// never gain a manifest failure mode. (The cpu and features chains
+/// resolve lazily and independently, so a build may walk twice — the
+/// walk is cheap and idempotent.)
 #[cfg(feature = "llvm")]
-fn manifest_release_target_cpu_for(filename: &str, output: OutputMode) -> Option<String> {
+fn manifest_release_field_for(
+    filename: &str,
+    output: OutputMode,
+    pick: fn(&manifest::Manifest) -> Option<String>,
+) -> Option<String> {
     let file_dir = std::path::Path::new(filename)
         .parent()
         .map(|p| {
@@ -4417,7 +4453,7 @@ fn manifest_release_target_cpu_for(filename: &str, output: OutputMode) -> Option
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     match manifest::discover_project_root(&file_dir) {
         Some(root) => match manifest::load_from_root(&root) {
-            Ok(m) => m.release_target_cpu,
+            Ok(m) => pick(&m),
             Err(e) => {
                 emit_manifest_error(&e, output);
                 process::exit(1);
@@ -4448,6 +4484,30 @@ fn apply_target_cpu_override(resolved: Option<String>) {
         process::exit(1);
     }
     crate::target::set_target_cpu_override(&cpu);
+}
+
+/// Act on the resolved `--target-features` value — the
+/// `apply_target_cpu_override` sibling (design.md § CPU Baseline
+/// Targeting > Feature-string override). `help` prints the same
+/// per-target dump (its `Available features` section is the relevant
+/// half) and exits 0. Any other value is token-validated (`+`/`-`
+/// prefixes, names in LLVM's per-target feature registry — LLVM's
+/// native behavior on an unknown feature is warn-and-ignore, the same
+/// silent neutering the CPU validation closes) and installed for the
+/// target-machine constructors, which append it after the per-target
+/// default features.
+#[cfg(feature = "llvm")]
+fn apply_target_features_override(resolved: Option<String>) {
+    let Some(features) = resolved else { return };
+    if features == "help" {
+        crate::codegen::print_target_cpu_listing();
+        process::exit(0);
+    }
+    if let Err(msg) = crate::codegen::validate_target_features(&features) {
+        eprintln!("{msg}");
+        process::exit(1);
+    }
+    crate::target::set_target_features_override(&features);
 }
 
 /// Normalize a rendered `DiagnosticJson` entry for cross-target
@@ -4718,6 +4778,7 @@ fn cmd_build(
     target: Option<&str>,
     bindings: Option<BindingsMode>,
     target_cpu: Option<&str>,
+    target_features: Option<&str>,
     monomorphization_budget: crate::monomorphization::MonomorphizationBudget,
     release: bool,
     lint_overrides: crate::lints::CliLintOverrides,
@@ -4753,8 +4814,18 @@ fn cmd_build(
             target_cpu
                 .map(str::to_string)
                 .or_else(read_target_cpu_env)
-                .or_else(|| manifest_release_target_cpu_for(filename, output)),
+                .or_else(|| {
+                    manifest_release_field_for(filename, output, |m| m.release_target_cpu.clone())
+                }),
         );
+        // Feature-string override — the sibling chain, resolved
+        // independently (a flag-supplied CPU does not suppress a
+        // manifest-supplied feature list, and vice versa).
+        apply_target_features_override(target_features.map(str::to_string).or_else(|| {
+            read_target_features_env().or_else(|| {
+                manifest_release_field_for(filename, output, |m| m.release_target_features.clone())
+            })
+        }));
         let is_wasm = build_target == "wasm_wasi" || build_target == "wasm_browser";
         // Phase-10 `--bindings` flag: resolve the effective WASM output
         // shape. Explicit flag wins; omitted, the mode is inferred from
@@ -4991,9 +5062,11 @@ fn cmd_build(
         // the llvm build path — accepted-but-inert here, consistent
         // with --offline / --target above.
         let _ = bindings;
-        // `--target-cpu` only parameterizes the LLVM target machine —
-        // accepted-but-inert on the non-llvm check fallback.
+        // `--target-cpu` / `--target-features` only parameterize the
+        // LLVM target machine — accepted-but-inert on the non-llvm
+        // check fallback.
         let _ = target_cpu;
+        let _ = target_features;
         // `--release` only affects codegen (contract stripping), which the
         // non-llvm fallback doesn't reach — accepted-but-inert, consistent
         // with --offline / --target / --enable-hot-swap above.
@@ -5268,6 +5341,9 @@ fn effect_set_to_display(
 /// (`E0223`), and runs cross-module name resolution per module
 /// (slice 5, `E0224` / `E0225`). Visibility enforcement and typechecking
 /// across modules arrive in slice 6+.
+// Same flag-shaped-argument posture as `cmd_build` above — a struct
+// here would just move the flag list rather than tighten it.
+#[allow(clippy::too_many_arguments)]
 fn cmd_build_project(
     output: OutputMode,
     offline: bool,
@@ -5275,6 +5351,7 @@ fn cmd_build_project(
     no_proxy: bool,
     target: Option<&str>,
     target_cpu: Option<&str>,
+    target_features: Option<&str>,
     release: bool,
 ) {
     // Phase-10: v1 target names are classified the same way as in
@@ -5292,13 +5369,13 @@ fn cmd_build_project(
         );
         process::exit(1);
     }
-    // `--target-cpu=help` exits before manifest discovery so the
-    // listing works from any directory — it needs only the active
-    // target, not a project. Name validation for a real CPU value waits
-    // until the manifest is loaded (the `[release] target-cpu` tier of
-    // the precedence chain lives there); see below.
+    // `--target-cpu=help` / `--target-features=help` exit before
+    // manifest discovery so the listing works from any directory — it
+    // needs only the active target, not a project. Name validation for
+    // a real value waits until the manifest is loaded (the `[release]`
+    // tier of each precedence chain lives there); see below.
     #[cfg(feature = "llvm")]
-    if target_cpu == Some("help") {
+    if target_cpu == Some("help") || target_features == Some("help") {
         crate::codegen::print_target_cpu_listing();
         process::exit(0);
     }
@@ -5361,8 +5438,16 @@ fn cmd_build_project(
             .or_else(read_target_cpu_env)
             .or_else(|| mf.release_target_cpu.clone()),
     );
+    // Feature-string override — the independent sibling chain.
+    #[cfg(feature = "llvm")]
+    apply_target_features_override(
+        target_features
+            .map(str::to_string)
+            .or_else(read_target_features_env)
+            .or_else(|| mf.release_target_features.clone()),
+    );
     #[cfg(not(feature = "llvm"))]
-    let _ = target_cpu;
+    let _ = (target_cpu, target_features);
 
     // Phase-7 line 5 sub-item 3 — target gating. Hot-swap requires dynamic
     // symbol resolution at runtime, which embedded and kernel profiles

@@ -288,6 +288,20 @@ OPTIONS:
                             Widening the baseline narrows the deploy
                             set in exchange for sharper codegen.
                             Accepts `--target-cpu <name>` too.
+    --target-features=<list>
+                            Feature-string override for codegen — a
+                            comma-separated `+feat`/`-feat` list (e.g.
+                            `+aes,-sve`) appended after the per-target
+                            default features; later entries win, so
+                            `-feat` disables a default. Every entry
+                            needs its `+`/`-` prefix and must name a
+                            feature for the active target — hard error
+                            otherwise. `--target-features=help` lists
+                            them. Own precedence chain: this flag >
+                            KARAC_TARGET_FEATURES env var > `[release]
+                            target-features` in kara.toml > defaults.
+                            Composes with --target-cpu. Accepts
+                            `--target-features <list>` too.
     --monomorphization-budget=warn:N,error:M
                             Cap per-generic instantiations. After typecheck
                             (before codegen), any generic instantiated >= N

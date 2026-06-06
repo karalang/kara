@@ -12099,3 +12099,282 @@ fn target_cpu_valid_override_builds() {
     assert!(tmp.join("cpubuild").exists(), "missing built binary");
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// ── Phase-10: `--target-features` override ──────────────────────────
+//
+// Feature-string sibling of `--target-cpu` (design.md § CPU Baseline
+// Targeting > Feature-string override). Own precedence chain (flag >
+// KARAC_TARGET_FEATURES > `[release] target-features`), token-shape
+// validation (`+`/`-` prefixes) plus registry membership — both fail
+// fast before the pipeline, so precedence is observable via distinct
+// bogus values per tier without any runtime archive.
+
+/// `--target-features=help` prints the dump (whose `Available features`
+/// section is the relevant half) and exits 0.
+#[test]
+fn target_features_help_lists_features() {
+    let tmp = wasm_test_dir("feathelp");
+    let path = tmp.join("p.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target-features=help"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: target_features_help_lists_features — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "help listing must exit 0: {stderr}");
+    assert!(
+        stderr.contains("Available features for this target:"),
+        "expected LLVM's feature table on stderr, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// An entry without its `+`/`-` prefix is a hard error naming the fix —
+/// a bare name would be silently meaningless to LLVM.
+#[test]
+fn target_features_missing_prefix_rejected() {
+    let tmp = wasm_test_dir("featpfx");
+    let path = tmp.join("p.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target-features=aes"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: target_features_missing_prefix_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("missing its '+' or '-' prefix") && stderr.contains("'+aes'"),
+        "expected the prefix diagnostic with the suggested spelling, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// An unknown feature name is a hard error carrying the supported
+/// listing — not LLVM's native warn-and-ignore.
+#[test]
+fn target_features_unknown_name_rejected() {
+    let tmp = wasm_test_dir("featbad");
+    let path = tmp.join("p.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target-features=+not-a-feat",
+        ])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: target_features_unknown_name_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown feature 'not-a-feat'") && stderr.contains("Supported features:"),
+        "expected the unknown-feature diagnostic with the listing, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Empty value rejects at the parse layer (both spellings) — no llvm
+/// machinery involved, so no skip.
+#[test]
+fn target_features_empty_value_rejected() {
+    for argv in [
+        vec!["build", "x.kara", "--target-features="],
+        vec!["build", "x.kara", "--target-features"],
+    ] {
+        let out = karac_bin().args(&argv).output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success());
+        assert!(
+            stderr.contains("--target-features requires a"),
+            "expected the missing-value diagnostic for {argv:?}, got: {stderr}",
+        );
+    }
+}
+
+/// The chains resolve independently and in order: the CLI flag beats
+/// the env var (diagnostic names the flag's bogus value), and the env
+/// var is consulted when the flag is absent.
+#[test]
+fn target_features_cli_beats_env_and_env_consulted() {
+    let tmp = wasm_test_dir("featprec");
+    let path = tmp.join("p.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+    // Flag + env, both bogus: the flag's name must win.
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target-features",
+            "+cli-bogus-feat",
+        ])
+        .env("KARAC_TARGET_FEATURES", "+env-bogus-feat")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: target_features_cli_beats_env_and_env_consulted — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown feature 'cli-bogus-feat'") && !stderr.contains("env-bogus-feat"),
+        "expected the CLI value to win, got: {stderr}",
+    );
+    // Env alone: consulted.
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap()])
+        .env("KARAC_TARGET_FEATURES", "+env-bogus-feat")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown feature 'env-bogus-feat'"),
+        "expected validation of the env-supplied list, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// `[release] target-features` is the lowest tier (consulted when flag
+/// and env are absent), and the env var beats it. Also pins the chains'
+/// independence: a CPU supplied via flag does not suppress the
+/// manifest's feature list.
+#[test]
+fn target_features_manifest_tier_and_independence() {
+    let tmp = wasm_test_dir("featmf");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"demo\"\n\n[release]\ntarget-features = \"+manifest-bogus-feat\"\n",
+    )
+    .unwrap();
+    let path = tmp.join("p.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+    // Manifest tier consulted when the higher tiers are silent.
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap()])
+        .env_remove("KARAC_TARGET_FEATURES")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: target_features_manifest_tier_and_independence — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown feature 'manifest-bogus-feat'"),
+        "expected validation of the manifest-supplied list, got: {stderr}",
+    );
+    // Env beats manifest.
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap()])
+        .env("KARAC_TARGET_FEATURES", "+env-bogus-feat")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown feature 'env-bogus-feat'")
+            && !stderr.contains("manifest-bogus-feat"),
+        "expected the env value to beat the manifest tier, got: {stderr}",
+    );
+    // Independence: a *CPU* flag does not suppress the manifest's
+    // *features* tier — the chains resolve separately, so the bogus
+    // manifest features still fail the build.
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target-cpu=generic"])
+        .env_remove("KARAC_TARGET_FEATURES")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown feature 'manifest-bogus-feat'"),
+        "a CPU flag must not suppress the features manifest tier, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A valid feature list passes validation and the build completes
+/// end-to-end. The feature name is read from the target's own `help`
+/// listing so the test is portable across host architectures.
+#[test]
+fn target_features_valid_override_builds() {
+    let tmp = wasm_test_dir("featok");
+    let path = tmp.join("featbuild.kara");
+    std::fs::write(&path, "fn main() {\n    println(\"hello\");\n}\n").unwrap();
+    // Pull a real feature name for this host from the help listing.
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target-features=help"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: target_features_valid_override_builds — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    let feature = stderr
+        .lines()
+        .skip_while(|l| !l.starts_with("Available features"))
+        .skip(1)
+        .filter_map(|l| l.strip_prefix("  ")?.split_whitespace().next())
+        .next()
+        .map(str::to_string);
+    let Some(feature) = feature else {
+        eprintln!("skip: target_features_valid_override_builds — no feature parsed from listing");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            &format!("--target-features=+{feature}"),
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !out.status.success()
+        && (stderr.contains("link failed") || stderr.contains("codegen failed"))
+    {
+        eprintln!("skip: target_features_valid_override_builds — native link unavailable");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "valid override must build: {stderr}");
+    assert!(
+        !stderr.contains("unknown feature") && !stderr.contains("is not a recognized feature"),
+        "a registry-valid feature must pass cleanly, got: {stderr}",
+    );
+    assert!(tmp.join("featbuild").exists(), "missing built binary");
+    let _ = std::fs::remove_dir_all(&tmp);
+}

@@ -508,13 +508,27 @@ pub(super) fn create_target_machine() -> Result<TargetMachine, String> {
 /// target-machine parameter (triple, features, reloc model) at the
 /// per-target default — the `--target-cpu` contract (design.md § CPU
 /// Baseline Targeting): widening or narrowing the baseline is the
-/// user's call, the rest of the machine configuration is not.
-/// `--target-features` is the deferred sibling knob.
+/// user's call, the rest of the machine configuration is not. The
+/// `--target-features` override (its sibling chain) is read inside the
+/// per-target constructors and *appended* after the default features.
 fn create_target_machine_with_cpu(cpu_override: Option<&str>) -> Result<TargetMachine, String> {
     if crate::target::active_target_is_wasm() {
         create_wasm_target_machine(cpu_override)
     } else {
         create_native_target_machine(cpu_override)
+    }
+}
+
+/// Combine the per-target default features with the `--target-features`
+/// override: defaults first, user list appended — LLVM applies feature
+/// flags in order with last-wins resolution, so a user `-feat` genuinely
+/// disables a table default (e.g. `-outline-atomics` on aarch64-linux)
+/// and the default can never silently re-override the user.
+fn combined_features(default_features: &str) -> String {
+    match crate::target::target_features_override() {
+        None => default_features.to_string(),
+        Some(user) if default_features.is_empty() => user.to_string(),
+        Some(user) => format!("{default_features},{user}"),
     }
 }
 
@@ -529,8 +543,11 @@ fn create_target_machine_with_cpu(cpu_override: Option<&str>) -> Result<TargetMa
 /// which is also why validation (`validate_target_cpu`) captures it
 /// from a child process instead of in-process.
 pub fn print_target_cpu_listing() {
+    // One dump serves both `--target-cpu=help` and
+    // `--target-features=help`: MCSubtargetInfo prints the CPUs table
+    // and the features table together.
     eprintln!(
-        "Supported CPUs for target `{}`:",
+        "Supported CPUs and features for target `{}`:",
         crate::target::active_target()
     );
     let _ = create_target_machine_with_cpu(Some("help"));
@@ -554,7 +571,10 @@ fn create_wasm_target_machine(cpu_override: Option<&str>) -> Result<TargetMachin
         .create_target_machine(
             &triple,
             cpu_override.unwrap_or("generic"),
-            "",
+            // No wasm default features (MVP baseline); a
+            // `--target-features` override (e.g. `+simd128`) is the
+            // whole string.
+            &combined_features(""),
             backend_optimization_level(),
             RelocMode::Default,
             CodeModel::Default,
@@ -571,19 +591,21 @@ fn create_native_target_machine(cpu_override: Option<&str>) -> Result<TargetMach
         Target::from_triple(&triple).map_err(|e| format!("Failed to get target: {}", e))?;
 
     let triple_str = triple.as_str().to_str().unwrap_or("");
-    // An override swaps the CPU only; the table's default *features*
+    // A CPU override swaps the CPU only; the table's default *features*
     // string stays (rustc's `-C target-cpu` posture — target-spec
     // features apply regardless of the CPU choice). E.g. on
     // aarch64-linux, `--target-cpu=neoverse-v1` keeps
-    // `+outline-atomics`.
-    let (default_cpu, features) = default_cpu_and_features(triple_str);
+    // `+outline-atomics`. A `--target-features` override appends after
+    // the defaults (last-wins — see `combined_features`).
+    let (default_cpu, default_features) = default_cpu_and_features(triple_str);
     let cpu = cpu_override.unwrap_or(default_cpu);
+    let features = combined_features(default_features);
 
     target
         .create_target_machine(
             &triple,
             cpu,
-            features,
+            &features,
             backend_optimization_level(),
             // PIC, not `Default`. The link step (`link_executable_impl`)
             // invokes `cc` with no `-no-pie`, and every modern toolchain
@@ -671,22 +693,78 @@ pub fn validate_target_cpu(cpu: &str) -> Result<(), String> {
     ))
 }
 
+/// Validate a `--target-features` value against LLVM's feature registry
+/// for the active target — the `validate_target_cpu` sibling, with one
+/// extra layer: token *shape*. Every comma-separated entry must carry
+/// an explicit `+` or `-` prefix (LLVM's feature-string grammar; a bare
+/// name would be silently meaningless) and name a registered feature.
+/// LLVM's native behavior on an unknown feature is warn-and-ignore —
+/// the same silent neutering the CPU validation closes. Registry
+/// capture rides the same `__list-target-cpus` child dump (its
+/// `Available features` section); unavailable → shape checks still
+/// apply, membership degrades to pass-through.
+pub fn validate_target_features(features: &str) -> Result<(), String> {
+    let known = supported_target_features();
+    for token in features.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            return Err(format!(
+                "error: empty entry in --target-features '{features}' — use a comma-separated list like +aes,-sve"
+            ));
+        }
+        let Some(name) = token.strip_prefix('+').or_else(|| token.strip_prefix('-')) else {
+            return Err(format!(
+                "error: --target-features entry '{token}' is missing its '+' or '-' prefix — write '+{token}' to enable or '-{token}' to disable"
+            ));
+        };
+        if let Some(ref known) = known {
+            if !known.iter().any(|k| k == name) {
+                return Err(format!(
+                    "error: unknown feature '{}' for target `{}`.\nSupported features: {}\nhint: run `karac build --target-features=help` for the annotated listing",
+                    name,
+                    crate::target::active_target(),
+                    known.join(", "),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Capture the active target's CPU registry by re-invoking karac with
 /// the hidden `__list-target-cpus` argv and parsing the child's stderr
 /// dump. `None` when the listing is unavailable (spawn failure, non-
 /// karac `current_exe`, non-llvm child) — callers degrade gracefully.
 fn supported_target_cpus() -> Option<Vec<String>> {
-    let exe = std::env::current_exe().ok()?;
-    let out = std::process::Command::new(exe)
-        .args(["__list-target-cpus", crate::target::active_target()])
-        .output()
-        .ok()?;
-    let names = parse_cpu_names_from_help_listing(&String::from_utf8_lossy(&out.stderr));
+    let names = parse_cpu_names_from_help_listing(&capture_help_listing()?);
     if names.is_empty() {
         None
     } else {
         Some(names)
     }
+}
+
+/// Capture the active target's feature registry — same child dump as
+/// `supported_target_cpus`, parsing the `Available features` section.
+fn supported_target_features() -> Option<Vec<String>> {
+    let names = parse_feature_names_from_help_listing(&capture_help_listing()?);
+    if names.is_empty() {
+        None
+    } else {
+        Some(names)
+    }
+}
+
+/// Re-invoke karac with the hidden `__list-target-cpus` argv and return
+/// the child's stderr (the MCSubtargetInfo dump: CPUs table + features
+/// table). `None` on spawn failure.
+fn capture_help_listing() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let out = std::process::Command::new(exe)
+        .args(["__list-target-cpus", crate::target::active_target()])
+        .output()
+        .ok()?;
+    Some(String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
 /// Extract CPU names from MCSubtargetInfo's `"help"` dump. The shape
@@ -716,6 +794,35 @@ fn parse_cpu_names_from_help_listing(listing: &str) -> Vec<String> {
             break;
         }
         if !in_cpu_section {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("  ") {
+            if let Some(name) = rest.split_whitespace().next() {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+/// Extract feature names from the same MCSubtargetInfo dump — the
+/// `Available features for this target:` section that
+/// `parse_cpu_names_from_help_listing` deliberately stops at. Ends at
+/// the `Use +feature…` trailer (its lines are not two-space-indented,
+/// so the indent filter would drop them anyway; the explicit break
+/// documents the boundary).
+fn parse_feature_names_from_help_listing(listing: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_features_section = false;
+    for line in listing.lines() {
+        if line.starts_with("Available features") {
+            in_features_section = true;
+            continue;
+        }
+        if line.starts_with("Use +feature") {
+            break;
+        }
+        if !in_features_section {
             continue;
         }
         if let Some(rest) = line.strip_prefix("  ") {
@@ -921,7 +1028,8 @@ pub(super) fn read_strip_error_trace_env() -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        default_cpu_and_features, parse_cpu_names_from_help_listing, symbol_listing_references_tls,
+        default_cpu_and_features, parse_cpu_names_from_help_listing,
+        parse_feature_names_from_help_listing, symbol_listing_references_tls,
     };
 
     #[test]
@@ -961,6 +1069,33 @@ For example, llc -mcpu=mycpu -mattr=+feature1,-feature2
         assert!(
             parse_cpu_names_from_help_listing("running 0 tests\n\ntest result: ok.\n").is_empty()
         );
+    }
+
+    #[test]
+    fn feature_help_listing_parse_extracts_features_only() {
+        // The features parser is the CPU parser's mirror: it skips the
+        // CPUs section entirely (CPU names must not pollute the valid-
+        // feature set) and stops at the `Use +feature…` trailer.
+        let listing = "\
+Supported CPUs and features for target `native`:
+Available CPUs for this target:
+
+  apple-m1        - Select the apple-m1 processor.
+
+Available features for this target:
+
+  aes             - Enable AES support.
+  outline-atomics - Enable out of line atomics to support LSE instructions.
+
+Use +feature to enable a feature, or -feature to disable it.
+For example, llc -mcpu=mycpu -mattr=+feature1,-feature2
+";
+        assert_eq!(
+            parse_feature_names_from_help_listing(listing),
+            vec!["aes", "outline-atomics"],
+        );
+        // Garbage → empty (validation degrades to pass-through).
+        assert!(parse_feature_names_from_help_listing("").is_empty());
     }
 
     #[test]

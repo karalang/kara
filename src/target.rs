@@ -110,6 +110,27 @@ pub fn target_cpu_override() -> Option<&'static str> {
     TARGET_CPU_OVERRIDE.get().map(|s| s.as_str())
 }
 
+/// User-selected feature-string override (phase-10 `--target-features`;
+/// design.md § CPU Baseline Targeting > Feature-string override). The
+/// sibling of [`TARGET_CPU_OVERRIDE`] with its own precedence chain
+/// (`--target-features` flag > `KARAC_TARGET_FEATURES` env > `[release]
+/// target-features`), resolved independently of the CPU chain. The
+/// codegen driver *appends* this after the per-target default features —
+/// LLVM resolves duplicate entries last-wins, so a user `-feat` can
+/// disable a table default and the default can't silently re-override.
+static TARGET_FEATURES_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Install the resolved `--target-features` override. First-set wins,
+/// same as [`set_target_cpu_override`].
+pub fn set_target_features_override(features: &str) {
+    let _ = TARGET_FEATURES_OVERRIDE.set(features.to_string());
+}
+
+/// The feature-string override for this process, if any.
+pub fn target_features_override() -> Option<&'static str> {
+    TARGET_FEATURES_OVERRIDE.get().map(|s| s.as_str())
+}
+
 /// Parsed form of one `#[target(...)]` attribute. Per the no-boolean-
 /// logic rule the list is either all positive or all negative — the
 /// parser rejects mixed lists, so `negated` applies to the whole set.

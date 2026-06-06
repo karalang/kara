@@ -200,6 +200,16 @@ pub struct Manifest {
     /// containment) and the valid set depends on the active target.
     /// `None` when the table or key is absent.
     pub release_target_cpu: Option<String>,
+    /// `[release] target-features = "<+feat,-feat,…>"` — project-declared
+    /// feature-string override for codegen (phase-10 `--target-features`;
+    /// design.md § CPU Baseline Targeting > Feature-string override).
+    /// Lowest tier of its own precedence chain (`--target-features` CLI
+    /// flag, then `KARAC_TARGET_FEATURES` env var, then this value),
+    /// resolved independently of `release_target_cpu`'s chain. Token
+    /// shape (`+`/`-` prefixes, names in LLVM's per-target feature
+    /// registry) is validated at build time, not here — same containment
+    /// rationale as `release_target_cpu` above. `None` when absent.
+    pub release_target_features: Option<String>,
     pub warnings: Vec<ManifestWarning>,
 }
 
@@ -628,7 +638,8 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     let build_default_target = parse_build_default_target(path, &table)?;
     let build_targets = parse_build_targets(path, &table)?;
     let lints = parse_lints_table(path, &table, &mut warnings)?;
-    let release_target_cpu = parse_release_table(path, &table, &mut warnings)?;
+    let (release_target_cpu, release_target_features) =
+        parse_release_table(path, &table, &mut warnings)?;
 
     // Stable order across package-key + dependency warnings — same sort key
     // (message string) used as before, but now applied after the full
@@ -653,22 +664,25 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         build_targets,
         lints,
         release_target_cpu,
+        release_target_features,
         warnings,
     })
 }
 
 /// Parse the `[release]` table when present. Recognised keys at v1:
-/// `target-cpu` (non-empty string — the CPU baseline override, design.md
-/// § CPU Baseline Targeting). Unknown keys soft-warn (reserved for later
-/// release-profile knobs); a wrong-typed or empty `target-cpu` hard-errors
-/// so a typo can't silently drop the override. Absent table → `None`.
+/// `target-cpu` (non-empty string — the CPU baseline override) and
+/// `target-features` (non-empty string — the feature-string override),
+/// both per design.md § CPU Baseline Targeting. Unknown keys soft-warn
+/// (reserved for later release-profile knobs); a wrong-typed or empty
+/// value for a known key hard-errors so a typo can't silently drop the
+/// override. Absent table → `(None, None)`.
 fn parse_release_table(
     path: &Path,
     table: &toml::Table,
     warnings: &mut Vec<ManifestWarning>,
-) -> Result<Option<String>, ManifestError> {
+) -> Result<(Option<String>, Option<String>), ManifestError> {
     let Some(value) = table.get("release") else {
-        return Ok(None);
+        return Ok((None, None));
     };
     let release_table = value
         .as_table()
@@ -678,6 +692,7 @@ fn parse_release_table(
             expected: "a table (e.g. `[release]`)",
         })?;
     let mut target_cpu = None;
+    let mut target_features = None;
     for (key, val) in release_table {
         match key.as_str() {
             "target-cpu" => match val {
@@ -692,6 +707,19 @@ fn parse_release_table(
                     });
                 }
             },
+            "target-features" => match val {
+                toml::Value::String(s) if !s.trim().is_empty() => {
+                    target_features = Some(s.trim().to_string());
+                }
+                _ => {
+                    return Err(ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: "release.target-features".to_string(),
+                        expected:
+                            "a non-empty feature list string (e.g. \"+aes,-outline-atomics\")",
+                    });
+                }
+            },
             other => warnings.push(ManifestWarning {
                 line: None,
                 message: format!(
@@ -700,7 +728,7 @@ fn parse_release_table(
             }),
         }
     }
-    Ok(target_cpu)
+    Ok((target_cpu, target_features))
 }
 
 /// Parse the `[lints]` table when present. Recognised keys at v1:
@@ -2775,6 +2803,46 @@ lto = "fat"
             "expected a soft warning for the unknown key, got: {:?}",
             m.warnings,
         );
+    }
+
+    #[test]
+    fn release_target_features_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[release]
+target-cpu = "apple-m4"
+target-features = "+aes,-outline-atomics"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.release_target_cpu.as_deref(), Some("apple-m4"));
+        assert_eq!(
+            m.release_target_features.as_deref(),
+            Some("+aes,-outline-atomics")
+        );
+        assert!(m.warnings.is_empty());
+        // Absent key → None (independent of target-cpu's presence).
+        let src = "[package]\nname = \"hello\"\n\n[release]\ntarget-cpu = \"apple-m4\"\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(m.release_target_features.is_none());
+    }
+
+    #[test]
+    fn release_target_features_wrong_type_is_hard_error() {
+        for src in [
+            "[package]\nname = \"hello\"\n\n[release]\ntarget-features = 42\n",
+            "[package]\nname = \"hello\"\n\n[release]\ntarget-features = \"\"\n",
+        ] {
+            let err = parse_manifest(&p(), src).unwrap_err();
+            match err {
+                ManifestError::InvalidFieldType { key, .. } => {
+                    assert_eq!(key, "release.target-features")
+                }
+                other => {
+                    panic!("expected InvalidFieldType on `release.target-features`, got {other:?}")
+                }
+            }
+        }
     }
 
     #[test]
