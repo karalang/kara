@@ -1576,6 +1576,11 @@ pub(super) struct Codegen<'ctx> {
     /// instead of `RcDec` for these. Keyed by fn key (bare name /
     /// `Type.method`), matching `current_fn_name`.
     pub(crate) elided_bindings: HashMap<String, HashSet<String>>,
+    /// Phase B1 cluster roots: fn key → root binding → (member struct
+    /// name, link user-field index). The let-site swaps the root's
+    /// cleanup for `FreeClusterWalk`. Cursors and fresh nodes keep
+    /// their standard cleanups (drop-side-only consumption).
+    pub(crate) elided_cluster_roots: HashMap<String, HashMap<String, (String, usize)>>,
     /// Per-function Arc-promoted binding names — the subset of `rc_fallback_fns`
     /// flagged by the ownership pass as crossing a `par {}` thread boundary.
     /// Inc/dec on these bindings emits atomic LLVM operations (`atomicrmw add` /
@@ -3725,6 +3730,7 @@ impl<'ctx> Codegen<'ctx> {
             branch_cancel_ptr: None,
             rc_fallback_fns: HashMap::new(),
             elided_bindings: HashMap::new(),
+            elided_cluster_roots: HashMap::new(),
             arc_fallback_fns: HashMap::new(),
             rc_fallback_heap_types: HashMap::new(),
             closure_capture_paths: HashMap::new(),
@@ -3844,6 +3850,16 @@ impl<'ctx> Codegen<'ctx> {
         // the let-stmt shared arm via `is_elided_binding`.
         for (fn_name, names) in &ow.elided_bindings {
             self.elided_bindings.insert(fn_name.clone(), names.clone());
+        }
+        // RC elision phase B1: cluster roots → free-walk cleanup.
+        for (fn_name, clusters) in &ow.elided_clusters {
+            let entry = self
+                .elided_cluster_roots
+                .entry(fn_name.clone())
+                .or_default();
+            for c in clusters {
+                entry.insert(c.root.clone(), (c.member_type.clone(), c.link_field_index));
+            }
         }
         // Disjoint-capture slice 4: per-closure capture-path mode set
         // (slice 2 output). Drives the per-path env-struct layout in
@@ -3970,6 +3986,16 @@ impl<'ctx> Codegen<'ctx> {
         self.elided_bindings
             .get(&self.current_fn_name)
             .is_some_and(|set| set.contains(name))
+    }
+
+    /// Phase-B1 cluster-root lookup for the current function: returns
+    /// (member type name, link user-field index) when `name` is a
+    /// cluster root whose cleanup takes the free-walk.
+    fn cluster_root_info(&self, name: &str) -> Option<(String, usize)> {
+        self.elided_cluster_roots
+            .get(&self.current_fn_name)
+            .and_then(|m| m.get(name))
+            .cloned()
     }
 
     /// True iff `name` was promoted to Arc in the current function — i.e. it

@@ -497,6 +497,30 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Phase-B1 cluster-root sibling of `track_rc_var`: queues the
+    /// link-following free-walk. The member's recursive drop fn is
+    /// still lazily synthesized — fresh-node and cursor bindings keep
+    /// their standard `RcDec` cleanups (B1 elides the ROOT's walk
+    /// only), and displaced/orphaned nodes drop through the normal
+    /// path during the build.
+    pub(super) fn track_cluster_root_var(
+        &mut self,
+        name: &str,
+        ptr: PointerValue<'ctx>,
+        member_type: &str,
+        link_field_index: usize,
+    ) {
+        let _ = self.emit_shared_struct_rc_drop_fn(member_type);
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeClusterWalk {
+                name: name.to_string(),
+                ptr,
+                member_type: member_type.to_string(),
+                link_field_index,
+            });
+        }
+    }
+
     /// RC-elided sibling of `track_rc_var` (ownership phase-A elision):
     /// queues an unconditional null-guarded `free` instead of the
     /// dec/zero-test/drop dance. No drop-fn synthesis — elision-eligible
@@ -1303,6 +1327,86 @@ impl<'ctx> super::Codegen<'ctx> {
         i64_t: inkwell::types::IntType<'ctx>,
     ) {
         match action {
+            CleanupAction::FreeClusterWalk {
+                name,
+                ptr,
+                member_type,
+                link_field_index,
+            } => {
+                let current_ptr = if let Some(slot) = self.variables.get(name) {
+                    self.builder
+                        .build_load(ptr_ty, slot.ptr, &format!("{}_cluster_cleanup", name))
+                        .unwrap()
+                        .into_pointer_value()
+                } else {
+                    *ptr
+                };
+                let heap_type = self
+                    .shared_types
+                    .get(member_type)
+                    .map(|i| i.heap_type)
+                    .expect("cluster member type registered in shared_types");
+                let niche = self
+                    .niche_field_inner_heap_type(member_type, *link_field_index)
+                    .is_some();
+                if !niche {
+                    // Defensive fallback: without the niche single-ptr
+                    // link slot, emit the standard dec instead (same
+                    // shape as the RcDec arm) — behavior-preserving.
+                    let null = ptr_ty.const_null();
+                    let is_null = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, current_ptr, null, "cw_fb_null")
+                        .unwrap();
+                    let skip_bb = self.context.append_basic_block(fn_val, "cw_fb_skip");
+                    let do_bb = self.context.append_basic_block(fn_val, "cw_fb_do");
+                    let join_bb = self.context.append_basic_block(fn_val, "cw_fb_join");
+                    self.builder
+                        .build_conditional_branch(is_null, skip_bb, do_bb)
+                        .unwrap();
+                    self.builder.position_at_end(do_bb);
+                    self.emit_refcount_dec(name, heap_type, current_ptr);
+                    self.builder.build_unconditional_branch(join_bb).unwrap();
+                    self.builder.position_at_end(skip_bb);
+                    self.builder.build_unconditional_branch(join_bb).unwrap();
+                    self.builder.position_at_end(join_bb);
+                    return;
+                }
+                // The free-walk:
+                //   cur = root; while cur != null { n = cur-><link>;
+                //   free(cur); cur = n; }
+                let link_heap_idx = (*link_field_index + 1) as u32;
+                let entry_bb = self.builder.get_insert_block().unwrap();
+                let loop_bb = self.context.append_basic_block(fn_val, "cw_loop");
+                let body_bb = self.context.append_basic_block(fn_val, "cw_body");
+                let done_bb = self.context.append_basic_block(fn_val, "cw_done");
+                self.builder.build_unconditional_branch(loop_bb).unwrap();
+                self.builder.position_at_end(loop_bb);
+                let phi = self.builder.build_phi(ptr_ty, "cw_cur").unwrap();
+                phi.add_incoming(&[(&current_ptr, entry_bb)]);
+                let cur = phi.as_basic_value().into_pointer_value();
+                let is_null = self.builder.build_is_null(cur, "cw_is_null").unwrap();
+                self.builder
+                    .build_conditional_branch(is_null, done_bb, body_bb)
+                    .unwrap();
+                self.builder.position_at_end(body_bb);
+                let link_ptr = self
+                    .builder
+                    .build_struct_gep(heap_type, cur, link_heap_idx, "cw_link")
+                    .unwrap();
+                let next = self
+                    .builder
+                    .build_load(ptr_ty, link_ptr, "cw_next")
+                    .unwrap()
+                    .into_pointer_value();
+                self.builder
+                    .build_call(self.free_fn, &[cur.into()], "")
+                    .unwrap();
+                let body_end = self.builder.get_insert_block().unwrap();
+                phi.add_incoming(&[(&next, body_end)]);
+                self.builder.build_unconditional_branch(loop_bb).unwrap();
+                self.builder.position_at_end(done_bb);
+            }
             CleanupAction::FreeSharedElided { name, ptr } => {
                 // Mirror RcDec's reload + null-guard, then free directly:
                 // the elision analysis proved rc can never exceed 1 and

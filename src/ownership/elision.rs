@@ -159,6 +159,37 @@ impl<'a> OwnershipChecker<'a> {
         }
         self.elided_bindings = elided;
         self.elision_blocked = blocked;
+
+        // Phase B1: cluster discovery (separate walk; phase-A
+        // candidates are all-primitive types and cluster members carry
+        // a link field, so the two sets are disjoint by construction).
+        let mut clusters: HashMap<String, Vec<ElidedCluster>> = HashMap::new();
+        for item in &self.program.items {
+            match item {
+                Item::Function(f) => {
+                    let cs = self.fn_clusters(f);
+                    if !cs.is_empty() {
+                        clusters.insert(f.name.clone(), cs);
+                    }
+                }
+                Item::ImplBlock(imp) => {
+                    let type_name = match &imp.target_type.kind {
+                        TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+                        _ => continue,
+                    };
+                    for item in &imp.items {
+                        if let ImplItem::Method(method) = item {
+                            let cs = self.fn_clusters(method);
+                            if !cs.is_empty() {
+                                clusters.insert(format!("{}.{}", type_name, method.name), cs);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.elided_clusters = clusters;
     }
 
     fn fn_elision(&self, f: &Function) -> (HashSet<String>, Vec<ElisionBlocked>) {
@@ -706,6 +737,910 @@ impl<'a> OwnershipChecker<'a> {
             ExprKind::Providers { .. } => {
                 scan.poison_all("unhandled construct (providers)", &expr.span);
             }
+        }
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+// Phase B1 — local cluster elision, append-only chain shape.
+// ════════════════════════════════════════════════════════════════
+//
+// Widens the elision unit from a single binding to a *cluster*: a
+// self-linked chain built and dropped inside one function. B1 consumes
+// the analysis on the DROP side only — the cluster ROOT's scope-exit
+// cleanup becomes a link-following free-walk (`FreeClusterWalk`: load
+// next, free, advance — no dec, no zero-test, no drop-fn dispatch).
+// All build-time count traffic stays untouched, so the existing
+// (suite- and ASAN-proven) discipline keeps every intermediate state
+// correct; the only new obligation is the free-walk's precondition.
+//
+// ## Soundness argument
+//
+// The free-walk frees every node reachable from the root while
+// ignoring refcounts. That is sound iff, at drain time, each reachable
+// node's rc equals its parent-link count and that count is exactly 1:
+//
+// 1. **rc == #parents at drain.** Build traffic is unchanged and
+//    balanced (today's dec-walk frees these exact shapes leak- and
+//    UAF-free under ASAN — that IS the proof that rc == #owners at
+//    scope exit). Cursor bindings hold +1 refs, but cleanup frames
+//    drain LIFO and the root is required to be the FIRST-declared
+//    cluster binding, so every cursor's RcDec runs BEFORE the root's
+//    free-walk — after them, owners = parent links only.
+// 2. **#parents == 1 (append-only).** Each fresh node may appear in
+//    link-VALUE position (`cursor.link = Some(node)`) at most once
+//    syntactically, fresh-node literals carry `link: None`, and
+//    cursors may never appear in link-value position — so no node can
+//    ever acquire a second parent, and link overwrites merely orphan
+//    the displaced node (the build traffic's release-old already frees
+//    it; it is then unreachable from the root). The PREPEND idiom
+//    (`let n = T { link: head }; head = Some(n);`) is deliberately
+//    NOT covered: its soundness couples the literal-init link to the
+//    immediately-following root reassignment (flow-sensitive) — B1.1
+//    territory, blocked by the literal-link-init rule below.
+//
+// ## v1 shape rules (default-deny, whole-cluster poisoning)
+//
+// - member type: `shared struct` (non-par, no user Drop) with exactly
+//   one `Option[Self]` link field; every other field primitive.
+// - root: the first-declared cluster binding; must be
+//   `let r = T { ..., link: None };` (bare literal root).
+// - fresh nodes: `let n = T { ..., link: None };`
+// - bare cursors: `let/assign c = <bare cluster ident>;` plus
+//   `let/assign c = <option cursor>.unwrap();`
+// - option cursors: `let/assign oc = <bare cluster ident>.link;`
+// - link stores: `<bare cluster ident>.link = Some(<fresh node>)`
+//   (or `= None`); each fresh node in at most ONE such site.
+// - `is_some()` / `is_none()` on option cursors: anywhere.
+// - primitive field reads/writes on bare bindings: anywhere.
+// - EVERYTHING else mentioning a cluster name blocks the whole
+//   cluster: calls, method receivers/args, returns/tails, `Some(x)`
+//   outside a link store, match/if-let, closures, par/lock regions,
+//   comparisons, stores into non-cluster aggregates, root
+//   reassignment. Unknown constructs poison (same discipline as
+//   phase A).
+
+/// A phase-B1 cluster eligible for the root free-walk. `bindings`
+/// records the full cluster-local name set (root + fresh nodes +
+/// cursors) — B1's codegen only consumes `root`/`member_type`/
+/// `link_field_index`; the set is surfaced for tests and for phase
+/// B2's build-side elision.
+#[derive(Debug, Clone)]
+pub struct ElidedCluster {
+    pub root: String,
+    pub member_type: String,
+    /// User-field index (declaration order, refcount header excluded)
+    /// of the `Option[Self]` link field — codegen GEPs heap index
+    /// `link_field_index + 1`.
+    pub link_field_index: usize,
+    pub bindings: HashSet<String>,
+}
+
+/// Cluster-binding role during the scan.
+#[derive(Clone, Copy, PartialEq)]
+enum ClusterKind {
+    /// Bare `T` handle: root, fresh node, or bare cursor.
+    Bare,
+    /// `Option[T]` handle: link-read cursor.
+    OptionCursor,
+}
+
+struct ClusterScan {
+    member_type: String,
+    link_field: String,
+    /// name → kind for every cluster-local binding.
+    bindings: HashMap<String, ClusterKind>,
+    /// Fresh-node binding names (`let n = T { ..., link: None };`) in
+    /// declaration order; each may take at most one link-value slot.
+    fresh: HashSet<String>,
+    /// Fresh names already consumed by a link-value site.
+    linked_once: HashSet<String>,
+    root: Option<String>,
+    /// Whether any fresh node was actually linked (a cluster with no
+    /// links gains nothing over per-binding phase A — skip it).
+    any_link: bool,
+    /// Names bound by NON-let patterns anywhere in the fn (for/match/
+    /// if-let/while-let/let-else patterns, closure params). A cluster
+    /// name colliding with any of these is shadowed somewhere — the
+    /// name-keyed analysis could then misattribute an external object
+    /// to the cluster (e.g. link an externally-referenced node into
+    /// the root's chain through a shadowed fresh name), so the whole
+    /// cluster poisons on intersection.
+    shadow_names: HashSet<String>,
+    poisoned: Option<(String, Span)>,
+}
+
+impl ClusterScan {
+    fn poison(&mut self, reason: &str, span: &Span) {
+        if self.poisoned.is_none() {
+            self.poisoned = Some((reason.to_string(), span.clone()));
+        }
+    }
+
+    fn kind_of(&self, name: &str) -> Option<ClusterKind> {
+        self.bindings.get(name).copied()
+    }
+}
+
+impl<'a> OwnershipChecker<'a> {
+    /// True when `name` is a B1-eligible chain link type; returns the
+    /// link field's name and user index.
+    fn cluster_link_struct(&self, name: &str) -> Option<(String, usize)> {
+        let info = self.typecheck_result.struct_info.get(name)?;
+        if !info.is_shared || info.is_par {
+            return None;
+        }
+        if self.typecheck_result.drop_method_keys.contains_key(name) {
+            return None;
+        }
+        let mut link: Option<(String, usize)> = None;
+        for (idx, (fname, ty, _)) in info.fields.iter().enumerate() {
+            match ty {
+                Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char => {}
+                Type::Named { name: n, args } if n == "Option" && args.len() == 1 => {
+                    match &args[0] {
+                        Type::Shared(inner) if inner == name => {
+                            if link.is_some() {
+                                return None; // multi-link → not v1
+                            }
+                            link = Some((fname.clone(), idx));
+                        }
+                        _ => return None,
+                    }
+                }
+                _ => return None,
+            }
+        }
+        link
+    }
+
+    /// B1 driver for one function: discover at most one cluster per
+    /// member type, verify the append-only rules, and return the
+    /// clusters whose roots may take the free-walk.
+    pub(crate) fn fn_clusters(&self, f: &Function) -> Vec<ElidedCluster> {
+        // Collect candidate member types from struct literals in this
+        // fn (cheap pre-pass: a fn without a T-literal can't host a
+        // T-cluster).
+        let mut member_types: Vec<(String, String, usize)> = Vec::new();
+        let mut seen = HashSet::new();
+        collect_struct_literal_types(&f.body, &mut |type_name| {
+            if seen.insert(type_name.to_string()) {
+                if let Some((field, idx)) = self.cluster_link_struct(type_name) {
+                    member_types.push((type_name.to_string(), field, idx));
+                }
+            }
+        });
+        let mut out = Vec::new();
+        for (member, link_field, link_idx) in member_types {
+            let mut scan = ClusterScan {
+                member_type: member.clone(),
+                link_field: link_field.clone(),
+                bindings: HashMap::new(),
+                fresh: HashSet::new(),
+                linked_once: HashSet::new(),
+                root: None,
+                any_link: false,
+                shadow_names: HashSet::new(),
+                poisoned: None,
+            };
+            // Param names of the member type poison immediately — a
+            // param-rooted chain is not fn-local.
+            for p in &f.params {
+                if type_expr_mentions(&p.ty, &member) {
+                    scan.poison("cluster type enters via parameter", &p.span);
+                }
+            }
+            // Pass 1: grow membership from lets, in declaration order.
+            self.cluster_collect_block(&f.body, &mut scan);
+            // Shadow check: any cluster name also bound by a non-let
+            // pattern (or fn param) somewhere in the fn poisons — see
+            // `shadow_names`.
+            for p in &f.params {
+                for n in p.pattern.binding_names() {
+                    scan.shadow_names.insert(n);
+                }
+            }
+            if let Some(shadowed) = scan
+                .bindings
+                .keys()
+                .find(|n| scan.shadow_names.contains(n.as_str()))
+                .cloned()
+            {
+                scan.poison(
+                    &format!("cluster name '{shadowed}' shadowed by a pattern binding"),
+                    &f.span,
+                );
+            }
+            // Pass 2: verify every use (default-deny).
+            self.cluster_verify_block(&f.body, ClusterCtx::default(), &mut scan);
+            if scan.poisoned.is_none() && scan.root.is_some() && scan.any_link {
+                let root = scan.root.clone().unwrap();
+                out.push(ElidedCluster {
+                    root,
+                    member_type: member,
+                    link_field_index: link_idx,
+                    bindings: scan.bindings.keys().cloned().collect(),
+                });
+            }
+        }
+        out
+    }
+
+    // ── Pass 1: membership ──────────────────────────────────────
+
+    fn cluster_collect_block(&self, block: &Block, scan: &mut ClusterScan) {
+        for stmt in &block.stmts {
+            self.cluster_collect_stmt(stmt, scan);
+        }
+        if let Some(e) = &block.final_expr {
+            self.cluster_collect_expr(e, scan);
+        }
+    }
+
+    fn cluster_collect_stmt(&self, stmt: &Stmt, scan: &mut ClusterScan) {
+        if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
+            if let PatternKind::Binding(name) = &pattern.kind {
+                if scan.bindings.contains_key(name.as_str()) {
+                    // Name rebound — name-keyed analysis can't track it.
+                    scan.poison("cluster name bound more than once", &pattern.span);
+                } else if let Some(kind) = self.classify_cluster_rhs(value, scan) {
+                    scan.bindings.insert(name.clone(), kind);
+                    if scan.root.is_none() {
+                        // First cluster binding = root; must be a bare
+                        // literal (link: None). Anything else cannot
+                        // anchor the free-walk.
+                        if is_member_literal_link_none(value, &scan.member_type, &scan.link_field) {
+                            scan.root = Some(name.clone());
+                        } else {
+                            scan.poison(
+                                "first cluster binding is not a literal root",
+                                &pattern.span,
+                            );
+                        }
+                    } else if is_member_literal_link_none(
+                        value,
+                        &scan.member_type,
+                        &scan.link_field,
+                    ) {
+                        scan.fresh.insert(name.clone());
+                    }
+                }
+            }
+        }
+        // Non-let pattern bindings shadow-collect.
+        if let StmtKind::LetElse { pattern, .. } = &stmt.kind {
+            for n in pattern.binding_names() {
+                scan.shadow_names.insert(n);
+            }
+        }
+        if let StmtKind::Let { pattern, .. } = &stmt.kind {
+            if !matches!(&pattern.kind, PatternKind::Binding(_)) {
+                for n in pattern.binding_names() {
+                    scan.shadow_names.insert(n);
+                }
+            }
+        }
+        // Recurse for nested lets (loop bodies, branches).
+        match &stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                self.cluster_collect_expr(value, scan)
+            }
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                self.cluster_collect_expr(target, scan);
+                self.cluster_collect_expr(value, scan);
+            }
+            StmtKind::Expr(e) => self.cluster_collect_expr(e, scan),
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                self.cluster_collect_block(body, scan)
+            }
+            StmtKind::LetUninit { .. } => {}
+        }
+    }
+
+    fn cluster_collect_expr(&self, expr: &Expr, scan: &mut ClusterScan) {
+        match &expr.kind {
+            ExprKind::Block(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Par(b)
+            | ExprKind::Lock { body: b, .. }
+            | ExprKind::Loop { body: b, .. }
+            | ExprKind::While { body: b, .. }
+            | ExprKind::LabeledBlock { body: b, .. } => self.cluster_collect_block(b, scan),
+            ExprKind::WhileLet {
+                pattern, body: b, ..
+            }
+            | ExprKind::For {
+                pattern, body: b, ..
+            } => {
+                for n in pattern.binding_names() {
+                    scan.shadow_names.insert(n);
+                }
+                self.cluster_collect_block(b, scan)
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                self.cluster_collect_block(then_block, scan);
+                if let Some(e) = else_branch {
+                    self.cluster_collect_expr(e, scan);
+                }
+            }
+            ExprKind::IfLet {
+                pattern,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                for n in pattern.binding_names() {
+                    scan.shadow_names.insert(n);
+                }
+                self.cluster_collect_block(then_block, scan);
+                if let Some(e) = else_branch {
+                    self.cluster_collect_expr(e, scan);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    for n in arm.pattern.binding_names() {
+                        scan.shadow_names.insert(n);
+                    }
+                    self.cluster_collect_expr(&arm.body, scan);
+                }
+            }
+            ExprKind::Closure { params, body, .. } => {
+                for p in params {
+                    for n in p.pattern.binding_names() {
+                        scan.shadow_names.insert(n);
+                    }
+                }
+                self.cluster_collect_expr(body, scan)
+            }
+            _ => {}
+        }
+    }
+
+    /// Does this RHS make the binding a cluster member, and of which
+    /// kind? `None` = unrelated binding (not part of the cluster).
+    fn classify_cluster_rhs(&self, value: &Expr, scan: &ClusterScan) -> Option<ClusterKind> {
+        match &value.kind {
+            // Fresh member literal (root or fresh node) — only the
+            // link:None form joins; a literal with any other link init
+            // (e.g. the prepend idiom's `link: head`) is NOT a member,
+            // and any cluster name inside it blocks in pass 2.
+            ExprKind::StructLiteral { path, .. }
+                if path.last().map(String::as_str) == Some(scan.member_type.as_str()) =>
+            {
+                if is_member_literal_link_none(value, &scan.member_type, &scan.link_field) {
+                    Some(ClusterKind::Bare)
+                } else {
+                    None
+                }
+            }
+            // Bare alias: `let tail = dummy;`
+            ExprKind::Identifier(n) if scan.kind_of(n) == Some(ClusterKind::Bare) => {
+                Some(ClusterKind::Bare)
+            }
+            // Link read: `let oc = x.link;`
+            ExprKind::FieldAccess { object, field } if field == &scan.link_field => {
+                match &object.kind {
+                    ExprKind::Identifier(n) if scan.kind_of(n) == Some(ClusterKind::Bare) => {
+                        Some(ClusterKind::OptionCursor)
+                    }
+                    _ => None,
+                }
+            }
+            // Unwrap: `let n = oc.unwrap();`
+            ExprKind::MethodCall { object, method, .. } if method == "unwrap" => {
+                match &object.kind {
+                    ExprKind::Identifier(n)
+                        if scan.kind_of(n) == Some(ClusterKind::OptionCursor) =>
+                    {
+                        Some(ClusterKind::Bare)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    // ── Pass 2: verification ────────────────────────────────────
+
+    fn cluster_verify_block(&self, block: &Block, ctx: ClusterCtx, scan: &mut ClusterScan) {
+        for stmt in &block.stmts {
+            self.cluster_verify_stmt(stmt, ctx, scan);
+        }
+        if let Some(e) = &block.final_expr {
+            self.cluster_verify_expr(e, ctx, scan);
+        }
+    }
+
+    fn cluster_verify_stmt(&self, stmt: &Stmt, ctx: ClusterCtx, scan: &mut ClusterScan) {
+        match &stmt.kind {
+            StmtKind::Let { pattern, value, .. } => {
+                let is_cluster_let = matches!(&pattern.kind, PatternKind::Binding(n)
+                    if scan.bindings.contains_key(n.as_str()));
+                if is_cluster_let && self.classify_cluster_rhs(value, scan).is_some() {
+                    // Allowed membership shape — verify only the
+                    // literal's prim inits (link init is None by
+                    // construction; prim inits scan generically).
+                    if let ExprKind::StructLiteral { fields, .. } = &value.kind {
+                        for f in fields {
+                            self.cluster_verify_expr(&f.value, ctx, scan);
+                        }
+                    }
+                    // Identifier/link-read/unwrap RHS: the mention is
+                    // the allowed alias — nothing further to verify.
+                    return;
+                }
+                self.cluster_verify_expr(value, ctx, scan);
+            }
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                self.cluster_verify_expr(value, ctx, scan);
+                self.cluster_verify_block(else_block, ctx, scan);
+            }
+            StmtKind::LetUninit { .. } => {}
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                self.cluster_verify_block(body, ClusterCtx { boundary: true }, scan);
+            }
+            StmtKind::Assign { target, value } => {
+                self.cluster_verify_assign(target, value, ctx, scan);
+            }
+            StmtKind::CompoundAssign { target, value, .. } => {
+                // Compound ops only make sense on primitive fields.
+                match &target.kind {
+                    ExprKind::FieldAccess { object, field }
+                        if field != &scan.link_field
+                            && matches!(&object.kind, ExprKind::Identifier(n)
+                                if scan.kind_of(n) == Some(ClusterKind::Bare)) =>
+                    {
+                        if ctx.boundary {
+                            scan.poison("cluster use inside boundary region", &target.span);
+                        }
+                    }
+                    _ => self.cluster_verify_expr(target, ctx, scan),
+                }
+                self.cluster_verify_expr(value, ctx, scan);
+            }
+            StmtKind::Expr(e) => self.cluster_verify_expr(e, ctx, scan),
+        }
+    }
+
+    fn cluster_verify_assign(
+        &self,
+        target: &Expr,
+        value: &Expr,
+        ctx: ClusterCtx,
+        scan: &mut ClusterScan,
+    ) {
+        // `x.link = Some(fresh)` / `x.link = None` — the append store.
+        if let ExprKind::FieldAccess { object, field } = &target.kind {
+            if let ExprKind::Identifier(obj) = &object.kind {
+                if scan.kind_of(obj) == Some(ClusterKind::Bare) {
+                    if ctx.boundary {
+                        scan.poison("cluster use inside boundary region", &target.span);
+                        return;
+                    }
+                    if field == &scan.link_field {
+                        match link_value_shape(value) {
+                            LinkValue::None => {}
+                            LinkValue::SomeIdent(v) => {
+                                if !scan.fresh.contains(v) {
+                                    scan.poison(
+                                        "link store of a non-fresh value (re-parenting)",
+                                        &value.span,
+                                    );
+                                } else if !scan.linked_once.insert(v.to_string()) {
+                                    scan.poison(
+                                        "fresh node linked at more than one site",
+                                        &value.span,
+                                    );
+                                } else {
+                                    scan.any_link = true;
+                                }
+                            }
+                            LinkValue::Other => {
+                                scan.poison("unsupported link store value", &value.span);
+                                self.cluster_verify_expr(value, ctx, scan);
+                            }
+                        }
+                        return;
+                    }
+                    // Primitive field write — value scans generically.
+                    self.cluster_verify_expr(value, ctx, scan);
+                    return;
+                }
+            }
+        }
+        // Cursor reassignment: `c = <cluster expr>` for an existing
+        // cluster binding of the matching kind.
+        if let ExprKind::Identifier(t) = &target.kind {
+            if let Some(kind) = scan.kind_of(t) {
+                if ctx.boundary {
+                    scan.poison("cluster use inside boundary region", &target.span);
+                    return;
+                }
+                if scan.root.as_deref() == Some(t.as_str()) {
+                    scan.poison("root reassigned", &target.span);
+                    return;
+                }
+                match self.classify_cluster_rhs(value, scan) {
+                    Some(k) if k == kind => {
+                        // Allowed cursor advance. A literal RHS would
+                        // re-bind a fresh node through an existing
+                        // name — disallow (fresh nodes are let-born).
+                        if matches!(&value.kind, ExprKind::StructLiteral { .. }) {
+                            scan.poison("literal assigned to existing cursor", &value.span);
+                        }
+                        return;
+                    }
+                    _ => {
+                        // `oc = None` resets an option cursor — allowed.
+                        if kind == ClusterKind::OptionCursor
+                            && matches!(&value.kind, ExprKind::Identifier(n) if n == "None")
+                        {
+                            return;
+                        }
+                        scan.poison("cluster binding assigned a non-cluster value", &value.span);
+                        self.cluster_verify_expr(value, ctx, scan);
+                        return;
+                    }
+                }
+            }
+        }
+        self.cluster_verify_expr(target, ctx, scan);
+        self.cluster_verify_expr(value, ctx, scan);
+    }
+
+    fn cluster_verify_expr(&self, expr: &Expr, ctx: ClusterCtx, scan: &mut ClusterScan) {
+        match &expr.kind {
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::CStringLit { .. }
+            | ExprKind::Bool(_)
+            | ExprKind::SelfValue
+            | ExprKind::SelfType
+            | ExprKind::PipePlaceholder
+            | ExprKind::Continue { .. }
+            | ExprKind::OffsetOf { .. }
+            | ExprKind::Error => {}
+
+            // Default-deny: a bare cluster identifier in any context
+            // not consumed by an allowed parent shape.
+            ExprKind::Identifier(n) => {
+                if scan.bindings.contains_key(n.as_str()) {
+                    scan.poison(
+                        "cluster binding escapes (alias/store/return/arg)",
+                        &expr.span,
+                    );
+                }
+            }
+            ExprKind::Path { .. } => {}
+
+            // Primitive field reads allowed anywhere; link reads only
+            // via the let/assign shapes (consumed before descent), so
+            // a link read reaching here blocks.
+            ExprKind::FieldAccess { object, field } => {
+                if let ExprKind::Identifier(n) = &object.kind {
+                    if let Some(kind) = scan.kind_of(n) {
+                        if ctx.boundary {
+                            scan.poison("cluster use inside boundary region", &object.span);
+                        } else if kind != ClusterKind::Bare || field == &scan.link_field {
+                            scan.poison("link or option-cursor field escapes", &expr.span);
+                        }
+                        return;
+                    }
+                }
+                self.cluster_verify_expr(object, ctx, scan);
+            }
+
+            // is_some/is_none on option cursors allowed; unwrap is only
+            // allowed via the let/assign shapes (consumed earlier).
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                if let ExprKind::Identifier(n) = &object.kind {
+                    if let Some(kind) = scan.kind_of(n) {
+                        if ctx.boundary {
+                            scan.poison("cluster use inside boundary region", &object.span);
+                        } else if !(kind == ClusterKind::OptionCursor
+                            && matches!(method.as_str(), "is_some" | "is_none"))
+                        {
+                            scan.poison("unsupported method on cluster binding", &expr.span);
+                        }
+                        for a in args {
+                            self.cluster_verify_expr(&a.value, ctx, scan);
+                        }
+                        return;
+                    }
+                }
+                self.cluster_verify_expr(object, ctx, scan);
+                for a in args {
+                    self.cluster_verify_expr(&a.value, ctx, scan);
+                }
+            }
+
+            // Boundary regions: any cluster mention inside blocks.
+            ExprKind::Closure { body, .. } => {
+                self.cluster_verify_expr(body, ClusterCtx { boundary: true }, scan);
+            }
+            ExprKind::Par(b) | ExprKind::Lock { body: b, .. } => {
+                self.cluster_verify_block(b, ClusterCtx { boundary: true }, scan);
+            }
+
+            // Generic recursion (same enumeration as phase A).
+            ExprKind::InterpolatedStringLit(parts) => {
+                for p in parts {
+                    if let ParsedInterpolationPart::Expr(e) = p {
+                        self.cluster_verify_expr(e, ctx, scan);
+                    }
+                }
+            }
+            ExprKind::Binary { left, right, .. } => {
+                self.cluster_verify_expr(left, ctx, scan);
+                self.cluster_verify_expr(right, ctx, scan);
+            }
+            ExprKind::Unary { operand, .. } => self.cluster_verify_expr(operand, ctx, scan),
+            ExprKind::Question(e) => self.cluster_verify_expr(e, ctx, scan),
+            ExprKind::OptionalChain { object, .. } => self.cluster_verify_expr(object, ctx, scan),
+            ExprKind::NilCoalesce { left, right } => {
+                self.cluster_verify_expr(left, ctx, scan);
+                self.cluster_verify_expr(right, ctx, scan);
+            }
+            ExprKind::TupleIndex { object, .. } => self.cluster_verify_expr(object, ctx, scan),
+            ExprKind::Index { object, index } => {
+                self.cluster_verify_expr(object, ctx, scan);
+                self.cluster_verify_expr(index, ctx, scan);
+            }
+            ExprKind::Call { callee, args } => {
+                self.cluster_verify_expr(callee, ctx, scan);
+                for a in args {
+                    self.cluster_verify_expr(&a.value, ctx, scan);
+                }
+            }
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) => {
+                self.cluster_verify_block(b, ctx, scan);
+            }
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.cluster_verify_expr(condition, ctx, scan);
+                self.cluster_verify_block(then_block, ctx, scan);
+                if let Some(e) = else_branch {
+                    self.cluster_verify_expr(e, ctx, scan);
+                }
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                self.cluster_verify_expr(value, ctx, scan);
+                self.cluster_verify_block(then_block, ctx, scan);
+                if let Some(e) = else_branch {
+                    self.cluster_verify_expr(e, ctx, scan);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.cluster_verify_expr(scrutinee, ctx, scan);
+                for arm in arms {
+                    if let Some(g) = &arm.guard {
+                        self.cluster_verify_expr(g, ctx, scan);
+                    }
+                    self.cluster_verify_expr(&arm.body, ctx, scan);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                self.cluster_verify_expr(condition, ctx, scan);
+                self.cluster_verify_block(body, ctx, scan);
+            }
+            ExprKind::WhileLet { value, body, .. } => {
+                self.cluster_verify_expr(value, ctx, scan);
+                self.cluster_verify_block(body, ctx, scan);
+            }
+            ExprKind::For { iterable, body, .. } => {
+                self.cluster_verify_expr(iterable, ctx, scan);
+                self.cluster_verify_block(body, ctx, scan);
+            }
+            ExprKind::Loop { body, .. } => self.cluster_verify_block(body, ctx, scan),
+            ExprKind::LabeledBlock { body, .. } => self.cluster_verify_block(body, ctx, scan),
+            ExprKind::Return(e) => {
+                if let Some(e) = e {
+                    self.cluster_verify_expr(e, ctx, scan);
+                }
+            }
+            ExprKind::Break { value, .. } => {
+                if let Some(e) = value {
+                    self.cluster_verify_expr(e, ctx, scan);
+                }
+            }
+            ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => {
+                for e in es {
+                    self.cluster_verify_expr(e, ctx, scan);
+                }
+            }
+            ExprKind::PrefixCollectionLiteral { items, .. } => {
+                for e in items {
+                    self.cluster_verify_expr(e, ctx, scan);
+                }
+            }
+            ExprKind::RepeatLiteral { value, count, .. } => {
+                self.cluster_verify_expr(value, ctx, scan);
+                self.cluster_verify_expr(count, ctx, scan);
+            }
+            ExprKind::MapLiteral(pairs) => {
+                for (k, v) in pairs {
+                    self.cluster_verify_expr(k, ctx, scan);
+                    self.cluster_verify_expr(v, ctx, scan);
+                }
+            }
+            ExprKind::StructLiteral { fields, .. } => {
+                for f in fields {
+                    self.cluster_verify_expr(&f.value, ctx, scan);
+                }
+            }
+            ExprKind::Pipe { left, right } => {
+                self.cluster_verify_expr(left, ctx, scan);
+                self.cluster_verify_expr(right, ctx, scan);
+            }
+            ExprKind::Cast { expr: inner, .. } => self.cluster_verify_expr(inner, ctx, scan),
+            ExprKind::Range { start, end, .. } => {
+                if let Some(s) = start {
+                    self.cluster_verify_expr(s, ctx, scan);
+                }
+                if let Some(e) = end {
+                    self.cluster_verify_expr(e, ctx, scan);
+                }
+            }
+            ExprKind::Providers { .. } => {
+                scan.poison("unhandled construct (providers)", &expr.span);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct ClusterCtx {
+    /// Inside a closure / par / lock / defer region — any cluster
+    /// mention poisons.
+    boundary: bool,
+}
+
+enum LinkValue<'e> {
+    None,
+    SomeIdent(&'e str),
+    Other,
+}
+
+fn link_value_shape(value: &Expr) -> LinkValue<'_> {
+    match &value.kind {
+        ExprKind::Identifier(n) if n == "None" => LinkValue::None,
+        ExprKind::Call { callee, args } if args.len() == 1 => match &callee.kind {
+            ExprKind::Identifier(c) if c == "Some" => match &args[0].value.kind {
+                ExprKind::Identifier(v) => LinkValue::SomeIdent(v),
+                _ => LinkValue::Other,
+            },
+            _ => LinkValue::Other,
+        },
+        _ => LinkValue::Other,
+    }
+}
+
+/// `T { ..., <link>: None }` — the fresh-member literal shape. A
+/// missing link init is NOT accepted (the typechecker requires all
+/// fields, so this is just defensive).
+fn is_member_literal_link_none(value: &Expr, member: &str, link_field: &str) -> bool {
+    let ExprKind::StructLiteral { path, fields, .. } = &value.kind else {
+        return false;
+    };
+    if path.last().map(String::as_str) != Some(member) {
+        return false;
+    }
+    fields.iter().any(|f| {
+        f.name == link_field && matches!(&f.value.kind, ExprKind::Identifier(n) if n == "None")
+    })
+}
+
+fn type_expr_mentions(te: &TypeExpr, name: &str) -> bool {
+    match &te.kind {
+        TypeKind::Path(p) => {
+            p.segments.last().map(String::as_str) == Some(name)
+                || p.generic_args.as_ref().is_some_and(|args| {
+                    args.iter().any(|a| match a {
+                        GenericArg::Type(t) => type_expr_mentions(t, name),
+                        _ => false,
+                    })
+                })
+        }
+        TypeKind::Ref(inner) | TypeKind::MutRef(inner) => type_expr_mentions(inner, name),
+        _ => false,
+    }
+}
+
+/// Pre-pass: every struct-literal type name in the body.
+fn collect_struct_literal_types(block: &Block, f: &mut impl FnMut(&str)) {
+    fn walk_expr(e: &Expr, f: &mut impl FnMut(&str)) {
+        if let ExprKind::StructLiteral { path, fields, .. } = &e.kind {
+            if let Some(n) = path.last() {
+                f(n);
+            }
+            for fi in fields {
+                walk_expr(&fi.value, f);
+            }
+            return;
+        }
+        // Containers that can host literals.
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Par(b)
+            | ExprKind::Lock { body: b, .. }
+            | ExprKind::Loop { body: b, .. }
+            | ExprKind::While { body: b, .. }
+            | ExprKind::WhileLet { body: b, .. }
+            | ExprKind::For { body: b, .. }
+            | ExprKind::LabeledBlock { body: b, .. } => collect_struct_literal_types(b, f),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                collect_struct_literal_types(then_block, f);
+                if let Some(e2) = else_branch {
+                    walk_expr(e2, f);
+                }
+            }
+            ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                collect_struct_literal_types(then_block, f);
+                if let Some(e2) = else_branch {
+                    walk_expr(e2, f);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    walk_expr(&arm.body, f);
+                }
+            }
+            ExprKind::Closure { body, .. } => walk_expr(body, f),
+            _ => {}
+        }
+    }
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => walk_expr(value, f),
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                walk_expr(target, f);
+                walk_expr(value, f);
+            }
+            StmtKind::Expr(e) => walk_expr(e, f),
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                collect_struct_literal_types(body, f)
+            }
+            StmtKind::LetUninit { .. } => {}
         }
     }
 }

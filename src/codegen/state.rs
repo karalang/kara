@@ -214,6 +214,28 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Fallback pointer if the variable is no longer in scope.
         ptr: PointerValue<'ctx>,
     },
+    /// Free an RC-elided phase-B1 cluster ROOT by walking its
+    /// self-link chain (ownership `src/ownership/elision.rs` § Phase
+    /// B1): `while p != null { next = p-><link>; free(p); p = next; }`
+    /// — no dec, no zero-test, no drop-fn dispatch. Sound because the
+    /// analysis proves each reachable node has exactly one parent and
+    /// every cursor's RcDec drains first (LIFO; the root is the
+    /// first-declared cluster binding). Falls back to plain RcDec
+    /// emission at drain time if the link field turns out not to be
+    /// niche-shaped (defensive — all `Option[shared Self]` fields are
+    /// niched today).
+    FreeClusterWalk {
+        /// Root binding name — reloads the current pointer at drain.
+        name: String,
+        /// Fallback pointer if the variable is no longer in scope.
+        ptr: PointerValue<'ctx>,
+        /// Member struct name (resolves `heap_type` + niche lookup at
+        /// emit time).
+        member_type: String,
+        /// User-field index of the `Option[Self]` link (heap index is
+        /// `+1` past the refcount header).
+        link_field_index: usize,
+    },
     /// Decrement the refcount of a `shared struct` value.
     RcDec {
         /// Variable name — used to reload the current pointer value in case

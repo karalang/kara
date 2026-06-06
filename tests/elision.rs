@@ -346,3 +346,264 @@ fn blocks_enum_ctor_capture() {
     let r = analyze(&src);
     assert!(!elided(&r, "main", "s"));
 }
+
+// ════════════════════════════════════════════════════════════════
+// Phase B1 — append-only chain clusters (root free-walk).
+// ════════════════════════════════════════════════════════════════
+
+const NODE: &str = "shared struct ListNode { val: i64, mut next: Option[ListNode] }\n";
+
+fn cluster_root(result: &OwnershipCheckResult, fn_name: &str) -> Option<String> {
+    result
+        .elided_clusters
+        .get(fn_name)
+        .and_then(|v| v.first())
+        .map(|c| c.root.clone())
+}
+
+const CANONICAL_BUILDER: &str = "fn build_and_sum(n: i64) -> i64 {\n\
+     let dummy = ListNode { val: 0, next: None };\n\
+     let mut tail = dummy;\n\
+     let mut i = 1;\n\
+     while i <= n {\n\
+         let node = ListNode { val: i, next: None };\n\
+         tail.next = Some(node);\n\
+         tail = node;\n\
+         i = i + 1;\n\
+     }\n\
+     let mut sum = 0;\n\
+     let mut cur = dummy.next;\n\
+     while cur.is_some() {\n\
+         let x = cur.unwrap();\n\
+         sum = sum + x.val;\n\
+         cur = x.next;\n\
+     }\n\
+     sum\n\
+ }\n\
+ fn main() { println(build_and_sum(5)); }";
+
+#[test]
+fn cluster_elides_canonical_append_builder() {
+    let src = format!("{NODE}{CANONICAL_BUILDER}");
+    let r = analyze(&src);
+    assert_eq!(
+        cluster_root(&r, "build_and_sum").as_deref(),
+        Some("dummy"),
+        "clusters: {:?}",
+        r.elided_clusters
+    );
+    let c = &r.elided_clusters["build_and_sum"][0];
+    assert_eq!(c.member_type, "ListNode");
+    assert_eq!(c.link_field_index, 1);
+    for b in ["dummy", "tail", "node", "cur", "x"] {
+        assert!(c.bindings.contains(b), "missing {b}: {:?}", c.bindings);
+    }
+}
+
+#[test]
+fn cluster_blocks_chain_escaping_to_call() {
+    // Passing any cluster binding to a call blocks the whole cluster
+    // (v1: walks must be inline).
+    let src = format!(
+        "{NODE}\
+         fn sum(head: Option[ListNode]) -> i64 {{\n\
+             let mut t = 0;\n\
+             let mut cur = head;\n\
+             while cur.is_some() {{\n\
+                 let n = cur.unwrap();\n\
+                 t = t + n.val;\n\
+                 cur = n.next;\n\
+             }}\n\
+             t\n\
+         }}\n\
+         fn run() -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let mut tail = dummy;\n\
+             let node = ListNode {{ val: 1, next: None }};\n\
+             tail.next = Some(node);\n\
+             sum(dummy.next)\n\
+         }}\n\
+         fn main() {{ println(run()); }}"
+    );
+    let r = analyze(&src);
+    assert!(cluster_root(&r, "run").is_none());
+}
+
+#[test]
+fn cluster_blocks_returned_chain() {
+    let src = format!(
+        "{NODE}\
+         fn build() -> Option[ListNode] {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let node = ListNode {{ val: 1, next: None }};\n\
+             dummy.next = Some(node);\n\
+             dummy.next\n\
+         }}\n\
+         fn main() {{ let c = build(); if c.is_some() {{ println(1); }} }}"
+    );
+    let r = analyze(&src);
+    assert!(cluster_root(&r, "build").is_none());
+}
+
+#[test]
+fn cluster_blocks_double_link_of_same_fresh_node() {
+    // The same fresh node linked at two sites would give it two
+    // parents — the free-walk would double-free.
+    let src = format!(
+        "{NODE}\
+         fn run() -> i64 {{\n\
+             let a = ListNode {{ val: 0, next: None }};\n\
+             let b = ListNode {{ val: 1, next: None }};\n\
+             let node = ListNode {{ val: 2, next: None }};\n\
+             a.next = Some(node);\n\
+             b.next = Some(node);\n\
+             a.val + b.val\n\
+         }}\n\
+         fn main() {{ println(run()); }}"
+    );
+    let r = analyze(&src);
+    assert!(cluster_root(&r, "run").is_none());
+}
+
+#[test]
+fn cluster_blocks_cursor_in_link_value_position() {
+    // Re-parenting an existing (link-read) node — splice idioms are
+    // not append-only.
+    let src = format!(
+        "{NODE}\
+         fn run() -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let node = ListNode {{ val: 1, next: None }};\n\
+             dummy.next = Some(node);\n\
+             let c = dummy.next;\n\
+             let n2 = c.unwrap();\n\
+             dummy.next = Some(n2);\n\
+             dummy.val\n\
+         }}\n\
+         fn main() {{ println(run()); }}"
+    );
+    let r = analyze(&src);
+    assert!(cluster_root(&r, "run").is_none());
+}
+
+#[test]
+fn cluster_blocks_member_type_parameter() {
+    // The cluster type entering via a parameter means non-local chains
+    // of the same type exist — poison.
+    let src = format!(
+        "{NODE}\
+         fn extend(seed: ListNode) -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let node = ListNode {{ val: 1, next: None }};\n\
+             dummy.next = Some(node);\n\
+             dummy.val + seed.val\n\
+         }}\n\
+         fn main() {{\n\
+             let s = ListNode {{ val: 9, next: None }};\n\
+             println(extend(s));\n\
+         }}"
+    );
+    let r = analyze(&src);
+    assert!(cluster_root(&r, "extend").is_none());
+}
+
+#[test]
+fn cluster_blocks_prepend_idiom() {
+    // Prepend couples the literal link-init to the root reassignment —
+    // flow-sensitive, deferred (B1.1). The literal with a non-None
+    // link init never joins, so no cluster forms.
+    let src = format!(
+        "{NODE}\
+         fn build(n: i64) -> i64 {{\n\
+             let mut head: Option[ListNode] = None;\n\
+             let mut i = 0;\n\
+             while i < n {{\n\
+                 let node = ListNode {{ val: i, next: head }};\n\
+                 head = Some(node);\n\
+                 i = i + 1;\n\
+             }}\n\
+             let mut sum = 0;\n\
+             let mut cur = head;\n\
+             while cur.is_some() {{\n\
+                 let x = cur.unwrap();\n\
+                 sum = sum + x.val;\n\
+                 cur = x.next;\n\
+             }}\n\
+             sum\n\
+         }}\n\
+         fn main() {{ println(build(5)); }}"
+    );
+    let r = analyze(&src);
+    assert!(cluster_root(&r, "build").is_none());
+}
+
+#[test]
+fn cluster_blocks_shadowed_fresh_name() {
+    // A for-loop variable shadowing a cluster name could route an
+    // external object through a cluster-classified use — poison.
+    let src = format!(
+        "{NODE}\
+         fn run() -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let node = ListNode {{ val: 1, next: None }};\n\
+             dummy.next = Some(node);\n\
+             let mut t = 0;\n\
+             for node in 0..3 {{\n\
+                 t = t + node;\n\
+             }}\n\
+             t + dummy.val\n\
+         }}\n\
+         fn main() {{ println(run()); }}"
+    );
+    let r = analyze(&src);
+    assert!(cluster_root(&r, "run").is_none());
+}
+
+#[test]
+fn cluster_allows_link_overwrite_displacement() {
+    // Overwriting a link ORPHANS the displaced node (the store's
+    // release-old frees it through normal RC) — the chain stays a
+    // tree, append-only holds, cluster stays elidable.
+    let src = format!(
+        "{NODE}\
+         fn run() -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let a = ListNode {{ val: 1, next: None }};\n\
+             let b = ListNode {{ val: 2, next: None }};\n\
+             dummy.next = Some(a);\n\
+             dummy.next = Some(b);\n\
+             let mut sum = 0;\n\
+             let mut cur = dummy.next;\n\
+             while cur.is_some() {{\n\
+                 let x = cur.unwrap();\n\
+                 sum = sum + x.val;\n\
+                 cur = x.next;\n\
+             }}\n\
+             sum\n\
+         }}\n\
+         fn main() {{ println(run()); }}"
+    );
+    let r = analyze(&src);
+    assert_eq!(cluster_root(&r, "run").as_deref(), Some("dummy"));
+}
+
+#[test]
+fn cluster_second_chain_same_type_keeps_standard_cleanup() {
+    // A second never-linked literal of the same type joins the binding
+    // set as a fresh node but is not the root — only the ROOT takes
+    // the free-walk; everything else keeps RcDec, so a second
+    // independent owner is sound (it dec-walks its own object).
+    let src = format!(
+        "{NODE}\
+         fn run() -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let node = ListNode {{ val: 1, next: None }};\n\
+             dummy.next = Some(node);\n\
+             let lone = ListNode {{ val: 5, next: None }};\n\
+             dummy.val + lone.val\n\
+         }}\n\
+         fn main() {{ println(run()); }}"
+    );
+    let r = analyze(&src);
+    assert_eq!(cluster_root(&r, "run").as_deref(), Some("dummy"));
+}

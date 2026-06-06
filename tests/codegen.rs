@@ -10216,6 +10216,176 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_cluster_root_takes_free_walk() {
+        // Phase B1: the append-builder's root cleanup is the
+        // link-following free-walk (cw_loop: load next, free, advance)
+        // — no dec, no drop-fn dispatch on the root path. Cursors keep
+        // their RcDec (they drain first).
+        let ir = ir_for_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build_and_sum(n: i64) -> i64 {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 1;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    let mut sum = 0;
+    let mut cur = dummy.next;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn main() { println(build_and_sum(5)); }
+"#,
+        );
+        let body = function_body(&ir, "build_and_sum").expect("fn body");
+        assert!(
+            body.contains("cw_loop") && body.contains("cw_next"),
+            "root should free-walk; body:\n{body}"
+        );
+        assert!(
+            !body.contains("dummy_rc_cleanup"),
+            "root must not take the RcDec path; body:\n{body}"
+        );
+        // The cursor `tail` keeps its standard RcDec.
+        assert!(
+            body.contains("tail_rc_cleanup"),
+            "cursor keeps RcDec (drains before the walk); body:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_ir_cluster_escaping_chain_keeps_rc_dec() {
+        // Control: the chain escapes via a call — no cluster, the
+        // root keeps the standard dec/drop path.
+        let ir = ir_for_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut t = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let n = cur.unwrap();
+        t = t + n.val;
+        cur = n.next;
+    }
+    t
+}
+fn run() -> i64 {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let node = ListNode { val: 1, next: None };
+    tail.next = Some(node);
+    sum(dummy.next)
+}
+fn main() { println(run()); }
+"#,
+        );
+        let body = function_body(&ir, "run").expect("fn body");
+        assert!(
+            !body.contains("cw_loop"),
+            "escaping chain must not free-walk; body:\n{body}"
+        );
+        assert!(
+            body.contains("dummy_rc_cleanup"),
+            "root keeps RcDec; body:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_cluster_append_builder_walk() {
+        // The canonical phase-B1 shape end-to-end, repeated so a
+        // free-walk soundness break (double free / missed node)
+        // corrupts deterministically.
+        let out = run_program_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build_and_sum(n: i64) -> i64 {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 1;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    let mut sum = 0;
+    let mut cur = dummy.next;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 64 {
+        total = total + build_and_sum(50);
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // 64 × Σ1..50 = 64 × 1275
+            assert_eq!(out.trim(), "81600");
+        }
+    }
+
+    #[test]
+    fn test_e2e_cluster_link_displacement_orphan() {
+        // Link overwrite orphans the displaced sub-chain mid-build:
+        // the store's release-old frees it through normal RC (build
+        // traffic untouched in B1), and the root free-walk sees only
+        // the surviving chain.
+        let out = run_program_with_ownership(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn run() -> i64 {
+    let dummy = ListNode { val: 0, next: None };
+    let a = ListNode { val: 10, next: None };
+    let b = ListNode { val: 20, next: None };
+    dummy.next = Some(a);
+    dummy.next = Some(b);
+    let mut sum = 0;
+    let mut cur = dummy.next;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 64 {
+        total = total + run();
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // surviving chain is just b: 20 × 64
+            assert_eq!(out.trim(), "1280");
+        }
+    }
+
+    #[test]
     fn test_ir_par_block_arc_promoted_binding_uses_atomic_rc() {
         // Trigger 1 (branch-divergent re-use) flags `d` as RC-fallback; the
         // par-block crossing makes Phase 2 promote it to Arc. Codegen must

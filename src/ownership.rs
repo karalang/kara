@@ -34,7 +34,7 @@ mod rc_promote;
 // rewrite. L215b3 adds `ConsumerRewriteTypeCtx` so the migrate tool can
 // thread typecheck-derived data (inferred-binding discovery + mutating-
 // method-call classifier) when the full pipeline succeeded.
-pub use elision::ElisionBlocked;
+pub use elision::{ElidedCluster, ElisionBlocked};
 
 pub(crate) use concurrent_shared::{
     build_consumer_rewrite_edits_in_program, build_consumer_rewrite_edits_with_mut_fields,
@@ -678,6 +678,12 @@ pub struct OwnershipCheckResult {
     /// phase-B/C corpus tuning and a future `karac explain` surface
     /// (design decision 5: record now, surface later).
     pub elision_blocked: HashMap<String, Vec<ElisionBlocked>>,
+    /// Phase B1: per-function append-only chain clusters whose ROOT
+    /// takes the link-following free-walk at scope exit (see
+    /// `src/ownership/elision.rs` § Phase B1). Build-side count
+    /// traffic is untouched in B1; only the root's cleanup action
+    /// changes.
+    pub elided_clusters: HashMap<String, Vec<ElidedCluster>>,
     /// Multi-edit `fix_diff` envelope keyed by the diagnostic's primary
     /// span — phase-7 line 197 follow-up. `ConcurrentSharedStruct` and
     /// `ConcurrentPlainStruct` populate this with the per-`mut`-field
@@ -814,6 +820,7 @@ pub struct OwnershipChecker<'a> {
     /// RC elision phase A output — populated by `compute_elision`.
     pub(crate) elided_bindings: HashMap<String, HashSet<String>>,
     pub(crate) elision_blocked: HashMap<String, Vec<ElisionBlocked>>,
+    pub(crate) elided_clusters: HashMap<String, Vec<ElidedCluster>>,
     /// `fix_diff` envelope sidecar — phase-7 line 197 follow-up. Keyed
     /// by the diagnostic's primary `SpanKey`, value is the list of
     /// machine-applicable `TextEdit`s. Populated only by the
@@ -952,6 +959,7 @@ impl<'a> OwnershipChecker<'a> {
             suppressed_rc_fn_keys: HashSet::new(),
             elided_bindings: HashMap::new(),
             elision_blocked: HashMap::new(),
+            elided_clusters: HashMap::new(),
             error_fix_diffs: HashMap::new(),
             binding_type_names: HashMap::new(),
             binding_types: HashMap::new(),
@@ -1047,6 +1055,7 @@ impl<'a> OwnershipChecker<'a> {
             suppressed_rc_fn_keys: self.suppressed_rc_fn_keys,
             elided_bindings: self.elided_bindings,
             elision_blocked: self.elision_blocked,
+            elided_clusters: self.elided_clusters,
             error_fix_diffs: self.error_fix_diffs,
         }
     }

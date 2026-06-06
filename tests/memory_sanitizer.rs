@@ -3269,6 +3269,68 @@ fn main() {
     }
 
     #[test]
+    fn asan_cluster_append_builder_repeat() {
+        // Phase B1 cluster free-walk under ASAN: the root's cleanup
+        // frees every chain node WITHOUT consulting refcounts — a
+        // wrong analysis (any node with a second owner) is an
+        // immediate ASAN double-free; a missed node is a leak (linux
+        // CI LeakSanitizer). Covers the canonical append builder +
+        // inline walk + a link-displacement orphan (freed through
+        // normal RC mid-build, unreachable from the walk).
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build_and_sum(n: i64) -> i64 {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut i = 1;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    let mut sum = 0;
+    let mut cur = dummy.next;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn displaced() -> i64 {
+    let dummy = ListNode { val: 0, next: None };
+    let a = ListNode { val: 10, next: None };
+    let b = ListNode { val: 20, next: None };
+    dummy.next = Some(a);
+    dummy.next = Some(b);
+    let mut sum = 0;
+    let mut cur = dummy.next;
+    while cur.is_some() {
+        let x = cur.unwrap();
+        sum = sum + x.val;
+        cur = x.next;
+    }
+    sum
+}
+fn main() {
+    let mut total = 0;
+    let mut iter = 0;
+    while iter < 50 {
+        total = total + build_and_sum(50);
+        total = total + displaced();
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+            &["64750"],
+            "cluster_append_builder_repeat",
+        );
+    }
+
+    #[test]
     fn asan_option_shared_niche_abi_convergence_repeat() {
         // Niche call ABI for `Option[shared T]` signatures (Slice 1,
         // 2026-06-05) + the explicit-return alias compensation it

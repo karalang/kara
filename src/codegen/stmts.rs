@@ -1610,6 +1610,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     let ptr = val.into_pointer_value();
                     if self.is_elided_binding(var_name) {
                         self.track_elided_shared_var(var_name, ptr);
+                    } else if let Some((member_type, link_idx)) = self.cluster_root_info(var_name) {
+                        // Phase-B1 cluster root: link-following
+                        // free-walk instead of the dec/drop-fn walk.
+                        self.track_cluster_root_var(var_name, ptr, &member_type, link_idx);
                     } else {
                         self.track_rc_var(var_name, ptr, info.heap_type);
                     }
