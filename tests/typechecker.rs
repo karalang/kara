@@ -8478,6 +8478,116 @@ fn test_file_open_wrong_arg_type_is_error() {
     );
 }
 
+// ── Phase 8 BufReader[R] — typechecker signatures ─────────────────
+//
+// BufReader.new / .with_capacity are static methods wrapping a `File`
+// reader, returning BufReader[File]; read_line / read_to_string take a
+// `mut ref String` destination, `read` takes a `mut Slice[u8]`. All
+// three read methods carry `reads(FileSystem)` (the v1 concrete
+// binding for R = File), validated by the effect-checker via the baked
+// stdlib `with` clauses in `runtime/stdlib/bufreader.kara`.
+
+#[test]
+fn test_bufreader_new_returns_bufreader() {
+    typecheck_ok(
+        "fn driver() with reads(FileSystem) {
+             match File.open(\"x.txt\") {
+                 Ok(f) => { let br = BufReader.new(f); }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
+fn test_bufreader_with_capacity_returns_bufreader() {
+    typecheck_ok(
+        "fn driver() with reads(FileSystem) {
+             match File.open(\"x.txt\") {
+                 Ok(f) => { let br = BufReader.with_capacity(f, 16); }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
+fn test_bufreader_read_line_returns_result_usize() {
+    // br.read_line(buf: mut ref String) -> Result[usize, IoError].
+    // The destination must be a `mut` binding; the returned count
+    // solves against `usize` in the match.
+    typecheck_ok(
+        "fn driver() with reads(FileSystem) {
+             match File.open(\"x.txt\") {
+                 Ok(f) => {
+                     let br = BufReader.new(f);
+                     let mut line = String.new();
+                     match br.read_line(line) {
+                         Ok(n) => {}
+                         Err(_) => {}
+                     }
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
+fn test_bufreader_read_to_string_returns_result_usize() {
+    typecheck_ok(
+        "fn driver() with reads(FileSystem) {
+             match File.open(\"x.txt\") {
+                 Ok(f) => {
+                     let br = BufReader.new(f);
+                     let mut all = String.new();
+                     let _ = br.read_to_string(all);
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
+fn test_bufreader_read_takes_mut_slice_returns_result_usize() {
+    typecheck_ok(
+        "fn driver() with reads(FileSystem) {
+             match File.open(\"x.txt\") {
+                 Ok(f) => {
+                     let br = BufReader.new(f);
+                     let mut buf: Vec[u8] = Vec.new();
+                     buf.push(0u8); buf.push(0u8);
+                     let _ = br.read(mut buf);
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
+fn test_bufreader_read_line_wrong_arg_type_is_error() {
+    // read_line expects a `mut ref String` buffer; passing an integer
+    // must fire a typechecker rejection.
+    let errs = typecheck_errors(
+        "fn driver() with reads(FileSystem) {
+             match File.open(\"x.txt\") {
+                 Ok(f) => {
+                     let br = BufReader.new(f);
+                     let _ = br.read_line(42);
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+    assert!(
+        !errs.is_empty(),
+        "expected typechecker rejection for non-String read_line buffer; errs={:?}",
+        errs,
+    );
+}
+
 // ── std.runtime introspection signatures (Debugger Contract slice 5) ─────────
 //
 // Three Kāra-callable APIs declared in `runtime/stdlib/runtime.kara`. The

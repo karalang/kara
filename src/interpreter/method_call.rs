@@ -617,6 +617,9 @@ impl<'a> super::Interpreter<'a> {
         if let Some(v) = self.try_eval_file_method(method, obj.clone(), args, span) {
             return v;
         }
+        if let Some(v) = self.try_eval_bufreader_method(method, obj.clone(), args, span) {
+            return v;
+        }
         if let Some(v) = self.try_eval_vector_method(method, object, obj.clone(), args, span) {
             return v;
         }

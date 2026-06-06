@@ -435,6 +435,63 @@ impl<'a> super::Interpreter<'a> {
                         Err(e) => io_err_value(io_error_from_std(&e)),
                     };
                 }
+                "BufReader.new" | "BufReader.with_capacity" => {
+                    // Phase 8 `BufReader[R]` slice: wrap a `File` reader with
+                    // a buffered `std::io::BufReader`. The wrapped reader `R`
+                    // is concretely `File` at v1. To give the BufReader an
+                    // owned reader while leaving the original `File` value
+                    // usable, we `try_clone` (dup) the underlying fd — the
+                    // clone shares the OS file offset, so reads through the
+                    // BufReader resume from wherever the File last left off.
+                    // Construction performs no observable read, so no effect
+                    // is tracked here (the read methods carry it).
+                    let reader_val = match args.first() {
+                        Some(arg) => self.eval_expr_inner(&arg.value),
+                        None => {
+                            return self.record_runtime_error(
+                                format!("{path_str} expects a File reader argument"),
+                                span,
+                            );
+                        }
+                    };
+                    let file_arc = match reader_val {
+                        Value::File(arc) => arc,
+                        other => {
+                            return self.record_runtime_error(
+                                format!(
+                                    "{path_str} expects a File reader, got `{}`",
+                                    other.variant_name()
+                                ),
+                                span,
+                            );
+                        }
+                    };
+                    // Default 8 KiB buffer for `new`; explicit capacity for
+                    // `with_capacity` (a non-positive value falls back to the
+                    // default rather than erroring — matches the permissive
+                    // interpreter posture).
+                    let cap = if path_str == "BufReader.with_capacity" {
+                        match args.get(1).map(|a| self.eval_expr_inner(&a.value)) {
+                            Some(Value::Int(n)) if n > 0 => n as usize,
+                            _ => 8192,
+                        }
+                    } else {
+                        8192
+                    };
+                    let cloned = {
+                        let guard = file_arc.lock().unwrap();
+                        guard.try_clone()
+                    };
+                    return match cloned {
+                        Ok(f) => Value::BufReader(Arc::new(Mutex::new(
+                            std::io::BufReader::with_capacity(cap, f),
+                        ))),
+                        Err(e) => self.record_runtime_error(
+                            format!("{path_str}: failed to clone file handle: {e}"),
+                            span,
+                        ),
+                    };
+                }
                 "F32.from" => {
                     let val = if let Some(arg) = args.first() {
                         match self.eval_expr_inner(&arg.value) {

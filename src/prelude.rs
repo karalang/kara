@@ -160,6 +160,11 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // operate on a live OS file descriptor. See `phase-8-stdlib-floor.md`
     // "File handle type" entry for the v1 surface + sub-task plan.
     "File",
+    // Phase 8 `BufReader[R]` — buffered reader wrapper (Standard I/O
+    // follow-up). `BufReader.new(reader)` / `.with_capacity(reader, cap)`
+    // wrap a `File`; `read_line` / `read_to_string` / `read` amortize
+    // syscall overhead. See `runtime/stdlib/bufreader.kara`.
+    "BufReader",
     // Debugger Contract slice 5: `std.runtime` introspection surface.
     // `Runtime` is the empty-marker host for the three `#[compiler_builtin]`
     // dispatch methods; `ParBlockInfo` / `TaskInfo` / `WaitTarget` are the
@@ -710,6 +715,14 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
         "bounded_channel.kara",
         include_str!("../runtime/stdlib/bounded_channel.kara"),
     ),
+    // `BufReader[R]` buffered reader wrapper (phase-8 Standard I/O
+    // follow-up). Wraps a `File` reader (concretely, at v1) with an
+    // internal buffer so per-call syscall overhead amortizes. Surface +
+    // collapsed interpreter intrinsic; see `runtime/stdlib/bufreader.kara`.
+    (
+        "bufreader.kara",
+        include_str!("../runtime/stdlib/bufreader.kara"),
+    ),
     // Compile-time layout introspection — `size_of[T]()` / `align_of[T]()`
     // (the `offset_of[T](field)` arm is a parser special-form, not a
     // stdlib function — see `runtime/stdlib/intrinsics.kara`).
@@ -1205,7 +1218,7 @@ fn stub_struct(name: &str, span: &Span) -> Item {
 fn stub_generics(name: &str, span: &Span) -> Option<GenericParams> {
     let params: &[&str] = match name {
         "Option" | "Vec" | "VecDeque" | "Slice" | "Array" | "Vector" | "Set" | "Atomic"
-        | "Mutex" | "SortedSet" | "Channel" | "Sender" | "Receiver" => &["T"],
+        | "Mutex" | "SortedSet" | "Channel" | "Sender" | "Receiver" | "BufReader" => &["T"],
         "Result" => &["T", "E"],
         "Map" | "Entry" => &["K", "V"],
         _ => return None,

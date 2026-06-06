@@ -1,0 +1,67 @@
+// runtime/stdlib/bufreader.kara
+//
+// Phase 8 `BufReader[R]` — buffered reader wrapper (Standard I/O
+// follow-up factored out of the "Standard I/O surface" entry). Wraps
+// a `Read` source with an internal buffer so per-call syscall overhead
+// amortizes. At v1 the wrapped reader `R` is concretely `File` — the
+// effect-polymorphic design (`reads(FileSystem)` flowing from the
+// wrapped reader's own effect set) waits on the effect-polymorphic
+// trait surface (P1, `phase-3-effect-checker.md`), so the v1 method
+// effects hardcode `reads(FileSystem)`.
+//
+// **Dispatch.** Like `Pool[T]` / `File`, the struct body is empty —
+// the actual state (an `Arc<Mutex<std::io::BufReader<std::fs::File>>>`)
+// lives on the `Value::BufReader` interpreter variant; the typechecker
+// only needs the type + method signatures, which the baked
+// `impl[R] BufReader[R] { ... }` below supplies. Constructors
+// `BufReader.new` / `.with_capacity` dispatch through the interpreter's
+// `"BufReader.new"` / `"BufReader.with_capacity"` path-string arms in
+// `eval_call.rs`; instance methods `read_line` / `read_to_string` /
+// `read` dispatch through `try_eval_bufreader_method`. Method bodies
+// are placeholder `#[compiler_builtin]` stubs.
+//
+// **Construction is buffer-only.** `BufReader.new` / `.with_capacity`
+// wrap an already-open `File` — no filesystem access happens at
+// construction (the dup of the underlying fd is not an observable
+// read), so they carry no effect. The read methods carry
+// `reads(FileSystem)`.
+//
+// Interpreter-only MVP. `lines()` (needs a `LinesIter[R]` type),
+// `fill_buf` / `consume` (low-level peek/advance), and the cancel-
+// safety `#[cancel_unsafe_until(...)]` annotation are deferred to
+// follow-on slices — see the `BufReader[R]` entry in
+// `phase-8-stdlib-floor.md` for the v1 surface + deferral list.
+
+struct BufReader[R] { }
+
+impl[R] BufReader[R] {
+    // Wrap `reader` with a default-capacity (8 KiB) internal buffer.
+    // Dispatched through `eval_call.rs`'s `"BufReader.new"` path-string
+    // arm, which clones the underlying file descriptor and wraps it in
+    // `std::io::BufReader`.
+    #[compiler_builtin]
+    fn new(reader: R) -> BufReader[R] { BufReader { } }
+
+    // Wrap `reader` with an explicit buffer capacity (bytes).
+    #[compiler_builtin]
+    fn with_capacity(reader: R, cap: usize) -> BufReader[R] { BufReader { } }
+
+    // Read until the next `\n` (inclusive) or EOF, appending the bytes
+    // read into `buf`. Returns the byte count appended; `0` signals EOF.
+    // Mirrors Rust's `BufRead::read_line` contract. (`buf` is a
+    // `mut ref String` — the checklist's `mut String` shorthand realizes
+    // as Kāra's mutable-borrow form.)
+    #[compiler_builtin]
+    fn read_line(ref self, buf: mut ref String) -> Result[usize, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    // Read all remaining bytes to EOF, appending them into `buf`.
+    // Returns the byte count appended.
+    #[compiler_builtin]
+    fn read_to_string(ref self, buf: mut ref String) -> Result[usize, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    // Low-level byte read: drains the internal buffer first, then
+    // delegates to the underlying reader. Fills up to `buf.len()`
+    // bytes; returns the count read (`0` = EOF).
+    #[compiler_builtin]
+    fn read(ref self, buf: mut Slice[u8]) -> Result[usize, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+}

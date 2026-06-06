@@ -4825,6 +4825,129 @@ fn test_stderr_flush_is_callable() {
     assert_eq!(out, "ok\n");
 }
 
+// ── Phase 8 BufReader[R] — interpreter MVP ────────────────────────
+//
+// BufReader.new / .with_capacity wrap a `File` (via a dup of its fd)
+// with a buffered reader; read_line / read_to_string append into a
+// `mut ref String` and return the byte count (0 from read_line = EOF);
+// read fills a `mut Slice[u8]`. Tests cover the line-then-rest
+// round-trip, read_to_string slurping, the Slice read, with_capacity,
+// and the EOF count.
+
+#[test]
+fn test_bufreader_read_line_then_read_to_string_roundtrip() {
+    let tmp = std::env::temp_dir().join("karac_test_bufreader_roundtrip.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(&tmp, b"hi\nyo\n").expect("seed temp");
+    let src = format!(
+        "fn main() {{
+             match File.open(\"{path}\") {{
+                 Ok(f) => {{
+                     let br = BufReader.new(f);
+                     let mut line = String.new();
+                     match br.read_line(line) {{
+                         Ok(n) => println(\"line n=\" + n.to_string() + \" [\" + line + \"]\"),
+                         Err(_) => println(\"read err\"),
+                     }}
+                     let mut rest = String.new();
+                     match br.read_to_string(rest) {{
+                         Ok(n) => println(\"rest n=\" + n.to_string() + \" [\" + rest + \"]\"),
+                         Err(_) => println(\"read err\"),
+                     }}
+                 }}
+                 Err(_) => println(\"open err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "line n=3 [hi\n]\nrest n=3 [yo\n]\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn test_bufreader_read_line_at_eof_returns_zero() {
+    // read_line on an empty file returns Ok(0) (EOF), leaving the
+    // destination String untouched.
+    let tmp = std::env::temp_dir().join("karac_test_bufreader_eof.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(&tmp, b"").expect("seed temp");
+    let src = format!(
+        "fn main() {{
+             match File.open(\"{path}\") {{
+                 Ok(f) => {{
+                     let br = BufReader.new(f);
+                     let mut line = String.new();
+                     match br.read_line(line) {{
+                         Ok(n) => println(\"n=\" + n.to_string()),
+                         Err(_) => println(\"read err\"),
+                     }}
+                 }}
+                 Err(_) => println(\"open err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "n=0\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn test_bufreader_read_to_string_slurps_whole_file() {
+    let tmp = std::env::temp_dir().join("karac_test_bufreader_slurp.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(&tmp, b"alpha\nbeta\n").expect("seed temp");
+    let src = format!(
+        "fn main() {{
+             match File.open(\"{path}\") {{
+                 Ok(f) => {{
+                     let br = BufReader.new(f);
+                     let mut all = String.new();
+                     match br.read_to_string(all) {{
+                         Ok(n) => println(\"n=\" + n.to_string() + \" [\" + all + \"]\"),
+                         Err(_) => println(\"read err\"),
+                     }}
+                 }}
+                 Err(_) => println(\"open err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "n=11 [alpha\nbeta\n]\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn test_bufreader_with_capacity_read_into_slice() {
+    // with_capacity wraps with an explicit buffer size; `read` fills a
+    // mut Slice[u8] and returns the byte count, writing bytes back
+    // through the slice storage (b0 == 'A' == 65).
+    let tmp = std::env::temp_dir().join("karac_test_bufreader_cap.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(&tmp, b"ABC").expect("seed temp");
+    let src = format!(
+        "fn main() {{
+             match File.open(\"{path}\") {{
+                 Ok(f) => {{
+                     let br = BufReader.with_capacity(f, 16);
+                     let buf = [0u8, 0u8, 0u8, 0u8, 0u8];
+                     match br.read(buf[0..5]) {{
+                         Ok(n) => println(\"n=\" + n.to_string() + \" b0=\" + buf[0].to_string()),
+                         Err(_) => println(\"read err\"),
+                     }}
+                 }}
+                 Err(_) => println(\"open err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "n=3 b0=65\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
 // ── std.runtime introspection (Debugger Contract slice 5) ─────────────────────
 //
 // The tree-walk interpreter has its own par-block evaluation path and does

@@ -756,6 +756,21 @@ impl<'a> EffectChecker<'a> {
                 );
                 self.inferred_effects.insert(fn_name.to_string(), set);
             }
+            // Phase 8 `BufReader[R]` slice: the buffered read methods carry
+            // `reads(FileSystem)` (the v1 concrete binding for `R = File`).
+            // Constructors `BufReader.new` / `.with_capacity` wrap an
+            // already-open handle and perform no observable read, so they
+            // seed no effect. Same bridge-the-`with`-clause-into-inference
+            // rationale as the `File.*` block above.
+            for fn_name in [
+                "BufReader.read_line",
+                "BufReader.read_to_string",
+                "BufReader.read",
+            ] {
+                let mut set = EffectSet::new();
+                set.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span.clone()));
+                self.inferred_effects.insert(fn_name.to_string(), set);
+            }
         }
 
         // Stdlib conversion traits (`From`, `Into`, `TryFrom`, `TryInto`) are

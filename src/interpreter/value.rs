@@ -198,6 +198,16 @@ pub enum Value {
     /// Constructed via `File.open` / `File.create` / `File.append`;
     /// methods `.read` / `.write` / `.flush` thread through the mutex.
     File(Arc<Mutex<std::fs::File>>),
+    /// `BufReader[R]` buffered reader wrapping a `File`. Holds an owned
+    /// `std::io::BufReader<std::fs::File>` (constructed over a `dup(2)`
+    /// clone of the wrapped file's fd, so the BufReader owns its reader
+    /// while the original `File` value stays usable). The `Arc<Mutex<…>>`
+    /// keeps `Value` clone-friendly without requiring `Clone` on the
+    /// inner reader; Drop on the last Arc closes the cloned fd. Phase 8
+    /// `BufReader[R]` slice. Constructed via `BufReader.new` /
+    /// `BufReader.with_capacity`; methods `read_line` / `read_to_string`
+    /// / `read` thread through the mutex.
+    BufReader(Arc<Mutex<std::io::BufReader<std::fs::File>>>),
     /// Aliasing slot used to back a `mut ref |...|` closure capture.
     /// Lives only inside an `Env` scope or a closure's captured-env map;
     /// never reaches user expressions because every path that reads a
@@ -845,6 +855,7 @@ impl std::fmt::Display for Value {
                 write!(f, "<{} entry for {} in {}>", occ, key, mv)
             }
             Value::File(_) => write!(f, "<File>"),
+            Value::BufReader(_) => write!(f, "<BufReader>"),
         }
     }
 }
@@ -972,6 +983,7 @@ impl Value {
             Value::SharedCell(_) => "SharedCell",
             Value::Entry { .. } => "Entry",
             Value::File(_) => "File",
+            Value::BufReader(_) => "BufReader",
         }
     }
 

@@ -7396,6 +7396,63 @@ fn test_pub_fn_with_filesystem_effects_declared_accepts_file_methods() {
     );
 }
 
+// ── Phase 8 BufReader[R] — effect declarations ─────────────────────
+//
+// BufReader read methods carry `reads(FileSystem)` via baked stdlib
+// `with reads(FileSystem)` clauses (`runtime/stdlib/bufreader.kara`),
+// seeded into `inferred_effects` so the call-site walker sees them. A
+// `pub fn` that calls a BufReader read method without declaring
+// reads(FileSystem) must fail `MissingEffectDeclaration`. The function
+// takes the `BufReader[File]` + destination by ref so the test
+// isolates the read effect (no `File.open` / `String.new` noise).
+
+// Instance-method effects (`br.read_line(...)`) resolve to the seeded
+// `BufReader.read_line` key only when the typechecker's
+// `method_callee_types` is threaded into the effectchecker, so these
+// use `effectcheck_full_pipeline` rather than the bare `effectcheck`
+// helpers (which the File tests above can use because `File.open` is a
+// name-resolved Path call).
+
+#[test]
+fn test_pub_fn_calling_bufreader_read_line_must_declare_reads_filesystem() {
+    let result = effectcheck_full_pipeline(
+        "pub fn slurp(br: ref BufReader[File], buf: mut ref String) {
+             let _ = br.read_line(buf);
+         }",
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("reads(FileSystem)")),
+        "expected MissingEffectDeclaration for reads(FileSystem); got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_pub_fn_with_reads_filesystem_declared_accepts_bufreader_methods() {
+    let result = effectcheck_full_pipeline(
+        "pub fn slurp(br: ref BufReader[File], buf: mut ref String, raw: mut Slice[u8]) \
+             with reads(FileSystem) {
+             let _ = br.read_line(buf);
+             let _ = br.read_to_string(buf);
+             let _ = br.read(raw);
+         }",
+    );
+    let real_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .collect();
+    assert!(
+        real_errors.is_empty(),
+        "expected clean effectcheck with reads(FileSystem) declared; got: {:?}",
+        real_errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
 // ── Refinement types (phase-9 step 3) ───────────────────────────
 //
 // `x as Refined` is a runtime predicate assertion that panics on
