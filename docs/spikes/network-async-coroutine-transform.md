@@ -224,10 +224,23 @@ completion slot. No hidden params, the slice-2b.1 shim is unchanged:
   normal body; the **first** park's suspend-return edge returns `slot` (not
   `hdl`) to the original caller.
 - **Each park** (`emit_state_machine_invocation_for_park_on_fd`, coro branch):
-  `start_dispatcher()` (idempotent) → `register_fd(fd, dir, &frame.parked={
-  poll_fn: @__kara_coro_resume, state: hdl })` → `coro.suspend(false)` →
-  `switch [0→resume, 1→cleanup] default→suspend-return`; the resume edge
-  deregisters and the existing post-park syscall lands there verbatim.
+  `start_dispatcher()` (idempotent) → **`save = coro.save(hdl)`** → `register_fd(
+  fd, dir, &frame.parked={ poll_fn: @__kara_coro_resume, state: hdl })` →
+  `coro.suspend(save, false)` → `switch [0→resume, 1→cleanup]
+  default→suspend-return`; the resume edge deregisters and the existing
+  post-park syscall lands there verbatim. **The `coro.save` before `register_fd`
+  is load-bearing, not optional** (§6's design called for it; this v2 recipe
+  originally dropped it to a bare `coro.suspend(false)` / `token none`). The
+  instant `register_fd` publishes `&frame.parked` to the (sharded) reactor, the
+  dispatcher thread can resume → `coro.done` → `coro.destroy` (free) this frame —
+  while the parking thread (a worker, on the first park) is still committing the
+  suspend. With `token none`, CoroSplit commits the frame's resume state *at the
+  suspend*, after the publish → a cross-thread frame use-after-free (the
+  `ws_idle_holder` reconnect-storm glibc heap-corruption crash). `coro.save`
+  moves that commit before the publish, per LLVM's "may be resumed on another
+  thread before the suspend" contract. Fixed 2026-06-05 — see
+  `phase-7-codegen.md` "Cross-thread coroutine-frame use-after-free at an I/O
+  park".
 - **Body completion**: `karac_runtime_park_slot_signal(slot)` then a **final**
   `coro.suspend(true)`. The dispatcher's last `@__kara_coro_resume` sees
   `coro.done` and `coro.destroy`s the frame; the signal has already woken the
