@@ -1,0 +1,67 @@
+// runtime/stdlib/bufwriter.kara
+//
+// Phase 8 `BufWriter[W]` — buffered writer wrapper, the Write-side peer
+// of `BufReader[R]` (Standard I/O follow-up). Wraps a `Write` sink with
+// an internal buffer so per-call syscall overhead amortizes: bytes
+// accumulate in the buffer and only reach the underlying writer when the
+// buffer fills, on an explicit `flush()`, or when the `BufWriter` drops.
+// At v1 the wrapped writer `W` is concretely `File` — the
+// effect-polymorphic design (`writes(FileSystem)` flowing from the
+// wrapped writer's own effect set) waits on the effect-polymorphic trait
+// surface (P1, `phase-3-effect-checker.md`), so the v1 method effects
+// hardcode `writes(FileSystem)`.
+//
+// **Dispatch.** Like `Pool[T]` / `File` / `BufReader[R]`, the struct body
+// is empty — the actual state (an
+// `Arc<Mutex<std::io::BufWriter<std::fs::File>>>`) lives on the
+// `Value::BufWriter` interpreter variant; the typechecker only needs the
+// type + method signatures, which the baked `impl[W] BufWriter[W] { ... }`
+// below supplies. Constructors `BufWriter.new` / `.with_capacity` dispatch
+// through the interpreter's `"BufWriter.new"` / `"BufWriter.with_capacity"`
+// path-string arms in `eval_call.rs`; instance methods `write` / `flush`
+// dispatch through `try_eval_bufwriter_method`. Method bodies are
+// placeholder `#[compiler_builtin]` stubs.
+//
+// **Construction is buffer-only.** `BufWriter.new` / `.with_capacity`
+// wrap an already-open `File` — no filesystem access happens at
+// construction (the dup of the underlying fd is not an observable write),
+// so they carry no effect. The write methods carry `writes(FileSystem)`.
+//
+// **Drop flushes.** `std::io::BufWriter`'s own Drop impl flushes any
+// buffered bytes through the underlying fd when the last `Value::BufWriter`
+// Arc drops, so omitting an explicit `flush()` before the value goes out
+// of scope still gets the bytes to disk (errors on the drop-flush are
+// swallowed, matching Rust — call `flush()` explicitly to observe them).
+//
+// Interpreter-only MVP. The cancel-safety `#[cancel_unsafe_until(...)]`
+// annotation (the "unflushed bytes" bit — same shape as `File`'s unflushed-
+// writes bit) is deferred to a follow-on slice (phase-6) — see the
+// `BufWriter[W]` entry in `phase-8-stdlib-floor.md` for the v1 surface +
+// deferral list.
+
+struct BufWriter[W] { }
+
+impl[W] BufWriter[W] {
+    // Wrap `writer` with a default-capacity (8 KiB) internal buffer.
+    // Dispatched through `eval_call.rs`'s `"BufWriter.new"` path-string
+    // arm, which clones the underlying file descriptor and wraps it in
+    // `std::io::BufWriter`.
+    #[compiler_builtin]
+    fn new(writer: W) -> BufWriter[W] { BufWriter { } }
+
+    // Wrap `writer` with an explicit buffer capacity (bytes).
+    #[compiler_builtin]
+    fn with_capacity(writer: W, cap: usize) -> BufWriter[W] { BufWriter { } }
+
+    // Write `buf` into the internal buffer, flushing to the underlying
+    // writer if the buffer fills. Returns the byte count accepted.
+    // Mirrors Rust's `Write::write` contract for `BufWriter` (a short
+    // write is possible only when an underlying flush partially fails).
+    #[compiler_builtin]
+    fn write(ref self, buf: Slice[u8]) -> Result[usize, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    // Flush all buffered bytes to the underlying writer. Returns Unit on
+    // success. Mirrors Rust's `Write::flush`.
+    #[compiler_builtin]
+    fn flush(ref self) -> Result[Unit, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+}

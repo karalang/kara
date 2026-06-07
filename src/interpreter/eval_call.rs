@@ -492,6 +492,64 @@ impl<'a> super::Interpreter<'a> {
                         ),
                     };
                 }
+                "BufWriter.new" | "BufWriter.with_capacity" => {
+                    // Phase 8 `BufWriter[W]` slice (Write-side peer of
+                    // `BufReader`): wrap a `File` writer with a buffered
+                    // `std::io::BufWriter`. The wrapped writer `W` is
+                    // concretely `File` at v1. As with `BufReader.new`, we
+                    // `try_clone` (dup) the underlying fd so the BufWriter
+                    // owns its writer while the original `File` value stays
+                    // usable — the clone shares the OS file offset, so writes
+                    // through the BufWriter land wherever the File last left
+                    // off. Construction performs no observable write, so no
+                    // effect is tracked here (the write methods carry it).
+                    let writer_val = match args.first() {
+                        Some(arg) => self.eval_expr_inner(&arg.value),
+                        None => {
+                            return self.record_runtime_error(
+                                format!("{path_str} expects a File writer argument"),
+                                span,
+                            );
+                        }
+                    };
+                    let file_arc = match writer_val {
+                        Value::File(arc) => arc,
+                        other => {
+                            return self.record_runtime_error(
+                                format!(
+                                    "{path_str} expects a File writer, got `{}`",
+                                    other.variant_name()
+                                ),
+                                span,
+                            );
+                        }
+                    };
+                    // Default 8 KiB buffer for `new`; explicit capacity for
+                    // `with_capacity` (a non-positive value falls back to the
+                    // default rather than erroring — matches the permissive
+                    // interpreter posture, mirroring `BufReader`).
+                    let cap = if path_str == "BufWriter.with_capacity" {
+                        match args.get(1).map(|a| self.eval_expr_inner(&a.value)) {
+                            Some(Value::Int(n)) if n > 0 => n as usize,
+                            _ => 8192,
+                        }
+                    } else {
+                        8192
+                    };
+                    let cloned = {
+                        let guard = file_arc.lock().unwrap();
+                        guard.try_clone()
+                    };
+                    return match cloned {
+                        Ok(f) => Value::BufWriter(Arc::new(Mutex::new(
+                            std::io::BufWriter::with_capacity(cap, f),
+                        ))),
+                        Err(e) => self.record_runtime_error(
+                            format!("{path_str}: failed to clone file handle: {e}"),
+                            span,
+                        ),
+                    };
+                }
                 "F32.from" => {
                     let val = if let Some(arg) = args.first() {
                         match self.eval_expr_inner(&arg.value) {

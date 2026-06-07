@@ -227,6 +227,18 @@ pub enum Value {
     /// drains it one line at a time, yielding `Result[String, IoError]` per
     /// line. Phase 8 `BufReader[R]` `lines()` slice.
     LinesIter(Arc<Mutex<std::io::BufReader<std::fs::File>>>),
+    /// `BufWriter[W]` buffered writer wrapping a `File` — the Write-side
+    /// peer of `BufReader`. Holds an owned
+    /// `std::io::BufWriter<std::fs::File>` (constructed over a `dup(2)`
+    /// clone of the wrapped file's fd, so the BufWriter owns its writer
+    /// while the original `File` value stays usable). The `Arc<Mutex<…>>`
+    /// keeps `Value` clone-friendly without requiring `Clone` on the inner
+    /// writer; Drop on the last Arc runs `std::io::BufWriter`'s own Drop,
+    /// flushing any buffered bytes through the cloned fd before it closes.
+    /// Phase 8 `BufWriter[W]` slice. Constructed via `BufWriter.new` /
+    /// `BufWriter.with_capacity`; methods `write` / `flush` thread through
+    /// the mutex.
+    BufWriter(Arc<Mutex<std::io::BufWriter<std::fs::File>>>),
     /// Aliasing slot used to back a `mut ref |...|` closure capture.
     /// Lives only inside an `Env` scope or a closure's captured-env map;
     /// never reaches user expressions because every path that reads a
@@ -882,6 +894,7 @@ impl std::fmt::Display for Value {
             }
             Value::File(_) => write!(f, "<File>"),
             Value::BufReader(_) => write!(f, "<BufReader>"),
+            Value::BufWriter(_) => write!(f, "<BufWriter>"),
             Value::LinesIter(_) => write!(f, "<LinesIter>"),
         }
     }
@@ -1012,6 +1025,7 @@ impl Value {
             Value::Entry { .. } => "Entry",
             Value::File(_) => "File",
             Value::BufReader(_) => "BufReader",
+            Value::BufWriter(_) => "BufWriter",
             Value::LinesIter(_) => "LinesIter",
         }
     }

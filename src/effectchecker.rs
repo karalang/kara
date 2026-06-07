@@ -779,6 +779,21 @@ impl<'a> EffectChecker<'a> {
                 set.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span.clone()));
                 self.inferred_effects.insert(fn_name.to_string(), set);
             }
+            // Phase 8 `BufWriter[W]` slice (Write-side peer of `BufReader`):
+            // the buffered write methods carry `writes(FileSystem)` (the v1
+            // concrete binding for `W = File`). Constructors `BufWriter.new`
+            // / `.with_capacity` wrap an already-open handle and perform no
+            // observable write, so they seed no effect. Same
+            // bridge-the-`with`-clause-into-inference rationale as the
+            // `File.*` / `BufReader.*` blocks above.
+            for fn_name in ["BufWriter.write", "BufWriter.flush"] {
+                let mut set = EffectSet::new();
+                set.add(
+                    writes_fs.clone(),
+                    EffectOrigin::Direct(builtin_span.clone()),
+                );
+                self.inferred_effects.insert(fn_name.to_string(), set);
+            }
         }
 
         // Stdlib conversion traits (`From`, `Into`, `TryFrom`, `TryInto`) are

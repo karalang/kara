@@ -169,6 +169,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // by a `for` loop yielding `Result[String, IoError]` per line. Non-
     // generic at v1 (concrete element type; wrapped reader erased).
     "LinesIter",
+    // Phase 8 `BufWriter[W]` — buffered writer wrapper, the Write-side peer
+    // of `BufReader`. `BufWriter.new(writer)` / `.with_capacity(writer, cap)`
+    // wrap a `File`; `write` / `flush` amortize syscall overhead, flushing
+    // on capacity / explicit `flush()` / drop. See
+    // `runtime/stdlib/bufwriter.kara`.
+    "BufWriter",
     // Debugger Contract slice 5: `std.runtime` introspection surface.
     // `Runtime` is the empty-marker host for the three `#[compiler_builtin]`
     // dispatch methods; `ParBlockInfo` / `TaskInfo` / `WaitTarget` are the
@@ -730,6 +736,15 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
         "bufreader.kara",
         include_str!("../runtime/stdlib/bufreader.kara"),
     ),
+    // `BufWriter[W]` buffered writer wrapper (phase-8 Standard I/O
+    // follow-up). The Write-side peer of `BufReader`: wraps a `File`
+    // writer (concretely, at v1) with an internal buffer so per-call
+    // syscall overhead amortizes. Surface + collapsed interpreter
+    // intrinsic; see `runtime/stdlib/bufwriter.kara`.
+    (
+        "bufwriter.kara",
+        include_str!("../runtime/stdlib/bufwriter.kara"),
+    ),
     // Compile-time layout introspection — `size_of[T]()` / `align_of[T]()`
     // (the `offset_of[T](field)` arm is a parser special-form, not a
     // stdlib function — see `runtime/stdlib/intrinsics.kara`).
@@ -1229,7 +1244,9 @@ fn stub_struct(name: &str, span: &Span) -> Item {
 fn stub_generics(name: &str, span: &Span) -> Option<GenericParams> {
     let params: &[&str] = match name {
         "Option" | "Vec" | "VecDeque" | "Slice" | "Array" | "Vector" | "Set" | "Atomic"
-        | "Mutex" | "SortedSet" | "Channel" | "Sender" | "Receiver" | "BufReader" => &["T"],
+        | "Mutex" | "SortedSet" | "Channel" | "Sender" | "Receiver" | "BufReader" | "BufWriter" => {
+            &["T"]
+        }
         "Result" => &["T", "E"],
         "Map" | "Entry" => &["K", "V"],
         _ => return None,

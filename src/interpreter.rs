@@ -17,6 +17,7 @@ mod iter_eval;
 mod method_call;
 mod method_call_bounded_channel;
 mod method_call_bufreader;
+mod method_call_bufwriter;
 mod method_call_channel;
 mod method_call_file;
 mod method_call_http;

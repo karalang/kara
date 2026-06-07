@@ -8672,6 +8672,96 @@ fn test_bufreader_consume_wrong_arg_type_is_error() {
     );
 }
 
+// ── Phase 8 BufWriter[W] — typechecker signatures ─────────────────
+//
+// BufWriter.new / .with_capacity are static methods wrapping a `File`
+// writer, returning BufWriter[File]; `write` takes a `Slice[u8]` and
+// `flush` takes no args. Both write methods carry `writes(FileSystem)`
+// (the v1 concrete binding for W = File), validated by the effect-checker
+// via the baked stdlib `with` clauses in `runtime/stdlib/bufwriter.kara`.
+
+#[test]
+fn test_bufwriter_new_returns_bufwriter() {
+    typecheck_ok(
+        "fn driver() with writes(FileSystem) {
+             match File.create(\"x.txt\") {
+                 Ok(f) => { let bw = BufWriter.new(f); }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
+fn test_bufwriter_with_capacity_returns_bufwriter() {
+    typecheck_ok(
+        "fn driver() with writes(FileSystem) {
+             match File.create(\"x.txt\") {
+                 Ok(f) => { let bw = BufWriter.with_capacity(f, 16); }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
+fn test_bufwriter_write_returns_result_usize() {
+    // bw.write(buf: Slice[u8]) -> Result[usize, IoError]; the returned
+    // count solves against `usize` in the match.
+    typecheck_ok(
+        "fn driver() with writes(FileSystem) {
+             match File.create(\"x.txt\") {
+                 Ok(f) => {
+                     let bw = BufWriter.new(f);
+                     let data = [104u8, 105u8];
+                     match bw.write(data[0..2]) {
+                         Ok(n) => {}
+                         Err(_) => {}
+                     }
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
+fn test_bufwriter_flush_returns_result_unit() {
+    typecheck_ok(
+        "fn driver() with writes(FileSystem) {
+             match File.create(\"x.txt\") {
+                 Ok(f) => {
+                     let bw = BufWriter.new(f);
+                     let _ = bw.flush();
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
+fn test_bufwriter_write_wrong_arg_type_is_error() {
+    // write expects a `Slice[u8]` buffer; passing an integer must fire a
+    // typechecker rejection.
+    let errs = typecheck_errors(
+        "fn driver() with writes(FileSystem) {
+             match File.create(\"x.txt\") {
+                 Ok(f) => {
+                     let bw = BufWriter.new(f);
+                     let _ = bw.write(42);
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+    assert!(
+        !errs.is_empty(),
+        "expected typechecker rejection for non-Slice write buffer; errs={:?}",
+        errs,
+    );
+}
+
 // ── std.runtime introspection signatures (Debugger Contract slice 5) ─────────
 //
 // Three Kāra-callable APIs declared in `runtime/stdlib/runtime.kara`. The

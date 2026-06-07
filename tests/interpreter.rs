@@ -5309,6 +5309,111 @@ fn test_bufreader_consume_clamps_past_buffer() {
     let _ = std::fs::remove_file(&tmp);
 }
 
+// ── Phase 8 BufWriter[W] — interpreter MVP ────────────────────────
+//
+// BufWriter.new / .with_capacity wrap a `File` (via a dup of its fd)
+// with a buffered writer; `write` accepts a `Slice[u8]` and returns the
+// byte count buffered; `flush` drains the buffer to the underlying fd.
+// Tests cover the write-flush-reopen-read round-trip, with_capacity, the
+// drop-flush (no explicit flush) path, and an empty write.
+
+#[test]
+fn test_bufwriter_write_flush_reopen_read_roundtrip() {
+    // Write "hi\n" through a BufWriter, flush, then read the file back via
+    // FileSystem.read_to_string to prove the bytes reached disk.
+    let tmp = std::env::temp_dir().join("karac_test_bufwriter_roundtrip.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    let src = format!(
+        "fn main() {{
+             match File.create(\"{path}\") {{
+                 Ok(f) => {{
+                     let bw = BufWriter.new(f);
+                     let data = [104u8, 105u8, 10u8];
+                     match bw.write(data[0..3]) {{
+                         Ok(n) => println(\"wrote \" + n.to_string()),
+                         Err(_) => println(\"write err\"),
+                     }}
+                     match bw.flush() {{
+                         Ok(_) => println(\"flushed\"),
+                         Err(_) => println(\"flush err\"),
+                     }}
+                 }}
+                 Err(_) => println(\"create err\"),
+             }}
+             match FileSystem.read_to_string(\"{path}\") {{
+                 Ok(s) => println(\"contents=[\" + s + \"]\"),
+                 Err(_) => println(\"read err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "wrote 3\nflushed\ncontents=[hi\n]\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn test_bufwriter_with_capacity_write_flush() {
+    // with_capacity wraps with an explicit buffer size; the write+flush
+    // path is otherwise identical.
+    let tmp = std::env::temp_dir().join("karac_test_bufwriter_cap.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    let src = format!(
+        "fn main() {{
+             match File.create(\"{path}\") {{
+                 Ok(f) => {{
+                     let bw = BufWriter.with_capacity(f, 4);
+                     let data = [65u8, 66u8, 67u8];
+                     let _ = bw.write(data[0..3]);
+                     let _ = bw.flush();
+                 }}
+                 Err(_) => println(\"create err\"),
+             }}
+             match FileSystem.read_to_string(\"{path}\") {{
+                 Ok(s) => println(\"contents=[\" + s + \"]\"),
+                 Err(_) => println(\"read err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "contents=[ABC]\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn test_bufwriter_drop_flushes_pending_writes() {
+    // Omit the explicit flush — std::io::BufWriter's own Drop flushes the
+    // buffered bytes through the cloned fd when the `Value::BufWriter` Arc
+    // drops at scope exit, so the contents still reach disk. Read-back
+    // happens after the writing scope ends.
+    let tmp = std::env::temp_dir().join("karac_test_bufwriter_drop_flush.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    let src = format!(
+        "fn write_it() {{
+             match File.create(\"{path}\") {{
+                 Ok(f) => {{
+                     let bw = BufWriter.new(f);
+                     let data = [122u8, 122u8];
+                     let _ = bw.write(data[0..2]);
+                 }}
+                 Err(_) => println(\"create err\"),
+             }}
+         }}
+         fn main() {{
+             write_it();
+             match FileSystem.read_to_string(\"{path}\") {{
+                 Ok(s) => println(\"contents=[\" + s + \"]\"),
+                 Err(_) => println(\"read err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "contents=[zz]\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
 // ── std.runtime introspection (Debugger Contract slice 5) ─────────────────────
 //
 // The tree-walk interpreter has its own par-block evaluation path and does

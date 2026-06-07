@@ -7668,6 +7668,55 @@ fn test_pub_fn_calling_bufreader_consume_needs_no_effect() {
     );
 }
 
+// ── Phase 8 BufWriter[W] — effect declarations ─────────────────────
+//
+// BufWriter write methods carry `writes(FileSystem)` via baked stdlib
+// `with writes(FileSystem)` clauses (`runtime/stdlib/bufwriter.kara`),
+// seeded into `inferred_effects` so the call-site walker sees them. A
+// `pub fn` that calls a BufWriter write method without declaring
+// writes(FileSystem) must fail `MissingEffectDeclaration`. As with the
+// BufReader tests, these use `effectcheck_full_pipeline` so the
+// typechecker's `method_callee_types` is threaded in (instance-method
+// effect resolution depends on it).
+
+#[test]
+fn test_pub_fn_calling_bufwriter_write_must_declare_writes_filesystem() {
+    let result = effectcheck_full_pipeline(
+        "pub fn dump(bw: ref BufWriter[File], raw: Slice[u8]) {
+             let _ = bw.write(raw);
+         }",
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("writes(FileSystem)")),
+        "expected MissingEffectDeclaration for writes(FileSystem); got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_pub_fn_with_writes_filesystem_declared_accepts_bufwriter_methods() {
+    let result = effectcheck_full_pipeline(
+        "pub fn dump(bw: ref BufWriter[File], raw: Slice[u8]) with writes(FileSystem) {
+             let _ = bw.write(raw);
+             let _ = bw.flush();
+         }",
+    );
+    let real_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .collect();
+    assert!(
+        real_errors.is_empty(),
+        "expected clean effectcheck with writes(FileSystem) declared; got: {:?}",
+        real_errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
 // ── Refinement types (phase-9 step 3) ───────────────────────────
 //
 // `x as Refined` is a runtime predicate assertion that panics on
