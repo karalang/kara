@@ -1435,6 +1435,28 @@ impl<'ctx> super::Codegen<'ctx> {
             if let BasicValueEnum::StructValue(sv) = recv_val {
                 let vec_ty = self.vec_struct_type();
                 if sv.get_type() == vec_ty {
+                    // General owned-temp tracking, slice 3 (method-chain
+                    // receiver temps): when the receiver is a *fresh-owned*
+                    // Vec/String temporary (`make_vec().len()`), `len` /
+                    // `is_empty` borrow it read-only — so the caller owns the
+                    // temp and must drop it. Without this its heap buffer
+                    // leaks (the field-extract below reads `len` and discards
+                    // the struct, orphaning `data`). Route the receiver value
+                    // through the owned-temp chokepoint so a `FreeVecBuffer`
+                    // (with the element type from `owned_temp_drops`, closing
+                    // nested-heap leaks) drains at scope exit. Gated to
+                    // Call/MethodCall: a *place*-expression receiver
+                    // (`obj.items.len()`, `arr[0].len()`) reloads a buffer an
+                    // existing binding owns, which a second free would
+                    // double-free; `expr_yields_fresh_owned_temp` excludes
+                    // those (and the `cap > 0` guard in `FreeVecBuffer` keeps
+                    // a non-owning / borrowed value safe regardless).
+                    if Self::expr_yields_fresh_owned_temp(object) {
+                        self.materialize_owned_temp(
+                            recv_val,
+                            (object.span.offset, object.span.length),
+                        );
+                    }
                     let i64_t = self.context.i64_type();
                     let len_val = self
                         .builder

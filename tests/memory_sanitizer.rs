@@ -2727,6 +2727,68 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_method_chain_intermediate_vec_freed() {
+        // Slice 3: `make_vec().len()` — a fresh-owned Vec temp is the receiver
+        // of `len` (borrow). The receiver's heap buffer must drop after the
+        // statement instead of leaking. 8-iteration loop: each iteration's
+        // receiver temp is freed exactly once — Linux `detect_leaks=1` is the
+        // leak oracle, macOS catches any double-free (e.g. a per-site reused
+        // temp slot freed against a stale buffer, or compounding).
+        assert_clean_asan_run(
+            r#"
+fn make_vec() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    v.push(2_i64);
+    v.push(3_i64);
+    return v;
+}
+
+fn main() {
+    let mut total = 0i64;
+    let mut i = 0;
+    while i < 8 {
+        total = total + make_vec().len();
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["24"],
+            "method_chain_intermediate_vec_freed",
+        );
+    }
+
+    #[test]
+    fn asan_method_chain_field_receiver_no_double_free() {
+        // Double-free guard for slice 3's gate: a field-access receiver
+        // (`h.items.len()`) reloads the buffer `h` owns — the receiver path
+        // must NOT free it (only `h`'s scope-exit cleanup does). Looping the
+        // read keeps `h` alive; a wrongful receiver-temp free would fault
+        // under macOS ASAN (and `h`'s own free at scope exit would be the
+        // second). Exercises the `expr_yields_fresh_owned_temp` exclusion.
+        assert_clean_asan_run(
+            r#"
+struct Holder { items: Vec[i64] }
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10_i64);
+    v.push(20_i64);
+    let h = Holder { items: v };
+    let mut i = 0;
+    while i < 8 {
+        println(h.items.len());
+        i = i + 1;
+    }
+}
+"#,
+            &["2", "2", "2", "2", "2", "2", "2", "2"],
+            "method_chain_field_receiver_no_double_free",
+        );
+    }
+
     // ── 491: tail-expression temp drops before block-local lets ──
     //
     // phase-6-runtime.md line 491 — "Tail-expression temporary scope —

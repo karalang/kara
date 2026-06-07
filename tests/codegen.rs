@@ -9212,6 +9212,69 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_method_chain_receiver_temp_freed() {
+        // Slice 3 (method-chain receiver temps): `make_vec().len()` — the
+        // receiver is a fresh-owned Vec temp borrowed read-only by `len`. The
+        // len/is_empty fast path extracted the length and discarded the
+        // struct, orphaning its `data` buffer. Now the receiver is routed
+        // through `materialize_owned_temp` → `__owned_tmp` slot + a
+        // `FreeVecBuffer` drain (`cleanup.free`). Archive-independent
+        // leak-closure gate (macOS ASAN has no LeakSanitizer).
+        let src = r#"
+fn make_vec() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    return v;
+}
+
+fn main() {
+    let n = make_vec().len();
+    println(n);
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__owned_tmp"),
+            "expected the fresh Vec receiver materialized into __owned_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.free"),
+            "expected a FreeVecBuffer drain for the method-chain receiver temp; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_method_chain_field_receiver_no_owned_temp() {
+        // Negative / double-free guard: a *place*-expression receiver
+        // (`h.items.len()`, a field access) reloads a buffer the `h` binding
+        // owns. `expr_yields_fresh_owned_temp` excludes it, so the receiver
+        // path must NOT materialize an `__owned_tmp` — freeing it would
+        // double-free against `h`'s own scope-exit cleanup. (Construction
+        // uses no other fresh-temp method chain, so any `__owned_tmp` here
+        // could only come from the field receiver.)
+        let src = r#"
+struct Holder { items: Vec[i64] }
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    let h = Holder { items: v };
+    let n = h.items.len();
+    println(n);
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            !ir.contains("__owned_tmp"),
+            "a field-access receiver must not materialize an owned temp \
+             (would double-free against the binding's cleanup); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_let_else_emits_branch_not_noop() {
         // phase-6-runtime.md line 489: `let … else` lowers to a real branch
         // (match edge binds + falls through, else edge diverges). Regression
