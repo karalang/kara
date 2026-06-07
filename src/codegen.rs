@@ -1350,6 +1350,13 @@ pub(super) struct Codegen<'ctx> {
     /// loads `i64 0`. See bug #8 (call-chain field access on
     /// shared-struct return).
     pub(crate) fn_return_type_names: HashMap<String, String>,
+    /// Function-name → inner `TypeExpr` of a borrow return (`-> ref T` /
+    /// `-> mut ref T` ⇒ inner `T`). Lets the caller learn that a call
+    /// result is a borrow so it can bind it as a ref-local (deref on use
+    /// via `ref_params`) rather than treating the returned `ptr` as a
+    /// value — the caller half of B-2026-06-07-5. Populated by
+    /// `declare_function`.
+    pub(crate) fn_ref_return_inner: HashMap<String, TypeExpr>,
     /// Function-name → inner-shared-name when the function returns
     /// `Option[shared T]`. Populated by `declare_function` from the
     /// return type's `Option[T]` generic arg when T is a known shared
@@ -1438,6 +1445,22 @@ pub(super) struct Codegen<'ctx> {
     /// doesn't return `Result[T, E]` (or doesn't return at all) — the
     /// `?` site falls back to staging bare `w0` as i64 in that case.
     pub(crate) current_fn_err_payload_ty: Option<inkwell::types::BasicTypeEnum<'ctx>>,
+    /// True while compiling a function whose declared return type is a
+    /// borrow (`-> ref T` / `-> mut ref T`). The LLVM signature returns a
+    /// thin `ptr`, so the tail / explicit-`return` sites must emit the
+    /// ADDRESS of the borrow source (a `ref` param or a field reached
+    /// through one) via `compile_ref_return_ptr`, not the materialized
+    /// value — see `B-2026-06-07-5` (returned-borrow codegen). Set per
+    /// function in `compile_function`.
+    pub(crate) current_fn_returns_ref: bool,
+    /// True only while compiling the RHS of a `let <name> = <ref-returning
+    /// call>` — the one caller context that binds the borrow as a ref-local
+    /// (deref on use). Outside it, a call to a borrow-returning function is
+    /// rejected by `compile_call` rather than silently miscompiled (the
+    /// returned `ptr` would be mishandled as a value). Direct use of a
+    /// borrow-returning call result is a tracked Tier-1.5 follow-on
+    /// (B-2026-06-07-5).
+    pub(crate) compiling_ref_return_let_rhs: bool,
     /// Set by `compile_match` when the scrutinee is a borrow-returning
     /// call (`Map.get`, `Vec.first`, ...) — used by `bind_pattern_values`
     /// to suppress `track_vec_var` for the bound name, since the payload
@@ -4098,6 +4121,7 @@ impl<'ctx> Codegen<'ctx> {
             fn_param_ref: HashMap::new(),
             fn_return_type_names: HashMap::new(),
             fn_return_type_exprs: HashMap::new(),
+            fn_ref_return_inner: HashMap::new(),
             fn_return_option_inner_shared: HashMap::new(),
             fn_niche_abi: HashMap::new(),
             var_option_shared_heap: HashMap::new(),
@@ -4106,6 +4130,8 @@ impl<'ctx> Codegen<'ctx> {
             scope_cleanup_actions: Vec::new(),
             pending_errdefer_payload: None,
             current_fn_err_payload_ty: None,
+            current_fn_returns_ref: false,
+            compiling_ref_return_let_rhs: false,
             pattern_binding_is_borrow: false,
             enum_drop_fns: HashMap::new(),
             struct_drop_fns: HashMap::new(),

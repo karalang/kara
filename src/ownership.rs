@@ -24,6 +24,7 @@ mod expr_check;
 mod par_capture_classify;
 mod par_helpers;
 mod rc_promote;
+mod ref_return;
 
 // Re-export for `cli::cmd_migrate` (phase-7 L215a): the migrate tool
 // reuses `build_fix_diff_edits` + `BindingKind` to emit the same type-
@@ -516,6 +517,32 @@ pub enum OwnershipErrorKind {
         type_name: String,
         binding: String,
     },
+    /// A function declared `-> ref T` / `-> mut ref T` returns a borrow
+    /// whose source is not a `ref` parameter (or a field reached through
+    /// one). Per design.md § Feature 4 Part 3 source-pinning: "every `ref`
+    /// value in a well-typed program has a traceable source ... if a `ref`
+    /// can't be traced to a parameter, that's a source pinning error." A
+    /// borrow of a local / owned value / temporary would dangle once the
+    /// function returns. The `shape` distinguishes a genuinely-dangling
+    /// source (permanent error) from a return form whose codegen support
+    /// is still pending (B-2026-06-07-5 Tiers 2/3).
+    BorrowReturnNotSourcePinned {
+        shape: BorrowReturnShape,
+    },
+}
+
+/// Why a `-> ref T` return failed the source-pinning check — selects the
+/// diagnostic wording for [`OwnershipErrorKind::BorrowReturnNotSourcePinned`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum BorrowReturnShape {
+    /// The returned borrow's source is a local binding, owned parameter,
+    /// temporary, or literal — it is dropped at function exit, so the
+    /// returned reference would dangle. Permanent source-pinning error.
+    DanglingSource,
+    /// The return form (e.g. `if`/`match` of `ref` params, a method-call
+    /// chain) is valid per the spec but not yet supported by the code
+    /// generator (B-2026-06-07-5 Tiers 2/3). Temporary limitation.
+    UnsupportedForm,
 }
 
 impl std::fmt::Display for OwnershipError {
@@ -1443,6 +1470,11 @@ impl<'a> OwnershipChecker<'a> {
         // case (iv). Emits E0508 at the closure expression with a
         // three-fix message.
         self.check_closure_ref_capture_escapes(f);
+
+        // Source-pinning for borrow returns (`-> ref T`): every returned
+        // borrow must trace to a `ref` parameter, or it would dangle.
+        // design.md § Feature 4 Part 3; B-2026-06-07-5. Emits E0509.
+        self.check_ref_return_source_pinning(f);
 
         // Infer parameter modes
         let mut modes: Vec<(String, OwnershipMode)> = Vec::new();

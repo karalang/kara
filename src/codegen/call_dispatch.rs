@@ -89,6 +89,24 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         self.emit_branch_cancel_check("call", callee_key.as_deref());
 
+        // Borrow-returning call used outside a `let <name> = ...` binding.
+        // The result is a `ptr` (the borrow's address); any other context
+        // (print arg, operand, nested call) would mishandle it as a value.
+        // The let arm sets `compiling_ref_return_let_rhs` for the one
+        // sanctioned site; reject everywhere else rather than miscompile.
+        // Direct use is a tracked Tier-1.5 follow-on (B-2026-06-07-5).
+        if !self.compiling_ref_return_let_rhs {
+            if let ExprKind::Identifier(n) = &callee.kind {
+                if self.fn_ref_return_inner.contains_key(n) {
+                    return Err(format!(
+                        "borrow-returning call `{n}(...)` must be bound directly with \
+                         `let x = {n}(...)` before use; direct use of a `-> ref T` result \
+                         is not yet supported (B-2026-06-07-5)"
+                    ));
+                }
+            }
+        }
+
         // `old(expr)` inside an `ensures` postcondition reads the pre-state
         // snapshot captured at function entry (design.md § Contracts rule 4),
         // keyed by the arg's span. Falls back to compiling the arg directly

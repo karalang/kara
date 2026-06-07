@@ -936,6 +936,28 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_borrow_return_let_bound() {
+        // B-2026-06-07-5: returning a borrow (`-> ref T`) — a field reached
+        // through a `ref` param (String + scalar) and a forwarded `ref`
+        // param — derefs correctly at a let-bound caller.
+        let out = run_program(
+            "struct User { name: String, age: i64 }\n\
+             fn name_of(u: ref User) -> ref String { u.name }\n\
+             fn age_of(p: ref User) -> ref i64 { p.age }\n\
+             fn fwd(s: ref String) -> ref String { s }\n\
+             fn main() {\n\
+             \x20   let u = User { name: \"ada\", age: 36 };\n\
+             \x20   let n = name_of(u); println(n);\n\
+             \x20   let a = age_of(u); println(a);\n\
+             \x20   let s = \"hello\"; let f = fwd(s); println(f);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "ada\n36\nhello");
+        }
+    }
+
+    #[test]
     fn test_e2e_ambient_resource_clock_now_and_env_set() {
         // Ambient built-in resource methods lower to runtime FFIs
         // (`karac_runtime_env_set` / `karac_runtime_clock_now`) — the

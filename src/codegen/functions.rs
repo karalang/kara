@@ -204,6 +204,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // which the bare-segment `fn_return_type_names` below drops.
             self.fn_return_type_exprs
                 .insert(func.name.clone(), ret_ty.clone());
+            // Borrow return (`-> ref T` / `-> mut ref T`): record the
+            // inner `T` so the caller binds the call result as a ref-local
+            // (deref on use) instead of as a raw value — caller half of
+            // B-2026-06-07-5.
+            if let TypeKind::Ref(inner) | TypeKind::MutRef(inner) = &ret_ty.kind {
+                self.fn_ref_return_inner
+                    .insert(func.name.clone(), (**inner).clone());
+            }
             if let TypeKind::Path(path) = &ret_ty.kind {
                 if let Some(seg) = path.segments.first() {
                     self.fn_return_type_names
@@ -389,6 +397,15 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => None,
         });
+
+        // Borrow-returning function (`-> ref T` / `-> mut ref T`): the
+        // tail / explicit-`return` sites emit the borrow's ADDRESS via
+        // `compile_ref_return_ptr` rather than its materialized value
+        // (B-2026-06-07-5).
+        self.current_fn_returns_ref = matches!(
+            func.return_type.as_ref().map(|t| &t.kind),
+            Some(TypeKind::Ref(_) | TypeKind::MutRef(_))
+        );
 
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
@@ -909,8 +926,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     .current_fn
                     .and_then(|f| f.get_type().get_return_type())
                     .is_none();
+                // Borrow return (`-> ref T`): emit the ADDRESS of the
+                // tail borrow source, not the materialized `val` (which
+                // would be `ret {ptr,i64,i64}/ptr` etc. — B-2026-06-07-5).
+                // The already-compiled `val` is a pure, dead load for the
+                // admitted shapes (ref-param identifier / field-of-ref-param).
+                let ref_ret_ptr = if self.current_fn_returns_ref {
+                    func.body
+                        .final_expr
+                        .as_deref()
+                        .and_then(|e| self.compile_ref_return_ptr(e))
+                } else {
+                    None
+                };
                 if fn_returns_void {
                     self.builder.build_return(None).unwrap();
+                } else if let Some(ptr) = ref_ret_ptr {
+                    self.builder.build_return(Some(&ptr)).unwrap();
                 } else if self.current_fn_ret_is_niche() {
                     // Niche-ABI return: pack the conventional 4-i64
                     // Option value into the single nullable ptr the

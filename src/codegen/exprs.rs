@@ -601,10 +601,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     // ramp return is emitted in the shared suspend-return
                     // block); the Kāra value `v` is discarded (unit-only this
                     // slice). A coroutine fn is never `main`.
+                    // Borrow return (`return s;` / `return u.field;` in a
+                    // `-> ref T` fn): emit the ADDRESS of the borrow source,
+                    // not the materialized `v` (B-2026-06-07-5). Computed
+                    // after the scope-cleanup walk above — the source is a
+                    // `ref` param (or a field through one), never a freed
+                    // local, so its address is valid here.
+                    let ref_ret_ptr = if self.current_fn_returns_ref {
+                        self.compile_ref_return_ptr(e)
+                    } else {
+                        None
+                    };
                     if let Some(ctx) = self.coro_ctx {
                         self.builder
                             .build_unconditional_branch(ctx.coro_return_bb)
                             .unwrap();
+                    } else if let Some(ptr) = ref_ret_ptr {
+                        self.builder.build_return(Some(&ptr)).unwrap();
                     } else if self.current_fn_ret_is_niche() {
                         // Niche-ABI return (`Option[shared T]` →
                         // nullable ptr): pack the conventional 4-i64

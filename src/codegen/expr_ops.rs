@@ -54,6 +54,65 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(agg.into())
     }
 
+    /// Lower a borrow-return expression to the ADDRESS of its source,
+    /// for functions whose declared return type is `ref T` / `mut ref T`
+    /// (`current_fn_returns_ref`). The LLVM return type is a thin `ptr`;
+    /// the normal value-materializing path produces the borrowed value
+    /// instead, which fails module verification (`ret {ptr,i64,i64} / ptr`,
+    /// `ret i64 / ptr`) — see `B-2026-06-07-5`.
+    ///
+    /// Handles the source-pinned shapes the front-end admits as valid
+    /// borrow returns (a borrow that traces to a `ref` parameter):
+    ///   - `fn f(s: ref T) -> ref T { s }` — forward the borrow itself:
+    ///     `get_data_ptr` yields the pointer the ref param holds (the
+    ///     caller's storage).
+    ///   - `fn f(u: ref U) -> ref F { u.field }` — GEP into the caller's
+    ///     struct through the ref param. Mirrors the proven ref-param
+    ///     field-STORE path in `compile_field_store`.
+    ///
+    /// Returns `None` for any other shape (owned local / temporary /
+    /// `if`/`match` / call chain), so callers fall back to the existing
+    /// return path. Dangling shapes (returning a local / owned value) are
+    /// rejected earlier by the ownership source-pinning check; non-dangling
+    /// shapes not yet handled here (`longer`-style `if` of two ref params,
+    /// `first_word`-style method chains) are tracked follow-ons.
+    pub(super) fn compile_ref_return_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
+        match &expr.kind {
+            ExprKind::Identifier(name) => {
+                // Only a borrow that is itself a `ref` parameter can be
+                // forwarded — `get_data_ptr` returns the held caller
+                // pointer for a ref param (and the local alloca for an
+                // owned binding, which would dangle: excluded here).
+                if self.ref_params.contains_key(name) {
+                    self.get_data_ptr(name)
+                } else {
+                    None
+                }
+            }
+            ExprKind::FieldAccess { object, field } => {
+                if let ExprKind::Identifier(base) = &object.kind {
+                    if let Some(&BasicTypeEnum::StructType(struct_ty)) =
+                        self.ref_params.get(base.as_str())
+                    {
+                        let idx = self.field_index_for(object, field)?;
+                        let base_ptr = self.get_data_ptr(base)?;
+                        return self
+                            .builder
+                            .build_struct_gep(
+                                struct_ty,
+                                base_ptr,
+                                idx,
+                                &format!("ret_borrow_{}", field),
+                            )
+                            .ok();
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn compile_field_access(
         &mut self,
         object: &Expr,

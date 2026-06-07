@@ -3008,6 +3008,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::ownership::OwnershipErrorKind::ConcurrentPlainStruct { .. } => {
                     "E_CONCURRENT_PLAIN_STRUCT"
                 }
+                crate::ownership::OwnershipErrorKind::BorrowReturnNotSourcePinned { .. } => "E0509",
             };
             let replacement_json = err.replacement.as_ref().map(|r| {
                 format!(

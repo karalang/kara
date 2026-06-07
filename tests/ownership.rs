@@ -7325,3 +7325,104 @@ fn shared_struct_two_branch_use_still_fires_after_par_exemption() {
         "shared struct two-branch use must still fire E_CONCURRENT_SHARED_STRUCT; got: {errors:?}"
     );
 }
+
+// ── Borrow returns: source pinning + caller move check (B-2026-06-07-5) ──
+
+#[test]
+fn test_borrow_return_field_of_ref_param_ok() {
+    // Tier-1 valid shapes: a field reached through a `ref` param, and a
+    // `ref` param forwarded directly. design.md § Feature 4 Part 3.
+    ownership_ok(
+        "struct User { name: String, age: i64 }\n\
+         fn name_of(u: ref User) -> ref String { u.name }\n\
+         fn fwd(s: ref String) -> ref String { s }\n",
+    );
+}
+
+#[test]
+fn test_borrow_return_dangling_owned_param_errors() {
+    let errors = ownership_errors("fn ret_owned(a: String) -> ref String { a }\n");
+    assert!(
+        errors.iter().any(|e| matches!(
+            e.kind,
+            OwnershipErrorKind::BorrowReturnNotSourcePinned {
+                shape: BorrowReturnShape::DanglingSource
+            }
+        )),
+        "expected a dangling source-pinning error, got: {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_borrow_return_dangling_local_errors() {
+    let errors = ownership_errors(
+        "fn leak(a: String) -> ref String {\n\
+        \x20   let s = a;\n\
+        \x20   s\n\
+         }\n",
+    );
+    assert!(errors.iter().any(|e| matches!(
+        e.kind,
+        OwnershipErrorKind::BorrowReturnNotSourcePinned {
+            shape: BorrowReturnShape::DanglingSource
+        }
+    )));
+}
+
+#[test]
+fn test_borrow_return_unsupported_form_errors() {
+    // `if` of two ref params is valid per spec but a Tier-2 codegen
+    // follow-on — reported as not-yet-supported, not dangling.
+    let errors = ownership_errors(
+        "fn longer(a: ref String, b: ref String) -> ref String {\n\
+        \x20   if a.len() > b.len() { a } else { b }\n\
+         }\n",
+    );
+    assert!(errors.iter().any(|e| matches!(
+        e.kind,
+        OwnershipErrorKind::BorrowReturnNotSourcePinned {
+            shape: BorrowReturnShape::UnsupportedForm
+        }
+    )));
+}
+
+#[test]
+fn test_borrow_return_move_source_while_live_errors() {
+    // 3b: moving the borrow's source while the returned borrow is still
+    // live is a use-after-free — must be rejected.
+    let errors = ownership_errors(
+        "struct User { name: String, age: i64 }\n\
+         fn name_of(u: ref User) -> ref String { u.name }\n\
+         fn sink(x: User) -> i64 { x.age }\n\
+         fn use_after(u: User) -> i64 {\n\
+        \x20   let n = name_of(u);\n\
+        \x20   let g = sink(u);\n\
+        \x20   g\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e.kind,
+            OwnershipErrorKind::SliceBorrowConflict {
+                shape: SliceConflictShape::MoveOfBorrowed
+            }
+        )),
+        "expected move-of-borrowed, got: {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_borrow_return_no_move_ok() {
+    // Borrowing then only reading the source (no move) is fine.
+    ownership_ok(
+        "struct User { name: String, age: i64 }\n\
+         fn name_of(u: ref User) -> ref String { u.name }\n\
+         fn read_age(x: ref User) -> i64 { x.age }\n\
+         fn ok_use(u: User) -> i64 {\n\
+        \x20   let n = name_of(u);\n\
+        \x20   read_age(u)\n\
+         }\n",
+    );
+}

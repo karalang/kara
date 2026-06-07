@@ -451,10 +451,19 @@ impl<'a> super::OwnershipChecker<'a> {
         // borrows would each fire, but for v1 we keep the diagnostic
         // count to one per move.
         let prior = borrows[0].clone();
+        // Word the diagnostic by borrow form: a returned borrow (`let n =
+        // f(u)` where `f -> ref T`) registers a non-slice `ImmRef`/`MutRef`
+        // borrow on its source — moving the source while that borrow is
+        // live is the use-after-free 3b closes (B-2026-06-07-5).
+        let borrow_desc = if prior.kind.is_slice() {
+            "a slice borrow into it"
+        } else {
+            "a borrow into it (a returned reference still points at it)"
+        };
         self.errors.push(OwnershipError {
             message: format!(
-                "cannot move `{}` while a slice borrow into it is still live (borrowed at line {}:{})",
-                name, prior.span.line, prior.span.column
+                "cannot move `{}` while {} is still live (borrowed at line {}:{})",
+                name, borrow_desc, prior.span.line, prior.span.column
             ),
             span: move_span.clone(),
             kind: OwnershipErrorKind::SliceBorrowConflict {

@@ -139,6 +139,14 @@ impl<'a> super::OwnershipChecker<'a> {
                     self.binding_scope_depth
                         .insert(name, self.current_scope_depth);
                 }
+
+                // Check 3b — caller-side borrow registration. If the RHS is
+                // a borrow-returning call, the binding aliases its source
+                // argument(s); register a persistent borrow so moving the
+                // source while this binding is live is rejected. Runs after
+                // the RHS walk so it sits outside the call's snapshot
+                // restore. B-2026-06-07-5.
+                self.register_ref_return_borrows(value);
             }
             StmtKind::LetUninit {
                 is_mut,

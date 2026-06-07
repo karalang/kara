@@ -942,6 +942,21 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(true)
     }
 
+    /// If `value` is a direct call to a function whose declared return
+    /// type is a borrow (`-> ref T` / `-> mut ref T`), return the inner
+    /// `T`'s `TypeExpr`. Used by the `let` arm to bind the call result as
+    /// a ref-local rather than a value (caller half of B-2026-06-07-5).
+    /// Plain free-function calls only for now; method-call chains
+    /// (`s.split(' ').first()`) are a tracked Tier-3 follow-on.
+    fn ref_return_inner_for_call(&self, value: &Expr) -> Option<TypeExpr> {
+        if let ExprKind::Call { callee, .. } = &value.kind {
+            if let ExprKind::Identifier(name) = &callee.kind {
+                return self.fn_ref_return_inner.get(name).cloned();
+            }
+        }
+        None
+    }
+
     pub(super) fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         // Slice c-repl.B.5.1: REPL value-snapshot replay short-circuit.
         // When this stmt is a top-level `let <name> = <expr>` whose
@@ -1000,6 +1015,50 @@ impl<'ctx> super::Codegen<'ctx> {
             StmtKind::Let {
                 pattern, value, ty, ..
             } => {
+                // Borrow-returning call bound to a name (`let n = name_of(u)`
+                // where `name_of -> ref T`): the RHS evaluates to a `ptr`
+                // (the borrow's address), not a value. Bind it as a
+                // ref-local — store the ptr, register it in `ref_params` so
+                // every use derefs (symmetric to a `ref` parameter), and
+                // queue NO heap cleanup (a borrow owns nothing; freeing it
+                // would double-free the source). Caller half of
+                // B-2026-06-07-5. Sits ahead of the value-oriented Vec/String
+                // tracking below, which would mis-handle the raw pointer.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if let Some(inner_te) = self.ref_return_inner_for_call(value) {
+                        let fn_val = self.current_fn.expect("let inside a function");
+                        // Mark this as the one sanctioned borrow-return call
+                        // site so `compile_call` emits the borrow pointer
+                        // rather than rejecting it as an unsupported direct use.
+                        self.compiling_ref_return_let_rhs = true;
+                        let ptr_res = self.compile_expr(value);
+                        self.compiling_ref_return_let_rhs = false;
+                        let ptr_val = ptr_res?;
+                        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                        let alloca = self.create_entry_alloca(fn_val, var_name, ptr_ty.into());
+                        self.builder.build_store(alloca, ptr_val).unwrap();
+                        self.variables.insert(
+                            var_name.clone(),
+                            VarSlot {
+                                ptr: alloca,
+                                ty: ptr_ty.into(),
+                            },
+                        );
+                        let inner_llvm = self.llvm_type_for_type_expr(&inner_te);
+                        self.ref_params.insert(var_name.clone(), inner_llvm);
+                        // Make use-site dispatch (field access, method calls,
+                        // print formatting) see the borrowed value's type.
+                        if let TypeKind::Path(p) = &inner_te.kind {
+                            if let Some(seg) = p.segments.first() {
+                                self.var_type_names.insert(var_name.clone(), seg.clone());
+                            }
+                        }
+                        if self.is_string_type_expr(&inner_te) {
+                            self.string_vars.insert(var_name.clone());
+                        }
+                        return Ok(());
+                    }
+                }
                 // Track Vec/String element types from type annotation or RHS.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     let mut detected = false;
