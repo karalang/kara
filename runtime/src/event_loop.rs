@@ -895,6 +895,53 @@ pub extern "C" fn karac_runtime_event_loop_deregister_fd(raw_fd: i32, token: u64
     }
 }
 
+/// Windows IOCP bridge — **groundwork PoC** for Phase 6 line 13
+/// ([`docs/spikes/windows-iocp-eventloop.md`]). Compile-checked via
+/// `cargo check --target x86_64-pc-windows-msvc`; **not yet runtime-validated**
+/// (no Windows runtime testing is possible from the macOS dev host). This
+/// proves the single highest-risk design decision compiles: bridging a raw
+/// `SOCKET` into mio's AFD/IOCP readiness backend through an owned
+/// `mio::net::TcpStream`, then recovering the handle WITHOUT closing it.
+///
+/// The full `#[cfg(windows)]` `register_fd` / `register_fd_cancel` /
+/// `deregister_fd` are written against this bridge (see the spike's
+/// implementation plan). They are NOT included here because they require the
+/// `i32 -> i64` fd-ABI widening (spike Problem 2) which touches codegen and is
+/// sequenced separately to avoid colliding with the active codegen agents.
+#[cfg(windows)]
+// Intentionally unwired groundwork — consumed once the `#[cfg(windows)]`
+// register/deregister FFIs land (spike implementation plan, step 2).
+#[allow(dead_code)]
+pub(crate) mod windows_iocp_bridge {
+    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+
+    /// Adopt a raw `SOCKET` into a mio readiness source **without** taking over
+    /// its lifetime. The returned value's `Drop` would `closesocket()` the
+    /// handle, so callers MUST hand it to [`release`] after
+    /// register/deregister — never let it drop. Getting this wrong is the
+    /// Windows analog of the `tcp_close` double-free that wedged the macOS demo
+    /// (phase-6-runtime.md RESOLUTION (2)).
+    ///
+    /// # Safety
+    /// `sock` must be a live socket the runtime owns for the duration of the
+    /// register/deregister call that consumes the returned source.
+    pub(crate) unsafe fn source_from_socket(sock: RawSocket) -> mio::net::TcpStream {
+        // `from_raw_socket` adopts the handle; `from_std` does not re-wrap or
+        // re-validate. Readiness interest (read/write) is identical whether the
+        // socket is a listener or a stream, so a single TcpStream wrapper covers
+        // both register sites — to be confirmed on Windows (spike open question).
+        let std_sock = std::net::TcpStream::from_raw_socket(sock);
+        mio::net::TcpStream::from_std(std_sock)
+    }
+
+    /// Recover the raw handle without running the close (`mem::forget` +
+    /// `as_raw_socket`, the Windows twin of the unix `IntoRawFd` no-destructor
+    /// discipline already used throughout this module).
+    pub(crate) fn release(source: mio::net::TcpStream) -> RawSocket {
+        source.into_raw_socket()
+    }
+}
+
 /// Drive the event loop once.
 ///
 /// - `max_wait_nanos = -1`: block indefinitely until any wakeup.
