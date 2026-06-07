@@ -23380,3 +23380,241 @@ fn test_tensor_matmul_end_to_end_signature() {
          }\n",
     );
 }
+
+// ── Effect-resource dispatch types untyped `let` bindings ─────────
+//
+// bugs.md "Untyped `let` from an effect-resource method call doesn't
+// type the binding": `let got = Store.lookup(1)` collapsed to the
+// silent `Type::Error` fallthrough in `resolve_path_type` because a
+// user `effect resource` matched none of the 2-segment-path arms. The
+// binding then had no type, `method_unwrap_inner_types` never
+// populated, and codegen failed with "no handler for method 'is_some'
+// on variable 'got'". The fix resolves the dispatch signature from
+// the resource's provider trait, or — for a trait-less resource —
+// from the representative override impl recovered by the env-build
+// `with_provider` pre-scan.
+
+#[test]
+fn resource_dispatch_traitless_untyped_let_types_binding() {
+    // The exact bugs.md repro shape, annotations dropped. The unwrap
+    // side-table must populate — that's the table codegen's
+    // `is_some`/`unwrap` lowering gates on.
+    let result = typecheck_ok(
+        r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+effect resource Store;
+struct FakeStore { n: i64 }
+impl FakeStore {
+    fn lookup(self, k: i64) -> Option[ListNode] {
+        if k == 1 {
+            return Some(ListNode { val: self.n, next: None });
+        }
+        None
+    }
+}
+fn probe() -> i64 reads(Store) {
+    let got = Store.lookup(1);
+    let mut t = 0;
+    if got.is_some() {
+        let node = got.unwrap();
+        t = t + node.val;
+    }
+    t
+}
+fn main() reads(Store) {
+    with_provider[Store](FakeStore { n: 5 }, || {
+        println(probe());
+    });
+}
+"#,
+    );
+    assert!(
+        !result.method_unwrap_inner_types.is_empty(),
+        "is_some/unwrap side-table must populate for the untyped binding"
+    );
+}
+
+#[test]
+fn resource_dispatch_traitless_binding_has_real_type() {
+    // The binding is `Option[ListNode]`, not a permissive sentinel —
+    // a contradictory annotation downstream must be rejected.
+    let errs = typecheck_errors(
+        r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+effect resource Store;
+struct FakeStore { n: i64 }
+impl FakeStore {
+    fn lookup(self, k: i64) -> Option[ListNode] { None }
+}
+fn probe() -> i64 reads(Store) {
+    let got = Store.lookup(1);
+    let n: i64 = got;
+    n
+}
+fn main() reads(Store) {
+    with_provider[Store](FakeStore { n: 5 }, || {
+        println(probe());
+    });
+}
+"#,
+    );
+    assert!(
+        errs.iter().any(|e| e
+            .to_string()
+            .contains("expected 'i64', found 'Option<ListNode>'")),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn resource_dispatch_traitless_arg_types_checked() {
+    // A real `Type::Function` for the dispatch site means arg types
+    // are now enforced against the override impl's signature.
+    let errs = typecheck_errors(
+        r#"
+effect resource Store;
+struct FakeStore { n: i64 }
+impl FakeStore {
+    fn lookup(self, k: i64) -> Option[i64] { Some(self.n) }
+}
+fn probe() reads(Store) {
+    let got = Store.lookup("oops");
+}
+fn main() reads(Store) {
+    with_provider[Store](FakeStore { n: 5 }, || {
+        probe();
+    });
+}
+"#,
+    );
+    assert!(
+        errs.iter().any(|e| {
+            let m = e.to_string();
+            m.contains("expected") && m.contains("i64")
+        }),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn resource_dispatch_traitful_untyped_let_types_binding() {
+    // Trait-ful sibling: `effect resource Store: KvStore;` resolves
+    // the dispatch signature from the trait declaration (no
+    // `with_provider` scan needed).
+    let result = typecheck_ok(
+        r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+trait KvStore {
+    fn lookup(ref self, k: i64) -> Option[ListNode];
+}
+effect resource Store: KvStore;
+struct FakeStore { n: i64 }
+impl KvStore for FakeStore {
+    fn lookup(ref self, k: i64) -> Option[ListNode] {
+        if k == 1 {
+            return Some(ListNode { val: self.n, next: None });
+        }
+        None
+    }
+}
+fn probe() -> i64 reads(Store) {
+    let got = Store.lookup(1);
+    let mut t = 0;
+    if got.is_some() {
+        let node = got.unwrap();
+        t = t + node.val;
+    }
+    t
+}
+fn main() reads(Store) {
+    with_provider[Store](FakeStore { n: 7 }, || {
+        println(probe());
+    });
+}
+"#,
+    );
+    assert!(
+        !result.method_unwrap_inner_types.is_empty(),
+        "is_some/unwrap side-table must populate via the trait signature"
+    );
+}
+
+#[test]
+fn resource_dispatch_traitful_binding_has_real_type() {
+    let errs = typecheck_errors(
+        r#"
+trait KvStore {
+    fn lookup(ref self, k: i64) -> Option[i64];
+}
+effect resource Store: KvStore;
+fn probe() -> i64 reads(Store) {
+    let got = Store.lookup(1);
+    let n: i64 = got;
+    n
+}
+fn main() reads(Store) {
+    probe();
+}
+"#,
+    );
+    assert!(
+        errs.iter().any(|e| e
+            .to_string()
+            .contains("expected 'i64', found 'Option<i64>'")),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn resource_dispatch_unresolvable_override_keeps_permissive_fallthrough() {
+    // Trait-less resource with no statically-visible `with_provider`
+    // override (the provider arrives through an unsupported shape or
+    // not at all): the dispatch site must keep the pre-existing
+    // permissive fallthrough — nothing that typechecked before the
+    // fix may be newly rejected.
+    typecheck_ok(
+        r#"
+effect resource Store;
+fn probe() -> i64 reads(Store) {
+    let got = Store.lookup(1);
+    let n: i64 = got;
+    n
+}
+fn main() reads(Store) {
+    probe();
+}
+"#,
+    );
+}
+
+#[test]
+fn resource_dispatch_let_bound_provider_resolves() {
+    // `let p = FakeStore { ... }; with_provider[Store](p, ...)` — the
+    // pre-scan resolves identifier providers through in-scope `let`
+    // bindings, mirroring codegen's eager ambient-vtable pre-pass.
+    let errs = typecheck_errors(
+        r#"
+effect resource Store;
+struct FakeStore { n: i64 }
+impl FakeStore {
+    fn lookup(self, k: i64) -> Option[i64] { Some(self.n) }
+}
+fn probe() reads(Store) {
+    let got = Store.lookup(1);
+    let n: i64 = got;
+}
+fn main() reads(Store) {
+    let p = FakeStore { n: 5 };
+    with_provider[Store](p, || {
+        probe();
+    });
+}
+"#,
+    );
+    assert!(
+        errs.iter().any(|e| e
+            .to_string()
+            .contains("expected 'i64', found 'Option<i64>'")),
+        "{errs:?}"
+    );
+}

@@ -342,6 +342,31 @@ impl<'a> super::TypeChecker<'a> {
                 };
             }
 
+            // User effect-resource method dispatch: `R.method(args)`
+            // where `R` is a user-declared `effect resource`. Resolve the
+            // method signature from the resource's provider trait
+            // (`effect resource R: Trait;`) or, for a trait-less
+            // resource, from a representative override impl recovered by
+            // the env-build `with_provider` pre-scan. Returning a real
+            // `Type::Function` here is what types an untyped
+            // `let got = Store.lookup(1)` binding — without it the call
+            // collapsed to the silent `Type::Error` fallthrough, the
+            // `method_unwrap_inner_types` side-table never populated, and
+            // codegen failed with "no handler for method 'is_some'"
+            // (bugs.md). Unresolvable shapes (no trait, no statically
+            // visible override) keep the pre-existing permissive
+            // fallthrough so nothing that typechecked before is rejected.
+            if let Some(provider_trait) = self.user_effect_resources.get(type_name).cloned() {
+                if let Some((params, return_type)) =
+                    self.resource_dispatch_signature(type_name, provider_trait.as_deref(), member)
+                {
+                    return Type::Function {
+                        params,
+                        return_type: Box::new(return_type),
+                    };
+                }
+            }
+
             // None of the special arms matched. If `type_name` is a known
             // type — registered enum, registered struct, prelude primitive,
             // or prelude type — emit a clean "no associated function"
@@ -394,6 +419,63 @@ impl<'a> super::TypeChecker<'a> {
             return self.resolve_identifier_type(first, span);
         }
         Type::Error
+    }
+
+    /// Resolve the `(params, return_type)` signature for a user
+    /// effect-resource dispatch call `R.method(args)`. Trait-ful
+    /// resources (`effect resource R: Trait;`) read the trait's method
+    /// declaration (user program first, then baked stdlib — via
+    /// [`Self::find_trait_method`]) and lower its signature; the
+    /// receiver (`self` / `ref self` / `mut ref self`) is not part of
+    /// the call-site argument list, so only the declared params lower.
+    /// Trait-less resources read the representative override impl
+    /// recovered by the env-build `with_provider` pre-scan — its
+    /// inherent-impl method signatures are already lowered in
+    /// `env.impls`. All overrides of a resource share their lowered
+    /// method signatures (the vtable-dispatch invariant), so the
+    /// representative is authoritative. `None` when the signature
+    /// can't be resolved — callers fall through to the pre-existing
+    /// permissive path.
+    fn resource_dispatch_signature(
+        &mut self,
+        resource: &str,
+        provider_trait: Option<&str>,
+        member: &str,
+    ) -> Option<(Vec<Type>, Type)> {
+        match provider_trait {
+            Some(trait_name) => {
+                // Clone the TypeExprs out first: `find_trait_method`
+                // borrows `self` and `lower_type_expr` needs `&mut self`.
+                let (param_tes, ret_te, method_gp) = {
+                    let m = self.find_trait_method(trait_name, member)?;
+                    (
+                        m.params.iter().map(|p| p.ty.clone()).collect::<Vec<_>>(),
+                        m.return_type.clone(),
+                        Self::generic_param_names(&m.generic_params),
+                    )
+                };
+                let params: Vec<Type> = param_tes
+                    .iter()
+                    .map(|te| self.lower_type_expr(te, &method_gp))
+                    .collect();
+                let return_type = ret_te
+                    .as_ref()
+                    .map(|te| self.lower_type_expr(te, &method_gp))
+                    .unwrap_or(Type::Unit);
+                Some((params, return_type))
+            }
+            None => {
+                let override_ty = self.user_resource_override_types.get(resource)?;
+                for imp in &self.env.impls {
+                    if imp.trait_name.is_none() && imp.target_type == *override_ty {
+                        if let Some(sig) = imp.methods.get(member) {
+                            return Some((sig.params.clone(), sig.return_type.clone()));
+                        }
+                    }
+                }
+                None
+            }
+        }
     }
 
     /// True when `name` denotes a known Type-class identifier — a registered

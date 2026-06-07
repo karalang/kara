@@ -131,15 +131,137 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 Item::DistinctType(d) => self.env_add_distinct_type(d),
+                Item::EffectResource(r) => {
+                    self.user_effect_resources
+                        .insert(r.name.clone(), r.provider_trait.clone());
+                }
                 _ => {}
             }
         }
+
+        // Resolve a representative override type for every trait-less
+        // user resource so `resolve_path_type` can type `R.method(...)`
+        // dispatch sites from the override's inherent impl (the trait-ful
+        // case types from the trait declaration instead and needs no
+        // scan). Runs after the items pass so `user_effect_resources` is
+        // populated.
+        self.collect_user_resource_override_types(&items);
 
         // Cross-module origins: record every imported item's declared
         // visibility in its origin module so `check_signature_visibility`
         // and `infer_field_access` can enforce three-level rules across
         // modules. Silent when `tree` is unset (single-file mode).
         self.collect_import_origins();
+    }
+
+    /// Resolve a representative override type name for every trait-less
+    /// user `effect resource` by scanning function / impl-method bodies
+    /// for `with_provider[R](provider, ...)` sites. Mirrors codegen's
+    /// eager ambient-vtable pre-pass (`emit_ambient_provider_vtables`):
+    /// the provider type is recovered syntactically from a struct
+    /// literal, a `let`-bound provider binding, or a constructor call
+    /// whose declared return type is a plain named type. Shapes the scan
+    /// can't see (function params, field projections, …) simply leave
+    /// the resource unrecorded — `resolve_path_type` then falls through
+    /// to the pre-existing permissive path, so nothing that typechecked
+    /// before is newly rejected.
+    ///
+    /// First resolvable site wins (`or_insert`): all overrides of a
+    /// resource must share their lowered method signatures for vtable
+    /// dispatch to work at all, so any one is representative.
+    fn collect_user_resource_override_types(&mut self, items: &[Item]) {
+        // Only trait-less user resources need a representative override;
+        // trait-ful ones type their dispatch sites from the trait.
+        if !self.user_effect_resources.values().any(|t| t.is_none()) {
+            return;
+        }
+        let ctor_returns = collect_ctor_return_type_names(items);
+        let empty = HashMap::new();
+        for item in items {
+            match item {
+                Item::Function(f) => {
+                    self.scan_block_for_resource_overrides(&f.body, &ctor_returns, &empty)
+                }
+                Item::ImplBlock(imp) => {
+                    for ii in &imp.items {
+                        if let ImplItem::Method(m) = ii {
+                            self.scan_block_for_resource_overrides(&m.body, &ctor_returns, &empty);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Block walker for [`Self::collect_user_resource_override_types`].
+    /// Tracks `let p = <provider>` bindings (struct literal or ctor
+    /// call) so a provider passed by identifier resolves to its type;
+    /// `inherited` seeds the map with bindings from enclosing scopes so
+    /// a nested `with_provider` inside a block-bodied closure still
+    /// resolves an outer-bound provider.
+    fn scan_block_for_resource_overrides(
+        &mut self,
+        block: &Block,
+        ctor_returns: &HashMap<String, String>,
+        inherited: &HashMap<String, String>,
+    ) {
+        let mut bindings: HashMap<String, String> = inherited.clone();
+        for stmt in &block.stmts {
+            match &stmt.kind {
+                StmtKind::Let { pattern, value, .. } => {
+                    if let PatternKind::Binding(name) = &pattern.kind {
+                        if let Some(ty) = provider_type_name(value, &bindings, ctor_returns) {
+                            bindings.insert(name.clone(), ty);
+                        }
+                    }
+                    self.scan_expr_for_resource_overrides(value, &bindings, ctor_returns);
+                }
+                StmtKind::Expr(e) => {
+                    self.scan_expr_for_resource_overrides(e, &bindings, ctor_returns)
+                }
+                _ => {}
+            }
+        }
+        if let Some(tail) = &block.final_expr {
+            self.scan_expr_for_resource_overrides(tail, &bindings, ctor_returns);
+        }
+    }
+
+    fn scan_expr_for_resource_overrides(
+        &mut self,
+        expr: &Expr,
+        bindings: &HashMap<String, String>,
+        ctor_returns: &HashMap<String, String>,
+    ) {
+        match &expr.kind {
+            ExprKind::Call { callee, args } => {
+                if let Some((resource, provider_expr, closure_expr)) =
+                    match_with_provider_call_shape(callee, args)
+                {
+                    if matches!(self.user_effect_resources.get(&resource), Some(None)) {
+                        if let Some(ty) = provider_type_name(provider_expr, bindings, ctor_returns)
+                        {
+                            self.user_resource_override_types
+                                .entry(resource)
+                                .or_insert(ty);
+                        }
+                    }
+                    if let ExprKind::Closure { body, .. } = &closure_expr.kind {
+                        self.scan_expr_for_resource_overrides(body, bindings, ctor_returns);
+                    }
+                    return;
+                }
+                for a in args {
+                    self.scan_expr_for_resource_overrides(&a.value, bindings, ctor_returns);
+                }
+            }
+            ExprKind::Block(b) => self.scan_block_for_resource_overrides(b, ctor_returns, bindings),
+            ExprKind::Closure { body, .. } => {
+                self.scan_expr_for_resource_overrides(body, bindings, ctor_returns)
+            }
+            _ => {}
+        }
     }
 
     /// Walk `self.program.items` imports, look each target up in the
@@ -2179,4 +2301,112 @@ fn refinement_binop_allowed(op: &BinOp) -> bool {
             | BinOp::Shl
             | BinOp::Shr
     )
+}
+
+/// Resolve the concrete provider-type name of a `with_provider` provider
+/// argument during the override pre-scan: a struct literal gives its
+/// type directly; an identifier resolves through the in-scope `let p =
+/// <provider>` bindings; a constructor call (`makeFoo()` / `Type.new()`)
+/// resolves through the declared-return-type map. Mirrors codegen's
+/// `ambient_provider_type` — other shapes return `None` and the
+/// resource stays on the permissive fallthrough.
+fn provider_type_name(
+    expr: &Expr,
+    bindings: &HashMap<String, String>,
+    ctor_returns: &HashMap<String, String>,
+) -> Option<String> {
+    match &expr.kind {
+        ExprKind::StructLiteral { path, .. } => path.last().cloned(),
+        ExprKind::Identifier(n) => bindings.get(n).cloned(),
+        ExprKind::Call { callee, .. } => {
+            ctor_call_key(callee).and_then(|k| ctor_returns.get(&k).cloned())
+        }
+        _ => None,
+    }
+}
+
+/// Callee → constructor key for [`provider_type_name`]'s call arm: a
+/// bare `Identifier(name)` keys as `"name"` (free fn); a two-segment
+/// `Path([Type, method])` keys as `"Type.method"` (associated fn).
+fn ctor_call_key(callee: &Expr) -> Option<String> {
+    match &callee.kind {
+        ExprKind::Identifier(n) => Some(n.clone()),
+        ExprKind::Path { segments, .. } if segments.len() == 2 => {
+            Some(format!("{}.{}", segments[0], segments[1]))
+        }
+        _ => None,
+    }
+}
+
+/// Map every free function and inherent (non-trait) impl method to the
+/// name of its declared return type, when that return type is a plain
+/// named type. Keyed `"name"` / `"Type.method"` — the keyspace
+/// [`ctor_call_key`] produces. Mirrors codegen's
+/// `collect_ctor_return_types`.
+fn collect_ctor_return_type_names(items: &[Item]) -> HashMap<String, String> {
+    fn named_return(te: &TypeExpr) -> Option<String> {
+        match &te.kind {
+            TypeKind::Path(p) => p.segments.last().cloned(),
+            _ => None,
+        }
+    }
+    let mut out: HashMap<String, String> = HashMap::new();
+    for item in items {
+        match item {
+            Item::Function(f) => {
+                if let Some(ret) = f.return_type.as_ref().and_then(named_return) {
+                    out.insert(f.name.clone(), ret);
+                }
+            }
+            Item::ImplBlock(imp) if imp.trait_name.is_none() => {
+                let Some(target) = (match &imp.target_type.kind {
+                    TypeKind::Path(p) => p.segments.last().cloned(),
+                    _ => None,
+                }) else {
+                    continue;
+                };
+                for ii in &imp.items {
+                    if let ImplItem::Method(m) = ii {
+                        if let Some(ret) = m.return_type.as_ref().and_then(named_return) {
+                            out.insert(format!("{target}.{}", m.name), ret);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Recognize the `with_provider[R](provider, closure)` call shape at AST
+/// level for the override pre-scan. Sibling of codegen's
+/// `match_with_provider_call` and the interpreter's
+/// `match_with_provider`. Returns `(R, provider_expr, closure_expr)`
+/// when the callee is `Index(Ident("with_provider") |
+/// Path(["with_provider"]), R)` with exactly two args, else `None`.
+fn match_with_provider_call_shape<'e>(
+    callee: &'e Expr,
+    args: &'e [CallArg],
+) -> Option<(String, &'e Expr, &'e Expr)> {
+    let ExprKind::Index { object, index } = &callee.kind else {
+        return None;
+    };
+    let is_with_provider = match &object.kind {
+        ExprKind::Identifier(n) => n == "with_provider",
+        ExprKind::Path { segments, .. } => segments.as_slice() == ["with_provider"],
+        _ => false,
+    };
+    if !is_with_provider {
+        return None;
+    }
+    let resource = match &index.kind {
+        ExprKind::Identifier(n) => n.clone(),
+        ExprKind::Path { segments, .. } => segments.last().cloned()?,
+        _ => return None,
+    };
+    if args.len() != 2 {
+        return None;
+    }
+    Some((resource, &args[0].value, &args[1].value))
 }

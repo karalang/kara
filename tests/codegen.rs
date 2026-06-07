@@ -4989,9 +4989,12 @@ fn main() {
         // (niche-shaped under the method extension), and the dispatch
         // site packs args / unpacks results keyed by the same impl
         // (`provider_method_fn_type`'s returned qualified name). Lets
-        // are annotated: untyped `let got = Store.lookup(1)` is a
-        // typechecker inference gap for resource calls (bugs.md), not a
-        // codegen one.
+        // are deliberately UNannotated: `resolve_path_type`'s
+        // effect-resource dispatch arm types `let got = Store.lookup(1)`
+        // from the override impl's signature (the former typechecker
+        // inference gap tracked in bugs.md), which is what populates the
+        // `method_unwrap_inner_types` table the `is_some`/`unwrap`
+        // lowering gates on.
         let out = run_program(
             r#"
 shared struct ListNode { val: i64, mut next: Option[ListNode] }
@@ -5007,8 +5010,8 @@ impl FakeStore {
     fn passthru(self, h: Option[ListNode]) -> Option[ListNode] { h }
 }
 fn probe() -> i64 reads(Store) {
-    let got: Option[ListNode] = Store.lookup(1);
-    let missed: Option[ListNode] = Store.lookup(0);
+    let got = Store.lookup(1);
+    let missed = Store.lookup(0);
     let mut t = 0;
     if got.is_some() {
         let node = got.unwrap();
@@ -5017,7 +5020,7 @@ fn probe() -> i64 reads(Store) {
     if missed.is_none() {
         t = t + 100;
     }
-    let chain: Option[ListNode] = Store.passthru(got);
+    let chain = Store.passthru(got);
     if chain.is_some() {
         let node = chain.unwrap();
         t = t + node.val;

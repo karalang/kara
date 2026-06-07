@@ -1059,6 +1059,26 @@ pub struct TypeChecker<'a> {
     /// dispatch. See the public copy on `TypeCheckResult` for the full
     /// rationale.
     pub(super) method_unwrap_inner_types: HashMap<SpanKey, TypeExpr>,
+    /// User-declared `effect resource` names → optional provider trait
+    /// (`effect resource Store: KvStore;` → `Some("KvStore")`; bare
+    /// `effect resource Store;` → `None`). Populated from
+    /// `program.items` during env build. Consumed by
+    /// `resolve_path_type` to type `R.method(args)` dispatch call
+    /// sites — without it, an untyped `let got = Store.lookup(1)`
+    /// binds `Type::Error` and the `is_some`/`unwrap` side-tables
+    /// never populate (bugs.md "untyped `let` from an effect-resource
+    /// method call").
+    pub(super) user_effect_resources: HashMap<String, Option<String>>,
+    /// Trait-less user resource name → concrete override type name,
+    /// recovered syntactically from `with_provider[R](provider, ...)`
+    /// sites during env build (struct-literal, `let`-bound, or
+    /// constructor-call provider shapes — the same set codegen's eager
+    /// ambient-vtable pre-pass resolves). The override type's inherent
+    /// impl supplies the method signatures for `R.method(...)` dispatch
+    /// typing; all overrides of a resource share their lowered method
+    /// signatures (the vtable invariant), so any resolvable one is
+    /// representative.
+    pub(super) user_resource_override_types: HashMap<String, String>,
     /// Bare-call expected-type dispatch resolutions: call-expression span →
     /// resolved target type name (e.g. `"Wrapper"`). Populated when
     /// `try_apply_expected_assoc_fn_inference` resolves a bare `name(args)`
@@ -1217,6 +1237,8 @@ impl<'a> TypeChecker<'a> {
             method_callee_types: HashMap::new(),
             impl_trait_captures: HashMap::new(),
             method_unwrap_inner_types: HashMap::new(),
+            user_effect_resources: HashMap::new(),
+            user_resource_override_types: HashMap::new(),
             bare_assoc_fn_targets: HashMap::new(),
             path_call_method_dispatch: HashSet::new(),
             call_type_subs: HashMap::new(),
