@@ -57,10 +57,13 @@ pub enum BindingsMode {
     /// ES-module JS glue next to the `.wasm` (`<stem>.js` — host fn
     /// import plumbing + WASI preview-1 polyfill; see `wasm_glue`).
     Browser,
-    /// Component Model output. Today this emits the C-ABI core module
-    /// only — the WIT-descriptor / embedded-WIT emission via pinned
-    /// `wit-bindgen` is the separate phase-10 "WASM Component Model
-    /// artifact emission" entry.
+    /// Component Model output — the paired interim shape design.md §
+    /// Target Build Artifacts sanctions until Component Model runtime
+    /// support is broadly stable: the C-ABI core module plus a
+    /// `<stem>.component.wit` WIT interface descriptor (see `wit`) for
+    /// wrapping by external tools. The embedded-WIT swap (single
+    /// componentized `.wasm` via a pinned external tool) is the
+    /// separate phase-10 "embedded-WIT migration" entry.
     Component,
     /// Raw `.wasm` only — no glue, no declarations. For users wrapping
     /// Kāra WASM with custom host integration.
@@ -4790,19 +4793,6 @@ fn resolve_effective_bindings(
     if !is_wasm {
         return None;
     }
-    // Explicitly requested `component` deserves the honest caveat: the
-    // wit-bindgen WIT-descriptor emission is the separate "WASM
-    // Component Model artifact emission" entry, so today the build
-    // produces the C-ABI core module only. The *inferred* component
-    // default (a bare `--target=wasm_wasi` build) stays silent — that
-    // is just the established wasi output.
-    if bindings == Some(BindingsMode::Component) {
-        eprintln!(
-            "note: --bindings=component emits the C-ABI core module only today — \
-             WIT descriptor / Component Model emission is a follow-up \
-             (design.md § Target Build Artifacts)"
-        );
-    }
     Some(bindings.unwrap_or(if build_target == "wasm_browser" {
         BindingsMode::Browser
     } else {
@@ -5041,50 +5031,67 @@ fn cmd_build(
             }
             Ok(()) => {
                 let _ = std::fs::remove_file(&obj_path);
-                // Browser-bindings builds ship a companion ES-module
-                // glue file: host fn import plumbing (`kara_host`
-                // namespace) + the WASI preview-1 polyfill the wasip1
-                // module needs in a browser/node host. See `wasm_glue`
-                // (design.md § Host Functions, browser-WASM lowering).
-                // The condition is the resolved bindings mode, not the
-                // target name: `--target=wasm_browser --bindings=none`
-                // suppresses the glue (raw module), and
+                // Companion artifacts keyed on the resolved bindings
+                // mode — not the target name: `--target=wasm_browser
+                // --bindings=none` suppresses them (raw module) and
                 // `--target=wasm_wasi --bindings=browser` opts a wasi
-                // module into it (both wasm targets lower host fns to
-                // the same `kara_host` import entries, so the glue is
-                // target-agnostic).
-                let glue_paths = if effective_bindings == Some(BindingsMode::Browser) {
-                    let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
-                    let glue = crate::wasm_glue::render_glue(&host_fns, &exe_path);
-                    let js_path = format!("{exe_name}.js");
-                    if let Err(e) = std::fs::write(&js_path, glue) {
-                        eprintln!("error: failed to write JS glue {js_path}: {e}");
-                        process::exit(1);
+                // module in (both wasm targets lower host fns to the
+                // same `kara_host` import entries, so each companion is
+                // target-agnostic). Browser bindings ship the ES-module
+                // glue (host fn import plumbing + WASI preview-1
+                // polyfill; see `wasm_glue`) plus its TypeScript
+                // declarations; component bindings ship the paired
+                // `<stem>.component.wit` WIT interface descriptor (see
+                // `wit` — design.md § Target Build Artifacts, the
+                // interim shape until the embedded-WIT swap). The
+                // `(json key, path)` pairs feed both output modes.
+                let mut companions: Vec<(&str, String)> = Vec::new();
+                match effective_bindings {
+                    Some(BindingsMode::Browser) => {
+                        let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
+                        let glue = crate::wasm_glue::render_glue(&host_fns, &exe_path);
+                        let js_path = format!("{exe_name}.js");
+                        if let Err(e) = std::fs::write(&js_path, glue) {
+                            eprintln!("error: failed to write JS glue {js_path}: {e}");
+                            process::exit(1);
+                        }
+                        companions.push(("glue", js_path));
+                        let dts = crate::wasm_glue::render_dts(&host_fns, &exe_path);
+                        let dts_path = format!("{exe_name}.d.ts");
+                        if let Err(e) = std::fs::write(&dts_path, dts) {
+                            eprintln!("error: failed to write TS declarations {dts_path}: {e}");
+                            process::exit(1);
+                        }
+                        companions.push(("dts", dts_path));
                     }
-                    // TypeScript declarations for the glue module — the
-                    // third browser-bindings artifact (phase-10 "WASM
-                    // browser artifact emission").
-                    let dts = crate::wasm_glue::render_dts(&host_fns, &exe_path);
-                    let dts_path = format!("{exe_name}.d.ts");
-                    if let Err(e) = std::fs::write(&dts_path, dts) {
-                        eprintln!("error: failed to write TS declarations {dts_path}: {e}");
-                        process::exit(1);
+                    Some(BindingsMode::Component) => {
+                        let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
+                        let wit = crate::wit::render_component_wit(&host_fns, exe_name, &exe_path);
+                        let wit_path = format!("{exe_name}.component.wit");
+                        if let Err(e) = std::fs::write(&wit_path, wit) {
+                            eprintln!("error: failed to write WIT descriptor {wit_path}: {e}");
+                            process::exit(1);
+                        }
+                        companions.push(("wit", wit_path));
                     }
-                    Some((js_path, dts_path))
-                } else {
-                    None
-                };
+                    Some(BindingsMode::None) | None => {}
+                }
                 match output {
-                    OutputMode::Text => match &glue_paths {
-                        Some((js, dts)) => println!("Built: {exe_path} + {js} + {dts}"),
-                        None => println!("Built: {exe_path}"),
-                    },
-                    OutputMode::Json => match &glue_paths {
-                        Some((js, dts)) => println!(
-                            "{{\"status\":\"ok\",\"output\":\"{exe_path}\",\"glue\":\"{js}\",\"dts\":\"{dts}\"}}"
-                        ),
-                        None => println!("{{\"status\":\"ok\",\"output\":\"{exe_path}\"}}"),
-                    },
+                    OutputMode::Text => {
+                        let mut line = format!("Built: {exe_path}");
+                        for (_, path) in &companions {
+                            line.push_str(&format!(" + {path}"));
+                        }
+                        println!("{line}");
+                    }
+                    OutputMode::Json => {
+                        let mut fields = format!("{{\"status\":\"ok\",\"output\":\"{exe_path}\"");
+                        for (key, path) in &companions {
+                            fields.push_str(&format!(",\"{key}\":\"{path}\""));
+                        }
+                        fields.push('}');
+                        println!("{fields}");
+                    }
                     OutputMode::Jsonl => unreachable!(),
                 }
             }
@@ -5690,9 +5697,10 @@ fn cmd_build_project(
                     exe_path,
                     glue_path,
                     dts_path,
+                    wit_path,
                 } => {
                     let mut line = format!("Built: {}", exe_path.display());
-                    for extra in [glue_path, dts_path].into_iter().flatten() {
+                    for extra in [glue_path, dts_path, wit_path].into_iter().flatten() {
                         line.push_str(&format!(" + {}", extra.display()));
                     }
                     println!("{line}");
@@ -5735,6 +5743,7 @@ fn cmd_build_project(
                     exe_path,
                     glue_path,
                     dts_path,
+                    wit_path,
                 } => {
                     let mut field = format!(
                         ",\"output\":{}",
@@ -5750,6 +5759,12 @@ fn cmd_build_project(
                         field.push_str(&format!(
                             ",\"dts\":{}",
                             json_string(&dts.display().to_string())
+                        ));
+                    }
+                    if let Some(wit) = wit_path {
+                        field.push_str(&format!(
+                            ",\"wit\":{}",
+                            json_string(&wit.display().to_string())
                         ));
                     }
                     field
@@ -5824,6 +5839,7 @@ fn cmd_build_project(
                 exe_path,
                 glue_path,
                 dts_path,
+                wit_path,
             } = &codegen_status
             {
                 let mut fields = format!(
@@ -5840,6 +5856,12 @@ fn cmd_build_project(
                     fields.push_str(&format!(
                         ",\"dts\":{}",
                         json_string(&dts.display().to_string())
+                    ));
+                }
+                if let Some(wit) = wit_path {
+                    fields.push_str(&format!(
+                        ",\"wit\":{}",
+                        json_string(&wit.display().to_string())
                     ));
                 }
                 emit_jsonl_event("build_artifact", &fields);
@@ -5887,11 +5909,14 @@ enum BuildCodegenStatus {
     /// native executable, or `dist/wasm/<pkg>.wasm` on a wasm target).
     /// Browser-bindings WASM builds additionally carry the companion
     /// ES-module glue (`<pkg>.js`) and TypeScript declarations
-    /// (`<pkg>.d.ts`) — `None` on every other build shape.
+    /// (`<pkg>.d.ts`); component-bindings builds carry the paired WIT
+    /// interface descriptor (`<pkg>.component.wit`) — each `None` on
+    /// every other build shape.
     Built {
         exe_path: PathBuf,
         glue_path: Option<PathBuf>,
         dts_path: Option<PathBuf>,
+        wit_path: Option<PathBuf>,
     },
     /// Late-phase failure (effect / ownership / concurrency / codegen /
     /// link). `phase` names the failing phase for the diagnostic output;
@@ -6138,44 +6163,65 @@ fn run_multi_file_codegen(
     }
     let _ = std::fs::remove_file(&obj_path);
 
-    // Browser-bindings WASM builds ship the companion ES-module glue +
-    // TypeScript declarations next to the module in `dist/wasm/` —
-    // `<pkg>.js` / `<pkg>.d.ts` keyed on the resolved bindings mode,
-    // exactly the single-file `cmd_build` contract (see `wasm_glue`).
-    let (glue_path, dts_path) = if effective_bindings == Some(BindingsMode::Browser) {
-        let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
-        let wasm_filename = format!("{}.wasm", mf.name);
-        let glue_path = exe_path.with_extension("js");
-        if let Err(e) = std::fs::write(
-            &glue_path,
-            crate::wasm_glue::render_glue(&host_fns, &wasm_filename),
-        ) {
-            return BuildCodegenStatus::Failed {
-                phase: "link".to_string(),
-                message: format!("failed to write JS glue {}: {e}", glue_path.display()),
-            };
+    // Companion artifacts next to the module in `dist/wasm/`, keyed on
+    // the resolved bindings mode — exactly the single-file `cmd_build`
+    // contract: browser bindings ship the ES-module glue + TypeScript
+    // declarations (`<pkg>.js` / `<pkg>.d.ts`, see `wasm_glue`);
+    // component bindings ship the paired `<pkg>.component.wit` WIT
+    // interface descriptor (see `wit` — design.md § Target Build
+    // Artifacts, the interim shape until the embedded-WIT swap).
+    let mut glue_path = None;
+    let mut dts_path = None;
+    let mut wit_path = None;
+    match effective_bindings {
+        Some(BindingsMode::Browser) => {
+            let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
+            let wasm_filename = format!("{}.wasm", mf.name);
+            let js = exe_path.with_extension("js");
+            if let Err(e) = std::fs::write(
+                &js,
+                crate::wasm_glue::render_glue(&host_fns, &wasm_filename),
+            ) {
+                return BuildCodegenStatus::Failed {
+                    phase: "link".to_string(),
+                    message: format!("failed to write JS glue {}: {e}", js.display()),
+                };
+            }
+            glue_path = Some(js);
+            let dts = exe_path.with_extension("d.ts");
+            if let Err(e) = std::fs::write(
+                &dts,
+                crate::wasm_glue::render_dts(&host_fns, &wasm_filename),
+            ) {
+                return BuildCodegenStatus::Failed {
+                    phase: "link".to_string(),
+                    message: format!("failed to write TS declarations {}: {e}", dts.display()),
+                };
+            }
+            dts_path = Some(dts);
         }
-        let dts_path = exe_path.with_extension("d.ts");
-        if let Err(e) = std::fs::write(
-            &dts_path,
-            crate::wasm_glue::render_dts(&host_fns, &wasm_filename),
-        ) {
-            return BuildCodegenStatus::Failed {
-                phase: "link".to_string(),
-                message: format!(
-                    "failed to write TS declarations {}: {e}",
-                    dts_path.display()
-                ),
-            };
+        Some(BindingsMode::Component) => {
+            let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
+            let wasm_filename = format!("{}.wasm", mf.name);
+            let wit = exe_path.with_extension("component.wit");
+            if let Err(e) = std::fs::write(
+                &wit,
+                crate::wit::render_component_wit(&host_fns, &mf.name, &wasm_filename),
+            ) {
+                return BuildCodegenStatus::Failed {
+                    phase: "link".to_string(),
+                    message: format!("failed to write WIT descriptor {}: {e}", wit.display()),
+                };
+            }
+            wit_path = Some(wit);
         }
-        (Some(glue_path), Some(dts_path))
-    } else {
-        (None, None)
-    };
+        Some(BindingsMode::None) | None => {}
+    }
     BuildCodegenStatus::Built {
         exe_path,
         glue_path,
         dts_path,
+        wit_path,
     }
 }
 

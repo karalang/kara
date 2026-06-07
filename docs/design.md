@@ -10266,11 +10266,13 @@ karac build --target wasm_browser --bindings none       # raw .wasm only
 
 Until Component Model runtime support is stable across the target ecosystem (see the `host fn` lowering note at [Host Functions](#host-functions)), `--bindings component` may emit a paired `<pkg>.wasm` (C-ABI core module) + `<pkg>.component.wit` (WIT interface) for wrapping by external tools. Migration to embedded-WIT Component Model format is non-breaking at the source level; downstream tooling that consumes the paired shape gets a deprecation notice one release before the swap.
 
+*Shipped status:* the **paired form** is live — project mode lands `dist/wasm/<pkg>.{wasm,component.wit}` (package name from `kara.toml`; single-file builds emit `<stem>.{wasm,component.wit}` in the CWD). The descriptor declares the `host` interface (every `host fn`, typed per the WIT boundary mapping — 64-bit ints ⇒ `s64`/`u64`, raw pointers ⇒ wasm32 `u32` addresses, opaque handles at their field's scalar width) and a world importing it with `export run: func()` standing for the core module's `_start`; each function's doc comment records its Kāra-surface signature and `kara_host` core-import name. Per-export WIT signatures beyond the entry point extend the descriptor when [entry point discovery](#entry-point-discovery) lands. The embedded-WIT single-file swap is the tracked follow-up (phase-10 "embedded-WIT migration").
+
 **Raw `.wasm` (`--bindings none`).** Produces only `dist/wasm/<pkg>.wasm`. For users who want to write their own glue or target an unusual host.
 
 #### Component Model emission
 
-For v1, `karac` calls into `wit-bindgen` as an **external tool** rather than baking the Component Model spec into the compiler. This avoids coupling compiler releases to a specification that is still evolving. The `wit-bindgen` version is pinned in the package's `kara.toml` toolchain section so builds are reproducible. Migration to in-compiler Component Model emission is a post-v1 decision, dependent on spec stability.
+Kāra never bakes the Component Model spec into the compiler — that would couple compiler releases to a specification that is still evolving. The shipped paired form needs no Component Model machinery at all: the `.component.wit` descriptor is plain text rendered by `karac` itself, and componentization is the downstream wrapper's job. When the embedded-WIT form becomes the default, `karac` calls into the componentization tooling (`wasm-tools` / `wit-bindgen`) as an **external tool**, with the version pinned in the package's `kara.toml` `[toolchain]` section so builds are reproducible. Migration to in-compiler Component Model emission is a post-v1 decision, dependent on spec stability.
 
 #### Entry point discovery
 

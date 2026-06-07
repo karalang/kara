@@ -272,8 +272,11 @@ OPTIONS:
                             ES-module glue + `.d.ts` TypeScript
                             declarations next to the `.wasm`),
                             component (Component Model; emits the C-ABI
-                            core module only today — WIT emission is a
-                            follow-up), or none (raw `.wasm`, no glue).
+                            core module paired with a `.component.wit`
+                            WIT interface descriptor for wrapping by
+                            external tools — the interim shape until
+                            the embedded-WIT swap), or none (raw
+                            `.wasm`, no glue).
                             Default is inferred from the target:
                             wasm_browser -> browser, wasm_wasi ->
                             component. Ignored on non-WASM targets.

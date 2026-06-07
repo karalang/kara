@@ -11528,18 +11528,22 @@ fn wasm_project_bindings_none_emits_raw_module_only() {
     let dist = tmp.join("dist").join("wasm");
     assert!(dist.join("rawpkg.wasm").exists(), "missing dist .wasm");
     assert!(
-        !dist.join("rawpkg.js").exists() && !dist.join("rawpkg.d.ts").exists(),
-        "--bindings=none must emit neither glue nor declarations",
+        !dist.join("rawpkg.js").exists()
+            && !dist.join("rawpkg.d.ts").exists()
+            && !dist.join("rawpkg.component.wit").exists(),
+        "--bindings=none must emit neither glue, declarations, nor WIT descriptor",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
 /// Project-mode `--target=wasm_wasi` with the *inferred* component
-/// default: the C-ABI core module lands at `dist/wasm/<pkg>.wasm`, no
-/// glue, and no caveat note (the core-module-only note fires only on
-/// an explicit `--bindings=component`).
+/// default emits the paired component shape: the C-ABI core module at
+/// `dist/wasm/<pkg>.wasm` plus the `<pkg>.component.wit` WIT interface
+/// descriptor (package name from `kara.toml`; the host fn lives in a
+/// non-entry module, pinning that the merged super-program feeds the
+/// descriptor) — no browser glue, no caveat note.
 #[test]
-fn wasm_project_wasi_emits_core_module_silently() {
+fn wasm_project_wasi_emits_core_module_and_wit_descriptor() {
     let tmp = wasm_test_dir("bprojwasi");
     write_wasm_project_fixture(&tmp, "wasipkg");
 
@@ -11551,7 +11555,7 @@ fn wasm_project_wasi_emits_core_module_silently() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     if let Some(reason) = wasm_build_skip_reason(&stderr) {
-        eprintln!("skip: wasm_project_wasi_emits_core_module_silently — {reason}");
+        eprintln!("skip: wasm_project_wasi_emits_core_module_and_wit_descriptor — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
     }
@@ -11560,8 +11564,23 @@ fn wasm_project_wasi_emits_core_module_silently() {
         !stderr.contains("core module only"),
         "inferred component default must stay silent, got: {stderr}",
     );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("wasipkg.wasm") && stdout.contains("wasipkg.component.wit"),
+        "Built line must name the paired artifacts, got: {stdout}",
+    );
     let dist = tmp.join("dist").join("wasm");
     assert!(dist.join("wasipkg.wasm").exists(), "missing dist .wasm");
+    let wit = std::fs::read_to_string(dist.join("wasipkg.component.wit"))
+        .expect("missing dist .component.wit descriptor");
+    assert!(
+        wit.contains("package kara:wasipkg;"),
+        "descriptor must key the package name from kara.toml, got:\n{wit}",
+    );
+    assert!(
+        wit.contains("report: func(value: s64) -> s64;"),
+        "host fn from the non-entry module must reach the descriptor, got:\n{wit}",
+    );
     assert!(
         !dist.join("wasipkg.js").exists() && !dist.join("wasipkg.d.ts").exists(),
         "component bindings must not emit browser glue",
@@ -11939,8 +11958,10 @@ fn bindings_none_suppresses_browser_glue() {
     );
     assert!(tmp.join("rawmod.wasm").exists(), "missing .wasm artifact");
     assert!(
-        !tmp.join("rawmod.js").exists() && !tmp.join("rawmod.d.ts").exists(),
-        "--bindings=none must emit neither glue nor declarations",
+        !tmp.join("rawmod.js").exists()
+            && !tmp.join("rawmod.d.ts").exists()
+            && !tmp.join("rawmod.component.wit").exists(),
+        "--bindings=none must emit neither glue, declarations, nor WIT descriptor",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -11987,16 +12008,23 @@ fn bindings_browser_on_wasi_emits_glue() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Explicit `--bindings=component` succeeds (core module emitted) and
-/// notes that WIT / Component Model emission is a follow-up. The
-/// *inferred* component default — a bare `--target=wasm_wasi` build —
-/// stays silent (asserted via the emission tests above carrying no
-/// such note).
+/// Explicit `--bindings=component` emits the paired shape (phase-10
+/// "WASM Component Model artifact emission"): the C-ABI core module
+/// plus the `<stem>.component.wit` WIT interface descriptor, with the
+/// `Built:` line naming both — and no follow-up caveat note (the
+/// descriptor *is* the sanctioned interim form, design.md § Target
+/// Build Artifacts).
 #[test]
-fn bindings_explicit_component_notes_core_module_only() {
+fn bindings_explicit_component_emits_wit_descriptor() {
     let tmp = wasm_test_dir("bcomp");
     let path = tmp.join("compmod.kara");
-    std::fs::write(&path, "fn main() {\n    println(\"hello\");\n}\n").unwrap();
+    std::fs::write(
+        &path,
+        "effect resource Reporter;\n\n\
+         host fn report(value: i64) -> i64 with writes(Reporter);\n\n\
+         fn main() {\n    report(42);\n}\n",
+    )
+    .unwrap();
 
     let out = karac_bin()
         .args([
@@ -12011,16 +12039,37 @@ fn bindings_explicit_component_notes_core_module_only() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     if let Some(reason) = wasm_build_skip_reason(&stderr) {
-        eprintln!("skip: bindings_explicit_component_notes_core_module_only — {reason}");
+        eprintln!("skip: bindings_explicit_component_emits_wit_descriptor — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
     }
     assert!(out.status.success(), "build failed: {stderr}");
     assert!(
-        stderr.contains("core module only") || stderr.contains("C-ABI core module only"),
-        "explicit component must note the WIT follow-up, got: {stderr}",
+        !stderr.contains("core module only"),
+        "the WIT-follow-up caveat note is retired, got: {stderr}",
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("Built: compmod.wasm + compmod.component.wit"),
+        "Built line must name the paired artifacts, got: {stdout}",
     );
     assert!(tmp.join("compmod.wasm").exists(), "missing .wasm artifact");
+    let wit = std::fs::read_to_string(tmp.join("compmod.component.wit"))
+        .expect("missing .component.wit descriptor");
+    assert!(
+        wit.contains("package kara:compmod;"),
+        "descriptor must carry the package header, got:\n{wit}",
+    );
+    assert!(
+        wit.contains("report: func(value: s64) -> s64;"),
+        "host fn must map per the WIT boundary contract (i64 ⇒ s64), got:\n{wit}",
+    );
+    assert!(
+        wit.contains("world compmod {")
+            && wit.contains("import host;")
+            && wit.contains("export run: func();"),
+        "world must import the host interface and export the entry point, got:\n{wit}",
+    );
     assert!(
         !tmp.join("compmod.js").exists() && !tmp.join("compmod.d.ts").exists(),
         "component bindings must not emit browser glue or declarations",
