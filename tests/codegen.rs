@@ -6668,6 +6668,53 @@ fn main() {
         }
     }
 
+    // Anonymous array literals in Slice contexts (phase-8 / kata-393 audit).
+    // Named arrays already coerced to `Slice[T]` params and range-sliced;
+    // bare literals did not. `f([1,2,3])` failed LLVM verification
+    // (`[N x i8]` vs `{ptr,i64}` param mismatch) and `f([1,2,3][a..b])`
+    // errored "range-slice requires a named source variable". Both now
+    // materialize the literal to a temp alloca and build a slice header.
+    // The interpreter always accepted these forms; codegen now matches.
+
+    #[test]
+    fn test_e2e_array_literal_arg_to_slice_param() {
+        let out = run_program(
+            r#"
+fn sum(xs: Slice[u8]) -> i64 {
+    let mut s = 0_i64;
+    for x in xs { s = s + (x as i64); }
+    s
+}
+fn main() {
+    println(sum([4u8, 5u8, 6u8]));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "15");
+        }
+    }
+
+    #[test]
+    fn test_e2e_array_literal_range_slice_arg() {
+        let out = run_program(
+            r#"
+fn sum(xs: Slice[u8]) -> i64 {
+    let mut s = 0_i64;
+    for x in xs { s = s + (x as i64); }
+    s
+}
+fn main() {
+    // [1..3] selects 20 + 30.
+    println(sum([10u8, 20u8, 30u8, 40u8][1..3]));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "50");
+        }
+    }
+
     #[test]
     fn test_ir_array_len_constant_fold() {
         // `Array[i64, 3]` annotation pins the fixed-array `len()` constant

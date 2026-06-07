@@ -2515,8 +2515,66 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Anonymous collection literal at a call boundary — `f([1, 2, 3])`.
+        // Named arrays / Vecs hit the Identifier fast path above; a bare
+        // literal has no alloca, so materialize it and build a slice header.
+        // Without this the literal reaches the call as a raw aggregate and
+        // fails LLVM verification (param-type mismatch); the interpreter
+        // accepts the same literal -> Slice coercion, so this brings codegen
+        // in line.
+        if let Some((data, len)) = self.collection_literal_slice_parts(arg)? {
+            return Ok(Some(self.build_slice_header(slice_ty, data, len)));
+        }
+
         let _ = elem_ty;
         Ok(None)
+    }
+
+    /// For an anonymous collection literal — a bare `[..]` (which lowering
+    /// keeps as `ArrayLiteral` when typed `Array[T, N]`, or rewrites to a
+    /// `Vec` `PrefixCollectionLiteral` otherwise) — compile it and return
+    /// `(data_ptr, len)` suitable for a slice header or range-slice base.
+    /// An array value is materialized to a temp alloca (`&arr == &arr[0]`,
+    /// so a one-index GEP from the result lands at `&arr[i]`); a Vec value
+    /// is unpacked to its `{data, len}` fields. Returns `None` if `expr`
+    /// isn't a collection literal, so the caller's compile is never
+    /// double-emitted.
+    pub(super) fn collection_literal_slice_parts(
+        &mut self,
+        expr: &Expr,
+    ) -> Result<Option<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>)>, String> {
+        let is_lit = matches!(&expr.kind, ExprKind::ArrayLiteral(_))
+            || matches!(&expr.kind, ExprKind::PrefixCollectionLiteral { type_name, .. }
+                if type_name == "Vec");
+        if !is_lit {
+            return Ok(None);
+        }
+        let i64_t = self.context.i64_type();
+        let compiled = self.compile_expr(expr)?;
+        match compiled.get_type() {
+            BasicTypeEnum::ArrayType(at) => {
+                let fn_val = self.current_fn.unwrap();
+                let tmp = self.create_entry_alloca(fn_val, "lit.slice.tmp", at.into());
+                self.builder.build_store(tmp, compiled).unwrap();
+                Ok(Some((tmp, i64_t.const_int(at.len() as u64, false))))
+            }
+            BasicTypeEnum::StructType(_) => {
+                // Vec value `{ptr,len,cap}`: pull out the data ptr + len.
+                let sv = compiled.into_struct_value();
+                let data = self
+                    .builder
+                    .build_extract_value(sv, 0, "lit.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_extract_value(sv, 1, "lit.len")
+                    .unwrap()
+                    .into_int_value();
+                Ok(Some((data, len)))
+            }
+            _ => Err("collection literal compiled to neither array nor Vec value".into()),
+        }
     }
 
     /// Assemble a two-field slice struct value from a data pointer and an
@@ -2634,6 +2692,16 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 return Err(format!("Undefined variable '{}' in range-slice", name));
             }
+        } else if let Some((data, len)) = self.collection_literal_slice_parts(object)? {
+            // Anonymous collection-literal source — `[1, 2, 3][a..b]`. Named
+            // arrays hit the Identifier path above; a bare literal has no
+            // alloca and (depending on its inferred type) lowers to either an
+            // `[N x T]` array value or a Vec `{ptr,len,cap}` value. The helper
+            // materializes either into a `(base_ptr, len)` whose base is the
+            // address of element 0, so the `source_is_array == false`
+            // one-index GEP below lands at `&elem[start]` correctly. The
+            // interpreter accepts the same form (`[7, 8][0..2]`).
+            (data, len)
         } else {
             return Err("range-slice requires a named source variable".into());
         };
