@@ -373,6 +373,37 @@ pub fn render_glue(
         .collect::<Vec<_>>()
         .join(", ");
     out.push_str(&format!("const DECLARED_IMPORTS = [{names}];\n"));
+    // Per-fn JS-scalar marshalling table for the threaded host-fn
+    // worker→main proxy (`makeHostProxy` / `startHostService` in the
+    // static body): each entry says how to read each scalar arg and the
+    // return out of the shared control block (a `bigint` slot vs a
+    // `number` slot). Always emitted (`[]` for a host-fn-free program)
+    // so the static body references it unconditionally; only the
+    // threaded path with declared host fns actually consults it. The
+    // sequential `kara_host` import wiring (`buildImports`) calls the
+    // user closures directly and needs no table.
+    let sigs = fns
+        .iter()
+        .map(|s| {
+            let params = s
+                .params
+                .iter()
+                .map(|p| match p.js {
+                    JsScalar::BigInt => "\"bigint\"",
+                    JsScalar::Number => "\"number\"",
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let ret = match &s.ret {
+                Some((_, JsScalar::BigInt)) => "\"bigint\"",
+                Some((_, JsScalar::Number)) => "\"number\"",
+                None => "\"void\"",
+            };
+            format!("{{ name: \"{}\", params: [{params}], ret: {ret} }}", s.name)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    out.push_str(&format!("const HOST_FN_SIGS = [{sigs}];\n"));
     // Threaded-build constants — rendered as inert nulls/zeros on a
     // sequential-only build so the static body references them
     // unconditionally.
@@ -856,10 +887,149 @@ function spawnKaraWorkerSync(data, opts = {}) {
   return w;
 }
 
+// ── host-fn worker→main proxy (threaded builds with host fns) ──
+//
+// The program runs in a worker (PROXY_TO_PTHREAD), but `host fn`
+// implementations are user-supplied MAIN-THREAD closures. A worker that
+// calls a host fn must round-trip to the main thread synchronously: it
+// publishes the call into a shared control block, wakes the main
+// thread, then `Atomics.wait`s for the result. The main thread is the
+// only blockable-by-design agent here (its service loop yields to the
+// event loop via Atomics.waitAsync), so it executes the closure and
+// notifies. One SharedArrayBuffer holds: a mutex (only one host call in
+// flight — the main thread services serially), a request doorbell the
+// main thread waits on, a done flag, and an 8-byte-slot payload region
+// for scalar args + the return. Strings cross as (ptr, len) scalars and
+// live in the shared linear memory — the main side reads them directly.
+const HC_LOCK = 0; // i32: mutex (0 free, 1 held)
+const HC_SEQ = 1; // i32: request counter / doorbell
+const HC_DONE = 2; // i32: result-ready flag for the current request
+const HC_FN = 3; // i32: HOST_FN_SIGS index of the call
+const HC_ARGC = 4; // i32: argument count
+const HC_PAYLOAD_OFF = 64; // 8-aligned; clears the i32 control cells
+const HC_MAX_ARGS = 16; // scalar-arg ceiling (host fns take a handful)
+const HC_RET_SLOT = HC_MAX_ARGS; // return value lives just past the args
+const HOST_CTL_BYTES = HC_PAYLOAD_OFF + (HC_MAX_ARGS + 1) * 8;
+
+/** Worker side: a `kara_host` import namespace whose entries marshal
+ * the call across the shared control block and block until the main
+ * thread writes the result. Built per worker (primary and pthreads),
+ * all bound to the same shared `hostCtl`. */
+function makeHostProxy(hostCtl) {
+  const c = new Int32Array(hostCtl);
+  const f = new Float64Array(hostCtl, HC_PAYLOAD_OFF);
+  const b = new BigInt64Array(hostCtl, HC_PAYLOAD_OFF);
+  const kara_host = {};
+  for (let idx = 0; idx < HOST_FN_SIGS.length; idx++) {
+    const sig = HOST_FN_SIGS[idx];
+    kara_host[sig.name] = (...args) => {
+      // Acquire the host-call mutex (block on contention).
+      while (Atomics.compareExchange(c, HC_LOCK, 0, 1) !== 0) {
+        Atomics.wait(c, HC_LOCK, 1);
+      }
+      try {
+        for (let k = 0; k < args.length; k++) {
+          if (sig.params[k] === "bigint") b[k] = BigInt(args[k]);
+          else f[k] = Number(args[k]);
+        }
+        Atomics.store(c, HC_FN, idx);
+        Atomics.store(c, HC_ARGC, args.length);
+        Atomics.store(c, HC_DONE, 0);
+        // Publish (release) and ring the doorbell.
+        Atomics.add(c, HC_SEQ, 1);
+        Atomics.notify(c, HC_SEQ);
+        // Block this worker until the main thread posts the result.
+        while (Atomics.load(c, HC_DONE) === 0) {
+          Atomics.wait(c, HC_DONE, 0);
+        }
+        if (sig.ret === "bigint") return b[HC_RET_SLOT];
+        if (sig.ret === "number") return f[HC_RET_SLOT];
+        return undefined;
+      } finally {
+        Atomics.store(c, HC_LOCK, 0);
+        Atomics.notify(c, HC_LOCK, 1);
+      }
+    };
+  }
+  return kara_host;
+}
+
+/** Main side: service host-fn calls posted by workers. Runs on the
+ * main thread's event loop (Atomics.waitAsync — the main agent may be
+ * non-blockable), executing each user closure with the shared memory in
+ * scope so (ptr, len) string args read directly. Returns a handle whose
+ * stop() unblocks and ends the loop once the program has exited. */
+function startHostService(hostCtl, memory, hostImpls) {
+  const c = new Int32Array(hostCtl);
+  const f = new Float64Array(hostCtl, HC_PAYLOAD_OFF);
+  const b = new BigInt64Array(hostCtl, HC_PAYLOAD_OFF);
+  const ctx = {
+    get memory() {
+      return memory;
+    },
+    readString: (ptr, len) => readString(memory, ptr, len),
+  };
+  let last = Atomics.load(c, HC_SEQ);
+  let running = true;
+  const hasWaitAsync = typeof Atomics.waitAsync === "function";
+  function serveOne() {
+    const idx = Atomics.load(c, HC_FN);
+    const argc = Atomics.load(c, HC_ARGC);
+    const sig = HOST_FN_SIGS[idx];
+    const args = [];
+    for (let k = 0; k < argc; k++) {
+      args.push(sig.params[k] === "bigint" ? b[k] : f[k]);
+    }
+    let ret;
+    try {
+      ret = hostImpls[sig.name](...args, ctx);
+    } catch (e) {
+      // A throwing host impl must not deadlock the worker — log and
+      // return a zero result so the round-trip completes.
+      console.error("kara: host fn `" + sig.name + "` threw:", e);
+      ret = undefined;
+    }
+    if (sig.ret === "bigint") b[HC_RET_SLOT] = BigInt(ret ?? 0n);
+    else if (sig.ret === "number") f[HC_RET_SLOT] = Number(ret ?? 0);
+    Atomics.store(c, HC_DONE, 1);
+    Atomics.notify(c, HC_DONE);
+  }
+  const done = (async () => {
+    for (;;) {
+      let cur = Atomics.load(c, HC_SEQ);
+      if (cur === last) {
+        if (hasWaitAsync) {
+          const w = Atomics.waitAsync(c, HC_SEQ, last);
+          if (w.async) await w.value;
+        } else {
+          // Engines without waitAsync: poll, yielding to the event loop
+          // (the main agent can't Atomics.wait).
+          await new Promise((r) => setTimeout(r, 0));
+        }
+        cur = Atomics.load(c, HC_SEQ);
+      }
+      if (!running) break;
+      if (cur === last) continue; // spurious wake
+      last = cur;
+      serveOne();
+    }
+  })();
+  return {
+    stop() {
+      running = false;
+      // Wake the loop so it observes !running and returns.
+      Atomics.add(c, HC_SEQ, 1);
+      Atomics.notify(c, HC_SEQ);
+      return done;
+    },
+  };
+}
+
 /** Worker-side protocol: instantiate the shared-memory module and
  * either run `_start` (primary) or `wasi_thread_start` (pthread). */
 async function karaThreadWorkerMain(data, postMessageFn) {
-  const { role, module, memory, tidCounter, env, tid, startArg } = data;
+  const { role, module, memory, tidCounter, env, tid, startArg, hostCtl } =
+    data;
   const imports = {
     env: { memory },
     wasi: {
@@ -874,6 +1044,11 @@ async function karaThreadWorkerMain(data, postMessageFn) {
     },
     wasi_snapshot_preview1: makeWasiPolyfill(() => memory, env),
   };
+  // host fns: proxy each call to the main thread's service loop. hostCtl
+  // is null for host-fn-free programs (no proxy needed).
+  if (hostCtl) {
+    imports.kara_host = makeHostProxy(hostCtl);
+  }
   const instance = await WebAssembly.instantiate(module, imports);
   if (role === "primary") {
     let code = 0;
@@ -933,12 +1108,17 @@ await karaMaybeRunAsThreadWorker();
 /** Main-thread side of the threaded run: compile the threaded module,
  * create the shared memory (limits mirror the module's import
  * declaration exactly), spawn the primary worker, await its exit. */
-async function runThreaded() {
-  if (DECLARED_IMPORTS.length > 0) {
-    // karac rejects host fns + wasm-threads at build time (their
-    // implementations are main-thread closures; the program runs in a
-    // worker). Defensive — this glue shape is unreachable.
-    throw new Error("host fns are not supported with wasm-threads");
+async function runThreaded(hostImpls = {}) {
+  // host fn implementations are main-thread closures bridged into the
+  // worker via the synchronous proxy below — validate them up front, the
+  // same contract the sequential `buildImports` enforces.
+  const missing = DECLARED_IMPORTS.filter(
+    (n) => typeof hostImpls?.[n] !== "function",
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      "missing host fn implementation(s): " + missing.join(", "),
+    );
   }
   const isNode =
     typeof process !== "undefined" && !!(process.versions && process.versions.node);
@@ -959,6 +1139,14 @@ async function runThreaded() {
   });
   const tidCounter = new SharedArrayBuffer(4);
   new Int32Array(tidCounter)[0] = 1;
+  // host fns: stand up the worker→main proxy (shared control block +
+  // the main-thread service loop). Null when the program declares none.
+  let hostCtl = null;
+  let hostService = null;
+  if (DECLARED_IMPORTS.length > 0) {
+    hostCtl = new SharedArrayBuffer(HOST_CTL_BYTES);
+    hostService = startHostService(hostCtl, memory, hostImpls);
+  }
   const poolSize =
     THREADS_POOL_SIZE ??
     (globalThis.navigator && navigator.hardwareConcurrency) ??
@@ -973,26 +1161,31 @@ async function runThreaded() {
     env,
     tid: 0,
     startArg: 0,
+    hostCtl,
   };
-  const code = await new Promise((resolve, reject) => {
-    const w = spawnKaraWorkerSync(data);
-    const onMessage = (msg) => {
-      if (msg && msg.__karaThreads === "exit") resolve(msg.code);
-      else if (msg && msg.__karaThreads === "error")
-        reject(new Error(msg.message));
-    };
-    if (nodeWorkerThreads) {
-      w.on("message", onMessage);
-      w.on("error", reject);
-    } else {
-      w.addEventListener("message", (e) => onMessage(e.data));
-      w.addEventListener("error", (e) =>
-        reject(e.error ?? new Error("kara thread worker error")),
-      );
-    }
-  });
-  if (code !== 0) throw new KaraExit(code);
-  return { memory, threaded: true };
+  try {
+    const code = await new Promise((resolve, reject) => {
+      const w = spawnKaraWorkerSync(data);
+      const onMessage = (msg) => {
+        if (msg && msg.__karaThreads === "exit") resolve(msg.code);
+        else if (msg && msg.__karaThreads === "error")
+          reject(new Error(msg.message));
+      };
+      if (nodeWorkerThreads) {
+        w.on("message", onMessage);
+        w.on("error", reject);
+      } else {
+        w.addEventListener("message", (e) => onMessage(e.data));
+        w.addEventListener("error", (e) =>
+          reject(e.error ?? new Error("kara thread worker error")),
+        );
+      }
+    });
+    if (code !== 0) throw new KaraExit(code);
+    return { memory, threaded: true };
+  } finally {
+    if (hostService) await hostService.stop();
+  }
 }
 
 /**
@@ -1045,7 +1238,7 @@ export async function instantiate(hostImpls = {}, opts = {}) {
 export async function run(hostImpls = {}, opts = {}) {
   if (WASM_THREADS_FILENAME !== null && !opts.forceSequential) {
     if (threadsSupported()) {
-      return await runThreaded();
+      return await runThreaded(hostImpls);
     }
     if (THREADS_NO_FALLBACK) {
       throw new Error(
@@ -1173,6 +1366,60 @@ mod tests {
         let seq = render_glue(&[], "app.wasm", None);
         assert!(seq.contains("const WASM_THREADS_FILENAME = null;"));
         assert!(seq.contains("const THREADS_POOL_SIZE = null;"));
+    }
+
+    #[test]
+    fn threaded_glue_renders_host_fn_proxy() {
+        let cfg = WasmThreadsGlueConfig {
+            threads_filename: "app.threads.wasm".to_string(),
+            no_fallback: false,
+            pool_size_override: None,
+            mem_initial_pages: 17,
+            mem_max_pages: 16384,
+        };
+        let fns = vec![
+            sig(
+                "report",
+                vec![param("value", "i64", JsScalar::BigInt)],
+                Some(("i64".to_string(), JsScalar::BigInt)),
+            ),
+            sig(
+                "log_str",
+                vec![
+                    param("ptr", "*const u8", JsScalar::Number),
+                    param("len", "i64", JsScalar::BigInt),
+                ],
+                None,
+            ),
+        ];
+        let glue = render_glue(&fns, "app.wasm", Some(&cfg));
+        // Signature-driven marshalling table: per-fn arg/ret JS kinds.
+        assert!(glue.contains(
+            "const HOST_FN_SIGS = [{ name: \"report\", params: [\"bigint\"], ret: \"bigint\" }, \
+             { name: \"log_str\", params: [\"number\", \"bigint\"], ret: \"void\" }];"
+        ));
+        // Both halves of the proxy plus the worker-side wiring.
+        for needle in [
+            "function makeHostProxy(hostCtl)",
+            "function startHostService(hostCtl, memory, hostImpls)",
+            "imports.kara_host = makeHostProxy(hostCtl);",
+            "Atomics.waitAsync",
+            "Atomics.compareExchange(c, HC_LOCK",
+            "hostService = startHostService(hostCtl, memory, hostImpls);",
+            "return await runThreaded(hostImpls);",
+        ] {
+            assert!(glue.contains(needle), "missing proxy machinery: {needle}");
+        }
+        // The dead build-time rejection in runThreaded is gone.
+        assert!(!glue.contains("host fns are not supported with wasm-threads"));
+    }
+
+    #[test]
+    fn host_fn_sigs_table_is_empty_without_host_fns() {
+        // The static body references HOST_FN_SIGS unconditionally, so it
+        // must render even on a host-fn-free build — as an empty array.
+        let glue = render_glue(&[], "plain.wasm", None);
+        assert!(glue.contains("const HOST_FN_SIGS = [];"));
     }
 
     #[test]

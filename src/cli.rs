@@ -5206,25 +5206,6 @@ fn cmd_build(
             }
         }
 
-        // `--features wasm-threads` × `host fn`: unsupported at v1. The
-        // threaded program runs in a primary Web Worker (every blocking
-        // primitive bottoms out in memory.atomic.wait, which traps on
-        // the browser main thread), but host fn implementations are
-        // main-thread JS closures — bridging them needs a synchronous
-        // worker→main proxy (SAB round-trip), tracked as its own
-        // phase-10 follow-up entry. Reject loudly rather than emit a
-        // glue that throws at load.
-        if wasm_threads && !crate::wasm_glue::collect_host_fns(&pipeline.parsed.program).is_empty()
-        {
-            eprintln!(
-                "error: --features wasm-threads does not support `host fn` yet \
-                 (the program runs in a Web Worker; host implementations live on \
-                 the main thread — the synchronous proxy is a tracked follow-up). \
-                 Drop the host fns or build without --features wasm-threads."
-            );
-            process::exit(1);
-        }
-
         // Output executable name — the stem derived before the
         // component-bindings setup above.
         let obj_path = format!("/tmp/karac_{exe_name}.o");
@@ -6433,21 +6414,6 @@ fn run_multi_file_codegen(
         return BuildCodegenStatus::Failed {
             phase: "checks".to_string(),
             message: format_pipeline_errors(&pipeline, "checks", Some(&span_table)),
-        };
-    }
-
-    // `--features wasm-threads` × `host fn`: unsupported at v1 — the
-    // single-file `cmd_build` contract (the program runs in a Web
-    // Worker; host implementations are main-thread closures; the
-    // synchronous proxy is a tracked phase-10 follow-up).
-    if wasm_threads && !crate::wasm_glue::collect_host_fns(&pipeline.parsed.program).is_empty() {
-        return BuildCodegenStatus::Failed {
-            phase: "codegen".to_string(),
-            message: "--features wasm-threads does not support `host fn` yet (the program \
-                      runs in a Web Worker; host implementations live on the main thread — \
-                      the synchronous proxy is a tracked follow-up). Drop the host fns or \
-                      build without --features wasm-threads."
-                .to_string(),
         };
     }
 

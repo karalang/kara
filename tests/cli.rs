@@ -13474,20 +13474,21 @@ fn wasm_threads_rejected_off_wasm_browser_and_with_component_bindings() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// `host fn` × wasm-threads: rejected at build time. The threaded
-/// program runs in a primary Web Worker while host implementations are
-/// main-thread JS closures — the synchronous worker→main proxy is a
-/// tracked follow-up, so the combination fails loudly instead of
-/// emitting a glue that throws at load.
+/// `host fn` × wasm-threads: the synchronous worker→main proxy (the v1
+/// rejection lifted). The build now SUCCEEDS and the glue carries the
+/// proxy machinery — the signature-driven marshalling table, the
+/// worker-side `kara_host` stubs (`makeHostProxy`), and the main-thread
+/// service loop (`startHostService`). Load-immune: asserts the emitted
+/// glue + dual artifact, no execution (the E2E below runs it on node).
 #[test]
-fn wasm_threads_rejects_host_fns() {
+fn wasm_threads_host_fn_emits_proxy_glue() {
     let tmp = wasm_test_dir("wthostfn");
     let path = tmp.join("hosted.kara");
     std::fs::write(
         &path,
         "effect resource Reporter;\n\n\
          host fn report(value: i64) -> i64 with writes(Reporter);\n\n\
-         fn main() with writes(Reporter) {\n    let _ = report(42);\n}\n",
+         fn main() with writes(Reporter) {\n    let r = report(42);\n    println(r);\n}\n",
     )
     .unwrap();
     let out = karac_bin()
@@ -13502,15 +13503,177 @@ fn wasm_threads_rejects_host_fns() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if stderr.contains("requires the llvm feature") {
-        eprintln!("skip: wasm_threads_rejects_host_fns — karac built without --features llvm");
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_host_fn_emits_proxy_glue — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
     }
-    assert!(!out.status.success(), "host fn + wasm-threads must reject");
     assert!(
-        stderr.contains("does not support `host fn`"),
-        "expected the host-fn rejection, got: {stderr}",
+        out.status.success(),
+        "host fn + wasm-threads must now build: {stderr}"
+    );
+    assert!(
+        tmp.join("hosted.threads.wasm").exists(),
+        "dual artifact missing"
+    );
+    let glue = std::fs::read_to_string(tmp.join("hosted.js")).unwrap();
+    assert!(glue.contains("const DECLARED_IMPORTS = [\"report\"];"));
+    assert!(glue.contains("{ name: \"report\", params: [\"bigint\"], ret: \"bigint\" }"));
+    for needle in [
+        "function makeHostProxy(hostCtl)",
+        "function startHostService(hostCtl, memory, hostImpls)",
+        "imports.kara_host = makeHostProxy(hostCtl);",
+    ] {
+        assert!(glue.contains(needle), "proxy glue missing: {needle}");
+    }
+    // d.ts: declared host fns make hostImpls required AND the threaded
+    // surface is present — the combination the v1 rejection made
+    // unreachable.
+    let dts = std::fs::read_to_string(tmp.join("hosted.d.ts")).unwrap();
+    assert!(dts.contains("hostImpls: HostImpls"));
+    assert!(dts.contains("KaraThreadedHandle"));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Headline E2E for the worker→main host-fn proxy: a threaded program
+/// that calls `host fn`s round-trips each call to a MAIN-THREAD closure
+/// synchronously (SAB control block + Atomics), from BOTH the primary
+/// worker (`_start`) and a pool worker (a spawned task) — the same
+/// shared control block serves every worker. The scalar/string results
+/// flow back into the guest. Load-immune threading evidence: the
+/// program runs in a worker (every blocking primitive traps on the page
+/// main thread), so a host fn returning a usable value at all proves
+/// the proxy executed the closure on main and transported the answer
+/// back across the SAB.
+#[test]
+fn wasm_threads_host_fn_proxy_e2e() {
+    let tmp = wasm_test_dir("wthoste2e");
+    let path = tmp.join("hosted.kara");
+    std::fs::write(
+        &path,
+        r#"
+effect resource Reporter;
+
+host fn report(x: i64) -> i64 with writes(Reporter);
+host fn log_str(ptr: *const u8, len: i64) with writes(Reporter);
+
+fn task_body(id: i64) -> i64 with writes(Reporter) {
+    report(id)
+}
+
+fn main() with writes(Reporter) {
+    // host fn from the primary worker: the (worker→main→worker) proxy.
+    let doubled = report(21);
+    println(doubled);
+    // string arg: (ptr, len) into the SHARED linear memory the main
+    // thread reads directly.
+    let msg = c"threaded kara host";
+    log_str(msg.as_ptr(), msg.len());
+    // host fn from a POOL worker: the spawned task proxies to main on
+    // the identical shared control block.
+    let h: TaskHandle[i64] = spawn(|| task_body(100));
+    let r: i64 = h.join();
+    println(r);
+    println("guest-done");
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_host_fn_proxy_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm-threads build failed: {stderr}");
+    assert!(tmp.join("hosted.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./hosted.js";
+
+// host fn implementations are MAIN-THREAD closures. The proxy must
+// invoke them on this thread and feed results back into the guest
+// running in the worker. `seen` records that they actually ran here.
+const seen = [];
+const h = await run({
+  report(x, ctx) {
+    if (typeof x !== "bigint")
+      throw new Error("i64 must arrive as BigInt on main, got " + typeof x);
+    seen.push("report:" + x);
+    return x * 2n;
+  },
+  log_str(ptr, len, ctx) {
+    if (typeof ptr !== "number")
+      throw new Error("ptr must arrive as number, got " + typeof ptr);
+    if (typeof len !== "bigint")
+      throw new Error("i64 len must arrive as BigInt, got " + typeof len);
+    // The string lives in the SHARED memory — readString decodes it on
+    // main without any copy across the worker boundary.
+    seen.push("log_str:" + ctx.readString(ptr, len));
+  },
+});
+// node has SAB unconditionally → run() takes the threaded pick.
+if (h.threaded !== true) throw new Error("expected the threaded module pick");
+// report() ran on main from BOTH the primary worker (21) and the pool
+// worker spawned by main (100).
+if (!seen.includes("report:21"))
+  throw new Error("primary-worker host fn did not run on main: " + JSON.stringify(seen));
+if (!seen.includes("report:100"))
+  throw new Error("pool-worker host fn did not run on main: " + JSON.stringify(seen));
+if (!seen.includes("log_str:threaded kara host"))
+  throw new Error("log_str (ptr,len) did not decode on main: " + JSON.stringify(seen));
+console.log("PROXY_OK");
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_threads_host_fn_proxy_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "threaded host-fn harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        node_stdout.contains("PROXY_OK"),
+        "missing PROXY_OK: stdout={node_stdout} stderr={node_stderr}",
+    );
+    // The host's doubled answers must flow back into the guest and out
+    // through its own println — proof the returns crossed the SAB back
+    // into the workers: 21 → 42 (primary worker), 100 → 200 (pool
+    // worker, transported through the spawned task's join).
+    assert!(
+        node_stdout.contains("42"),
+        "primary-worker host answer must flow back into the guest: {node_stdout}",
+    );
+    assert!(
+        node_stdout.contains("200"),
+        "pool-worker host answer must flow back through the spawned task: {node_stdout}",
+    );
+    assert!(
+        node_stdout.contains("guest-done"),
+        "guest must run to completion after the host calls: {node_stdout}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
