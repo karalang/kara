@@ -2454,9 +2454,24 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Error
             }
 
-            ExprKind::WhileLet { value, body, .. } => {
-                self.infer_expr(value);
+            ExprKind::WhileLet {
+                pattern,
+                value,
+                body,
+                ..
+            } => {
+                let scrut_ty = self.infer_expr(value);
+                // Bind the pattern's variables for the duration of the loop
+                // body, mirroring `if let` — without this the bindings stay
+                // un-typed (silent fall-through to `Type::Error`), breaking
+                // `pattern_binding_types` recording and codegen's binding-type
+                // propagation for `while let Some(x) = … { … x … }`.
+                let (mode, dispatch_ty) = ScrutineeMode::classify(&scrut_ty);
+                let dispatch_ty = dispatch_ty.clone();
+                self.local_scope.push();
+                self.check_pattern_against(pattern, &dispatch_ty, mode);
                 self.infer_block(body);
+                self.local_scope.pop();
                 Type::Unit
             }
 

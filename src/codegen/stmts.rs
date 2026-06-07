@@ -2665,25 +2665,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(())
             }
-            // `let … else` has no codegen lowering yet (phase-6-runtime.md
-            // line 489). Without this explicit arm it falls through the
-            // catch-all below and silently emits nothing: the scrutinee is
-            // never evaluated and the else-divergence never runs, so a
-            // pattern that fails to match at runtime falls straight through
-            // to the following code — a clean build that runs *wrong* with no
-            // diagnostic. (When the bound name is later used, codegen instead
-            // fails with "Undefined variable"; the dangerous case is an
-            // unused binding, which stays silent.) Fail loud instead of
-            // miscompiling until the real lowering lands. `LetUninit` keeps
-            // falling through the catch-all below — its slot is materialized
-            // lazily on first assignment, so a no-op is correct there.
-            StmtKind::LetElse { value, .. } => Err(format!(
-                "`let … else` is not yet lowered to native code (codegen), at {}:{}. \
-                 It would otherwise silently compile to a no-op — the else branch \
-                 never runs and the binding is absent. Rewrite as `match` for now. \
-                 Tracked at docs/implementation_checklist/phase-6-runtime.md line 489.",
-                value.span.line, value.span.column
-            )),
+            StmtKind::LetElse {
+                pattern,
+                value,
+                else_block,
+                ..
+            } => self.compile_let_else(pattern, value, else_block),
+            // `LetUninit` falls through the catch-all below — its slot is
+            // materialized lazily on first assignment, so a no-op is correct
+            // there.
             _ => Ok(()),
         }
     }

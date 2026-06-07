@@ -112,6 +112,123 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    // ── WhileLet ─────────────────────────────────────────────────
+
+    /// Lower `while let PAT = SCRUT { BODY }` (phase-6-runtime.md line 489).
+    /// Structurally a `compile_while` whose condition is a pattern test:
+    /// the loop header re-evaluates the scrutinee each iteration, tests it
+    /// against the pattern (`compile_pattern_condition`), and on a match
+    /// binds the pattern's names (`bind_pattern_values`) before running the
+    /// body. A per-iteration scope-cleanup frame (same shape as
+    /// `compile_while`) drops the iteration's pattern bindings and any body
+    /// temporaries before the next iteration's scrutinee is evaluated.
+    pub(super) fn compile_while_let(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        value: &Expr,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let cond_bb = self.context.append_basic_block(fn_val, "whilelet.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "whilelet.body");
+        let exit_bb = self.context.append_basic_block(fn_val, "whilelet.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            label: label.map(str::to_string),
+            continue_bb: cond_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+        });
+
+        // Header: re-evaluate the scrutinee and test the pattern every
+        // iteration. `val` is defined in `cond_bb`, which dominates
+        // `body_bb`, so the bind below can reuse it (same SSA shape as
+        // `compile_if_let`).
+        self.builder.position_at_end(cond_bb);
+        let val = self.compile_expr(value)?;
+        let cond = self.compile_pattern_condition(pattern, val)?;
+        self.builder
+            .build_conditional_branch(cond.into_int_value(), body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        // Per-iteration scope frame, same shape as `compile_while` — see its
+        // comment for the leak rationale.
+        self.scope_cleanup_actions.push(Vec::new());
+        self.bind_pattern_values(pattern, val)?;
+        self.compile_block(body)?;
+        let body_has_terminator = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_some();
+        if !body_has_terminator {
+            self.drain_top_frame_with_emit();
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+        } else {
+            self.scope_cleanup_actions.pop();
+        }
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    // ── LetElse ──────────────────────────────────────────────────
+
+    /// Lower `let PAT = SCRUT else { ELSE }` (phase-6-runtime.md line 489).
+    /// Evaluate the scrutinee, test it against the pattern, and branch: on a
+    /// match, bind the pattern's names into the **enclosing** scope (so they
+    /// are live for the rest of the block) and fall through to the following
+    /// statements; on a miss, run the else block, which the typechecker has
+    /// already verified diverges (`return` / `break` / `continue` / panic).
+    /// Mirrors `compile_if_let`'s scrutinee+condition machinery, but the
+    /// bindings escape the construct and there is no merge block — the match
+    /// edge continues straight into the block and the else edge diverges.
+    pub(super) fn compile_let_else(
+        &mut self,
+        pattern: &Pattern,
+        value: &Expr,
+        else_block: &Block,
+    ) -> Result<(), String> {
+        let val = self.compile_expr(value)?;
+        let cond = self.compile_pattern_condition(pattern, val)?;
+
+        let fn_val = self.current_fn.unwrap();
+        let match_bb = self.context.append_basic_block(fn_val, "letelse.match");
+        let else_bb = self.context.append_basic_block(fn_val, "letelse.else");
+
+        self.builder
+            .build_conditional_branch(cond.into_int_value(), match_bb, else_bb)
+            .unwrap();
+
+        // Else edge: the block diverges (typecheck-enforced). Compile it in
+        // its own scope frame; the divergent exit's `emit_scope_cleanup`
+        // walks that frame. Guard against a missing terminator defensively —
+        // a well-typed program always terminates here.
+        self.builder.position_at_end(else_bb);
+        self.compile_block_with_frame(else_block)?;
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            self.builder.build_unreachable().unwrap();
+        }
+
+        // Match edge: bind into the current (enclosing) scope and fall
+        // through. `val` is defined before the branch and dominates here.
+        self.builder.position_at_end(match_bb);
+        self.bind_pattern_values(pattern, val)?;
+        Ok(())
+    }
+
     pub(super) fn compile_print(
         &mut self,
         name: &str,

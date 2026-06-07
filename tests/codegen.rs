@@ -8905,12 +8905,11 @@ fn main() {
     }
 
     #[test]
-    fn test_codegen_while_let_rejected_not_silent_noop() {
-        // phase-6-runtime.md line 489: `while let` has no codegen lowering.
-        // It MUST fail loud at codegen rather than fall through the
-        // `compile_expr` catch-all to a constant `0`, which silently drops
-        // the loop body (clean build, wrong run). Pin the rejection so the
-        // silent-miscompile never regresses back in.
+    fn test_ir_while_let_emits_loop_not_noop() {
+        // phase-6-runtime.md line 489: `while let` lowers to a real loop
+        // (header re-tests the pattern, body runs on a match). Regression
+        // against the prior silent no-op (fall-through to a constant `0`,
+        // loop body dropped). Archive-independent — asserts on the IR.
         let src = r#"
 fn pop(v: mut ref Vec[i64]) -> Option[i64] {
     if v.len() == 0 {
@@ -8930,31 +8929,19 @@ fn main() {
     }
 }
 "#;
-        let mut parsed = karac::parse(src);
+        let ir = ir_for(src);
         assert!(
-            parsed.errors.is_empty(),
-            "parse errors: {:?}",
-            parsed.errors
-        );
-        let resolved = karac::resolve(&parsed.program);
-        let typed = karac::typecheck(&parsed.program, &resolved);
-        karac::lower(&mut parsed.program, &typed);
-        let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("expected codegen to reject `while let` rather than silently no-op it");
-        assert!(
-            err.contains("`while let` is not yet lowered"),
-            "expected while-let not-lowered diagnostic; got: {}",
-            err
+            ir.contains("whilelet.cond") && ir.contains("whilelet.body"),
+            "expected while-let loop blocks in IR; got:\n{}",
+            ir
         );
     }
 
     #[test]
-    fn test_codegen_let_else_rejected_not_silent_noop() {
-        // phase-6-runtime.md line 489: `let … else` has no codegen lowering.
-        // The dangerous case is an UNUSED binding — codegen would otherwise
-        // fall through `compile_stmt`'s catch-all and emit nothing, so a
-        // runtime pattern-mismatch silently skips the else-divergence and
-        // falls through (clean build, wrong run). Pin the rejection.
+    fn test_ir_let_else_emits_branch_not_noop() {
+        // phase-6-runtime.md line 489: `let … else` lowers to a real branch
+        // (match edge binds + falls through, else edge diverges). Regression
+        // against the prior silent no-op (fall-through that emitted nothing).
         let src = r#"
 fn maybe(empty: bool) -> Option[i64] {
     if empty {
@@ -8964,30 +8951,84 @@ fn maybe(empty: bool) -> Option[i64] {
 }
 
 fn main() {
-    println("before");
-    let Some(_x) = maybe(true) else {
+    let Some(x) = maybe(false) else {
+        return
+    }
+    println(f"bound {x}");
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("letelse.match") && ir.contains("letelse.else"),
+            "expected let-else branch blocks in IR; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_e2e_while_let_drains_and_binds() {
+        // The loop body runs once per match with the correct per-iteration
+        // binding, and terminates when the scrutinee stops matching (`None`).
+        let src = r#"
+fn pop(v: mut ref Vec[i64]) -> Option[i64] {
+    if v.len() == 0 {
+        return Option.None;
+    }
+    let last = v.len() - 1;
+    let x = v[last];
+    v.remove(last);
+    return Option.Some(x);
+}
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10_i64);
+    v.push(20_i64);
+    v.push(30_i64);
+    let mut sum = 0_i64;
+    while let Some(x) = pop(mut v) {
+        sum = sum + x;
+        println(f"got {x}");
+    }
+    println(f"sum={sum}");
+    println("done");
+}
+"#;
+        if let Some(out) = run_program(src) {
+            assert_eq!(out.trim(), "got 30\ngot 20\ngot 10\nsum=60\ndone");
+        }
+    }
+
+    #[test]
+    fn test_e2e_let_else_binds_then_else_diverges() {
+        // Match edge: bind the payload and continue to the following code.
+        // Non-match edge: run the else block, which diverges (`return`) — the
+        // bound-name path is skipped, control returns to the caller.
+        let src = r#"
+fn maybe(empty: bool) -> Option[i64] {
+    if empty {
+        return Option.None;
+    }
+    return Option.Some(7_i64);
+}
+
+fn run(empty: bool) {
+    let Some(x) = maybe(empty) else {
         println("else fired");
         return
     }
-    println("after");
+    println(f"bound {x}");
+}
+
+fn main() {
+    run(false);
+    run(true);
+    println("done");
 }
 "#;
-        let mut parsed = karac::parse(src);
-        assert!(
-            parsed.errors.is_empty(),
-            "parse errors: {:?}",
-            parsed.errors
-        );
-        let resolved = karac::resolve(&parsed.program);
-        let typed = karac::typecheck(&parsed.program, &resolved);
-        karac::lower(&mut parsed.program, &typed);
-        let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("expected codegen to reject `let … else` rather than silently no-op it");
-        assert!(
-            err.contains("`let … else` is not yet lowered"),
-            "expected let-else not-lowered diagnostic; got: {}",
-            err
-        );
+        if let Some(out) = run_program(src) {
+            assert_eq!(out.trim(), "bound 7\nelse fired\ndone");
+        }
     }
 
     #[test]

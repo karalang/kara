@@ -18,7 +18,7 @@ use super::const_eval::{
     apply_binary, apply_unary, const_value_type, infer_operand_target_ty, integer_to_const_value,
 };
 use super::inference::{find_unbound_const_param, find_unbound_type_param};
-use super::types::{type_display, IntSize, Type, UIntSize, VariantTypeInfo};
+use super::types::{type_display, IntSize, ScrutineeMode, Type, UIntSize, VariantTypeInfo};
 use super::{ConstEvalError, LocalTypeScope, TypeErrorKind};
 
 impl<'a> super::TypeChecker<'a> {
@@ -2283,7 +2283,9 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_unsolved_type_param(&inferred, &value.span);
                     inferred
                 };
-                self.bind_pattern_types(pattern, &expected_ty);
+                // The else block runs on the NON-matching edge, so the
+                // pattern's bindings are NOT in scope there — infer it first,
+                // before binding the pattern. It must diverge.
                 let else_ty = self.infer_block(else_block);
                 if else_ty != Type::Never && else_ty != Type::Error {
                     self.type_error(
@@ -2293,6 +2295,16 @@ impl<'a> super::TypeChecker<'a> {
                         TypeErrorKind::BranchTypeMismatch,
                     );
                 }
+                // Bind the pattern into the CURRENT scope (not a child scope) so
+                // the bindings are live for the rest of the enclosing block.
+                // Route through `check_pattern_against` — the same path `if let`
+                // uses — so a variant pattern (`Some(x)`) extracts the payload
+                // type for `x` and records `pattern_binding_types` for codegen.
+                // (`bind_pattern_types`, the prior call, binds variant payloads
+                // to `Type::Error`, which left `x` untyped.)
+                let (mode, dispatch_ty) = ScrutineeMode::classify(&expected_ty);
+                let dispatch_ty = dispatch_ty.clone();
+                self.check_pattern_against(pattern, &dispatch_ty, mode);
             }
             StmtKind::Defer { body } => {
                 let prev = self.in_defer;

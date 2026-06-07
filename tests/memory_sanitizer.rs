@@ -2707,6 +2707,80 @@ fn main() {
         );
     }
 
+    // ── while let / let else drop paths (phase-6 line 489) ───────
+
+    #[test]
+    fn asan_while_let_per_iteration_heap_local_freed() {
+        // `compile_while_let` pushes a per-iteration scope-cleanup frame.
+        // A heap String created inside the loop body must be freed at each
+        // iteration's exit — not leaked across iterations, not double-freed
+        // when the next iteration reuses the binding's slot.
+        assert_clean_asan_run(
+            r#"
+fn pop(v: mut ref Vec[i64]) -> Option[i64] {
+    if v.len() == 0 {
+        return Option.None;
+    }
+    let last = v.len() - 1;
+    let x = v[last];
+    v.remove(last);
+    return Option.Some(x);
+}
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    v.push(2_i64);
+    v.push(3_i64);
+    while let Some(x) = pop(mut v) {
+        let prefix = "n=";
+        let line = prefix + "x";
+        println(f"{line} {x}");
+    }
+    println("done");
+}
+"#,
+            &["n=x 3", "n=x 2", "n=x 1", "done"],
+            "while_let_per_iteration_heap_local_freed",
+        );
+    }
+
+    #[test]
+    fn asan_let_else_binding_and_else_heap_clean() {
+        // let-else: a heap String bound on the match edge drops at scope
+        // exit; a heap String built in the diverging else path drops on
+        // the `return`. Exercises both edges of `compile_let_else`.
+        assert_clean_asan_run(
+            r#"
+fn make(empty: bool) -> Option[String] {
+    if empty {
+        return Option.None;
+    }
+    let s = "hello";
+    return Option.Some(s + "!");
+}
+
+fn run(empty: bool) {
+    let Some(s) = make(empty) else {
+        let msg = "was ";
+        let full = msg + "empty";
+        println(full);
+        return
+    }
+    println(s);
+}
+
+fn main() {
+    run(false);
+    run(true);
+    println("done");
+}
+"#,
+            &["hello!", "was empty", "done"],
+            "let_else_binding_and_else_heap_clean",
+        );
+    }
+
     // ── kara-katas leetcode #8 (atoi) end-to-end ─────────────────
     //
     // The kata that surfaced the interpreter Cast no-op (commit
