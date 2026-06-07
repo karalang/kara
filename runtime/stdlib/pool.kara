@@ -172,6 +172,14 @@ impl[T] Pool[T] {
 // this placeholder body. `std.Pool` is interpreter-only, so this impl
 // never reaches codegen — `PooledConnection.drop` is not a lowered
 // LLVM symbol, and the user-drop-wrapper synth skips it.
+//
+// Drop-skip-sound: if this Drop never runs, the checkout's slot is
+// never handed back — the pool loses capacity and later checkouts
+// block or fail. No UB, no type-system violation; release is
+// idempotent (keyed on `conn_id`), so the skipped-then-leaked path
+// cannot alias a reissued slot. Soundness derives from the type
+// system; this destructor only runs cleanup (design.md § Drop >
+// Destructors are NOT soundness mechanisms).
 impl[T] Drop for PooledConnection[T] {
     #[compiler_builtin]
     fn drop(mut ref self) {}

@@ -300,11 +300,20 @@ impl TlsStream {
 // stdlib gap closes they become real pure-kara bodies of the shape
 // `unsafe { karac_runtime_tls_config_free(self.config); karac_runtime_tls_close(self.fd); }`.
 
+// Drop-skip-sound: skipping this Drop leaks the listener fd + the
+// rustls server-config allocation; no UB, no type-system violation.
+// Soundness derives from the type system; this destructor only runs
+// cleanup (design.md § Drop > Destructors are NOT soundness
+// mechanisms).
 impl Drop for TlsListener {
     #[compiler_builtin]
     fn drop(mut ref self) {}
 }
 
+// Drop-skip-sound: skipping this Drop leaks the connection fd + its
+// runtime-side `SESSIONS` registry entry (the `ServerConnection`
+// allocation); no UB, no type-system violation. Soundness derives
+// from the type system; this destructor only runs cleanup.
 impl Drop for TlsStream {
     #[compiler_builtin]
     fn drop(mut ref self) {}

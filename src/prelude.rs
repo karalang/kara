@@ -1975,4 +1975,115 @@ mod tests {
         );
         assert_inherent_impl_compiler_builtin("encoding.kara", "Url", &["encode", "decode"]);
     }
+
+    /// `drop_carries_soundness` audit gate (design.md § Drop >
+    /// "Destructors are NOT soundness mechanisms"; phase-8 § Stdlib
+    /// lint — `drop_carries_soundness` audit checklist). Every
+    /// `impl Drop` in the baked + gated stdlib must (a) target a type
+    /// on the audited allowlist below and (b) carry a
+    /// `Drop-skip-sound:` line in the comment block directly above the
+    /// impl, recording the answer to "if this Drop never runs, what
+    /// becomes unsafe?" — which must be "nothing: only resources
+    /// leak; no UB, no type-system violation". Adding a `Drop` impl to
+    /// a new stdlib type fails this gate until the audit answer is
+    /// written at the impl site and the type is appended here. The
+    /// stdlib is baked into the compiler binary, so `cargo test` IS
+    /// the stdlib build step (mirrors the variance hygiene gate in
+    /// `src/typechecker/variance.rs`).
+    #[test]
+    fn baked_stdlib_drop_impls_are_audited_drop_skip_sound() {
+        // Audited 2026-06-07. Per-type answers live in the
+        // `Drop-skip-sound:` comment above each impl.
+        const AUDITED: &[&str] = &[
+            "PooledConnection",
+            "TaskGroup",
+            "TcpListener",
+            "TcpStream",
+            "TlsListener",
+            "TlsStream",
+            "WebSocket",
+        ];
+
+        // (a) Parse-level: every stdlib `impl Drop for X` has an
+        // audited `X`.
+        let mut seen = std::collections::BTreeSet::new();
+        let programs: Vec<(String, &crate::ast::Program)> = STDLIB_PROGRAMS
+            .iter()
+            .map(|(n, p)| (n.to_string(), p))
+            .chain(
+                GATED_STDLIB_PROGRAMS
+                    .iter()
+                    .map(|(path, p)| (path.join("."), p)),
+            )
+            .collect();
+        for (name, program) in &programs {
+            for item in &program.items {
+                let Item::ImplBlock(imp) = item else { continue };
+                let is_drop = imp
+                    .trait_name
+                    .as_ref()
+                    .and_then(|p| p.segments.last())
+                    .is_some_and(|s| s == "Drop");
+                if !is_drop {
+                    continue;
+                }
+                let target = match &imp.target_type.kind {
+                    crate::ast::TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+                    _ => String::new(),
+                };
+                assert!(
+                    AUDITED.contains(&target.as_str()),
+                    "{name}: `impl Drop for {target}` is not on the \
+                     drop_carries_soundness audited allowlist — answer \
+                     \"if this Drop never runs, what becomes unsafe?\" \
+                     (must be \"nothing — only resources leak\"), record \
+                     it in a `Drop-skip-sound:` comment directly above \
+                     the impl, and append the type to AUDITED",
+                );
+                seen.insert(target);
+            }
+        }
+        // Non-vacuity + pruning: the allowlist must be exactly the set
+        // of Drop impls found — a stale entry means the impl was
+        // removed (prune it); an empty `seen` means the parse-level
+        // scan broke.
+        let expected: std::collections::BTreeSet<String> =
+            AUDITED.iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            seen, expected,
+            "AUDITED allowlist is out of sync with the stdlib's actual \
+             `impl Drop` set",
+        );
+
+        // (b) Source-level: the contiguous comment block directly
+        // above each `impl … Drop for …` contains the marker.
+        let sources = STDLIB_SOURCES
+            .iter()
+            .map(|(n, s)| (n.to_string(), *s))
+            .chain(
+                GATED_STDLIB_SOURCES
+                    .iter()
+                    .map(|(path, s)| (path.join("."), *s)),
+            );
+        for (name, src) in sources {
+            let lines: Vec<&str> = src.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                let t = line.trim_start();
+                if !(t.starts_with("impl") && t.contains(" Drop for ")) {
+                    continue;
+                }
+                let audited = (0..i)
+                    .rev()
+                    .map(|j| lines[j].trim_start())
+                    .take_while(|c| c.starts_with("//"))
+                    .any(|c| c.contains("Drop-skip-sound:"));
+                assert!(
+                    audited,
+                    "{name}:{}: `impl Drop` lacks a `Drop-skip-sound:` \
+                     line in the comment block directly above it",
+                    i + 1,
+                );
+            }
+        }
+    }
 }

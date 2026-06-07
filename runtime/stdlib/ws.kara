@@ -277,6 +277,11 @@ impl WebSocket {
 // invokes `karac_runtime_tcp_close(self.fd)`. The stub body below
 // never executes — codegen replaces it via
 // `emit_hardcoded_stdlib_drop_bodies` in `src/codegen/synth_drop.rs`.
+//
+// Drop-skip-sound: skipping this Drop leaks the connection fd; no UB,
+// no type-system violation. Soundness derives from the type system;
+// this destructor only runs cleanup (design.md § Drop > Destructors
+// are NOT soundness mechanisms).
 impl Drop for WebSocket {
     #[compiler_builtin]
     fn drop(mut ref self) {}

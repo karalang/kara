@@ -246,11 +246,18 @@ impl TcpStream {
 // stubs become real pure-kara bodies of the shape
 // `unsafe { karac_runtime_tcp_close(self.fd); }`.
 
+// Drop-skip-sound: skipping this Drop leaks the listener fd; no UB,
+// no type-system violation. Soundness derives from the type system;
+// this destructor only runs cleanup (design.md § Drop > Destructors
+// are NOT soundness mechanisms).
 impl Drop for TcpListener {
     #[compiler_builtin]
     fn drop(mut ref self) {}
 }
 
+// Drop-skip-sound: skipping this Drop leaks the connection fd; no UB,
+// no type-system violation. Soundness derives from the type system;
+// this destructor only runs cleanup.
 impl Drop for TcpStream {
     #[compiler_builtin]
     fn drop(mut ref self) {}

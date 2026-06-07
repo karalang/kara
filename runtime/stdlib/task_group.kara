@@ -198,6 +198,24 @@ impl[T] TaskHandle[T] {
 // spawned child completes, propagating fail-fast cancellation if
 // any child errs/panics. The stub body below never executes —
 // codegen replaces it via `emit_hardcoded_stdlib_drop_bodies`.
+//
+// Drop-skip-sound: the join-before-scope-exit invariant does NOT
+// rest on this Drop — design.md § Drop ("Destructors are NOT
+// soundness mechanisms", enforcement-table row 1) pins it on the
+// structural join barrier + `ScopeLocal`. This Drop is merely the
+// v1 emission vehicle for the barrier, and every v1 Drop-skip path
+// (double-panic, panic=abort, process.exit) terminates the whole
+// process, so no still-running child can observe a freed parent
+// frame. A future `forget`-style primitive must NOT skip the
+// scope-exit join — the barrier is a property of the scope, not of
+// this value's liveness. Skipping cleanup otherwise leaks the
+// scheduler's per-scope registry slot (and detaches children); no
+// UB. Caveat surfaced by the 2026-06-07 audit: the structural
+// escape rejection for `TaskGroup` *itself* (only `TaskHandle`
+// carries `ScopeLocal` today) is not yet implemented — tracked in
+// phase-6-runtime.md ("TaskGroup escape rejection" entry); today
+// escape shapes die at codegen (ICE / verifier error), which
+// prevents builds but is not a soundness mechanism.
 impl Drop for TaskGroup {
     #[compiler_builtin]
     fn drop(mut ref self) {}
