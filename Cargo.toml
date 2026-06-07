@@ -151,6 +151,13 @@ wasi-preview1-component-adapter-provider = "45.0.1"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = "2"
 rustyline = "18.0.0"
+# Segmented-stack growth for the tree-walk interpreter's call recursion
+# (`Interpreter::eval_body_growing`): ~8 Rust frames per Kāra call means
+# deep-but-conforming Kāra recursion exhausts any fixed thread stack —
+# `maybe_grow` re-homes the recursion onto heap segments instead of
+# cliffing. psm has no stack-switching support on wasm32, so the browser
+# playground build falls back to a plain call (cfg in the helper).
+stacker = "0.1"
 
 [dev-dependencies]
 # Phase-7 L560 W3.1: pipe + dup2 + fork-safe fd dance for capturing

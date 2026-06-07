@@ -1076,7 +1076,7 @@ impl<'a> super::Interpreter<'a> {
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
-                    self.eval_block_inner(&body)
+                    self.eval_body_growing(&body)
                 };
 
                 // `ensures` predicates run after the body, with `result`
@@ -1537,7 +1537,7 @@ impl<'a> super::Interpreter<'a> {
                         self.env.define(k.clone(), v.clone());
                     }
                 }
-                let result = self.eval_block_inner(&body);
+                let result = self.eval_body_growing(&body);
                 self.env.pop_scope();
                 match result {
                     Ok(v) => v,
@@ -1613,7 +1613,7 @@ impl<'a> super::Interpreter<'a> {
                 self.bind_pattern(pat, v.clone());
             }
         }
-        let result = self.eval_block_inner(&body);
+        let result = self.eval_body_growing(&body);
         self.env.pop_scope();
         match result {
             Ok(v) => v,

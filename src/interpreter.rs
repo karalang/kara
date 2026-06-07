@@ -1274,6 +1274,48 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    /// Evaluate a user-level callable body — function, method, closure, or
+    /// user `drop` — growing the Rust stack when the recursion nears the
+    /// current segment's end. The tree-walk costs ~8 Rust frames per Kāra
+    /// call, so deep-but-conforming Kāra recursion (one frame per node over
+    /// a 5000-node list — LeetCode's linked-list bound, found by kata #25)
+    /// exhausts the 16 MB interpreter thread stack (`run_on_interp_thread`,
+    /// `main.rs`) long before the same program's AOT binary feels it.
+    /// `stacker::maybe_grow` is a stack-pointer check until the 128 KiB red
+    /// zone is hit, then re-homes the recursion onto a fresh 4 MiB heap
+    /// segment — depth becomes heap-bounded, matching the AOT story instead
+    /// of cliffing at a fixed thread-stack size, and it covers `par { }`
+    /// worker threads (whatever their stack size) for free. Wrapping the
+    /// *body* rather than `eval_expr_inner` keeps the check off the
+    /// per-expression hot path: Rust-stack depth only compounds through
+    /// Kāra-level calls. Every body-invocation site must route through here
+    /// — a site that calls `eval_block_inner` directly re-opens the cliff
+    /// for whatever callable shape it implements. wasm32 (browser
+    /// playground) falls back to a plain call: psm has no stack-switching
+    /// support there.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn eval_body_growing(&mut self, body: &Block) -> Result<Value, ControlFlow> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Red zone must exceed ONE Kāra call's worst-case Rust-stack
+            // bill — the check only runs at call boundaries, so the chain
+            // between two checks (eval_call → eval_expr_inner → eval_stmt
+            // → … , several giant match-on-AST frames) must fit inside it.
+            // Debug builds bill ~200+ KiB per call (the documented fib(10)
+            // 2 MB Windows overflow ⇒ ≥ 200 KiB/frame-chain); 2 MiB gives
+            // ~10× headroom. 32 MiB segments amortize the switch cost:
+            // release frames (~3 KiB/call) fit thousands of calls per
+            // segment, debug fits ~100+.
+            stacker::maybe_grow(2 * 1024 * 1024, 32 * 1024 * 1024, || {
+                self.eval_block_inner(body)
+            })
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.eval_block_inner(body)
+        }
+    }
+
     fn call_function(&mut self, name: &str, args: &[Value]) -> Value {
         let func = self.env.get(name);
         let func_variant = func
@@ -1298,7 +1340,7 @@ impl<'a> Interpreter<'a> {
                         self.bind_pattern(pat, val.clone());
                     }
                 }
-                let result = self.eval_block_inner(&body);
+                let result = self.eval_body_growing(&body);
                 self.env.pop_scope();
                 match result {
                     Ok(v) => v,

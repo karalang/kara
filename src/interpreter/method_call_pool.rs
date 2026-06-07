@@ -272,7 +272,7 @@ impl<'a> super::Interpreter<'a> {
                 self.env.define(k, v);
             }
         }
-        let result = self.eval_block_inner(&body);
+        let result = self.eval_body_growing(&body);
         self.env.pop_scope();
         Some(match result {
             Ok(v) => v,

@@ -130,7 +130,7 @@ impl<'a> super::Interpreter<'a> {
             };
             self.bind_pattern(pat, val);
         }
-        let result = self.eval_block_inner(&body);
+        let result = self.eval_body_growing(&body);
         self.env.pop_scope();
         match result {
             Ok(v) => v,

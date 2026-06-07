@@ -631,7 +631,7 @@ impl<'a> super::Interpreter<'a> {
             if let Some(self_pat) = param_patterns.first() {
                 self.bind_pattern(self_pat, value);
             }
-            let _ = self.eval_block_inner(&body);
+            let _ = self.eval_body_growing(&body);
             self.env.pop_scope();
         }
     }

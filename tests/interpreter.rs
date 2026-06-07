@@ -1082,6 +1082,24 @@ fn test_recursive_function() {
 }
 
 #[test]
+fn test_deep_recursion_grows_stack() {
+    // Depth 5000 — LeetCode's linked-list bound (one frame per node at
+    // k = 1 in kata #25, which found this). At ~8 Rust frames per Kāra
+    // call this blows any fixed thread stack (16 MB included) unless
+    // `eval_body_growing` re-homes the recursion onto heap segments via
+    // `stacker::maybe_grow`. Regression: this aborted with a stack
+    // overflow before the helper existed.
+    assert_eq!(
+        run("fn countdown(n: i64) -> i64 {\n\
+                 if n <= 0 { return 0; }\n\
+                 countdown(n - 1) + 1\n\
+             }\n\
+             fn main() { println(countdown(5000)); }"),
+        "5000\n"
+    );
+}
+
+#[test]
 fn test_multiple_params() {
     assert_eq!(
         run("fn add(a: i64, b: i64) -> i64 { a + b }\n\

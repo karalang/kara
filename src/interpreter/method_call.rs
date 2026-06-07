@@ -760,7 +760,7 @@ impl<'a> super::Interpreter<'a> {
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
-                    self.eval_block_inner(&body)
+                    self.eval_body_growing(&body)
                 };
 
                 if contract_fault.is_none() {
