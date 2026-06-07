@@ -30969,9 +30969,8 @@ fn main() {
     fn test_e2e_large_n_sort_by_generic_elem_size() {
         // 24-byte element (3-tuple) exercises the generic (non-8/16) element
         // path. Sort 80 records by their first field; assert sorted.
-        // (Tuple, not struct: struct-field comparator thunks on the runtime
-        // path are a separate pre-existing gap — see the
-        // phase-7-codegen.md follow-up; tuples drive the same merge sort.)
+        // (Named-struct field comparators on the runtime path are covered
+        // separately by `test_e2e_large_n_sort_by_named_struct_field`.)
         let out = run_program(
             r#"
 fn main() {
@@ -31028,6 +31027,87 @@ fn main() {
         }
         pk = t.0;
         po = t.1;
+        j = j + 1;
+    }
+    println(bad);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "0");
+        }
+    }
+
+    #[test]
+    fn test_e2e_large_n_sort_by_named_struct_field() {
+        // Runtime-path (N>64) named-struct field comparator. The inline
+        // thunk re-compiles `a.v.cmp(b.v)`, so it must register the
+        // closure params' Kāra type name (`Score`) for the `.v` field
+        // access to resolve — the same registration the mono path (N≤64)
+        // already did. Before the fix the thunk's compare lowered to a
+        // constant → an always-equal comparator → `karac_vec_sort_by`
+        // left the 100 records in their original (descending-key) order,
+        // so `bad` would be 99 instead of 0. Tuples (numeric `.0`) were
+        // never affected; this is the struct-only witness.
+        let out = run_program(
+            r#"
+struct Score { v: i64 }
+fn main() {
+    let mut v: Vec[Score] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 100 {
+        v.push(Score { v: (i * 37 + 5) % 100 });
+        i = i + 1;
+    }
+    v.sort_by(|a, b| a.v.cmp(b.v));
+    let mut bad: i64 = 0;
+    let mut prev: i64 = -1;
+    let mut j: i64 = 0;
+    while j < 100 {
+        let s = v.get(j).unwrap();
+        if s.v < prev { bad = bad + 1; }
+        prev = s.v;
+        j = j + 1;
+    }
+    println(bad);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "0");
+        }
+    }
+
+    #[test]
+    fn test_e2e_large_n_sort_by_named_struct_field_is_stable() {
+        // Stability on the runtime path with a named-struct element: 90
+        // records keyed by `k = i % 9` (duplicates) with a strictly
+        // increasing `tag = i`. Sorting by `k` alone must keep equal-key
+        // records in original (`tag`-ascending) order. 0 ⇒ stable sort
+        // AND the struct-field comparator resolved correctly.
+        let out = run_program(
+            r#"
+struct Rec { k: i64, tag: i64 }
+fn main() {
+    let mut v: Vec[Rec] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 90 {
+        v.push(Rec { k: i % 9, tag: i });
+        i = i + 1;
+    }
+    v.sort_by(|a, b| a.k.cmp(b.k));
+    let mut bad: i64 = 0;
+    let mut pk: i64 = -1;
+    let mut pt: i64 = -1;
+    let mut j: i64 = 0;
+    while j < 90 {
+        let r = v.get(j).unwrap();
+        if r.k < pk { bad = bad + 1; }
+        if r.k == pk {
+            if r.tag < pt { bad = bad + 1; }
+        }
+        pk = r.k;
+        pt = r.tag;
         j = j + 1;
     }
     println(bad);

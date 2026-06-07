@@ -1742,8 +1742,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             elem_ty,
                             elem_type_name.as_deref(),
                         )?;
-                        let (thunk_fn, ctx_alloca) =
-                            self.emit_sort_by_inline_thunk(params, body, elem_ty)?;
+                        let (thunk_fn, ctx_alloca) = self.emit_sort_by_inline_thunk(
+                            params,
+                            body,
+                            elem_ty,
+                            elem_type_name.as_deref(),
+                        )?;
                         let data_ptr_ptr = self
                             .builder
                             .build_struct_gep(vec_ty, data_ptr, 0, "vec.data.ptr")
@@ -1855,13 +1859,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 //   (b) closure-typed local Identifier — spill fat pointer,
                 //       thunk does an indirect call through {fn_ptr,env_ptr};
                 //   (c) named function Identifier — direct ABI, no env.
+                // Named-struct elem type name for the inline-closure path
+                // (captures present, or a non-mono-eligible elem — the
+                // shapes the mono fast path above declines). Same lookup
+                // and rationale as the mono dispatch: the inline thunk
+                // re-compiles the body and needs it to resolve `a.field`.
+                let elem_type_name: Option<String> = self
+                    .var_elem_type_exprs
+                    .get(var_name)
+                    .and_then(|te| match &te.kind {
+                        TypeKind::Path(p) => p.segments.last().cloned(),
+                        _ => None,
+                    });
                 let (thunk, ctx_alloca): (FunctionValue<'ctx>, PointerValue<'ctx>) = match &args[0]
                     .value
                     .kind
                 {
-                    ExprKind::Closure { params, body, .. } => {
-                        self.emit_sort_by_inline_thunk(params, body, elem_ty)?
-                    }
+                    ExprKind::Closure { params, body, .. } => self.emit_sort_by_inline_thunk(
+                        params,
+                        body,
+                        elem_ty,
+                        elem_type_name.as_deref(),
+                    )?,
                     ExprKind::Identifier(name) => {
                         if let Some(&closure_fn_type) = self.closure_fn_types.get(name) {
                             let closure_val = self.compile_expr(&args[0].value)?;
@@ -3029,6 +3048,7 @@ impl<'ctx> super::Codegen<'ctx> {
         params: &[ClosureParam],
         body: &Expr,
         elem_ty: BasicTypeEnum<'ctx>,
+        elem_type_name: Option<&str>,
     ) -> Result<(FunctionValue<'ctx>, PointerValue<'ctx>), String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
@@ -3131,6 +3151,19 @@ impl<'ctx> super::Codegen<'ctx> {
             let ty = val.get_type();
             let alloca = self.create_entry_alloca(thunk_fn, &param_name, ty);
             self.builder.build_store(alloca, val).unwrap();
+            // For named-struct elements, register the closure param's
+            // Kāra type name so the body's `a.field` / `b.field` access
+            // resolves to the right field index. Without this the runtime
+            // path's inline thunk silently mis-lowered named-field
+            // comparisons (the compare returned a constant → an
+            // always-equal comparator → `karac_vec_sort_by` left the vec
+            // in original order at N>64, while the mono path at N≤64 — which
+            // already registered this — sorted correctly). Mirrors the
+            // mono emitter's registration; tuples pass None and route
+            // through the numeric `.0`/`.1` index path that needs no name.
+            if let Some(name) = elem_type_name {
+                self.record_var_type_name(param_name.clone(), name.to_string());
+            }
             self.variables
                 .insert(param_name, VarSlot { ptr: alloca, ty });
         }
