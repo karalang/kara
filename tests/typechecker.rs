@@ -19112,6 +19112,8 @@ fn drop_method_keys_empty_when_no_drop_impl() {
     //     body lands with slice 5 of the same tracker entry)
     //   - `TlsListener` / `TlsStream` (phase 6 line 236 slice 2 —
     //     close-on-drop fd + config free for TlsListener)
+    //   - `PooledConnection` (phase 8 line 200 — Pool[T] auto-release
+    //     back to the pool on drop, abc9c714)
     // Those entries are always present regardless of user code, so
     // the test asserts no USER-defined impl was added (Point's
     // entry is absent) and the only entries are the stdlib ones.
@@ -19122,6 +19124,7 @@ fn drop_method_keys_empty_when_no_drop_impl() {
         "TaskGroup",
         "TlsListener",
         "TlsStream",
+        "PooledConnection",
     ];
     let user_keys: Vec<&String> = result
         .drop_method_keys
