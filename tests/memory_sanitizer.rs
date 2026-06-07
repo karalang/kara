@@ -3142,6 +3142,40 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_struct_destructure_bound_and_unbound_no_double_free() {
+        // B follow-up #3: an owned struct destructure of a fresh temp where
+        // one heap field is bound (`a`, freed via its binding) and another is
+        // discarded (`b: _`, freed via a synthetic discard slot). Run in a
+        // loop so any per-iteration imbalance — a double-free of `a` against a
+        // whole-struct drop, or a missed/extra free of `b` — faults under
+        // ASAN's quarantine. macOS has no LeakSanitizer, so the leak closure
+        // is pinned by the IR tests; this is the double-free gate.
+        assert_clean_asan_run(
+            r#"
+struct Pair { a: Vec[i64], b: Vec[i64], n: i64 }
+fn mk(x: i64) -> Pair {
+    let mut va: Vec[i64] = Vec.new();
+    va.push(x);
+    let mut vb: Vec[i64] = Vec.new();
+    vb.push(x * 2);
+    return Pair { a: va, b: vb, n: x };
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let Pair { a, b: _, n } = mk(i);
+        println(a.len() + n);
+        i = i + 1;
+    }
+    println(99);
+}
+"#,
+            &["1", "2", "3", "4", "5", "99"],
+            "struct_destructure_bound_and_unbound_no_double_free",
+        );
+    }
+
     // ── general owned-temp tracking, slice 1 (phase-6 line 489/497) ──
     //
     // docs/spikes/general-owned-temp-tracking.md slice 1: a fresh-owned

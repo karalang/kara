@@ -612,28 +612,30 @@ impl<'a> super::TypeChecker<'a> {
                         if let Some(ref sub_pattern) = field.pattern {
                             self.check_pattern_against(sub_pattern, &field_ty, mode);
                         } else {
-                            // Shorthand: field name becomes binding. Under a
-                            // `ref`/`mut ref` scrutinee, the binding type is
-                            // wrapped per the match-arm binding-mode rule
-                            // (design.md § Match Arm Binding Modes).
-                            //
-                            // Cannot-double-consume rule — shorthand parallel
-                            // to the `Binding` leaf arm: `x @ Foo { a }` with
-                            // a non-Copy field `a` claims content `x` owns.
-                            if matches!(mode, ScrutineeMode::Owned)
-                                && !self.owned_at_binding_outers.is_empty()
-                                && !self.is_copy_type_during_check(&field_ty)
-                            {
-                                self.report_at_binding_double_consume(&field.name, &field.span);
-                            }
-                            let binding_ty = mode.wrap_binding_ty(field_ty.clone());
-                            self.local_scope.insert(field.name.clone(), binding_ty);
-                            // Record borrow mode keyed by the field's span
-                            // so codegen can apply the ref-binding shim at
-                            // the synthesized leaf binding site (codegen
-                            // synthesizes `Pattern { Binding(field.name),
-                            // span: field.span }` for shorthand).
-                            self.record_pattern_binding_borrow_mode(&field.span, mode, &field_ty);
+                            // Shorthand `Point { items }`: codegen synthesizes a
+                            // leaf `Pattern { Binding(field.name), span:
+                            // field.span }` (pattern_binding.rs Struct arm), so
+                            // run an identical synthetic binding through
+                            // `check_pattern_against` here. The `Binding` arm
+                            // records `pattern_binding_types` / the inner-element
+                            // table / the borrow mode against that exact span,
+                            // AND applies the cannot-double-consume `@` rule —
+                            // the same surface every other leaf binding gets.
+                            // Without this the shorthand field carried only a
+                            // borrow-mode entry, so codegen's leaf arm had no
+                            // type for it and could neither dispatch methods
+                            // (`items.len()` → "no handler for method") nor
+                            // register its scope-exit cleanup (the
+                            // struct-destructure heap-field leak). Subsumes the
+                            // previously-inlined double-consume + borrow-mode
+                            // writes (now the single Binding-arm path). The
+                            // explicit `items: x` form already routed here via
+                            // its sub-pattern; this brings shorthand to parity.
+                            let synthetic = Pattern {
+                                kind: PatternKind::Binding(field.name.clone()),
+                                span: field.span.clone(),
+                            };
+                            self.check_pattern_against(&synthetic, &field_ty, mode);
                         }
                     }
                 }

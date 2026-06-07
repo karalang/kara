@@ -1,12 +1,14 @@
 # Design spike — pattern-arm unbound heap-field drop (codegen)
 
 **Status:** **DONE for all four pattern-matching constructs over enum-variant
-patterns (if-let / match / let-else / while-let), 2026-06-07.** Out-of-mechanism
-remainders carved to separate follow-ups — see "Remaining" below. Note the
-"deep nesting" follow-up was **reclassified 2026-06-07** from a drop gap to a
-representation-level silent miscompile (oversized enum payload), now tracked in
-[`oversized-enum-payload.md`](oversized-enum-payload.md) and fixed loud. A
-real, IR-proven leak found while scoping slice 4 of
+patterns (if-let / match / let-else / while-let), 2026-06-07**, plus all three
+follow-ups resolved 2026-06-07: (1) **deep nesting** — reclassified from a drop
+gap to a representation-level silent miscompile (oversized enum payload), now
+tracked in [`oversized-enum-payload.md`](oversized-enum-payload.md) and fixed
+loud; (2) **`while let` heap-bearing miss variant** — LANDED; (3) **plain-struct
+destructure** (dispatch + cleanup, match family + `let` family) — LANDED. See
+"Remaining" below for each follow-up's detail and the few narrow leaks (never
+double-frees) still open. A real, IR-proven leak found while scoping slice 4 of
 [`general-owned-temp-tracking.md`](general-owned-temp-tracking.md).
 
 **Implementation finding (reshaped the fix — simpler than §4's "new per-field
@@ -81,15 +83,36 @@ miscompile; pre-existing, this fix doesn't widen them):**
   `test_ir_whilelet_place_scrutinee_miss_not_dropped` (codegen.rs, the
   macOS-reliable leak gate); `asan_whilelet_miss_variant_no_double_free`
   (memory_sanitizer.rs, the double-free gate).
-- **Plain-struct destructure** (`let Point { items: _, count } = make()`) —
-  fresh-temp *struct* (non-enum) temp with an unbound heap field leaks
-  (IR-probed `mat=0`; `materialize_freshtemp_enum_scrutinee` is enum-only). A
-  struct analogue would need `track_struct_var` + a struct-field-offset
-  suppression. **Blocked behind a separate codegen gap anyway:** the *bound*-field
-  variant (`let Point { items, count } = make(); items.len()`) fails today with
-  "no handler for method 'len' on variable 'items'" — struct-destructure field
-  bindings aren't fully wired for method dispatch, so the construct is
-  half-supported independent of this leak.
+- **Plain-struct destructure** (`let Point { items, count } = make()`) —
+  **LANDED 2026-06-07.** Scoping (2026-06-07) corrected the original framing on
+  two counts: (a) it was *not* "a leak blocked behind a method-dispatch gap" —
+  both symptoms shared **one** root cause (the binding sites registered neither
+  dispatch nor cleanup for the field bindings); and (b) it splits across **two
+  structurally separate paths** — `match` / `if let` / `while let` (typechecker
+  `check_pattern_against` + codegen `bind_pattern_values`) and the `let`
+  statement (typechecker `bind_pattern_types` + codegen `bind_pattern`). Both
+  bypassed the leaf-binding registration that scalar lets / params / for-loop
+  bindings get. The earlier "no handler for method" *and* the leak both fell out
+  of that. Fixes: the match family is closed by routing the shorthand struct
+  field through the same synthetic `Binding` codegen already mirrors
+  (`check_pattern_against`, src/typechecker/patterns.rs) — the existing leaf arm
+  then does dispatch + `track_vec_var` cleanup. The `let` family is closed by
+  `finish_owned_struct_destructure` (src/codegen/stmts.rs): per bound field,
+  `register_var_from_type_expr` (dispatch) + a one-shot per-field cleanup
+  (`track_vec_var` / `track_map_var` / `track_struct_var`); unbound heap fields
+  (`items: _` or dropped by a `..` rest) are stashed in a synthetic
+  `__destructure_discard_N` slot and freed there. **Structs need no
+  whole-value-drop + cap-suppression dance** (unlike the enum B path) because
+  field offsets are static, so each heap field gets exactly one one-shot
+  cleanup. Cleanup is gated to a **fresh-temp RHS** (`= make()`): a non-fresh RHS
+  (`let Point { … } = p`) keeps today's behavior (dispatch works, but `p`'s own
+  cleanup owns the heap — adding a second free would double-free), so it stays a
+  pre-existing dispatch-only/leak case (narrow; not a double-free). Tests:
+  `test_e2e_struct_destructure_field_method_dispatch`,
+  `test_ir_struct_destructure_{bound,unbound,rest}_field_freed` (codegen.rs);
+  `asan_struct_destructure_bound_and_unbound_no_double_free`
+  (memory_sanitizer.rs). **Remaining narrow gaps** (leaks, never double-frees):
+  `Set` fields, nested-enum / nested-pattern fields, and non-fresh-temp RHS.
 
 Distinct mechanism from the sibling spike (move-out-aware *partial* drop reusing
 `EnumDrop` + cap-suppression, not chokepoint routing of a whole temp), so it gets

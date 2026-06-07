@@ -11692,6 +11692,88 @@ fn main() {
         compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen failed")
     }
 
+    /// Count `call void @free(...)` instructions inside `@main`'s body.
+    fn main_free_count(ir: &str) -> usize {
+        let mut in_main = false;
+        let mut frees = 0;
+        for line in ir.lines() {
+            if line.starts_with("define") && line.contains("@main(") {
+                in_main = true;
+            }
+            if in_main {
+                if line.contains("call void @free(") {
+                    frees += 1;
+                }
+                if line == "}" {
+                    break;
+                }
+            }
+        }
+        frees
+    }
+
+    // ── B follow-up #3: owned struct-destructure dispatch + cleanup ──
+    //
+    // `let Point { items, count } = make()` used to register neither method
+    // dispatch nor scope-exit cleanup for the field bindings, so `items.len()`
+    // failed to compile ("no handler for method") and the heap field leaked.
+    // The fix (`finish_owned_struct_destructure`, src/codegen/stmts.rs) wires
+    // both per field; cleanup is gated to a fresh-temp RHS. See
+    // docs/spikes/pattern-arm-unbound-field-drop.md.
+
+    const STRUCT_DESTRUCTURE_PRELUDE: &str = "struct Point { items: Vec[i64], count: i64 }\nfn make() -> Point { let mut v: Vec[i64] = Vec.new(); v.push(10_i64); v.push(20_i64); return Point { items: v, count: 5 }; }\n";
+
+    #[test]
+    fn test_e2e_struct_destructure_field_method_dispatch() {
+        // The bound field must dispatch methods (was a hard codegen error).
+        let src = format!(
+            "{STRUCT_DESTRUCTURE_PRELUDE}fn main() {{\n    let Point {{ items, count }} = make();\n    println(items.len() + count);\n}}\n"
+        );
+        if let Some(out) = run_program(&src) {
+            assert_eq!(out.trim(), "7");
+        }
+    }
+
+    #[test]
+    fn test_ir_struct_destructure_bound_field_freed() {
+        // A bound heap field is freed via its binding's scope-exit cleanup.
+        let src = format!(
+            "{STRUCT_DESTRUCTURE_PRELUDE}fn main() {{\n    let Point {{ items, count }} = make();\n    println(items.len() + count);\n}}\n"
+        );
+        let ir = ir_for_with_ownership(&src);
+        assert!(
+            main_free_count(&ir) >= 1,
+            "bound Vec field must be freed once; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_struct_destructure_unbound_field_freed() {
+        // An explicitly-discarded heap field (`items: _`) is stashed in a
+        // synthetic discard slot and freed there.
+        let src = format!(
+            "{STRUCT_DESTRUCTURE_PRELUDE}fn main() {{\n    let Point {{ items: _, count }} = make();\n    println(count);\n}}\n"
+        );
+        let ir = ir_for_with_ownership(&src);
+        assert!(
+            ir.contains("__destructure_discard_") && main_free_count(&ir) >= 1,
+            "unbound Vec field must be discard-freed; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_struct_destructure_rest_field_freed() {
+        // A heap field dropped by a `..` rest is also discard-freed.
+        let src = format!(
+            "{STRUCT_DESTRUCTURE_PRELUDE}fn main() {{\n    let Point {{ count, .. }} = make();\n    println(count);\n}}\n"
+        );
+        let ir = ir_for_with_ownership(&src);
+        assert!(
+            ir.contains("__destructure_discard_") && main_free_count(&ir) >= 1,
+            "field dropped by `..` rest must be freed; got:\n{ir}"
+        );
+    }
+
     // ── RC elision phase A (ownership/elision.rs) ──────────────────
     //
     // Trivial intra-fn single-owner shared bindings skip the

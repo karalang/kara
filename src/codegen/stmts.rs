@@ -14,7 +14,7 @@ use crate::concurrency::ParallelGroup;
 
 use inkwell::module::Linkage;
 use inkwell::types::{BasicTypeEnum, StructType};
-use inkwell::values::{BasicValue, BasicValueEnum, GlobalValue};
+use inkwell::values::{BasicValue, BasicValueEnum, GlobalValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -1901,6 +1901,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.bind_slice_pattern(prefix, rest, suffix, &src, false)?;
                 } else {
                     self.bind_pattern(pattern, val)?;
+                    // `let Point { items, count } = …` — `bind_pattern` only
+                    // allocas the field bindings; it registers neither method
+                    // dispatch nor scope-exit cleanup for them, so destructured
+                    // heap fields used to be undispatchable (`items.len()` →
+                    // "no handler for method") AND leaked. Wire both here (B
+                    // follow-up #3 / docs/spikes/pattern-arm-unbound-field-drop.md).
+                    if matches!(&pattern.kind, PatternKind::Struct { .. }) {
+                        self.finish_owned_struct_destructure(pattern, value, val)?;
+                    }
                 }
                 // For shared-struct lets that may not execute at runtime
                 // (nested inside a loop body or conditional branch),
@@ -2898,6 +2907,166 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(())
             }
             _ => Ok(()),
+        }
+    }
+
+    /// Finish an owned `let Point { … } = <expr>` destructure: register
+    /// method-dispatch side-tables for each bound field and queue scope-exit
+    /// cleanup for the heap-owning ones. `bind_pattern` only allocas the field
+    /// bindings; without this they could neither dispatch methods
+    /// (`items.len()` → "no handler for method") nor free their heap (the
+    /// struct-destructure leak). B follow-up #3 —
+    /// docs/spikes/pattern-arm-unbound-field-drop.md.
+    ///
+    /// Dispatch registration runs for every bound field (harmless; it only
+    /// populates side-tables). Cleanup runs only when the RHS is a *fresh
+    /// owned temporary* (`make()` etc.): a fresh temp has no source binding, so
+    /// each heap field is owned outright by its new binding, or orphaned (a
+    /// field left unbound by `_` / a `..` rest) — freeing it here is the only
+    /// free. A non-fresh RHS (`let Point { … } = p`) keeps today's behavior:
+    /// `p`'s own cleanup owns the heap, so a second free would double-free;
+    /// that case stays a (pre-existing) dispatch-only gap. Structs have static
+    /// field offsets, so each field gets its own one-shot cleanup — no
+    /// whole-value drop + cap-suppression dance (the enum B path needs that
+    /// only because the live variant is dynamic).
+    fn finish_owned_struct_destructure(
+        &mut self,
+        pattern: &Pattern,
+        value: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        let PatternKind::Struct { path, fields, .. } = &pattern.kind else {
+            return Ok(());
+        };
+        let struct_name = path.last().cloned().unwrap_or_default();
+        let Some(field_names) = self.struct_field_names.get(&struct_name).cloned() else {
+            return Ok(());
+        };
+        let Some(field_tes) = self.struct_field_type_exprs.get(&struct_name).cloned() else {
+            return Ok(());
+        };
+        let BasicValueEnum::StructValue(sv) = val else {
+            return Ok(());
+        };
+        let fresh = Self::expr_yields_fresh_owned_temp(value);
+
+        for (idx, fname) in field_names.iter().enumerate() {
+            let Some(field_te) = field_tes.get(idx).cloned() else {
+                continue;
+            };
+            // Which name (if any) does the pattern bind this field to?
+            let bound_name: Option<String> = match fields.iter().find(|f| &f.name == fname) {
+                Some(f) => match &f.pattern {
+                    None => Some(f.name.clone()),
+                    Some(p) => match &p.kind {
+                        PatternKind::Binding(n) => Some(n.clone()),
+                        // `_` (Wildcard) or a nested pattern — not a plain
+                        // owned leaf binding; treat as unbound here.
+                        _ => None,
+                    },
+                },
+                // Absent from the pattern: dropped by a `..` rest — unbound.
+                None => None,
+            };
+
+            if let Some(name) = bound_name {
+                // Dispatch always (so `field.method()` compiles for any RHS).
+                self.register_var_from_type_expr(&name, &field_te);
+                if fresh && self.destructure_field_needs_cleanup(&field_te) {
+                    if let Some(slot) = self.variables.get(&name).copied() {
+                        self.track_owned_destructure_field_cleanup(&name, slot.ptr, &field_te);
+                    }
+                }
+            } else if fresh && self.destructure_field_needs_cleanup(&field_te) {
+                // Unbound heap field (`items: _` or dropped by `..`): no
+                // binding to free it, so stash a copy in a synthetic slot and
+                // queue its cleanup — otherwise the buffer leaks.
+                let field_val = self
+                    .builder
+                    .build_extract_value(sv, idx as u32, "destructure.discard")
+                    .unwrap();
+                let fn_val = self.current_fn.unwrap();
+                let synth = format!("__destructure_discard_{}", self.indexed_elem_counter);
+                self.indexed_elem_counter += 1;
+                let alloca = self.create_entry_alloca(fn_val, &synth, field_val.get_type());
+                self.builder.build_store(alloca, field_val).unwrap();
+                self.register_var_from_type_expr(&synth, &field_te);
+                self.track_owned_destructure_field_cleanup(&synth, alloca, &field_te);
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether a destructured field's type owns heap that this slice's
+    /// per-field cleanup handles: Vec/String, Map, or a non-shared user
+    /// struct. Set, nested-enum, and nested-pattern fields are out of v1's
+    /// scope (a narrow remaining leak, never a double-free).
+    fn destructure_field_needs_cleanup(&self, te: &TypeExpr) -> bool {
+        if self.extract_vec_elem_type(te).is_some()
+            || self.is_string_type_expr(te)
+            || self.extract_map_kv_types(te).is_some()
+        {
+            return true;
+        }
+        if let TypeKind::Path(p) = &te.kind {
+            if let Some(seg) = p.segments.last() {
+                return self.struct_types.contains_key(seg.as_str())
+                    && !self.shared_types.contains_key(seg.as_str());
+            }
+        }
+        false
+    }
+
+    /// Queue the right scope-exit `CleanupAction` for an owned destructured
+    /// field given its slot + source `TypeExpr`. Mirrors the simple-`let`
+    /// cleanup arms (`track_vec_var` / `track_map_var` / `track_struct_var`).
+    /// The var must already be registered via `register_var_from_type_expr`
+    /// (so the Map flag lookups resolve).
+    fn track_owned_destructure_field_cleanup(
+        &mut self,
+        var_name: &str,
+        alloca: PointerValue<'ctx>,
+        te: &TypeExpr,
+    ) {
+        if let Some(elem_ty) = self.extract_vec_elem_type(te) {
+            self.track_vec_var(alloca, Some(elem_ty));
+            return;
+        }
+        if self.is_string_type_expr(te) {
+            let i8t = self.context.i8_type().into();
+            self.track_vec_var(alloca, Some(i8t));
+            return;
+        }
+        if self.extract_map_kv_types(te).is_some() {
+            let key_is_vec = self
+                .map_key_types
+                .get(var_name)
+                .copied()
+                .is_some_and(|t| self.llvm_ty_is_vec_struct(t));
+            let val_is_vec = self
+                .map_val_types
+                .get(var_name)
+                .copied()
+                .is_some_and(|t| self.llvm_ty_is_vec_struct(t));
+            let val_shared_heap = self.map_val_shared_heap_type_for(var_name);
+            let key_shared_heap = self.map_key_shared_heap_type_for(var_name);
+            self.track_map_var(
+                alloca,
+                key_is_vec,
+                val_is_vec,
+                val_shared_heap,
+                key_shared_heap,
+            );
+            return;
+        }
+        if let TypeKind::Path(p) = &te.kind {
+            if let Some(seg) = p.segments.last() {
+                if self.struct_types.contains_key(seg.as_str())
+                    && !self.shared_types.contains_key(seg.as_str())
+                {
+                    self.track_struct_var(seg, alloca);
+                }
+            }
         }
     }
 
