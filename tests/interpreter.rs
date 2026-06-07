@@ -7450,6 +7450,58 @@ fn test_pool_release_returns_slot_for_next_acquire() {
 }
 
 #[test]
+fn test_pool_pooled_connection_auto_releases_on_drop() {
+    // Phase-8 line 200: drop-releases-automatically. A `PooledConnection`
+    // bound with `let` returns its slot to the source pool when it leaves
+    // scope — no explicit `pool.release(conn)`. `max_connections` is 1, so
+    // the second acquire can only succeed (reusing the recycled slot) if
+    // the first connection's scope-exit `Drop` handed its slot back;
+    // without auto-release it would hit the cap and time out.
+    let output = run(r#"fn make_int() -> i64 { 55 }
+         fn main() {
+             let pool: Pool[i64] = Pool.new(make_int, 1, 4);
+             {
+                 let c1 = pool.acquire(0).unwrap();
+                 println(c1.val);
+             }
+             match pool.acquire(0) {
+                 Ok(c2) => println(c2.val),
+                 Err(_) => println("TIMEOUT"),
+             }
+         }"#);
+    assert_eq!(output, "55\n55\n");
+}
+
+#[test]
+fn test_pool_release_then_drop_returns_slot_once() {
+    // Idempotent return: an explicit `release` followed by the binding's
+    // scope-exit auto-`Drop` hands the slot back exactly once (keyed on the
+    // checkout's `conn_id`). With `max_connections` = 1, a double-return
+    // would let two simultaneous acquires both succeed; asserting the
+    // second times out pins the single-return invariant. (A/B: with the
+    // `checked_out` idempotency removed this prints "DOUBLE".)
+    let output = run(r#"fn make_int() -> i64 { 7 }
+         fn main() {
+             let pool: Pool[i64] = Pool.new(make_int, 1, 4);
+             {
+                 let c1 = pool.acquire(0).unwrap();
+                 pool.release(c1);
+             }
+             match pool.acquire(0) {
+                 Ok(_) => {
+                     match pool.acquire(0) {
+                         Ok(_) => println("DOUBLE"),
+                         Err(PoolError.Timeout) => println("single"),
+                         Err(_) => println("other"),
+                     }
+                 }
+                 Err(_) => println("acq_err"),
+             }
+         }"#);
+    assert_eq!(output, "single\n");
+}
+
+#[test]
 fn test_pool_health_check_passes_reuses_idle_slot() {
     // A registered health check that returns true hands the released
     // (idle) slot straight back — no fresh mint. `make_conn` prints

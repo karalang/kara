@@ -314,6 +314,18 @@ pub struct PoolEntry {
     /// and `acquire` falls through to mint a fresh one. `None` → idle slots
     /// are handed back unchecked (the v1 default).
     pub health_check: Option<Value>,
+    /// Conn-ids currently checked out (handed to a caller and not yet
+    /// returned). Both explicit `Pool.release` and the `PooledConnection`
+    /// auto-`Drop` route their slot return through `checked_out` for
+    /// idempotency: returning a conn-id already absent is a no-op, so an
+    /// explicit `release` followed by the binding's scope-exit drop hands
+    /// the slot back exactly once (never inflating one connection into two
+    /// idle slots). See `src/interpreter/method_call_pool.rs`.
+    pub checked_out: HashSet<i64>,
+    /// Monotonic source of the per-connection ids minted at `acquire`;
+    /// starts at `1` so a hand-rolled `PooledConnection` literal (no
+    /// `conn_id`, reads as `0`) never collides with a live checkout.
+    pub next_conn_id: i64,
 }
 
 /// Per-semaphore permit state. `available` is the live count an

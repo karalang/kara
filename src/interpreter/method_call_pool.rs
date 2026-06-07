@@ -23,7 +23,7 @@
 //! dispatches, `PooledConnection`'s drop body can call the same
 //! release path and the explicit call becomes optional.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
 use crate::token::Span;
@@ -68,6 +68,8 @@ impl<'a> super::Interpreter<'a> {
                 slots: Vec::new(),
                 active_count: 0,
                 health_check: None,
+                checked_out: HashSet::new(),
+                next_conn_id: 1,
             },
         );
 
@@ -132,7 +134,7 @@ impl<'a> super::Interpreter<'a> {
             };
             let Some(check) = health_check else {
                 // No hook → hand the idle slot straight back.
-                return Some(result_ok(pooled_connection(handle, val)));
+                return Some(result_ok(self.check_out(handle, val)));
             };
             // Validate on a clone so the slot value survives a healthy
             // verdict. `invoke_function_value` returns `Unit` on a
@@ -143,7 +145,7 @@ impl<'a> super::Interpreter<'a> {
                 Value::Bool(true) | Value::Unit
             );
             if healthy {
-                return Some(result_ok(pooled_connection(handle, val)));
+                return Some(result_ok(self.check_out(handle, val)));
             }
             // Unhealthy: evict (drop `val`) and decrement `active_count`.
             if let Some(entry) = self.pool_table.get_mut(&handle) {
@@ -176,28 +178,76 @@ impl<'a> super::Interpreter<'a> {
         // Re-borrow after the user closure may have mutated state.
         if let Some(entry) = self.pool_table.get_mut(&handle) {
             entry.active_count += 1;
-            Some(result_ok(pooled_connection(handle, minted)))
         } else {
             // Closure deleted the pool out from under us — surface
             // as PoolClosed rather than panic.
-            Some(result_err(pool_error("PoolClosed")))
+            return Some(result_err(pool_error("PoolClosed")));
         }
+        Some(result_ok(self.check_out(handle, minted)))
+    }
+
+    /// Mint a fresh conn-id for `handle`, record it as checked-out, and
+    /// wrap `val` in a `PooledConnection`. Shared by every `acquire`
+    /// hand-back path (idle-slot reuse + fresh mint) so each checked-out
+    /// connection carries a unique id the idempotent return path keys on.
+    /// `handle` is always live here (the caller just read the entry), but
+    /// a vanished pool degrades to a `conn_id` of `0` rather than panic.
+    fn check_out(&mut self, handle: i64, val: Value) -> Value {
+        let conn_id = if let Some(entry) = self.pool_table.get_mut(&handle) {
+            let id = entry.next_conn_id;
+            entry.next_conn_id += 1;
+            entry.checked_out.insert(id);
+            id
+        } else {
+            0
+        };
+        pooled_connection(handle, conn_id, val)
     }
 
     fn eval_pool_release(&mut self, obj: Value, args: &[CallArg]) -> Option<Value> {
         let pool_handle = pool_handle(&obj)?;
         let conn_val = args.first().map(|a| self.eval_expr_inner(&a.value))?;
-        let (conn_pool_handle, val) = unpack_pooled_connection(conn_val)?;
+        let (conn_pool_handle, conn_id, val) = unpack_pooled_connection(conn_val)?;
         if conn_pool_handle != pool_handle {
             // Cross-pool release — user passed a connection minted
             // by a different pool. Drop the value silently rather
             // than corrupting the target pool's bookkeeping.
             return Some(Value::Unit);
         }
-        if let Some(entry) = self.pool_table.get_mut(&pool_handle) {
-            entry.slots.push(val);
-        }
+        self.return_connection(pool_handle, conn_id, val);
         Some(Value::Unit)
+    }
+
+    /// Idempotent slot return shared by explicit `Pool.release` and the
+    /// `PooledConnection` auto-`Drop`. Pushes `val` back into the pool's
+    /// idle `slots` only when `conn_id` is still checked out — a second
+    /// return of the same connection (an explicit `release` followed by
+    /// the binding's scope-exit drop, or a double `release`) finds the id
+    /// already cleared and no-ops, so one connection never inflates into
+    /// two idle slots. No-op when the source pool is gone (closed).
+    fn return_connection(&mut self, pool_handle: i64, conn_id: i64, val: Value) {
+        if let Some(entry) = self.pool_table.get_mut(&pool_handle) {
+            if entry.checked_out.remove(&conn_id) {
+                entry.slots.push(val);
+            }
+        }
+    }
+
+    /// Auto-`Drop` handler for `PooledConnection[T]`, fired from the
+    /// interpreter's user-`Drop` drain (`eval_stmt::try_eval_builtin_drop`)
+    /// when a connection binding reaches its NLL endpoint / scope exit.
+    /// Routes the wrapped value back to its source pool via the idempotent
+    /// `return_connection` path, so a connection handed back implicitly
+    /// returns its slot without an explicit `pool.release(conn)`. No-op
+    /// when the binding isn't a live `PooledConnection`.
+    pub(super) fn drop_pooled_connection(&mut self, name: &str) {
+        let Some(conn_val) = self.env.get(name) else {
+            return;
+        };
+        let Some((pool_handle, conn_id, val)) = unpack_pooled_connection(conn_val) else {
+            return;
+        };
+        self.return_connection(pool_handle, conn_id, val);
     }
 
     /// Invoke a zero-arg `Value::Function` and return its result.
@@ -247,7 +297,7 @@ fn pool_handle(obj: &Value) -> Option<i64> {
     }
 }
 
-fn unpack_pooled_connection(obj: Value) -> Option<(i64, Value)> {
+fn unpack_pooled_connection(obj: Value) -> Option<(i64, i64, Value)> {
     let Value::Struct { name, mut fields } = obj else {
         return None;
     };
@@ -258,15 +308,24 @@ fn unpack_pooled_connection(obj: Value) -> Option<(i64, Value)> {
         Some(Value::Int(h)) => *h,
         _ => return None,
     };
+    // A hand-rolled `PooledConnection` literal need not carry `conn_id`;
+    // a missing/garbage field reads as `0`, which is never a live
+    // checkout, so the idempotent return path treats it as already-
+    // returned (a no-op) rather than corrupting pool bookkeeping.
+    let conn_id = match fields.get("conn_id") {
+        Some(Value::Int(c)) => *c,
+        _ => 0,
+    };
     let val = fields.remove("val")?;
-    Some((handle, val))
+    Some((handle, conn_id, val))
 }
 
 // ── Kāra-value constructors ───────────────────────────────────────
 
-fn pooled_connection(pool_handle: i64, val: Value) -> Value {
+fn pooled_connection(pool_handle: i64, conn_id: i64, val: Value) -> Value {
     let mut fields = HashMap::new();
     fields.insert("pool_handle_id".to_string(), Value::Int(pool_handle));
+    fields.insert("conn_id".to_string(), Value::Int(conn_id));
     fields.insert("val".to_string(), val);
     Value::Struct {
         name: "PooledConnection".to_string(),

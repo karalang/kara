@@ -572,7 +572,33 @@ impl<'a> super::Interpreter<'a> {
         if !has_user_drop {
             return;
         }
+        // A `#[compiler_builtin]` stdlib `impl Drop` (e.g.
+        // `PooledConnection`) releases a side-table resource the
+        // interpreter owns rather than running a Kāra body, so route it
+        // to the native handler before the (placeholder) body drain.
+        if self.try_eval_builtin_drop(&type_name, name) {
+            return;
+        }
         self.run_user_drop_body(&type_name, name);
+    }
+
+    /// Native interpreter `Drop` for `#[compiler_builtin]` stdlib types
+    /// whose `impl Drop` releases a side-table resource (held Rust-side
+    /// in an interpreter table) rather than running a Kāra body — their
+    /// placeholder `fn drop(...) {}` body is a no-op, so the resource
+    /// teardown lives here. Returns `true` when `type_name` was handled,
+    /// suppressing the no-op body drain. Mirrors codegen's stdlib-drop
+    /// special-casing in `src/codegen/synth_drop.rs`
+    /// (`emit_hardcoded_stdlib_drop_bodies`: TlsStream / TlsListener /
+    /// TaskGroup / …).
+    fn try_eval_builtin_drop(&mut self, type_name: &str, name: &str) -> bool {
+        match type_name {
+            "PooledConnection" => {
+                self.drop_pooled_connection(name);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Execute a binding's user `<Type>.drop` body with `self` bound to

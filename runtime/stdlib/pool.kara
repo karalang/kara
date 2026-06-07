@@ -22,15 +22,17 @@
 // backend (codegen / runtime) but doesn't gate a waiter queue
 // today.
 //
-// **Drop-releases-automatically — deferred.** The spec's
-// `PooledConnection` carrying a drop that returns the slot needs
-// user-`impl Drop` dispatch in the interpreter, which is not yet
-// wired (`src/interpreter/eval_stmt.rs::run_cleanup` —
-// `CleanupAction::Drop` is a trace-only no-op until user Drop
-// lands). v1 ships an explicit `pool.release(conn)` method
-// instead; once user Drop dispatches, `PooledConnection.drop`
-// can call the same release path and the explicit release call
-// becomes optional.
+// **Drop-releases-automatically — shipped.** `impl[T] Drop for
+// PooledConnection[T]` (below) returns a connection's slot to its
+// source pool at scope exit, so the explicit `pool.release(conn)`
+// call is now optional (it stays as an eager-return convenience).
+// The interpreter's user-`Drop` drain routes `PooledConnection` to
+// a native handler (`method_call_pool.rs::drop_pooled_connection`)
+// rather than running the placeholder body — `std.Pool` is
+// interpreter-only, so there is no codegen lowering. Return is
+// **idempotent**, keyed on each checkout's `conn_id`: calling
+// `release` *and* letting the binding drop hands the slot back
+// exactly once, never inflating one connection into two idle slots.
 //
 // **Health-check hook — shipped.** Per spec, "health-check hook fires
 // on acquire (callable's responsibility); evict-on-error pattern."
@@ -69,8 +71,10 @@ struct Pool[T] {
 
 // Handle to a single checked-out connection. Carries the source
 // pool's `handle_id` (so `release` can route the value back to the
-// right pool) plus the wrapped `val: T` (the actual connection
-// value the user works with).
+// right pool), a per-checkout `conn_id` (minted at `acquire`; the
+// idempotent-return key that lets explicit `release` and scope-exit
+// auto-`Drop` coexist without double-returning the slot), plus the
+// wrapped `val: T` (the actual connection value the user works with).
 //
 // **`#[must_use]` (slice 2 of the `#[must_use]` mandate).**
 // `PooledConnection[T]` is a guard-shaped handle: the
@@ -86,6 +90,7 @@ struct Pool[T] {
 #[must_use = "discarding the connection releases the slot back to the pool without using it — bind the handle to a variable so it lives across the work, or pass it to the consuming function"]
 struct PooledConnection[T] {
     pool_handle_id: i64,
+    conn_id: i64,
     val: T,
 }
 
@@ -127,9 +132,10 @@ impl[T] Pool[T] {
     // a different pool) silently drops the value rather than
     // corrupting the target pool's bookkeeping.
     //
-    // Once user-`impl Drop` lands in the interpreter, `Pool[T]`
-    // will gain an `impl Drop for PooledConnection[T]` that calls
-    // this same release path, and explicit calls become optional.
+    // `impl[T] Drop for PooledConnection[T]` (below) now calls this
+    // same idempotent return path at scope exit, so explicit
+    // `release` is optional — keep it for eager hand-back (return a
+    // connection to the pool before the binding leaves scope).
     #[compiler_builtin]
     fn release(ref self, conn: PooledConnection[T]) -> Unit {
         Unit
@@ -151,4 +157,22 @@ impl[T] Pool[T] {
     fn with_health_check(ref self, check: Fn(T) -> bool) -> Pool[T] {
         Pool { handle_id: self.handle_id }
     }
+}
+
+// Auto-release: when a `PooledConnection` leaves scope (its NLL
+// endpoint or block exit), its slot returns to the source pool — the
+// same path `Pool.release(conn)` takes — so an explicit release is
+// optional. The return is idempotent (keyed on the checkout's
+// `conn_id`): calling `release` *and* letting the value drop hands
+// the slot back exactly once.
+//
+// `#[compiler_builtin]`: the interpreter's user-`Drop` drain routes
+// `PooledConnection` to a native handler
+// (`method_call_pool.rs::drop_pooled_connection`) instead of running
+// this placeholder body. `std.Pool` is interpreter-only, so this impl
+// never reaches codegen — `PooledConnection.drop` is not a lowered
+// LLVM symbol, and the user-drop-wrapper synth skips it.
+impl[T] Drop for PooledConnection[T] {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
 }
