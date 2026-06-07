@@ -14179,3 +14179,155 @@ fn test_tensor_iter_axis_runtime_axis_value() {
         "{errors:?}",
     );
 }
+
+#[test]
+fn test_tensor_reshape_values_c_order() {
+    // C-order data is untouched; only the dims change.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let r = t.reshape([3, 2]);\n\
+             println(r.rank());\n\
+             println(r[0, 0]);\n\
+             println(r[0, 1]);\n\
+             println(r[1, 0]);\n\
+             println(r[2, 1]);\n\
+             let flat = t.reshape([6]);\n\
+             println(flat[4]);\n\
+         }",
+    );
+    assert_eq!(out, "2\n1\n2\n3\n6\n5\n");
+}
+
+#[test]
+fn test_tensor_reshape_is_a_copy_and_checks_count() {
+    // Writing through the reshaped tensor leaves the source untouched;
+    // a runtime-valued dim with a bad product errors at runtime.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2], [3, 4]]);\n\
+             let mut r = t.reshape([4]);\n\
+             r[0] = 99;\n\
+             println(r[0]);\n\
+             println(t[0, 0]);\n\
+         }",
+    );
+    assert_eq!(out, "99\n1\n");
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let m = 4;\n\
+             let bad = t.reshape([2, m]);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("element counts must match")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_permute_transpose_and_rank3() {
+    // result[i, j] = t[j, i] for the rank-2 transpose; for [2, 0, 1] on
+    // a rank-3 receiver, result[i, j, k] = t[j, k, i] (NumPy transpose
+    // semantics).
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let p = t.permute([1, 0]);\n\
+             println(p.shape()[0]);\n\
+             println(p[0, 1]);\n\
+             println(p[2, 0]);\n\
+             let t3 = Tensor.from([[[1, 2], [3, 4], [5, 6]], [[7, 8], [9, 10], [11, 12]]]);\n\
+             let p3 = t3.permute([2, 0, 1]);\n\
+             println(p3.shape()[0]);\n\
+             println(p3.shape()[1]);\n\
+             println(p3.shape()[2]);\n\
+             println(p3[0, 0, 1]);\n\
+             println(p3[1, 1, 2]);\n\
+         }",
+    );
+    assert_eq!(out, "3\n4\n3\n2\n2\n3\n3\n12\n");
+}
+
+#[test]
+fn test_tensor_slice_values_and_runtime_bounds() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let s = t.slice(1, 1, 3);\n\
+             println(s.shape()[1]);\n\
+             println(s[0, 0]);\n\
+             println(s[1, 1]);\n\
+             let rows = t.slice(0, 1, 2);\n\
+             println(rows.shape()[0]);\n\
+             println(rows[0, 2]);\n\
+             let empty = t.slice(1, 2, 2);\n\
+             println(empty.shape()[1]);\n\
+         }",
+    );
+    assert_eq!(out, "2\n2\n6\n1\n6\n0\n");
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let e = 5;\n\
+             let bad = t.slice(1, 2, e);\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("slice end 5 out of bounds for dim 1 (size 3)")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_squeeze_values_and_runtime_check() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let u = Tensor.from([[[7, 8, 9]]]);\n\
+             let q = u.squeeze();\n\
+             println(q.rank());\n\
+             println(q[2]);\n\
+             let one = u.squeeze(0);\n\
+             println(one.rank());\n\
+             println(one[0, 1]);\n\
+         }",
+    );
+    assert_eq!(out, "1\n9\n2\n8\n");
+    // A `?`-typed (runtime-checked) squeeze axis whose size isn't 1.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let t: Tensor[f64, [1, ?]] = Tensor.zeros([1, 4]);\n\
+             let bad = t.squeeze(1);\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("cannot squeeze axis 1: its size is 4, not 1")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_reshape_of_permuted_data() {
+    // Chained transforms: permute reorders the buffer, reshape then
+    // reads the *new* C-order — pins that permute produced a real
+    // reordered copy, not a view.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let p = t.permute([1, 0]);\n\
+             let flat = p.reshape([6]);\n\
+             println(flat[0]);\n\
+             println(flat[1]);\n\
+             println(flat[2]);\n\
+             println(flat[5]);\n\
+         }",
+    );
+    assert_eq!(out, "1\n4\n2\n6\n");
+}

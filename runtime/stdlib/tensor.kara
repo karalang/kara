@@ -105,4 +105,55 @@ impl[T, ...S] Tensor[T, S] {
     fn iter_axis(ref self, n: i64) -> Vec[Tensor[T, S]] {
         Vec.new()
     }
+
+    // Shape transforms — like `iter_axis`, the declared return types
+    // below are surface-only: the real result shape depends on the
+    // receiver's shape and the arguments' syntactic form (literal
+    // arguments give exact static dims; runtime-valued arguments
+    // degrade the affected dims to `?`), so the typechecker
+    // (`src/typechecker/expr_method_tensor.rs`) and the interpreter
+    // (`src/interpreter/method_call_tensor.rs`) both intercept before
+    // these signatures are consulted. All four return copies — tensors
+    // are value types (codegen may share buffers copy-on-write later).
+
+    // Same elements, new dims, C-order preserved. The dims argument
+    // must be an array literal (its length is the result's static
+    // rank); integer-literal entries become concrete dims, expression
+    // entries become `?` dims. Element counts must match — checked at
+    // compile time when fully static, at runtime otherwise.
+    #[compiler_builtin]
+    fn reshape(ref self, dims: Vec[i64]) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
+
+    // Reorder axes: result dim `i` is the receiver's dim `axes[i]`, so
+    // `t.permute([1, 0])` is the rank-2 transpose. The axis list must
+    // be an array literal of integer literals forming an exact
+    // permutation of `0..rank` (checked at compile time); static dims
+    // — including `?` slots — move with their axis.
+    #[compiler_builtin]
+    fn permute(ref self, axes: Vec[i64]) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
+
+    // Contiguous `[start, end)` range along one axis, other axes
+    // untouched (`t[i, :, :]` indexing-syntax slicing is v1.5). With a
+    // literal axis the result keeps every dim except the sliced slot,
+    // which becomes `end - start` when both bounds are literals and `?`
+    // otherwise. `start == end` (an empty slice) is legal.
+    #[compiler_builtin]
+    fn slice(ref self, axis: i64, start: i64, end: i64) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
+
+    // Drop size-1 axes. `squeeze(n)` drops exactly slot `n` (size must
+    // be 1; rank ≥ 2 — rank-0 tensors aren't expressible). The no-arg
+    // form `squeeze()` drops every size-1 dim and requires a fully
+    // static shape (a `?` dim's size — and therefore the result rank —
+    // isn't known at compile time). Declared here in the no-arg form;
+    // the optional-axis arity is handled by the intercepts.
+    #[compiler_builtin]
+    fn squeeze(ref self) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
 }

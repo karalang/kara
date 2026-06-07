@@ -23722,6 +23722,306 @@ fn test_tensor_iter_axis_dynamic_dims_survive_literal_axis() {
     );
 }
 
+// ── Tensor reshape / permute / slice / squeeze (phase-11 sub-slice) ─
+
+#[test]
+fn test_tensor_reshape_static_type_and_probe() {
+    // Literal dims → exact static result type: annotation agreement
+    // and a literal-index bounds probe against the *new* dims.
+    typecheck_ok(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let r: Tensor[i64, [3, 2]] = t.reshape([3, 2]);\n\
+             let flat: Tensor[i64, [6]] = t.reshape([6]);\n\
+         }\n",
+    );
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let r = t.reshape([3, 2]);\n\
+             let x = r[0, 2];\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("index 2 out of bounds for dim 1 (size 2)")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_reshape_count_mismatch_rejected() {
+    // Fully-static receiver + all-literal dims → compile-time product
+    // check.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let r = t.reshape([4, 2]);\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains(
+            "reshape from [2, 3] (6 element(s)) to [4, 2] (8 element(s)) — \
+             element counts must match"
+        )),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_reshape_non_literal_arg_rejected() {
+    // The result's static rank comes from the literal's length; a
+    // runtime Vec can't provide one.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let dims = Vec.new();\n\
+             let r = t.reshape(dims);\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("reshape requires an array-literal dims argument")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_reshape_expression_dims_dynamic() {
+    // Expression entries degrade to `?` dims; the product check moves
+    // to runtime, and the static type carries the mixed shape.
+    typecheck_ok(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let n = 3;\n\
+             let r: Tensor[i64, [2, ?]] = t.reshape([2, n]);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_tensor_reshape_empty_dims_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([1, 2]);\n\
+             let r = t.reshape([]);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("reshape to rank 0")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_permute_static_dims_move_with_axis() {
+    // Concrete and `?` dims both move with their slot:
+    // [2, ?] permuted by [1, 0] → [?, 2].
+    typecheck_ok(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let p: Tensor[i64, [3, 2]] = t.permute([1, 0]);\n\
+             let d: Tensor[f64, [2, ?]] = Tensor.zeros([2, 5]);\n\
+             let q: Tensor[f64, [?, 2]] = d.permute([1, 0]);\n\
+             let t3 = Tensor.from([[[1, 2], [3, 4], [5, 6]], [[7, 8], [9, 10], [11, 12]]]);\n\
+             let p3: Tensor[i64, [2, 2, 3]] = t3.permute([2, 0, 1]);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_tensor_permute_invalid_lists_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let a = t.permute([0, 0]);\n\
+             let b = t.permute([0, 2]);\n\
+             let c = t.permute([0]);\n\
+             let n = 1;\n\
+             let d = t.permute([0, n]);\n\
+             let v = Vec.new();\n\
+             let e = t.permute(v);\n\
+         }\n",
+    );
+    for needle in [
+        "permute axis list repeats axis 0",
+        "axis 2 out of bounds for rank-2 tensor",
+        "permute axis list has 1 entry, expected 2 (the receiver's rank)",
+        "permute axes must be integer literals",
+        "permute requires a literal axis-list argument",
+    ] {
+        assert!(
+            errors.iter().any(|e| e.message.contains(needle)),
+            "missing '{needle}' in {errors:?}",
+        );
+    }
+}
+
+#[test]
+fn test_tensor_slice_static_result_and_bounds() {
+    typecheck_ok(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let s: Tensor[i64, [2, 2]] = t.slice(1, 1, 3);\n\
+             let empty: Tensor[i64, [0, 3]] = t.slice(0, 1, 1);\n\
+         }\n",
+    );
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let a = t.slice(1, 2, 5);\n\
+             let b = t.slice(1, 2, 1);\n\
+             let c = t.slice(2, 0, 1);\n\
+         }\n",
+    );
+    for needle in [
+        "slice end 5 out of bounds for dim 1 (size 3)",
+        "slice end 1 is before start 2",
+        "axis 2 out of bounds for rank-2 tensor",
+    ] {
+        assert!(
+            errors.iter().any(|e| e.message.contains(needle)),
+            "missing '{needle}' in {errors:?}",
+        );
+    }
+}
+
+#[test]
+fn test_tensor_slice_runtime_bounds_dynamic_dim() {
+    // Runtime bounds → the sliced slot degrades to `?`; the untouched
+    // dims survive. A runtime axis degrades every dim.
+    typecheck_ok(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let e = 3;\n\
+             let s: Tensor[i64, [2, ?]] = t.slice(1, 1, e);\n\
+             let n = 0;\n\
+             let d: Tensor[i64, [?, ?]] = t.slice(n, 0, 1);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_tensor_squeeze_noarg_static() {
+    // Drops every size-1 dim of a fully-static shape; squeezing a
+    // shape with no 1s is a legal no-op.
+    typecheck_ok(
+        "fn main() {\n\
+             let u = Tensor.from([[[7, 8, 9]]]);\n\
+             let q: Tensor[i64, [3]] = u.squeeze();\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let same: Tensor[i64, [2, 3]] = t.squeeze();\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_tensor_squeeze_noarg_dynamic_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t: Tensor[f64, [1, ?]] = Tensor.zeros([1, 4]);\n\
+             let a = t.squeeze();\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("squeeze() without an axis requires a fully-static shape")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_squeeze_noarg_all_ones_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1]]);\n\
+             let a = t.squeeze();\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("squeezing every dim of [1, 1] produces a rank-0 tensor")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_squeeze_axis_static_checks() {
+    // squeeze(n) drops a static 1-slot exactly; a `?` slot is deferred
+    // to the runtime ==1 check.
+    typecheck_ok(
+        "fn main() {\n\
+             let u = Tensor.from([[[7, 8, 9]]]);\n\
+             let q: Tensor[i64, [1, 3]] = u.squeeze(0);\n\
+             let d: Tensor[f64, [1, ?]] = Tensor.zeros([1, 4]);\n\
+             let k: Tensor[f64, [?]] = d.squeeze(0);\n\
+         }\n",
+    );
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let a = t.squeeze(0);\n\
+             let b = t.squeeze(7);\n\
+             let v = Tensor.from([1]);\n\
+             let c = v.squeeze(0);\n\
+         }\n",
+    );
+    for needle in [
+        "cannot squeeze axis 0: its size is 2, not 1",
+        "axis 7 out of bounds for rank-2 tensor",
+        "cannot squeeze a rank-1 tensor",
+    ] {
+        assert!(
+            errors.iter().any(|e| e.message.contains(needle)),
+            "missing '{needle}' in {errors:?}",
+        );
+    }
+}
+
+#[test]
+fn test_tensor_shape_family_generic_receiver_rejected() {
+    // The whole family shares the static-rank requirement: bare-`S`
+    // shape params and splice-bearing literals get the focused error.
+    let errors = typecheck_errors(
+        "fn probe[T, ...S](t: Tensor[T, S]) -> i64 {\n\
+             let r = t.reshape([2, 2]);\n\
+             0\n\
+         }\n\
+         fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let n = probe(t);\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("reshape requires the receiver's rank to be statically known")),
+        "{errors:?}",
+    );
+    let errors = typecheck_errors(
+        "fn probe[T, ...S, N: Dim](t: Tensor[T, [...S, N]]) -> i64 {\n\
+             let p = t.permute([1, 0]);\n\
+             0\n\
+         }\n\
+         fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let n = probe(t);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("this shape carries a `...` splice")),
+        "{errors:?}",
+    );
+}
+
 // ── Effect-resource dispatch types untyped `let` bindings ─────────
 //
 // bugs.md "Untyped `let` from an effect-resource method call doesn't

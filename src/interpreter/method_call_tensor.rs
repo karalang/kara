@@ -1,8 +1,9 @@
 //! `Tensor[T, Shape]` interpreter intrinsics (phase-11 numerical
 //! stdlib, MVP slice). Constructors dispatch through `eval_call.rs`'s
 //! `"Tensor.zeros"` / `"Tensor.ones"` / `"Tensor.full"` path-string
-//! arms; instance methods (`shape` / `rank` / `iter_axis`) through
-//! `try_eval_tensor_method` in the method-dispatch chain. Element
+//! arms; instance methods (`shape` / `rank` and the shape-transform
+//! family `iter_axis` / `reshape` / `permute` / `slice` / `squeeze`)
+//! through `try_eval_tensor_method` in the method-dispatch chain. Element
 //! storage is C-order (row-major) in the same `Arc<RwLock<Vec<Value>>>`
 //! shared-cell shape as `Value::Array` (par-block capture shares Values
 //! across real OS threads). Indexing get/set live at the existing
@@ -227,8 +228,9 @@ impl<'a> super::Interpreter<'a> {
     }
 
     /// Instance methods on `Value::Tensor`: `shape()` -> Vec[i64] (as
-    /// the interpreter's Array value), `rank()` -> i64, `iter_axis(n)`
-    /// -> Vec of sub-tensors. Returns `None` for non-Tensor receivers /
+    /// the interpreter's Array value), `rank()` -> i64, and the
+    /// shape-transform family (`iter_axis` / `reshape` / `permute` /
+    /// `slice` / `squeeze`). Returns `None` for non-Tensor receivers /
     /// unknown methods (caller falls through).
     pub(super) fn try_eval_tensor_method(
         &mut self,
@@ -246,6 +248,10 @@ impl<'a> super::Interpreter<'a> {
             )))),
             "rank" => Some(Value::Int(dims.len() as i64)),
             "iter_axis" => Some(self.eval_tensor_iter_axis(dims, data, args, span)),
+            "reshape" => Some(self.eval_tensor_reshape(dims, data, args, span)),
+            "permute" => Some(self.eval_tensor_permute(dims, data, args, span)),
+            "slice" => Some(self.eval_tensor_slice(dims, data, args, span)),
+            "squeeze" => Some(self.eval_tensor_squeeze(dims, data, args, span)),
             _ => None,
         }
     }
@@ -316,5 +322,325 @@ impl<'a> super::Interpreter<'a> {
             })
             .collect();
         Value::Array(Arc::new(RwLock::new(out)))
+    }
+
+    /// `t.reshape([d0, d1, ...])` — same elements, new dims, C-order
+    /// preserved. The dims argument must be an array literal (the
+    /// typechecker's rule, re-emitted here since `run_program` doesn't
+    /// gate on typecheck); entries evaluate to non-negative ints whose
+    /// product must equal the element count. The data is *copied* —
+    /// tensors are value types, so the result must not alias the
+    /// receiver (codegen may share buffers copy-on-write later).
+    fn eval_tensor_reshape(
+        &mut self,
+        dims: &[i64],
+        data: &Arc<RwLock<Vec<Value>>>,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Value {
+        let Some(dims_arg) = args.first().map(|a| &a.value) else {
+            return self.record_runtime_error(
+                "reshape takes exactly 1 argument (the new dims)".to_string(),
+                span,
+            );
+        };
+        let ExprKind::ArrayLiteral(entries) = &dims_arg.kind else {
+            return self.record_runtime_error(
+                "reshape requires an array-literal dims argument — the result's \
+                 static rank comes from the literal's length (`t.reshape([3, 4])`); \
+                 runtime-shaped reshape is v1.5 shape arithmetic"
+                    .to_string(),
+                span,
+            );
+        };
+        if entries.is_empty() {
+            return self.record_runtime_error(
+                "reshape to rank 0 — `[]` is not a valid dims list (rank-0 \
+                 tensors aren't expressible)"
+                    .to_string(),
+                span,
+            );
+        }
+        let mut new_dims: Vec<i64> = Vec::with_capacity(entries.len());
+        for entry in entries {
+            match self.eval_expr_inner(entry) {
+                Value::Int(v) if v >= 0 => new_dims.push(v),
+                Value::Int(v) => {
+                    return self.record_runtime_error(
+                        format!("reshape dim must be non-negative, got {}", v),
+                        span,
+                    );
+                }
+                _ => {
+                    return self
+                        .record_runtime_error("reshape dims must be integers".to_string(), span);
+                }
+            }
+        }
+        let old_count: i64 = dims.iter().product();
+        let new_count: i64 = new_dims.iter().product();
+        if old_count != new_count {
+            return self.record_runtime_error(
+                format!(
+                    "reshape from {:?} ({} element(s)) to {:?} ({} element(s)) — \
+                     element counts must match",
+                    dims, old_count, new_dims, new_count
+                ),
+                span,
+            );
+        }
+        let elements = data.read().unwrap().clone();
+        Value::Tensor {
+            dims: Arc::new(new_dims),
+            data: Arc::new(RwLock::new(elements)),
+        }
+    }
+
+    /// `t.permute([1, 0, 2])` — reorder the axes; result dim `i` is the
+    /// receiver's dim `perm[i]`. The axis list must be an array literal
+    /// forming an exact permutation of `0..rank` (typechecker rule,
+    /// re-emitted at runtime). Data is reordered into a fresh C-order
+    /// buffer: each output flat index decomposes into output coords by
+    /// div/mod, and the source flat index is the dot product of those
+    /// coords with the *source* strides of the permuted-from axes.
+    fn eval_tensor_permute(
+        &mut self,
+        dims: &[i64],
+        data: &Arc<RwLock<Vec<Value>>>,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Value {
+        let rank = dims.len();
+        let Some(perm_arg) = args.first().map(|a| &a.value) else {
+            return self.record_runtime_error(
+                "permute takes exactly 1 argument (the axis list)".to_string(),
+                span,
+            );
+        };
+        let ExprKind::ArrayLiteral(entries) = &perm_arg.kind else {
+            return self.record_runtime_error(
+                "permute requires a literal axis-list argument \
+                 (`t.permute([1, 0])`) — runtime-valued permutations are v1.5"
+                    .to_string(),
+                span,
+            );
+        };
+        if entries.len() != rank {
+            return self.record_runtime_error(
+                format!(
+                    "permute axis list has {} entr{}, expected {} (the receiver's rank)",
+                    entries.len(),
+                    if entries.len() == 1 { "y" } else { "ies" },
+                    rank
+                ),
+                span,
+            );
+        }
+        let mut perm: Vec<usize> = Vec::with_capacity(rank);
+        let mut seen = vec![false; rank];
+        for entry in entries {
+            let Value::Int(i) = self.eval_expr_inner(entry) else {
+                return self
+                    .record_runtime_error("permute axes must be integers".to_string(), span);
+            };
+            if i < 0 || i as usize >= rank {
+                return self.record_runtime_error(
+                    format!("axis {} out of bounds for rank-{} tensor", i, rank),
+                    span,
+                );
+            }
+            if seen[i as usize] {
+                return self
+                    .record_runtime_error(format!("permute axis list repeats axis {}", i), span);
+            }
+            seen[i as usize] = true;
+            perm.push(i as usize);
+        }
+        // Source strides (C-order): stride[k] = product of dims[k+1..].
+        let mut src_strides = vec![1usize; rank];
+        for k in (0..rank - 1).rev() {
+            src_strides[k] = src_strides[k + 1] * (dims[k + 1] as usize);
+        }
+        let new_dims: Vec<i64> = perm.iter().map(|&p| dims[p]).collect();
+        let guard = data.read().unwrap();
+        let total = guard.len();
+        let mut out: Vec<Value> = Vec::with_capacity(total);
+        for f in 0..total {
+            // Decompose f into output coords (C-order over new_dims),
+            // accumulating the source flat index as we go: output coord
+            // i indexes source axis perm[i].
+            let mut rem = f;
+            let mut src = 0usize;
+            for (i, &nd) in new_dims.iter().enumerate().rev() {
+                let coord = rem % (nd as usize);
+                rem /= nd as usize;
+                src += coord * src_strides[perm[i]];
+            }
+            out.push(guard[src].clone());
+        }
+        Value::Tensor {
+            dims: Arc::new(new_dims),
+            data: Arc::new(RwLock::new(out)),
+        }
+    }
+
+    /// `t.slice(axis, start, end)` — contiguous `[start, end)` range
+    /// along one axis, other axes untouched, as a copy. Runtime checks:
+    /// axis in range, `0 <= start <= end <= dims[axis]`. The copy walks
+    /// the receiver as outer × dims[axis] × inner (outer = product of
+    /// dims left of the axis, inner = product right of it) and keeps
+    /// the `[start, end)` middle band of every outer block.
+    fn eval_tensor_slice(
+        &mut self,
+        dims: &[i64],
+        data: &Arc<RwLock<Vec<Value>>>,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Value {
+        if args.len() != 3 {
+            return self.record_runtime_error(
+                format!(
+                    "slice takes exactly 3 arguments (axis, start, end), found {}",
+                    args.len()
+                ),
+                span,
+            );
+        }
+        let mut vals = [0i64; 3];
+        for (slot, arg) in vals.iter_mut().zip(args.iter()) {
+            let Value::Int(v) = self.eval_expr_inner(&arg.value) else {
+                return self
+                    .record_runtime_error("slice arguments must be integers".to_string(), span);
+            };
+            *slot = v;
+        }
+        let [axis, start, end] = vals;
+        let rank = dims.len();
+        if axis < 0 || axis as usize >= rank {
+            return self.record_runtime_error(
+                format!("axis {} out of bounds for rank-{} tensor", axis, rank),
+                span,
+            );
+        }
+        let axis = axis as usize;
+        if start < 0 {
+            return self.record_runtime_error(
+                format!("slice start must be non-negative, got {}", start),
+                span,
+            );
+        }
+        if end < start {
+            return self.record_runtime_error(
+                format!("slice end {} is before start {}", end, start),
+                span,
+            );
+        }
+        if end > dims[axis] {
+            return self.record_runtime_error(
+                format!(
+                    "slice end {} out of bounds for dim {} (size {})",
+                    end, axis, dims[axis]
+                ),
+                span,
+            );
+        }
+        let (start, end) = (start as usize, end as usize);
+        let inner: usize = dims[axis + 1..].iter().map(|&d| d as usize).product();
+        let outer: usize = dims[..axis].iter().map(|&d| d as usize).product();
+        let axis_len = dims[axis] as usize;
+        let guard = data.read().unwrap();
+        let mut out: Vec<Value> = Vec::with_capacity(outer * (end - start) * inner);
+        for o in 0..outer {
+            let block = o * axis_len * inner;
+            out.extend_from_slice(&guard[block + start * inner..block + end * inner]);
+        }
+        let new_dims: Vec<i64> = dims
+            .iter()
+            .enumerate()
+            .map(|(i, &d)| if i == axis { (end - start) as i64 } else { d })
+            .collect();
+        Value::Tensor {
+            dims: Arc::new(new_dims),
+            data: Arc::new(RwLock::new(out)),
+        }
+    }
+
+    /// `t.squeeze()` / `t.squeeze(n)` — drop size-1 axes. The no-arg
+    /// form drops every size-1 dim (error if that would leave rank 0);
+    /// the one-arg form drops exactly slot `n`, which must be in range,
+    /// of size 1, and on a rank ≥ 2 receiver. Data is unchanged (the
+    /// element count and C-order are identical), only the dims shrink —
+    /// still copied, since tensors are value types.
+    fn eval_tensor_squeeze(
+        &mut self,
+        dims: &[i64],
+        data: &Arc<RwLock<Vec<Value>>>,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Value {
+        let rank = dims.len();
+        let new_dims: Vec<i64> = match args {
+            [] => {
+                let kept: Vec<i64> = dims.iter().copied().filter(|&d| d != 1).collect();
+                if kept.is_empty() {
+                    return self.record_runtime_error(
+                        format!(
+                            "squeezing every dim of {:?} produces a rank-0 tensor, \
+                             which isn't expressible — keep at least one dim \
+                             (use `squeeze(n)`)",
+                            dims
+                        ),
+                        span,
+                    );
+                }
+                kept
+            }
+            [axis_arg] => {
+                let Value::Int(n) = self.eval_expr_inner(&axis_arg.value) else {
+                    return self
+                        .record_runtime_error("squeeze axis must be an integer".to_string(), span);
+                };
+                if rank < 2 {
+                    return self.record_runtime_error(
+                        "cannot squeeze a rank-1 tensor — the result would be \
+                         rank-0, which isn't expressible"
+                            .to_string(),
+                        span,
+                    );
+                }
+                if n < 0 || n as usize >= rank {
+                    return self.record_runtime_error(
+                        format!("axis {} out of bounds for rank-{} tensor", n, rank),
+                        span,
+                    );
+                }
+                let n = n as usize;
+                if dims[n] != 1 {
+                    return self.record_runtime_error(
+                        format!("cannot squeeze axis {}: its size is {}, not 1", n, dims[n]),
+                        span,
+                    );
+                }
+                dims.iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != n)
+                    .map(|(_, &d)| d)
+                    .collect()
+            }
+            _ => {
+                return self.record_runtime_error(
+                    format!(
+                        "squeeze takes 0 or 1 argument(s) (an optional axis), found {}",
+                        args.len()
+                    ),
+                    span,
+                );
+            }
+        };
+        let elements = data.read().unwrap().clone();
+        Value::Tensor {
+            dims: Arc::new(new_dims),
+            data: Arc::new(RwLock::new(elements)),
+        }
     }
 }
