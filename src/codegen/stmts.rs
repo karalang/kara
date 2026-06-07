@@ -2012,15 +2012,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 // Oversized boxed enum payload (`Option[Wide]` /
                 // `Result[Wide, _]`) — queue a scope-exit free of the heap
-                // box. v1 covers the explicitly-annotated let, where the
-                // declared type names the payload `T` directly; fresh-temp
-                // scrutinees (`Vec.pop()` → `match`) and untyped inference
-                // are follow-ups (tracked in the spike). Skipped when a
-                // shared-Option cleanup is already queued — a shared
-                // payload is a 1-word RC pointer and is never boxed.
+                // box. The declared type names the payload `T` directly; for
+                // an *untyped* let whose RHS is a known function call
+                // (`let o = make_opt()`), recover `T` from the callee's
+                // recorded return type (§3). Fresh-temp scrutinees
+                // (`match v.pop()`) are handled at the scrutinee, not here.
+                // Skipped when a shared-Option cleanup is already queued — a
+                // shared payload is a 1-word RC pointer and is never boxed.
                 if shared_option_info.is_none() {
                     if let PatternKind::Binding(var_name) = &pattern.kind {
-                        if let Some(te) = ty.as_ref() {
+                        let boxed_te: Option<TypeExpr> =
+                            ty.clone().or_else(|| self.untyped_let_boxed_enum_te(value));
+                        if let Some(te) = boxed_te.as_ref() {
                             let boxed = self.boxed_enum_payload_variants(te);
                             if let Some(slot) = (!boxed.is_empty())
                                 .then(|| self.variables.get(var_name.as_str()).copied())

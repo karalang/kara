@@ -17845,6 +17845,78 @@ fn main() {
         );
     }
 
+    /// Oversized-enum-payload §3 (untyped-let inference): `let o = make()`
+    /// with NO annotation, where `make() -> Option[Wide]` (boxed). The box
+    /// drop is recovered from the callee's return type
+    /// (`fn_return_type_exprs`) instead of the missing annotation, so the box
+    /// is freed at scope exit. (Leak gate.)
+    #[test]
+    fn test_ir_untyped_let_boxed_option_frees_box() {
+        let src = r#"
+struct Wide { a: i64, b: i64, c: i64, d: i64 }
+fn make() -> Option[Wide] {
+    return Some(Wide { a: 1, b: 2, c: 3, d: 4 });
+}
+fn main() {
+    let o = make();
+    println(0);
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            ir.contains("boxdrop"),
+            "untyped let over a boxed Option-returning call must free its box; got:\n{ir}"
+        );
+    }
+
+    /// Oversized-enum-payload §3/§4 (untyped Result.Err boxing): `let r =
+    /// make()` with no annotation, where `make() -> Result[i64, WideErr]` and
+    /// `WideErr` is 6 words (> Result's 5-word area), so the `Err` payload is
+    /// boxed. The box drop for the `Err` variant must be queued from the
+    /// inferred return type. (Leak gate; the runtime value is `Ok` so the
+    /// drop's tag guard skips, but the cleanup block is still emitted.)
+    #[test]
+    fn test_ir_untyped_let_boxed_result_err_frees_box() {
+        let src = r#"
+struct WideErr { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }
+fn make() -> Result[i64, WideErr] {
+    return Ok(7);
+}
+fn main() {
+    let r = make();
+    println(0);
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            ir.contains("boxdrop"),
+            "untyped let over a boxed Result.Err-returning call must free its box; got:\n{ir}"
+        );
+    }
+
+    /// Oversized-enum-payload §3 round-trip: an untyped `let o = make()`
+    /// (boxed `Option[Wide]`) then `match o { … }` reads the 4th word back
+    /// through the box correctly.
+    #[test]
+    fn test_e2e_untyped_let_boxed_option_reads_correct_value() {
+        let src = r#"
+struct Wide { a: i64, b: i64, c: i64, d: i64 }
+fn make() -> Option[Wide] {
+    return Some(Wide { a: 1, b: 2, c: 3, d: 400 });
+}
+fn main() {
+    let o = make();
+    match o {
+        Some(e) => println(e.d),
+        None => println(-1),
+    }
+}
+"#;
+        if let Some(out) = run_program(src) {
+            assert_eq!(out.trim(), "400");
+        }
+    }
+
     // ── Concurrency analysis plumbing ──
 
     /// Slice 1 wiring sanity-check: full pipeline through

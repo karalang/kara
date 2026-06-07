@@ -8,10 +8,17 @@ in §4. Two slices:
   unpack readers (`reconstruct_payload_value`, the `.unwrap()` helper in
   `calls.rs`) recompute the same `llvm_type_word_count(T) > area` predicate and
   load `T` back from the box.
-- **Drop** (this commit): a `BoxedEnumDrop` cleanup action frees the box (and
-  runs the inner struct drop first when `T` owns heap) at scope exit, queued by
-  `track_boxed_enum_var` at the **annotated** `let o: Option[T]` / `Result[T,E]`
-  site.
+- **Drop** (commit `873be65c` sibling): a `BoxedEnumDrop` cleanup action frees
+  the box (and runs the inner struct drop first when `T` owns heap) at scope
+  exit, queued by `track_boxed_enum_var` at the annotated `let o: Option[T]` /
+  `Result[T,E]` site.
+- **Box-free coverage** (2026-06-07): the box drop now also fires for
+  fresh-temp scrutinees (`match v.pop() { … }`, §1, all four pattern
+  constructs), the move-OUT-of-box interaction (§2, box-only free), untyped
+  lets (`let o = make_opt()`, §3), and `Result.Err` payloads (§4). See the
+  **Box-free coverage** follow-ups below for the per-slice detail and the two
+  narrow deferred cases (unbound heap-owning payload; method-call-RHS untyped
+  let — both leak-only, never double-free).
 
 The fail-loud `E_ENUM_PAYLOAD_OVERSIZED` error is **removed** — the capability it
 guarded now works.
@@ -43,8 +50,27 @@ guarded now works.
   the scrutinee's static type; never a double-free, no regression. A
   `Result`-loop terminating on a boxed `Err` `while let` miss is likewise rare
   and deferred (an `Option` loop terminates on `None`, which carries no box).
-- **Untyped-let inference** (`let o = make_opt()` with no annotation) and
-  **`Result.Err` boxing** beyond the annotated-Ok/Err cases.
+- **Untyped-let inference + `Result.Err` boxing — LANDED 2026-06-07.** An
+  *untyped* `let o = make_opt()` (no annotation) had no `TypeExpr` for the
+  let-site box drop to read `T` from, so the box leaked. `declare_function` now
+  records each function's full return `TypeExpr` in `fn_return_type_exprs`
+  (`fn_return_type_names` kept only the bare segment, dropping the generic arg);
+  the let-site recovers it via `untyped_let_boxed_enum_te` when the RHS is a
+  direct call to a known free function, and runs the same
+  `boxed_enum_payload_variants` + `track_boxed_enum_var` path as the annotated
+  let. Because `boxed_enum_payload_variants` already checks **both** `Ok` and
+  `Err` (areas 3/5), this also closes the **`Result.Err` boxing** gap for both
+  untyped lets (here) and fresh-temp scrutinees (the §1 helper checks every arm
+  variant, `Err` included). Tests: `test_ir_untyped_let_boxed_option_frees_box`,
+  `test_ir_untyped_let_boxed_result_err_frees_box` (leak gates — both fail
+  without the fix), `test_e2e_untyped_let_boxed_option_reads_correct_value`
+  (round-trip), `asan_untyped_let_boxed_option_inner_heap_no_double_free`
+  (inner-heap balance). **Narrow remaining (deferred):** a *method-call* RHS
+  (`let o = v.pop()`) — its return type isn't in `fn_return_type_exprs`;
+  recovering it needs synthesizing `Option[elem]` from the receiver's
+  `var_elem_type_exprs`. Leaks the box, never double-frees. (Note: the common
+  `match v.pop() { … }` shape — pop's result consumed directly, not let-bound —
+  is already covered by the §1 fresh-temp scrutinee path.)
 
 A real, IR-proven **silent miscompile** found 2026-06-07 while scoping the
 "deep nesting" follow-up of
@@ -168,12 +194,17 @@ remaining open items are untyped-let inference and `Result.Err` boxing.
 - `src/codegen/control_flow_match.rs` `reconstruct_payload_value` — unpack/unbox
 - `src/codegen/calls.rs` (`.unwrap()`/`.expect()` helper) — unwrap/unbox
 - `src/codegen/{state,runtime}.rs` — `BoxedEnumDrop` action + `track_boxed_enum_var`
-- `src/codegen/types_lowering.rs` `boxed_enum_payload_variants` — let-site predicate
+- `src/codegen/types_lowering.rs` `boxed_enum_payload_variants` — let-site
+  predicate; `untyped_let_boxed_enum_te` — §3 untyped-let RHS type recovery
 - `src/codegen/control_flow_match.rs` `track_freshtemp_boxed_enum_scrutinee` +
   `src/codegen/control_flow.rs` (if-let/while-let/let-else hooks) — §1 fresh-temp
   scrutinee box-free
-- `tests/codegen.rs` `test_{e2e,ir}_boxed_*`, `test_ir_freshtemp_boxed_option_*`
-  — round-trip + box-free regressions
+- `src/codegen.rs` `fn_return_type_exprs` + `src/codegen/functions.rs`
+  (`declare_function` registration) — §3 untyped-let return-type source
+- `src/codegen/stmts.rs` let-site boxed block — annotated + §3 untyped box drop
+- `tests/codegen.rs` `test_{e2e,ir}_boxed_*`, `test_ir_freshtemp_boxed_option_*`,
+  `test_{ir,e2e}_untyped_let_boxed_*` — round-trip + box-free regressions
 - `tests/memory_sanitizer.rs` `asan_boxed_option_*` /
-  `asan_freshtemp_boxed_option_*` — box-free double-free gate;
-  `asan_soa_pop_remove_no_leak_or_uaf` — re-widened to 4-field `Entity` (§1 landed)
+  `asan_freshtemp_boxed_option_*` / `asan_untyped_let_boxed_option_*` — box-free
+  double-free gates; `asan_soa_pop_remove_no_leak_or_uaf` — re-widened to 4-field
+  `Entity` (§1 landed)

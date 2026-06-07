@@ -1360,6 +1360,15 @@ pub(super) struct Codegen<'ctx> {
     /// (`let out: Option[ListNode] = ...`) reads the inner directly
     /// off the surface `TypeExpr`.
     pub(crate) fn_return_option_inner_shared: HashMap<String, String>,
+    /// Function-name → full return `TypeExpr`. Populated by
+    /// `declare_function`. Read by the let-stmt handler's oversized-enum
+    /// boxing path (`boxed_enum_payload_variants`) for an *untyped* let whose
+    /// RHS is a direct call (`let o = make_opt()`): the box drop needs the
+    /// generic arg `T` of `Option[T]` / `Result[T, E]` to decide boxing and
+    /// name the inner struct, which `fn_return_type_names` (bare segment only)
+    /// can't supply. The annotated shape reads `T` off the `let`'s `ty`.
+    /// docs/spikes/oversized-enum-payload.md §3.
+    pub(crate) fn_return_type_exprs: HashMap<String, TypeExpr>,
     /// Niche-ABI record per function (wip-shared-struct-codegen-followups
     /// Slice 1). A function whose signature mentions `Option[shared T]`
     /// in return and/or parameter position is declared with a single
@@ -4018,6 +4027,7 @@ impl<'ctx> Codegen<'ctx> {
             owned_vecstr_params: HashSet::new(),
             fn_param_ref: HashMap::new(),
             fn_return_type_names: HashMap::new(),
+            fn_return_type_exprs: HashMap::new(),
             fn_return_option_inner_shared: HashMap::new(),
             fn_niche_abi: HashMap::new(),
             var_option_shared_heap: HashMap::new(),

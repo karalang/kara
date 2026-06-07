@@ -3274,6 +3274,38 @@ fn main() {
         );
     }
 
+    /// Oversized-enum-payload §3 (untyped-let inference, inner heap): an
+    /// untyped `let o = make(i)` over a boxed `Option[H]` (`H` owns a `Vec`,
+    /// 5 words → boxed). The box drop is inferred from the callee's return
+    /// type — it must free the inner Vec (via the inner struct drop) and the
+    /// box exactly once each. The loop turns any imbalance into a
+    /// deterministic ASAN leak/double-free. Untyped analogue of
+    /// `asan_boxed_option_inner_heap_no_double_free`.
+    #[test]
+    fn asan_untyped_let_boxed_option_inner_heap_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct H { v: Vec[i64], a: i64, b: i64 }
+fn make(i: i64) -> Option[H] {
+    let mut vv: Vec[i64] = Vec.new();
+    vv.push(i);
+    return Some(H { v: vv, a: 1, b: 2 });
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let o = make(i);
+        println(i);
+        i = i + 1;
+    }
+    println(99);
+}
+"#,
+            &["0", "1", "2", "3", "4", "99"],
+            "untyped_let_boxed_option_inner_heap_no_double_free",
+        );
+    }
+
     // ── general owned-temp tracking, slice 1 (phase-6 line 489/497) ──
     //
     // docs/spikes/general-owned-temp-tracking.md slice 1: a fresh-owned

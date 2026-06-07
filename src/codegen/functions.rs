@@ -199,6 +199,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // `compile_field_access` and bug #8 (shared-struct return field
         // access on an unbound call result).
         if let Some(ret_ty) = &func.return_type {
+            // Full return TypeExpr — the untyped-let oversized-enum boxing
+            // path needs the generic arg of `Option[T]` / `Result[T, E]`,
+            // which the bare-segment `fn_return_type_names` below drops.
+            self.fn_return_type_exprs
+                .insert(func.name.clone(), ret_ty.clone());
             if let TypeKind::Path(path) = &ret_ty.kind {
                 if let Some(seg) = path.segments.first() {
                     self.fn_return_type_names

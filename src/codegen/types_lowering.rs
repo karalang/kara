@@ -1634,6 +1634,24 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         out
     }
+
+    /// Recover the source `TypeExpr` of an *untyped* `let`'s RHS when it is a
+    /// direct call to a known free function, so the oversized-payload box drop
+    /// (`boxed_enum_payload_variants` + `track_boxed_enum_var`) can run without
+    /// an annotation (`let o = make_opt()` where `make_opt -> Option[Wide]`).
+    /// Returns the callee's recorded return `TypeExpr` (`fn_return_type_exprs`).
+    /// Method-call RHS (`let o = v.pop()`) is a deferred narrow case — the box
+    /// leaks but never double-frees; see docs/spikes/oversized-enum-payload.md
+    /// §3. `None` for any other RHS shape (the caller keeps the annotation).
+    pub(super) fn untyped_let_boxed_enum_te(&self, value: &Expr) -> Option<TypeExpr> {
+        let ExprKind::Call { callee, .. } = &value.kind else {
+            return None;
+        };
+        let ExprKind::Identifier(name) = &callee.kind else {
+            return None;
+        };
+        self.fn_return_type_exprs.get(name).cloned()
+    }
 }
 
 /// Is `te` a path whose last segment is `bool`? Used by the Atomic arm
