@@ -827,11 +827,17 @@ fn parse_toolchain_table(
 /// pages). Unknown keys soft-warn (reserved for later wasm knobs); a
 /// wrong-typed or non-positive value for a known key hard-errors so a
 /// typo can't silently drop the override. Absent table → all `None`.
+/// The `[wasm]` table's parsed knobs: `(pool_size, fallback,
+/// max_memory_pages)`. A named alias mainly for clippy's
+/// type-complexity ceiling — the tuple is consumed immediately at the
+/// single `parse_manifest` call site.
+type WasmTableKnobs = (Option<u32>, Option<bool>, Option<u32>);
+
 fn parse_wasm_table(
     path: &Path,
     table: &toml::Table,
     warnings: &mut Vec<ManifestWarning>,
-) -> Result<(Option<u32>, Option<bool>, Option<u32>), ManifestError> {
+) -> Result<WasmTableKnobs, ManifestError> {
     let Some(value) = table.get("wasm") else {
         return Ok((None, None, None));
     };

@@ -10926,8 +10926,16 @@ fn wasm_build_skip_reason(stderr: &str) -> Option<&'static str> {
     if stderr.contains("libkarac_runtime_wasm.a not found") {
         return Some("wasm runtime archive not built (see CLAUDE.md archive recipe)");
     }
+    // `--features wasm-threads` infrastructure (phase-10 wasm-threads
+    // entry): the FOURTH archive + the threads rustup target.
+    if stderr.contains("libkarac_runtime_wasm_threads.a not found") {
+        return Some("wasm-threads runtime archive not built (see CLAUDE.md archive recipe)");
+    }
     if stderr.contains("no wasm linker found") {
         return Some("no wasm-ld / rust-lld available");
+    }
+    if stderr.contains("wasm32-wasip1-threads self-contained sysroot not found") {
+        return Some("rustup target wasm32-wasip1-threads not installed");
     }
     if stderr.contains("self-contained sysroot not found") {
         return Some("rustup target wasm32-wasip1 not installed");
@@ -13365,5 +13373,342 @@ fn target_features_valid_override_builds() {
         "a registry-valid feature must pass cleanly, got: {stderr}",
     );
     assert!(tmp.join("featbuild").exists(), "missing built binary");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// ── `--features wasm-threads` (phase-10 "WASM concurrency lowering —
+// `--features wasm-threads` opt-in") ───────────────────────────────────
+//
+// Dual-artifact builds: the sequential module (today's lowering,
+// unchanged) plus `<stem>.threads.wasm` — a wasm32-wasip1-threads
+// shared-memory module whose spawn/TaskGroup/par run on a Web Worker
+// pool (wasi-threads ABI serviced by the glue). Infrastructure needs on
+// top of the standard wasm set: the threaded runtime archive
+// (`libkarac_runtime_wasm_threads.a`) and the wasm32-wasip1-threads
+// rustup target — both skip-reasoned, not failures.
+
+/// `--features` is a closed set: unknown values hard-error naming the
+/// set; `help` lists it and exits 0. Parse-level — no llvm needed.
+#[test]
+fn features_flag_unknown_value_rejected_and_help_lists_set() {
+    let out = karac_bin()
+        .args(["build", "x.kara", "--features=fibers"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown --features value 'fibers'") && stderr.contains("wasm-threads"),
+        "expected the closed-set rejection, got: {stderr}",
+    );
+
+    let out = karac_bin()
+        .args(["build", "x.kara", "--features=help"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "--features=help must exit 0");
+    assert!(
+        stdout.contains("wasm-threads") && stdout.contains("COOP/COEP"),
+        "help must list the closed set with the deployment note, got: {stdout}",
+    );
+}
+
+/// Scope gate: wasm-threads is wasm_browser-only (wasi-threads and the
+/// component model don't compose; wasm_wasi's default bindings are
+/// component), and an explicit `--bindings=component` is rejected even
+/// on wasm_browser. Single-file and project mode share the gate.
+#[test]
+fn wasm_threads_rejected_off_wasm_browser_and_with_component_bindings() {
+    let tmp = wasm_test_dir("wtscope");
+    let path = tmp.join("p.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+
+    for (args, expect) in [
+        (
+            vec!["--target=wasm_wasi", "--features=wasm-threads"],
+            "--features wasm-threads requires --target=wasm_browser",
+        ),
+        (
+            vec!["--target=native", "--features=wasm-threads"],
+            "--features wasm-threads requires --target=wasm_browser",
+        ),
+        (
+            vec![
+                "--target=wasm_browser",
+                "--bindings=component",
+                "--features=wasm-threads",
+            ],
+            "incompatible with --bindings=component",
+        ),
+    ] {
+        let mut full = vec!["build", path.to_str().unwrap()];
+        full.extend(args.iter().copied());
+        let out = karac_bin().args(&full).current_dir(&tmp).output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // The gate rides the llvm build path; the non-llvm fallback
+        // accepts-but-inerts (the --bindings posture).
+        if stderr.contains("requires the llvm feature") {
+            continue;
+        }
+        assert!(!out.status.success(), "expected rejection for {args:?}");
+        assert!(
+            stderr.contains(expect),
+            "args {args:?}: expected `{expect}`, got: {stderr}",
+        );
+    }
+    // Project mode (no file argument) — same gate, pre-manifest.
+    let out = karac_bin()
+        .args(["build", "--target=wasm_wasi", "--features=wasm-threads"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !stderr.contains("requires the llvm feature") {
+        assert!(!out.status.success());
+        assert!(
+            stderr.contains("--features wasm-threads requires --target=wasm_browser"),
+            "expected the project-mode scope rejection, got: {stderr}",
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// `host fn` × wasm-threads: rejected at build time. The threaded
+/// program runs in a primary Web Worker while host implementations are
+/// main-thread JS closures — the synchronous worker→main proxy is a
+/// tracked follow-up, so the combination fails loudly instead of
+/// emitting a glue that throws at load.
+#[test]
+fn wasm_threads_rejects_host_fns() {
+    let tmp = wasm_test_dir("wthostfn");
+    let path = tmp.join("hosted.kara");
+    std::fs::write(
+        &path,
+        "effect resource Reporter;\n\n\
+         host fn report(value: i64) -> i64 with writes(Reporter);\n\n\
+         fn main() with writes(Reporter) {\n    let _ = report(42);\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("requires the llvm feature") {
+        eprintln!("skip: wasm_threads_rejects_host_fns — karac built without --features llvm");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(!out.status.success(), "host fn + wasm-threads must reject");
+    assert!(
+        stderr.contains("does not support `host fn`"),
+        "expected the host-fn rejection, got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Project-mode artifact set: a wasm-threads build emits BOTH modules
+/// plus the glue + declarations, and the glue carries the load-time
+/// pick machinery with the manifest's `[wasm]` knobs baked in.
+#[test]
+fn wasm_threads_project_emits_dual_artifact_set() {
+    let tmp = wasm_test_dir("wtproj");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"dualapp\"\nedition = \"2026\"\n\n[wasm]\npool-size = 3\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("src/main.kara"),
+        "fn main() {\n    println(\"dual\");\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", "--target=wasm_browser", "--features=wasm-threads"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_project_emits_dual_artifact_set — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "wasm-threads project build failed: {stderr}"
+    );
+    let dist = tmp.join("dist").join("wasm");
+    for artifact in [
+        "dualapp.wasm",
+        "dualapp.threads.wasm",
+        "dualapp.js",
+        "dualapp.d.ts",
+    ] {
+        assert!(
+            dist.join(artifact).exists(),
+            "missing dist artifact {artifact}"
+        );
+    }
+    // Both modules are core modules (no componentization on this path).
+    assert_eq!(
+        wasm_artifact_kind(&dist.join("dualapp.wasm")),
+        "core module"
+    );
+    assert_eq!(
+        wasm_artifact_kind(&dist.join("dualapp.threads.wasm")),
+        "core module"
+    );
+    let glue = std::fs::read_to_string(dist.join("dualapp.js")).unwrap();
+    assert!(glue.contains("const WASM_THREADS_FILENAME = \"dualapp.threads.wasm\";"));
+    assert!(
+        glue.contains("const THREADS_POOL_SIZE = 3;"),
+        "[wasm] pool-size must bake into the glue"
+    );
+    let dts = std::fs::read_to_string(dist.join("dualapp.d.ts")).unwrap();
+    assert!(
+        dts.contains("KaraThreadedHandle"),
+        "threaded d.ts surface missing"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The headline E2E: spawn/TaskGroup/par run on REAL worker threads
+/// under the threaded module on node. Load-immune threading evidence:
+/// the threaded scheduler's `task_join` Condvar-blocks with no
+/// work-helping, so `h.join()` returning at all proves a pool worker —
+/// a real Web Worker thread — executed the task. Also pins the
+/// forced-fallback path: `crossOriginIsolated = false` makes the glue
+/// console.warn and run the sequential module, same output.
+#[test]
+fn wasm_threads_spawn_join_runs_on_worker_pool_e2e() {
+    let tmp = wasm_test_dir("wte2e");
+    let path = tmp.join("threaded.kara");
+    std::fs::write(
+        &path,
+        r#"
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+fn worker(id: i64) {
+    println(id)
+}
+
+fn main() {
+    let h: TaskHandle[i64] = spawn(|| add(40, 2));
+    let r: i64 = h.join();
+    println(r);
+
+    par {
+        println("pa");
+        println("pb");
+    }
+
+    let mut tg = TaskGroup.new();
+    tg.spawn(|| worker(1));
+    tg.spawn(|| worker(2));
+    tg.spawn(|| worker(3));
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_spawn_join_runs_on_worker_pool_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm-threads build failed: {stderr}");
+    assert!(tmp.join("threaded.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./threaded.js";
+
+// Threaded pick: node has SAB unconditionally, so run() must take the
+// worker-pool path and resolve with the threaded handle shape.
+const h = await run({});
+if (h.threaded !== true) throw new Error("expected the threaded module pick");
+console.log("THREADED_OK");
+
+// Forced fallback: an explicit crossOriginIsolated=false simulates a
+// deploy without COOP/COEP. The glue must console.warn and run the
+// sequential module to the same program output.
+globalThis.crossOriginIsolated = false;
+const warns = [];
+const origWarn = console.warn;
+console.warn = (...a) => warns.push(a.join(" "));
+const s = await run({});
+console.warn = origWarn;
+if (s.threaded === true) throw new Error("fallback must use the sequential module");
+if (!warns.some((w) => w.includes("falling back to the sequential")))
+  throw new Error("missing the fallback console.warn, got: " + JSON.stringify(warns));
+console.log("FALLBACK_OK");
+
+// forceSequential opt: same sequential path, no warn.
+const f = await run({}, { forceSequential: true });
+if (f.threaded === true) throw new Error("forceSequential must skip the pick");
+console.log("FORCE_SEQ_OK");
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_threads_spawn_join_runs_on_worker_pool_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "threaded harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    for marker in ["THREADED_OK", "FALLBACK_OK", "FORCE_SEQ_OK"] {
+        assert!(
+            node_stdout.contains(marker),
+            "missing {marker}: stdout={node_stdout} stderr={node_stderr}",
+        );
+    }
+    // Program output correctness on BOTH paths: the join result, both
+    // par branches, and the three group workers each appear at least
+    // twice (threaded run + fallback run; the forceSequential run makes
+    // three). Cross-thread print ORDER is intentionally unasserted.
+    for needle in ["42", "pa", "pb", "1", "2", "3"] {
+        let count = node_stdout.matches(needle).count();
+        assert!(
+            count >= 2,
+            "program output `{needle}` seen {count}x (expected from both the \
+             threaded and fallback runs): stdout={node_stdout}",
+        );
+    }
     let _ = std::fs::remove_dir_all(&tmp);
 }

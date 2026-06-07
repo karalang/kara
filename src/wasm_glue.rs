@@ -184,10 +184,140 @@ fn signature_doc_line(sig: &HostFnSig) -> String {
     format!("//   {}({params}){ret}", sig.name)
 }
 
+/// Threaded-build parameters for the glue (phase-10 "WASM concurrency
+/// lowering — `--features wasm-threads` opt-in"). Present only when the
+/// build emitted the dual artifact; drives the glue's load-time pick
+/// between the threaded module (`<stem>.threads.wasm`, a Web Worker
+/// pool over SharedArrayBuffer) and the sequential one. Plain data —
+/// the CLI assembles it from the flag, the `[wasm]` manifest knobs,
+/// and the linked threaded module's own memory-import limits.
+#[derive(Debug, Clone)]
+pub struct WasmThreadsGlueConfig {
+    /// Sibling threaded artifact's file name (`<stem>.threads.wasm`),
+    /// resolved against `import.meta.url` like `WASM_FILENAME`.
+    pub threads_filename: String,
+    /// `[wasm] fallback = false`: when SAB/cross-origin-isolation are
+    /// unavailable the glue hard-errors instead of console.warn +
+    /// sequential.
+    pub no_fallback: bool,
+    /// `[wasm] pool-size`: worker-pool size baked into the glue's
+    /// `KARAC_PAR_WORKERS` env injection. `None` = use
+    /// `navigator.hardwareConcurrency` at load time.
+    pub pool_size_override: Option<u32>,
+    /// The threaded module's imported-memory limits (64 KiB pages),
+    /// parsed out of the **linked** module by
+    /// [`imported_memory_limits`] — wasm-ld computes `initial` from the
+    /// data/stack layout, so it can't be predicted, only read back. The
+    /// glue must create its `WebAssembly.Memory({shared: true})` with
+    /// exactly these limits or instantiation fails the import match.
+    pub mem_initial_pages: u32,
+    pub mem_max_pages: u32,
+}
+
+/// Parse the `(import "env" "memory" (memory min max shared))` limits
+/// out of a linked wasm binary — the threaded module declares its
+/// memory as an import (`--import-memory --shared-memory`), and the
+/// glue must mirror the limits exactly. Returns `(initial, maximum)`
+/// in pages; `None` when the binary has no imported memory (or is
+/// malformed) — the CLI treats that as a build error for the threaded
+/// artifact. Minimal single-purpose reader, not a general wasm parser:
+/// it walks sections to the import section (id 2) and scans entries.
+pub fn imported_memory_limits(bytes: &[u8]) -> Option<(u32, u32)> {
+    // Magic + version.
+    if bytes.len() < 8 || &bytes[0..4] != b"\0asm" {
+        return None;
+    }
+    let mut pos = 8usize;
+    // LEB128 u32 decode.
+    fn leb_u32(bytes: &[u8], pos: &mut usize) -> Option<u32> {
+        let mut result: u32 = 0;
+        let mut shift = 0u32;
+        loop {
+            let byte = *bytes.get(*pos)?;
+            *pos += 1;
+            result |= u32::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Some(result);
+            }
+            shift += 7;
+            if shift >= 35 {
+                return None;
+            }
+        }
+    }
+    while pos < bytes.len() {
+        let id = *bytes.get(pos)?;
+        pos += 1;
+        let size = leb_u32(bytes, &mut pos)? as usize;
+        let section_end = pos.checked_add(size)?;
+        if id != 2 {
+            pos = section_end;
+            continue;
+        }
+        // Import section: count, then (module, name, kind, …) entries.
+        let count = leb_u32(bytes, &mut pos)?;
+        for _ in 0..count {
+            let mod_len = leb_u32(bytes, &mut pos)? as usize;
+            let module = bytes.get(pos..pos + mod_len)?;
+            pos += mod_len;
+            let name_len = leb_u32(bytes, &mut pos)? as usize;
+            let name = bytes.get(pos..pos + name_len)?;
+            pos += name_len;
+            let kind = *bytes.get(pos)?;
+            pos += 1;
+            match kind {
+                0x00 => {
+                    // function: typeidx
+                    leb_u32(bytes, &mut pos)?;
+                }
+                0x01 => {
+                    // table: reftype byte + limits
+                    pos += 1;
+                    let flags = *bytes.get(pos)?;
+                    pos += 1;
+                    leb_u32(bytes, &mut pos)?;
+                    if flags & 0x01 != 0 {
+                        leb_u32(bytes, &mut pos)?;
+                    }
+                }
+                0x02 => {
+                    // memory: limits — flags bit 0 = has-max, bit 1 = shared.
+                    let flags = *bytes.get(pos)?;
+                    pos += 1;
+                    let min = leb_u32(bytes, &mut pos)?;
+                    let max = if flags & 0x01 != 0 {
+                        Some(leb_u32(bytes, &mut pos)?)
+                    } else {
+                        None
+                    };
+                    if module == b"env" && name == b"memory" {
+                        // Shared memories always carry a max; mirror min
+                        // when a (non-shared, theoretical) import lacks one.
+                        return Some((min, max.unwrap_or(min)));
+                    }
+                }
+                0x03 => {
+                    // global: valtype + mutability
+                    pos += 2;
+                }
+                _ => return None,
+            }
+        }
+        return None; // import section scanned, no env.memory
+    }
+    None
+}
+
 /// Render the complete ES-module glue file. `wasm_filename` is the
 /// sibling `.wasm` artifact's file name (not path — the glue resolves
-/// it against `import.meta.url`).
-pub fn render_glue(fns: &[HostFnSig], wasm_filename: &str) -> String {
+/// it against `import.meta.url`). `threads` is `Some` on a `--features
+/// wasm-threads` dual-artifact build — the glue then picks the threaded
+/// module at load time when SAB + cross-origin isolation are available.
+pub fn render_glue(
+    fns: &[HostFnSig],
+    wasm_filename: &str,
+    threads: Option<&WasmThreadsGlueConfig>,
+) -> String {
     let mut out = String::with_capacity(8 * 1024);
 
     out.push_str(&format!(
@@ -221,6 +351,21 @@ pub fn render_glue(fns: &[HostFnSig], wasm_filename: &str) -> String {
     }
     out.push('\n');
 
+    if threads.is_some() {
+        out.push_str(
+            "//\n\
+             // wasm-threads build: a second, threaded module ships alongside\n\
+             // (Web Worker pool + SharedArrayBuffer + atomics). run() picks it\n\
+             // at load time when SAB + cross-origin isolation are available —\n\
+             // deploy with COOP/COEP headers:\n\
+             //   Cross-Origin-Opener-Policy: same-origin\n\
+             //   Cross-Origin-Embedder-Policy: require-corp\n\
+             // instantiate() always uses the sequential module (its exports\n\
+             // run on the caller's thread, which must never block).\n",
+        );
+    }
+    out.push('\n');
+
     out.push_str(&format!("const WASM_FILENAME = \"{wasm_filename}\";\n"));
     let names = fns
         .iter()
@@ -228,10 +373,48 @@ pub fn render_glue(fns: &[HostFnSig], wasm_filename: &str) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     out.push_str(&format!("const DECLARED_IMPORTS = [{names}];\n"));
+    // Threaded-build constants — rendered as inert nulls/zeros on a
+    // sequential-only build so the static body references them
+    // unconditionally.
+    match threads {
+        Some(cfg) => {
+            out.push_str(&format!(
+                "const WASM_THREADS_FILENAME = \"{}\";\n",
+                cfg.threads_filename
+            ));
+            out.push_str(&format!(
+                "const THREADS_NO_FALLBACK = {};\n",
+                cfg.no_fallback
+            ));
+            out.push_str(&format!(
+                "const THREADS_POOL_SIZE = {};\n",
+                cfg.pool_size_override
+                    .map_or("null".to_string(), |n| n.to_string())
+            ));
+            out.push_str(&format!(
+                "const THREADS_MEM_INITIAL_PAGES = {};\n",
+                cfg.mem_initial_pages
+            ));
+            out.push_str(&format!(
+                "const THREADS_MEM_MAX_PAGES = {};\n",
+                cfg.mem_max_pages
+            ));
+        }
+        None => {
+            out.push_str(
+                "const WASM_THREADS_FILENAME = null;\n\
+                 const THREADS_NO_FALLBACK = false;\n\
+                 const THREADS_POOL_SIZE = null;\n\
+                 const THREADS_MEM_INITIAL_PAGES = 0;\n\
+                 const THREADS_MEM_MAX_PAGES = 0;\n",
+            );
+        }
+    }
 
     // The static remainder: helpers, WASI polyfill, import-object
-    // construction, default loader, public API. Kept as one literal so
-    // the emitted JS reads as a coherent hand-written module.
+    // construction, default loader, threaded-path machinery, public
+    // API. Kept as one literal so the emitted JS reads as a coherent
+    // hand-written module.
     out.push_str(GLUE_STATIC_BODY);
     out
 }
@@ -259,7 +442,14 @@ fn ts_type(js: JsScalar) -> &'static str {
 /// shapes and exported structs) extend this generator when the
 /// phase-10 "WASM entry-point discovery" entry lands — today the only
 /// wasm-exported user entry point is `main` via `_start`.
-pub fn render_dts(fns: &[HostFnSig], wasm_filename: &str) -> String {
+///
+/// `threaded` mirrors [`render_glue`]'s `threads.is_some()`: a
+/// wasm-threads build's declarations additionally carry
+/// `KaraThreadedHandle` (what `run()` resolves with when the threaded
+/// module was picked — the instance lives in the primary worker, so
+/// only the shared memory crosses back) and the widened `run()` return
+/// type; a sequential-only build's declarations are unchanged.
+pub fn render_dts(fns: &[HostFnSig], wasm_filename: &str, threaded: bool) -> String {
     use std::fmt::Write;
     let mut out = String::with_capacity(4 * 1024);
 
@@ -332,19 +522,51 @@ pub fn render_dts(fns: &[HostFnSig], wasm_filename: &str) -> String {
         out.push_str("}\n\n");
     }
 
+    if threaded {
+        out.push_str(
+            "export interface InstantiateOpts {\n\
+             \x20 /** Pre-compiled module — bypasses the default loader.\n\
+             \x20  * Feeds the sequential path only. */\n\
+             \x20 module?: WebAssembly.Module;\n\
+             \x20 /** Raw module bytes — bypasses the default loader.\n\
+             \x20  * Feeds the sequential path only. */\n\
+             \x20 bytes?: BufferSource;\n\
+             \x20 /** Skip the threaded-module pick in run() and use the\n\
+             \x20  * sequential module unconditionally. */\n\
+             \x20 forceSequential?: boolean;\n\
+             }\n\n",
+        );
+    } else {
+        out.push_str(
+            "export interface InstantiateOpts {\n\
+             \x20 /** Pre-compiled module — bypasses the default loader. */\n\
+             \x20 module?: WebAssembly.Module;\n\
+             \x20 /** Raw module bytes — bypasses the default loader. */\n\
+             \x20 bytes?: BufferSource;\n\
+             }\n\n",
+        );
+    }
+
     out.push_str(
-        "export interface InstantiateOpts {\n\
-         \x20 /** Pre-compiled module — bypasses the default loader. */\n\
-         \x20 module?: WebAssembly.Module;\n\
-         \x20 /** Raw module bytes — bypasses the default loader. */\n\
-         \x20 bytes?: BufferSource;\n\
-         }\n\n\
-         export interface KaraHandle {\n\
+        "export interface KaraHandle {\n\
          \x20 instance: WebAssembly.Instance;\n\
          \x20 exports: WebAssembly.Exports & { _start(): void };\n\
          \x20 memory: WebAssembly.Memory;\n\
-         }\n\n\
-         /** Decode a (ptr, len) UTF-8 string out of the module's linear memory. */\n\
+         }\n\n",
+    );
+    if threaded {
+        out.push_str(
+            "/** Resolved by run() when the THREADED module was picked: the\n\
+             \x20* program ran on the Web Worker pool (its instance lives in the\n\
+             \x20* primary worker); only the shared memory crosses back. */\n\
+             export interface KaraThreadedHandle {\n\
+             \x20 memory: WebAssembly.Memory;\n\
+             \x20 threaded: true;\n\
+             }\n\n",
+        );
+    }
+    out.push_str(
+        "/** Decode a (ptr, len) UTF-8 string out of the module's linear memory. */\n\
          export function readString(\n\
          \x20 memory: WebAssembly.Memory,\n\
          \x20 ptr: number | bigint,\n\
@@ -365,31 +587,59 @@ pub fn render_dts(fns: &[HostFnSig], wasm_filename: &str) -> String {
     } else {
         "hostImpls: HostImpls"
     };
-    let _ = write!(
-        out,
+    let run_ret = if threaded {
+        "Promise<KaraHandle | KaraThreadedHandle>"
+    } else {
+        "Promise<KaraHandle>"
+    };
+    let instantiate_doc = if threaded {
+        "/**\n\
+         \x20* Compile + instantiate the SEQUENTIAL module (its exports run on\n\
+         \x20* the caller's thread, which must never block — the threaded\n\
+         \x20* module is only ever driven by run()'s worker pool). Missing\n\
+         \x20* host fn implementations throw before any wasm runs.\n\
+         \x20*/\n"
+    } else {
         "/**\n\
          \x20* Compile + instantiate the module. Missing host fn implementations\n\
          \x20* throw before any wasm runs.\n\
-         \x20*/\n\
+         \x20*/\n"
+    };
+    let run_doc = if threaded {
+        "/**\n\
+         \x20* Run the program: picks the THREADED module when SharedArrayBuffer\n\
+         \x20* + cross-origin isolation are available (deploy with COOP/COEP\n\
+         \x20* headers), else console.warns and falls back to the sequential\n\
+         \x20* module (or throws, when the build disabled fallback). A clean\n\
+         \x20* exit resolves normally; a nonzero exit code rejects with KaraExit.\n\
+         \x20*/\n"
+    } else {
+        "/**\n\
+         \x20* Instantiate and run the program's entry point (`_start`). A clean\n\
+         \x20* exit resolves normally; a nonzero exit code rejects with KaraExit.\n\
+         \x20*/\n"
+    };
+    let _ = write!(
+        out,
+        "{instantiate_doc}\
          export function instantiate(\n\
          \x20 {host_param},\n\
          \x20 opts?: InstantiateOpts,\n\
          ): Promise<KaraHandle>;\n\n\
-         /**\n\
-         \x20* Instantiate and run the program's entry point (`_start`). A clean\n\
-         \x20* exit resolves normally; a nonzero exit code rejects with KaraExit.\n\
-         \x20*/\n\
+         {run_doc}\
          export function run(\n\
          \x20 {host_param},\n\
          \x20 opts?: InstantiateOpts,\n\
-         ): Promise<KaraHandle>;\n"
+         ): {run_ret};\n"
     );
 
     out
 }
 
-/// The host-fn-independent remainder of the glue file.
-const GLUE_STATIC_BODY: &str = r#"
+/// The host-fn-independent remainder of the glue file. (`r##` raw
+/// delimiter: the JS contains `"#kara-thread-worker"`, whose `"#`
+/// sequence would close a plain `r#` literal.)
+const GLUE_STATIC_BODY: &str = r##"
 /** Decode a (ptr, len) UTF-8 string out of the module's linear memory. */
 export function readString(memory, ptr, len) {
   return new TextDecoder("utf-8").decode(
@@ -408,8 +658,12 @@ export class KaraExit extends Error {
 // Minimal console-backed WASI preview-1 polyfill — just enough for the
 // karac wasm runtime archive (stdout/stderr writes, clock, randomness,
 // args/environ negotiation). Unknown syscalls throw loudly by name.
-function makeWasiPolyfill(getMemory) {
+// `env` is a list of "KEY=value" strings serialized through
+// environ_get — the threaded path injects KARAC_PAR_WORKERS there (the
+// runtime's pool-size knob); the sequential path passes none.
+function makeWasiPolyfill(getMemory, env = []) {
   const view = () => new DataView(getMemory().buffer);
+  const envBytes = env.map((s) => new TextEncoder().encode(s + "\0"));
   const impl = {
     fd_write(fd, iovsPtr, iovsLen, nwrittenPtr) {
       const dv = view();
@@ -425,7 +679,16 @@ function makeWasiPolyfill(getMemory) {
         written += len;
       }
       dv.setUint32(nwrittenPtr, written, true);
-      (fd === 2 ? console.error : console.log)(text.replace(/\n$/, ""));
+      if (nodeFsSync) {
+        // Threaded path under node: workers' console pipes to the main
+        // process asynchronously and an unref'd pthread worker dying at
+        // process exit drops anything unflushed — writeSync is the
+        // loss-proof channel. Only ever set on the threaded path; the
+        // sequential glue keeps the console behavior byte-for-byte.
+        nodeFsSync.writeSync(fd === 2 ? 2 : 1, text);
+      } else {
+        (fd === 2 ? console.error : console.log)(text.replace(/\n$/, ""));
+      }
       return 0;
     },
     fd_close() {
@@ -462,11 +725,23 @@ function makeWasiPolyfill(getMemory) {
       return 0;
     },
     environ_sizes_get(countPtr, bufSizePtr) {
-      view().setUint32(countPtr, 0, true);
-      view().setUint32(bufSizePtr, 0, true);
+      view().setUint32(countPtr, envBytes.length, true);
+      view().setUint32(
+        bufSizePtr,
+        envBytes.reduce((a, b) => a + b.length, 0),
+        true,
+      );
       return 0;
     },
-    environ_get() {
+    environ_get(environPtr, bufPtr) {
+      const dv = view();
+      const mem = new Uint8Array(getMemory().buffer);
+      let p = bufPtr;
+      envBytes.forEach((b, i) => {
+        dv.setUint32(environPtr + 4 * i, p, true);
+        mem.set(b, p);
+        p += b.length;
+      });
       return 0;
     },
     sched_yield() {
@@ -510,8 +785,8 @@ function buildImports(hostImpls, getMemory) {
 // Default loader: `new URL(..., import.meta.url)` is the asset-reference
 // pattern bundlers (vite / webpack / esbuild / rollup) rewrite natively —
 // no custom loader configuration. Under node (file: URL) read from disk.
-async function defaultSource() {
-  const url = new URL(WASM_FILENAME, import.meta.url);
+async function defaultSource(filename = WASM_FILENAME) {
+  const url = new URL(filename, import.meta.url);
   if (url.protocol === "file:") {
     const [{ readFile }, { fileURLToPath }] = await Promise.all([
       import("node:fs/promises"),
@@ -520,6 +795,204 @@ async function defaultSource() {
     return await readFile(fileURLToPath(url));
   }
   return await fetch(url);
+}
+
+// ── wasm-threads machinery (inert when WASM_THREADS_FILENAME is null) ──
+//
+// The threaded module is a wasm32-wasip1-threads build: shared imported
+// memory (`env.memory`), pthreads riding the wasi-threads ABI — the
+// module imports `wasi.thread-spawn` and exports `wasi_thread_start`;
+// this glue services thread-spawn by spawning a Web Worker (browser) /
+// worker_threads Worker (node) ON THIS SAME MODULE FILE, which detects
+// the worker role at load and runs the worker protocol below.
+//
+// The program's `_start` itself runs in a "primary" worker — never on
+// the page's main thread — because every blocking primitive in the
+// threaded runtime bottoms out in `memory.atomic.wait32`, which traps
+// on non-blockable agents (the browser main thread). The classic
+// PROXY_TO_PTHREAD model.
+
+/** SAB + cross-origin isolation feature detection. node has SAB
+ * unconditionally and no crossOriginIsolated — treat undefined as
+ * isolated. */
+function threadsSupported() {
+  if (typeof SharedArrayBuffer === "undefined") return false;
+  return globalThis.crossOriginIsolated ?? true;
+}
+
+// node:worker_threads module, resolved once per agent (main thread at
+// runThreaded; workers at bootstrap) so thread-spawn can create
+// siblings synchronously.
+let nodeWorkerThreads = null;
+// node:fs, resolved alongside — gives the threaded path's fd_write a
+// synchronous stdout/stderr (see the polyfill). Stays null on the
+// sequential path and in browsers.
+let nodeFsSync = null;
+
+/** Spawn a kara thread worker on this module file. `data` is the
+ * worker-protocol record (structured-cloneable: WebAssembly.Module,
+ * shared Memory, SAB tid counter). Synchronous — wasi.thread-spawn
+ * must return the new tid without awaiting. */
+function spawnKaraWorkerSync(data, opts = {}) {
+  if (nodeWorkerThreads) {
+    const w = new nodeWorkerThreads.Worker(new URL(import.meta.url), {
+      workerData: data,
+    });
+    // pthread workers must not hold the node process open — the pool's
+    // worker_loop never returns by design (parity with the native
+    // daemon-thread pool). The primary stays ref'd: its exit message is
+    // the program result.
+    if (opts.unref) w.unref();
+    return w;
+  }
+  // The #kara-thread-worker fragment is the worker-role marker: only a
+  // module loaded under it consumes its first message as the protocol
+  // record, so a user importing this glue inside their own worker is
+  // never disturbed.
+  const w = new Worker(new URL("#kara-thread-worker", import.meta.url), {
+    type: "module",
+  });
+  w.postMessage(data);
+  return w;
+}
+
+/** Worker-side protocol: instantiate the shared-memory module and
+ * either run `_start` (primary) or `wasi_thread_start` (pthread). */
+async function karaThreadWorkerMain(data, postMessageFn) {
+  const { role, module, memory, tidCounter, env, tid, startArg } = data;
+  const imports = {
+    env: { memory },
+    wasi: {
+      "thread-spawn": (arg) => {
+        const newTid = Atomics.add(new Int32Array(tidCounter), 0, 1);
+        spawnKaraWorkerSync(
+          { ...data, role: "pthread", tid: newTid, startArg: arg },
+          { unref: true },
+        );
+        return newTid;
+      },
+    },
+    wasi_snapshot_preview1: makeWasiPolyfill(() => memory, env),
+  };
+  const instance = await WebAssembly.instantiate(module, imports);
+  if (role === "primary") {
+    let code = 0;
+    try {
+      instance.exports._start();
+    } catch (e) {
+      if (e instanceof KaraExit) {
+        code = e.code;
+      } else {
+        postMessageFn({
+          __karaThreads: "error",
+          message: String(e && e.stack ? e.stack : e),
+        });
+        return;
+      }
+    }
+    postMessageFn({ __karaThreads: "exit", code });
+  } else {
+    instance.exports.wasi_thread_start(tid, startArg);
+  }
+}
+
+/** Detect "this module was loaded as a kara thread worker" and run the
+ * protocol. No-op on the main thread, in non-kara workers, and on
+ * sequential-only builds. */
+async function karaMaybeRunAsThreadWorker() {
+  if (WASM_THREADS_FILENAME === null) return;
+  const isNode =
+    typeof process !== "undefined" && !!(process.versions && process.versions.node);
+  if (isNode) {
+    const wt = await import("node:worker_threads");
+    if (wt.isMainThread) return;
+    const data = wt.workerData;
+    if (!data || data.__karaThreads !== true) return;
+    nodeWorkerThreads = wt;
+    nodeFsSync = await import("node:fs");
+    await karaThreadWorkerMain(data, (m) => wt.parentPort.postMessage(m));
+    return;
+  }
+  const isWorkerScope =
+    typeof WorkerGlobalScope !== "undefined" &&
+    globalThis instanceof WorkerGlobalScope;
+  if (!isWorkerScope || self.location.hash !== "#kara-thread-worker") return;
+  const data = await new Promise((resolve) => {
+    globalThis.addEventListener("message", (e) => resolve(e.data), {
+      once: true,
+    });
+  });
+  if (!data || data.__karaThreads !== true) return;
+  await karaThreadWorkerMain(data, (m) => globalThis.postMessage(m));
+  // A finished pthread's worker has nothing left to do (pool workers
+  // never reach here — worker_loop doesn't return).
+  if (data.role === "pthread") globalThis.close();
+}
+await karaMaybeRunAsThreadWorker();
+
+/** Main-thread side of the threaded run: compile the threaded module,
+ * create the shared memory (limits mirror the module's import
+ * declaration exactly), spawn the primary worker, await its exit. */
+async function runThreaded() {
+  if (DECLARED_IMPORTS.length > 0) {
+    // karac rejects host fns + wasm-threads at build time (their
+    // implementations are main-thread closures; the program runs in a
+    // worker). Defensive — this glue shape is unreachable.
+    throw new Error("host fns are not supported with wasm-threads");
+  }
+  const isNode =
+    typeof process !== "undefined" && !!(process.versions && process.versions.node);
+  if (isNode) {
+    nodeWorkerThreads = await import("node:worker_threads");
+    nodeFsSync = await import("node:fs");
+  }
+  const src = await defaultSource(WASM_THREADS_FILENAME);
+  const bytes =
+    typeof Response !== "undefined" && src instanceof Response
+      ? await src.arrayBuffer()
+      : src;
+  const module = await WebAssembly.compile(bytes);
+  const memory = new WebAssembly.Memory({
+    initial: THREADS_MEM_INITIAL_PAGES,
+    maximum: THREADS_MEM_MAX_PAGES,
+    shared: true,
+  });
+  const tidCounter = new SharedArrayBuffer(4);
+  new Int32Array(tidCounter)[0] = 1;
+  const poolSize =
+    THREADS_POOL_SIZE ??
+    (globalThis.navigator && navigator.hardwareConcurrency) ??
+    4;
+  const env = ["KARAC_PAR_WORKERS=" + poolSize];
+  const data = {
+    __karaThreads: true,
+    role: "primary",
+    module,
+    memory,
+    tidCounter,
+    env,
+    tid: 0,
+    startArg: 0,
+  };
+  const code = await new Promise((resolve, reject) => {
+    const w = spawnKaraWorkerSync(data);
+    const onMessage = (msg) => {
+      if (msg && msg.__karaThreads === "exit") resolve(msg.code);
+      else if (msg && msg.__karaThreads === "error")
+        reject(new Error(msg.message));
+    };
+    if (nodeWorkerThreads) {
+      w.on("message", onMessage);
+      w.on("error", reject);
+    } else {
+      w.addEventListener("message", (e) => onMessage(e.data));
+      w.addEventListener("error", (e) =>
+        reject(e.error ?? new Error("kara thread worker error")),
+      );
+    }
+  });
+  if (code !== 0) throw new KaraExit(code);
+  return { memory, threaded: true };
 }
 
 /**
@@ -558,8 +1031,36 @@ export async function instantiate(hostImpls = {}, opts = {}) {
  * Instantiate and run the program's entry point (`_start`). A clean
  * exit (proc_exit(0) or main returning) resolves normally; a nonzero
  * exit code rejects with KaraExit.
+ *
+ * On a wasm-threads build this picks the THREADED module when
+ * SharedArrayBuffer + cross-origin isolation are available (running
+ * `_start` in a primary worker; the resolved handle then carries only
+ * `{ memory, threaded: true }` — the instance lives in the worker).
+ * Otherwise it console.warns and falls back to the sequential module —
+ * or throws, when the build's manifest set `[wasm] fallback = false`.
+ * `opts.forceSequential` skips the pick (useful for A/B runs and
+ * tests); `opts.module` / `opts.bytes` only ever feed the sequential
+ * path.
  */
 export async function run(hostImpls = {}, opts = {}) {
+  if (WASM_THREADS_FILENAME !== null && !opts.forceSequential) {
+    if (threadsSupported()) {
+      return await runThreaded();
+    }
+    if (THREADS_NO_FALLBACK) {
+      throw new Error(
+        "karac: this build requires wasm-threads (SharedArrayBuffer + " +
+          "cross-origin isolation) but they are unavailable. Serve with " +
+          "COOP/COEP headers (Cross-Origin-Opener-Policy: same-origin; " +
+          "Cross-Origin-Embedder-Policy: require-corp). Sequential " +
+          "fallback was disabled by `[wasm] fallback = false` in kara.toml.",
+      );
+    }
+    console.warn(
+      "karac: SharedArrayBuffer/cross-origin isolation unavailable; " +
+        "falling back to the sequential (single-threaded) module",
+    );
+  }
   const handle = await instantiate(hostImpls, opts);
   try {
     handle.exports._start();
@@ -568,7 +1069,7 @@ export async function run(hostImpls = {}, opts = {}) {
   }
   return handle;
 }
-"#;
+"##;
 
 #[cfg(test)]
 mod tests {
@@ -607,7 +1108,7 @@ mod tests {
                 None,
             ),
         ];
-        let dts = render_dts(&fns, "app.wasm");
+        let dts = render_dts(&fns, "app.wasm", false);
         // i64 params/returns are bigint; pointers are numbers; unit
         // returns are void; every impl takes the trailing HostCtx.
         assert!(dts.contains("report(value: bigint, ctx: HostCtx): bigint;"));
@@ -621,7 +1122,7 @@ mod tests {
 
     #[test]
     fn dts_with_no_host_fns_makes_host_impls_optional() {
-        let dts = render_dts(&[], "plain.wasm");
+        let dts = render_dts(&[], "plain.wasm", false);
         assert!(dts.contains("export interface HostImpls {}"));
         assert!(dts.contains("hostImpls?: HostImpls"));
         // The glue module's own surface is always declared.
@@ -636,5 +1137,109 @@ mod tests {
         ] {
             assert!(dts.contains(decl), "missing declaration: {decl}");
         }
+        // Sequential-only declarations carry none of the threaded surface.
+        assert!(!dts.contains("KaraThreadedHandle"));
+        assert!(!dts.contains("forceSequential"));
+    }
+
+    #[test]
+    fn threaded_glue_renders_pick_constants_and_machinery() {
+        let cfg = WasmThreadsGlueConfig {
+            threads_filename: "app.threads.wasm".to_string(),
+            no_fallback: false,
+            pool_size_override: Some(6),
+            mem_initial_pages: 18,
+            mem_max_pages: 16384,
+        };
+        let glue = render_glue(&[], "app.wasm", Some(&cfg));
+        for needle in [
+            "const WASM_THREADS_FILENAME = \"app.threads.wasm\";",
+            "const THREADS_NO_FALLBACK = false;",
+            "const THREADS_POOL_SIZE = 6;",
+            "const THREADS_MEM_INITIAL_PAGES = 18;",
+            "const THREADS_MEM_MAX_PAGES = 16384;",
+            // Machinery + protocol pieces the threaded path depends on.
+            "function threadsSupported()",
+            "\"thread-spawn\"",
+            "wasi_thread_start",
+            "#kara-thread-worker",
+            "KARAC_PAR_WORKERS=",
+            "forceSequential",
+        ] {
+            assert!(glue.contains(needle), "missing in threaded glue: {needle}");
+        }
+        // Sequential-only build renders the constants inert (the static
+        // body references them unconditionally).
+        let seq = render_glue(&[], "app.wasm", None);
+        assert!(seq.contains("const WASM_THREADS_FILENAME = null;"));
+        assert!(seq.contains("const THREADS_POOL_SIZE = null;"));
+    }
+
+    #[test]
+    fn threaded_dts_declares_threaded_surface() {
+        let dts = render_dts(&[], "app.wasm", true);
+        assert!(dts.contains("export interface KaraThreadedHandle"));
+        assert!(dts.contains("forceSequential?: boolean;"));
+        assert!(dts.contains("Promise<KaraHandle | KaraThreadedHandle>"));
+        // instantiate() stays sequential-typed.
+        assert!(dts.contains("): Promise<KaraHandle>;"));
+    }
+
+    #[test]
+    fn imported_memory_limits_parses_shared_memory_import() {
+        // Hand-assembled minimal module: magic+version, then an import
+        // section with exactly (import "env" "memory" (memory 17 16384
+        // shared)) — flags 0x03 = has-max | shared; 16384 = LEB 0x80 0x80
+        // 0x01.
+        let mut m = Vec::new();
+        m.extend_from_slice(b"\0asm");
+        m.extend_from_slice(&[1, 0, 0, 0]);
+        let body: &[u8] = &[
+            0x01, // one import
+            0x03, b'e', b'n', b'v', // module "env"
+            0x06, b'm', b'e', b'm', b'o', b'r', b'y', // name "memory"
+            0x02, // kind: memory
+            0x03, // limits flags: has-max | shared
+            0x11, // min = 17
+            0x80, 0x80, 0x01, // max = 16384
+        ];
+        m.push(0x02); // import section id
+        m.push(body.len() as u8);
+        m.extend_from_slice(body);
+        assert_eq!(imported_memory_limits(&m), Some((17, 16384)));
+    }
+
+    #[test]
+    fn imported_memory_limits_skips_non_memory_imports_and_handles_absence() {
+        // A function import before the memory import must be skipped
+        // correctly (typeidx consumed), and a module with no env.memory
+        // import returns None.
+        let mut m = Vec::new();
+        m.extend_from_slice(b"\0asm");
+        m.extend_from_slice(&[1, 0, 0, 0]);
+        let body: &[u8] = &[
+            0x02, // two imports
+            0x04, b'w', b'a', b's', b'i', // module "wasi"
+            0x0c, b't', b'h', b'r', b'e', b'a', b'd', b'-', b's', b'p', b'a', b'w',
+            b'n', // name "thread-spawn"
+            0x00, // kind: function
+            0x05, // typeidx 5
+            0x03, b'e', b'n', b'v', // module "env"
+            0x06, b'm', b'e', b'm', b'o', b'r', b'y', // name "memory"
+            0x02, // kind: memory
+            0x01, // limits flags: has-max (non-shared)
+            0x02, // min = 2
+            0x0a, // max = 10
+        ];
+        m.push(0x02);
+        m.push(body.len() as u8);
+        m.extend_from_slice(body);
+        assert_eq!(imported_memory_limits(&m), Some((2, 10)));
+
+        // No import section at all → None.
+        assert_eq!(imported_memory_limits(b"\0asm\x01\x00\x00\x00"), None);
+        // Truncated/garbage input → None, never a panic.
+        assert_eq!(imported_memory_limits(b"\0asm"), None);
+        assert_eq!(imported_memory_limits(b"not wasm at all"), None);
     }
 }

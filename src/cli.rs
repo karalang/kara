@@ -4504,6 +4504,124 @@ fn manifest_release_field_for(
     }
 }
 
+/// The `[wasm]` table's wasm-threads tuning knobs, via the same lazy
+/// manifest walk-up as [`manifest_release_field_for`] (single-file
+/// builds discover the manifest from the file's own directory; no
+/// manifest → all-`None` defaults). Returns `(pool_size, fallback,
+/// max_memory_pages)`. Only consulted on a `--features wasm-threads`
+/// build, so plain builds never gain a manifest failure mode from it.
+#[cfg(feature = "llvm")]
+fn manifest_wasm_knobs_for(
+    filename: &str,
+    output: OutputMode,
+) -> (Option<u32>, Option<bool>, Option<u32>) {
+    let file_dir = std::path::Path::new(filename)
+        .parent()
+        .map(|p| {
+            if p.as_os_str().is_empty() {
+                std::path::PathBuf::from(".")
+            } else {
+                p.to_path_buf()
+            }
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    match manifest::discover_project_root(&file_dir) {
+        Some(root) => match manifest::load_from_root(&root) {
+            Ok(m) => (m.wasm_pool_size, m.wasm_fallback, m.wasm_max_memory_pages),
+            Err(e) => {
+                emit_manifest_error(&e, output);
+                process::exit(1);
+            }
+        },
+        None => (None, None, None),
+    }
+}
+
+/// Default `--max-memory` for the threaded wasm module, in 64 KiB pages:
+/// 16384 pages = 1 GiB — rustc's own wasm32-wasip1-threads target
+/// default (shared memories must declare a maximum; the reservation is
+/// address space, committed lazily). `[wasm] max-memory-pages`
+/// overrides.
+#[cfg(feature = "llvm")]
+const WASM_THREADS_DEFAULT_MAX_MEMORY_PAGES: u32 = 16384;
+
+/// Run the threaded pass of a `--features wasm-threads` build (phase-10
+/// wasm-threads entry): codegen the SAME front-end output again with
+/// auto-par re-enabled on the wasip1-threads machine, link it
+/// `--shared-memory` against the threaded runtime archive, and read the
+/// linked module's imported-memory limits back out (wasm-ld computes
+/// `initial`; the glue must mirror the limits exactly). Returns the
+/// glue config describing the artifact. Shared by single-file and
+/// project mode — `threads_wasm_path` is the final artifact path,
+/// `threads_filename` the sibling-relative name baked into the glue.
+#[cfg(feature = "llvm")]
+#[allow(clippy::too_many_arguments)]
+fn emit_wasm_threads_artifact(
+    program: &crate::ast::Program,
+    ownership: Option<&crate::ownership::OwnershipCheckResult>,
+    concurrency: Option<&crate::concurrency::ConcurrencyAnalysis>,
+    source_filename: Option<&str>,
+    source_text: Option<&str>,
+    release: bool,
+    obj_path: &str,
+    threads_wasm_path: &std::path::Path,
+    threads_filename: &str,
+    knobs: (Option<u32>, Option<bool>, Option<u32>),
+) -> crate::wasm_glue::WasmThreadsGlueConfig {
+    let (pool_size, fallback, max_pages) = knobs;
+    if let Err(e) = crate::codegen::compile_to_object_wasm_threaded(
+        program,
+        obj_path,
+        ownership,
+        concurrency,
+        source_filename,
+        source_text,
+        release,
+    ) {
+        eprintln!("error: wasm-threads codegen failed: {e}");
+        process::exit(1);
+    }
+    let max_memory_pages = max_pages.unwrap_or(WASM_THREADS_DEFAULT_MAX_MEMORY_PAGES);
+    let link_result = crate::codegen::link_wasm_executable_threaded(
+        obj_path,
+        threads_wasm_path.to_str().unwrap_or(threads_filename),
+        u64::from(max_memory_pages) * 65536,
+    );
+    let _ = std::fs::remove_file(obj_path);
+    if let Err(e) = link_result {
+        eprintln!("error: wasm-threads link failed: {e}");
+        process::exit(1);
+    }
+    // Mirror the linked module's memory-import limits into the glue —
+    // instantiation fails the import match on any divergence.
+    let bytes = match std::fs::read(threads_wasm_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!(
+                "error: cannot read back threaded module {}: {e}",
+                threads_wasm_path.display()
+            );
+            process::exit(1);
+        }
+    };
+    let Some((mem_initial_pages, mem_max_pages)) = crate::wasm_glue::imported_memory_limits(&bytes)
+    else {
+        eprintln!(
+            "error: threaded module {} carries no imported env.memory — \
+             the --shared-memory link should have produced one (linker drift?)",
+            threads_wasm_path.display()
+        );
+        process::exit(1);
+    };
+    crate::wasm_glue::WasmThreadsGlueConfig {
+        threads_filename: threads_filename.to_string(),
+        no_fallback: fallback == Some(false),
+        pool_size_override: pool_size,
+        mem_initial_pages,
+        mem_max_pages,
+    }
+}
+
 /// Act on the resolved `--target-cpu` value (phase-10; design.md § CPU
 /// Baseline Targeting). `None` — the common case — keeps the per-target
 /// default table. The literal `help` prints LLVM's supported-CPU
@@ -5088,6 +5206,25 @@ fn cmd_build(
             }
         }
 
+        // `--features wasm-threads` × `host fn`: unsupported at v1. The
+        // threaded program runs in a primary Web Worker (every blocking
+        // primitive bottoms out in memory.atomic.wait, which traps on
+        // the browser main thread), but host fn implementations are
+        // main-thread JS closures — bridging them needs a synchronous
+        // worker→main proxy (SAB round-trip), tracked as its own
+        // phase-10 follow-up entry. Reject loudly rather than emit a
+        // glue that throws at load.
+        if wasm_threads && !crate::wasm_glue::collect_host_fns(&pipeline.parsed.program).is_empty()
+        {
+            eprintln!(
+                "error: --features wasm-threads does not support `host fn` yet \
+                 (the program runs in a Web Worker; host implementations live on \
+                 the main thread — the synchronous proxy is a tracked follow-up). \
+                 Drop the host fns or build without --features wasm-threads."
+            );
+            process::exit(1);
+        }
+
         // Output executable name — the stem derived before the
         // component-bindings setup above.
         let obj_path = format!("/tmp/karac_{exe_name}.o");
@@ -5171,17 +5308,50 @@ fn cmd_build(
                 // self-describing component. The `(json key, path)`
                 // pairs feed both output modes.
                 let mut companions: Vec<(&str, String)> = Vec::new();
+                // `--features wasm-threads`: the dual artifact's second
+                // pass — same front-end output, auto-par re-enabled,
+                // wasip1-threads machine, --shared-memory link against
+                // the threaded runtime archive. Runs after the
+                // sequential link so a clean build always has the
+                // fallback module on disk first.
+                let threads_glue_cfg = if wasm_threads {
+                    let threads_filename = format!("{exe_name}.threads.wasm");
+                    let cfg = emit_wasm_threads_artifact(
+                        &pipeline.parsed.program,
+                        pipeline.ownership.as_ref(),
+                        pipeline.concurrency.as_ref(),
+                        Some(filename),
+                        Some(&source),
+                        release,
+                        &format!("/tmp/karac_{exe_name}.threads.o"),
+                        std::path::Path::new(&threads_filename),
+                        &threads_filename,
+                        manifest_wasm_knobs_for(filename, output),
+                    );
+                    companions.push(("threads_wasm", threads_filename));
+                    Some(cfg)
+                } else {
+                    None
+                };
                 match effective_bindings {
                     Some(BindingsMode::Browser) => {
                         let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
-                        let glue = crate::wasm_glue::render_glue(&host_fns, &exe_path);
+                        let glue = crate::wasm_glue::render_glue(
+                            &host_fns,
+                            &exe_path,
+                            threads_glue_cfg.as_ref(),
+                        );
                         let js_path = format!("{exe_name}.js");
                         if let Err(e) = std::fs::write(&js_path, glue) {
                             eprintln!("error: failed to write JS glue {js_path}: {e}");
                             process::exit(1);
                         }
                         companions.push(("glue", js_path));
-                        let dts = crate::wasm_glue::render_dts(&host_fns, &exe_path);
+                        let dts = crate::wasm_glue::render_dts(
+                            &host_fns,
+                            &exe_path,
+                            threads_glue_cfg.is_some(),
+                        );
                         let dts_path = format!("{exe_name}.d.ts");
                         if let Err(e) = std::fs::write(&dts_path, dts) {
                             eprintln!("error: failed to write TS declarations {dts_path}: {e}");
@@ -5798,6 +5968,7 @@ fn cmd_build_project(
             is_wasm,
             effective_bindings,
             wasm_tools.as_ref(),
+            wasm_threads,
         );
     }
 
@@ -5854,9 +6025,13 @@ fn cmd_build_project(
                     exe_path,
                     glue_path,
                     dts_path,
+                    threads_wasm_path,
                 } => {
                     let mut line = format!("Built: {}", exe_path.display());
-                    for extra in [glue_path, dts_path].into_iter().flatten() {
+                    for extra in [threads_wasm_path, glue_path, dts_path]
+                        .into_iter()
+                        .flatten()
+                    {
                         line.push_str(&format!(" + {}", extra.display()));
                     }
                     println!("{line}");
@@ -5899,11 +6074,18 @@ fn cmd_build_project(
                     exe_path,
                     glue_path,
                     dts_path,
+                    threads_wasm_path,
                 } => {
                     let mut field = format!(
                         ",\"output\":{}",
                         json_string(&exe_path.display().to_string())
                     );
+                    if let Some(tw) = threads_wasm_path {
+                        field.push_str(&format!(
+                            ",\"threads_wasm\":{}",
+                            json_string(&tw.display().to_string())
+                        ));
+                    }
                     if let Some(js) = glue_path {
                         field.push_str(&format!(
                             ",\"glue\":{}",
@@ -5988,12 +6170,19 @@ fn cmd_build_project(
                 exe_path,
                 glue_path,
                 dts_path,
+                threads_wasm_path,
             } = &codegen_status
             {
                 let mut fields = format!(
                     "\"output\":{}",
                     json_string(&exe_path.display().to_string())
                 );
+                if let Some(tw) = threads_wasm_path {
+                    fields.push_str(&format!(
+                        ",\"threads_wasm\":{}",
+                        json_string(&tw.display().to_string())
+                    ));
+                }
                 if let Some(js) = glue_path {
                     fields.push_str(&format!(
                         ",\"glue\":{}",
@@ -6054,10 +6243,14 @@ enum BuildCodegenStatus {
     /// carry the companion ES-module glue (`<pkg>.js`) and TypeScript
     /// declarations (`<pkg>.d.ts`) — each `None` on every other build
     /// shape.
+    /// `--features wasm-threads` builds also carry the threaded module
+    /// (`<pkg>.threads.wasm` — the dual artifact's second leg); `None`
+    /// otherwise.
     Built {
         exe_path: PathBuf,
         glue_path: Option<PathBuf>,
         dts_path: Option<PathBuf>,
+        threads_wasm_path: Option<PathBuf>,
     },
     /// Late-phase failure (effect / ownership / concurrency / codegen /
     /// link). `phase` names the failing phase for the diagnostic output;
@@ -6105,6 +6298,7 @@ fn run_multi_file_codegen(
     is_wasm: bool,
     effective_bindings: Option<BindingsMode>,
     wasm_tools: Option<&crate::componentize::WasmTools>,
+    wasm_threads: bool,
 ) -> BuildCodegenStatus {
     // 1. Topological emission order — dependencies before dependents.
     let order = module::emission_order(tree);
@@ -6242,6 +6436,21 @@ fn run_multi_file_codegen(
         };
     }
 
+    // `--features wasm-threads` × `host fn`: unsupported at v1 — the
+    // single-file `cmd_build` contract (the program runs in a Web
+    // Worker; host implementations are main-thread closures; the
+    // synchronous proxy is a tracked phase-10 follow-up).
+    if wasm_threads && !crate::wasm_glue::collect_host_fns(&pipeline.parsed.program).is_empty() {
+        return BuildCodegenStatus::Failed {
+            phase: "codegen".to_string(),
+            message: "--features wasm-threads does not support `host fn` yet (the program \
+                      runs in a Web Worker; host implementations live on the main thread — \
+                      the synchronous proxy is a tracked follow-up). Drop the host fns or \
+                      build without --features wasm-threads."
+                .to_string(),
+        };
+    }
+
     // 4. Codegen — write to a temp object then link to the manifest's
     // `name` field as the binary basename in the project root. A wasm
     // build instead lands in the `dist/wasm/<pkg>.wasm` artifact layout
@@ -6329,6 +6538,40 @@ fn run_multi_file_codegen(
         }
     }
 
+    // `--features wasm-threads`: the dual artifact's second pass — same
+    // front-end output, auto-par re-enabled, wasip1-threads machine,
+    // --shared-memory link. Lands as `dist/wasm/<pkg>.threads.wasm`
+    // next to the sequential module; knobs come straight from the
+    // project's own manifest (already loaded — no walk-up).
+    let (threads_wasm_path, threads_glue_cfg) = if wasm_threads {
+        let threads_filename = format!("{}.threads.wasm", mf.name);
+        let threads_path = exe_path.with_file_name(&threads_filename);
+        let threads_obj = std::env::temp_dir().join(format!(
+            "karac_proj_{}_{}.threads.o",
+            std::process::id(),
+            mf.name.replace(['/', '\\'], "_"),
+        ));
+        let cfg = emit_wasm_threads_artifact(
+            &pipeline.parsed.program,
+            pipeline.ownership.as_ref(),
+            pipeline.concurrency.as_ref(),
+            None,
+            None,
+            release,
+            &threads_obj.to_string_lossy(),
+            &threads_path,
+            &threads_filename,
+            (
+                mf.wasm_pool_size,
+                mf.wasm_fallback,
+                mf.wasm_max_memory_pages,
+            ),
+        );
+        (Some(threads_path), Some(cfg))
+    } else {
+        (None, None)
+    };
+
     // Companion artifacts next to the module in `dist/wasm/`, keyed on
     // the resolved bindings mode — exactly the single-file `cmd_build`
     // contract: browser bindings ship the ES-module glue + TypeScript
@@ -6344,7 +6587,7 @@ fn run_multi_file_codegen(
             let js = exe_path.with_extension("js");
             if let Err(e) = std::fs::write(
                 &js,
-                crate::wasm_glue::render_glue(&host_fns, &wasm_filename),
+                crate::wasm_glue::render_glue(&host_fns, &wasm_filename, threads_glue_cfg.as_ref()),
             ) {
                 return BuildCodegenStatus::Failed {
                     phase: "link".to_string(),
@@ -6355,7 +6598,7 @@ fn run_multi_file_codegen(
             let dts = exe_path.with_extension("d.ts");
             if let Err(e) = std::fs::write(
                 &dts,
-                crate::wasm_glue::render_dts(&host_fns, &wasm_filename),
+                crate::wasm_glue::render_dts(&host_fns, &wasm_filename, threads_glue_cfg.is_some()),
             ) {
                 return BuildCodegenStatus::Failed {
                     phase: "link".to_string(),
@@ -6370,6 +6613,7 @@ fn run_multi_file_codegen(
         exe_path,
         glue_path,
         dts_path,
+        threads_wasm_path,
     }
 }
 
@@ -6387,6 +6631,7 @@ fn run_multi_file_codegen(
     _is_wasm: bool,
     _effective_bindings: Option<BindingsMode>,
     _wasm_tools: Option<&crate::componentize::WasmTools>,
+    _wasm_threads: bool,
 ) -> BuildCodegenStatus {
     BuildCodegenStatus::NoLlvmFeature
 }

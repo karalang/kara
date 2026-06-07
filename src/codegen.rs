@@ -78,8 +78,8 @@ use driver::{
     read_runtime_debug_metadata_env, read_strip_contracts_env, read_strip_error_trace_env,
 };
 pub use driver::{
-    link_executable, link_executable_with_sanitizer, print_target_cpu_listing, validate_target_cpu,
-    validate_target_features,
+    link_executable, link_executable_with_sanitizer, link_wasm_executable_threaded,
+    print_target_cpu_listing, validate_target_cpu, validate_target_features,
 };
 use helpers::{
     impl_target_name, make_impl_method_function, method_is_compiler_builtin, method_self_is_value,
