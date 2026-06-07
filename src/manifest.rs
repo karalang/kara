@@ -220,6 +220,26 @@ pub struct Manifest {
     /// `None` when the table or key is absent — any discovered version is
     /// then accepted.
     pub toolchain_wasm_tools: Option<String>,
+    /// `[wasm] pool-size = <n>` — worker-pool size baked into the JS glue
+    /// for `--features wasm-threads` builds (phase-10 wasm-threads entry;
+    /// design.md § WASM Concurrency Lowering). Overrides the load-time
+    /// `navigator.hardwareConcurrency` default. The manifest *tunes* the
+    /// threaded build; it can never *enable* one — the COOP/COEP
+    /// deployment contract belongs at the CLI flag where it's visible.
+    /// `None` when absent.
+    pub wasm_pool_size: Option<u32>,
+    /// `[wasm] fallback = false` — opt out of the SAB-unavailable
+    /// graceful degradation: instead of `console.warn` + loading the
+    /// sequential module, the glue hard-errors at load time. Both
+    /// modules are still emitted (the artifact set never depends on
+    /// deploy-environment knobs). `None`/absent means fallback enabled.
+    pub wasm_fallback: Option<bool>,
+    /// `[wasm] max-memory-pages = <n>` — `--max-memory` (in 64 KiB wasm
+    /// pages) for the threaded module's shared memory. Shared memories
+    /// must declare a maximum; default mirrors rustc's own
+    /// wasm32-wasip1-threads target default (16384 pages = 1 GiB).
+    /// `None` when absent.
+    pub wasm_max_memory_pages: Option<u32>,
     pub warnings: Vec<ManifestWarning>,
 }
 
@@ -651,6 +671,8 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     let (release_target_cpu, release_target_features) =
         parse_release_table(path, &table, &mut warnings)?;
     let toolchain_wasm_tools = parse_toolchain_table(path, &table, &mut warnings)?;
+    let (wasm_pool_size, wasm_fallback, wasm_max_memory_pages) =
+        parse_wasm_table(path, &table, &mut warnings)?;
 
     // Stable order across package-key + dependency warnings — same sort key
     // (message string) used as before, but now applied after the full
@@ -677,6 +699,9 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         release_target_cpu,
         release_target_features,
         toolchain_wasm_tools,
+        wasm_pool_size,
+        wasm_fallback,
+        wasm_max_memory_pages,
         warnings,
     })
 }
@@ -789,6 +814,74 @@ fn parse_toolchain_table(
         }
     }
     Ok(wasm_tools)
+}
+
+/// Parse the `[wasm]` table when present. Recognised keys at v1 (all
+/// `--features wasm-threads` tuning knobs — phase-10 wasm-threads entry;
+/// design.md § WASM Concurrency Lowering): `pool-size` (positive integer
+/// — worker-pool size baked into the glue, overriding the load-time
+/// `navigator.hardwareConcurrency` default), `fallback` (bool — `false`
+/// makes the glue hard-error instead of console.warn + sequential when
+/// SAB is unavailable), and `max-memory-pages` (positive integer —
+/// `--max-memory` for the threaded module's shared memory, in 64 KiB
+/// pages). Unknown keys soft-warn (reserved for later wasm knobs); a
+/// wrong-typed or non-positive value for a known key hard-errors so a
+/// typo can't silently drop the override. Absent table → all `None`.
+fn parse_wasm_table(
+    path: &Path,
+    table: &toml::Table,
+    warnings: &mut Vec<ManifestWarning>,
+) -> Result<(Option<u32>, Option<bool>, Option<u32>), ManifestError> {
+    let Some(value) = table.get("wasm") else {
+        return Ok((None, None, None));
+    };
+    let wasm_table = value
+        .as_table()
+        .ok_or_else(|| ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "wasm".to_string(),
+            expected: "a table (e.g. `[wasm]`)",
+        })?;
+    let mut pool_size = None;
+    let mut fallback = None;
+    let mut max_memory_pages = None;
+    // Shared shape for the two positive-integer keys: TOML integer,
+    // in 1..=u32::MAX, hard error otherwise.
+    let parse_positive_u32 = |key: &str, val: &toml::Value| -> Result<u32, ManifestError> {
+        match val {
+            toml::Value::Integer(i) if *i > 0 && *i <= i64::from(u32::MAX) => Ok(*i as u32),
+            _ => Err(ManifestError::InvalidFieldType {
+                path: path.to_path_buf(),
+                key: format!("wasm.{key}"),
+                expected: "a positive integer",
+            }),
+        }
+    };
+    for (key, val) in wasm_table {
+        match key.as_str() {
+            "pool-size" => pool_size = Some(parse_positive_u32("pool-size", val)?),
+            "fallback" => match val {
+                toml::Value::Boolean(b) => fallback = Some(*b),
+                _ => {
+                    return Err(ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: "wasm.fallback".to_string(),
+                        expected: "a boolean (e.g. `fallback = false`)",
+                    });
+                }
+            },
+            "max-memory-pages" => {
+                max_memory_pages = Some(parse_positive_u32("max-memory-pages", val)?);
+            }
+            other => warnings.push(ManifestWarning {
+                line: None,
+                message: format!(
+                    "unknown key `[wasm].{other}` — ignored in v1 (reserved for a later release)"
+                ),
+            }),
+        }
+    }
+    Ok((pool_size, fallback, max_memory_pages))
 }
 
 /// Parse the `[lints]` table when present. Recognised keys at v1:
@@ -2950,6 +3043,78 @@ wasm-tools = "1.251.0"
             m.warnings
                 .iter()
                 .any(|w| w.message.contains("unknown key `[toolchain].wit-bindgen`")),
+            "expected a soft warning for the unknown key, got: {:?}",
+            m.warnings,
+        );
+    }
+
+    #[test]
+    fn wasm_table_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[wasm]
+pool-size = 8
+fallback = false
+max-memory-pages = 4096
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.wasm_pool_size, Some(8));
+        assert_eq!(m.wasm_fallback, Some(false));
+        assert_eq!(m.wasm_max_memory_pages, Some(4096));
+        assert!(m.warnings.is_empty());
+        // Absent table → all None; empty [wasm] table is also fine.
+        let src = "[package]\nname = \"hello\"\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(m.wasm_pool_size.is_none());
+        assert!(m.wasm_fallback.is_none());
+        assert!(m.wasm_max_memory_pages.is_none());
+        let src = "[package]\nname = \"hello\"\n\n[wasm]\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(m.wasm_pool_size.is_none());
+    }
+
+    #[test]
+    fn wasm_table_wrong_type_is_hard_error() {
+        // A typo'd knob must not silently drop the override — same
+        // posture as `[release].target-cpu`. Non-positive integers are
+        // the integer-key typo shape (`pool-size = 0` can't mean
+        // anything; `-1` is a sign error).
+        for (src, key) in [
+            (
+                "[package]\nname = \"hello\"\n\n[wasm]\npool-size = \"8\"\n",
+                "wasm.pool-size",
+            ),
+            (
+                "[package]\nname = \"hello\"\n\n[wasm]\npool-size = 0\n",
+                "wasm.pool-size",
+            ),
+            (
+                "[package]\nname = \"hello\"\n\n[wasm]\nfallback = \"false\"\n",
+                "wasm.fallback",
+            ),
+            (
+                "[package]\nname = \"hello\"\n\n[wasm]\nmax-memory-pages = -1\n",
+                "wasm.max-memory-pages",
+            ),
+        ] {
+            let err = parse_manifest(&p(), src).unwrap_err();
+            match err {
+                ManifestError::InvalidFieldType { key: k, .. } => assert_eq!(k, key),
+                other => panic!("expected InvalidFieldType on `{key}`, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn wasm_table_unknown_key_soft_warns() {
+        let src = "[package]\nname = \"hello\"\n\n[wasm]\nstack-size = 4\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(m.wasm_pool_size.is_none());
+        assert!(
+            m.warnings
+                .iter()
+                .any(|w| w.message.contains("unknown key `[wasm].stack-size`")),
             "expected a soft warning for the unknown key, got: {:?}",
             m.warnings,
         );
