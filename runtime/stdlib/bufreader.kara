@@ -45,7 +45,7 @@
 // from the receiver). It can gain a parameter additively when
 // effect-polymorphic readers (Stdin / network streams) land.
 
-struct BufReader[R] { }
+struct BufReader[=R] { }
 
 // Iterator over the lines of a `BufReader`, yielded by `.lines()`. Empty
 // body — the iteration state is the shared wrapped reader, held on the

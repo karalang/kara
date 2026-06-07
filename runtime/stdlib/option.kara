@@ -16,7 +16,7 @@
 // "does Option support Eq?" get the same answer as before.
 
 #[derive(Eq, PartialEq, Hash, Ord, PartialOrd)]
-enum Option[T] {
+enum Option[+T] {
     Some(T),
     None,
 }

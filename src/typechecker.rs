@@ -44,6 +44,7 @@ mod stdlib_seq;
 #[cfg(test)]
 mod tests;
 pub mod types;
+mod variance;
 
 pub use const_eval::ConstEvalError;
 use const_eval::{binop_glyph, const_value_type, format_const_value, unaryop_glyph};

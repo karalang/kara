@@ -89,6 +89,8 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
             bounds: vec![bound],
             is_const: false,
             const_type: None,
+            variance: Variance::Invariant,
+            variance_span: None,
             is_variadic_shape: false,
             span: impl_trait_span.clone(),
         });

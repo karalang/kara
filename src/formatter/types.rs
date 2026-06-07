@@ -21,6 +21,17 @@ impl super::Formatter {
             if p.is_variadic_shape {
                 self.write_str("...");
             }
+            // Variance marker round-trip (design.md § Variance): explicit
+            // markers — including explicit `=` (the stdlib lint requires
+            // it) — are preserved; the implicit-invariant default prints
+            // nothing.
+            if p.variance_span.is_some() {
+                match p.variance {
+                    Variance::Covariant => self.write_str("+"),
+                    Variance::Contravariant => self.write_str("-"),
+                    Variance::Invariant => self.write_str("="),
+                }
+            }
             self.write_ident(&p.name);
             if let Some(ref ct) = p.const_type {
                 self.write_str(": ");

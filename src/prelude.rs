@@ -33,7 +33,7 @@
 
 use crate::ast::{
     Block, Deprecation, Function, GenericParam, GenericParams, ImportItem, Item, Program,
-    StructDef, TraitDef, TypeKind, Unstable, Visibility,
+    StructDef, TraitDef, TypeKind, Unstable, Variance, Visibility,
 };
 use crate::token::Span;
 use std::collections::HashMap;
@@ -818,6 +818,71 @@ pub static STDLIB_PROGRAMS: LazyLock<Vec<(&'static str, Program)>> = LazyLock::n
     out
 });
 
+/// Per-stdlib-type variance declarations (design.md § Variance), keyed
+/// by type name → per-parameter variance vector in declaration order.
+/// Derived from the explicit `+T` / `-T` / `=T` markers on baked stdlib
+/// struct/enum declarations ([`STDLIB_PROGRAMS`] + [`GATED_STDLIB_PROGRAMS`]),
+/// plus hardcoded entries for parametric pseudo-types with no syntactic
+/// declaration surface (`Iterator`, `Array` — see
+/// `register_compiler_intrinsic_env`).
+///
+/// Consulted by the typechecker's `types_compatible` Named-type arm to
+/// gate generic-argument subtyping per slot: `+T` slots accept
+/// refinement-to-base widening, `=T` slots demand mutual compatibility,
+/// `-T` slots flip the direction. Types absent from this table — every
+/// user-defined type — are invariant in all parameters (user-side
+/// variance declarations are rejected with `E_VARIANCE_USER_DECL_NOT_YET`
+/// at v1).
+///
+/// Known narrowing: the lookup is name-keyed, so a user type that
+/// *shadows* a covariant stdlib name (`struct Option[T] {...}` — the
+/// resolver allows prelude shadowing) inherits the stdlib entry's
+/// variance at compatibility-check time. Shadowing a prelude type AND
+/// relying on generic-arg invariance with refinement arguments is a
+/// corner the name-keyed table accepts at v1; the fix (def-site-keyed
+/// lookup) requires threading decl identity into `Type::Named`.
+pub static STDLIB_VARIANCE: LazyLock<HashMap<String, Vec<Variance>>> = LazyLock::new(|| {
+    let mut table: HashMap<String, Vec<Variance>> = HashMap::new();
+    // `Iterator` is a trait + a compiler-intrinsic parametric
+    // pseudo-struct (runtime/stdlib/iterator.kara documents the split);
+    // there is no syntactic generic-param list to mark. Audit:
+    // `Iterator[+T]` — produces `T`s, never consumes one.
+    table.insert("Iterator".to_string(), vec![Variance::Covariant]);
+    // `Array[=T, const N]` — compiler-intrinsic; invariant in T
+    // (mutable through `mut ref`).
+    table.insert("Array".to_string(), vec![Variance::Invariant]);
+    let programs = STDLIB_PROGRAMS
+        .iter()
+        .map(|(_, p)| p)
+        .chain(GATED_STDLIB_PROGRAMS.iter().map(|(_, p)| p));
+    for program in programs {
+        for item in &program.items {
+            let (name, generics) = match item {
+                Item::StructDef(s) => (&s.name, &s.generic_params),
+                Item::EnumDef(e) => (&e.name, &e.generic_params),
+                _ => continue,
+            };
+            let Some(gp) = generics else { continue };
+            let variances: Vec<Variance> = gp
+                .params
+                .iter()
+                .filter(|p| !p.is_const && !p.is_variadic_shape)
+                .map(|p| p.variance)
+                .collect();
+            if !variances.is_empty() {
+                table.insert(name.clone(), variances);
+            }
+        }
+    }
+    table
+});
+
+/// Per-slot variance lookup for a named type. `None` for types with no
+/// stdlib variance declaration — callers treat every slot as invariant.
+pub fn stdlib_variance(name: &str) -> Option<&'static [Variance]> {
+    STDLIB_VARIANCE.get(name).map(|v| v.as_slice())
+}
+
 /// Parsed AST of every entry in [`GATED_STDLIB_SOURCES`]. Same contract as
 /// [`STDLIB_PROGRAMS`] (lazy, cached, panics on parse failure — a broken
 /// baked source is a compiler bug, not user error), keyed by module path
@@ -1262,6 +1327,8 @@ fn stub_generics(name: &str, span: &Span) -> Option<GenericParams> {
                 bounds: Vec::new(),
                 is_const: false,
                 const_type: None,
+                variance: Variance::Invariant,
+                variance_span: None,
                 is_variadic_shape: false,
             })
             .collect(),

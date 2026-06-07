@@ -7,4 +7,4 @@
 // is a peer follow-up). Mirrors the `vec.kara` shape: opaque
 // in-memory representation, no public fields, no `#[derive(...)]`.
 
-struct VecDeque[T] { }
+struct VecDeque[=T] { }

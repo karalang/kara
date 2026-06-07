@@ -65,7 +65,7 @@ enum PoolError {
 // `pool_table` side-table; `0` is reserved for hand-rolled
 // `Pool { handle_id: 0 }` literals that bypass `Pool.new` —
 // `acquire` on such a value short-circuits with `PoolClosed`.
-struct Pool[T] {
+struct Pool[=T] {
     handle_id: i64,
 }
 
@@ -88,7 +88,7 @@ struct Pool[T] {
 // (`docs/implementation_checklist/phase-5-diagnostics.md` §
 // `#[must_use]` mandate, slice 4).
 #[must_use = "discarding the connection releases the slot back to the pool without using it — bind the handle to a variable so it lives across the work, or pass it to the consuming function"]
-struct PooledConnection[T] {
+struct PooledConnection[=T] {
     pool_handle_id: i64,
     conn_id: i64,
     val: T,

@@ -46,6 +46,10 @@ impl<'a> super::TypeChecker<'a> {
                 Item::StructDef(s) => {
                     let gp = Self::generic_param_names(&s.generic_params);
                     self.validate_all_bounds(&s.generic_params, &s.where_clause, &gp);
+                    // Variance declarations (design.md § Variance):
+                    // user-side `+`/`-` rejection, stdlib-side
+                    // explicit-marker lint + structural verifier.
+                    self.check_struct_variance(s);
                     self.check_struct_invariants(s, &gp);
                     if s.is_par {
                         self.check_par_field_constraints("struct", &s.name, &s.fields);
@@ -54,6 +58,7 @@ impl<'a> super::TypeChecker<'a> {
                 Item::EnumDef(e) => {
                     let gp = Self::generic_param_names(&e.generic_params);
                     self.validate_all_bounds(&e.generic_params, &e.where_clause, &gp);
+                    self.check_enum_variance(e);
                     if e.is_par {
                         for v in &e.variants {
                             if let VariantKind::Struct(fields) = &v.kind {
@@ -61,6 +66,13 @@ impl<'a> super::TypeChecker<'a> {
                             }
                         }
                     }
+                }
+                // Variance markers are legal only on stdlib struct/enum
+                // declarations (design.md § Variance) — never on type
+                // aliases. The alias's other checks (bound enforcement,
+                // phase-8 "type alias bounds" entry) live elsewhere.
+                Item::TypeAlias(t) => {
+                    self.reject_user_variance_markers(&t.generic_params, false);
                 }
                 // `host fn` boundary-type restrictions (phase-10,
                 // design.md § Host Functions > Parameter and return
@@ -178,6 +190,10 @@ impl<'a> super::TypeChecker<'a> {
     /// `Self` is treated as an abstract type parameter (`Type::TypeParam("Self")`)
     /// so signature and body references to `Self`/`self` resolve consistently.
     fn check_trait_def(&mut self, t: &TraitDef) {
+        // Variance markers are legal only on stdlib struct/enum
+        // declarations (design.md § Variance) — never on traits.
+        self.reject_user_variance_markers(&t.generic_params, false);
+
         let mut enclosing = vec!["Self".to_string()];
         if let Some(ref generics) = t.generic_params {
             for p in &generics.params {
@@ -1161,6 +1177,11 @@ impl<'a> super::TypeChecker<'a> {
     ) {
         self.local_scope = LocalTypeScope::new();
 
+        // Variance markers are a property of (stdlib) nominal type
+        // declarations — never legal on function generic params
+        // (design.md § Variance).
+        self.reject_user_variance_markers(&f.generic_params, false);
+
         let mut gp = enclosing_generics.to_vec();
         gp.extend(Self::generic_param_names(&f.generic_params));
 
@@ -1440,6 +1461,10 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     fn check_impl_block(&mut self, imp: &ImplBlock) {
+        // Variance markers are legal only on stdlib struct/enum
+        // declarations (design.md § Variance) — never on impl blocks.
+        self.reject_user_variance_markers(&imp.generic_params, false);
+
         let type_name = match &imp.target_type.kind {
             TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
             _ => return,

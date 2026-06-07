@@ -39,7 +39,7 @@ enum ChannelError {
 // `BoundedChannel { handle_id: 0 }` literal that bypassed `new` — `send`
 // on such a value fails closed with `ChannelError.Full` and `recv`
 // returns `None`.
-struct BoundedChannel[T] {
+struct BoundedChannel[=T] {
     handle_id: i64,
 }
 

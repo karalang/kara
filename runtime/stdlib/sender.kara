@@ -3,4 +3,4 @@
 // CR-202 slice 6.1b. Concurrency primitive — sending half of a
 // channel. Methods stay in `infer_channel_method`.
 
-struct Sender[T] { }
+struct Sender[=T] { }

@@ -17,4 +17,4 @@
 // `atomic.kara`, which likewise registers only the shape and keeps method
 // dispatch in the hardcoded path.
 
-struct Mutex[T] { }
+struct Mutex[=T] { }

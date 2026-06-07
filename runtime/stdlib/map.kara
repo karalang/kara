@@ -7,4 +7,4 @@
 // `register_builtin_types` since it doesn't have a syntactic
 // representation in the baked source today.
 
-struct Map[K, V] { }
+struct Map[=K, =V] { }

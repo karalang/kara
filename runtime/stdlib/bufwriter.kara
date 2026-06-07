@@ -39,7 +39,7 @@
 // `BufWriter[W]` entry in `phase-8-stdlib-floor.md` for the v1 surface +
 // deferral list.
 
-struct BufWriter[W] { }
+struct BufWriter[=W] { }
 
 impl[W] BufWriter[W] {
     // Wrap `writer` with a default-capacity (8 KiB) internal buffer.

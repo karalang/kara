@@ -34,7 +34,7 @@
 // design.md § Runtime equality check — codegen-era work. The
 // interpreter MVP checks indexing bounds against the *runtime* dims.
 
-struct Tensor[T, ...S] {
+struct Tensor[=T, ...S] {
     // Opaque — interpreter intercepts all construction and access.
     handle_id: i64,
 }

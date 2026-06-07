@@ -24409,3 +24409,108 @@ fn main() reads(Store) {
         "{errs:?}"
     );
 }
+
+// ── Per-type variance at use sites (design.md § Variance) ────────
+
+#[test]
+fn variance_covariant_stdlib_types_widen_refinement_args() {
+    // `Option[+T]` / `Result[+T, +E]` / `Iterator[+T]` / `TaskHandle[+T]`
+    // accept refinement-to-base widening through their covariant slots.
+    typecheck_ok(
+        "type Positive = i64 where self > 0;
+         fn widen_opt(o: Option[Positive]) -> Option[i64] { o }
+         fn widen_res(r: Result[Positive, IoError]) -> Result[i64, IoError] { r }
+         fn widen_iter(it: Iterator[Positive]) -> Iterator[i64] { it }
+         fn take_handle(h: TaskHandle[i64]) { }
+         fn give_handle(h: TaskHandle[Positive]) { take_handle(h); }
+         fn main() { }",
+    );
+}
+
+#[test]
+fn variance_invariant_stdlib_types_reject_widening() {
+    // `Vec[=T]` / `Sender[=T]` are invariant — the refinement widening
+    // cannot promote a parameter through an invariant slot.
+    let errors = typecheck_errors(
+        "type Positive = i64 where self > 0;
+         fn bad(v: Vec[Positive]) -> Vec[i64] { v }
+         fn main() { }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "Vec[Positive] must NOT widen to Vec[i64]"
+    );
+    let errors = typecheck_errors(
+        "type Positive = i64 where self > 0;
+         fn bad(s: Sender[Positive]) -> Sender[i64] { s }
+         fn main() { }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "Sender[Positive] must NOT widen to Sender[i64]"
+    );
+}
+
+#[test]
+fn variance_user_types_are_invariant() {
+    let errors = typecheck_errors(
+        "type Positive = i64 where self > 0;
+         struct MyBox[T] { v: T }
+         fn bad(b: MyBox[Positive]) -> MyBox[i64] { b }
+         fn main() { }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "user types are invariant in every parameter at v1"
+    );
+}
+
+#[test]
+fn variance_mut_ref_rejects_refinement_widening() {
+    // The load-bearing soundness pin: `mut ref Positive` → `mut ref i64`
+    // is rejected (here via the owned→mut-ref call-boundary coercion —
+    // the callee could write a refinement-violating value back).
+    let errors = typecheck_errors(
+        "type Positive = i64 where self > 0;
+         fn write_it(r: mut ref i64) { }
+         fn main() {
+             let p: Positive = Positive.try_from(1).unwrap();
+             write_it(mut p);
+         }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "owned Positive must not coerce to a mut ref i64 slot"
+    );
+}
+
+#[test]
+fn variance_user_decl_markers_rejected() {
+    // `+`/`-` markers are reserved for stdlib type declarations at v1.
+    for src in [
+        "struct Foo[+T] { x: T }\nfn main() { }",
+        "enum Bar[-T] { A }\nfn main() { }",
+        "fn f[+T](x: T) -> T { x }\nfn main() { }",
+        "trait Tr[+T] { }\nfn main() { }",
+        "type Alias[-T] = Vec[T];\nfn main() { }",
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.to_string().contains("E_VARIANCE_USER_DECL_NOT_YET")),
+            "expected E_VARIANCE_USER_DECL_NOT_YET for: {src}\ngot: {:?}",
+            errors.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+        );
+    }
+}
+
+#[test]
+fn variance_user_explicit_invariant_marker_accepted() {
+    // Explicit `=T` is identical to the no-marker default — accepted
+    // in user code (only `+`/`-` are reserved).
+    typecheck_ok(
+        "struct Holder[=T] { v: T }
+         fn main() { }",
+    );
+}

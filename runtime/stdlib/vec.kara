@@ -18,4 +18,4 @@
 // per-method dispatch keyed on `T`'s capabilities, not on derived
 // traits at the Vec level.
 
-struct Vec[T] { }
+struct Vec[=T] { }

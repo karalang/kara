@@ -4,4 +4,4 @@
 // `["Array", "SortedSet", "Set", "Iterator", "Peekable"]` loop in
 // `register_builtin_types`. Methods stay programmatic.
 
-struct Set[T] { }
+struct Set[=T] { }

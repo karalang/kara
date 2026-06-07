@@ -10575,3 +10575,127 @@ fn test_single_index_not_tuple_wrapped() {
         "single index must not be 1-tuple-wrapped",
     );
 }
+
+// ── Variance markers on generic params (design.md § Variance) ────
+
+/// Find a struct by name in a parsed program.
+fn find_struct<'a>(program: &'a Program, name: &str) -> &'a StructDef {
+    program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::StructDef(s) if s.name == name => Some(s),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("struct {name} not found"))
+}
+
+#[test]
+fn test_variance_markers_parse_on_struct_params() {
+    let program = parse_ok("struct Quad[+T, -U, =V, W] { }\nfn main() {}\n");
+    let s = find_struct(&program, "Quad");
+    let params = &s.generic_params.as_ref().unwrap().params;
+    assert_eq!(params.len(), 4);
+    assert_eq!(params[0].variance, Variance::Covariant);
+    assert!(params[0].variance_span.is_some());
+    assert_eq!(params[1].variance, Variance::Contravariant);
+    assert!(params[1].variance_span.is_some());
+    // Explicit `=` records Invariant WITH a marker span (the stdlib
+    // lint distinguishes explicit `=V` from the implicit default).
+    assert_eq!(params[2].variance, Variance::Invariant);
+    assert!(params[2].variance_span.is_some());
+    // No marker — implicit invariant, no span.
+    assert_eq!(params[3].variance, Variance::Invariant);
+    assert!(params[3].variance_span.is_none());
+}
+
+#[test]
+fn test_variance_marker_attaches_to_param_not_bound() {
+    // `+T: Ord` is `(+ T) (: Ord)` — marker on the param, bound intact.
+    let program = parse_ok("struct Sorted[+T: Ord + Clone] { }\nfn main() {}\n");
+    let s = find_struct(&program, "Sorted");
+    let p = &s.generic_params.as_ref().unwrap().params[0];
+    assert_eq!(p.variance, Variance::Covariant);
+    assert_eq!(p.bounds.len(), 2);
+    assert_eq!(p.bounds[0].path, vec!["Ord".to_string()]);
+    assert_eq!(p.bounds[1].path, vec!["Clone".to_string()]);
+}
+
+#[test]
+fn test_variance_marker_on_enum_params() {
+    let program = parse_ok("enum Either[+L, +R] { Left(L), Right(R) }\nfn main() {}\n");
+    let e = program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::EnumDef(e) if e.name == "Either" => Some(e),
+            _ => None,
+        })
+        .expect("enum Either");
+    let params = &e.generic_params.as_ref().unwrap().params;
+    assert_eq!(params[0].variance, Variance::Covariant);
+    assert_eq!(params[1].variance, Variance::Covariant);
+}
+
+#[test]
+fn test_variance_marker_rejected_on_const_param() {
+    let (_, errors) = parse_with_errors("struct Buf[+const N: i64] { }\nfn main() {}\n");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("apply only to type parameters")),
+        "expected variance-on-const rejection, got: {errors:?}",
+    );
+}
+
+#[test]
+fn test_variance_marker_rejected_on_variadic_shape_param() {
+    let (_, errors) = parse_with_errors("struct Shaped[+...S] { }\nfn main() {}\n");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("apply only to type parameters")),
+        "expected variance-on-variadic rejection, got: {errors:?}",
+    );
+}
+
+#[test]
+fn test_variance_marker_rejected_on_effect_params() {
+    // Bounded-form effect param: the `Effect` bound reclassifies.
+    let (_, errors) = parse_with_errors("fn f[+E: Effect]() with E { }\nfn main() {}\n");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("apply only to type parameters")),
+        "expected variance-on-effect rejection (bounded form), got: {errors:?}",
+    );
+    // Positional `with` form.
+    let (_, errors) = parse_with_errors("fn g[with +E]() { }\nfn main() {}\n");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("apply only to type parameters")),
+        "expected variance-on-effect rejection (`with` form), got: {errors:?}",
+    );
+}
+
+#[test]
+fn test_variance_marker_formatter_roundtrip() {
+    let src = "struct Quad[+T, -U, =V, W] { }\nfn main() {}\n";
+    let prog = parse_ok(src);
+    let formatted = karac::formatter::format_program(&prog);
+    // Explicit markers (including explicit `=`) survive; the implicit
+    // default prints nothing.
+    assert!(
+        formatted.contains("[+T, -U, =V, W]"),
+        "variance markers must round-trip; got:\n{formatted}",
+    );
+    // Idempotence: re-parsing the formatted output preserves variance.
+    let reparsed = parse_ok(&formatted);
+    let s = find_struct(&reparsed, "Quad");
+    let params = &s.generic_params.as_ref().unwrap().params;
+    assert_eq!(params[0].variance, Variance::Covariant);
+    assert_eq!(params[2].variance, Variance::Invariant);
+    assert!(params[2].variance_span.is_some());
+    assert!(params[3].variance_span.is_none());
+}

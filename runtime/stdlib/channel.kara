@@ -5,4 +5,4 @@
 // are `Sender[T]` and `Receiver[T]`. Methods stay in
 // `infer_channel_method`.
 
-struct Channel[T] { }
+struct Channel[=T] { }

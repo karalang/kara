@@ -84,7 +84,7 @@ struct TaskGroup {
 // `karac_runtime_task_join` FFI; a non-zero-size field keeps the
 // value carrying its scheduler-side identity through ownership +
 // codegen passes unchanged.
-struct TaskHandle[T] {
+struct TaskHandle[+T] {
     task_id: i64,
 }
 

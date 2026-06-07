@@ -5,4 +5,4 @@
 // bound, which is enforced by `infer_sorted_set_method` rather than at
 // the type level). Methods stay programmatic.
 
-struct SortedSet[T] { }
+struct SortedSet[=T] { }

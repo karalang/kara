@@ -52,6 +52,39 @@ impl super::Parser {
                 self.advance();
                 in_effect_params = true;
             }
+            // Optional leading variance marker — `+T` / `-T` / `=T`
+            // (syntax.md §6.4 VARIANCE_MARKER; design.md § Variance).
+            // Parsed up front for *every* param alternative so a marker
+            // on a const / shape-variadic / effect param gets a focused
+            // rejection below instead of a generic parse error; the
+            // grammar attaches markers to type parameters only.
+            let (variance, variance_span) = match self.peek_token() {
+                Token::Plus => {
+                    let s = self.current_span();
+                    self.advance();
+                    (Variance::Covariant, Some(s))
+                }
+                Token::Minus => {
+                    let s = self.current_span();
+                    self.advance();
+                    (Variance::Contravariant, Some(s))
+                }
+                Token::Equal => {
+                    let s = self.current_span();
+                    self.advance();
+                    (Variance::Invariant, Some(s))
+                }
+                _ => (Variance::Invariant, None),
+            };
+            if variance_span.is_some()
+                && (in_effect_params || self.check(&Token::DotDotDot) || self.check(&Token::Const))
+            {
+                self.error(
+                    "variance markers (`+`/`-`/`=`) apply only to type parameters — const, \
+                     shape-variadic, and effect parameters have no variance; remove the marker",
+                );
+                return None;
+            }
             if in_effect_params {
                 let ep_start = self.current_span();
                 let name = self.expect_identifier()?;
@@ -85,6 +118,8 @@ impl super::Parser {
                     bounds: Vec::new(),
                     is_const: false,
                     const_type: None,
+                    variance: Variance::Invariant,
+                    variance_span: None,
                     is_variadic_shape: true,
                     span: self.span_from(&pstart),
                 });
@@ -115,6 +150,8 @@ impl super::Parser {
                     bounds: Vec::new(),
                     is_const: true,
                     const_type: Some(ty),
+                    variance: Variance::Invariant,
+                    variance_span: None,
                     is_variadic_shape: false,
                     span: self.span_from(&pstart),
                 });
@@ -153,6 +190,16 @@ impl super::Parser {
                     .map(|b| b.path.len() == 1 && b.path[0] == "Effect" && b.generic_args.is_none())
                     .unwrap_or(false);
                 if is_effect_bounded {
+                    if variance_span.is_some() {
+                        // `+E: Effect` — the bound reclassifies the param
+                        // as an effect variable, which has no variance.
+                        self.error(
+                            "variance markers (`+`/`-`/`=`) apply only to type parameters — \
+                             const, shape-variadic, and effect parameters have no variance; \
+                             remove the marker",
+                        );
+                        return None;
+                    }
                     effect_params.push(EffectParam {
                         name,
                         bounds,
@@ -164,6 +211,8 @@ impl super::Parser {
                         bounds,
                         is_const: false,
                         const_type: None,
+                        variance,
+                        variance_span,
                         is_variadic_shape: false,
                         span: self.span_from(&pstart),
                     });

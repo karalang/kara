@@ -53,12 +53,37 @@ pub struct GenericParams {
     pub span: Span,
 }
 
+/// Declared variance of a generic type parameter — the `+T` / `-T` /
+/// `=T` marker surface (syntax.md §6.4 VARIANCE_MARKER; design.md
+/// § Variance). No marker defaults to `Invariant`, the conservative
+/// choice. At v1 the `+`/`-` markers are legal only on stdlib
+/// parametric type declarations (user code gets
+/// `E_VARIANCE_USER_DECL_NOT_YET`); the verifier proves stdlib
+/// declarations consistent with the type's structure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Variance {
+    /// `+T` — `Foo[Sub] <: Foo[Super]` when `Sub <: Super`.
+    Covariant,
+    /// `-T` — `Foo[Super] <: Foo[Sub]` when `Sub <: Super`.
+    Contravariant,
+    /// `=T` or no marker — `Foo[A]` / `Foo[B]` unrelated unless `A == B`.
+    Invariant,
+}
+
 #[derive(Debug, Clone)]
 pub struct GenericParam {
     pub name: String,
     pub bounds: Vec<TraitBound>,
     pub is_const: bool,
     pub const_type: Option<TypeExpr>,
+    /// Declared variance (design.md § Variance). `Invariant` when no
+    /// marker is written. `variance_span` is `Some` only when an
+    /// explicit marker token (`+`/`-`/`=`) was present — the stdlib
+    /// explicit-variance lint distinguishes explicit `=T` from the
+    /// implicit default, and the user-side rejection diagnostic
+    /// underlines the marker itself.
+    pub variance: Variance,
+    pub variance_span: Option<Span>,
     /// `...S` — shape-variadic parameter (syntax.md § GENERIC_PARAM
     /// variadic row): binds a full dim list (Shape kind). Mutually
     /// exclusive with `is_const`. A `: Dim` bound on a non-variadic

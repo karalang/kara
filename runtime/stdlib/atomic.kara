@@ -10,4 +10,4 @@
 // fell through to a default named-type path for `Atomic[T]`). Baking
 // it makes the type shape uniform with other stdlib collection types.
 
-struct Atomic[T] { }
+struct Atomic[=T] { }

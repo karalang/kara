@@ -971,7 +971,12 @@ pub(super) fn is_subtype(super_ty: &Type, sub_ty: &Type) -> bool {
                 && sp.iter().zip(bp.iter()).all(|(s, b)| is_subtype(b, s))
                 && is_subtype(sr, br)
         }
-        (Type::Ref(s), Type::Ref(b)) | (Type::MutRef(s), Type::MutRef(b)) => is_subtype(s, b),
+        // `ref T` target is covariant; `mut ref T` is invariant in `T`
+        // (design.md § Variance — load-bearing soundness pin): the
+        // refinement-base widening is rejected in both directions, so
+        // the MutRef arm demands mutual subtyping.
+        (Type::Ref(s), Type::Ref(b)) => is_subtype(s, b),
+        (Type::MutRef(s), Type::MutRef(b)) => is_subtype(s, b) && is_subtype(b, s),
         // Owned-to-ref coercion: a `ref T` slot accepts an owned `T` value.
         // design.md Feature 4 Part 3 § Explicit ref for Borrow Returns — the
         // borrow source is inferred from context (function-return tail, call
@@ -991,8 +996,11 @@ pub(super) fn is_subtype(super_ty: &Type, sub_ty: &Type) -> bool {
         // blocks `ref T → mut ref T` (loss-of-mutability would be
         // wrong); the identity `MutRef → MutRef` case is handled by
         // the dedicated arm above.
+        // Invariant like the MutRef↔MutRef arm: the callee writes
+        // through the borrow into the caller's owned binding, so a
+        // widened slot could store a refinement-violating value.
         (Type::MutRef(inner), sub) if !matches!(sub, Type::Ref(_) | Type::MutRef(_)) => {
-            is_subtype(inner, sub)
+            is_subtype(inner, sub) && is_subtype(sub, inner)
         }
         _ => types_compatible(super_ty, sub_ty),
     }
@@ -1070,6 +1078,21 @@ pub(super) fn projection_unresolvable_with(a: &Type, b: &Type) -> bool {
         (Type::AssocProjection { .. }, Type::AssocProjection { .. }) => false,
         (Type::AssocProjection { .. }, _) | (_, Type::AssocProjection { .. }) => true,
         _ => false,
+    }
+}
+
+/// Generic-argument compatibility under a slot's declared variance
+/// (design.md § Variance > per-type variance). The invariant form is
+/// *mutual* compatibility rather than structural equality so the
+/// symmetric permissive arms of `types_compatible` (TypeParam
+/// wildcards, integer-width compat, Never/Error) keep working during
+/// inference, while one-directional widenings (refined→base) are
+/// rejected.
+fn generic_arg_compatible(variance: crate::ast::Variance, a: &Type, b: &Type) -> bool {
+    match variance {
+        crate::ast::Variance::Covariant => types_compatible(a, b),
+        crate::ast::Variance::Contravariant => types_compatible(b, a),
+        crate::ast::Variance::Invariant => types_compatible(a, b) && types_compatible(b, a),
     }
 }
 
@@ -1193,6 +1216,16 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
                     .zip(b_types.iter())
                     .all(|(a, b)| types_compatible(a, b))
         }
+        // Named types: generic-argument compatibility is governed by
+        // the type's per-slot variance declaration (design.md §
+        // Variance; `prelude::STDLIB_VARIANCE`). `+T` slots accept the
+        // refinement-to-base widening directionally (`Iterator[Positive]`
+        // → `Iterator[i32]`); `=T` slots — every parameter of every
+        // user type, and the conservative stdlib default — demand
+        // mutual compatibility, which rejects one-directional widening
+        // (`Vec[Positive]` does NOT widen to `Vec[i32]`) while keeping
+        // the symmetric permissive arms (TypeParam wildcards, integer
+        // compat, Never/Error) intact; `-T` slots flip the direction.
         (
             Type::Named {
                 name: a_name,
@@ -1203,24 +1236,41 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
                 args: b_args,
             },
         ) => {
+            let variances = crate::prelude::stdlib_variance(a_name);
             a_name == b_name
                 && a_args.len() == b_args.len()
                 && a_args
                     .iter()
                     .zip(b_args.iter())
-                    .all(|(a, b)| types_compatible(a, b))
+                    .enumerate()
+                    .all(|(i, (a, b))| {
+                        let slot = variances
+                            .and_then(|v| v.get(i).copied())
+                            .unwrap_or(crate::ast::Variance::Invariant);
+                        generic_arg_compatible(slot, a, b)
+                    })
         }
+        // `ref T` target is covariant; `mut ref T` is invariant in `T`
+        // — the load-bearing soundness pin (design.md § Variance):
+        // refinement-base widening (`mut ref Positive` → `mut ref i32`)
+        // is rejected in both directions.
         (Type::Ref(a), Type::Ref(b)) => types_compatible(a, b),
-        (Type::MutRef(a), Type::MutRef(b)) => types_compatible(a, b),
+        (Type::MutRef(a), Type::MutRef(b)) => {
+            generic_arg_compatible(crate::ast::Variance::Invariant, a, b)
+        }
         // Owned-to-mut-ref coercion (slice 8ag): a `mut ref T` slot
         // accepts an owned source at call boundaries. The `mut` marker
         // is enforced separately by `check_call_site_marker`;
         // types_compatible is type-level only, mirroring the existing
         // `mut Slice[T]` ↔ owned `Vec[T]` / `Array[T, N]` coercion
         // pattern below. The `Ref`/`MutRef` exclusion blocks the cross-
-        // mutability case (`ref T` → `mut ref T`).
+        // mutability case (`ref T` → `mut ref T`). Invariant like the
+        // MutRef↔MutRef arm above: the callee writes through the borrow
+        // into the caller's owned binding, so refinement-base widening
+        // (owned `Positive` source → `mut ref i64` slot) would let the
+        // callee store a refinement-violating value.
         (Type::MutRef(a), sub) if !matches!(sub, Type::Ref(_) | Type::MutRef(_)) => {
-            types_compatible(a, sub)
+            generic_arg_compatible(crate::ast::Variance::Invariant, a, sub)
         }
         // Raw pointers — sibling to the `Ref`/`MutRef` arms above.
         // Constness is part of the shape; cross-constness compatibility
@@ -1236,7 +1286,15 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
                 is_mut: b_mut,
                 inner: b_inner,
             },
-        ) if a_mut == b_mut => types_compatible(a_inner, b_inner),
+        ) if a_mut == b_mut => {
+            // `*const T` is a read-only view — covariant; `*mut T` is
+            // a write window — invariant (same lemma as `mut ref T`).
+            if *a_mut {
+                generic_arg_compatible(crate::ast::Variance::Invariant, a_inner, b_inner)
+            } else {
+                types_compatible(a_inner, b_inner)
+            }
+        }
         (
             Type::Array {
                 element: a_el,
@@ -1246,7 +1304,11 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
                 element: b_el,
                 size: b_sz,
             },
-        ) => a_sz == b_sz && types_compatible(a_el, b_el),
+        ) => {
+            // `Array[=T, const N]` — invariant element per the stdlib
+            // variance audit (mutable through `mut ref`).
+            a_sz == b_sz && generic_arg_compatible(crate::ast::Variance::Invariant, a_el, b_el)
+        }
         // Slice[T] → Slice[T] with compatible elements (identity case is
         // covered above by `a == b`; this arm handles e.g. integer
         // compatibility on the element type).
@@ -1261,9 +1323,11 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
             },
         ) => {
             // Read-only slot accepts mutable source (reborrow as read-only).
-            // Mutable slot rejects read-only source.
+            // Mutable slot rejects read-only source. Elements are
+            // invariant per the stdlib variance audit (`Slice[=T]` —
+            // the type name is shared between read-only and mut views).
             let mut_ok = !*a_mut || *b_mut;
-            mut_ok && types_compatible(a_el, b_el)
+            mut_ok && generic_arg_compatible(crate::ast::Variance::Invariant, a_el, b_el)
         }
         // Coercion at call boundaries: `Slice[T]` accepts `Vec[T]` / `Array[T, N]`,
         // and their `ref` borrows. One-directional — the reverse is not compatible.
@@ -1276,14 +1340,16 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
             Type::Array {
                 element: arr_el, ..
             },
-        ) => types_compatible(slice_el, arr_el),
+        ) => generic_arg_compatible(crate::ast::Variance::Invariant, slice_el, arr_el),
         (
             Type::Slice {
                 element: slice_el,
                 mutable: false,
             },
             Type::Named { name, args },
-        ) if name == "Vec" && args.len() == 1 => types_compatible(slice_el, &args[0]),
+        ) if name == "Vec" && args.len() == 1 => {
+            generic_arg_compatible(crate::ast::Variance::Invariant, slice_el, &args[0])
+        }
         (
             Type::Slice {
                 element: slice_el,
@@ -1292,14 +1358,14 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
             Type::Ref(inner),
         ) => match inner.as_ref() {
             Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
-                types_compatible(slice_el, &args[0])
+                generic_arg_compatible(crate::ast::Variance::Invariant, slice_el, &args[0])
             }
             Type::Array {
                 element: arr_el, ..
-            } => types_compatible(slice_el, arr_el),
+            } => generic_arg_compatible(crate::ast::Variance::Invariant, slice_el, arr_el),
             Type::Slice {
                 element: inner_el, ..
-            } => types_compatible(slice_el, inner_el),
+            } => generic_arg_compatible(crate::ast::Variance::Invariant, slice_el, inner_el),
             _ => false,
         },
         // `mut Slice[T]` at the slot — accepts `mut ref Vec[T]` / `mut ref Array[T, N]`
@@ -1316,15 +1382,15 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
             Type::MutRef(inner),
         ) => match inner.as_ref() {
             Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
-                types_compatible(slice_el, &args[0])
+                generic_arg_compatible(crate::ast::Variance::Invariant, slice_el, &args[0])
             }
             Type::Array {
                 element: arr_el, ..
-            } => types_compatible(slice_el, arr_el),
+            } => generic_arg_compatible(crate::ast::Variance::Invariant, slice_el, arr_el),
             Type::Slice {
                 element: inner_el,
                 mutable: true,
-            } => types_compatible(slice_el, inner_el),
+            } => generic_arg_compatible(crate::ast::Variance::Invariant, slice_el, inner_el),
             _ => false,
         },
         (
@@ -1335,14 +1401,16 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
             Type::Array {
                 element: arr_el, ..
             },
-        ) => types_compatible(slice_el, arr_el),
+        ) => generic_arg_compatible(crate::ast::Variance::Invariant, slice_el, arr_el),
         (
             Type::Slice {
                 element: slice_el,
                 mutable: true,
             },
             Type::Named { name, args },
-        ) if name == "Vec" && args.len() == 1 => types_compatible(slice_el, &args[0]),
+        ) if name == "Vec" && args.len() == 1 => {
+            generic_arg_compatible(crate::ast::Variance::Invariant, slice_el, &args[0])
+        }
         (
             Type::Function {
                 params: a_p,
@@ -1363,11 +1431,19 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
                 return_type: b_r,
             },
         ) => {
+            // Position-based variance (design.md § Variance table):
+            // function arguments are contravariant — a source fn that
+            // accepts the *wider* type serves a slot demanding the
+            // narrower one — and the return type is covariant. The
+            // pre-variance implementation checked arguments
+            // covariantly, which let `Fn(Positive)` flow into a
+            // `Fn(i64)` slot (unsound) while rejecting the sound
+            // direction.
             a_p.len() == b_p.len()
                 && a_p
                     .iter()
                     .zip(b_p.iter())
-                    .all(|(a, b)| types_compatible(a, b))
+                    .all(|(a, b)| types_compatible(b, a))
                 && types_compatible(a_r, b_r)
         }
         // Refinement types — one-directional refined→base widening
@@ -1389,8 +1465,15 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
         // `Vec[i64]` slot.
         (_, Type::Refinement { .. }) => types_compatible(a, strip_refinement(b)),
         (Type::Shared(a_name), Type::Shared(b_name)) => a_name == b_name,
-        (Type::Rc(a_inner), Type::Rc(b_inner)) => types_compatible(a_inner, b_inner),
-        (Type::Arc(a_inner), Type::Arc(b_inner)) => types_compatible(a_inner, b_inner),
+        // `Rc[=T]` / `Arc[=T]` — invariant per the stdlib variance
+        // audit (consuming the handle yields a `T`; widening would
+        // violate move-out semantics).
+        (Type::Rc(a_inner), Type::Rc(b_inner)) => {
+            generic_arg_compatible(crate::ast::Variance::Invariant, a_inner, b_inner)
+        }
+        (Type::Arc(a_inner), Type::Arc(b_inner)) => {
+            generic_arg_compatible(crate::ast::Variance::Invariant, a_inner, b_inner)
+        }
         // No (Rc, Arc) / (Arc, Rc) cross arms: `Rc[T]` is not assignable
         // to `Arc[T]` and vice versa per design.md § RC integration. The
         // value-site auto-promotion in `OwnershipChecker::promote_rc_to_arc`
