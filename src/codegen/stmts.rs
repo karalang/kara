@@ -2010,6 +2010,53 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // Oversized boxed enum payload (`Option[Wide]` /
+                // `Result[Wide, _]`) — queue a scope-exit free of the heap
+                // box. v1 covers the explicitly-annotated let, where the
+                // declared type names the payload `T` directly; fresh-temp
+                // scrutinees (`Vec.pop()` → `match`) and untyped inference
+                // are follow-ups (tracked in the spike). Skipped when a
+                // shared-Option cleanup is already queued — a shared
+                // payload is a 1-word RC pointer and is never boxed.
+                if shared_option_info.is_none() {
+                    if let PatternKind::Binding(var_name) = &pattern.kind {
+                        if let Some(te) = ty.as_ref() {
+                            let boxed = self.boxed_enum_payload_variants(te);
+                            if let Some(slot) = (!boxed.is_empty())
+                                .then(|| self.variables.get(var_name.as_str()).copied())
+                                .flatten()
+                            {
+                                // Zero-init nested-scope slots so a let that
+                                // doesn't execute leaves tag=0 (no payload),
+                                // not undef, at cleanup — mirrors the
+                                // shared-Option path above.
+                                let is_nested = self
+                                    .current_fn
+                                    .and_then(|f| f.get_first_basic_block())
+                                    .zip(self.builder.get_insert_block())
+                                    .map(|(entry, cur)| entry != cur)
+                                    .unwrap_or(false);
+                                if is_nested {
+                                    if let Some(en) = boxed.first().map(|b| b.0) {
+                                        let enum_ty = self.enum_layouts[en].llvm_type;
+                                        self.zero_init_option_slot_in_entry_block(
+                                            slot.ptr, enum_ty,
+                                        );
+                                    }
+                                }
+                                for (enum_name, variant, inner) in &boxed {
+                                    self.track_boxed_enum_var(
+                                        var_name,
+                                        slot.ptr,
+                                        enum_name,
+                                        variant,
+                                        inner.as_deref(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
                 // Track Tensor bindings for scope cleanup. Unannotated
                 // bindings (`let t = Tensor.from(...)`, or a tensor-
                 // returning call) register here from the lowering

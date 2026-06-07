@@ -663,6 +663,41 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Queue a scope-exit free of the heap box backing an enum binding
+    /// whose payload `T` was too wide to inline (`Option[Wide]` /
+    /// `Result[Wide, _]` — see `coerce_to_payload_words`'s boxing path).
+    /// `payload_variant` is the discriminant that carries the box (`Some`
+    /// / `Ok`); `inner_struct_name`, when `Some`, names the boxed struct
+    /// so its `__karac_drop_struct_<T>` field cleanup runs before the box
+    /// is freed (skipped when `T` is all-inline). Non-shared analogue of
+    /// `track_rc_option_var`.
+    pub(super) fn track_boxed_enum_var(
+        &mut self,
+        name: &str,
+        enum_slot: PointerValue<'ctx>,
+        enum_name: &str,
+        payload_variant: &str,
+        inner_struct_name: Option<&str>,
+    ) {
+        let (enum_ty, some_tag) = match self.enum_layouts.get(enum_name) {
+            Some(l) => (
+                l.llvm_type,
+                l.tags.get(payload_variant).copied().unwrap_or(1),
+            ),
+            None => return,
+        };
+        let inner_drop_fn = inner_struct_name.and_then(|n| self.emit_struct_drop_synthesis(n));
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::BoxedEnumDrop {
+                name: name.to_string(),
+                enum_slot,
+                enum_ty,
+                inner_drop_fn,
+                some_tag,
+            });
+        }
+    }
+
     /// Zero-init an `Option[T]` slot at the top of the current
     /// function's entry block. Mirrors `null_init_slot_in_entry_block`'s
     /// shape but operates on the full Option struct (`{tag, w0, w1,
@@ -2507,6 +2542,87 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.position_at_end(inner_skip_bb);
                 self.builder.build_unconditional_branch(join_bb).unwrap();
                 self.builder.position_at_end(skip_bb);
+                self.builder.build_unconditional_branch(join_bb).unwrap();
+                self.builder.position_at_end(join_bb);
+            }
+            // Oversized boxed enum payload (see `coerce_to_payload_words`):
+            // free the heap box. Load the tag, branch on the payload-
+            // bearing discriminant, recover the box pointer from word 0,
+            // run the inner drop fn (when `T` owns heap), then `free` the
+            // box. Mirrors `RcDecOption` with `free` in place of the
+            // refcount dec.
+            CleanupAction::BoxedEnumDrop {
+                name,
+                enum_slot,
+                enum_ty,
+                inner_drop_fn,
+                some_tag,
+            } => {
+                let tag_ptr = self
+                    .builder
+                    .build_struct_gep(*enum_ty, *enum_slot, 0, &format!("{}_box_tag_ptr", name))
+                    .unwrap();
+                let tag = self
+                    .builder
+                    .build_load(i64_t, tag_ptr, &format!("{}_box_tag", name))
+                    .unwrap()
+                    .into_int_value();
+                let some_tag_const = i64_t.const_int(*some_tag, false);
+                let is_some = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        tag,
+                        some_tag_const,
+                        &format!("{}_box_is_some", name),
+                    )
+                    .unwrap();
+                let do_bb = self.context.append_basic_block(fn_val, "boxdrop_do");
+                let join_bb = self.context.append_basic_block(fn_val, "boxdrop_join");
+                self.builder
+                    .build_conditional_branch(is_some, do_bb, join_bb)
+                    .unwrap();
+                self.builder.position_at_end(do_bb);
+                let w0_ptr = self
+                    .builder
+                    .build_struct_gep(*enum_ty, *enum_slot, 1, &format!("{}_box_w0_ptr", name))
+                    .unwrap();
+                let w0 = self
+                    .builder
+                    .build_load(i64_t, w0_ptr, &format!("{}_box_w0", name))
+                    .unwrap()
+                    .into_int_value();
+                let box_ptr = self
+                    .builder
+                    .build_int_to_ptr(w0, ptr_ty, &format!("{}_box_ptr", name))
+                    .unwrap();
+                // Defensive null-guard (mirrors RcDecOption): a real
+                // Some/Ok payload box is never null, but a future codegen
+                // shape storing a sentinel must not crash the free.
+                let is_null = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        box_ptr,
+                        ptr_ty.const_null(),
+                        &format!("{}_box_is_null", name),
+                    )
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(fn_val, "boxdrop_free");
+                self.builder
+                    .build_conditional_branch(is_null, join_bb, free_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                // The box points directly at `T`; run its field cleanup
+                // before releasing the box (no-op when `T` is all-inline).
+                if let Some(drop_fn) = inner_drop_fn {
+                    self.builder
+                        .build_call(*drop_fn, &[box_ptr.into()], "")
+                        .unwrap();
+                }
+                self.builder
+                    .build_call(self.free_fn, &[box_ptr.into()], "")
+                    .unwrap();
                 self.builder.build_unconditional_branch(join_bb).unwrap();
                 self.builder.position_at_end(join_bb);
             }

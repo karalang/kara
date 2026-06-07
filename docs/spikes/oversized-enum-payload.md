@@ -1,11 +1,33 @@
 # Design spike — oversized enum payload (codegen)
 
-**Status:** **Fail-loud stop-gap LANDED 2026-06-07** (`E_ENUM_PAYLOAD_OVERSIZED`
-at `coerce_to_payload_words`, `src/codegen/call_dispatch.rs`). The real fix
-(native support for payloads wider than a seeded enum's fixed area) is **not
-started** — it is a deliberate representation/design decision (box vs widen vs
-per-`T` monomorphization), scoped below for later scheduling. Recommendation:
-**box oversized payloads** (rationale in §4).
+**Status:** **Boxing LANDED 2026-06-07** — native support for payloads wider
+than a seeded enum's fixed area, via the **box-oversized** representation chosen
+in §4. Two slices:
+- **Pack + unpack** (commit `873be65c`): `coerce_to_payload_words` heap-boxes a
+  value wider than the area (box pointer in word 0) instead of erroring; the
+  unpack readers (`reconstruct_payload_value`, the `.unwrap()` helper in
+  `calls.rs`) recompute the same `llvm_type_word_count(T) > area` predicate and
+  load `T` back from the box.
+- **Drop** (this commit): a `BoxedEnumDrop` cleanup action frees the box (and
+  runs the inner struct drop first when `T` owns heap) at scope exit, queued by
+  `track_boxed_enum_var` at the **annotated** `let o: Option[T]` / `Result[T,E]`
+  site.
+
+The fail-loud `E_ENUM_PAYLOAD_OVERSIZED` error is **removed** — the capability it
+guarded now works.
+
+**Remaining follow-ups (box-free coverage):**
+- **Fresh-temp scrutinee box-free** — `Vec[Wide].pop()` / `Map[K,Wide].get()` →
+  `match` produces a boxed `Option` with no named binding, so v1's let-site drop
+  doesn't free it (the box leaks; invisible on macOS — no LeakSanitizer). Tie-in:
+  re-widen `asan_soa_pop_remove_no_leak_or_uaf` back to 4-field `Entity` once this
+  lands (it was narrowed to 3-field as the B#1 stop-gap workaround).
+- **Move-OUT of a boxed payload** — `match boxed_opt { Some(h) => … }` where `h`
+  owns heap copies the inner pointers; freeing both `h` and the box double-frees.
+  v1 ASAN coverage isolates the move-IN suppression (no `match`); the move-out
+  interaction needs the `suppress_destructured_enum_payload_cleanup` keying.
+- **Untyped-let inference** (`let o = make_opt()` with no annotation) and
+  **`Result.Err` boxing** beyond the annotated-Ok/Err cases.
 
 A real, IR-proven **silent miscompile** found 2026-06-07 while scoping the
 "deep nesting" follow-up of
@@ -69,54 +91,66 @@ RC pointer and fits. So real exposure is "any `Option`/`Result` over a
 struct/tuple wider than the area" — common in principle, sparse in the current
 corpus because most code uses small structs or `shared` for big aggregates.
 
-## 3. Stop-gap (landed)
+## 3. History — fail-loud stop-gap (superseded)
 
-`coerce_to_payload_words` now returns `Err(E_ENUM_PAYLOAD_OVERSIZED)` when the
-decomposed value's word count exceeds `num_words`, instead of truncating. A hard
-compile error beats garbage (memory `prefer-failloud-over-silent-miscompile`):
-the "capability" it removes never actually worked. Nested *enum* payloads are
-still rejected one level earlier by the typechecker's `E_ENUM_NESTED_ENUM_PAYLOAD`,
-so this guard's live surface is oversized **struct / tuple** payloads.
+Before boxing, `coerce_to_payload_words` returned `Err(E_ENUM_PAYLOAD_OVERSIZED)`
+when the decomposed word count exceeded `num_words`, instead of truncating — a
+hard compile error beat garbage (memory `prefer-failloud-over-silent-miscompile`)
+while the real representation was designed. The boxing slices **removed** that
+error; the capability it guarded now works. The B#1 corpus workaround that
+narrowed `asan_soa_pop_remove_no_leak_or_uaf` to a 3-word struct still stands —
+re-widen it once the fresh-temp-scrutinee box-free (§1) lands.
 
-- Diagnostic + guard: `src/codegen/call_dispatch.rs` `coerce_to_payload_words`.
-- Negative test: `test_codegen_rejects_oversized_option_payload` (tests/codegen.rs).
-- Corpus fix: `asan_soa_pop_remove_no_leak_or_uaf` narrowed to a 3-word struct
-  (its `cold { label }` group made the popped `Entity` 4 words). Cold-group
-  *layout* coverage is unaffected — it lives in tests/codegen.rs.
-
-## 4. The real fix — design fork (not started)
+## 4. The chosen representation — box-oversized (LANDED)
 
 | approach | common case (`Option[i64]`/`Option[Vec]`) | wide case | new drop work | reach |
 |---|---|---|---|---|
-| **widen-global** (seed area to program-wide max payload width) | **bloats** to widest | works | none | every Option grows; threads width through the hardcoded `coerce_to_payload_words(_, 3/5)` sites |
-| **box-oversized** (heap-box `T` > area, pointer in w0) | unchanged (small) | works | **box free + inner drop** | localized to pack/unpack/drop of the wide case |
-| **per-`T` Option monomorphization** (distinct `Option_T` LLVM types) | unchanged | works | per-type drop | codegen-wide rewrite (Option is one seeded type today) |
+| widen-global (seed area to program-wide max payload width) | **bloats** to widest | works | none | every Option grows; threads width through the hardcoded `coerce_to_payload_words(_, 3/5)` sites |
+| **box-oversized** ✅ (heap-box `T` > area, pointer in w0) | unchanged (small) | works | box free + inner drop | localized to pack/unpack/drop of the wide case |
+| per-`T` Option monomorphization (distinct `Option_T` LLVM types) | unchanged | works | per-type drop | codegen-wide rewrite (Option is one seeded type today) |
 
-**Recommendation: box-oversized.** Widen-global taxes the hot common case
-(`Option[i64]` from `Map.get` in a loop) to fix the rare wide one — wrong default
-for a performance-oriented language. Per-`T` monomorphization is cleanest but is
-a codegen-wide change. Boxing keeps the common path small and, crucially,
-**re-converges with the original "deep nesting" drop-recursion**: dropping a
-boxed `Option[Holder]` is "call `__karac_drop_Holder` (free the inner `Vec`),
-then free the box" — exactly the `EnumDropKind` recursion the sibling spike
-imagined, but now on a *sound* heap `Holder` instead of a truncated inline one.
-So that work is not wasted; it just needs this representation first. Cost: one
-heap alloc per wide `Some(...)` + the box-free drop obligation (slots into the
-existing `EnumDrop` / synth-drop path).
+**Boxing was chosen.** Widen-global taxes the hot common case (`Option[i64]`
+from `Map.get` in a loop) to fix the rare wide one — wrong default for a
+performance-oriented language. Per-`T` monomorphization is cleanest but a
+codegen-wide change. Boxing keeps the common path byte-identical and confines the
+heap indirection to the wide case.
 
-Open questions for the box slice: niche the boxed case to 1 word (null = None)?
-interaction with move-out suppression (B) when a pattern binds a field out of a
-boxed payload; `Result` (5-word area) boxing threshold; whether to box at the
-seeded-area boundary or only when strictly larger.
+**The coherence invariant that makes it sound:** the box decision is a pure
+function of the static type — `llvm_type_word_count(T) > area` — recomputed
+identically at pack (`coerce_to_payload_words`, from the value's LLVM type),
+unpack (`reconstruct_payload_value` / the `.unwrap()` helper, from the
+typechecker-recorded `T`), and drop (`track_boxed_enum_var`, from the declared
+`Option[T]`). The typechecker assigns the same `Option[T]` at a value's
+definition and every use, so the sites stay in lockstep with no runtime
+"am I boxed" flag. Where a consumer site genuinely cannot recover `T`, it must
+**not** read word 0 as inline (the `.unwrap()` path keeps its early-return
+fail-loud for that case).
+
+As §4's recommendation foresaw, boxing **re-converged with the original "deep
+nesting" drop-recursion**: dropping a boxed `Option[H]` is "run
+`__karac_drop_struct_H` (free the inner `Vec`), then free the box" — now on a
+*sound* heap `H` instead of a truncated inline one (`BoxedEnumDrop`,
+`runtime.rs`).
+
+**Resolved design questions** (the §4 open list): box only when *strictly* wider
+than the area (fitting payloads stay byte-identical); keep the seeded
+`{tag, w0, …}` layout with the box pointer in `w0` (no niche — a later
+optimization); `Result` boxes per-variant at its 5-word area. The move-out
+suppression interaction is the remaining open item (§1 follow-ups).
 
 ## 5. Doc footprint (update these together — see memory `maintain-scope-doc-index`)
 
-- this file — the scope + design fork (entry point)
+- this file — the representation + coherence invariant (entry point)
 - `docs/spikes/pattern-arm-unbound-field-drop.md` — "deep nesting" follow-up
   corrected to point here (representation miscompile, not a drop gap)
 - `docs/spikes/general-owned-temp-tracking.md` — slice-4 note references this
-- `src/codegen/call_dispatch.rs` `coerce_to_payload_words` — the guard + the
+- `src/codegen/call_dispatch.rs` `coerce_to_payload_words` — pack/box + the
   authoritative doc comment
-- `tests/codegen.rs` `test_codegen_rejects_oversized_option_payload` — the
-  fail-loud regression
-- `tests/memory_sanitizer.rs` `asan_soa_pop_remove_no_leak_or_uaf` — narrowed to fit
+- `src/codegen/control_flow_match.rs` `reconstruct_payload_value` — unpack/unbox
+- `src/codegen/calls.rs` (`.unwrap()`/`.expect()` helper) — unwrap/unbox
+- `src/codegen/{state,runtime}.rs` — `BoxedEnumDrop` action + `track_boxed_enum_var`
+- `src/codegen/types_lowering.rs` `boxed_enum_payload_variants` — let-site predicate
+- `tests/codegen.rs` `test_{e2e,ir}_boxed_*` — round-trip + box-free regressions
+- `tests/memory_sanitizer.rs` `asan_boxed_option_*` — box-free double-free gate;
+  `asan_soa_pop_remove_no_leak_or_uaf` — narrowed to fit (re-widen after the
+  fresh-temp-scrutinee box-free, §1)

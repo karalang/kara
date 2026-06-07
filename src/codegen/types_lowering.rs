@@ -1578,6 +1578,62 @@ impl<'ctx> super::Codegen<'ctx> {
         let info = self.shared_types.get(inner_name.as_str())?.clone();
         Some((inner_name.clone(), info))
     }
+
+    /// For a let-binding's declared `Option[T]` / `Result[T, E]` type,
+    /// return each *boxed* payload variant as
+    /// `(enum_name, payload_variant, inner_struct_name)`. A variant's
+    /// payload is boxed when its LLVM word count exceeds the enum's fixed
+    /// area (Option = 3, Result = 5) — the same predicate
+    /// `coerce_to_payload_words` packs with. Shared payloads lower to a
+    /// 1-word RC pointer and fitting payloads stay ≤ area, so both yield
+    /// nothing. `inner_struct_name` names a user struct payload (so its
+    /// `__karac_drop_struct_<T>` field cleanup runs before the box is
+    /// freed) or `None` for tuples / scalars. Drives `track_boxed_enum_var`
+    /// at the let-site. See docs/spikes/oversized-enum-payload.md.
+    pub(super) fn boxed_enum_payload_variants(
+        &self,
+        te: &TypeExpr,
+    ) -> Vec<(&'static str, &'static str, Option<String>)> {
+        let TypeKind::Path(p) = &te.kind else {
+            return vec![];
+        };
+        let enum_name = p.segments.last().map(|s| s.as_str());
+        let (enum_lit, area, variants): (&'static str, usize, &[&'static str]) = match enum_name {
+            Some("Option") => ("Option", 3, &["Some"]),
+            Some("Result") => ("Result", 5, &["Ok", "Err"]),
+            _ => return vec![],
+        };
+        let args: Vec<&TypeExpr> = match &p.generic_args {
+            Some(a) => a
+                .iter()
+                .filter_map(|g| match g {
+                    GenericArg::Type(t) => Some(t),
+                    _ => None,
+                })
+                .collect(),
+            None => return vec![],
+        };
+        let mut out = Vec::new();
+        for (i, variant) in variants.iter().enumerate() {
+            let Some(arg) = args.get(i) else {
+                continue;
+            };
+            let ll = self.llvm_type_for_type_expr(arg);
+            if Self::llvm_type_word_count(ll) > area {
+                let inner_struct = match &arg.kind {
+                    TypeKind::Path(ip) => ip
+                        .segments
+                        .last()
+                        .map(|s| s.as_str())
+                        .filter(|n| self.struct_types.contains_key(*n))
+                        .map(|n| n.to_string()),
+                    _ => None,
+                };
+                out.push((enum_lit, *variant, inner_struct));
+            }
+        }
+        out
+    }
 }
 
 /// Is `te` a path whose last segment is `bool`? Used by the Atomic arm

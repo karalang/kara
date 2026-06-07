@@ -523,6 +523,35 @@ pub(crate) enum CleanupAction<'ctx> {
         /// so cleanup is robust against a future seed-table renumber.
         some_tag: u64,
     },
+    /// Free the heap box carried by an enum binding whose payload `T` was
+    /// too wide to inline (`llvm_type_word_count(T) > area` — see
+    /// `coerce_to_payload_words`'s boxing path). The slot holds the
+    /// `{tag, w0, ...}` struct; on cleanup, load the tag, branch on the
+    /// payload-bearing discriminant (`Some` / `Ok`), recover the box
+    /// pointer from word 0 (`int_to_ptr`), run the inner drop fn (when
+    /// `T` itself owns heap — e.g. a struct with a `Vec` field), then
+    /// `free` the box. The non-payload side is a no-op. Mirrors
+    /// `RcDecOption`'s reload-from-slot + tag-guard shape; the box is the
+    /// non-shared analogue of the RC pointer.
+    BoxedEnumDrop {
+        /// Variable name — for diagnostic-labeled IR temporaries.
+        name: String,
+        /// Alloca holding the `{tag, w0, ...}` enum struct value.
+        /// Reloaded at cleanup so reassignment is observed at scope exit.
+        enum_slot: PointerValue<'ctx>,
+        /// LLVM struct type of the enum's tagged-union value (Option's
+        /// 4-i64 shape / Result's 6-i64 shape) — the GEP type.
+        enum_ty: StructType<'ctx>,
+        /// `__karac_drop_struct_<T>` for the boxed payload, when `T` owns
+        /// heap and needs an inner drop before the box is freed. `None`
+        /// when `T` is all-inline (the common wide-scalar-struct case) —
+        /// then only the box itself is freed.
+        inner_drop_fn: Option<FunctionValue<'ctx>>,
+        /// Discriminant value for the payload-bearing variant (`Some` /
+        /// `Ok`). Captured at registration so cleanup is robust to a
+        /// seed-table renumber.
+        some_tag: u64,
+    },
     /// User-source `defer { ... }` block to compile at scope exit.
     /// Pushed in program order at the `defer` statement's site; drained
     /// LIFO together with the compiler-internal cleanup variants at

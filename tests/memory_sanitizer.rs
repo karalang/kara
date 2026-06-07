@@ -3176,6 +3176,68 @@ fn main() {
         );
     }
 
+    /// Oversized boxed enum payload — box-free double-free gate. A 4-word
+    /// `Wide` exceeds Option's 3-word area, so `Some(Wide)` heap-boxes it
+    /// (`coerce_to_payload_words`); the annotated `let o: Option[Wide]`
+    /// frees the box at scope exit. The matched-out `e` is a scalar copy
+    /// (no inner heap), so the only owner of the box is `o`'s slot —
+    /// looping faults under ASAN if the box is freed twice or the
+    /// matched-out copy aliases it. macOS has no LeakSanitizer, so the
+    /// leak side is pinned by the IR free-count test; this is the
+    /// double-free gate. See docs/spikes/oversized-enum-payload.md.
+    #[test]
+    fn asan_boxed_option_let_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct Wide { a: i64, b: i64, c: i64, d: i64 }
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let o: Option[Wide] = Some(Wide { a: i, b: 2, c: 3, d: 4 });
+        match o {
+            Some(e) => println(e.a + e.d),
+            None => println(-1),
+        }
+        i = i + 1;
+    }
+    println(99);
+}
+"#,
+            &["4", "5", "6", "7", "8", "99"],
+            "boxed_option_let_no_double_free",
+        );
+    }
+
+    /// Boxed payload whose `T` itself owns heap: `Option[H]` with a `Vec`
+    /// field (5 words → boxed). Scope exit runs the inner struct drop
+    /// (frees the Vec buffer) then frees the box. The `vv` moved into
+    /// `Some(H { v: vv, .. })` must have its own scope cleanup suppressed
+    /// — otherwise the Vec buffer is freed by both `vv`'s cleanup and the
+    /// box's inner drop. Looping turns any such imbalance into an ASAN
+    /// fault. (No `match` here, to isolate the box-drop + move-in
+    /// suppression from the move-OUT-of-box path, a separate follow-up.)
+    #[test]
+    fn asan_boxed_option_inner_heap_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct H { v: Vec[i64], a: i64, b: i64 }
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let mut vv: Vec[i64] = Vec.new();
+        vv.push(i);
+        let o: Option[H] = Some(H { v: vv, a: 1, b: 2 });
+        println(i);
+        i = i + 1;
+    }
+    println(99);
+}
+"#,
+            &["0", "1", "2", "3", "4", "99"],
+            "boxed_option_inner_heap_no_double_free",
+        );
+    }
+
     // ── general owned-temp tracking, slice 1 (phase-6 line 489/497) ──
     //
     // docs/spikes/general-owned-temp-tracking.md slice 1: a fresh-owned

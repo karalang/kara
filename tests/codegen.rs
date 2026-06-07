@@ -17757,6 +17757,46 @@ fn main() {
         }
     }
 
+    /// Drop: an annotated `let o: Option[Wide]` frees its heap box at
+    /// scope exit (the `boxdrop` cleanup). Without it the box leaks
+    /// (invisible to macOS ASAN, so this IR free-count is the gate).
+    #[test]
+    fn test_ir_boxed_option_let_frees_box() {
+        let src = r#"
+struct Wide { a: i64, b: i64, c: i64, d: i64 }
+fn main() {
+    let o: Option[Wide] = Some(Wide { a: 1, b: 2, c: 3, d: 4 });
+    println(0);
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            ir.contains("boxdrop") && main_free_count(&ir) >= 1,
+            "boxed Option let must free its box at scope exit; got:\n{ir}"
+        );
+    }
+
+    /// Drop with inner heap: `Option[H]` where `H` owns a `Vec` (5 words,
+    /// boxed). Scope exit must free BOTH the inner Vec buffer (via the
+    /// inner struct drop) AND the box — two frees.
+    #[test]
+    fn test_ir_boxed_option_let_frees_inner_heap_and_box() {
+        let src = r#"
+struct H { v: Vec[i64], a: i64, b: i64 }
+fn main() {
+    let mut vv: Vec[i64] = Vec.new();
+    vv.push(7_i64);
+    let o: Option[H] = Some(H { v: vv, a: 1, b: 2 });
+    println(0);
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            main_free_count(&ir) >= 2,
+            "boxed Option[H] must free inner Vec + box (>=2 frees); got:\n{ir}"
+        );
+    }
+
     // ── Concurrency analysis plumbing ──
 
     /// Slice 1 wiring sanity-check: full pipeline through
