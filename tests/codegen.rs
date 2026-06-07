@@ -9559,6 +9559,37 @@ fn make() -> Holder {
     }
 
     #[test]
+    fn test_ir_whilelet_freshtemp_enum_unbound_field_freed() {
+        // `while let Full(_, n) = next(i) { … }` — per-iteration fresh-temp enum
+        // scrutinee. The materialize + `track_enum_var` register in the body's
+        // per-iteration frame (not an enclosing one), so the enum drop walk
+        // frees each iteration's unbound Vec before the next scrutinee eval.
+        let src = r#"
+enum Holder { Full(Vec[i64], i64), Empty }
+fn next(i: i64) -> Holder {
+    if i < 3 {
+        let mut v: Vec[i64] = Vec.new();
+        v.push(1_i64);
+        return Holder.Full(v, i);
+    }
+    return Holder.Empty;
+}
+fn main() {
+    let mut i = 0;
+    while let Holder.Full(_, n) = next(i) {
+        println(n);
+        i = i + 1;
+    }
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            ir.contains("__freshtemp_enum_scrut") && ir.contains("@__karac_drop_Holder("),
+            "expected fresh-temp while-let scrutinee materialized + enum-dropped; got:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_let_else_emits_branch_not_noop() {
         // phase-6-runtime.md line 489: `let … else` lowers to a real branch
         // (match edge binds + falls through, else edge diverges). Regression

@@ -3051,6 +3051,59 @@ fn make() -> Holder {
         );
     }
 
+    // while-let surface of the B fix — the per-iteration outlier. The
+    // materialize + EnumDrop live in the loop body's per-iteration frame, so
+    // each iteration's scrutinee temp drops before the next eval. A
+    // many-iteration drain amplifies a per-iteration imbalance (stale alloca
+    // cap re-freed, or a moved field double-freed against its binding) into a
+    // deterministic macOS fault; the unbound case is the Linux leak oracle.
+    // `next(i)` returns `Full` while `i < 6`, then `Empty` (heap-free miss
+    // variant — the noted exit-edge leak does not apply).
+
+    const B_WHILELET_PRELUDE: &str = r#"
+enum Holder { Full(Vec[i64], i64), Empty }
+fn next(i: i64) -> Holder {
+    if i < 6 {
+        let mut v: Vec[i64] = Vec.new();
+        v.push(1_i64);
+        v.push(2_i64);
+        return Holder.Full(v, i);
+    }
+    return Holder.Empty;
+}
+"#;
+
+    #[test]
+    fn asan_whilelet_freshtemp_enum_unbound_field_clean() {
+        // `while let Full(_, n) = next(i)` — the Vec is unbound each iteration;
+        // the per-iteration EnumDrop frees it before the next scrutinee eval.
+        let src = format!(
+            "{B_WHILELET_PRELUDE}\nfn main() {{\n    let mut i = 0;\n    while let Holder.Full(_, n) = next(i) {{\n        println(n);\n        i = i + 1;\n    }}\n    println(99);\n}}\n"
+        );
+        assert_clean_asan_run(
+            &src,
+            &["0", "1", "2", "3", "4", "5", "99"],
+            "whilelet_freshtemp_enum_unbound_field_clean",
+        );
+    }
+
+    #[test]
+    fn asan_whilelet_freshtemp_enum_bound_field_no_double_free() {
+        // `while let Full(v, n) = next(i)` — the Vec is moved into `v` each
+        // iteration. Suppression zeroes the moved field's cap in the
+        // (reused) alloca so the per-iteration EnumDrop skips it; `v`'s
+        // per-iteration binding cleanup frees it once. A double-free would
+        // fault on macOS.
+        let src = format!(
+            "{B_WHILELET_PRELUDE}\nfn main() {{\n    let mut i = 0;\n    while let Holder.Full(v, n) = next(i) {{\n        println(v.len() + n);\n        i = i + 1;\n    }}\n    println(99);\n}}\n"
+        );
+        assert_clean_asan_run(
+            &src,
+            &["2", "3", "4", "5", "6", "7", "99"],
+            "whilelet_freshtemp_enum_bound_field_no_double_free",
+        );
+    }
+
     // ── general owned-temp tracking, slice 1 (phase-6 line 489/497) ──
     //
     // docs/spikes/general-owned-temp-tracking.md slice 1: a fresh-owned

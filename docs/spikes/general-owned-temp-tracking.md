@@ -335,13 +335,15 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    whole temp drops as one unit and partial-drop is never needed. **Update
    (2026-06-07):** the B track ([`pattern-arm-unbound-field-drop.md`](pattern-arm-unbound-field-drop.md))
    landed `materialize_freshtemp_enum_scrutinee` + `track_enum_var` for fresh-temp
-   *enum* scrutinees in if-let/match/let-else — which already delivers BOTH the
+   *enum* scrutinees in **all four** pattern-matching constructs
+   (if-let/match/let-else/while-let) — which already delivers BOTH the
    wholesale-drop on the miss edge (no suppression → the enum drop walk frees the
    whole temp) AND the move-out-aware partial drop on the hit edge. So slice 4's
-   wholesale case is **done for those three constructs over enum scrutinees**.
-   What's left under this slice: `while let` (per-iteration frame placement),
-   deep-nested enum scrutinees, and the guard-style borrow-returning-method
-   scrutinee (still gated on 3b — see below).
+   wholesale case is **done for all four constructs over enum scrutinees**. What's
+   left under this slice: deep-nested enum scrutinees (needs `EnumDropKind`
+   recursion — a core enum-drop enhancement, not chokepoint work), plain-struct
+   destructure temps, and the guard-style borrow-returning-method scrutinee
+   (still gated on 3b — see below).
    **Why this is not a bounded chokepoint slice:** an IR probe on `main` showed
    that every *realizable* scrutinee is an `Option`/`Result`/enum carrying heap
    in a *payload* (`if let Holder.Empty = make()` where `make() -> Holder` has a

@@ -174,7 +174,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // Per-iteration scope frame, same shape as `compile_while` — see its
         // comment for the leak rationale.
         self.scope_cleanup_actions.push(Vec::new());
+        // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
+        // scrutinee with a heap payload field the arm leaves unbound leaks per
+        // iteration. Unlike if-let/let-else (one enclosing-frame drop), the
+        // materialize + `track_enum_var` must register in the *per-iteration*
+        // body frame (pushed just above) so the EnumDrop drains at the bottom
+        // of each iteration and the entry alloca is overwritten by the next
+        // iteration's scrutinee before being read again. The store emits here
+        // in `body_bb` (dominated by `cond_bb` where `val` is defined).
+        // Limitation: a heap-bearing *miss* variant at loop exit (the final
+        // non-matching scrutinee, evaluated in `cond_bb` and never entering the
+        // body) is not dropped — a narrow, separately-tracked leak.
+        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val);
         self.bind_pattern_values(pattern, val)?;
+        if let Some((alloca, enum_name)) = &freshtemp_enum {
+            self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
+        }
         self.compile_block(body)?;
         let body_has_terminator = self
             .builder
