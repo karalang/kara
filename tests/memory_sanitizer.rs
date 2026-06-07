@@ -2656,6 +2656,57 @@ fn main() {
         );
     }
 
+    // ── 491: tail-expression temp drops before block-local lets ──
+    //
+    // phase-6-runtime.md line 491 — "Tail-expression temporary scope —
+    // drop before block locals." The ordering rule is structural, not a
+    // special case: a block's let-bindings and the materialized temp of
+    // its tail expression share ONE scope-cleanup frame, pushed in
+    // program order (the lets first, the tail-expr temp last because it
+    // is later in source order). LIFO drain therefore frees the tail-
+    // expr temp BEFORE every block-local let — the same unified-stack
+    // mechanism pinned at IR level by
+    // `test_ir_defer_drop_interleave_emission_order` (tests/codegen.rs).
+    //
+    // The only mid-expression temporary codegen tracks today is the
+    // `ref T` Vec/String call-arg materialization (the `asan_ref_arg_*`
+    // family above). This test puts one in TAIL position (`slen(make())`
+    // with no trailing `;`) alongside a heap block-local `let v`, and
+    // asserts ASAN-clean. A regression that hoisted the tail temp to the
+    // outer scope, freed it against the wrong cap, or double-freed it
+    // against the block-local `v` would surface here (leak arm on Linux;
+    // UAF / double-free on macOS). The canonical MutexGuard *drop-order*
+    // observation from the spec's test plan awaits a `MutexGuard` type
+    // (mutex.kara is type-shape-only) and general method-chain temp
+    // tracking; this pins the rule for every temporary tracked today.
+    #[test]
+    fn asan_tail_expr_temp_coexists_with_block_local_let() {
+        assert_clean_asan_run(
+            r#"
+fn make() -> String {
+    let a = "tail ";
+    let b = "temp";
+    return a + b;
+}
+
+fn slen(s: ref String) {
+    println(s.len());
+}
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    v.push(2_i64);
+    v.push(3_i64);
+    println(f"v={v.len()}");
+    slen(make())
+}
+"#,
+            &["v=3", "9"],
+            "tail_expr_temp_coexists_with_block_local_let",
+        );
+    }
+
     // ── kara-katas leetcode #8 (atoi) end-to-end ─────────────────
     //
     // The kata that surfaced the interpreter Cast no-op (commit
