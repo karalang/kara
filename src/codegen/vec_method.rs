@@ -458,6 +458,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("Vec.push requires an argument".to_string());
                 }
                 let elem_val = self.compile_expr(&args[0].value)?;
+                // F-string argument (`v.push(f"…")`): the accumulator's
+                // queued scope-exit `FreeVecBuffer` must be disarmed —
+                // the container takes the buffer (move), and without the
+                // take both the acc cleanup and the container's
+                // recursive drop free the same data pointer (SIGTRAP,
+                // kata-22 2026-06-06). Same take-point as the Let /
+                // Assign / struct-field / tail-return consumers of
+                // `last_fstr_acc`.
+                self.suppress_fstr_acc_if_moved_out(&args[0].value);
+                // Owned String/Vec PARAM argument (`out.push(cur)` where
+                // `cur: String` is a parameter): the caller retains the
+                // buffer's free under the by-value header ABI, so the
+                // container must own a deep copy, not an alias. See
+                // `emit_vecstr_defensive_copy`.
+                let elem_val = self.maybe_defensive_copy_param_arg(&args[0].value, elem_val);
                 // Move semantics: when the argument is a tracked Vec /
                 // String binding, push bit-copies its `{ptr, len, cap}`
                 // into the container's data buffer. Both source and
@@ -591,6 +606,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("VecDeque.push_front requires an argument".to_string());
                 }
                 let elem_val = self.compile_expr(&args[0].value)?;
+                // Same consume-site ownership pair as the "push" arm: an
+                // f-string temp moves in (disarm its acc cleanup); an
+                // owned String/Vec param deep-copies (caller keeps the
+                // free).
+                self.suppress_fstr_acc_if_moved_out(&args[0].value);
+                let elem_val = self.maybe_defensive_copy_param_arg(&args[0].value, elem_val);
+                // And the local-binding move: zero the source's cap so its
+                // scope-exit cleanup skips — the deque owns the buffer now
+                // (mirrors the "push" arm; push_front was missing it).
+                self.suppress_source_vec_cleanup_for_arg(&args[0].value);
 
                 let data_ptr_ptr = self
                     .builder

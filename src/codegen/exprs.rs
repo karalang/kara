@@ -383,6 +383,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         self.compile_expr(e)?
                     };
+                    // Owned String/Vec PARAM returned by value (`return s;`
+                    // where `s: String` is a parameter): the caller that
+                    // passed `s` still owns its buffer (by-value header
+                    // ABI), while the caller RECEIVING this return value
+                    // binds-and-frees what we hand back — so hand back a
+                    // deep copy, not the alias. No-op for every other
+                    // return shape. See `emit_vecstr_defensive_copy`.
+                    let v = self.maybe_defensive_copy_param_arg(e, v);
                     // Move-aware suppression for a DIRECT `return f"..."`: the
                     // returned String buffer IS the f-string accumulator, now
                     // owned by the caller. The `suppress_source_vec_cleanup_for_arg`
@@ -1167,6 +1175,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 for (idx, field_init) in fields.iter().enumerate() {
                     let val = self.compile_expr(&field_init.value)?;
+                    // Owned String/Vec PARAM captured into a field
+                    // (`Node { name: s }` where `s: String` is a param):
+                    // deep-copy — the caller retains the buffer's free
+                    // under the by-value header ABI (kata-22 family).
+                    let val = self.maybe_defensive_copy_param_arg(&field_init.value, val);
                     // Fields start at index `base` (0 headerless;
                     // 1 headered — index 0 is the refcount).
                     let field_ptr = self
@@ -1243,6 +1256,9 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut agg = st.get_undef();
             for (idx, field_init) in fields.iter().enumerate() {
                 let val = self.compile_expr(&field_init.value)?;
+                // Owned String/Vec PARAM captured into a field — deep-copy,
+                // same rationale as the shared-struct branch above.
+                let val = self.maybe_defensive_copy_param_arg(&field_init.value, val);
                 // Width coercion at the field-init boundary — inserting
                 // a default-width literal into a narrower member builds
                 // a malformed aggregate that reads back as garbage. See
@@ -1282,7 +1298,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`Foo { body: b }` / `return b`) are already handled by
     /// `suppress_source_vec_cleanup_for_arg`. Call AFTER `compile_expr`
     /// (which stages the acc) and BEFORE the scope-cleanup walk.
-    fn suppress_fstr_acc_if_moved_out(&mut self, value: &Expr) {
+    pub(super) fn suppress_fstr_acc_if_moved_out(&mut self, value: &Expr) {
         if matches!(value.kind, ExprKind::InterpolatedStringLit(_)) {
             if let Some(acc) = self.last_fstr_acc.take() {
                 self.zero_vec_alloca_cap(acc);

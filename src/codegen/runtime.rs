@@ -13,7 +13,7 @@
 
 use crate::ast::*;
 
-use inkwell::types::{BasicTypeEnum, StructType};
+use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::{AddressSpace, AtomicOrdering, AtomicRMWBinOp, IntPredicate};
 
@@ -792,6 +792,223 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
         }
+    }
+
+    /// Deep-copy a String / Vec value (`{data, len, cap}` struct) into a
+    /// fresh heap buffer, returning the copied header. Used at retaining
+    /// consume sites of owned String/Vec PARAMETERS (`Vec.push(param)`,
+    /// `return param`): the call ABI passes the header by value while the
+    /// caller keeps the buffer's scope-exit free, so retaining the alias
+    /// would dangle once the caller's cleanup fires. The copy gives the
+    /// retainer its own buffer; the caller's free stays balanced.
+    ///
+    /// Runtime-guarded on `cap > 0`: a `cap == 0` source (string literal
+    /// over .rodata, empty vec, already-moved slot) carries no heap
+    /// ownership and passes through unchanged — every downstream free is
+    /// gated on `cap > 0`, so the alias is permanently safe. The copy's
+    /// `new_cap = max(len, 1)` keeps the result in the owned regime even
+    /// for a `len == 0, cap > 0` source (so exactly one of source/copy
+    /// can't end up sharing a buffer with the other).
+    ///
+    /// `elem_te` (the element's surface type, from `var_elem_type_exprs`)
+    /// drives the recursive case: when the element is itself heap-owning
+    /// (String / Vec[...]), each copied element header is rewritten with
+    /// a recursive deep copy of its own buffer — a flat memcpy would
+    /// alias the inner buffers, which the source's recursive
+    /// `FreeVecBuffer` drop also walks. `None` (String receivers, scalar
+    /// elements) means the flat memcpy is complete.
+    pub(super) fn emit_vecstr_defensive_copy(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        elem_ty: BasicTypeEnum<'ctx>,
+        elem_te: Option<&TypeExpr>,
+    ) -> BasicValueEnum<'ctx> {
+        let vec_ty = self.vec_struct_type();
+        if val.get_type() != vec_ty.into() {
+            return val;
+        }
+        let sv = val.into_struct_value();
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+
+        let data = self
+            .builder
+            .build_extract_value(sv, 0, "dcopy.data")
+            .unwrap()
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_extract_value(sv, 1, "dcopy.len")
+            .unwrap()
+            .into_int_value();
+        let cap = self
+            .builder
+            .build_extract_value(sv, 2, "dcopy.cap")
+            .unwrap()
+            .into_int_value();
+
+        let entry_bb = self.builder.get_insert_block().unwrap();
+        let copy_bb = self.context.append_basic_block(fn_val, "dcopy.copy");
+        let done_bb = self.context.append_basic_block(fn_val, "dcopy.done");
+
+        let owned = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::UGT,
+                cap,
+                i64_t.const_int(0, false),
+                "dcopy.owned",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(owned, copy_bb, done_bb)
+            .unwrap();
+
+        // Copy path: bytes = len * sizeof(elem); malloc(max(bytes, 1));
+        // memcpy; result {buf, len, max(len, 1)}.
+        self.builder.position_at_end(copy_bb);
+        let elem_size = elem_ty.size_of().unwrap();
+        let bytes = self
+            .builder
+            .build_int_mul(len, elem_size, "dcopy.bytes")
+            .unwrap();
+        let one = i64_t.const_int(1, false);
+        let bytes_pos = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::UGT, bytes, one, "dcopy.bytes.cmp")
+            .unwrap();
+        let alloc_bytes = self
+            .builder
+            .build_select(bytes_pos, bytes, one, "dcopy.alloc_bytes")
+            .unwrap()
+            .into_int_value();
+        let buf = self
+            .builder
+            .build_call(self.malloc_fn, &[alloc_bytes.into()], "dcopy.buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder.build_memcpy(buf, 1, data, 1, bytes).unwrap();
+
+        // Recursive case: heap-owning elements (String / Vec[...]) get
+        // their own buffers — rewrite each copied header in place.
+        if let Some(inner_te) = elem_te {
+            let inner_is_heap = self.is_string_type_expr(inner_te)
+                || self.extract_vec_elem_type(inner_te).is_some();
+            if inner_is_heap {
+                let inner_elem_ty: BasicTypeEnum<'ctx> = if self.is_string_type_expr(inner_te) {
+                    self.context.i8_type().into()
+                } else {
+                    self.extract_vec_elem_type(inner_te).unwrap()
+                };
+                let inner_inner_te = crate::codegen::helpers::vec_inner_type_expr(inner_te);
+
+                let loop_bb = self.context.append_basic_block(fn_val, "dcopy.elem.loop");
+                let body_bb = self.context.append_basic_block(fn_val, "dcopy.elem.body");
+                let exit_bb = self.context.append_basic_block(fn_val, "dcopy.elem.exit");
+                let pre_bb = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+                self.builder.position_at_end(loop_bb);
+                let idx_phi = self.builder.build_phi(i64_t, "dcopy.elem.i").unwrap();
+                idx_phi.add_incoming(&[(&i64_t.const_int(0, false), pre_bb)]);
+                let idx = idx_phi.as_basic_value().into_int_value();
+                let in_range = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::ULT, idx, len, "dcopy.elem.cmp")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(in_range, body_bb, exit_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(body_bb);
+                let slot = unsafe {
+                    self.builder
+                        .build_gep(vec_ty, buf, &[idx], "dcopy.elem.slot")
+                        .unwrap()
+                };
+                let elem_val = self
+                    .builder
+                    .build_load(vec_ty, slot, "dcopy.elem.val")
+                    .unwrap();
+                let copied = self.emit_vecstr_defensive_copy(
+                    elem_val,
+                    inner_elem_ty,
+                    inner_inner_te.as_ref(),
+                );
+                self.builder.build_store(slot, copied).unwrap();
+                // The recursive call may have moved the insertion point
+                // into its own done-block — branch from wherever we are.
+                let body_end = self.builder.get_insert_block().unwrap();
+                let next = self
+                    .builder
+                    .build_int_add(idx, i64_t.const_int(1, false), "dcopy.elem.next")
+                    .unwrap();
+                self.builder.build_unconditional_branch(loop_bb).unwrap();
+                idx_phi.add_incoming(&[(&next, body_end)]);
+
+                self.builder.position_at_end(exit_bb);
+            }
+        }
+
+        let len_pos = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::UGT, len, one, "dcopy.len.cmp")
+            .unwrap();
+        let new_cap = self
+            .builder
+            .build_select(len_pos, len, one, "dcopy.new_cap")
+            .unwrap()
+            .into_int_value();
+        let mut copied = vec_ty.get_undef();
+        copied = self
+            .builder
+            .build_insert_value(copied, buf, 0, "dcopy.out.data")
+            .unwrap()
+            .into_struct_value();
+        copied = self
+            .builder
+            .build_insert_value(copied, len, 1, "dcopy.out.len")
+            .unwrap()
+            .into_struct_value();
+        copied = self
+            .builder
+            .build_insert_value(copied, new_cap, 2, "dcopy.out.cap")
+            .unwrap()
+            .into_struct_value();
+        let copy_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(done_bb).unwrap();
+
+        self.builder.position_at_end(done_bb);
+        let phi = self.builder.build_phi(vec_ty, "dcopy.result").unwrap();
+        phi.add_incoming(&[(&sv, entry_bb), (&copied, copy_end_bb)]);
+        phi.as_basic_value()
+    }
+
+    /// Defensive-copy shim for retaining consume sites: when `arg_expr`
+    /// is a bare Identifier naming an owned String/Vec PARAMETER of the
+    /// current function (`owned_vecstr_params`), return a deep copy of
+    /// `val`; otherwise return `val` unchanged. See
+    /// `emit_vecstr_defensive_copy` for the ownership rationale.
+    pub(super) fn maybe_defensive_copy_param_arg(
+        &mut self,
+        arg_expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let name = match &arg_expr.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            _ => return val,
+        };
+        if !self.owned_vecstr_params.contains(&name) {
+            return val;
+        }
+        let elem_ty = match self.vec_elem_types.get(&name) {
+            Some(t) => *t,
+            None => return val,
+        };
+        let elem_te = self.var_elem_type_exprs.get(&name).cloned();
+        self.emit_vecstr_defensive_copy(val, elem_ty, elem_te.as_ref())
     }
 
     /// Emit an eager free of a Vec/String slot's heap buffer, guarded on

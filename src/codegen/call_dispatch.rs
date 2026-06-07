@@ -1161,6 +1161,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap_or_default();
             for (i, arg) in args.iter().enumerate() {
                 let val = self.compile_expr(&arg.value)?;
+                // F-string payload (`Some(f"…")`): disarm the staged
+                // accumulator cleanup — the enum's drop owns the buffer
+                // now. Owned String/Vec PARAM payload (`Some(s)` where
+                // `s: String` is a parameter): deep-copy, the caller
+                // retains the free (kata-22 family, 2026-06-06).
+                self.suppress_fstr_acc_if_moved_out(&arg.value);
+                let val = self.maybe_defensive_copy_param_arg(&arg.value, val);
                 let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
                 let words = self.coerce_to_payload_words(val, num_words)?;
                 for (j, w) in words.into_iter().enumerate() {
@@ -1214,6 +1221,12 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or_default();
         for (i, arg) in args.iter().enumerate() {
             let val = self.compile_expr(&arg.value)?;
+            // Same consume-site ownership pair as the shared-enum branch
+            // above: f-string payloads move in (disarm the staged acc
+            // cleanup); owned String/Vec PARAM payloads deep-copy (the
+            // caller retains the free). Kata-22 family, 2026-06-06.
+            self.suppress_fstr_acc_if_moved_out(&arg.value);
+            let val = self.maybe_defensive_copy_param_arg(&arg.value, val);
             let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1)); // legacy fallback if layout missing
             let words = self.coerce_to_payload_words(val, num_words)?;
             for (j, w) in words.into_iter().enumerate() {

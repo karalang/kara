@@ -1243,6 +1243,18 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) slice_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Variables that are ref parameters (name → inner LLVM type for dereferencing).
     pub(crate) ref_params: HashMap<String, BasicTypeEnum<'ctx>>,
+    /// Owned (bare `String` / `Vec[T]`, non-ref) parameters of the
+    /// function currently being compiled. The call ABI passes these
+    /// `{data, len, cap}` headers by value while the CALLER retains the
+    /// buffer's scope-exit free (no ownership transfer at the call
+    /// boundary today), so any consume site inside the callee that
+    /// RETAINS the value beyond the call — `Vec.push(param)`,
+    /// `return param` — must deep-copy the buffer instead of aliasing
+    /// it. Without the copy, the caller's free leaves the retained
+    /// alias dangling (kata-22 backtracking: `out.push(cur)` at the
+    /// recursion base case; `fn id(s: String) -> String { s }`).
+    /// Cleared per-function alongside `ref_params`.
+    pub(crate) owned_vecstr_params: HashSet<String>,
     /// SoA layout metadata (layout name → SoaLayout).
     pub(crate) soa_layouts: HashMap<String, SoaLayout>,
     /// Function parameter ref-ness (function name → vec of is_ref per param).
@@ -3897,6 +3909,7 @@ impl<'ctx> Codegen<'ctx> {
             slice_elem_types: HashMap::new(),
             fn_param_slice_elem: HashMap::new(),
             ref_params: HashMap::new(),
+            owned_vecstr_params: HashSet::new(),
             fn_param_ref: HashMap::new(),
             fn_return_type_names: HashMap::new(),
             fn_return_option_inner_shared: HashMap::new(),

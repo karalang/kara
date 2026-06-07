@@ -34843,4 +34843,236 @@ fn main() {
             assert_eq!(out, "0\n2\n", "Vec-variable dims must construct correctly");
         }
     }
+
+    // ── Owned String/Vec parameter retention (kata-22 family, 2026-06-06) ──
+    //
+    // The call ABI passes owned String/Vec headers by value while the
+    // CALLER retains the buffer's scope-exit free — so a callee that
+    // RETAINS the value (push into a container, return it, capture it
+    // in a struct/enum payload) must deep-copy the buffer instead of
+    // aliasing it (`emit_vecstr_defensive_copy`). Before the fix every
+    // shape below either aborted under macOS malloc (exit 133 double
+    // free) or read freed memory. The f-string siblings pin the
+    // `last_fstr_acc` take-points at the same consume sites (the temp
+    // accumulator's queued cleanup must be disarmed when the container
+    // takes the buffer).
+
+    #[test]
+    fn test_e2e_owned_string_param_push_branch_move() {
+        // Recursive backtracking shape: `cur` is moved into the vec in
+        // the base-case branch and borrowed by the f-string in the
+        // recursive branch. The cap-sentinel machinery gives the
+        // per-branch flow sensitivity; the defensive copy keeps the
+        // pushed buffer alive past the caller's f-string-temp cleanup.
+        let out = run_program(
+            r#"
+fn add_rec(cur: String, k: i64, out: mut ref Vec[String]) {
+    if k == 0 {
+        out.push(cur);
+        return;
+    }
+    add_rec(f"{cur}(", k - 1, out);
+}
+
+fn generate(n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    add_rec("", n, mut out);
+    out
+}
+
+fn main() {
+    let combos = generate(3);
+    println(combos.len());
+    println(combos[0]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\n(((");
+        }
+    }
+
+    #[test]
+    fn test_e2e_owned_string_param_tail_return() {
+        // `fn id(s: String) -> String { s }` — the returned value must
+        // be a copy: the caller that passed `s` frees its buffer AND the
+        // caller receiving the return frees what it binds.
+        let out = run_program(
+            r#"
+fn id(s: String) -> String {
+    s
+}
+
+fn main() {
+    let a = f"abc{1}";
+    let b = id(a);
+    println(b);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "abc1");
+        }
+    }
+
+    #[test]
+    fn test_e2e_owned_string_param_explicit_return() {
+        // Same as the tail form but through the explicit-`return` arm in
+        // `compile_expr` (separate code path).
+        let out = run_program(
+            r#"
+fn id(s: String) -> String {
+    return s;
+}
+
+fn main() {
+    let a = f"xyz{7}";
+    let b = id(a);
+    println(b);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "xyz7");
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_push_fstring_temp() {
+        // `v.push(f"s{i}")` — the f-string accumulator's queued cleanup
+        // must be disarmed at the push consume site (the vec takes the
+        // buffer); without the take, the acc cleanup and the vec's
+        // recursive drop both freed the same pointer.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 3 {
+        v.push(f"s{i}");
+        i = i + 1;
+    }
+    println(v.len());
+    println(v[0]);
+    println(v[2]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\ns0\ns2");
+        }
+    }
+
+    #[test]
+    fn test_e2e_owned_string_param_enum_payload() {
+        // `Some(s)` where `s: String` is a parameter — the enum payload
+        // must carry a copied buffer (the caller that passed `s` retains
+        // the original's free).
+        let out = run_program(
+            r#"
+fn wrap(s: String) -> Option[String] {
+    Some(s)
+}
+
+fn main() {
+    let w = wrap(f"pay{9}");
+    match w {
+        Some(s) => println(s),
+        None => println("none"),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "pay9");
+        }
+    }
+
+    #[test]
+    fn test_e2e_owned_string_param_struct_field() {
+        // Struct-literal capture of an owned String param — the field
+        // must own a copied buffer.
+        let out = run_program(
+            r#"
+struct Holder {
+    name: String,
+}
+
+fn make(s: String) -> Holder {
+    Holder { name: s }
+}
+
+fn main() {
+    let h = make(f"nm{3}");
+    println(h.name);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "nm3");
+        }
+    }
+
+    #[test]
+    fn test_e2e_value_fn_loop_tail_terminates_with_unreachable() {
+        // A value-returning function whose body's final expression is a
+        // `loop` with interior `return`s produces no tail value — the
+        // function-end path must emit `unreachable` for the dead tail,
+        // not a type-mismatched `ret void` (module verification failure:
+        // "Function return type does not match operand type of return
+        // inst"). Kata-22 closure_number shape.
+        let out = run_program(
+            r#"
+fn build_rows(n: i64) -> Vec[String] {
+    let mut m = 1;
+    loop {
+        let mut row: Vec[String] = Vec.new();
+        row.push(f"row{m}");
+        if m == n {
+            return row;
+        }
+        m = m + 1;
+    }
+}
+
+fn main() {
+    let rows = build_rows(3);
+    println(rows.len());
+    println(rows[0]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\nrow3");
+        }
+    }
+
+    #[test]
+    fn test_e2e_indexed_elem_method_on_call_rhs_binding() {
+        // `let combos = make();` (no annotation) followed by
+        // `combos[0].len()` — the binding's element TypeExpr comes from
+        // the typechecker's `pattern_binding_inner_types`, which spells
+        // String as "str" (`Type::Str` → `type_to_type_expr`). The
+        // indexed-receiver synth registration must accept that spelling
+        // (`is_string_type_expr`), else method dispatch falls through
+        // with "no handler for method 'len' on variable
+        // '__indexed_elem_0'" (kata-22 bench, 2026-06-06).
+        let out = run_program(
+            r#"
+fn make() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("hello");
+    v
+}
+
+fn main() {
+    let combos = make();
+    println(combos[0].len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5");
+        }
+    }
 }

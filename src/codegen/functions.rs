@@ -313,6 +313,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_type_names.clear();
         self.var_option_shared_heap.clear();
         self.ref_params.clear();
+        self.owned_vecstr_params.clear();
         self.rc_fallback_heap_types.clear();
         // Per-function reset of the name-keyed local-variable type side-
         // tables. These mirror exactly what `register_var_from_type_expr`
@@ -466,6 +467,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 if let Some(te) = registration_te {
                     self.register_var_from_type_expr(&param_name, te);
+                }
+                // Record owned (bare, non-ref) `String` / `Vec[T]` params.
+                // The registrar above put String/Vec params into
+                // `vec_elem_types` (Slice params land in `slice_elem_types`
+                // instead, so they're naturally excluded); intersect with
+                // "not a ref/slice mode" to get the owned-header set that
+                // retaining consume sites must deep-copy — see the field
+                // doc on `owned_vecstr_params`.
+                if !matches!(
+                    param.ty.kind,
+                    TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
+                ) && self.vec_elem_types.contains_key(&param_name)
+                {
+                    self.owned_vecstr_params.insert(param_name.clone());
                 }
                 // Track the declared type name so field/variant lookups work on this param.
                 // Both owned (`Type`) and ref-wrapped (`ref Type` / `mut ref Type`)
@@ -726,7 +741,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // groups to `karac_par_run` when a `ConcurrencyAnalysis` was
         // threaded into codegen. With no analysis, `compile_function_body`
         // falls through to `compile_block` and behavior is unchanged.
-        let result = self.compile_function_body(&func.body)?;
+        let mut result = self.compile_function_body(&func.body)?;
         self.tail_ret_inner = None;
 
         if self
@@ -736,6 +751,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .get_terminator()
             .is_none()
         {
+            // Owned String/Vec PARAM in tail position (`fn id(s: String)
+            // -> String { s }`): the by-value header ABI leaves the
+            // buffer's free with the caller that passed `s`, while the
+            // caller receiving this return binds-and-frees the value we
+            // hand back — return a deep copy so each frees its own
+            // buffer (the alias double-freed: k22n repro, 2026-06-06).
+            // Mirrors the explicit-`return` arm in `compile_expr`.
+            if let (Some(final_expr), Some(v)) = (func.body.final_expr.as_deref(), result) {
+                result = Some(self.maybe_defensive_copy_param_arg(final_expr, v));
+            }
             // Contract `ensures` checks at the tail return (design.md
             // § Contracts), with `result` bound to the tail value — before
             // scope cleanup, so the postcondition sees live params / result.
@@ -897,7 +922,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.build_return(Some(&val)).unwrap();
                 }
             } else {
-                self.builder.build_return(None).unwrap();
+                // No tail value. For a void function this is the normal
+                // `ret void`. For a VALUE-returning function, reaching
+                // here means the body's tail produced nothing — e.g. the
+                // final expression is a `loop { … return v; … }` whose
+                // every exit is an interior `return` (kata-22
+                // closure_number, 2026-06-06). The typechecker has
+                // already proven all paths return a value, so this tail
+                // is dead code: emit `unreachable` instead of the
+                // type-mismatched `ret void` that fails module
+                // verification ("Function return type does not match
+                // operand type of return inst").
+                let fn_returns_void = self
+                    .current_fn
+                    .and_then(|f| f.get_type().get_return_type())
+                    .is_none();
+                if fn_returns_void {
+                    self.builder.build_return(None).unwrap();
+                } else {
+                    self.builder.build_unreachable().unwrap();
+                }
             }
         }
 

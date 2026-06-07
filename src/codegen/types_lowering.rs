@@ -583,7 +583,20 @@ impl<'ctx> super::Codegen<'ctx> {
 
     pub(super) fn is_string_type_expr(&self, te: &TypeExpr) -> bool {
         if let TypeKind::Path(path) = &te.kind {
-            path.segments.first().map(|s| s.as_str()) == Some("String")
+            // "str" is the typechecker-internal spelling (`Type::Str` →
+            // `type_to_type_expr` → `path("str")`, e.g. in
+            // `pattern_binding_inner_types` for an untyped
+            // `let combos = make();` where make returns Vec[String]) —
+            // every other String/str consumer in codegen already treats
+            // the two as synonyms (`synth.rs`, `declarations.rs`,
+            // `types_lowering::llvm_type_for_type_expr`, …). Without the
+            // "str" arm here, the indexed-receiver synth registration
+            // (`combos[j].len()`) missed the String side-tables and
+            // method dispatch fell through (kata-22 bench, 2026-06-06).
+            matches!(
+                path.segments.first().map(|s| s.as_str()),
+                Some("String") | Some("str")
+            )
         } else {
             false
         }
