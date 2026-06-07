@@ -591,6 +591,20 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Lock { mutex, alias, body } => {
                 self.compile_lock_block(mutex, alias.as_deref(), body)
             }
+            // `while let` has no codegen lowering yet (phase-6-runtime.md
+            // line 489). Without this explicit arm it falls through the
+            // catch-all below and silently compiles to a constant `0` — the
+            // loop body is dropped, so the program builds clean and runs
+            // *wrong* (the loop never executes) with no diagnostic. Fail loud
+            // instead of miscompiling: turn the silent no-op into a hard
+            // codegen error until the real lowering lands.
+            ExprKind::WhileLet { .. } => Err(format!(
+                "`while let` is not yet lowered to native code (codegen), at {}:{}. \
+                 It would otherwise silently compile to a no-op — the loop body \
+                 never runs. Rewrite as `loop {{ match … {{ … }} }}` for now. \
+                 Tracked at docs/implementation_checklist/phase-6-runtime.md line 489.",
+                expr.span.line, expr.span.column
+            )),
             _ => Ok(self.context.i64_type().const_int(0, false).into()),
         }
     }

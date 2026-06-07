@@ -8905,6 +8905,92 @@ fn main() {
     }
 
     #[test]
+    fn test_codegen_while_let_rejected_not_silent_noop() {
+        // phase-6-runtime.md line 489: `while let` has no codegen lowering.
+        // It MUST fail loud at codegen rather than fall through the
+        // `compile_expr` catch-all to a constant `0`, which silently drops
+        // the loop body (clean build, wrong run). Pin the rejection so the
+        // silent-miscompile never regresses back in.
+        let src = r#"
+fn pop(v: mut ref Vec[i64]) -> Option[i64] {
+    if v.len() == 0 {
+        return Option.None;
+    }
+    let last = v.len() - 1;
+    let x = v[last];
+    v.remove(last);
+    return Option.Some(x);
+}
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10_i64);
+    while let Some(x) = pop(mut v) {
+        println(f"got {x}");
+    }
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, None, None)
+            .expect_err("expected codegen to reject `while let` rather than silently no-op it");
+        assert!(
+            err.contains("`while let` is not yet lowered"),
+            "expected while-let not-lowered diagnostic; got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_codegen_let_else_rejected_not_silent_noop() {
+        // phase-6-runtime.md line 489: `let … else` has no codegen lowering.
+        // The dangerous case is an UNUSED binding — codegen would otherwise
+        // fall through `compile_stmt`'s catch-all and emit nothing, so a
+        // runtime pattern-mismatch silently skips the else-divergence and
+        // falls through (clean build, wrong run). Pin the rejection.
+        let src = r#"
+fn maybe(empty: bool) -> Option[i64] {
+    if empty {
+        return Option.None;
+    }
+    return Option.Some(7_i64);
+}
+
+fn main() {
+    println("before");
+    let Some(_x) = maybe(true) else {
+        println("else fired");
+        return
+    }
+    println("after");
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, None, None)
+            .expect_err("expected codegen to reject `let … else` rather than silently no-op it");
+        assert!(
+            err.contains("`let … else` is not yet lowered"),
+            "expected let-else not-lowered diagnostic; got: {}",
+            err
+        );
+    }
+
+    #[test]
     fn test_e2e_indexed_receiver_user_struct_method() {
         // Vec[Counter] indexed receiver dispatching through `Counter.bump`.
         // Verifies var_type_names wiring for synth identifiers and that
