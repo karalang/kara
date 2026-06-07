@@ -114,6 +114,40 @@ mod codegen_tests {
             .expect("codegen failed")
     }
 
+    // ── String slicing fail-loud guard (phase-8 line 737) ────────
+    //
+    // `s[a..b]` String slicing is interpreter-only at this slice. In
+    // codegen the range branch would otherwise fall through to the
+    // integer-index tail and SILENTLY miscompile (empty output instead
+    // of the substring). The guard converts that into a hard codegen
+    // error — fail loud, never silently wrong.
+
+    #[test]
+    fn string_slice_in_codegen_fails_loud_not_silent_miscompile() {
+        let mut parsed = karac::parse(
+            "fn main() {\n\
+                 let s = \"hello world\";\n\
+                 let mid = s[6..11];\n\
+                 println(mid);\n\
+             }",
+        );
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let result = compile_to_ir(&parsed.program, None, None);
+        let err = result
+            .expect_err("String slicing must FAIL codegen (fail-loud), not silently miscompile");
+        assert!(
+            err.contains("String slicing") && err.contains("interpreter-only"),
+            "expected the fail-loud String-slicing message, got: {err}"
+        );
+    }
+
     // ── Basic arithmetic ─────────────────────────────────────────
 
     #[test]

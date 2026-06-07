@@ -724,6 +724,29 @@ impl<'ctx> super::Codegen<'ctx> {
             inclusive,
         } = &index.kind
         {
+            // String slicing `s[a..b]` -> fresh `String` is interpreter-only
+            // at this slice (phase-8 line 737). It is NOT yet supported in
+            // compiled (codegen) mode: `infer_elem_from_source` returns None
+            // for a String, so without this guard the range branch falls
+            // through to the integer-index tail and silently miscompiles
+            // (the compiled binary produced empty output instead of the
+            // substring). Fail loud here until the codegen lowering lands —
+            // see the deferred codegen sub-item under the line-737 entry.
+            // `string_typed_exprs` is the typechecker's per-expression
+            // String flag, keyed by span (offset, length).
+            if self
+                .string_typed_exprs
+                .contains(&(object.span.offset, object.span.length))
+            {
+                return Err(format!(
+                    "String slicing `s[a..b]` is interpreter-only at this slice \
+                     and not yet supported in compiled (codegen) mode \
+                     (phase-8 line 737); at {}:{}. Run via the interpreter \
+                     (`karac run`), or extract the substring with a char loop \
+                     until the codegen lowering lands.",
+                    object.span.line, object.span.column
+                ));
+            }
             if let Some(elem_ty) = self.infer_elem_from_source(object) {
                 return self.compile_range_slice(object, start, end, *inclusive, elem_ty);
             }

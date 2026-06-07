@@ -677,6 +677,42 @@ fn test_string_clone_returns_string() {
 }
 
 #[test]
+fn test_string_slice_returns_string() {
+    // `s[a..b]` on a String yields a fresh String — assignable to a
+    // String-annotated binding (not a Slice). Phase-8 line 737.
+    typecheck_ok(
+        "fn main() {
+             let s: String = \"hello world\";
+             let mid: String = s[6..11];
+         }",
+    );
+}
+
+#[test]
+fn test_string_slice_open_and_inclusive_forms_return_string() {
+    typecheck_ok(
+        "fn main() {
+             let s: String = \"hello world\";
+             let a: String = s[6..];
+             let b: String = s[..5];
+             let c: String = s[..];
+             let d: String = s[0..=4];
+         }",
+    );
+}
+
+#[test]
+fn test_string_slice_result_concatenates_as_string() {
+    // The slice is a String, so `+` String-concatenation typechecks.
+    typecheck_ok(
+        "fn main() {
+             let s: String = \"hello world\";
+             let g: String = s[0..5] + \"!\";
+         }",
+    );
+}
+
+#[test]
 fn test_map_clone_returns_self_type() {
     typecheck_ok(
         "fn main() {\n\

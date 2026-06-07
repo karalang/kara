@@ -2018,6 +2018,19 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 }
                 if is_range_idx {
+                    // String slicing: `s[a..b]` → a fresh `String` (a
+                    // sub-range copy), NOT a `Slice[T]`. UTF-8 char-boundary
+                    // validation happens at runtime (panic
+                    // `E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY` on a non-boundary
+                    // index, mirroring Rust). No borrowed-substring view at
+                    // v1. See phase-8-stdlib-floor.md "String substring /
+                    // slicing surface".
+                    let is_string = matches!(&obj_ty, Type::Str)
+                        || matches!(&obj_ty, Type::Ref(inner) | Type::MutRef(inner)
+                            if matches!(inner.as_ref(), Type::Str));
+                    if is_string {
+                        return Type::Str;
+                    }
                     // Range indexing: `collection[a..b]` → `Slice[T]` where T
                     // is the element type of the indexed collection. See
                     // design.md § Slices and § Subscript Trait.

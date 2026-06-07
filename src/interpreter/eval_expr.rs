@@ -316,6 +316,58 @@ impl<'a> super::Interpreter<'a> {
                                 mutable: false,
                             };
                         }
+                        Value::String(s) => {
+                            // `s[a..b]` → a fresh substring `String` (not a
+                            // Slice). Byte-offset range with UTF-8
+                            // char-boundary validation: a non-boundary index
+                            // is a runtime panic
+                            // (`E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY`), mirroring
+                            // Rust's `&s[a..b]`. `a..=b` includes byte `b`
+                            // (so the boundary check applies to `b + 1`).
+                            let byte_len = s.len();
+                            let raw_end = if let Some(e) = end {
+                                let v = self.eval_expr_inner(e);
+                                let v_variant = v.variant_name();
+                                match v {
+                                    Value::Int(n) if n >= 0 => n as usize,
+                                    Value::Int(n) => {
+                                        return self.record_runtime_error(
+                                            format!("range end must be non-negative, got {}", n),
+                                            &expr.span,
+                                        );
+                                    }
+                                    _ => unreachable!(
+                                        "range end at {}:{} was Value::{} not Int; \
+                                         either an interpreter codepath produced the wrong variant \
+                                         or the typechecker accepted a non-integer range end",
+                                        expr.span.line, expr.span.column, v_variant
+                                    ),
+                                }
+                            } else {
+                                byte_len
+                            };
+                            let end_i = if *inclusive { raw_end + 1 } else { raw_end };
+                            if start_i > end_i || end_i > byte_len {
+                                return self.record_runtime_error(
+                                    format!(
+                                        "string slice bounds {}..{} out of range (len {})",
+                                        start_i, end_i, byte_len,
+                                    ),
+                                    &expr.span,
+                                );
+                            }
+                            if !s.is_char_boundary(start_i) || !s.is_char_boundary(end_i) {
+                                return self.record_runtime_error(
+                                    format!(
+                                        "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range \
+                                         {}..{} does not fall on UTF-8 char boundaries of {:?}",
+                                        start_i, end_i, s,
+                                    ),
+                                    &expr.span,
+                                );
+                            }
+                            return Value::String(s[start_i..end_i].to_string());
+                        }
                         _ => unreachable!(
                             "range-indexing on Value::{} at {}:{}; \
                              either an interpreter codepath produced a non-array/non-slice value \

@@ -8168,6 +8168,117 @@ fn test_string_from_utf8_empty_returns_ok_empty() {
     assert_eq!(output, "0\n");
 }
 
+// ── String slicing — `s[a..b]` (phase-8 line 737) ─────────────────
+//
+// `s[a..b]` returns a fresh substring `String` (not a Slice), with all
+// range forms (`a..b` / `a..` / `..b` / `..` / `a..=b`). Byte offsets
+// with UTF-8 char-boundary validation: a non-boundary index is a runtime
+// panic carrying `E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY`.
+
+#[test]
+fn test_string_slice_basic_half_open() {
+    let output = run_no_errors(
+        "fn main() {
+             let s = \"hello world\";
+             println(s[0..5]);
+             println(s[6..11]);
+         }",
+    );
+    assert_eq!(output, "hello\nworld\n");
+}
+
+#[test]
+fn test_string_slice_open_ended_forms() {
+    // `a..` (to end), `..b` (from start), `..` (full), all fresh Strings.
+    let output = run_no_errors(
+        "fn main() {
+             let s = \"hello world\";
+             println(s[6..]);
+             println(s[..5]);
+             println(s[..]);
+         }",
+    );
+    assert_eq!(output, "world\nhello\nhello world\n");
+}
+
+#[test]
+fn test_string_slice_inclusive_and_empty() {
+    // `a..=b` includes byte b; `a..a` is the empty string.
+    let output = run_no_errors(
+        "fn main() {
+             let s = \"hello\";
+             println(s[0..=4]);
+             println(\"[\" + s[2..2] + \"]\");
+         }",
+    );
+    assert_eq!(output, "hello\n[]\n");
+}
+
+#[test]
+fn test_string_slice_result_is_string_and_concatenates() {
+    // The slice result is a real String — it concatenates with `+` and
+    // exposes String methods (`.len()`).
+    let output = run_no_errors(
+        "fn main() {
+             let s = \"hello world\";
+             let mid = s[6..11];
+             println(mid + \"!\");
+             println(mid.len());
+         }",
+    );
+    assert_eq!(output, "world!\n5\n");
+}
+
+#[test]
+fn test_string_slice_multibyte_on_boundary_ok() {
+    // `é` is two bytes at offsets 1..3, so 0..1 ('h') and 1..3 ('é') both
+    // land on char boundaries and slice cleanly.
+    let output = run_no_errors(
+        "fn main() {
+             let s = \"héllo\";
+             println(s[0..1]);
+             println(s[1..3]);
+         }",
+    );
+    assert_eq!(output, "h\né\n");
+}
+
+#[test]
+fn test_string_slice_non_char_boundary_panics() {
+    // Byte 2 falls in the middle of the 2-byte `é`, so `s[0..2]` panics
+    // with E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY (Rust's slicing contract).
+    let errs = runtime_errors(
+        "fn main() {
+             let s = \"héllo\";
+             let bad = s[0..2];
+             println(bad);
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY")),
+        "expected E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY panic, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_string_slice_out_of_range_is_runtime_error() {
+    let errs = runtime_errors(
+        "fn main() {
+             let s = \"hi\";
+             let bad = s[0..9];
+             println(bad);
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("string slice bounds 0..9 out of range")),
+        "expected out-of-range slice error, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
 // ── Set[T] ────────────────────────────────────────────────────────
 
 #[test]
