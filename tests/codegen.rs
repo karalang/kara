@@ -979,6 +979,28 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_borrow_return_method_accessor() {
+        // B-2026-06-07-5 method-ref: `ref self -> ref T` accessors. The
+        // call result is bound as a ref-local (via the lowering span table)
+        // and derefs correctly at use.
+        let out = run_program(
+            "struct User { name: String, age: i64 }\n\
+             impl User {\n\
+             \x20   fn name(ref self) -> ref String { self.name }\n\
+             \x20   fn age(ref self) -> ref i64 { self.age }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let u = User { name: \"alice\", age: 30 };\n\
+             \x20   let n = u.name(); println(n);\n\
+             \x20   let a = u.age(); println(a);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "alice\n30");
+        }
+    }
+
+    #[test]
     fn test_e2e_ambient_resource_clock_now_and_env_set() {
         // Ambient built-in resource methods lower to runtime FFIs
         // (`karac_runtime_env_set` / `karac_runtime_clock_now`) — the

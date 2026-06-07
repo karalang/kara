@@ -266,6 +266,16 @@ pub type MethodUnwrapInnerTypesTable = std::collections::HashMap<(usize, usize),
 /// channel handle.
 pub type ChannelElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
+/// Side-table populated by the lowering pass from `TypeCheckResult.expr_types`:
+/// for every expression whose Kāra type is a borrow (`ref T` / `mut ref T`),
+/// the inner `T` as a `TypeExpr`. Lets codegen learn that a call result
+/// (free-fn or method) is a borrow — keyed by the expression's span — so it
+/// binds the result as a ref-local (deref on use) instead of as a value.
+/// The method-ref half of B-2026-06-07-5 (free-fn calls use
+/// `fn_ref_return_inner`; method calls have no static name to key, so they
+/// route through this span table). Empty unless the lowering pass ran.
+pub type RefReturnInnerTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
 /// Side-table populated by the lowering pass from the typechecker's
 /// `pattern_binding_types` map. Maps each pattern-binding's span (offset,
 /// length) to the canonical surface type name (e.g. `"MyError"`). Used by
@@ -461,6 +471,10 @@ pub struct Program {
     /// empty otherwise. Channel-op element types for codegen's
     /// `karac_runtime_channel_*` lowering.
     pub channel_elem_types: ChannelElemTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: inner
+    /// type of every borrow-typed (`ref T`) expression, keyed by span. Lets
+    /// codegen bind a borrow-returning method-call result as a ref-local.
+    pub ref_return_inner_types: RefReturnInnerTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.pattern_binding_types`.
     pub pattern_binding_types: PatternBindingTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.pattern_binding_inner_types`.

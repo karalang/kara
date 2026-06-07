@@ -1571,6 +1571,18 @@ pub(super) struct Codegen<'ctx> {
     /// `compile_method_call` lowers `T` to its LLVM shape to size the
     /// `karac_runtime_channel_*` transfer and shape the recv out slot.
     pub(crate) channel_elem_types: HashMap<(usize, usize), TypeExpr>,
+    /// Inner type of every borrow-typed (`ref T`) expression, keyed by span
+    /// — populated from `Program.ref_return_inner_types`. Lets the `let` arm
+    /// recognise that a method-call RHS (`let n = u.name()`) returns a
+    /// borrow and bind `n` as a ref-local. Method-ref half of
+    /// B-2026-06-07-5 (free-fn calls use `fn_ref_return_inner`).
+    pub(crate) ref_return_inner_types: HashMap<(usize, usize), TypeExpr>,
+    /// Bare names of USER-defined impl methods whose declared return type is
+    /// a borrow (`-> ref T`). Gates the method-ref caller path (let-bind +
+    /// direct-use rejection) so it fires ONLY for user accessors — builtin
+    /// ref-returning methods (`Map.or_insert`, `Vec.get`, …) are never in
+    /// a user impl block and so keep their dedicated codegen. B-2026-06-07-5.
+    pub(crate) user_ref_method_names: std::collections::HashSet<String>,
     /// Set of `(span.offset, span.length)` keys for every expression whose
     /// Kāra type is `String`. Populated from `Program.string_typed_exprs`
     /// (which the lowering pass derives from `TypeCheckResult.expr_types`).
@@ -4161,6 +4173,8 @@ impl<'ctx> Codegen<'ctx> {
             call_effect_subs: crate::ast::CallEffectSubsTable::new(),
             method_unwrap_inner_types: HashMap::new(),
             channel_elem_types: HashMap::new(),
+            ref_return_inner_types: HashMap::new(),
+            user_ref_method_names: std::collections::HashSet::new(),
             string_typed_exprs: HashSet::new(),
             tensor_typed_exprs: HashMap::new(),
             tensor_var_infos: HashMap::new(),
@@ -4935,6 +4949,23 @@ impl<'ctx> Codegen<'ctx> {
         // to know how to reconstitute the payload back to a value of T.
         self.method_unwrap_inner_types = program.method_unwrap_inner_types.clone();
         self.channel_elem_types = program.channel_elem_types.clone();
+        self.ref_return_inner_types = program.ref_return_inner_types.clone();
+        // Bare names of user impl methods that return a borrow — gates the
+        // method-ref caller path away from builtin ref-returning methods.
+        for item in &program.items {
+            if let Item::ImplBlock(imp) = item {
+                for impl_item in &imp.items {
+                    if let ImplItem::Method(m) = impl_item {
+                        if matches!(
+                            m.return_type.as_ref().map(|t| &t.kind),
+                            Some(TypeKind::Ref(_) | TypeKind::MutRef(_))
+                        ) {
+                            self.user_ref_method_names.insert(m.name.clone());
+                        }
+                    }
+                }
+            }
+        }
 
         // Side-table set by `lowering::lower_program`: each pattern-
         // binding's span maps to its surface type name. Read by
@@ -5454,6 +5485,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_call_effect_subs = tp.call_effect_subs.clone();
         let mut t_method_unwrap_inner_types = tp.method_unwrap_inner_types.clone();
         let mut t_channel_elem_types = tp.channel_elem_types.clone();
+        let mut t_ref_return_inner_types = tp.ref_return_inner_types.clone();
         let mut t_pattern_binding_types = tp.pattern_binding_types.clone();
         let mut t_pattern_binding_inner_types = tp.pattern_binding_inner_types.clone();
         let mut t_pattern_binding_borrow_modes = tp.pattern_binding_borrow_modes.clone();
@@ -5479,6 +5511,10 @@ impl<'ctx> Codegen<'ctx> {
                     &mut t_method_unwrap_inner_types,
                 );
                 std::mem::swap(&mut self.channel_elem_types, &mut t_channel_elem_types);
+                std::mem::swap(
+                    &mut self.ref_return_inner_types,
+                    &mut t_ref_return_inner_types,
+                );
                 std::mem::swap(
                     &mut self.pattern_binding_types,
                     &mut t_pattern_binding_types,

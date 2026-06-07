@@ -89,23 +89,35 @@ impl<'ctx> super::Codegen<'ctx> {
                     None
                 }
             }
+            // `ref self` returned directly (`fn this(ref self) -> ref Self`):
+            // forward the receiver borrow, same as a ref parameter.
+            ExprKind::SelfValue => {
+                if self.ref_params.contains_key("self") {
+                    self.get_data_ptr("self")
+                } else {
+                    None
+                }
+            }
+            // Field reached through a `ref` parameter or `ref self` receiver
+            // (`u.name` / `self.name`): GEP into the borrowed struct.
             ExprKind::FieldAccess { object, field } => {
-                if let ExprKind::Identifier(base) = &object.kind {
-                    if let Some(&BasicTypeEnum::StructType(struct_ty)) =
-                        self.ref_params.get(base.as_str())
-                    {
-                        let idx = self.field_index_for(object, field)?;
-                        let base_ptr = self.get_data_ptr(base)?;
-                        return self
-                            .builder
-                            .build_struct_gep(
-                                struct_ty,
-                                base_ptr,
-                                idx,
-                                &format!("ret_borrow_{}", field),
-                            )
-                            .ok();
-                    }
+                let base = match &object.kind {
+                    ExprKind::Identifier(b) => Some(b.as_str()),
+                    ExprKind::SelfValue => Some("self"),
+                    _ => None,
+                }?;
+                if let Some(&BasicTypeEnum::StructType(struct_ty)) = self.ref_params.get(base) {
+                    let idx = self.field_index_for(object, field)?;
+                    let base_ptr = self.get_data_ptr(base)?;
+                    return self
+                        .builder
+                        .build_struct_gep(
+                            struct_ty,
+                            base_ptr,
+                            idx,
+                            &format!("ret_borrow_{}", field),
+                        )
+                        .ok();
                 }
                 None
             }

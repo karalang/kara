@@ -283,11 +283,9 @@ fn spec_return_borrowed_struct() {
 /// canonical case for lifetime elision (`fn name(&self) -> &String`); in
 /// Kāra single-source shorthand applies for the same reason.
 ///
-/// Same impl gap as `spec_field_projection_in_borrow_return` — `self.name`
-/// in return position doesn't auto-borrow today. Spec test.
+/// `ref self` method returning a borrow into a field — the canonical
+/// accessor. Implemented in B-2026-06-07-5 (method-ref slice).
 #[test]
-#[ignore = "method `ref self -> ref T` (field-through-self) returns not yet implemented — \
-            B-2026-06-07-5 follow-on; E0509 reports the `self.field` form as not-yet-supported"]
 fn spec_ref_self_returning_field_borrow() {
     assert_static_accept(
         "struct User { name: String, age: i64 }\n\

@@ -66,6 +66,23 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // Inner type of every borrow-typed (`ref T` / `mut ref T`) expression,
+    // keyed by span. A method call shares its receiver's span and the
+    // call's *result* type is the last write at that key, so a borrow-
+    // returning `u.name()` lands here keyed by the receiver span — exactly
+    // the key the codegen let-arm looks up to bind the result as a
+    // ref-local (method-ref half of B-2026-06-07-5; free-fn calls key off
+    // `fn_ref_return_inner` instead, which is name-addressable).
+    program.ref_return_inner_types = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Ref(inner) | Type::MutRef(inner) => {
+                Some(((k.0, k.1), TypeChecker::type_to_type_expr(inner)))
+            }
+            _ => None,
+        })
+        .collect();
     // Forward the pattern-binding type table so codegen can reconstitute
     // struct payloads (single-field error wrappers, etc.) from the i64
     // word at match-arm bind sites. Without this, `Err(e) => e.field`

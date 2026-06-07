@@ -22,6 +22,8 @@
 use std::collections::HashSet;
 
 use crate::ast::*;
+use crate::resolver::SpanKey;
+use crate::typechecker::Type;
 
 use super::{BorrowKind, BorrowReturnShape, OwnershipError, OwnershipErrorKind};
 
@@ -42,12 +44,18 @@ impl<'a> super::OwnershipChecker<'a> {
         // Valid borrow sources: `ref` parameters, plus ref-locals — a
         // `let x = <call to a ref-returning fn>;` whose result is itself
         // a borrow that traces (transitively) to a `ref` parameter.
-        let ref_params: HashSet<String> = f
+        let mut ref_params: HashSet<String> = f
             .params
             .iter()
             .filter(|p| matches!(p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
             .flat_map(|p| p.pattern.binding_names())
             .collect();
+        // A `ref self` / `mut ref self` receiver is a borrow source too —
+        // it lives in `self_param`, not `params` (method accessors:
+        // `fn name(ref self) -> ref String { self.name }`).
+        if matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef)) {
+            ref_params.insert("self".to_string());
+        }
         let ref_returning_fns = self.ref_returning_fn_names();
         let mut ref_locals: HashSet<String> = HashSet::new();
         collect_ref_locals(&f.body, &ref_returning_fns, &mut ref_locals);
@@ -111,21 +119,45 @@ impl<'a> super::OwnershipChecker<'a> {
     /// returns, so a borrow pushed here (outside that snapshot) is the one
     /// that persists for the binding's scope and drains at scope exit.
     pub(crate) fn register_ref_return_borrows(&mut self, value: &Expr) {
-        let ExprKind::Call { callee, args } = &value.kind else {
-            return;
-        };
-        let ExprKind::Identifier(fname) = &callee.kind else {
-            return;
-        };
-        if !self.ref_returning_fn_names().contains(fname) {
-            return;
-        }
-        for (i, arg) in args.iter().enumerate() {
-            if self.arg_is_borrow_position(callee, i) {
-                if let Some(place) = self.place_expr_root(&arg.value) {
-                    self.push_active_borrow(BorrowKind::ImmRef, place, arg.value.span.clone());
+        match &value.kind {
+            ExprKind::Call { callee, args } => {
+                let ExprKind::Identifier(fname) = &callee.kind else {
+                    return;
+                };
+                if !self.ref_returning_fn_names().contains(fname) {
+                    return;
+                }
+                for (i, arg) in args.iter().enumerate() {
+                    if self.arg_is_borrow_position(callee, i) {
+                        if let Some(place) = self.place_expr_root(&arg.value) {
+                            self.push_active_borrow(
+                                BorrowKind::ImmRef,
+                                place,
+                                arg.value.span.clone(),
+                            );
+                        }
+                    }
                 }
             }
+            // Borrow-returning method call (`let n = u.name()`): the result
+            // borrows from the receiver. The method's ref-ness is read from
+            // the typechecker (the call result type sits at the receiver-span
+            // key). Register a borrow on the receiver's root so moving it
+            // while `n` is live is rejected.
+            ExprKind::MethodCall { object, .. } => {
+                let is_ref = matches!(
+                    self.typecheck_result
+                        .expr_types
+                        .get(&SpanKey::from_span(&value.span)),
+                    Some(Type::Ref(_) | Type::MutRef(_))
+                );
+                if is_ref {
+                    if let Some(place) = self.place_expr_root(object) {
+                        self.push_active_borrow(BorrowKind::ImmRef, place, value.span.clone());
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -161,9 +193,21 @@ fn classify_borrow_return(
                 Some(BorrowReturnShape::DanglingSource)
             }
         }
+        // `ref self` returned directly from a method.
+        ExprKind::SelfValue => {
+            if ref_params.contains("self") {
+                None
+            } else {
+                Some(BorrowReturnShape::DanglingSource)
+            }
+        }
         ExprKind::FieldAccess { object, .. } => match &object.kind {
             ExprKind::Identifier(b) if ref_params.contains(b) || ref_locals.contains(b) => None,
-            ExprKind::Identifier(_) => Some(BorrowReturnShape::DanglingSource),
+            // Field through a `ref self` receiver (`self.name`).
+            ExprKind::SelfValue if ref_params.contains("self") => None,
+            ExprKind::Identifier(_) | ExprKind::SelfValue => {
+                Some(BorrowReturnShape::DanglingSource)
+            }
             // A field reached through a non-identifier (a chained field
             // access, a call, …) — valid per spec but Tier-2/3 codegen.
             _ => Some(BorrowReturnShape::UnsupportedForm),

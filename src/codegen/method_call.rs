@@ -55,6 +55,27 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned();
         self.emit_branch_cancel_check("mcall", callee_key.as_deref());
 
+        // Borrow-returning method call used outside a `let x = recv.m()`
+        // binding: the result is a `ptr` (the borrow's address); any other
+        // context would mishandle it as a value. The let arm sets
+        // `compiling_ref_return_let_rhs` for the sanctioned site; reject
+        // elsewhere rather than miscompile (sibling of the free-fn gate in
+        // `compile_call`). The MethodCall expr shares the receiver's span,
+        // which is the key the lowering pass used for the call's result
+        // type. Direct use is a tracked follow-on (B-2026-06-07-5).
+        if !self.compiling_ref_return_let_rhs
+            && self.user_ref_method_names.contains(method)
+            && self
+                .ref_return_inner_types
+                .contains_key(&(object.span.offset, object.span.length))
+        {
+            return Err(format!(
+                "borrow-returning method call `.{method}(...)` must be bound directly with \
+                 `let x = ...{method}(...)` before use; direct use of a `-> ref T` result \
+                 is not yet supported (B-2026-06-07-5)"
+            ));
+        }
+
         // Chained-call span collision guard. The parser sets
         // `MethodCall.span == receiver.span`, so in `recv.inner().outer()`
         // the inner and outer calls share one `method_callee_types` key, and

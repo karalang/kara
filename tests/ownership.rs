@@ -7485,3 +7485,55 @@ fn test_borrow_return_if_move_source_while_live_errors() {
         }
     )));
 }
+
+// ── Method `-> ref` accessors (B-2026-06-07-5) ──
+
+#[test]
+fn test_borrow_return_method_ref_self_field_ok() {
+    ownership_ok(
+        "struct User { name: String, age: i64 }\n\
+         impl User {\n\
+        \x20   fn name(ref self) -> ref String { self.name }\n\
+        \x20   fn age(ref self) -> ref i64 { self.age }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_borrow_return_method_dangling_local_errors() {
+    let errors = ownership_errors(
+        "struct User { name: String, age: i64 }\n\
+         impl User {\n\
+        \x20   fn bad(ref self) -> ref String {\n\
+        \x20       let s = self.name;\n\
+        \x20       s\n\
+        \x20   }\n\
+         }\n",
+    );
+    // `self.name` bound to a local then returned — the local is not a
+    // recognized borrow source, so it's flagged (dangling).
+    assert!(errors.iter().any(|e| matches!(
+        e.kind,
+        OwnershipErrorKind::BorrowReturnNotSourcePinned { .. }
+    )));
+}
+
+#[test]
+fn test_borrow_return_method_move_receiver_while_live_errors() {
+    let errors = ownership_errors(
+        "struct User { name: String, age: i64 }\n\
+         impl User { fn name(ref self) -> ref String { self.name } }\n\
+         fn sink(x: User) -> i64 { x.age }\n\
+         fn use_after(u: User) -> i64 {\n\
+        \x20   let n = u.name();\n\
+        \x20   let g = sink(u);\n\
+        \x20   g\n\
+         }\n",
+    );
+    assert!(errors.iter().any(|e| matches!(
+        e.kind,
+        OwnershipErrorKind::SliceBorrowConflict {
+            shape: SliceConflictShape::MoveOfBorrowed
+        }
+    )));
+}

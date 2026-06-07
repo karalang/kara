@@ -942,19 +942,33 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(true)
     }
 
-    /// If `value` is a direct call to a function whose declared return
-    /// type is a borrow (`-> ref T` / `-> mut ref T`), return the inner
-    /// `T`'s `TypeExpr`. Used by the `let` arm to bind the call result as
-    /// a ref-local rather than a value (caller half of B-2026-06-07-5).
-    /// Plain free-function calls only for now; method-call chains
-    /// (`s.split(' ').first()`) are a tracked Tier-3 follow-on.
+    /// If `value` is a call whose result is a borrow (`-> ref T` /
+    /// `-> mut ref T`), return the inner `T`'s `TypeExpr`. Used by the `let`
+    /// arm to bind the result as a ref-local rather than a value (caller
+    /// half of B-2026-06-07-5). Free-function calls resolve by name via
+    /// `fn_ref_return_inner`; method calls (`u.name()`) have no static name
+    /// to key, so they resolve by the call expression's span through the
+    /// `ref_return_inner_types` table the lowering pass derived from the
+    /// typechecker. Method-call chains (`s.split(' ').first()`) remain a
+    /// tracked follow-on.
     fn ref_return_inner_for_call(&self, value: &Expr) -> Option<TypeExpr> {
-        if let ExprKind::Call { callee, .. } = &value.kind {
-            if let ExprKind::Identifier(name) = &callee.kind {
-                return self.fn_ref_return_inner.get(name).cloned();
+        match &value.kind {
+            ExprKind::Call { callee, .. } => {
+                if let ExprKind::Identifier(name) = &callee.kind {
+                    return self.fn_ref_return_inner.get(name).cloned();
+                }
+                None
             }
+            // Only USER-defined ref accessors route through the method-ref
+            // path; builtin ref-returning methods (`or_insert`, `get`, …)
+            // keep their dedicated codegen.
+            ExprKind::MethodCall { method, .. } if self.user_ref_method_names.contains(method) => {
+                self.ref_return_inner_types
+                    .get(&(value.span.offset, value.span.length))
+                    .cloned()
+            }
+            _ => None,
         }
-        None
     }
 
     pub(super) fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
