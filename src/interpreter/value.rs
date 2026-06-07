@@ -107,6 +107,17 @@ pub enum Value {
         len: usize,
         mutable: bool,
     },
+    /// `Tensor[T, Shape]` — N-D dense container (phase-11 numerical
+    /// stdlib, interpreter MVP). `dims` is the runtime dim list (rank =
+    /// dims.len()); `data` is C-order (row-major) element storage in the
+    /// same universal `Arc<RwLock<...>>` shared-cell shape as
+    /// `Value::Array` — par-block branch evaluators share captured
+    /// Values across real OS threads, so interior mutability must be
+    /// Arc-shareable (see the Array doc comment above).
+    Tensor {
+        dims: Arc<Vec<i64>>,
+        data: Arc<RwLock<Vec<Value>>>,
+    },
     Map(Vec<(Value, Value)>),
     Struct {
         name: String,
@@ -677,6 +688,13 @@ impl std::fmt::Display for Value {
             // typecheck via `type_supports_display`).
             Value::CStr(bytes) => write!(f, "{}", String::from_utf8_lossy(bytes)),
             Value::Unit => write!(f, "()"),
+            // Debug-courtesy render: shape only (element dumps for large
+            // tensors would flood output; `t[i, j]` reads individual
+            // elements).
+            Value::Tensor { dims, .. } => {
+                let rendered: Vec<String> = dims.iter().map(|d| d.to_string()).collect();
+                write!(f, "Tensor[{}]", rendered.join(", "))
+            }
             Value::Tuple(vals) => {
                 write!(f, "(")?;
                 for (i, v) in vals.iter().enumerate() {
@@ -971,6 +989,7 @@ impl Value {
             Value::String(_) => "String",
             Value::CStr(_) => "CStr",
             Value::Unit => "Unit",
+            Value::Tensor { .. } => "Tensor",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",
             Value::Vector(_) => "Vector",

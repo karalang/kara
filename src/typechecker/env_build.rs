@@ -1155,6 +1155,15 @@ impl<'a> super::TypeChecker<'a> {
 
     fn env_add_struct(&mut self, s: &StructDef) {
         let gp = Self::generic_param_names(&s.generic_params);
+        // Phase 11 Q1: record shape-kinded (`...S`) param positions so
+        // `lower_generic_args` accepts shape literals — canonical
+        // registration covering both baked-stdlib and user structs (the
+        // user-items stub pass also records early for self-ref ordering).
+        if let Some(positions) = Self::shape_param_positions(&s.generic_params) {
+            self.env
+                .shape_param_positions
+                .insert(s.name.clone(), positions);
+        }
         let fields: Vec<(String, Type, bool)> = s
             .fields
             .iter()
@@ -1276,6 +1285,11 @@ impl<'a> super::TypeChecker<'a> {
 
     fn env_add_enum(&mut self, e: &EnumDef) {
         let gp = Self::generic_param_names(&e.generic_params);
+        if let Some(positions) = Self::shape_param_positions(&e.generic_params) {
+            self.env
+                .shape_param_positions
+                .insert(e.name.clone(), positions);
+        }
         let variants: Vec<(String, VariantTypeInfo)> = e
             .variants
             .iter()

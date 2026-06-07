@@ -240,6 +240,9 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Pool",
     "PooledConnection",
     "PoolError",
+    // `Tensor[T, Shape]` shape-typed N-D container (phase-11 numerical
+    // stdlib, interpreter MVP). See `runtime/stdlib/tensor.kara`.
+    "Tensor",
     // `Semaphore` application-layer backpressure primitive (phase-8 P1).
     // See `runtime/stdlib/semaphore.kara`.
     "Semaphore",
@@ -734,6 +737,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
         "intrinsics.kara",
         include_str!("../runtime/stdlib/intrinsics.kara"),
     ),
+    // `Tensor[T, Shape]` shape-typed N-D container (phase-11 numerical
+    // stdlib). Interpreter MVP: zeros/ones/full + shape/rank + tuple
+    // indexing; see `runtime/stdlib/tensor.kara`.
+    ("tensor.kara", include_str!("../runtime/stdlib/tensor.kara")),
 ];
 
 /// Phase-10 (`std.web`): baked stdlib modules that are GATED — real Kāra

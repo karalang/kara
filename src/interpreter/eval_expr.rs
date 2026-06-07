@@ -363,6 +363,30 @@ impl<'a> super::Interpreter<'a> {
                 }
                 let obj = self.eval_expr_inner(object);
                 let idx = self.eval_expr_inner(index);
+                // Phase-11 Tensor multi-dim indexing — `t[i, j, k]`
+                // arrives as a tuple index (parser desugar); rank-1
+                // accepts a bare Int. Row-major offset + runtime bounds
+                // checks via `tensor_offset`.
+                if let Value::Tensor { dims, data } = &obj {
+                    let Some(components) =
+                        crate::interpreter::method_call_tensor::index_components(&idx)
+                    else {
+                        return self.record_runtime_error(
+                            format!(
+                                "tensor index must be integers (one per dim), got {}",
+                                idx.variant_name()
+                            ),
+                            &expr.span,
+                        );
+                    };
+                    return match crate::interpreter::method_call_tensor::tensor_offset(
+                        dims,
+                        &components,
+                    ) {
+                        Ok(off) => data.read().unwrap()[off].clone(),
+                        Err(msg) => self.record_runtime_error(msg, &expr.span),
+                    };
+                }
                 match (&obj, &idx) {
                     (Value::Array(rc), Value::Int(i)) => {
                         let i = *i as usize;

@@ -13658,3 +13658,110 @@ fn main() {
     );
     assert_eq!(out, "2\n");
 }
+
+// ── Tensor[T, Shape] interpreter MVP (Phase 11) ─────────────────────
+
+#[test]
+fn test_tensor_zeros_shape_rank() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t: Tensor[f64, [3, 4]] = Tensor.zeros([3, 4]);\n\
+             println(t.rank());\n\
+             let s = t.shape();\n\
+             println(s[0]);\n\
+             println(s[1]);\n\
+         }",
+    );
+    assert_eq!(out, "2\n3\n4\n");
+}
+
+#[test]
+fn test_tensor_full_and_index_get() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t: Tensor[i64, [2, 3]] = Tensor.full([2, 3], 7);\n\
+             println(t[0, 0]);\n\
+             println(t[1, 2]);\n\
+         }",
+    );
+    assert_eq!(out, "7\n7\n");
+}
+
+#[test]
+fn test_tensor_index_set_get_roundtrip() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut t: Tensor[f64, [2, 2]] = Tensor.zeros([2, 2]);\n\
+             t[0, 1] = 5.5;\n\
+             t[1, 0] = 2.5;\n\
+             println(t[0, 1]);\n\
+             println(t[1, 0]);\n\
+             println(t[0, 0]);\n\
+         }",
+    );
+    assert_eq!(out, "5.5\n2.5\n0\n");
+}
+
+#[test]
+fn test_tensor_rank1_bare_index() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut v: Tensor[f64, [4]] = Tensor.ones([4]);\n\
+             v[2] = 9.0;\n\
+             println(v[2]);\n\
+             println(v[0]);\n\
+         }",
+    );
+    assert_eq!(out, "9\n1\n");
+}
+
+#[test]
+fn test_tensor_row_major_layout_distinct_cells() {
+    // Writes to distinct cells must not alias (row-major offsets).
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut t: Tensor[i64, [2, 3]] = Tensor.full([2, 3], 0);\n\
+             t[0, 0] = 1;\n\
+             t[0, 2] = 3;\n\
+             t[1, 0] = 4;\n\
+             t[1, 2] = 6;\n\
+             println(t[0, 0]);\n\
+             println(t[0, 1]);\n\
+             println(t[0, 2]);\n\
+             println(t[1, 0]);\n\
+             println(t[1, 1]);\n\
+             println(t[1, 2]);\n\
+         }",
+    );
+    assert_eq!(out, "1\n0\n3\n4\n0\n6\n");
+}
+
+#[test]
+fn test_tensor_index_out_of_bounds_runtime_error() {
+    // Dynamic dim (?) so the bounds miss is a runtime concern, not a
+    // compile-time literal check.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let t: Tensor[f64, [?, ?]] = Tensor.zeros([2, 2]);\n\
+             let i = 5;\n\
+             println(t[i, 0]);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("out of bounds for dim 0 (size 2)")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_display_renders_shape() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t: Tensor[f64, [2, 3]] = Tensor.zeros([2, 3]);\n\
+             println(t);\n\
+         }",
+    );
+    assert_eq!(out, "Tensor[2, 3]\n");
+}

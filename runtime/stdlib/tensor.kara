@@ -1,0 +1,75 @@
+// runtime/stdlib/tensor.kara
+//
+// `Tensor[T, Shape]` — N-dimensional dense container carrying shape
+// information in the type (Phase 11 numerical stdlib; design.md
+// § Numerical Types > Tensor — shape types). Interpreter MVP slice:
+// constructors (`zeros` / `ones` / `full`), `shape()` / `rank()`, and
+// multi-dim indexing get + set (the parser desugars `t[i, j, k]` to a
+// single tuple index per design.md § Indexing). `from` literal
+// construction, `iter_axis`, reshape / permute / slice / squeeze, and
+// the Arrow-layout codegen lowering are follow-on sub-slices —
+// tracker at `phase-11-stdlib-longtail.md § Numerical and
+// data-science stdlib`.
+//
+// **Dispatch.** Constructors fire through `eval_call.rs`'s
+// `"Tensor.zeros"` / `"Tensor.ones"` / `"Tensor.full"` path-string
+// arms; instance methods through `try_eval_tensor_method`
+// (`src/interpreter/method_call_tensor.rs`). The interpreter
+// represents tensors natively — `Value::Tensor` carries the runtime
+// dim list plus `Arc<RwLock<Vec<Value>>>` element storage in C-order
+// (row-major), mirroring `Value::Array`'s universal shared-cell
+// design so par-block capture stays sound. The struct body below is
+// an opaque surface-only declaration (the handle field is never
+// read), mirroring `Pool[T]`'s pattern.
+//
+// **Interpreter element-type note.** The tree-walk interpreter is
+// dynamically typed and cannot see `T` at `zeros` / `ones` call sites,
+// so they fill `f64` elements (the numerical stack's primary element
+// type); `full(dims, value)` is the typed fill for other element
+// types. Codegen lowers typed zero-fills properly (follow-on slice).
+//
+// **Static-dim consistency note.** Where the annotated shape's dims
+// are concrete (`Tensor[f64, [3, 4]]`), agreement with the runtime
+// `dims` argument is the compiler-inserted call-boundary assert of
+// design.md § Runtime equality check — codegen-era work. The
+// interpreter MVP checks indexing bounds against the *runtime* dims.
+
+struct Tensor[T, ...S] {
+    // Opaque — interpreter intercepts all construction and access.
+    handle_id: i64,
+}
+
+impl[T, ...S] Tensor[T, S] {
+    // Fresh tensor with the given runtime dims, zero-filled. The
+    // static shape `S` comes from the binding annotation / call-site
+    // inference: `let a: Tensor[f64, [3, 4]] = Tensor.zeros([3, 4]);`.
+    #[compiler_builtin]
+    fn zeros(dims: Vec[i64]) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
+
+    // Fresh tensor with the given runtime dims, one-filled.
+    #[compiler_builtin]
+    fn ones(dims: Vec[i64]) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
+
+    // Typed fill — every element is a copy of `value`.
+    #[compiler_builtin]
+    fn full(dims: Vec[i64], value: T) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
+
+    // Runtime shape accessor — `[3, 4]` for a rank-2 tensor
+    // (design.md: "t.shape() returns the shape as a runtime value").
+    #[compiler_builtin]
+    fn shape(ref self) -> Vec[i64] {
+        Vec.new()
+    }
+
+    // Number of dims.
+    #[compiler_builtin]
+    fn rank(ref self) -> i64 {
+        0
+    }
+}

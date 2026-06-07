@@ -23261,3 +23261,95 @@ fn test_shape_param_arithmetic_deferred() {
         "{errors:?}",
     );
 }
+
+// ── Tensor[T, Shape] static surface (Phase 11 MVP) ──────────────────
+
+#[test]
+fn test_tensor_zeros_annotation_driven() {
+    typecheck_ok(
+        "fn main() {\n\
+             let t: Tensor[f64, [3, 4]] = Tensor.zeros([3, 4]);\n\
+             let u: Tensor[i64, [2]] = Tensor.full([2], 0);\n\
+             let s: Vec[i64] = t.shape();\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_tensor_index_element_type() {
+    // bool-slot probe: t[i, j] on Tensor[f64, ...] must infer f64.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t: Tensor[f64, [3, 4]] = Tensor.zeros([3, 4]);\n\
+             let flag: bool = t[1, 2];\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'bool', found 'f64'")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_index_arity_mismatch_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t: Tensor[f64, [3, 4]] = Tensor.zeros([3, 4]);\n\
+             let x = t[1, 2, 3];\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("rank-2 tensor requires 2 index component(s), found 3")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_static_literal_bounds_checked_at_compile_time() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t: Tensor[f64, [3, 4]] = Tensor.zeros([3, 4]);\n\
+             let x = t[5, 0];\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("index 5 out of bounds for dim 0 (size 3)")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_non_integer_index_component_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t: Tensor[f64, [3, 4]] = Tensor.zeros([3, 4]);\n\
+             let x = t[1, \"two\"];\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("tensor index components must be integers")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_matmul_end_to_end_signature() {
+    // The full design.md § Numerical Types example shape: construct via
+    // zeros, flow through a dim-unified signature.
+    typecheck_ok(
+        "fn matmul[M, K, N](a: Tensor[f64, [M, K]], b: Tensor[f64, [K, N]]) -> Tensor[f64, [M, N]] { todo() }\n\
+         fn main() {\n\
+             let a: Tensor[f64, [3, 4]] = Tensor.zeros([3, 4]);\n\
+             let b: Tensor[f64, [4, 5]] = Tensor.zeros([4, 5]);\n\
+             let c = matmul(a, b);\n\
+         }\n",
+    );
+}

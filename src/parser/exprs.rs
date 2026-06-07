@@ -205,9 +205,30 @@ impl super::Parser {
                         };
                         continue;
                     }
-                    // Index
+                    // Index. Multi-dimensional `t[i, j, k]` desugars to a
+                    // single tuple index `t[(i, j, k)]` per design.md
+                    // § Numerical Types > Indexing — the two forms are
+                    // exactly equivalent and downstream phases only ever
+                    // see the tuple shape. Single-index `v[i]` parses
+                    // unchanged (no 1-tuple wrapping).
                     self.advance();
-                    let index = self.parse_expression()?;
+                    let index_start = self.current_span();
+                    let first = self.parse_expression()?;
+                    let index = if self.check(&Token::Comma) {
+                        let mut elems = vec![first];
+                        while self.eat(&Token::Comma) {
+                            if self.check(&Token::RightBracket) {
+                                break;
+                            }
+                            elems.push(self.parse_expression()?);
+                        }
+                        Expr {
+                            span: self.span_from(&index_start),
+                            kind: ExprKind::Tuple(elems),
+                        }
+                    } else {
+                        first
+                    };
                     self.expect(&Token::RightBracket)?;
                     lhs = Expr {
                         span: lhs.span.clone(),

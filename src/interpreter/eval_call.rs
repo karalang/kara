@@ -559,6 +559,13 @@ impl<'a> super::Interpreter<'a> {
                         return v;
                     }
                 }
+                // Phase-11 Tensor constructors (interpreter MVP) — see
+                // runtime/stdlib/tensor.kara for the fill-type note.
+                "Tensor.zeros" | "Tensor.ones" | "Tensor.full" => {
+                    if let Some(v) = self.eval_tensor_new(&path_str, args, span) {
+                        return v;
+                    }
+                }
                 "Semaphore.new" => {
                     if let Some(v) = self.eval_semaphore_new(args) {
                         return v;

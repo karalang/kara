@@ -10524,3 +10524,54 @@ fn test_variadic_shape_param_mid_list() {
     assert!(gp.params[1].is_variadic_shape);
     assert!(!gp.params[2].is_variadic_shape);
 }
+
+// ── Multi-dim index desugar (Phase 11 Tensor MVP) ───────────────────
+
+#[test]
+fn test_multi_index_desugars_to_tuple() {
+    // `t[i, j, k]` → `t[(i, j, k)]` per design.md § Numerical Types >
+    // Indexing.
+    let program =
+        parse_ok("fn f(t: Tensor[f64, [2, 2, 2]]) { let x = t[0, 1, 0]; }\nfn main() {}\n");
+    let func = program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(f) if f.name == "f" => Some(f),
+            _ => None,
+        })
+        .expect("fn f");
+    let StmtKind::Let { value, .. } = &func.body.stmts[0].kind else {
+        panic!("expected let");
+    };
+    let ExprKind::Index { index, .. } = &value.kind else {
+        panic!("expected index expr");
+    };
+    let ExprKind::Tuple(parts) = &index.kind else {
+        panic!("expected tuple-desugared index, got {:?}", index.kind);
+    };
+    assert_eq!(parts.len(), 3);
+}
+
+#[test]
+fn test_single_index_not_tuple_wrapped() {
+    let program = parse_ok("fn f(v: Vec[i64]) { let x = v[0]; }\nfn main() {}\n");
+    let func = program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(f) if f.name == "f" => Some(f),
+            _ => None,
+        })
+        .expect("fn f");
+    let StmtKind::Let { value, .. } = &func.body.stmts[0].kind else {
+        panic!("expected let");
+    };
+    let ExprKind::Index { index, .. } = &value.kind else {
+        panic!("expected index expr");
+    };
+    assert!(
+        !matches!(&index.kind, ExprKind::Tuple(_)),
+        "single index must not be 1-tuple-wrapped",
+    );
+}

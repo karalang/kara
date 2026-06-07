@@ -589,6 +589,9 @@ impl<'a> super::Interpreter<'a> {
         if let Some(v) = self.try_eval_process_method(method, obj.clone(), args, span) {
             return v;
         }
+        if let Some(v) = self.try_eval_tensor_method(method, &obj, span) {
+            return v;
+        }
         if let Some(v) = self.try_eval_pool_method(method, obj.clone(), args, span) {
             return v;
         }

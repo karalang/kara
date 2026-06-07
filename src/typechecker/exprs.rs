@@ -24,9 +24,19 @@ use super::inference::{
 };
 use super::types::{
     contains_type_param, impl_args_match, impl_table_key, is_integer, lub_block_type, type_display,
-    type_to_concrete_or_param_name, ConstArg, IntSize, ScrutineeMode, SubstValue, Type, UIntSize,
+    type_to_concrete_or_param_name, ConstArg, DimArg, IntSize, ScrutineeMode, SubstValue, Type,
+    UIntSize,
 };
 use super::TypeErrorKind;
+
+/// The component exprs of a (possibly tuple-desugared) index expression —
+/// `t[i, j]` arrives as `Tuple([i, j])`; a single index yields one slot.
+fn tuple_index_parts(index: &Expr) -> Vec<Option<&Expr>> {
+    match &index.kind {
+        ExprKind::Tuple(parts) => parts.iter().map(Some).collect(),
+        _ => vec![Some(index)],
+    }
+}
 
 impl<'a> super::TypeChecker<'a> {
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
@@ -1889,6 +1899,111 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Index { object, index } => {
                 let obj_ty = self.infer_expr(object);
                 let idx_ty = self.infer_expr(index);
+                // Phase 11: Tensor multi-dim indexing — `t[i, j, k]`
+                // arrives as a tuple index (parser desugar per design.md
+                // § Numerical Types > Indexing). Arity must equal the
+                // rank when the static shape is splice-free; literal
+                // indices bounds-check against concrete dims at compile
+                // time. Returns the element type `T`.
+                {
+                    let tensor_ty = match &obj_ty {
+                        Type::Named { name, args } if name == "Tensor" => Some((name, args)),
+                        Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                            Type::Named { name, args } if name == "Tensor" => Some((name, args)),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some((_, args)) = tensor_ty {
+                        if args.len() == 2 {
+                            let elem_ty = args[0].clone();
+                            let idx_arity = match &idx_ty {
+                                Type::Tuple(parts) => {
+                                    for (part_ty, part_expr) in
+                                        parts.iter().zip(tuple_index_parts(index).iter())
+                                    {
+                                        if !is_integer(part_ty) && *part_ty != Type::Error {
+                                            self.type_error(
+                                                format!(
+                                                    "tensor index components must be \
+                                                     integers, found '{}'",
+                                                    type_display(part_ty)
+                                                ),
+                                                part_expr
+                                                    .map(|e| e.span.clone())
+                                                    .unwrap_or_else(|| index.span.clone()),
+                                                TypeErrorKind::TypeMismatch,
+                                            );
+                                        }
+                                    }
+                                    Some(parts.len())
+                                }
+                                t if is_integer(t) => Some(1),
+                                Type::Error => None,
+                                _ => {
+                                    self.type_error(
+                                        format!(
+                                            "tensor index must be integers (one per dim), \
+                                             found '{}'",
+                                            type_display(&idx_ty)
+                                        ),
+                                        index.span.clone(),
+                                        TypeErrorKind::TypeMismatch,
+                                    );
+                                    None
+                                }
+                            };
+                            if let (Some(arity), Type::Shape(dims)) = (idx_arity, &args[1]) {
+                                let splice_free = !dims
+                                    .iter()
+                                    .any(|d| matches!(d, DimArg::Splice(_) | DimArg::SpliceVar(_)));
+                                if splice_free && arity != dims.len() {
+                                    self.type_error(
+                                        format!(
+                                            "rank-{} tensor requires {} index component(s), \
+                                             found {} — index every dim explicitly \
+                                             (`t[i, :, :]` slicing is v1.5)",
+                                            dims.len(),
+                                            dims.len(),
+                                            arity
+                                        ),
+                                        index.span.clone(),
+                                        TypeErrorKind::TypeMismatch,
+                                    );
+                                } else if splice_free {
+                                    // Compile-time bounds check: literal
+                                    // index against concrete dim.
+                                    for (pos, (dim, idx_expr)) in
+                                        dims.iter().zip(tuple_index_parts(index).iter()).enumerate()
+                                    {
+                                        if let (
+                                            DimArg::Const(ConstArg::Literal(d)),
+                                            Some(Expr {
+                                                kind: ExprKind::Integer(i, _),
+                                                span,
+                                                ..
+                                            }),
+                                        ) = (dim, idx_expr)
+                                        {
+                                            if *i < 0 || i >= d {
+                                                self.type_error(
+                                                    format!(
+                                                        "index {} out of bounds for dim {} \
+                                                         (size {})",
+                                                        i, pos, d
+                                                    ),
+                                                    span.clone(),
+                                                    TypeErrorKind::TypeMismatch,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            return elem_ty;
+                        }
+                    }
+                }
                 let is_range_idx = matches!(&idx_ty, Type::Named { name, .. }
                     if matches!(name.as_str(), "Range" | "RangeInclusive" | "RangeFrom"
                         | "RangeTo" | "RangeToInclusive" | "RangeFull"));

@@ -30,6 +30,7 @@ mod method_call_regex;
 mod method_call_semaphore;
 mod method_call_seq;
 mod method_call_set;
+mod method_call_tensor;
 mod pattern_match;
 mod resource_method;
 mod value;
@@ -1773,7 +1774,44 @@ impl<'a> Interpreter<'a> {
     }
 
     fn set_index(&mut self, object: &Expr, index: &Expr, val: Value) {
-        let Value::Int(i) = self.eval_expr_inner(index) else {
+        let idx_val = self.eval_expr_inner(index);
+        // Phase-11 Tensor element store — `t[i, j] = v`. The index is a
+        // tuple (parser desugar) or a bare Int for rank-1; the target's
+        // `Arc<RwLock<...>>` storage aliases the binding's, so the write
+        // lands regardless of how the receiver was reached.
+        if let Value::Tensor { dims, data } = {
+            // Resolve the receiver the same way as the container arms
+            // below: identifier lookup or expression eval.
+            match &object.kind {
+                ExprKind::Identifier(name) => match self.env.get(name) {
+                    Some(v) => v,
+                    None => return,
+                },
+                _ => self.eval_expr_inner(object),
+            }
+        } {
+            let Some(components) = method_call_tensor::index_components(&idx_val) else {
+                self.record_runtime_error(
+                    format!(
+                        "tensor index must be integers (one per dim), got {}",
+                        idx_val.variant_name()
+                    ),
+                    &index.span,
+                );
+                return;
+            };
+            match method_call_tensor::tensor_offset(&dims, &components) {
+                Ok(off) => {
+                    let mut guard = try_write_or_panic(&data, "<tensor>");
+                    guard[off] = val;
+                }
+                Err(msg) => {
+                    self.record_runtime_error(msg, &index.span);
+                }
+            }
+            return;
+        }
+        let Value::Int(i) = idx_val else {
             return;
         };
         let i = i as usize;
