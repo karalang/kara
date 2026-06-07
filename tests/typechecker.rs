@@ -18126,6 +18126,33 @@ fn stable_baked_stdlib_method_call_no_warning() {
     );
 }
 
+// ── phase-8 line-62 audit finding 3: the `WebSocket.from_fd` test-only
+// raw-fd constructor carries `#[unstable]` in `runtime/stdlib/ws.kara`.
+// It is an associated function, so it enforces through the
+// `STDLIB_METHOD_STABILITY` assoc-fn path (the same mechanism as the
+// `Server.serve_static` freeze-list tag above). (Finding 2 — the
+// `std.tracing` lowering shims — was NOT tagged: an audit experiment
+// confirmed the name-based use-site lint does not consult baked-stdlib
+// *free-function* `#[unstable]` attributes, so a tag there is inert
+// until a free-fn stability side-table lands — see the phase-8 line-62
+// carved follow-up.)
+
+#[test]
+fn unstable_api_baked_websocket_from_fd_emits_warning() {
+    // `WebSocket.from_fd` carries `#[unstable]` in
+    // `runtime/stdlib/ws.kara` — a test-only raw-fd constructor. The
+    // assoc-call site must surface the warning + the "use accept" note.
+    let result = typecheck_ok("fn main() {\n\x20   let _ws = WebSocket.from_fd(3);\n}");
+    let warn = result
+        .warnings
+        .iter()
+        .find(|w| w.lint_name.as_deref() == Some("unstable_api"))
+        .expect("expected an `unstable_api` warning at the WebSocket.from_fd call site");
+    assert!(warn.message.contains("WebSocket.from_fd"));
+    assert!(warn.message.contains("accept"));
+    assert!(warn.message.contains("#[allow(unstable_api)]"));
+}
+
 #[test]
 fn unstable_api_user_instance_method_call_emits_warning() {
     // The general (non-stdlib) case: a user `#[unstable]` impl method

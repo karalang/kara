@@ -59,6 +59,15 @@ impl WebSocket {
     // lowering builds a `WebSocket { fd }` struct value in one IR
     // instruction (mirror of `TcpListener.bind`'s `insert_value`
     // pack at `lower_tcp_listener_bind`).
+    //
+    // `#[unstable]` (phase-8 line-62 audit, finding 3): a test-only
+    // raw-fd escape hatch with no production consumer — the direct
+    // analog to `std.http`'s `#[unstable]` `Server.serve_static`.
+    // Production code constructs a `WebSocket` via `accept` /
+    // `accept_tls`, which run the RFC 6455 handshake; `from_fd` trusts
+    // the caller to have done that out of band. Opt in with
+    // `#[allow(unstable_api)]` (the WS test harness does).
+    #[unstable(note: "test-only raw-fd constructor; production code uses WebSocket.accept / accept_tls")]
     #[compiler_builtin]
     fn from_fd(fd: i32) -> WebSocket {
         WebSocket { fd: fd }
