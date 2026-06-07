@@ -9138,6 +9138,80 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_ref_arg_nested_vec_elem_freed() {
+        // Slice 2 part B: a fresh `Vec[String]` passed to a `ref Vec[String]`
+        // param is materialized into a `ref_rvalue_arg` temp. The prior path
+        // tracked it with `elem_ty: None` (outer buffer only). Now
+        // `queue_ref_rvalue_arg_cleanup` recovers the element type from
+        // `owned_temp_drops`, so the `FreeVecBuffer` cleanup emits its
+        // recursive per-element free loop (`cleanup.drop.cond`) — proving the
+        // nested-String leak is closed. Archive-independent (macOS ASAN has no
+        // LeakSanitizer).
+        let src = r#"
+fn make_vv() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("a");
+    return v;
+}
+
+fn show(v: ref Vec[String]) {
+    println(v.len());
+}
+
+fn main() {
+    show(make_vv());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("ref_rvalue_arg"),
+            "expected the fresh Vec[String] rvalue materialized into a ref_rvalue_arg temp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.drop.cond"),
+            "expected the recursive per-element free loop for the ref-arg temp \
+             (elem_ty flowed from owned_temp_drops); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_ref_arg_map_emits_free() {
+        // Slice 2 part B: a fresh `Map[i64,i64]` handle passed to a `ref
+        // Map[i64,i64]` param. The prior `ref_rvalue_arg` path only tracked
+        // Vec/String temps, so the handle leaked. `queue_ref_rvalue_arg_cleanup`
+        // now recognizes the `Map[K,V]` TypeExpr and queues a `FreeMapHandle`
+        // → `karac_map_free` against the temp. Archive-independent leak gate.
+        let src = r#"
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 2_i64);
+    return m;
+}
+
+fn show(m: ref Map[i64, i64]) {
+    println(m.len());
+}
+
+fn main() {
+    show(make_map());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("ref_rvalue_arg"),
+            "expected the fresh Map handle materialized into a ref_rvalue_arg temp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("karac_map_free"),
+            "expected a FreeMapHandle drain (karac_map_free) for the ref-arg Map temp; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_let_else_emits_branch_not_noop() {
         // phase-6-runtime.md line 489: `let … else` lowers to a real branch
         // (match edge binds + falls through, else edge diverges). Regression

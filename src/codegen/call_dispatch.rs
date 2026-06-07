@@ -14,7 +14,9 @@
 use crate::ast::*;
 
 use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, FunctionValue};
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, FunctionValue, PointerValue,
+};
 use inkwell::{AddressSpace, IntPredicate};
 
 use super::declarations::KARAC_PARK_ON_FD;
@@ -833,17 +835,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 // above passes that slot's pointer).
                 //
                 // Cleanup: scalars and the no-op `cap = 0` non-owning
-                // case (string literals, .rodata-backed) need none. When
-                // the materialized value has the Vec/String layout
-                // (`{ptr, len, cap}`), register the temp through the
-                // same scope-exit cleanup the `let`-binding workaround
-                // walks (`track_vec_var` → `FreeVecBuffer`); without
-                // this, a function-return rvalue like
-                // `report(make_heap())` would leave its heap buffer
-                // unreachable after the call returns. The
-                // `cap > 0` guard inside `FreeVecBuffer` keeps the
-                // registration safe to apply unconditionally for any
-                // Vec/String-shaped value.
+                // case (string literals, .rodata-backed) need none. A
+                // fresh *owned* rvalue — a Vec/String, a Map/Set handle —
+                // would otherwise leak its heap storage after the call
+                // returns (the callee only *borrows* via `ref T`). Route
+                // the temp through `queue_ref_rvalue_arg_cleanup`, the
+                // owned-temp classification shared with the discard
+                // chokepoint (slice 2): it recovers the Vec element type
+                // from `owned_temp_drops` (closing the nested-heap leak the
+                // prior `track_vec_var(temp, None)` left open for
+                // `Vec[String]` / `Vec[Vec[T]]`) and frees Map/Set handles
+                // (which the old vec-struct-only check missed entirely).
+                // The `cap > 0` / null guards inside the cleanup actions
+                // keep the registration safe to apply unconditionally.
                 let val = self.compile_expr(&a.value)?;
                 let cur_fn = self
                     .builder
@@ -853,9 +857,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let temp =
                     self.create_entry_alloca(cur_fn, &format!("ref_rvalue_arg{i}"), val.get_type());
                 self.builder.build_store(temp, val).unwrap();
-                if self.llvm_ty_is_vec_struct(val.get_type()) {
-                    self.track_vec_var(temp, None);
-                }
+                self.queue_ref_rvalue_arg_cleanup(temp, val, &a.value);
                 compiled_args.push(temp.into());
                 continue;
             }
@@ -1438,6 +1440,56 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 _ => true,
             });
+        }
+    }
+
+    /// Queue scope-exit cleanup for a `ref T` rvalue-arg temp materialized
+    /// into `slot` (the `ref_rvalue_arg{i}` alloca). Generalizes the prior
+    /// Vec/String-only `track_vec_var(slot, None)` (slice 2 part B):
+    ///   - **Vec / String** — the element type is recovered from
+    ///     `owned_temp_drops` so the `FreeVecBuffer` walk frees nested
+    ///     element buffers (`Vec[String]` / `Vec[Vec[T]]`), closing the
+    ///     nested-heap leak the prior `None` left open. Detection is still
+    ///     by LLVM value type, so a missing hint entry degrades to the
+    ///     slice-1 behavior (outer buffer freed, inner leaks) — never a
+    ///     double-free.
+    ///   - **Map / Set handle** — a plain pointer, recognized only via the
+    ///     hint table; freed with the K/V Vec/shared classification from
+    ///     `map_temp_cleanup_parts`. Map handles passed as fresh rvalues to
+    ///     a `ref Map` param leaked entirely before this.
+    ///
+    /// RC-box rvalue args (`ref shared T`) are deferred — the `ref shared T`
+    /// argument ABI needs separate handling and the prior code didn't cover
+    /// them either, so leaving them out is not a regression.
+    fn queue_ref_rvalue_arg_cleanup(
+        &mut self,
+        slot: PointerValue<'ctx>,
+        val: BasicValueEnum<'ctx>,
+        arg_expr: &Expr,
+    ) {
+        let span_key = (arg_expr.span.offset, arg_expr.span.length);
+        if self.llvm_ty_is_vec_struct(val.get_type()) {
+            let elem_ty = self
+                .owned_temp_drops
+                .get(&span_key)
+                .cloned()
+                .and_then(|te| self.extract_vec_elem_type(&te));
+            self.track_vec_var(slot, elem_ty);
+            return;
+        }
+        if !val.is_pointer_value() {
+            return;
+        }
+        let Some(te) = self.owned_temp_drops.get(&span_key).cloned() else {
+            return;
+        };
+        let head = match &te.kind {
+            TypeKind::Path(p) => p.segments.first().map(|s| s.as_str()).unwrap_or(""),
+            _ => return,
+        };
+        if head == "Map" || head == "Set" {
+            let (key_is_vec, val_is_vec, key_shared, val_shared) = self.map_temp_cleanup_parts(&te);
+            self.track_map_var(slot, key_is_vec, val_is_vec, val_shared, key_shared);
         }
     }
 

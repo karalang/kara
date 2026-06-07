@@ -2656,6 +2656,77 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_ref_arg_nested_vec_elem_freed() {
+        // Slice 2 part B: a fresh `Vec[String]` rvalue passed to a `ref
+        // Vec[String]` param. The prior `ref_rvalue_arg` path freed only the
+        // outer buffer (`track_vec_var(temp, None)`), leaking each String
+        // element's `{ptr,len,cap}` data. `queue_ref_rvalue_arg_cleanup` now
+        // recovers the element type from `owned_temp_drops`, so the recursive
+        // `FreeVecBuffer` walk frees the inner String buffers too. 8-iteration
+        // loop: Linux `detect_leaks=1` is the leak oracle for the element
+        // closure; macOS catches any double-free of the outer buffer.
+        assert_clean_asan_run(
+            r#"
+fn make_vv() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alpha");
+    v.push("beta");
+    return v;
+}
+
+fn show(v: ref Vec[String]) {
+    println(v.len());
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 8 {
+        show(make_vv());
+        i = i + 1;
+    }
+}
+"#,
+            &["2", "2", "2", "2", "2", "2", "2", "2"],
+            "ref_arg_nested_vec_elem_freed",
+        );
+    }
+
+    #[test]
+    fn asan_ref_arg_map_freed() {
+        // Slice 2 part B: a fresh `Map[i64,i64]` handle passed to a `ref
+        // Map[i64,i64]` param. The prior `ref_rvalue_arg` path only tracked
+        // Vec/String-shaped temps, so a fresh Map handle passed by `ref`
+        // leaked its whole control block. `queue_ref_rvalue_arg_cleanup`
+        // recognizes the `Map[K,V]` TypeExpr via the hint table and queues a
+        // `FreeMapHandle`. Loop amplifies any imbalance into a deterministic
+        // macOS double-free fault; Linux catches the leak.
+        assert_clean_asan_run(
+            r#"
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 2_i64);
+    m.insert(3_i64, 4_i64);
+    return m;
+}
+
+fn show(m: ref Map[i64, i64]) {
+    println(m.len());
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 8 {
+        show(make_map());
+        i = i + 1;
+    }
+}
+"#,
+            &["2", "2", "2", "2", "2", "2", "2", "2"],
+            "ref_arg_map_freed",
+        );
+    }
+
     // ── 491: tail-expression temp drops before block-local lets ──
     //
     // phase-6-runtime.md line 491 — "Tail-expression temporary scope —

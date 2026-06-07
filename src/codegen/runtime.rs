@@ -817,7 +817,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `owned_temp_drops` are the source of truth. Returns
     /// `(key_is_vec, val_is_vec, key_shared_heap, val_shared_heap)`; a `Set`
     /// lowers to `Map[T, ()]`, so its value half is inert.
-    fn map_temp_cleanup_parts(
+    pub(super) fn map_temp_cleanup_parts(
         &self,
         te: &TypeExpr,
     ) -> (

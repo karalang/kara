@@ -1,13 +1,16 @@
 # Design spike — general owned-temp tracking (codegen)
 
-**Status:** **slices 1–2 (hint-table half) landed 2026-06-06**. Slice 1:
-chokepoint + statement-position discard (Vec/String). Slice 2 part A: the
-lowering-pass `owned_temp_drops` hint table + Map/Set-handle and shared-struct
-RC-box discard + Vec element-type closing (nested-heap leak). Slice 2 part B
-(call-arg / operand-temp migration onto the chokepoint) and slices 3–6 not
-started. This doc scopes the work and is the designated *unblocker* for the
-phase-6 line-489 remainder (scrutinee-temp drop scope) and the phase-6 line-497
-tail-expr leak carve-out — both blocked on the gap here.
+**Status:** **slices 1–2 landed 2026-06-06/07**. Slice 1: chokepoint +
+statement-position discard (Vec/String). Slice 2 part A: the lowering-pass
+`owned_temp_drops` hint table + Map/Set-handle and shared-struct RC-box discard +
+Vec element-type closing (nested-heap leak). Slice 2 part B: the `ref_rvalue_arg`
+call-arg path migrated onto the owned-temp classification (Vec element closing +
+Map-handle cleanup). **Operand temps deferred to slice 3** (they overlap the
+method-chain receiver-temp surface — `make_vec().len()` is a chain receiver, not
+an operator operand). Slices 3–6 not started. This doc scopes the work and is the
+designated *unblocker* for the phase-6 line-489 remainder (scrutinee-temp drop
+scope) and the phase-6 line-497 tail-expr leak carve-out — both blocked on the
+gap here.
 
 **Scope decision (2026-06-06):** build the `materialize_owned_temp` chokepoint +
 slice 1 for its standalone architectural value (it stops the special-case
@@ -240,14 +243,32 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    `asan_discarded_nested_vec_string_temp_freed`, `asan_discarded_rc_temp_freed`,
    `asan_returned_map_explicit_return_no_double_free` (the return-suppression
    regression). All gates green.
-   **Part B (not started) — call-arg / operand temps.** Route fresh-temp args /
-   operator operands through `materialize_owned_temp`, migrating the Vec-only
-   `ref_rvalue_arg` path (`call_dispatch.rs`) onto the chokepoint (now Map/RC +
-   `elem_ty: Some`, closing its `None` nested-leak). Tests: `asan_ref_arg_map_freed`,
-   `asan_ref_arg_nested_vec_elem_freed`, `asan_operand_temp_freed`.
-3. **Method-chain intermediates.** Route chain receivers/intermediates through
-   the chokepoint against the statement frame. Tests:
-   `asan_method_chain_intermediate_vec_freed`.
+   **Part B — call-arg temps. — DONE 2026-06-07.** Migrated the Vec-only
+   `ref_rvalue_arg` path (`call_dispatch.rs`) onto the owned-temp
+   classification via a new `queue_ref_rvalue_arg_cleanup` helper (sharing
+   `map_temp_cleanup_parts`, now `pub(super)`): Vec/String temps recover their
+   element type from `owned_temp_drops` (closing the `track_vec_var(temp, None)`
+   nested-leak for `Vec[String]` / `Vec[Vec[T]]`), and fresh `Map`/`Set` handles
+   passed to a `ref Map` param are freed via `FreeMapHandle` (leaked entirely
+   before). RC-box rvalue args (`ref shared T`) deferred — the `ref shared T`
+   argument ABI needs separate handling; the prior code didn't cover them
+   either, so it's not a regression. **Tests:** 2 IR
+   (`test_ir_ref_arg_nested_vec_elem_freed` → `cleanup.drop.cond`,
+   `test_ir_ref_arg_map_emits_free` → `karac_map_free`) + 2 ASAN
+   (`asan_ref_arg_nested_vec_elem_freed`, `asan_ref_arg_map_freed`). The Vec
+   element-type extraction reuses `extract_vec_elem_type`; detection stays by
+   LLVM value type so a missing hint entry degrades to slice-1 behavior (outer
+   freed, inner leaks) — never a double-free.
+   **Operand temps (deferred → slice 3).** Operator operands that are fresh
+   heap temps overlap the method-chain receiver-temp surface (`make_vec().len()`
+   is a chain receiver). Folded into slice 3 rather than split across two slices.
+3. **Method-chain intermediates + operator-operand temps.** Route chain
+   receivers/intermediates and fresh operator operands (`arr[make_vec().len()]`,
+   `make_str() + "x"`) through the chokepoint against the statement frame.
+   (Operand temps were folded here from slice 2 part B — a chain receiver and an
+   operator operand are the same "fresh heap temp consumed mid-expression"
+   shape.) Tests: `asan_method_chain_intermediate_vec_freed`,
+   `asan_operand_temp_freed`.
 4. **Scrutinee sub-frame (= line-489 slice 3).** Dedicated scrutinee frame in
    if-let/while-let/let-else; drain on miss-before-else, hit-at-arm-exit,
    per-iteration. Tests: `asan_if_let_scrutinee_temp_freed_on_miss` +
