@@ -398,6 +398,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Just return it directly.
                     return self.compile_expr(operand);
                 }
+                // Negative integer literals parse as `Neg(Integer(n))` and
+                // the typechecker range-validates them as a UNIT — fold to a
+                // single constant here. Compiling the positive half first
+                // would wrap at the target width (`-2147483648i32`'s positive
+                // half doesn't fit i32), and the checked-neg runtime trap
+                // (design.md § Arithmetic Overflow) would then fire on a
+                // literal that is in range as written. `n` is a positive
+                // i64 literal, so `-n` cannot itself overflow.
+                if matches!(op, UnaryOp::Neg) {
+                    if let ExprKind::Integer(n, sfx) = &operand.kind {
+                        return Ok(self.const_int_for_suffix(-*n, *sfx).into());
+                    }
+                }
                 let val = self.compile_expr(operand)?;
                 self.compile_unaryop(op, val)
             }

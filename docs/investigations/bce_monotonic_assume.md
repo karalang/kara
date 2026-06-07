@@ -1,6 +1,6 @@
 # Bounds-check elision via `llvm.assume` on monotone loop variables
 
-**Date:** 2026-06-07 · **Status:** mechanism validated in isolated IR; implementation blocked on AOT integer-overflow trapping (soundness prerequisite — see `implementation_checklist/phase-7-codegen.md` § AOT integer-overflow trapping).
+**Date:** 2026-06-07 · **Status:** mechanism validated in isolated IR; the soundness prerequisite (AOT integer-overflow trapping) **landed the same day** — assume emission is now unblocked, and more valuable than measured below: the `with.overflow` lowering's extractvalue blocks LVI phi-range reasoning, so one previously-LLVM-folded check per kata resurfaced (see the trap entry's bench probe in `implementation_checklist/phase-7-codegen.md`).
 
 Companion to the promoted tracker entry `phase-7-codegen.md` § "Bounds-check elision: transitive bounds from induction-variable monotonicity". This note records the per-kata diagnostic and the `opt` experiments so the slice doesn't have to re-derive them.
 

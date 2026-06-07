@@ -198,16 +198,20 @@ mod codegen_tests {
             "should contain a function definition"
         );
         assert!(ir.contains("@add"), "should contain the function name");
-        // LLVM 18 emits `add nsw i64` for checked integer addition.
-        assert!(ir.contains("add nsw i64"), "should contain integer add");
+        // Checked arithmetic (design.md § Arithmetic Overflow): integer
+        // `+` lowers through llvm.sadd.with.overflow since 2026-06-07.
+        assert!(
+            ir.contains("sadd.with.overflow"),
+            "should contain checked integer add"
+        );
     }
 
     #[test]
     fn test_ir_sub_mul_div() {
         let ir = ir_for("fn calc(a: i64, b: i64) -> i64 { (a - b) * (a + b) }");
-        // LLVM 18 emits nsw variants for checked arithmetic.
-        assert!(ir.contains("sub nsw i64"));
-        assert!(ir.contains("mul nsw i64"));
+        // Checked arithmetic: - and * lower through the with.overflow family.
+        assert!(ir.contains("ssub.with.overflow"));
+        assert!(ir.contains("smul.with.overflow"));
     }
 
     #[test]
@@ -287,7 +291,7 @@ mod codegen_tests {
     #[test]
     fn test_ir_let_binding() {
         let ir = ir_for("fn double(x: i64) -> i64 { let y = x * 2; y }");
-        assert!(ir.contains("mul nsw"));
+        assert!(ir.contains("smul.with.overflow"));
         assert!(ir.contains("alloca"));
     }
 
@@ -323,8 +327,8 @@ fn accumulate(limit: i64) -> i64 {
 "#,
         );
         assert!(
-            ir.contains("add nsw"),
-            "should contain integer addition for +="
+            ir.contains("sadd.with.overflow"),
+            "should contain checked integer addition for +="
         );
         assert!(
             ir.contains("while.cond"),
@@ -548,7 +552,7 @@ struct Rect { width: i64, height: i64 }
 fn area(r: Rect) -> i64 { r.width * r.height }
 "#,
         );
-        assert!(ir.contains("mul nsw"));
+        assert!(ir.contains("smul.with.overflow"));
         assert!(ir.contains("extractvalue"));
     }
 
@@ -3151,7 +3155,7 @@ fn main() {
 "#,
         );
         assert!(ir.contains("__closure_0"));
-        assert!(ir.contains("mul nsw"));
+        assert!(ir.contains("smul.with.overflow"));
     }
 
     #[test]
@@ -3172,7 +3176,7 @@ fn main() {
         );
         // The function takes an env pointer and the param.
         assert!(
-            ir.contains("add nsw") || ir.contains("add i64"),
+            ir.contains("sadd.with.overflow") || ir.contains("add i64"),
             "should add"
         );
     }
@@ -8724,6 +8728,287 @@ fn main() {
                 "code after panicking index store should not run"
             );
         }
+    }
+
+    // ── Arithmetic fault traps (design.md § Arithmetic Overflow) ───────
+    // AOT parity with the interpreter's checked arithmetic
+    // (src/interpreter/eval_ops.rs): + - * trap "integer overflow",
+    // / and % by zero trap "division by zero", iN::MIN / -1 and % -1
+    // trap "integer overflow" (same family), unary -iN::MIN traps.
+    // Before 2026-06-07 these were nsw/raw ops — IR-level UB that
+    // happened to wrap (or print garbage, for div) on arm64. Operands
+    // are built via `let mut` + reassignment so neither const-eval nor
+    // instcombine folds the fault away before the runtime check.
+
+    #[test]
+    fn test_e2e_int_overflow_add_traps() {
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let mut x = 9223372036854775806;
+    x = x + 1;
+    x = x + 1;
+    println(x);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("integer overflow"),
+                "expected integer-overflow panic, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("-9223372036854775808"),
+                "wrapped value must not print"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_int_overflow_sub_traps() {
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let mut x = -9223372036854775807;
+    x = x - 1;
+    x = x - 1;
+    println(x);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("integer overflow"),
+                "expected integer-overflow panic on MIN - 1, got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_int_overflow_mul_traps() {
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let mut x = 4611686018427387904;
+    x = x * 2;
+    println(x);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("integer overflow"),
+                "expected integer-overflow panic on 2^62 * 2, got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_div_by_zero_traps() {
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let mut z = 0;
+    z = z + 0;
+    let q = 7 / z;
+    println(q);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("division by zero"),
+                "expected division-by-zero panic, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_mod_by_zero_traps() {
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let mut z = 0;
+    z = z + 0;
+    let r = 7 % z;
+    println(r);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("division by zero"),
+                "expected division-by-zero panic on %, got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_min_div_neg_one_traps_as_overflow() {
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let mut m = -9223372036854775807;
+    m = m - 1;
+    let mut d = -1;
+    d = d + 0;
+    let q = m / d;
+    println(q);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("integer overflow"),
+                "expected integer-overflow panic on MIN / -1 (design.md: same \
+                 error family as MAX + 1, distinct from division by zero), \
+                 got stdout={:?}",
+                c.stdout
+            );
+            assert!(
+                !c.stdout.contains("division by zero"),
+                "MIN / -1 must report overflow, not division by zero"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_min_mod_neg_one_traps_as_overflow() {
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let mut m = -9223372036854775807;
+    m = m - 1;
+    let mut d = -1;
+    d = d + 0;
+    let r = m % d;
+    println(r);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("integer overflow"),
+                "expected integer-overflow panic on MIN % -1, got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_neg_min_traps() {
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let mut m = -9223372036854775807;
+    m = m - 1;
+    let n = -m;
+    println(n);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("integer overflow"),
+                "expected integer-overflow panic on -iN::MIN (interpreter \
+                 parity: checked_neg), got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_negative_min_literal_folds_without_trap() {
+        // `-2147483648i32` parses as Neg(Integer(2147483648)) and is
+        // range-valid as a UNIT. Codegen folds it to one constant; without
+        // the fold, the positive half wraps at i32 width and the checked
+        // neg spuriously traps (caught by asan_kata_8 atoi, 2026-06-07).
+        let out = run_program(
+            r#"
+fn main() {
+    let int_min: i32 = -2147483648i32;
+    println(int_min);
+    let i64_min = -9223372036854775807 - 1;
+    println(i64_min);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "-2147483648\n-9223372036854775808\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_checked_arith_non_faulting_results_unchanged() {
+        // The checked lowering must not perturb in-range arithmetic.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut a = 20;
+    a = a + 0;
+    let b = 22;
+    println(a + b);
+    println(a - b);
+    println(a * b);
+    println(b / a);
+    println(b % a);
+    println(-a);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "42\n-2\n440\n1\n2\n-20\n");
+        }
+    }
+
+    #[test]
+    fn test_ir_add_emits_checked_overflow_intrinsic() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let mut x = 1;
+    x = x + 41;
+    println(x);
+}
+"#,
+        );
+        assert!(
+            ir.contains("sadd.with.overflow"),
+            "signed add must lower through llvm.sadd.with.overflow, IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("add.ovf.trap"),
+            "overflow trap block must be emitted, IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_div_emits_zero_and_min_guards() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let mut z = 3;
+    z = z + 0;
+    let q = 7 / z;
+    println(q);
+}
+"#,
+        );
+        assert!(
+            ir.contains("div.zero.trap"),
+            "division must emit a zero-guard trap block, IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("div.ovf.trap"),
+            "signed division must emit the MIN/-1 overflow guard, IR:\n{ir}"
+        );
     }
 
     // ── Level 2 crash diagnostics (design.md § Crash diagnostics) ──────

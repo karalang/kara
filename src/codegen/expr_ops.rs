@@ -1928,10 +1928,19 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         };
         let result = match op {
-            BinOp::Add => self.builder.build_int_nsw_add(lv, rv, "add").unwrap(),
-            BinOp::Sub => self.builder.build_int_nsw_sub(lv, rv, "sub").unwrap(),
-            BinOp::Mul => self.builder.build_int_nsw_mul(lv, rv, "mul").unwrap(),
+            // Checked arithmetic — design.md § Arithmetic Overflow (trap on
+            // app/lib profiles). These arms previously emitted bare `nsw`
+            // ops, which declared overflow UB at the IR level while the
+            // interpreter trapped; the divergence record lives in
+            // `phase-7-codegen.md` § "AOT integer-overflow trapping". The
+            // `with.overflow` intrinsics hand LLVM the same no-wrap fact on
+            // the continue path that `nsw` asserted — but as a checked
+            // runtime property. Panic messages match `eval_ops.rs` exactly.
+            BinOp::Add => self.emit_checked_int_arith("add", lv, rv, is_unsigned)?,
+            BinOp::Sub => self.emit_checked_int_arith("sub", lv, rv, is_unsigned)?,
+            BinOp::Mul => self.emit_checked_int_arith("mul", lv, rv, is_unsigned)?,
             BinOp::Div => {
+                self.emit_int_div_guards(lv, rv, is_unsigned);
                 if is_unsigned {
                     self.builder.build_int_unsigned_div(lv, rv, "div").unwrap()
                 } else {
@@ -1939,6 +1948,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             BinOp::Mod => {
+                self.emit_int_div_guards(lv, rv, is_unsigned);
                 if is_unsigned {
                     self.builder.build_int_unsigned_rem(lv, rv, "mod").unwrap()
                 } else {
@@ -2018,6 +2028,136 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => return Err(format!("Unsupported binary op: {:?}", op)),
         };
         Ok(result.into())
+    }
+
+    /// Checked integer `+` / `-` / `*` via the
+    /// `llvm.{s,u}{add,sub,mul}.with.overflow.iN` intrinsic family,
+    /// branching to an outlined panic site on the overflow flag.
+    /// Implements design.md § Arithmetic Overflow (trap by default on
+    /// `app`/`lib`) at the AOT surface, matching the interpreter's
+    /// `checked_*` arms in `src/interpreter/eval_ops.rs` — message
+    /// `integer overflow`. The `embedded`-profile wrapping default is
+    /// future profile plumbing (see the phase-7 tracker entry); both
+    /// shipped backends currently expose only app/lib semantics.
+    ///
+    /// `op_name` ∈ {"add", "sub", "mul"} — used for both the intrinsic
+    /// name and IR labels (`add.chk` / `add.ovf.trap` / `add.ovf.ok`),
+    /// which IR tests pin.
+    fn emit_checked_int_arith(
+        &mut self,
+        op_name: &str,
+        lv: inkwell::values::IntValue<'ctx>,
+        rv: inkwell::values::IntValue<'ctx>,
+        is_unsigned: bool,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let sign = if is_unsigned { 'u' } else { 's' };
+        let name = format!("llvm.{sign}{op_name}.with.overflow");
+        let intrinsic = inkwell::intrinsics::Intrinsic::find(&name)
+            .ok_or_else(|| format!("{name} intrinsic must exist in LLVM"))?;
+        let decl = intrinsic
+            .get_declaration(&self.module, &[lv.get_type().into()])
+            .ok_or_else(|| {
+                format!(
+                    "{name} has no declaration for width {}",
+                    lv.get_type().get_bit_width()
+                )
+            })?;
+        let pair = self
+            .builder
+            .build_call(decl, &[lv.into(), rv.into()], &format!("{op_name}.chk"))
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_struct_value();
+        let value = self
+            .builder
+            .build_extract_value(pair, 0, &format!("{op_name}.val"))
+            .unwrap()
+            .into_int_value();
+        let overflowed = self
+            .builder
+            .build_extract_value(pair, 1, &format!("{op_name}.ovf"))
+            .unwrap()
+            .into_int_value();
+        let fn_val = self.current_fn.unwrap();
+        let trap_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{op_name}.ovf.trap"));
+        let ok_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{op_name}.ovf.ok"));
+        self.builder
+            .build_conditional_branch(overflowed, trap_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(trap_bb);
+        self.emit_panic("integer overflow");
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok_bb);
+        Ok(value)
+    }
+
+    /// Division/remainder guards — design.md § Arithmetic Overflow:
+    /// `x / 0` and `x % 0` trap `division by zero`; signed
+    /// `iN::MIN / -1` and `iN::MIN % -1` trap `integer overflow` (the
+    /// mathematical result doesn't fit; LLVM `sdiv`/`srem` make it UB).
+    /// Mirrors the interpreter's Div/Mod arms (`checked_div`/`checked_rem`
+    /// after an explicit zero test). Unsigned types only need the zero
+    /// guard. Without these, AOT div-by-zero was full IR-level UB —
+    /// measured printing garbage where `karac run` traps (2026-06-07,
+    /// `docs/investigations/bce_monotonic_assume.md` filing session).
+    fn emit_int_div_guards(
+        &mut self,
+        lv: inkwell::values::IntValue<'ctx>,
+        rv: inkwell::values::IntValue<'ctx>,
+        is_unsigned: bool,
+    ) {
+        let ty = rv.get_type();
+        let fn_val = self.current_fn.unwrap();
+
+        let zero_trap = self.context.append_basic_block(fn_val, "div.zero.trap");
+        let zero_ok = self.context.append_basic_block(fn_val, "div.zero.ok");
+        let is_zero = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, rv, ty.const_zero(), "div.is_zero")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_zero, zero_trap, zero_ok)
+            .unwrap();
+        self.builder.position_at_end(zero_trap);
+        self.emit_panic("division by zero");
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(zero_ok);
+
+        if is_unsigned {
+            return;
+        }
+        // Signed MIN / -1: build MIN as `1 << (w - 1)` via const ops so the
+        // shape is width-generic (covers i128 without u64 literal overflow).
+        let w = ty.get_bit_width();
+        let min = ty
+            .const_int(1, false)
+            .const_shl(ty.const_int(u64::from(w) - 1, false));
+        let ovf_trap = self.context.append_basic_block(fn_val, "div.ovf.trap");
+        let ovf_ok = self.context.append_basic_block(fn_val, "div.ovf.ok");
+        let lhs_is_min = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, lv, min, "div.lhs_min")
+            .unwrap();
+        let rhs_is_m1 = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, rv, ty.const_all_ones(), "div.rhs_m1")
+            .unwrap();
+        let both = self
+            .builder
+            .build_and(lhs_is_min, rhs_is_m1, "div.min_ovf")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(both, ovf_trap, ovf_ok)
+            .unwrap();
+        self.builder.position_at_end(ovf_trap);
+        self.emit_panic("integer overflow");
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ovf_ok);
     }
 
     pub(super) fn compile_struct_eq(
@@ -2438,11 +2578,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into())
                 } else {
-                    Ok(self
-                        .builder
-                        .build_int_neg(val.into_int_value(), "neg")
-                        .unwrap()
-                        .into())
+                    // Checked negate: `-iN::MIN` doesn't fit and traps as
+                    // `integer overflow`, matching the interpreter's
+                    // `checked_neg` arm (`eval_ops.rs`). Lowered as checked
+                    // `0 - v` through the same `ssub.with.overflow` path the
+                    // binary ops use.
+                    let v = val.into_int_value();
+                    let zero = v.get_type().const_zero();
+                    Ok(self.emit_checked_int_arith("sub", zero, v, false)?.into())
                 }
             }
             UnaryOp::Not | UnaryOp::BitNot => {
