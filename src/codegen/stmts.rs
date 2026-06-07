@@ -1366,6 +1366,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 let val = self.compile_expr(value)?;
                 self.pending_let_elem_type = saved_pending_let_elem;
                 self.pending_let_tensor_info = saved_pending_let_tensor;
+                // Owned String/Vec PARAM moved into a local binding
+                // (`let mut work = lists;` where `lists` is a bare
+                // by-value param): under the owned-param ABI the CALLER
+                // retains the buffer's free (kata-22 family, baa210e2),
+                // so arming the new binding as owner over the same
+                // buffer double-frees at the two scope exits — surfaced
+                // by kata-23's `merge_k_lists` (param move + in-place
+                // interval merge over `Vec[Option[ListNode]]`); whether
+                // it trapped or passed silently was allocator luck.
+                // Deep-copy instead: the binding owns the copy, the
+                // caller frees the original. The let-move suppression
+                // below is skipped for this shape — the param's header
+                // must stay intact (cap > 0) so any LATER retaining
+                // consume site of the same param still sees an owned
+                // buffer to copy.
+                let rhs_is_owned_param = matches!(
+                    &value.kind,
+                    ExprKind::Identifier(n) if self.owned_vecstr_params.contains(n.as_str())
+                );
+                let val = if rhs_is_owned_param {
+                    self.maybe_defensive_copy_param_arg(value, val)
+                } else {
+                    val
+                };
                 // Sibling to the Assign arm's f-string staged-acc capture.
                 // The slot is consumed below at the tracked-Vec/String let-
                 // binding site (it transfers ownership of the buffer to
@@ -2012,7 +2036,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         // `outer` binding's track stays the unique owner.
                         // No-op for non-Identifier RHS (fresh-value
                         // constructors / call results / literals).
-                        self.suppress_source_vec_cleanup_for_arg(value);
+                        // Skipped when the RHS is an owned String/Vec
+                        // param — the binding received a deep copy above
+                        // and the param header must stay intact for any
+                        // later consume site (see the kata-23 comment at
+                        // the defensive-copy shim).
+                        if !rhs_is_owned_param {
+                            self.suppress_source_vec_cleanup_for_arg(value);
+                        }
                         // Sibling case for `let t: String = f"…";` — the
                         // f-string acc alloca is queued for scope cleanup
                         // and now aliases the new binding's heap buffer.
@@ -2289,6 +2320,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 let rhs_is_fresh = self.rhs_yields_fresh_ref(value);
                 let rhs_is_fstring = matches!(&value.kind, ExprKind::InterpolatedStringLit(_));
                 let val = self.compile_expr(value)?;
+                // Owned String/Vec PARAM moved into an existing binding
+                // (`work = lists;` where `lists` is a bare by-value
+                // param) — same caller-frees double-free as the Let arm's
+                // shim (see the kata-23 comment there): deep-copy and
+                // leave the param's header intact; the move-suppression
+                // below is skipped for this shape.
+                let rhs_is_owned_param = matches!(
+                    &value.kind,
+                    ExprKind::Identifier(n) if self.owned_vecstr_params.contains(n.as_str())
+                );
+                let val = if rhs_is_owned_param {
+                    self.maybe_defensive_copy_param_arg(value, val)
+                } else {
+                    val
+                };
                 // Consume the f-string acc staging slot once compile_expr
                 // returns — even on the rare paths where the Assign arm
                 // doesn't reach the transfer step below, the slot must not
@@ -2623,7 +2669,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Identifier RHS — fresh-value RHS shapes can't
                     // alias an existing tracked binding.
                     if lhs_is_tracked_vec {
-                        self.suppress_source_vec_cleanup_for_arg(value);
+                        // Owned-param RHS received a deep copy above —
+                        // keep the param's header intact (cap > 0) for
+                        // later consume sites; see the Let arm's shim.
+                        if !rhs_is_owned_param {
+                            self.suppress_source_vec_cleanup_for_arg(value);
+                        }
                         // Sibling case for the InterpolatedStringLit RHS
                         // shape: the f-string accumulator alloca is queued
                         // for scope-exit cleanup (see `compile_expr`'s

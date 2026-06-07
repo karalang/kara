@@ -4404,4 +4404,146 @@ fn main() {
             "[{label}] unexpected stdout (ASAN passed, output mismatched)"
         );
     }
+
+    // ── Owned Vec/String param moved into a local (kata-23, 2026-06-07) ──
+    //
+    // `let mut work = lists;` where `lists` is a bare by-value Vec/String
+    // param: the caller retains the buffer's scope-exit free (kata-22
+    // owned-param ABI), so the let-move must deep-copy — pre-fix the moved
+    // binding's `FreeVecBuffer` and the caller's free double-freed the
+    // same buffer. macOS malloc only trapped on some heap layouts (kata-23's
+    // ten cases split unpredictably); ASAN catches it deterministically.
+
+    #[test]
+    fn asan_owned_vec_param_let_move_interval_merge() {
+        // kata-23 merge_k_lists shape: param Vec[Option[shared]] moved to
+        // a mut local, in-place interval element reads/assignments, slot 0
+        // returned, caller walks the spliced chain.
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn merge_two(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+    loop {
+        if let Some(na) = a {
+            if let Some(nb) = b {
+                if na.val <= nb.val {
+                    tail.next = Some(na);
+                    tail = na;
+                    a = na.next;
+                } else {
+                    tail.next = Some(nb);
+                    tail = nb;
+                    b = nb.next;
+                }
+            } else {
+                tail.next = a;
+                break;
+            }
+        } else {
+            tail.next = b;
+            break;
+        }
+    }
+    dummy.next
+}
+
+fn merge_k(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
+    let mut work = lists;
+    let k = work.len();
+    if k == 0 {
+        return None;
+    }
+    let mut interval = 1;
+    while interval < k {
+        let mut i = 0;
+        while i + interval < k {
+            work[i] = merge_two(work[i], work[i + interval]);
+            i = i + 2 * interval;
+        }
+        interval = 2 * interval;
+    }
+    work[0]
+}
+
+fn main() {
+    let n1 = ListNode { val: 1, next: None };
+    let n2 = ListNode { val: 2, next: None };
+    let n3 = ListNode { val: 3, next: None };
+    let mut v: Vec[Option[ListNode]] = Vec.new();
+    v.push(Some(n1));
+    v.push(Some(n2));
+    v.push(Some(n3));
+    let mut cur = merge_k(v);
+    loop {
+        match cur {
+            Some(node) => {
+                println(node.val);
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+}
+"#,
+            &["1", "2", "3"],
+            "owned_vec_param_let_move_interval_merge",
+        );
+    }
+
+    #[test]
+    fn asan_owned_string_param_let_move_grow() {
+        // String sibling with a realloc after the move — without the
+        // deep copy the caller frees a stale (realloc-moved) pointer.
+        assert_clean_asan_run(
+            r#"
+fn bang(s: String) -> String {
+    let mut t = s;
+    t.push_str("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+    t
+}
+
+fn main() {
+    let a = f"abc{1}";
+    let b = bang(a);
+    println(b.len());
+}
+"#,
+            &["36"],
+            "owned_string_param_let_move_grow",
+        );
+    }
+
+    #[test]
+    fn asan_owned_vec_param_assign_move() {
+        // Assign-arm sibling: `work = v;` deep-copies; the LHS's prior
+        // buffer is eagerly freed (no leak), the caller's free stays
+        // valid.
+        assert_clean_asan_run(
+            r#"
+fn second(v: Vec[i64]) -> i64 {
+    let mut work: Vec[i64] = Vec.new();
+    work.push(0);
+    work = v;
+    work[1]
+}
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7);
+    v.push(9);
+    println(second(v));
+}
+"#,
+            &["9"],
+            "owned_vec_param_assign_move",
+        );
+    }
 }

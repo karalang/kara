@@ -35411,6 +35411,164 @@ fn main() {
         }
     }
 
+    // ── Owned Vec/String param moved into a local (kata-23, 2026-06-07) ──
+    //
+    // `let mut work = lists;` / `work = lists;` where `lists` is a bare
+    // by-value Vec/String param is a RETAINING consume site like the
+    // kata-22 family above: the caller keeps the buffer's scope-exit
+    // free, so the let/assign-move must deep-copy instead of arming the
+    // new binding as a second owner of the same buffer. Before the fix
+    // the caller's free and the moved binding's free double-freed —
+    // whether that trapped (exit 133/134), lost buffered stdout, or
+    // passed silently was pure allocator luck, which is why kata-23's
+    // ten cases split unpredictably. The param's header must stay
+    // intact after the copy (no cap-zero suppression) so later consume
+    // sites of the same param still see an owned buffer.
+
+    #[test]
+    fn test_e2e_owned_vec_param_let_move_then_index() {
+        // kata-23 merge_k_lists shape, minimized: param vec of
+        // Option[shared] moved to a mut local, elements read/merged/
+        // re-assigned in place, slot 0 returned, caller walks the chain.
+        let out = run_program(
+            r#"
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn pick(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    if let Some(n1) = l1 {
+        let _ = n1.val;
+        l1
+    } else {
+        l2
+    }
+}
+
+fn merge_k(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
+    let mut work = lists;
+    let k = work.len();
+    if k == 0 {
+        return None;
+    }
+    let mut interval = 1;
+    while interval < k {
+        let mut i = 0;
+        while i + interval < k {
+            work[i] = pick(work[i], work[i + interval]);
+            i = i + 2 * interval;
+        }
+        interval = 2 * interval;
+    }
+    work[0]
+}
+
+fn main() {
+    let n3 = ListNode { val: 3, next: None };
+    let n2 = ListNode { val: 2, next: Some(n3) };
+    let n1 = ListNode { val: 1, next: Some(n2) };
+    let mut v: Vec[Option[ListNode]] = Vec.new();
+    v.push(Some(n1));
+    v.push(None);
+    v.push(None);
+    let mut cur = merge_k(v);
+    loop {
+        match cur {
+            Some(node) => {
+                println(node.val);
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\n2\n3");
+        }
+    }
+
+    #[test]
+    fn test_e2e_owned_vec_param_let_move_param_reusable() {
+        // The param header survives the move-copy: a SECOND consume of
+        // the same param (here another let-move) still sees cap > 0 and
+        // copies again. Pre-fix, the first move's cap-zero suppression
+        // turned the second binding into a cap=0 alias whose owner was
+        // ambiguous.
+        let out = run_program(
+            r#"
+fn twice(v: Vec[i64]) -> i64 {
+    let a = v;
+    let b = v;
+    a[0] + b[1]
+}
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(32);
+    println(twice(v));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
+    #[test]
+    fn test_e2e_owned_string_param_let_move_then_grow() {
+        // String sibling, with a realloc after the move: `t` must own a
+        // copied buffer, or push_str's realloc leaves the caller freeing
+        // a stale pointer.
+        let out = run_program(
+            r#"
+fn bang(s: String) -> String {
+    let mut t = s;
+    t.push_str("!");
+    t
+}
+
+fn main() {
+    let a = f"abc{1}";
+    println(bang(a));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "abc1!");
+        }
+    }
+
+    #[test]
+    fn test_e2e_owned_vec_param_assign_move() {
+        // Assign-arm sibling: `work = lists;` onto an existing tracked
+        // binding deep-copies the same way (and the LHS's prior buffer
+        // is eagerly freed, not leaked).
+        let out = run_program(
+            r#"
+fn second(v: Vec[i64]) -> i64 {
+    let mut work: Vec[i64] = Vec.new();
+    work.push(0);
+    work = v;
+    work[1]
+}
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7);
+    v.push(9);
+    println(second(v));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "9");
+        }
+    }
+
     // ── F-string accumulator pre-sizing (kata-22 perf lever, 2026-06-06) ──
 
     #[test]
