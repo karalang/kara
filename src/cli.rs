@@ -66,13 +66,6 @@ pub enum BindingsMode {
     /// `target::wasm_component_host_package`). The phase-10
     /// "embedded-WIT migration" swap of the former paired default.
     Component,
-    /// **Deprecated** — the former paired Component Model shape: the
-    /// C-ABI core module (`kara_host` imports) plus a
-    /// `<stem>.component.wit` WIT interface descriptor (see `wit`) for
-    /// wrapping by external tools. Retained one release past the
-    /// embedded-WIT swap (design.md § Target Build Artifacts); selects
-    /// with a deprecation notice on stderr.
-    ComponentPaired,
     /// Raw `.wasm` only — no glue, no declarations. For users wrapping
     /// Kāra WASM with custom host integration.
     None,
@@ -4808,22 +4801,6 @@ fn resolve_effective_bindings(
     }))
 }
 
-/// The paired form's one-release deprecation notice (design.md §
-/// Target Build Artifacts: "downstream tooling that consumes the
-/// paired shape gets a deprecation notice one release before the
-/// swap"). Printed once per build, on stderr, by every path that
-/// resolves `--bindings component-paired` — single-file and project
-/// mode alike. The spelling (and this notice) is removed one release
-/// after the embedded-WIT swap ships.
-fn emit_component_paired_deprecation() {
-    eprintln!(
-        "warning: --bindings component-paired (core module + .component.wit descriptor) is \
-         deprecated — `--bindings component` now emits a single embedded-WIT component that \
-         wasmtime/jco-class hosts run directly; the paired form will be removed one release \
-         after this notice"
-    );
-}
-
 // CLI dispatch helpers naturally land more flag-shaped arguments
 // than the clippy default; factoring them into a struct here would
 // just move the flag list rather than tighten it.
@@ -4912,9 +4889,7 @@ fn cmd_build(
         // install the package name that flips codegen's host-fn import
         // attachment to canonical-ABI `kara:<pkg>/host` naming. The
         // pin rides the same lazy manifest walk-up as the `[release]`
-        // chain (`[toolchain] wasm-tools`). The deprecated paired form
-        // keeps the C-ABI shape and announces its one-release
-        // deprecation here, once, on stderr.
+        // chain (`[toolchain] wasm-tools`).
         let wasm_tools = match effective_bindings {
             Some(BindingsMode::Component) => {
                 let pin = manifest_release_field_for(filename, output, |m| {
@@ -4930,10 +4905,6 @@ fn cmd_build(
                         process::exit(1);
                     }
                 }
-            }
-            Some(BindingsMode::ComponentPaired) => {
-                emit_component_paired_deprecation();
-                None
             }
             _ => None,
         };
@@ -5117,17 +5088,15 @@ fn cmd_build(
                 // mode — not the target name: `--target=wasm_browser
                 // --bindings=none` suppresses them (raw module) and
                 // `--target=wasm_wasi --bindings=browser` opts a wasi
-                // module in (browser/none/paired all lower host fns to
+                // module in (browser/none both lower host fns to
                 // the same `kara_host` import entries, so each
                 // companion is target-agnostic). Browser bindings ship
                 // the ES-module glue (host fn import plumbing + WASI
                 // preview-1 polyfill; see `wasm_glue`) plus its
                 // TypeScript declarations; embedded component bindings
                 // ship NO companion — `<stem>.wasm` is the single
-                // self-describing component; the deprecated paired form
-                // ships the `<stem>.component.wit` WIT interface
-                // descriptor (see `wit`). The `(json key, path)` pairs
-                // feed both output modes.
+                // self-describing component. The `(json key, path)`
+                // pairs feed both output modes.
                 let mut companions: Vec<(&str, String)> = Vec::new();
                 match effective_bindings {
                     Some(BindingsMode::Browser) => {
@@ -5146,16 +5115,6 @@ fn cmd_build(
                             process::exit(1);
                         }
                         companions.push(("dts", dts_path));
-                    }
-                    Some(BindingsMode::ComponentPaired) => {
-                        let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
-                        let wit = crate::wit::render_component_wit(&host_fns, exe_name, &exe_path);
-                        let wit_path = format!("{exe_name}.component.wit");
-                        if let Err(e) = std::fs::write(&wit_path, wit) {
-                            eprintln!("error: failed to write WIT descriptor {wit_path}: {e}");
-                            process::exit(1);
-                        }
-                        companions.push(("wit", wit_path));
                     }
                     Some(BindingsMode::Component) | Some(BindingsMode::None) | None => {}
                 }
@@ -5597,8 +5556,7 @@ fn cmd_build_project(
     // on missing/mis-pinned, pin from the project's own `[toolchain]`
     // table — already loaded, no walk-up needed) and install the
     // package name that flips codegen's host-fn import attachment to
-    // canonical-ABI `kara:<pkg>/host` naming. The deprecated paired
-    // form announces its one-release deprecation instead. Runtime-
+    // canonical-ABI `kara:<pkg>/host` naming. Runtime-
     // gated on the llvm feature: the non-llvm fallback builds nothing,
     // so a missing tool must not fail what is effectively a check run.
     let wasm_tools = if cfg!(feature = "llvm") {
@@ -5614,10 +5572,6 @@ fn cmd_build_project(
                         process::exit(1);
                     }
                 }
-            }
-            Some(BindingsMode::ComponentPaired) => {
-                emit_component_paired_deprecation();
-                None
             }
             _ => None,
         }
@@ -5814,10 +5768,9 @@ fn cmd_build_project(
                     exe_path,
                     glue_path,
                     dts_path,
-                    wit_path,
                 } => {
                     let mut line = format!("Built: {}", exe_path.display());
-                    for extra in [glue_path, dts_path, wit_path].into_iter().flatten() {
+                    for extra in [glue_path, dts_path].into_iter().flatten() {
                         line.push_str(&format!(" + {}", extra.display()));
                     }
                     println!("{line}");
@@ -5860,7 +5813,6 @@ fn cmd_build_project(
                     exe_path,
                     glue_path,
                     dts_path,
-                    wit_path,
                 } => {
                     let mut field = format!(
                         ",\"output\":{}",
@@ -5876,12 +5828,6 @@ fn cmd_build_project(
                         field.push_str(&format!(
                             ",\"dts\":{}",
                             json_string(&dts.display().to_string())
-                        ));
-                    }
-                    if let Some(wit) = wit_path {
-                        field.push_str(&format!(
-                            ",\"wit\":{}",
-                            json_string(&wit.display().to_string())
                         ));
                     }
                     field
@@ -5956,7 +5902,6 @@ fn cmd_build_project(
                 exe_path,
                 glue_path,
                 dts_path,
-                wit_path,
             } = &codegen_status
             {
                 let mut fields = format!(
@@ -5973,12 +5918,6 @@ fn cmd_build_project(
                     fields.push_str(&format!(
                         ",\"dts\":{}",
                         json_string(&dts.display().to_string())
-                    ));
-                }
-                if let Some(wit) = wit_path {
-                    fields.push_str(&format!(
-                        ",\"wit\":{}",
-                        json_string(&wit.display().to_string())
                     ));
                 }
                 emit_jsonl_event("build_artifact", &fields);
@@ -6027,14 +5966,12 @@ enum BuildCodegenStatus {
     /// under embedded component bindings that single file IS the
     /// componentized output). Browser-bindings WASM builds additionally
     /// carry the companion ES-module glue (`<pkg>.js`) and TypeScript
-    /// declarations (`<pkg>.d.ts`); the deprecated paired form carries
-    /// the WIT interface descriptor (`<pkg>.component.wit`) — each
-    /// `None` on every other build shape.
+    /// declarations (`<pkg>.d.ts`) — each `None` on every other build
+    /// shape.
     Built {
         exe_path: PathBuf,
         glue_path: Option<PathBuf>,
         dts_path: Option<PathBuf>,
-        wit_path: Option<PathBuf>,
     },
     /// Late-phase failure (effect / ownership / concurrency / codegen /
     /// link). `phase` names the failing phase for the diagnostic output;
@@ -6311,11 +6248,9 @@ fn run_multi_file_codegen(
     // contract: browser bindings ship the ES-module glue + TypeScript
     // declarations (`<pkg>.js` / `<pkg>.d.ts`, see `wasm_glue`);
     // embedded component bindings ship NO companion (`<pkg>.wasm` IS
-    // the self-describing component); the deprecated paired form ships
-    // the `<pkg>.component.wit` WIT interface descriptor (see `wit`).
+    // the self-describing component).
     let mut glue_path = None;
     let mut dts_path = None;
-    let mut wit_path = None;
     match effective_bindings {
         Some(BindingsMode::Browser) => {
             let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
@@ -6343,28 +6278,12 @@ fn run_multi_file_codegen(
             }
             dts_path = Some(dts);
         }
-        Some(BindingsMode::ComponentPaired) => {
-            let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
-            let wasm_filename = format!("{}.wasm", mf.name);
-            let wit = exe_path.with_extension("component.wit");
-            if let Err(e) = std::fs::write(
-                &wit,
-                crate::wit::render_component_wit(&host_fns, &mf.name, &wasm_filename),
-            ) {
-                return BuildCodegenStatus::Failed {
-                    phase: "link".to_string(),
-                    message: format!("failed to write WIT descriptor {}: {e}", wit.display()),
-                };
-            }
-            wit_path = Some(wit);
-        }
         Some(BindingsMode::Component) | Some(BindingsMode::None) | None => {}
     }
     BuildCodegenStatus::Built {
         exe_path,
         glue_path,
         dts_path,
-        wit_path,
     }
 }
 

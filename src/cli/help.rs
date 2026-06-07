@@ -278,12 +278,7 @@ OPTIONS:
                             `cargo install wasm-tools`, pin the exact
                             version via `[toolchain] wasm-tools = <v>`
                             in kara.toml, point KARAC_WASM_TOOLS at a
-                            specific binary), component-paired
-                            (DEPRECATED: the former paired shape — the
-                            C-ABI core module plus a `.component.wit`
-                            WIT descriptor for wrapping by external
-                            tools; removed one release after the
-                            embedded-WIT swap), or none (raw `.wasm`,
+                            specific binary), or none (raw `.wasm`,
                             no glue).
                             Default is inferred from the target:
                             wasm_browser -> browser, wasm_wasi ->

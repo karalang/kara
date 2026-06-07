@@ -11207,7 +11207,7 @@ fn main() {
 }
 
 /// Server-WASM `host fn` lowering E2E (phase-10): on `wasm_wasi` under
-/// `--bindings none` (and browser / the deprecated paired form),
+/// `--bindings none` (and browser),
 /// `host fn` declarations lower to the same `kara_host` import entries
 /// as the browser target — the "C-ABI call + thin shim" shape, where
 /// the embedder's hand-rolled import object IS the shim. (Embedded
@@ -12048,7 +12048,7 @@ fn bindings_flag_unknown_value_rejected() {
     assert!(!out.status.success());
     assert!(
         stderr.contains("unknown --bindings value 'xml'")
-            && stderr.contains("browser, component, component-paired (deprecated), or none"),
+            && stderr.contains("browser, component, or none"),
         "expected the valid-set listing, got: {stderr}",
     );
 }
@@ -12239,80 +12239,27 @@ fn bindings_explicit_component_emits_embedded_component() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// `--bindings=component-paired` keeps the former paired shape — the
-/// C-ABI core module (`kara_host` imports) plus the
-/// `<stem>.component.wit` descriptor — behind a one-release
-/// deprecation notice on stderr (design.md § Target Build Artifacts).
-/// No external tool involved, so this needs no wasm-tools skip.
+/// `--bindings=component-paired` is GONE — the pre-embedded-WIT paired
+/// shape (C-ABI core module + `<stem>.component.wit` descriptor) was
+/// removed pre-first-release per the one-release deprecation contract
+/// (design.md § Target Build Artifacts; no release ever carried the
+/// spelling). The old spelling must now be the parse-level unknown-
+/// value hard error listing the closed three-value set — not a silent
+/// fallback to the embedded default. Fires before any file is read,
+/// so no wasm infrastructure is needed.
 #[test]
-fn bindings_component_paired_emits_descriptor_with_deprecation() {
-    let tmp = wasm_test_dir("bcomppaired");
-    let path = tmp.join("pairmod.kara");
-    std::fs::write(
-        &path,
-        "effect resource Reporter;\n\n\
-         host fn report(value: i64) -> i64 with writes(Reporter);\n\n\
-         fn main() {\n    report(42);\n}\n",
-    )
-    .unwrap();
-
+fn bindings_component_paired_spelling_removed() {
     let out = karac_bin()
-        .args([
-            "build",
-            path.to_str().unwrap(),
-            "--target=wasm_wasi",
-            "--bindings=component-paired",
-        ])
-        .current_dir(&tmp)
-        .env_remove("KARAC_RUNTIME")
+        .args(["build", "x.kara", "--bindings=component-paired"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
-        eprintln!("skip: bindings_component_paired_emits_descriptor_with_deprecation — {reason}");
-        let _ = std::fs::remove_dir_all(&tmp);
-        return;
-    }
-    assert!(out.status.success(), "build failed: {stderr}");
+    assert!(!out.status.success());
     assert!(
-        stderr.contains("component-paired") && stderr.contains("deprecated"),
-        "the paired form must announce its one-release deprecation, got: {stderr}",
+        stderr.contains("unknown --bindings value 'component-paired'")
+            && stderr.contains("browser, component, or none"),
+        "the removed spelling must hit the unknown-value error with the closed set, got: {stderr}",
     );
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("Built: pairmod.wasm + pairmod.component.wit"),
-        "Built line must name the paired artifacts, got: {stdout}",
-    );
-    let module = tmp.join("pairmod.wasm");
-    assert_eq!(
-        wasm_artifact_kind(&module),
-        "core module",
-        "the paired form ships the C-ABI core module, not a component",
-    );
-    let wit = std::fs::read_to_string(tmp.join("pairmod.component.wit"))
-        .expect("missing .component.wit descriptor");
-    assert!(
-        wit.contains("package kara:pairmod;"),
-        "descriptor must carry the package header, got:\n{wit}",
-    );
-    assert!(
-        wit.contains("report: func(value: s64) -> s64;"),
-        "host fn must map per the WIT boundary contract (i64 ⇒ s64), got:\n{wit}",
-    );
-    assert!(
-        wit.contains("world pairmod {")
-            && wit.contains("import host;")
-            && wit.contains("export run: func();"),
-        "descriptor world must import the host interface and export the entry point, got:\n{wit}",
-    );
-    // The core module keeps the C-ABI `kara_host` import shape — the
-    // canonical-ABI rename applies only to embedded component builds.
-    let descriptor_doc = wit.contains("core import `kara_host.report`");
-    assert!(
-        descriptor_doc,
-        "descriptor doc lines must record the kara_host core import, got:\n{wit}",
-    );
-    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 /// `--bindings` on a non-WASM target is accepted-but-inert (the

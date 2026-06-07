@@ -1,41 +1,36 @@
-//! WASM Component Model WIT emission (`--bindings component` /
-//! `component-paired`, phase-10 "WASM Component Model artifact
-//! emission" + "embedded-WIT migration").
+//! WASM Component Model WIT emission (`--bindings component`, phase-10
+//! "WASM Component Model artifact emission" + "embedded-WIT
+//! migration").
 //!
-//! Two rendered forms share the `interface host` body:
+//! [`render_embed_wit`] renders the WIT world `wasm-tools component
+//! embed` bakes into the core module before `component new` wraps it
+//! into a single self-describing component
+//! (`componentize::componentize`). The world only *imports* `host`;
+//! the preview1 command adapter contributes `export wasi:cli/run`
+//! from `_start` at `component new` time, so no custom `run` export
+//! appears here. The core module imports host fns as
+//! `kara:<pkg>/host` / kebab-case names per the canonical ABI —
+//! [`host_import_module`] / [`host_import_name`] are the single
+//! source of those strings for codegen's attribute-attachment site.
+//! (The pre-embedded-WIT **paired form** — C-ABI core module +
+//! `<pkg>.component.wit` descriptor, `--bindings component-paired` —
+//! was removed pre-first-release per the one-release deprecation
+//! contract in design.md § Target Build Artifacts; no release ever
+//! carried it.)
 //!
-//!   - [`render_embed_wit`] — the **embedded form** behind the default
-//!     `--bindings component`: the WIT world `wasm-tools component
-//!     embed` bakes into the core module before `component new` wraps
-//!     it into a single self-describing component
-//!     (`componentize::componentize`). The world only *imports* `host`;
-//!     the preview1 command adapter contributes `export wasi:cli/run`
-//!     from `_start` at `component new` time, so no custom `run` export
-//!     appears here. Under this form the core module imports host fns
-//!     as `kara:<pkg>/host` / kebab-case names per the canonical ABI —
-//!     [`host_import_module`] / [`host_import_name`] are the single
-//!     source of those strings for codegen's attribute-attachment site.
-//!   - [`render_component_wit`] — the **paired form** descriptor
-//!     (`--bindings component-paired`, deprecated): `<pkg>.wasm`
-//!     (C-ABI core module, `kara_host` snake_case imports) plus
-//!     `<pkg>.component.wit` for wrapping by external tools. Retained
-//!     one release past the embedded-WIT swap per design.md § Target
-//!     Build Artifacts.
-//!
-//! Karac takes no dependency on the Component Model spec itself — both
-//! forms are plain text, and componentization is delegated to the
+//! Karac takes no dependency on the Component Model spec itself — the
+//! world is plain text, and componentization is delegated to the
 //! external `wasm-tools` binary pinned via `kara.toml` `[toolchain]`
 //! (design.md § Component Model emission).
 //!
-//! Mapping contract (also documented in the descriptor header):
+//! Mapping contract:
 //!
 //!   - every `host fn` becomes a function in `interface host` (doc
-//!     comments carry the core import name each form uses);
+//!     comments carry the core import name);
 //!   - the program entry point is the core module's `_start` (WASI
-//!     command) — surfaced as `export run: func();` in the paired
-//!     descriptor and as the adapter-synthesized `wasi:cli/run` in the
-//!     embedded component — the only exported user entry until the
-//!     phase-10 "WASM entry-point discovery" entry lands;
+//!     command) — surfaced as the adapter-synthesized `wasi:cli/run`
+//!     in the embedded component — the only exported user entry until
+//!     the phase-10 "WASM entry-point discovery" entry lands;
 //!   - types map from the Kāra surface: `i8`..`i64`/`isize` ⇒
 //!     `s8`..`s64`, `u8`..`u64`/`usize` ⇒ `u8`..`u64` (Kāra keeps
 //!     64-bit `usize` semantics on wasm32), `f32`/`f64`, `bool`,
@@ -217,15 +212,9 @@ fn world_name(pkg: &str) -> String {
 
 /// Append the `interface host { ... }` block — one function per
 /// `host fn`, each with a doc line carrying the Kāra-surface signature
-/// and the core import path (`<doc_module>.<import name>`, which
-/// differs between the paired form — `kara_host` + snake_case — and
-/// the embedded form — `kara:<pkg>/host` + kebab-case).
-fn push_host_interface(
-    out: &mut String,
-    fns: &[HostFnSig],
-    doc_module: &str,
-    doc_name: impl Fn(&HostFnSig) -> String,
-) {
+/// and the canonical-ABI core import path
+/// (`kara:<pkg>/host.<kebab-name>`, the strings codegen attaches).
+fn push_host_interface(out: &mut String, fns: &[HostFnSig], doc_module: &str) {
     out.push_str(
         "/// Host functions the embedder provides (the core module's\n\
          /// host-import namespace).\n\
@@ -236,7 +225,7 @@ fn push_host_interface(
             out,
             "  /// `{}` — core import `{doc_module}.{}`",
             kara_signature(sig),
-            doc_name(sig)
+            host_import_name(&sig.name)
         );
         let params = sig
             .params
@@ -279,7 +268,7 @@ pub fn render_embed_wit(fns: &[HostFnSig], package: &str) -> (String, String) {
     );
     let _ = writeln!(out, "package kara:{pkg};\n");
     if !fns.is_empty() {
-        push_host_interface(&mut out, fns, &module, |sig| host_import_name(&sig.name));
+        push_host_interface(&mut out, fns, &module);
     }
     let _ = writeln!(out, "world {world} {{");
     if !fns.is_empty() {
@@ -287,53 +276,6 @@ pub fn render_embed_wit(fns: &[HostFnSig], package: &str) -> (String, String) {
     }
     out.push_str("}\n");
     (out, world)
-}
-
-/// Render the `<pkg>.component.wit` descriptor for the paired
-/// component-bindings shape (`--bindings component-paired`, deprecated
-/// — retained one release past the embedded-WIT swap). `package` is the
-/// `kara.toml` package name (project mode) or the source-file stem
-/// (single-file mode); `wasm_filename` is the sibling core module's
-/// file name, named in the header so the pairing is self-describing.
-pub fn render_component_wit(fns: &[HostFnSig], package: &str, wasm_filename: &str) -> String {
-    let pkg = wit_ident(package);
-    let world = world_name(&pkg);
-
-    let mut out = String::with_capacity(2 * 1024);
-    let _ = write!(
-        out,
-        "// Generated by karac for {wasm_filename} — WIT interface descriptor. DO NOT EDIT.\n\
-         //\n\
-         // Paired component-bindings shape (design.md § Target Build Artifacts):\n\
-         // {wasm_filename} is a C-ABI core module (wasm32-wasip1 command); this\n\
-         // descriptor declares its host surface for wrapping by external tools\n\
-         // (wasm-tools component embed/new, jco). Until the embedded-WIT swap,\n\
-         // the pairing contract is:\n\
-         //\n\
-         //   - each `interface host` function is a core-module import under the\n\
-         //     `kara_host` import module, with the snake_case name its doc\n\
-         //     comment records (WIT identifiers are kebab-case);\n\
-         //   - the world export `run` is the core module's `_start` entry point;\n\
-         //   - strings cross the core ABI as (ptr, len) pairs into linear\n\
-         //     memory; raw-pointer parameters (rendered u32) are linear-memory\n\
-         //     addresses a wrapper must bridge below the canonical ABI.\n\n"
-    );
-    let _ = writeln!(out, "package kara:{pkg};\n");
-
-    if !fns.is_empty() {
-        push_host_interface(&mut out, fns, "kara_host", |sig| sig.name.clone());
-    }
-
-    let _ = writeln!(out, "world {world} {{");
-    if !fns.is_empty() {
-        out.push_str("  import host;\n");
-    }
-    out.push_str(
-        "  /// The program entry point (core-module export `_start`).\n\
-         \x20 export run: func();\n\
-         }\n",
-    );
-    out
 }
 
 #[cfg(test)]
@@ -374,31 +316,20 @@ mod tests {
                 None,
             ),
         ];
-        let wit = render_component_wit(&fns, "webapp", "webapp.wasm");
+        let (wit, _) = render_embed_wit(&fns, "webapp");
         assert!(wit.contains("package kara:webapp;"));
         // 64-bit ints are s64/u64; pointers are wasm32 addresses (u32);
         // snake_case kebab-cases; unit returns drop the arrow.
         assert!(wit.contains("report: func(value: s64) -> s64;"));
         assert!(wit.contains("log-str: func(ptr: u32, len: u64);"));
         // Kāra-surface signature + core import name survive as doc lines.
-        assert!(
-            wit.contains("`host fn report(value: i64) -> i64` — core import `kara_host.report`")
-        );
+        assert!(wit.contains(
+            "`host fn report(value: i64) -> i64` — core import `kara:webapp/host.report`"
+        ));
         // Host fns pull the interface import into the world.
         assert!(wit.contains("interface host {"));
         assert!(wit.contains("world webapp {"));
         assert!(wit.contains("import host;"));
-        assert!(wit.contains("export run: func();"));
-    }
-
-    #[test]
-    fn wit_without_host_fns_omits_the_host_interface() {
-        let wit = render_component_wit(&[], "plain", "plain.wasm");
-        assert!(!wit.contains("interface host {"));
-        assert!(!wit.contains("import host;"));
-        assert!(wit.contains("package kara:plain;"));
-        assert!(wit.contains("world plain {"));
-        assert!(wit.contains("export run: func();"));
     }
 
     #[test]
@@ -456,17 +387,19 @@ mod tests {
     fn wit_identifiers_escape_keywords_and_normalize_kebab() {
         // Keyword collision: a host fn named `record` must %-escape.
         let fns = vec![sig("record", vec![], None)];
-        let wit = render_component_wit(&fns, "My_App", "my_app.wasm");
+        let (wit, world) = render_embed_wit(&fns, "My_App");
         assert!(wit.contains("%record: func();"));
         // Package/world names kebab-case (lowercase, `_` ⇒ `-`).
         assert!(wit.contains("package kara:my-app;"));
         assert!(wit.contains("world my-app {"));
+        assert_eq!(world, "my-app");
         // A kebab word can't start with a digit: fold the separator.
         assert_eq!(kebab_ident("vec_2d"), "vec2d");
         assert_eq!(kebab_ident("2048"), "p2048");
         // A package named exactly `host` must not collide with the
-        // descriptor's own `host` interface.
-        let hosted = render_component_wit(&fns, "host", "host.wasm");
+        // world file's own `host` interface.
+        let (hosted, hosted_world) = render_embed_wit(&fns, "host");
         assert!(hosted.contains("world host-world {"));
+        assert_eq!(hosted_world, "host-world");
     }
 }

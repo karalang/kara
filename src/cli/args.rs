@@ -491,10 +491,7 @@ fn parse_build_command(args: &[String]) -> Command {
             // Space-separated form, mirroring `--target <triple>` (the
             // design.md examples write `--bindings browser`).
             if i + 1 >= args.len() {
-                eprintln!(
-                    "error: --bindings requires a value. Use browser, component, \
-                     component-paired (deprecated), or none."
-                );
+                eprintln!("error: --bindings requires a value. Use browser, component, or none.");
                 process::exit(1);
             }
             bindings = Some(parse_bindings_value(&args[i + 1]));
@@ -578,20 +575,20 @@ fn parse_build_command(args: &[String]) -> Command {
 }
 
 /// Parse a `--bindings` value (phase-10 WASM output-shape selector;
-/// `design.md § Target Build Artifacts`). The set is closed at four —
-/// `browser` | `component` | `component-paired` (deprecated) | `none`
-/// — and an unknown value is a hard error listing it, so a typo can't
-/// silently fall back to the target-inferred default.
+/// `design.md § Target Build Artifacts`). The set is closed at three —
+/// `browser` | `component` | `none` — and an unknown value is a hard
+/// error listing it, so a typo can't silently fall back to the
+/// target-inferred default. (`component-paired`, the pre-embedded-WIT
+/// paired shape, was removed pre-first-release per the one-release
+/// deprecation contract — no release ever carried the spelling.)
 fn parse_bindings_value(value: &str) -> BindingsMode {
     match value.trim() {
         "browser" => BindingsMode::Browser,
         "component" => BindingsMode::Component,
-        "component-paired" => BindingsMode::ComponentPaired,
         "none" => BindingsMode::None,
         other => {
             eprintln!(
-                "error: unknown --bindings value '{other}'. Use browser, component, \
-                 component-paired (deprecated), or none."
+                "error: unknown --bindings value '{other}'. Use browser, component, or none."
             );
             process::exit(1);
         }

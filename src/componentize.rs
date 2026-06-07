@@ -46,8 +46,7 @@ pub struct WasmTools {
 
 /// The escape hatches every missing-tool / pin-drift error names.
 const ESCAPE_HATCHES: &str = "set KARAC_WASM_TOOLS=<path> to point at a specific binary, or build \
-     with `--bindings component-paired` (deprecated paired form, no external tool) or \
-     `--bindings none` (raw core module)";
+     with `--bindings none` (raw core module, no external tool)";
 
 /// Locate `wasm-tools` and verify any `[toolchain]` pin. Resolution
 /// order mirrors `resolve_wasm_linker`'s contract:
