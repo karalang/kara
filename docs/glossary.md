@@ -123,7 +123,7 @@ Functions whose inferred or declared effect set includes `sends(Network)` or `re
 The rule that resources held across a suspension point (e.g., a `MutexGuard` held while a network call yields control) must release cleanly when the task is cancelled, when a panic unwinds, or when the task is destroyed in a non-completion path. v1 promotes this from a warning to a compile error for network-boundary functions — the compiler rejects code that holds a non-cancel-safe resource across a yield point. Decided in v64 (2026-05-09).
 
 **M1 / M2 / M3 Staging**
-The staged concurrency milestones for Kāra v1's pre-release: M1 (Phase 6.3 lands, 100K stable on flagship demo), M2 (polish layer 1, 250K stable), M3 (io_uring + cross-platform parity, 1M+ stable). Public v1 launch is gated on M3 — the headline number is consolidated reality, not a promise. Decided in v64.
+The staged concurrency milestones for Kāra v1's pre-release: M1 (Phase 6.3 lands, 100K stable on flagship demo), M2 (polish layer 1, 250K stable), M3 (cross-platform parity, 1M+ stable). Public v1 launch is gated on M3 — the headline number is consolidated reality, not a promise. Decided in v64.
 
 **Flagship Demo**
 The verification gate workload that pins the concurrency claim. v1 layers three demos: (1) minimal HTTP+WebSocket server proves 1M+ idle connections (P0 unconditional); (2) Parallax (full or "lite") proves auto-concurrency under realistic load (P0); (3) data-engineering pipeline (Kafka→S3→DuckDB-shape) proves the compounding-into-other-personas claim (P1). Demos are CI benchmark gates — regression > 5% on the steady-state number blocks merge.
