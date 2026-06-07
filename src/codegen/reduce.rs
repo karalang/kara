@@ -1289,7 +1289,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let slot_align = i64_t.const_int(slot_byte_width, false);
 
         // Widen iter_total to i64 if the source's `end` evaluated to a
-        // narrower int — the descriptor field is usize (i64 on 64-bit).
+        // narrower int — the descriptor field is u64 (wasm32-clean; see
+        // the runtime's `KaracReduceDescriptor::iter_total` field note).
         // zext (not sext): iter_total represents a non-negative count, so
         // zero-extension is correct for both signed source types (whose
         // positive values fit unchanged) and unsigned source types (whose

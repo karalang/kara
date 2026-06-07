@@ -44,11 +44,14 @@
 //!
 //! ## cfg shape
 //!
-//! The module compiles on wasm (the real consumer) **and** under
-//! `cfg(test)` on native so the queue/join/group logic is unit-testable
-//! without a wasm host; only the `#[no_mangle]` exports are wasm-gated
-//! (additionally on `not(feature = "net")` so they can never collide
-//! with `scheduler.rs`'s exports if a future wasm build turns `net` on).
+//! The module compiles on sequential wasm (the real consumer) **and**
+//! under `cfg(test)` on native so the queue/join/group logic is
+//! unit-testable without a wasm host; only the `#[no_mangle]` exports
+//! are wasm-gated (additionally on `not(feature = "net")` and
+//! `not(feature = "wasm-threads")` so exactly one scheduler exports the
+//! `karac_runtime_*` task surface per archive — `scheduler.rs` under
+//! `net`, `wasm_threads_scheduler.rs` under `wasm-threads`, this module
+//! otherwise on wasm).
 
 use std::alloc::Layout;
 use std::cell::{Cell, RefCell};
@@ -346,13 +349,18 @@ pub(crate) unsafe fn seq_taskgroup_cancel(group: *mut SeqTaskGroupHandle) {
     }
 }
 
-// ── extern surface (wasm archive only) ─────────────────────────────────────
+// ── extern surface (sequential wasm archive only) ──────────────────────────
 //
-// Same symbol names + ABI as `scheduler.rs`'s native exports; the
-// `not(feature = "net")` leg guarantees the two schedulers can never both
-// export them in one archive.
+// Same symbol names + ABI as `scheduler.rs`'s native exports and
+// `wasm_threads_scheduler.rs`'s threaded ones; the `not(feature = "net")`
+// + `not(feature = "wasm-threads")` legs guarantee exactly one scheduler
+// exports them per archive.
 
-#[cfg(all(target_family = "wasm", not(feature = "net")))]
+#[cfg(all(
+    target_family = "wasm",
+    not(feature = "net"),
+    not(feature = "wasm-threads")
+))]
 mod exports {
     use super::*;
 

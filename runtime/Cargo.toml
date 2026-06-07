@@ -40,11 +40,14 @@ crate-type = ["staticlib", "rlib"]
 [features]
 # `default = ["tls", "net"]` so a plain `cargo build`/`cargo test` keeps the
 # full runtime surface (HTTPS serving, the HTTP client, WS-over-TLS). The
-# production AOT build emits THREE archives: the full one (the default
+# production AOT build emits FOUR archives: the full one (the default
 # feature set), a lean one (`--no-default-features --features net`) for
-# compute-only Kāra programs, and — phase-10 WASM build path — a wasm one
-# (`--no-default-features --target wasm32-wasip1`) with the whole native
-# networking/scheduler surface compiled out. See phase-7-codegen.md
+# compute-only Kāra programs, and — phase-10 WASM build path — two wasm
+# ones: sequential (`--no-default-features --target wasm32-wasip1`) with
+# the whole native networking/scheduler surface compiled out, and
+# threaded (`--no-default-features --features wasm-threads --target
+# wasm32-wasip1-threads`) for the `--features wasm-threads` opt-in's
+# dual-artifact build. See phase-7-codegen.md
 # § "Phase 4 binary-size" — `rustls` + `ring` are the *only* deps whose
 # unwind machinery survives `-dead_strip` onto a compute binary's shared
 # panic/alloc path (+48.5 KiB, measured; tokio/hyper/mio/serde_json are all
@@ -88,6 +91,22 @@ tls = [
     "dep:webpki-roots",
     "dep:ureq",
 ]
+
+# Threaded wasm concurrency — phase-10 "WASM concurrency lowering —
+# `--features wasm-threads` opt-in". Built ONLY into the threaded wasm
+# archive (`cargo rustc -p karac-runtime --release --target
+# wasm32-wasip1-threads --no-default-features --features wasm-threads
+# --crate-type staticlib` → `libkarac_runtime_wasm_threads.a`). No deps:
+# it widens the existing std-backed pool substrate's cfg gates in
+# `lib.rs` (std::thread / Mutex / Condvar are real on
+# wasm32-wasip1-threads — pthreads over the wasi-threads ABI,
+# futex-backed atomics over shared memory) and compiles
+# `wasm_threads_scheduler.rs` in place of `seq_scheduler.rs` for the
+# spawn/TaskGroup extern surface. Never enabled on native builds (the
+# cfg gates reduce to today's native arms) and never combined with
+# `net` (the wasm archives are `--no-default-features`; tokio/mio don't
+# build on wasm32).
+wasm-threads = []
 
 # Test-only FFI surface for `tests/park_and_wake.rs`. Adds
 # `karac_runtime_test_bind_and_print_port`, which binds a TCP socket

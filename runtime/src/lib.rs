@@ -44,12 +44,24 @@ pub mod scheduler;
 // lowering (phase-10 "WASM concurrency lowering — sequential default").
 // Compiled under cfg(test) on native too so the queue/join logic is
 // unit-testable without a wasm host; its `karac_runtime_*` exports are
-// wasm-gated inside the module.
-#[cfg(any(target_family = "wasm", test))]
+// wasm-gated inside the module. Compiled out of the threaded wasm
+// archive (`--features wasm-threads`), where the pool-backed
+// `wasm_threads_scheduler` below supplies the task surface instead.
+#[cfg(any(all(target_family = "wasm", not(feature = "wasm-threads")), test))]
 pub mod seq_scheduler;
+// Threaded spawn/TaskGroup scheduler — the `--features wasm-threads`
+// lowering (phase-10 "WASM concurrency lowering — wasm-threads opt-in"):
+// pool-backed on wasm32-wasip1-threads (real std threads over the
+// wasi-threads ABI). Compiled under cfg(test) on native too — the
+// implementation is plain std-thread code, so the spawn/join/group
+// semantics are unit-testable without a wasm host; its
+// `karac_runtime_*` exports are wasm+wasm-threads-gated inside the
+// module.
 #[cfg(feature = "tls")]
 pub mod tls;
 pub mod tracing;
+#[cfg(any(all(target_family = "wasm", feature = "wasm-threads"), test))]
+pub mod wasm_threads_scheduler;
 // Heap unification with wasi-libc `malloc` — wasm archive only; see the
 // module doc for why cross-boundary frees require it.
 #[cfg(all(target_family = "wasm", target_os = "wasi"))]
@@ -302,18 +314,22 @@ pub fn __preserve_no_mangle_symbols() -> usize {
 }
 
 use std::cell::Cell;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-// Pool-substrate imports — native-only, like the pool itself (the
-// WASM-default concurrency lowering is sequential; see `seq_par_run` /
-// `seq_scheduler.rs`).
-#[cfg(not(target_family = "wasm"))]
+// Pool-substrate imports — compiled wherever the pool itself is: native
+// always, wasm only under `--features wasm-threads` (the phase-10
+// threaded opt-in; the wasm *default* lowering is sequential — see
+// `seq_par_run` / `seq_scheduler.rs`). On wasm32-wasip1-threads,
+// std::thread / Mutex / Condvar are real (pthreads over the
+// wasi-threads ABI, futex-backed atomics), so the same substrate
+// serves both worlds unchanged.
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 use std::sync::{Arc, Condvar};
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 use std::thread;
 
 /// A single branch of a `par {}` block: a function pointer and its opaque
@@ -855,11 +871,14 @@ impl Drop for FrameGuard {
 /// spawn-side join wait. See `scheduler.rs` for the dispatch surface.
 ///
 /// The whole pool substrate (ParCall / Task / Pool / workers / the
-/// dispatch + wait helpers) is native-only: the WASM-default lowering is
-/// sequential (phase-10 "WASM concurrency lowering — sequential
-/// default"), so the wasm archive compiles it out entirely — see
-/// `seq_par_run` and `seq_scheduler.rs` for the sequential surface.
-#[cfg(not(target_family = "wasm"))]
+/// dispatch + wait helpers) compiles wherever a thread pool exists:
+/// native always, wasm only under `--features wasm-threads` (phase-10
+/// threaded opt-in — wasm32-wasip1-threads has real std threads). The
+/// WASM-*default* lowering is sequential (phase-10 "WASM concurrency
+/// lowering — sequential default") and the default wasm archive
+/// compiles all of this out — see `seq_par_run` and `seq_scheduler.rs`
+/// for the sequential surface.
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 pub(crate) struct ParCall {
     pub(crate) cancel: AtomicBool,
     /// Number of tasks not yet completed (decremented by each task on
@@ -885,20 +904,20 @@ pub(crate) struct ParCall {
 /// per dispatched task; for the workload sizes the runtime targets
 /// (1–18 workers per call), that's negligible vs the thread-scheduling
 /// overhead the pool was built to avoid.
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 pub(crate) struct Task {
     pub(crate) call: Arc<ParCall>,
     pub(crate) branch_idx: u32,
     pub(crate) run: Box<dyn FnOnce(&AtomicBool) + Send>,
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 pub(crate) struct Pool {
     pub(crate) queue: Mutex<VecDeque<Task>>,
     pub(crate) cv: Condvar,
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 static POOL: OnceLock<Arc<Pool>> = OnceLock::new();
 
 /// Resolve the auto-par worker count.
@@ -921,7 +940,13 @@ static POOL: OnceLock<Arc<Pool>> = OnceLock::new();
 /// there anyway, and `karac_par_reduce`'s per-call read is cheap libc
 /// getenv that lets a user override the count for a single command-line
 /// invocation without rebuilding.
-#[cfg(not(target_family = "wasm"))]
+// On wasm32-wasip1-threads, `available_parallelism()` is
+// `Err(Unsupported)` (no host CPU-count probe in preview1), so the
+// auto-detect path bottoms at the `.unwrap_or(4).max(2)` default — the
+// env tier is authoritative there: the JS glue injects
+// `KARAC_PAR_WORKERS=<navigator.hardwareConcurrency | [wasm] pool-size>`
+// through its WASI environ (phase-10 wasm-threads entry).
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 fn resolve_pool_workers() -> usize {
     if let Ok(s) = std::env::var("KARAC_PAR_WORKERS") {
         if let Ok(n) = s.parse::<usize>() {
@@ -936,7 +961,7 @@ fn resolve_pool_workers() -> usize {
         .max(2)
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 pub(crate) fn pool() -> &'static Arc<Pool> {
     POOL.get_or_init(|| {
         let n = resolve_pool_workers();
@@ -952,7 +977,7 @@ pub(crate) fn pool() -> &'static Arc<Pool> {
     })
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 fn worker_loop(pool: Arc<Pool>) {
     loop {
         let task = {
@@ -972,7 +997,7 @@ fn worker_loop(pool: Arc<Pool>) {
 /// the boxed closure under a `FrameGuard` (when frame-tracking is on)
 /// and `catch_unwind`. Always decrements `remaining` and signals `notify`
 /// on the last task — even on panic, so the caller doesn't hang.
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 fn execute_task(task: Task) {
     let Task {
         call,
@@ -1079,15 +1104,18 @@ pub unsafe extern "C" fn karac_par_run(
     }
 
     // phase-10 "WASM concurrency lowering — sequential default": the
-    // target is single-threaded, so there is no pool to dispatch to —
-    // run the branches in source order on the calling thread. Cancel /
-    // cascade / frame-tracking semantics live in `seq_par_run`.
-    #[cfg(target_family = "wasm")]
+    // default wasm target is single-threaded, so there is no pool to
+    // dispatch to — run the branches in source order on the calling
+    // thread. Cancel / cascade / frame-tracking semantics live in
+    // `seq_par_run`. Under `--features wasm-threads` (the phase-10
+    // threaded opt-in) the pool exists on wasm too, and the pooled arm
+    // below takes over.
+    #[cfg(all(target_family = "wasm", not(feature = "wasm-threads")))]
     {
         seq_par_run(branches, count, spawn_site_id, parent_cancel);
     }
 
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
     {
         karac_par_run_pooled(branches, count, spawn_site_id, parent_cancel);
     }
@@ -1100,7 +1128,7 @@ pub unsafe extern "C" fn karac_par_run(
 /// # Safety
 ///
 /// Same contract as [`karac_par_run`].
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 unsafe fn karac_par_run_pooled(
     branches: *const KaracBranch,
     count: usize,
@@ -1178,12 +1206,15 @@ unsafe fn karac_par_run_pooled(
 ///   `panic = "abort"` either).
 ///
 /// Compiled under `cfg(test)` on native as well so the ordering/cascade
-/// behavior is unit-testable without a wasm host.
+/// behavior is unit-testable without a wasm host. Under `--features
+/// wasm-threads` the pooled path takes over and this arm is compiled
+/// out (the tightened gate keeps the threaded archive's clippy free of
+/// dead code).
 ///
 /// # Safety
 ///
 /// Same contract as [`karac_par_run`].
-#[cfg(any(target_family = "wasm", test))]
+#[cfg(any(all(target_family = "wasm", not(feature = "wasm-threads")), test))]
 pub(crate) unsafe fn seq_par_run(
     branches: *const KaracBranch,
     count: usize,
@@ -1240,7 +1271,7 @@ pub(crate) unsafe fn seq_par_run(
 /// `wait` — no polling overhead on the common path. Worst-case cascade
 /// latency is the poll cadence plus the inner effect-boundary distance,
 /// summed along the nesting path, matching the spec's stated bound.
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 unsafe fn par_join_wait(call: &Arc<ParCall>, p: &Arc<Pool>, parent_cancel: *const AtomicBool) {
     loop {
         // Done?
@@ -1331,7 +1362,7 @@ unsafe fn par_join_wait(call: &Arc<ParCall>, p: &Arc<Pool>, parent_cancel: *cons
 /// pool's queue, notifies workers, then blocks until `call.remaining` hits
 /// zero — opportunistically executing pool tasks while waiting so nested
 /// par-block-inside-par-block calls from inside the pool can't deadlock.
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 fn dispatch_and_wait(call: &Arc<ParCall>, tasks: Vec<Task>) {
     let p = pool();
     {
@@ -1376,13 +1407,23 @@ pub struct KaracReduceDescriptor {
     /// Iteration count — the worker fan-out splits `[0, iter_total)` into
     /// `min(pool_workers, iter_total)` contiguous chunks. When zero, no
     /// workers run and `out_slot` is left at identity.
-    pub iter_total: usize,
+    ///
+    /// `u64`, not `usize` (likewise the three integer fields below and
+    /// `worker_fn`'s `start`/`end`): codegen stamps the descriptor with
+    /// `i64` fields for every target, and on wasm32 a `usize` here is
+    /// i32-width — `#[repr(C)]` would then lay out four narrow fields
+    /// against codegen's wide stores, silently corrupting the layout
+    /// (worse than the `signature_mismatch` trap that catches mis-width
+    /// *parameters*, e.g. `karac_par_run`'s `count`). Unreachable on
+    /// wasm until `--features wasm-threads` re-enabled auto-par
+    /// reductions there; ABI-identical on 64-bit native.
+    pub iter_total: u64,
     /// Bytes per accumulator slot. Must match the size implied by the type
     /// the codegen-emitted `init_slot` / `worker_fn` / `combine_fn` operate on.
-    pub slot_size: usize,
+    pub slot_size: u64,
     /// Required alignment of an accumulator slot. The runtime aligns each
     /// per-worker slot to this value when carving up the slot buffer.
-    pub slot_align: usize,
+    pub slot_align: u64,
     /// Write the operator's identity element into `slot`.
     pub init_slot: unsafe extern "C" fn(slot: *mut u8),
     /// Accumulate iterations `[start, end)` into `slot`. The closure
@@ -1391,10 +1432,12 @@ pub struct KaracReduceDescriptor {
     /// closure capture record). `cancel` is the per-call atomic flag;
     /// today no worker is expected to consult it (reductions don't have a
     /// fail-fast story), but it's threaded for future cancellation work.
+    /// `start`/`end` are `u64` per the field-width note on `iter_total`
+    /// (codegen emits the worker helper with i64 index parameters).
     pub worker_fn: unsafe extern "C" fn(
         slot: *mut u8,
-        start: usize,
-        end: usize,
+        start: u64,
+        end: u64,
         ctx: *mut c_void,
         cancel: *const AtomicBool,
     ),
@@ -1412,8 +1455,9 @@ pub struct KaracReduceDescriptor {
     /// thread (slice 3b.8). A value of `0` is a sentinel meaning "no
     /// estimate available — always dispatch"; codegen-emitted
     /// descriptors always set a real estimate (the source-level body's
-    /// cost-units walk bottoms at 1, never 0).
-    pub per_iter_cost_units: usize,
+    /// cost-units walk bottoms at 1, never 0). `u64` per the field-width
+    /// note on `iter_total`.
+    pub per_iter_cost_units: u64,
 }
 
 // SAFETY: The descriptor's pointer fields are exclusively borrowed by the
@@ -1429,7 +1473,7 @@ unsafe impl Sync for KaracReduceDescriptor {}
 /// same calibration. Threshold = `pool_workers * this`; when the loop's
 /// estimated total work falls below, the runtime skips dispatch and runs
 /// the worker once in the caller's thread.
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 const DISPATCH_OVERHEAD_PER_CALL_UNITS_RT: u64 = 10_000;
 
 /// Split a loop's iteration space across N workers; each accumulates a
@@ -1476,20 +1520,22 @@ pub unsafe extern "C" fn karac_par_reduce(
     }
 
     // phase-10 "WASM concurrency lowering — sequential default": the
-    // single-threaded target takes the single-worker shape the native
-    // fast path below already defines — one `worker_fn` call over the
-    // full range, directly into `out_slot`, no slot buffer, no combine
-    // (and no pool, which doesn't exist on this target). Codegen
-    // additionally skips emitting reduction fan-outs on wasm entirely
-    // (auto-par is pure overhead with no parallelism), so this arm is
-    // the semantic backstop, not the expected hot path.
-    #[cfg(target_family = "wasm")]
+    // single-threaded default wasm target takes the single-worker shape
+    // the native fast path below already defines — one `worker_fn` call
+    // over the full range, directly into `out_slot`, no slot buffer, no
+    // combine (and no pool, which doesn't exist on that target). Codegen
+    // additionally skips emitting reduction fan-outs on sequential wasm
+    // entirely (auto-par is pure overhead with no parallelism), so this
+    // arm is the semantic backstop, not the expected hot path. Under
+    // `--features wasm-threads` the pool exists and the pooled arm runs
+    // — auto-par reductions are re-enabled there.
+    #[cfg(all(target_family = "wasm", not(feature = "wasm-threads")))]
     {
         let dummy = AtomicBool::new(false);
         (desc.worker_fn)(out_slot, 0, desc.iter_total, desc.ctx, &dummy);
     }
 
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
     karac_par_reduce_pooled(desc, out_slot, _spawn_site_id);
 }
 
@@ -1500,7 +1546,7 @@ pub unsafe extern "C" fn karac_par_reduce(
 /// # Safety
 ///
 /// Same contract as [`karac_par_reduce`].
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 unsafe fn karac_par_reduce_pooled(
     desc: &KaracReduceDescriptor,
     out_slot: *mut u8,
@@ -1514,8 +1560,11 @@ unsafe fn karac_par_reduce_pooled(
     // would cap `pool_workers` here at the auto-detect value while
     // `pool()` spawned a different count, and the per-worker slot
     // allocation below would mis-size.
+    // Worker count fits `usize` everywhere: it's `min`-capped by
+    // `pool_workers` (a small host count), so the `u64 → usize` cast
+    // after the min is lossless even on wasm32.
     let pool_workers = resolve_pool_workers();
-    let n_workers = pool_workers.min(desc.iter_total).max(1);
+    let n_workers = (pool_workers as u64).min(desc.iter_total).max(1) as usize;
 
     // Slice 3b.8 (2026-05-20): runtime-side cost gate. Even when the
     // codegen-time gate let the call through (e.g. variable-K loops
@@ -1525,7 +1574,7 @@ unsafe fn karac_par_reduce_pooled(
     // below `pool_workers * DISPATCH_OVERHEAD_PER_CALL_UNITS_RT`. The
     // `per_iter_cost_units == 0` sentinel (caller didn't estimate)
     // bypasses the gate so behaviour stays at "always dispatch."
-    let total_cost = (desc.iter_total as u64).saturating_mul(desc.per_iter_cost_units as u64);
+    let total_cost = desc.iter_total.saturating_mul(desc.per_iter_cost_units);
     let cost_threshold = (pool_workers as u64).saturating_mul(DISPATCH_OVERHEAD_PER_CALL_UNITS_RT);
     let gate_skip = desc.per_iter_cost_units != 0 && total_cost < cost_threshold;
 
@@ -1543,8 +1592,14 @@ unsafe fn karac_par_reduce_pooled(
 
     // Allocate the per-worker slot buffer in one chunk so the worker
     // slots share locality and the dealloc on return is a single call.
-    let stride = align_up(desc.slot_size, desc.slot_align);
-    let layout = std::alloc::Layout::from_size_align(stride * n_workers, desc.slot_align)
+    // Slot size/align are descriptor-level `u64` (see the field-width
+    // note on `iter_total`) but describe an in-memory accumulator, so
+    // they always fit `usize` — codegen stamps them from a Kara
+    // primitive's size/alignment.
+    let slot_size = desc.slot_size as usize;
+    let slot_align = desc.slot_align as usize;
+    let stride = align_up(slot_size, slot_align);
+    let layout = std::alloc::Layout::from_size_align(stride * n_workers, slot_align)
         .expect("karac_par_reduce: slot_size * n_workers overflows or alignment is invalid");
     let slots: *mut u8 = std::alloc::alloc(layout);
     if slots.is_null() {
@@ -1566,7 +1621,10 @@ unsafe fn karac_par_reduce_pooled(
     // frame-tracking API today (the worker fn is a synthesized helper,
     // not a source-level par-branch); they fold in alongside whenever
     // the debugger contract grows a reduction-frame variant.
-    let chunk = desc.iter_total.div_ceil(n_workers);
+    // Range math stays in `u64` end-to-end — the per-worker `start`/`end`
+    // feed `worker_fn`'s i64-width index parameters directly, no
+    // narrowing on wasm32.
+    let chunk = desc.iter_total.div_ceil(n_workers as u64);
     let ctx_addr = desc.ctx as usize;
     let slot_base = slots as usize;
     let worker_fn = desc.worker_fn;
@@ -1584,8 +1642,8 @@ unsafe fn karac_par_reduce_pooled(
 
     let tasks: Vec<Task> = (0..n_workers)
         .map(|w| {
-            let start = w * chunk;
-            let end = ((w + 1) * chunk).min(iter_total);
+            let start = (w as u64) * chunk;
+            let end = ((w as u64) + 1).saturating_mul(chunk).min(iter_total);
             let slot_addr = slot_base + w * stride_local;
             Task {
                 call: Arc::clone(&call),
@@ -1619,7 +1677,7 @@ unsafe fn karac_par_reduce_pooled(
 /// power of two — the caller (`karac_par_reduce` above) gets `align` from
 /// the FFI descriptor, where the codegen guarantees `align` is the
 /// natural alignment of a Kara primitive type (1, 2, 4, or 8).
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 #[inline]
 fn align_up(n: usize, align: usize) -> usize {
     debug_assert!(align.is_power_of_two(), "align must be a power of two");
@@ -6980,8 +7038,8 @@ mod tests {
     /// will thread `inputs` and `reverse` through ctx in slice 3.
     unsafe extern "C" fn worker_sum_range(
         slot: *mut u8,
-        start: usize,
-        end: usize,
+        start: u64,
+        end: u64,
         _ctx: *mut c_void,
         _cancel: *const AtomicBool,
     ) {
@@ -6997,8 +7055,8 @@ mod tests {
     /// zeroes the entire product). Multiplicative reduction sanity check.
     unsafe extern "C" fn worker_product_range_plus_one(
         slot: *mut u8,
-        start: usize,
-        end: usize,
+        start: u64,
+        end: u64,
         _ctx: *mut c_void,
         _cancel: *const AtomicBool,
     ) {
@@ -7010,15 +7068,15 @@ mod tests {
     }
 
     fn run_reduce(
-        iter_total: usize,
+        iter_total: u64,
         init: unsafe extern "C" fn(*mut u8),
-        worker: unsafe extern "C" fn(*mut u8, usize, usize, *mut c_void, *const AtomicBool),
+        worker: unsafe extern "C" fn(*mut u8, u64, u64, *mut c_void, *const AtomicBool),
         combine: unsafe extern "C" fn(*mut u8, *const u8),
     ) -> i64 {
         let desc = KaracReduceDescriptor {
             iter_total,
-            slot_size: std::mem::size_of::<i64>(),
-            slot_align: std::mem::align_of::<i64>(),
+            slot_size: std::mem::size_of::<i64>() as u64,
+            slot_align: std::mem::align_of::<i64>() as u64,
             init_slot: init,
             worker_fn: worker,
             combine_fn: combine,
@@ -7035,6 +7093,30 @@ mod tests {
             karac_par_reduce(&desc, &mut out as *mut i64 as *mut u8, 0);
         }
         out
+    }
+
+    /// Layout pin for the wasm32 ABI contract: every integer field of
+    /// `KaracReduceDescriptor` is `u64` (codegen stamps the struct with
+    /// i64 fields for every target — `src/codegen/reduce.rs`'s
+    /// `desc_ty`), so the `#[repr(C)]` layout is identical on 64-bit
+    /// native and wasm32. A regression back to `usize` would shrink the
+    /// wasm32 layout (i32-width fields) and silently misalign every
+    /// field after the first against codegen's stores — this pin makes
+    /// that a loud native test failure instead. Offsets assume the
+    /// 64-bit host this test suite runs on: 4 × u64 + 3 fn-ptrs + 1
+    /// ctx-ptr, all 8-byte slots.
+    #[test]
+    fn test_reduce_descriptor_layout_is_u64_pinned() {
+        use std::mem::{offset_of, size_of};
+        assert_eq!(size_of::<KaracReduceDescriptor>(), 8 * 8);
+        assert_eq!(offset_of!(KaracReduceDescriptor, iter_total), 0);
+        assert_eq!(offset_of!(KaracReduceDescriptor, slot_size), 8);
+        assert_eq!(offset_of!(KaracReduceDescriptor, slot_align), 16);
+        assert_eq!(offset_of!(KaracReduceDescriptor, init_slot), 24);
+        assert_eq!(offset_of!(KaracReduceDescriptor, worker_fn), 32);
+        assert_eq!(offset_of!(KaracReduceDescriptor, combine_fn), 40);
+        assert_eq!(offset_of!(KaracReduceDescriptor, ctx), 48);
+        assert_eq!(offset_of!(KaracReduceDescriptor, per_iter_cost_units), 56);
     }
 
     /// 0-iter reduction returns the identity element (init_slot output).
@@ -7123,7 +7205,7 @@ mod tests {
         // first 8 bytes hold meaningful data.
         let desc = KaracReduceDescriptor {
             iter_total: 1000,
-            slot_size: std::mem::size_of::<i64>(),
+            slot_size: std::mem::size_of::<i64>() as u64,
             slot_align: 16,
             init_slot: init_i64_zero,
             worker_fn: worker_sum_range,
@@ -7155,7 +7237,7 @@ mod tests {
     #[test]
     fn test_par_reduce_iter_equals_pool_size_add() {
         let n = super::resolve_pool_workers();
-        let total = run_reduce(n, init_i64_zero, worker_sum_range, combine_i64_add);
+        let total = run_reduce(n as u64, init_i64_zero, worker_sum_range, combine_i64_add);
         let expected: i64 = (0..n as i64).sum();
         assert_eq!(total, expected);
     }
@@ -7178,8 +7260,8 @@ mod tests {
     /// invocation count free of cargo-parallel-test interference.
     unsafe extern "C" fn worker_sum_range_counting(
         slot: *mut u8,
-        start: usize,
-        end: usize,
+        start: u64,
+        end: u64,
         ctx: *mut c_void,
         _cancel: *const AtomicBool,
     ) {
@@ -7196,12 +7278,12 @@ mod tests {
     /// `run_reduce` but plumbs the new field and supplies a per-test
     /// counter via `ctx` so the gate path can be inspected by call-
     /// count without static state racing across parallel tests.
-    fn run_reduce_with_per_iter(iter_total: usize, per_iter_cost_units: usize) -> (i64, usize) {
+    fn run_reduce_with_per_iter(iter_total: u64, per_iter_cost_units: u64) -> (i64, usize) {
         let counter = AtomicUsize::new(0);
         let desc = KaracReduceDescriptor {
             iter_total,
-            slot_size: std::mem::size_of::<i64>(),
-            slot_align: std::mem::align_of::<i64>(),
+            slot_size: std::mem::size_of::<i64>() as u64,
+            slot_align: std::mem::align_of::<i64>() as u64,
             init_slot: init_i64_zero,
             worker_fn: worker_sum_range_counting,
             combine_fn: combine_i64_add,
