@@ -2075,7 +2075,22 @@ impl<'a> super::TypeChecker<'a> {
                     // `Vector[T, N]` lane read `v[i] -> T` (design.md § Portable
                     // SIMD). Range indexing of a vector is not part of the v1
                     // surface, so it falls through to the range-error path above.
-                    Type::Vector { element, .. } => *element.clone(),
+                    Type::Vector { element, lanes } => {
+                        // Record the lane-read receiver, mirroring the
+                        // method-call write in `infer_method_call`: the
+                        // Index node shares the receiver's span and is
+                        // about to overwrite it in `expr_types` with the
+                        // element type, erasing the vector's `(T, N)` —
+                        // which the signedness side-channel
+                        // (`unsigned_vector_exprs`, fed from this table
+                        // in lowering.rs) needs for `println(v[i])` on
+                        // unsigned elements (2026-06-07).
+                        if let Some(n) = lanes.as_usize() {
+                            self.vector_method_receivers
+                                .insert(SpanKey::from_span(&expr.span), ((**element).clone(), n));
+                        }
+                        *element.clone()
+                    }
                     Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
                         args[0].clone()
                     }

@@ -48,14 +48,32 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::{type_display, FloatSize, IntSize, Type, TypeCheckResult, UIntSize};
 
-/// Native vector register width in bits for the current target. All v1
-/// default targets — x86-64 (SSE baseline, 128-bit XMM), aarch64 / Apple M1
-/// (NEON, 128-bit) — expose 128-bit vector registers, so this is a constant
-/// today. It becomes a per-target lookup when AVX/AVX-512/SVE feature
-/// detection or `--target` cross-compilation lands (see
-/// `default_cpu_and_features` in `src/codegen/driver.rs`, which already
-/// distinguishes the host triples).
+/// Native vector register width in bits for every v1 target that has a
+/// vector unit. x86-64 (SSE baseline, 128-bit XMM), aarch64 / Apple M1
+/// (NEON, 128-bit), and wasm SIMD-128 (`v128`) all expose 128-bit
+/// vector registers, so the width is a single constant; whether the
+/// active target *has* a vector unit at all is [`native_vector_bits`]'s
+/// call. The width becomes a per-target lookup when AVX/AVX-512/SVE
+/// feature detection lands (see `default_cpu_and_features` in
+/// `src/codegen/driver.rs`, which already distinguishes the host
+/// triples).
 pub const NATIVE_VECTOR_BITS: u32 = 128;
+
+/// Native vector register width for the active target, or `None` when
+/// the target has no vector unit and every vector op scalarizes. The
+/// only `None` case today: a wasm target with SIMD-128 disabled via
+/// `--target-features=-simd128` (`+simd128` is the wasm default —
+/// design.md § Portable SIMD; `create_wasm_target_machine` in
+/// `src/codegen/driver.rs`). The enablement chain is read through
+/// `target::wasm_simd128_enabled` — plain data, no LLVM types, so the
+/// codegen-containment posture of this module holds.
+pub fn native_vector_bits() -> Option<u32> {
+    if crate::target::active_target_is_wasm() && !crate::target::wasm_simd128_enabled() {
+        None
+    } else {
+        Some(NATIVE_VECTOR_BITS)
+    }
+}
 
 /// Lowering tier a `(T, N)` vector op falls into on the current target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +96,10 @@ pub enum ScalarReason {
     /// Element type has no SIMD lane representation (128-bit integers — no
     /// target has a 128-bit-lane vector ALU op).
     UnsupportedElement,
+    /// The target has no vector unit at all, so every vector op scalarizes
+    /// regardless of shape (wasm with SIMD-128 disabled via
+    /// `--target-features=-simd128`).
+    NoVectorUnit,
 }
 
 impl ScalarReason {
@@ -86,6 +108,9 @@ impl ScalarReason {
             ScalarReason::NonPowerOfTwoLanes => "lane count is not a power of two",
             ScalarReason::UnsupportedElement => {
                 "element type has no SIMD lane representation on this target"
+            }
+            ScalarReason::NoVectorUnit => {
+                "wasm SIMD-128 is disabled by `-simd128`, leaving the target no vector unit"
             }
         }
     }
@@ -111,11 +136,24 @@ fn element_bits(elem: &Type) -> Option<u32> {
     }
 }
 
-/// Classify a `Vector[T, N]` op given its element type and concrete lane
-/// count. The lane count must be a resolved literal — symbolic
+/// Classify a `Vector[T, N]` op against the *active* target — the
+/// [`native_vector_bits`] model. See [`classify_for`].
+pub fn classify(elem: &Type, lanes: usize) -> SimdTier {
+    classify_for(native_vector_bits(), elem, lanes)
+}
+
+/// Classify a `Vector[T, N]` op given its element type, concrete lane
+/// count, and the target's vector width (`None` = no vector unit, every
+/// op scalarizes). The lane count must be a resolved literal — symbolic
 /// (`ConstParam` / `ConstVar`) lane counts arise only in un-monomorphized
 /// generic contexts and are out of scope for the per-target guarantee.
-pub fn classify(elem: &Type, lanes: usize) -> SimdTier {
+/// The width is a parameter (rather than read from the process-global
+/// target state inside) so unit tests can exercise every target model in
+/// one process.
+pub fn classify_for(vector_bits: Option<u32>, elem: &Type, lanes: usize) -> SimdTier {
+    let Some(native_bits) = vector_bits else {
+        return SimdTier::Scalar;
+    };
     let Some(bits) = element_bits(elem) else {
         return SimdTier::Scalar;
     };
@@ -127,7 +165,7 @@ pub fn classify(elem: &Type, lanes: usize) -> SimdTier {
         return SimdTier::Scalar;
     }
     let total = bits.saturating_mul(lanes as u32);
-    if total <= NATIVE_VECTOR_BITS {
+    if total <= native_bits {
         SimdTier::Native
     } else {
         SimdTier::Wide
@@ -136,11 +174,14 @@ pub fn classify(elem: &Type, lanes: usize) -> SimdTier {
 
 /// The scalarization cause for a `(T, N)` that classifies [`SimdTier::Scalar`],
 /// or `None` when it does not scalarize. Element-unsupported is reported in
-/// preference to lane shape when both apply.
-fn scalar_reason(elem: &Type, lanes: usize) -> Option<ScalarReason> {
+/// preference to the other causes when several apply (it survives even
+/// re-enabling SIMD-128 / fixing the lane shape); a missing vector unit
+/// outranks lane shape (with no vector unit, the lane count is moot).
+fn scalar_reason(vector_bits: Option<u32>, elem: &Type, lanes: usize) -> Option<ScalarReason> {
     match element_bits(elem) {
         None => Some(ScalarReason::UnsupportedElement),
         Some(bits) if bits >= 128 => Some(ScalarReason::UnsupportedElement),
+        Some(_) if vector_bits.is_none() => Some(ScalarReason::NoVectorUnit),
         Some(_) if !lanes.is_power_of_two() => Some(ScalarReason::NonPowerOfTwoLanes),
         Some(_) => None,
     }
@@ -199,6 +240,9 @@ impl SimdFinding {
                 "`{}` lanes have no SIMD representation; pick a 8/16/32/64-bit element type, or remove `#[require_simd]`",
                 self.element,
             ),
+            Some(ScalarReason::NoVectorUnit) => {
+                "drop `-simd128` from the target-features chain (wasm SIMD-128 is on by default), or remove `#[require_simd]` to accept the scalar fallback".to_string()
+            }
             None => "remove `#[require_simd]` to accept the scalar fallback".to_string(),
         }
     }
@@ -215,6 +259,9 @@ pub fn analyze_program(program: &Program, typed: Option<&TypeCheckResult>) -> Ve
     let mut scan = Scan {
         expr_types: &typed.expr_types,
         vector_method_receivers: &typed.vector_method_receivers,
+        // Resolved once per walk: the per-op classification must agree
+        // with itself across the whole program.
+        vector_bits: native_vector_bits(),
         findings: Vec::new(),
         func_name: String::new(),
         require_simd: false,
@@ -254,9 +301,14 @@ pub fn require_simd_errors(findings: &[SimdFinding]) -> Vec<SimdFinding> {
 /// Returns the full report as a string (the CLI prints it to stdout).
 pub fn render_simd_report(findings: &[SimdFinding]) -> String {
     let mut out = String::new();
-    out.push_str(&format!(
-        "SIMD lowering report (native vector width: {NATIVE_VECTOR_BITS} bits)\n"
-    ));
+    match native_vector_bits() {
+        Some(bits) => out.push_str(&format!(
+            "SIMD lowering report (native vector width: {bits} bits)\n"
+        )),
+        None => out.push_str(
+            "SIMD lowering report (no vector unit: wasm SIMD-128 disabled by `-simd128`)\n",
+        ),
+    }
     if findings.is_empty() {
         out.push_str("  <no vector operations>\n");
         return out;
@@ -310,6 +362,8 @@ fn type_expr_name(ty: &crate::ast::TypeExpr) -> String {
 struct Scan<'a> {
     expr_types: &'a HashMap<SpanKey, Type>,
     vector_method_receivers: &'a HashMap<SpanKey, (Type, usize)>,
+    /// Active target's vector width ([`native_vector_bits`], resolved once).
+    vector_bits: Option<u32>,
     findings: Vec<SimdFinding>,
     func_name: String,
     require_simd: bool,
@@ -354,9 +408,9 @@ impl Scan<'_> {
     }
 
     fn record(&mut self, span: &Span, op_desc: String, elem: &Type, lanes: usize) {
-        let tier = classify(elem, lanes);
+        let tier = classify_for(self.vector_bits, elem, lanes);
         let reason = if tier == SimdTier::Scalar {
-            scalar_reason(elem, lanes)
+            scalar_reason(self.vector_bits, elem, lanes)
         } else {
             None
         };
@@ -678,7 +732,7 @@ mod tests {
         // 3 lanes is not a power of two regardless of element width.
         assert_eq!(classify(&Type::Int(IntSize::I32), 3), SimdTier::Scalar);
         assert_eq!(
-            scalar_reason(&Type::Int(IntSize::I32), 3),
+            scalar_reason(Some(NATIVE_VECTOR_BITS), &Type::Int(IntSize::I32), 3),
             Some(ScalarReason::NonPowerOfTwoLanes)
         );
         assert_eq!(classify(&Type::Float(FloatSize::F32), 5), SimdTier::Scalar);
@@ -689,10 +743,53 @@ mod tests {
         // 128-bit integer lanes have no SIMD ALU even with a pow2 lane count.
         assert_eq!(classify(&Type::Int(IntSize::I128), 2), SimdTier::Scalar);
         assert_eq!(
-            scalar_reason(&Type::Int(IntSize::I128), 2),
+            scalar_reason(Some(NATIVE_VECTOR_BITS), &Type::Int(IntSize::I128), 2),
             Some(ScalarReason::UnsupportedElement)
         );
         assert_eq!(classify(&Type::UInt(UIntSize::U128), 4), SimdTier::Scalar);
+    }
+
+    #[test]
+    fn classify_no_vector_unit_scalarizes_everything() {
+        // The wasm `-simd128` model (`native_vector_bits()` = None): every
+        // shape scalarizes, including ones Native/Wide on every other target.
+        for (elem, lanes) in [
+            (Type::Float(FloatSize::F32), 4), // Native elsewhere
+            (Type::Int(IntSize::I32), 8),     // Wide elsewhere
+            (Type::Int(IntSize::I8), 2),      // tiny pow2, Native elsewhere
+        ] {
+            assert_eq!(classify_for(None, &elem, lanes), SimdTier::Scalar);
+            assert_eq!(
+                scalar_reason(None, &elem, lanes),
+                Some(ScalarReason::NoVectorUnit)
+            );
+        }
+        // Cause priority: an unsupported element outranks the missing
+        // vector unit (re-enabling simd128 wouldn't fix it)…
+        assert_eq!(
+            scalar_reason(None, &Type::Int(IntSize::I128), 2),
+            Some(ScalarReason::UnsupportedElement)
+        );
+        // …and the missing vector unit outranks lane shape (with no unit,
+        // the lane count is moot).
+        assert_eq!(
+            scalar_reason(None, &Type::Int(IntSize::I32), 3),
+            Some(ScalarReason::NoVectorUnit)
+        );
+    }
+
+    #[test]
+    fn classify_for_native_width_matches_default_model() {
+        // `classify` is `classify_for` at the active target's width; the
+        // default (native) target model is Some(128).
+        assert_eq!(
+            classify_for(Some(NATIVE_VECTOR_BITS), &Type::Float(FloatSize::F32), 4),
+            SimdTier::Native
+        );
+        assert_eq!(
+            classify_for(Some(NATIVE_VECTOR_BITS), &Type::Int(IntSize::I32), 8),
+            SimdTier::Wide
+        );
     }
 
     #[test]
@@ -716,7 +813,7 @@ mod tests {
             lanes,
             tier,
             reason: if tier == SimdTier::Scalar {
-                scalar_reason(&elem, lanes)
+                scalar_reason(Some(NATIVE_VECTOR_BITS), &elem, lanes)
             } else {
                 None
             },

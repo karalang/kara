@@ -131,6 +131,63 @@ pub fn target_features_override() -> Option<&'static str> {
     TARGET_FEATURES_OVERRIDE.get().map(|s| s.as_str())
 }
 
+/// Is WASM SIMD-128 effectively enabled for the active wasm target?
+/// `+simd128` is the wasm default feature (design.md § Portable SIMD —
+/// "WebAssembly SIMD-128 is a first-class lowering target"; phase-10
+/// WASM SIMD-128 entry), so this is `true` unless the
+/// `--target-features` chain disables it with `-simd128`. The scan is
+/// last-wins over the user list, mirroring how LLVM resolves the
+/// combined feature string the codegen driver builds (per-target
+/// default first, user override appended — see `combined_features` in
+/// `codegen/driver.rs`). Only meaningful when [`active_target_is_wasm`];
+/// native SIMD enablement is the driver's per-triple table. Read by
+/// `simd_report::native_vector_bits` (the `#[require_simd]` /
+/// `--simd-report` target model) — lives here, as plain data, so that
+/// model needs no LLVM types (CLAUDE.md § Codegen containment).
+pub fn wasm_simd128_enabled() -> bool {
+    match target_features_override() {
+        None => true,
+        Some(features) => simd128_after_features(features),
+    }
+}
+
+/// `+simd128`-enabled state after applying a user feature list on top of
+/// the wasm default (`+simd128`), last-wins. Split from
+/// [`wasm_simd128_enabled`] so the resolution is testable without the
+/// process-global override.
+fn simd128_after_features(features: &str) -> bool {
+    let mut enabled = true;
+    for feat in features.split(',') {
+        match feat.trim() {
+            "+simd128" => enabled = true,
+            "-simd128" => enabled = false,
+            _ => {}
+        }
+    }
+    enabled
+}
+
+#[cfg(test)]
+mod simd128_feature_tests {
+    use super::simd128_after_features;
+
+    #[test]
+    fn default_on_and_last_wins() {
+        // No mention of simd128 → the wasm default (+simd128) stands.
+        assert!(simd128_after_features(""));
+        assert!(simd128_after_features("+bulk-memory,+sign-ext"));
+        // A user `-simd128` disables it…
+        assert!(!simd128_after_features("-simd128"));
+        assert!(!simd128_after_features("+bulk-memory,-simd128"));
+        // …and resolution over the user list is last-wins, mirroring
+        // LLVM's handling of the combined string.
+        assert!(simd128_after_features("-simd128,+simd128"));
+        assert!(!simd128_after_features("+simd128,-simd128"));
+        // Whitespace around entries is tolerated.
+        assert!(!simd128_after_features(" -simd128 "));
+    }
+}
+
 /// Package name under embedded-WIT component bindings (phase-10
 /// "embedded-WIT migration"). Set by the CLI before codegen when the
 /// effective `--bindings` mode is `component` on a wasm target; its

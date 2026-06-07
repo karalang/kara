@@ -312,7 +312,10 @@ OPTIONS:
                             KARAC_TARGET_FEATURES env var > `[release]
                             target-features` in kara.toml > defaults.
                             Composes with --target-cpu. Accepts
-                            `--target-features <list>` too.
+                            `--target-features <list>` too. On wasm
+                            targets `+simd128` is the default (Vector
+                            ops lower to v128); `-simd128` opts back
+                            down to an MVP-clean scalarized module.
     --monomorphization-budget=warn:N,error:M
                             Cap per-generic instantiations. After typecheck
                             (before codegen), any generic instantiated >= N

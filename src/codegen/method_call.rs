@@ -3244,6 +3244,10 @@ impl<'ctx> super::Codegen<'ctx> {
             return Err("splat: lowered type is not an LLVM vector".to_string());
         };
         let scalar = self.compile_expr(&args[0].value)?;
+        // Literal-width boundary coercion, same as vector construction:
+        // a bare `0.5` / `1` scalar lowers at the literal default width
+        // (f64 / i64) and would broadcast a mistyped lane.
+        let scalar = self.coerce_scalar_to_type(scalar, vt.get_element_type());
         let i32_ty = self.context.i32_type();
         let mut acc = vt.get_undef();
         for i in 0..vt.get_size() {
@@ -3293,11 +3297,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let i32_ty = self.context.i32_type();
         let mut acc = vt.get_undef();
         for (i, val) in lanes.iter().enumerate() {
+            // Literal-width boundary coercion for the array-literal arm
+            // (a bare `0.5` element lowers as f64); no-op for the
+            // aggregate arm's already-`T`-typed extracts.
+            let val = self.coerce_scalar_to_type(*val, vt.get_element_type());
             acc = self
                 .builder
                 .build_insert_element(
                     acc,
-                    *val,
+                    val,
                     i32_ty.const_int(i as u64, false),
                     "from_array.lane",
                 )
@@ -3819,6 +3827,10 @@ impl<'ctx> super::Codegen<'ctx> {
             "replace" => {
                 let idx = self.compile_expr(&args[0].value)?.into_int_value();
                 let x = self.compile_expr(&args[1].value)?;
+                // Literal-width boundary coercion (`v.replace(0, 0.5)` on a
+                // `Vector[f32, N]` lowers the bare literal as f64), same as
+                // construction / splat / from_array.
+                let x = self.coerce_scalar_to_type(x, recv.get_type().get_element_type());
                 // Bounds-check `idx` against `N`, comparing in the index's own
                 // int width (UGE so a negative index also trips the panic).
                 let len = idx.get_type().const_int(n as u64, false);

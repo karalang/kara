@@ -2074,7 +2074,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (design.md § Portable SIMD). Builds the vector by inserting each compiled
     /// lane argument into an undef vector at its index. The typechecker has
     /// already verified the arg count equals `N` and each lane's type matches
-    /// `T`, so no shape re-validation is needed here.
+    /// `T`, so no shape re-validation is needed here — but each compiled lane
+    /// still needs the standard literal-width boundary coercion
+    /// (`coerce_scalar_to_type`): a bare `0.5` / `1` lane lowers at the
+    /// literal default width (f64 / i64), and inserting it raw mislowered
+    /// `Vector[f32, 4](0.5, …)` as `<4 x double>` — caught by the LLVM
+    /// verifier only once the vector met a correctly-typed operand
+    /// (surfaced 2026-06-07 by the WASM SIMD-128 slice's E2E fixture;
+    /// target-independent, same failure on native).
     fn compile_vector_construction(
         &mut self,
         generic_args: &[GenericArg],
@@ -2090,6 +2097,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut acc = vt.get_undef();
         for (i, arg) in args.iter().enumerate() {
             let lane = self.compile_expr(&arg.value)?;
+            let lane = self.coerce_scalar_to_type(lane, vt.get_element_type());
             let idx = i32_ty.const_int(i as u64, false);
             acc = self
                 .builder

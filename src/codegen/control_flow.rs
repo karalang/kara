@@ -506,6 +506,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
                 .unwrap();
         } else if val.is_float_value() {
+            // C default-argument promotion: a varargs `float` must be
+            // widened to `double` before the call (`synth_display.rs`'s
+            // f32 arm already does this). Native ABIs masked the missing
+            // fpext by register-passing accident; wasm32's args-buffer
+            // varargs lowering does not — printf's `%g` read 8 bytes
+            // where 4 were stored and rendered garbage (the f32 bit
+            // pattern reinterpreted as the low half of a double).
+            let mut fv = val.into_float_value();
+            if fv.get_type() != self.context.f64_type() {
+                fv = self
+                    .builder
+                    .build_float_ext(fv, self.context.f64_type(), "pf64")
+                    .unwrap();
+            }
             let fmt = self
                 .builder
                 .build_global_string_ptr(&format!("%g{nl}"), "ff")
@@ -515,7 +529,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.printf_fn,
                     &[
                         BasicMetadataValueEnum::from(fmt.as_pointer_value()),
-                        BasicMetadataValueEnum::from(val.into_float_value()),
+                        BasicMetadataValueEnum::from(fv),
                     ],
                     "printf",
                 )

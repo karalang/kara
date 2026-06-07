@@ -11206,6 +11206,331 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The `Vector[T, N]` program the WASM SIMD-128 tests share (phase-10
+/// "WASM SIMD-128 lowering"). The `a` lane inputs flow from function
+/// params so the ops survive at `KARAC_OPT_LEVEL=0` (constant inputs
+/// would fold at the default -O2 and the instruction-presence
+/// assertions would test the optimizer, not the lowering); the `b`
+/// vector is deliberately literal-built, riding the lane boundary
+/// coercion (`coerce_scalar_to_type` — see
+/// `tests/codegen.rs::test_vector_f32_literal_lanes_coerce_to_element_type`)
+/// through the wasm pipeline. The `println(f32)` result also pins the
+/// varargs float→double promotion wasm32's args-buffer lowering
+/// exposed. Expected output: `22` then `12`.
+const WASM_SIMD_VECTOR_PROGRAM: &str = r#"
+fn lane_sum(p: i64, q: i64) -> i64 {
+    let a: Vector[i64, 2] = Vector[i64, 2](p, p);
+    let b: Vector[i64, 2] = Vector[i64, 2](q, q);
+    let c = a + b;
+    c[0] + c[1]
+}
+
+fn f32_fma(x: f32) -> f32 {
+    let a: Vector[f32, 4] = Vector[f32, 4](x, x, x, x);
+    let b: Vector[f32, 4] = Vector[f32, 4](0.5, 0.5, 0.5, 0.5);
+    let c = a * b + a;
+    c[0] + c[1] + c[2] + c[3]
+}
+
+fn main() {
+    println(lane_sum(1, 10));
+    println(f32_fma(2.0));
+}
+"#;
+
+/// Run a core wasm module under node's built-in `node:wasi` preview-1
+/// host (the same embedder shape as `wasm_wasi_build_and_run_e2e`).
+/// `None` when node is not on PATH — callers skip the run leg. Node
+/// enables WASM SIMD-128 unconditionally (it is WASM 2.0 baseline), so
+/// this also exercises `v128`-carrying modules.
+fn run_wasm_under_node(
+    tmp: &std::path::Path,
+    wasm: &std::path::Path,
+) -> Option<std::process::Output> {
+    let runner = tmp.join("run_wasi_simd.mjs");
+    std::fs::write(
+        &runner,
+        "import { readFile } from 'node:fs/promises';\n\
+         import { WASI } from 'node:wasi';\n\
+         import { argv, exit } from 'node:process';\n\
+         const wasi = new WASI({ version: 'preview1', args: [], env: {} });\n\
+         const wasm = await WebAssembly.compile(await readFile(argv[2]));\n\
+         const instance = await WebAssembly.instantiate(wasm, wasi.getImportObject());\n\
+         exit(wasi.start(instance));\n",
+    )
+    .unwrap();
+    std::process::Command::new("node")
+        .arg(&runner)
+        .arg(wasm)
+        .current_dir(tmp)
+        .output()
+        .ok()
+}
+
+/// WASM SIMD-128 is the default lowering (phase-10 "WASM SIMD-128
+/// lowering"; design.md § Portable SIMD — first-class lowering target):
+/// with no feature flags at all, `Vector[i64, 2]` `+` and
+/// `Vector[f32, 4]` `*`/`+` select single `v128` instructions
+/// (`i64x2.add`, `f32x4.mul`, `f32x4.add`), and the module runs
+/// correctly under a WASI host.
+#[test]
+fn wasm_simd128_default_lowers_vector_ops_to_v128() {
+    let tmp = wasm_test_dir("simd_default");
+    let path = tmp.join("vecsimd.kara");
+    std::fs::write(&path, WASM_SIMD_VECTOR_PROGRAM).unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .env("KARAC_OPT_LEVEL", "0")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_simd128_default_lowers_vector_ops_to_v128 — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm build failed: {stderr}");
+    let wasm_path = tmp.join("vecsimd.wasm");
+    assert!(wasm_path.exists(), "expected vecsimd.wasm in the build cwd");
+
+    // Instruction-level assertion (deterministic, load-immune): the
+    // disassembly must carry the single-instruction v128 forms the
+    // phase-10 entry names.
+    if let Some(tool) = wasm_tools_on_path() {
+        let print = std::process::Command::new(tool)
+            .arg("print")
+            .arg(&wasm_path)
+            .output()
+            .unwrap();
+        assert!(print.status.success(), "wasm-tools print failed");
+        let wat = String::from_utf8_lossy(&print.stdout);
+        for instr in ["i64x2.add", "f32x4.mul", "f32x4.add"] {
+            assert!(
+                wat.contains(instr),
+                "expected `{instr}` in the disassembly — `+simd128` is \
+                 the wasm default and `Vector` ops must select single \
+                 v128 instructions",
+            );
+        }
+    } else {
+        eprintln!(
+            "note: wasm_simd128_default_lowers_vector_ops_to_v128 — \
+             wasm-tools not on PATH, instruction assertions skipped"
+        );
+    }
+
+    let Some(node_out) = run_wasm_under_node(&tmp, &wasm_path) else {
+        eprintln!("skip: wasm_simd128_default_lowers_vector_ops_to_v128 — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "v128 module failed under node:wasi: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert_eq!(
+        node_stdout, "22\n12\n",
+        "vector arithmetic must match native semantics; stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// `--target-features=-simd128` disables the wasm SIMD-128 default
+/// (last-wins over the `+simd128` table default): LLVM scalarizes every
+/// vector op and the module stays MVP-clean — the portable-by-guarantee
+/// escape for hosts without SIMD-128, which reject any `v128`-carrying
+/// module at validation (the feature is module-granular, not
+/// per-instruction). Same program, same output, no vector instructions;
+/// and `-simd128,+simd128` re-enables (last-wins resolution).
+#[test]
+fn wasm_simd128_opt_out_scalarizes_module() {
+    let tmp = wasm_test_dir("simd_optout");
+    let path = tmp.join("vecscalar.kara");
+    std::fs::write(&path, WASM_SIMD_VECTOR_PROGRAM).unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+            "--target-features=-simd128",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .env("KARAC_OPT_LEVEL", "0")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_simd128_opt_out_scalarizes_module — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "scalar wasm build failed: {stderr}");
+    let wasm_path = tmp.join("vecscalar.wasm");
+
+    if let Some(tool) = wasm_tools_on_path() {
+        let print = std::process::Command::new(tool)
+            .arg("print")
+            .arg(&wasm_path)
+            .output()
+            .unwrap();
+        assert!(print.status.success(), "wasm-tools print failed");
+        let wat = String::from_utf8_lossy(&print.stdout);
+        for fragment in ["v128", "f32x4", "i64x2"] {
+            assert!(
+                !wat.contains(fragment),
+                "`-simd128` must scalarize the whole module (MVP-clean); \
+                 found `{fragment}` in the disassembly",
+            );
+        }
+    }
+
+    // Scalar lowering, same semantics.
+    if let Some(node_out) = run_wasm_under_node(&tmp, &wasm_path) {
+        let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+        let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+        assert!(
+            node_out.status.success(),
+            "scalar module failed under node:wasi: stdout={node_stdout} stderr={node_stderr}",
+        );
+        assert_eq!(node_stdout, "22\n12\n", "stderr={node_stderr}");
+    } else {
+        eprintln!(
+            "note: wasm_simd128_opt_out_scalarizes_module — node not on PATH, run leg skipped"
+        );
+    }
+
+    // Last-wins: a later `+simd128` in the user list re-enables.
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+            "--target-features=-simd128,+simd128",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .env("KARAC_OPT_LEVEL", "0")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "re-enable build failed: {stderr}");
+    if let Some(tool) = wasm_tools_on_path() {
+        let print = std::process::Command::new(tool)
+            .arg("print")
+            .arg(&wasm_path)
+            .output()
+            .unwrap();
+        let wat = String::from_utf8_lossy(&print.stdout);
+        assert!(
+            wat.contains("i64x2.add"),
+            "`-simd128,+simd128` must resolve last-wins to enabled",
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// `#[require_simd]` is honored on WASM the same way as native
+/// (phase-10 "WASM SIMD-128 lowering"): under the `+simd128` default
+/// the annotated function's `Vector[f32, 4]` ops classify Native and
+/// the build proceeds; under `--target-features=-simd128` the target
+/// has no vector unit, every vector op classifies Scalar, and the
+/// build rejects with the targeted diagnostic.
+#[test]
+fn wasm_require_simd_fires_on_simd128_opt_out() {
+    let tmp = wasm_test_dir("simd_require");
+    let path = tmp.join("reqsimd.kara");
+    std::fs::write(
+        &path,
+        r#"
+#[require_simd]
+fn f32_scale(x: f32, y: f32) -> f32 {
+    let a: Vector[f32, 4] = Vector[f32, 4](x, x, x, x);
+    let b: Vector[f32, 4] = Vector[f32, 4](y, y, y, y);
+    let c = a * b;
+    c[0] + c[1] + c[2] + c[3]
+}
+
+fn main() {
+    println(f32_scale(2.0, 0.5));
+}
+"#,
+    )
+    .unwrap();
+
+    // Opt-out leg: rejected before codegen with the no-vector-unit cause
+    // and the actionable hint.
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+            "--target-features=-simd128",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("requires the llvm feature") {
+        eprintln!("skip: wasm_require_simd_fires_on_simd128_opt_out — non-llvm karac");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        !out.status.success(),
+        "`#[require_simd]` + `-simd128` must reject the build; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("E_REQUIRE_SIMD")
+            && stderr.contains("wasm SIMD-128 is disabled by `-simd128`"),
+        "expected the no-vector-unit require_simd diagnostic, got: {stderr}",
+    );
+    assert!(
+        stderr.contains("drop `-simd128`"),
+        "expected the re-enable hint, got: {stderr}",
+    );
+
+    // Default leg: `+simd128` is on, the same function classifies
+    // Native, the guarantee holds, the build proceeds.
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_require_simd_fires_on_simd128_opt_out (default leg) — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "`#[require_simd]` must pass under the simd128 default: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Server-WASM `host fn` lowering E2E (phase-10): on `wasm_wasi` under
 /// `--bindings none` (and browser),
 /// `host fn` declarations lower to the same `kara_host` import entries

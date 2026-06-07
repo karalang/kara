@@ -1384,6 +1384,32 @@ impl<'ctx> super::Codegen<'ctx> {
             // type name and look the qualified key up. Same -56 print
             // symptom as the free-fn arm, method shape (2026-06-06).
             ExprKind::MethodCall { object, method, .. } => {
+                // Element-typed vector reductions / lane folds on an
+                // unsigned-element `Vector[T, N]`: the result carries the
+                // receiver's element signedness. The receiver rides
+                // `unsigned_vector_exprs` at the method-call span (call
+                // and receiver share a span; the receiver-position
+                // entries come from `vector_method_receivers` — see
+                // lowering.rs). Without this arm `println(v.reduce_max())`
+                // on `Vector[u8, N]` sign-extends 255 to -1 (surfaced
+                // 2026-06-07 with the lane boundary-coercion fix; lanes
+                // previously lowered i64-wide and printed by accident).
+                if matches!(
+                    method.as_str(),
+                    "reduce_min"
+                        | "reduce_max"
+                        | "reduce_sum"
+                        | "reduce_product"
+                        | "reduce_and"
+                        | "reduce_or"
+                        | "reduce_xor"
+                        | "dot"
+                ) && self
+                    .unsigned_vector_exprs
+                    .contains(&(expr.span.offset, expr.span.length))
+                {
+                    return true;
+                }
                 let recv_ty = match &object.kind {
                     ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()),
                     ExprKind::SelfValue => self.var_type_names.get("self"),
@@ -1437,7 +1463,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
-                false
+                // `v[i]` lane read on an unsigned-element `Vector[T, N]` —
+                // same signedness story as the reduction arm above. The
+                // typechecker records the receiver at the Index node's
+                // span (`vector_method_receivers` → `unsigned_vector_exprs`
+                // via lowering.rs); the object span is checked too for the
+                // collided-span shape.
+                self.unsigned_vector_exprs
+                    .contains(&(expr.span.offset, expr.span.length))
+                    || self
+                        .unsigned_vector_exprs
+                        .contains(&(object.span.offset, object.span.length))
             }
             _ => false,
         }

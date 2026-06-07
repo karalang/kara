@@ -557,8 +557,7 @@ pub fn print_target_cpu_listing() {
 /// both wasip1 modules in v1): wasm32 with the WASI preview-1 OS tag —
 /// matches rustc's `wasm32-wasip1` llvm-target and the triple the
 /// runtime archive (`libkarac_runtime_wasm.a`) is built for. CPU
-/// baseline `generic` (MVP wasm — SIMD-128 lowering is the separate
-/// phase-10 entry). Static reloc: `wasm-ld` links a non-relocatable
+/// baseline `generic`. Static reloc: `wasm-ld` links a non-relocatable
 /// module; PIC is only for shared-library wasm.
 fn create_wasm_target_machine(cpu_override: Option<&str>) -> Result<TargetMachine, String> {
     Target::initialize_webassembly(&InitializationConfig::default());
@@ -571,10 +570,22 @@ fn create_wasm_target_machine(cpu_override: Option<&str>) -> Result<TargetMachin
         .create_target_machine(
             &triple,
             cpu_override.unwrap_or("generic"),
-            // No wasm default features (MVP baseline); a
-            // `--target-features` override (e.g. `+simd128`) is the
-            // whole string.
-            &combined_features(""),
+            // `+simd128` by default: WASM SIMD-128 is a first-class
+            // lowering target (design.md § Portable SIMD; phase-10 WASM
+            // SIMD-128 entry) and part of the WASM 2.0 baseline every
+            // current engine ships, so `Vector[T, N]` ops select single
+            // `v128` instructions up to 128 bits and split under tier 2
+            // above that. Hosts without SIMD-128 reject a module
+            // containing `v128` at validation (the feature is
+            // module-granular, not per-instruction), so the
+            // portable-by-guarantee fallback is the opt-out *build*:
+            // `--target-features=-simd128` appends after this default
+            // and wins (last-wins resolution — `combined_features`),
+            // and LLVM then scalarizes every vector op into an
+            // MVP-clean module. The `#[require_simd]` / `--simd-report`
+            // target model mirrors this default+override chain via
+            // `target::wasm_simd128_enabled`.
+            &combined_features("+simd128"),
             backend_optimization_level(),
             RelocMode::Default,
             CodeModel::Default,

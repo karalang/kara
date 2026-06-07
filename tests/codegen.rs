@@ -33236,6 +33236,62 @@ fn main() {
         }
     }
 
+    /// Bare numeric literals as vector lanes lower at the literal default
+    /// width (f64 / i64) and must be boundary-coerced to the element type
+    /// (`coerce_scalar_to_type`) at every scalar entry point — construction,
+    /// `splat`, `from_array` (array-literal arm), `replace`. Without the
+    /// coercion, `Vector[f32, 4](0.5, …)` mislowered as `<4 x double>` and
+    /// the module failed LLVM verification at the first op against a
+    /// correctly-typed operand (surfaced 2026-06-07 by the WASM SIMD-128
+    /// slice's E2E fixture; target-independent). Also pins `println(f32)`'s
+    /// varargs promotion (fpext to double — the C default-argument rule);
+    /// the missing fpext printed garbage on wasm32's args-buffer varargs.
+    #[test]
+    fn test_vector_f32_literal_lanes_coerce_to_element_type() {
+        let out = run_program(
+            r#"
+fn construct(x: f32) -> f32 {
+    let a: Vector[f32, 4] = Vector[f32, 4](x, x, x, x);
+    let b: Vector[f32, 4] = Vector[f32, 4](0.5, 0.25, 0.5, 0.25);
+    let c = a * b;
+    c[0] + c[1] + c[2] + c[3]
+}
+
+fn splat_lit(y: f32) -> f32 {
+    let m: Vector[f32, 4] = Vector[f32, 4].splat(0.5);
+    let a: Vector[f32, 4] = Vector[f32, 4](y, y, y, y);
+    let c = a * m;
+    c[0] + c[3]
+}
+
+fn from_array_replace(y: f32) -> f32 {
+    let m: Vector[f32, 4] = Vector[f32, 4].from_array([0.5, 0.5, 0.25, 0.25]);
+    let r = m.replace(0, 1.5);
+    let a: Vector[f32, 4] = Vector[f32, 4](y, y, y, y);
+    let c = a * r;
+    c[0] + c[1] + c[2] + c[3]
+}
+
+fn int_lanes(x: i32) -> i32 {
+    let a: Vector[i32, 8] = Vector[i32, 8].splat(x);
+    let b: Vector[i32, 8] = Vector[i32, 8](1, 2, 3, 4, 5, 6, 7, 8);
+    let c = a + b;
+    c[0] + c[7]
+}
+
+fn main() {
+    println(construct(2.0));
+    println(splat_lit(4.0));
+    println(from_array_replace(2.0));
+    println(int_lanes(10));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "3\n4\n5\n29\n");
+        }
+    }
+
     #[test]
     fn test_vector_i64_mul_and_sub() {
         let out = run_program(
@@ -33600,6 +33656,30 @@ fn main() {
         );
         if let Some(out) = out {
             assert_eq!(out, "10\n255\n");
+        }
+    }
+
+    /// `println(v[i])` on an unsigned-element vector must print the lane
+    /// unsigned: the lane is a genuine narrow uint since the literal-width
+    /// lane coercion (2026-06-07), so the print path needs the receiver's
+    /// element signedness — recorded by the typechecker at the Index span
+    /// (`vector_method_receivers`, folded into `unsigned_vector_exprs`),
+    /// since the Index node's `expr_types` entry holds the scalar element
+    /// type. Pre-coercion the lanes were i64-wide positives and printed
+    /// correctly by accident.
+    #[test]
+    fn test_vector_u8_lane_read_prints_unsigned() {
+        let out = run_program(
+            r#"
+fn main() {
+    let v = Vector[u8, 4](200, 10, 50, 255);
+    println(v[0]);
+    println(v[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "200\n255\n");
         }
     }
 

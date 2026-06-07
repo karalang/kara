@@ -298,7 +298,12 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    typechecker-recorded table mapping the method-call span → the receiver's
    element `TypeExpr`, populated in `infer_method_call` (where the receiver type
    is known) and forwarded through lowering — exactly the pattern
-   `method_callee_types` uses to dodge the same span-collision race. That makes
+   `method_callee_types` uses to dodge the same span-collision race. (A second
+   live instance landed 2026-06-07 with the WASM SIMD-128 slice:
+   `vector_method_receivers` — receiver `(T, N)` recorded at the collided
+   span in `infer_method_call` *and* at `Vector` lane-read Index spans, folded
+   into `unsigned_vector_exprs` in lowering.rs for SIMD reduce/print
+   signedness — copy either model.) That makes
    3b a small cross-phase slice (typechecker + lowering + the codegen
    redispatch), not codegen-only. Until it lands these methods on temps stay a
    hard error (fail-loud, no silent leak);

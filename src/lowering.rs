@@ -145,6 +145,22 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+    // The `expr_types` sweep alone misses method receivers: a MethodCall
+    // node shares its receiver's span, and the call's *result* type is
+    // the last write at that key — so `v.reduce_min()` erases `v`'s
+    // `Vector[u8, N]` entry and reduce_min/max compared signed. Masked
+    // until 2026-06-07 by bare-literal lanes lowering at i64 width (wide
+    // positive values compare the same under either predicate); the lane
+    // boundary coercion exposed it. `vector_method_receivers` records the
+    // receiver vector type keyed by the call span (the same collided
+    // key), so folding its unsigned hits in restores this table's
+    // documented meaning for receiver positions.
+    program.unsigned_vector_exprs.extend(
+        tc.vector_method_receivers
+            .iter()
+            .filter(|(_, (elem, _))| matches!(elem, Type::UInt(_)))
+            .map(|(k, _)| (k.0, k.1)),
+    );
     // Sibling to `string_typed_exprs`: for each expression whose Kāra
     // type is a `Named` struct, record the canonical struct name. Codegen
     // uses this in `emit_sort_by_key_inline_thunk` to dispatch struct-typed
