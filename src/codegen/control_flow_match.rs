@@ -1540,6 +1540,10 @@ fn pattern_consumes_field(p: &crate::ast::Pattern) -> bool {
         | PatternKind::RangePattern { .. }
         | PatternKind::Slice { .. } => false,
         PatternKind::Binding(_) => true,
+        // `ref name @ PATTERN` — the whole subtree borrows (design.md
+        // § @ Bindings); nothing is moved out, so the source's drop
+        // must still free the field's heap content.
+        PatternKind::AtBinding { by_ref: true, .. } => false,
         PatternKind::AtBinding { pattern, .. } => pattern_consumes_field(pattern),
         PatternKind::Tuple(pats) => pats.iter().any(pattern_consumes_field),
         PatternKind::TupleVariant { patterns, .. } => patterns.iter().any(pattern_consumes_field),

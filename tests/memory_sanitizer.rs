@@ -4953,4 +4953,62 @@ fn main() {
             "swap_pairs_pair_relink_loop",
         );
     }
+
+    // ── `ref name @ PATTERN` borrow bindings (phase-8 @ slice 4) ──
+    //
+    // `ref x @ Foo { a }` under an owned scrutinee: the subtree
+    // borrows — pattern bindings must NOT register heap cleanup
+    // (`pattern_binding_is_borrow` suppression in the by_ref
+    // AtBinding bind path) while the source keeps its own drop
+    // (`pattern_consumes_field` → false for by_ref). If either half
+    // regresses, the String buffer is freed twice (binding cleanup +
+    // source drop) and ASAN flags it here.
+
+    #[test]
+    fn asan_ref_at_binding_struct_string_field_single_free() {
+        assert_clean_asan_run(
+            r#"
+struct Foo { a: String, n: i64 }
+fn main() {
+    let foo = Foo { a: "heap-owned string content", n: 7 };
+    match foo {
+        ref x @ Foo { a, n } => {
+            println(a);
+            println(n);
+            println(x.n);
+        }
+    }
+    println(foo.a);
+}
+"#,
+            &[
+                "heap-owned string content",
+                "7",
+                "7",
+                "heap-owned string content",
+            ],
+            "ref_at_binding_struct_string_field_single_free",
+        );
+    }
+
+    #[test]
+    fn asan_ref_at_binding_option_string_payload_single_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let opt = Some("payload string on the heap");
+    match opt {
+        ref x @ Some(y) => { println(y); }
+        None => { println("none"); }
+    }
+    match opt {
+        Some(z) => { println(z); }
+        None => { }
+    }
+}
+"#,
+            &["payload string on the heap", "payload string on the heap"],
+            "ref_at_binding_option_string_payload_single_free",
+        );
+    }
 }

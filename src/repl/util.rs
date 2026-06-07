@@ -903,7 +903,7 @@ pub(super) fn collect_pattern_bindings(
                 collect_pattern_bindings(&p.kind, out);
             }
         }
-        PatternKind::AtBinding { name, pattern } => {
+        PatternKind::AtBinding { name, pattern, .. } => {
             out.insert(name.clone());
             collect_pattern_bindings(&pattern.kind, out);
         }

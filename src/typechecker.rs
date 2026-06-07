@@ -384,6 +384,12 @@ pub enum TypeErrorKind {
     /// across a channel. See design.md § ScopeLocal. (Phase 6 line 218
     /// slice 2.)
     ScopeLocalEscape,
+    /// `x @ Some(y)` under an owned scrutinee where both the outer `x`
+    /// (whole value) and an inner binding `y` (sub-field) are non-Copy
+    /// by-move claims — the same heap content would be owned twice.
+    /// See design.md § @ Bindings, "Owned scrutinee". (Phase 8 `@`
+    /// binding semantics, slice 4.)
+    AtBindingDoubleConsume,
     /// A `mut` field of a `par struct` / `par enum` is declared with a type
     /// other than `Atomic[T]` or `Mutex[T]`. `par struct` enforces concurrent
     /// safety structurally at the definition site: immutable fields are freely
@@ -653,9 +659,9 @@ pub(crate) fn class_for_type_error_kind(
         }
         TypeErrorKind::RefutablePattern => Some(DC::RefutablePattern),
         TypeErrorKind::CannotInferTypeParam => Some(DC::CannotInferTypeParam),
-        TypeErrorKind::MissingMutMarker | TypeErrorKind::InvalidMutMarker => {
-            Some(DC::OwnershipBorrowConflict)
-        }
+        TypeErrorKind::MissingMutMarker
+        | TypeErrorKind::InvalidMutMarker
+        | TypeErrorKind::AtBindingDoubleConsume => Some(DC::OwnershipBorrowConflict),
 
         // Lint-surfaced kinds — keep at `LintWarning` regardless of
         // underlying shape (the lint-emission helper sets this
@@ -990,6 +996,14 @@ pub struct TypeChecker<'a> {
     pub(super) type_origins: HashMap<String, (Vec<String>, String, Visibility)>,
     pub(super) env: TypeEnv,
     pub(super) local_scope: LocalTypeScope,
+    /// Stack of enclosing *consuming* `@`-binding outer names while
+    /// recursing through `check_pattern_against` — `(name, span)` pushed
+    /// when an `IDENT @ PATTERN` (not `ref`-annotated) binds a non-Copy
+    /// value under an `Owned` scrutinee mode. Any by-move non-Copy
+    /// binding reached inside fires `E_AT_BINDING_DOUBLE_CONSUME`
+    /// against the nearest enclosing entry (design.md § @ Bindings,
+    /// "Owned scrutinee" — the cannot-double-consume rule).
+    pub(super) owned_at_binding_outers: Vec<(String, Span)>,
     pub(super) errors: Vec<TypeError>,
     pub(super) warnings: Vec<TypeError>,
     pub(super) expr_types: HashMap<SpanKey, Type>,
@@ -1221,6 +1235,7 @@ impl<'a> TypeChecker<'a> {
             type_origins: HashMap::new(),
             env: TypeEnv::new(),
             local_scope: LocalTypeScope::new(),
+            owned_at_binding_outers: Vec::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             expr_types: HashMap::new(),

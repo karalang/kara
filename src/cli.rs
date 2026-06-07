@@ -2809,6 +2809,11 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // Phase 6 `Mutex` / `lock` — the `lock` target is not a
                 // `Mutex[T]` binding.
                 crate::typechecker::TypeErrorKind::LockTargetNotMutex => "E0260",
+                // Phase 8 `@` bindings slice 4 — owned scrutinee, outer
+                // `@` alias and an inner sub-pattern binding both claim
+                // non-Copy ownership of overlapping content (design.md
+                // § @ Bindings > Owned scrutinee).
+                crate::typechecker::TypeErrorKind::AtBindingDoubleConsume => "E0261",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),

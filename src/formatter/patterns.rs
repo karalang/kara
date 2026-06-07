@@ -28,7 +28,14 @@ impl super::Formatter {
                     self.format_literal_pattern(e);
                 }
             }
-            PatternKind::AtBinding { name, pattern } => {
+            PatternKind::AtBinding {
+                name,
+                pattern,
+                by_ref,
+            } => {
+                if *by_ref {
+                    self.write_str("ref ");
+                }
                 self.write_ident(name);
                 self.write_str(" @ ");
                 self.format_pattern(pattern);

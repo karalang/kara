@@ -50,6 +50,37 @@ impl super::Parser {
                     span: self.span_from(&start),
                 })
             }
+            // `ref name @ PATTERN` — the only position where `ref` is
+            // legal inside a pattern (design.md § @ Bindings, "Explicit
+            // `ref` on the `@` binding"). Per-binding `ref` annotations
+            // elsewhere don't exist in Kāra — binding modes flow from
+            // the scrutinee type (design.md § Match Arm Binding Modes).
+            Token::Ref => {
+                self.advance();
+                let name = self.expect_identifier()?;
+                let name_span = self.span_from(&start);
+                if !self.eat(&Token::At) {
+                    self.errors.push(ParseError {
+                        message: format!(
+                            "'ref' in a pattern is only valid on an '@' binding \
+                             ('ref {name} @ PATTERN'); binding modes otherwise \
+                             follow the scrutinee type"
+                        ),
+                        span: name_span,
+                    });
+                    return None;
+                }
+                self.check_ident_class(&name, IdentClass::Value, "binding", name_span);
+                let sub_pattern = self.parse_single_pattern()?;
+                Some(Pattern {
+                    kind: PatternKind::AtBinding {
+                        name,
+                        pattern: Box::new(sub_pattern),
+                        by_ref: true,
+                    },
+                    span: self.span_from(&start),
+                })
+            }
             // Half-open range patterns with a missing start: `..lit` and `..=lit`.
             // Bare `..` is not a valid pattern (use `_` for wildcard).
             Token::DotDot => {
@@ -306,6 +337,7 @@ impl super::Parser {
                         kind: PatternKind::AtBinding {
                             name,
                             pattern: Box::new(sub_pattern),
+                            by_ref: false,
                         },
                         span: self.span_from(&start),
                     });

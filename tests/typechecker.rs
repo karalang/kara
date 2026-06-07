@@ -6153,6 +6153,161 @@ fn at_binding_irrefutable_struct_pattern_in_let_accepted() {
     );
 }
 
+// ── @ binding slice 4 — cannot-double-consume rule
+// (`E_AT_BINDING_DOUBLE_CONSUME`, design.md § @ Bindings "Owned
+// scrutinee") ────────────────────────────────────────────────────────
+
+#[test]
+fn at_binding_double_consume_rejected_in_match_arm() {
+    // Owned scrutinee, outer `x` (Option[String], non-Copy) and inner
+    // `y` (String, non-Copy) both claim ownership.
+    let errors = typecheck_errors(
+        "fn main() { \
+         let opt = Some(\"hello\"); \
+         match opt { x @ Some(y) => { let _ = y; let _ = x; } None => { } } \
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_AT_BINDING_DOUBLE_CONSUME")
+                && e.message.contains("'x'")
+                && e.message.contains("'y'")),
+        "expected E_AT_BINDING_DOUBLE_CONSUME naming x and y, got: {errors:?}"
+    );
+}
+
+#[test]
+fn at_binding_double_consume_rejected_struct_shorthand_field() {
+    // `x @ Foo { a }` — the shorthand field binding is the inner
+    // by-move claim.
+    let errors = typecheck_errors(
+        "struct Foo { a: String } \
+         fn main() { \
+         let foo = Foo { a: \"hi\" }; \
+         match foo { x @ Foo { a } => { let _ = a; let _ = x; } } \
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_AT_BINDING_DOUBLE_CONSUME")
+                && e.message.contains("'a'")),
+        "expected E_AT_BINDING_DOUBLE_CONSUME on shorthand field, got: {errors:?}"
+    );
+}
+
+#[test]
+fn at_binding_double_consume_rejected_in_let_form() {
+    // The let-form of the same conflict: `let x @ Foo { a } = foo;`.
+    let errors = typecheck_errors(
+        "struct Foo { a: String } \
+         fn main() { \
+         let foo = Foo { a: \"hi\" }; \
+         let x @ Foo { a } = foo; \
+         let _ = a; let _ = x; \
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_AT_BINDING_DOUBLE_CONSUME")),
+        "expected E_AT_BINDING_DOUBLE_CONSUME in let form, got: {errors:?}"
+    );
+}
+
+#[test]
+fn at_binding_copy_inner_accepted() {
+    // Copy payload (i64) — the inner binding copies, no double-consume.
+    typecheck_ok(
+        "fn main() { \
+         let opt = Some(42); \
+         match opt { x @ Some(y) => { let _ = y; let _ = x; } None => { } } \
+         }",
+    );
+}
+
+#[test]
+fn at_binding_wildcard_inner_accepted_with_non_copy_scrutinee() {
+    // `x @ Some(_)` — no inner by-move claim; outer alone owns.
+    typecheck_ok(
+        "fn main() { \
+         let opt = Some(\"hello\"); \
+         match opt { x @ Some(_) => { let _ = x; } None => { } } \
+         }",
+    );
+}
+
+#[test]
+fn at_binding_borrow_scrutinee_accepted_with_non_copy_payload() {
+    // `ref Option[String]` scrutinee — match-arm binding modes make
+    // both bindings borrows; no consume claims, no conflict.
+    typecheck_ok(
+        "fn show(opt: ref Option[String]) { \
+         match opt { x @ Some(y) => { let _ = y; let _ = x; } None => { } } \
+         } \
+         fn main() { let o = Some(\"hello\"); show(o); }",
+    );
+}
+
+#[test]
+fn at_binding_nested_double_consume_fires_per_enclosing_outer() {
+    // `outer @ Foo { f: inner @ Bar.B(s) }` with everything non-Copy:
+    // `inner` conflicts with `outer` (nearest enclosing), and `s`
+    // conflicts with `inner` — two diagnostics at slice-8 granularity.
+    let errors = typecheck_errors(
+        "enum Bar { B(String) } \
+         struct Foo { f: Bar } \
+         fn main() { \
+         let foo = Foo { f: Bar.B(\"hi\") }; \
+         match foo { outer @ Foo { f: inner @ Bar.B(s) } => { \
+         let _ = s; let _ = inner; let _ = outer; } } \
+         }",
+    );
+    let dc: Vec<_> = errors
+        .iter()
+        .filter(|e| e.message.contains("E_AT_BINDING_DOUBLE_CONSUME"))
+        .collect();
+    assert!(
+        dc.iter()
+            .any(|e| e.message.contains("'outer'") && e.message.contains("'inner'")),
+        "expected inner-vs-outer conflict, got: {errors:?}"
+    );
+    assert!(
+        dc.iter()
+            .any(|e| e.message.contains("'inner'") && e.message.contains("'s'")),
+        "expected s-vs-inner conflict, got: {errors:?}"
+    );
+}
+
+// ── `ref name @ PATTERN` — explicit-ref @ bindings ───────────────────
+
+#[test]
+fn ref_at_binding_accepted_under_owned_scrutinee() {
+    // The diagnostic's suggested fix: `ref x @ Some(y)` borrows the
+    // whole Option via `x`, and `y` is a borrow into the payload —
+    // no consume claims at all (design.md § @ Bindings).
+    typecheck_ok(
+        "fn main() { \
+         let opt = Some(\"hello\"); \
+         match opt { ref x @ Some(y) => { let _ = y; let _ = x; } None => { } } \
+         }",
+    );
+}
+
+#[test]
+fn ref_at_binding_in_let_accepted_and_rhs_stays_live() {
+    typecheck_ok(
+        "struct Foo { a: String } \
+         fn main() { \
+         let foo = Foo { a: \"hi\" }; \
+         let ref x @ Foo { a } = foo; \
+         let _ = a; let _ = x; \
+         println(foo.a); \
+         }",
+    );
+}
+
 #[test]
 fn refutable_let_with_enum_variant_rejected() {
     let errors = typecheck_errors(

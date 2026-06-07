@@ -1586,7 +1586,7 @@ impl<'a> OwnershipChecker<'a> {
                 }
             }
             PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {}
-            PatternKind::AtBinding { name, pattern } => {
+            PatternKind::AtBinding { name, pattern, .. } => {
                 states.insert(name.clone(), ValueState::Live);
                 self.define_pattern_states(pattern, states);
             }

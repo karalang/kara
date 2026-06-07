@@ -1253,6 +1253,36 @@ fn test_match_at_binding_consumes_non_copy_scrutinee() {
 }
 
 #[test]
+fn test_match_ref_at_binding_does_not_consume_scrutinee() {
+    // `ref whole @ Some(_)` flips the subtree to borrow mode
+    // (design.md § @ Bindings) — the scrutinee stays live after the
+    // match.
+    ownership_ok(
+        "fn main() {\n\
+             let opt: Option[String] = Some(\"hi\");\n\
+             match opt { ref whole @ Some(_) => { let _ = whole; } None => { } }\n\
+             let _ = opt;\n\
+         }",
+    );
+}
+
+#[test]
+fn test_let_ref_at_binding_does_not_consume_rhs() {
+    // `let ref x @ Foo { a } = foo` — borrow, not move; `foo` stays
+    // live for the rest of the block.
+    ownership_ok(
+        "struct Foo { a: String }\n\
+         fn main() {\n\
+             let foo = Foo { a: \"hi\" };\n\
+             let ref x @ Foo { a } = foo;\n\
+             let _ = a;\n\
+             let _ = x;\n\
+             let _ = foo;\n\
+         }",
+    );
+}
+
+#[test]
 fn test_match_struct_pattern_with_field_binding_consumes() {
     // Struct pattern that binds a non-Copy field consumes the scrutinee.
     let errors = ownership_errors(

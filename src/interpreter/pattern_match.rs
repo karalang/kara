@@ -248,7 +248,7 @@ impl<'a> super::Interpreter<'a> {
                     self.bind_pattern(first, value);
                 }
             }
-            PatternKind::AtBinding { name, pattern } => {
+            PatternKind::AtBinding { name, pattern, .. } => {
                 self.env.define(name.clone(), value.clone());
                 self.bind_pattern(pattern, value);
             }

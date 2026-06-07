@@ -14597,3 +14597,43 @@ fn test_tensor_reshape_of_permuted_data() {
     );
     assert_eq!(out, "1\n4\n2\n6\n");
 }
+
+// ── `ref name @ PATTERN` — explicit-ref @ bindings (design.md § @
+// Bindings): bindings borrow, scrutinee stays usable after ──────────
+
+#[test]
+fn test_ref_at_binding_match_borrows_and_scrutinee_stays_live() {
+    let out = run_no_errors(
+        "struct Foo { a: String, n: i64 }\n\
+         fn main() {\n\
+             let foo = Foo { a: \"hi\", n: 7 };\n\
+             match foo {\n\
+                 ref x @ Foo { a, n } => {\n\
+                     println(a);\n\
+                     println(n);\n\
+                     println(x.n);\n\
+                 }\n\
+             }\n\
+             println(foo.a);\n\
+         }",
+    );
+    assert_eq!(out, "hi\n7\n7\nhi\n");
+}
+
+#[test]
+fn test_ref_at_binding_over_option_payload() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let opt = Some(\"hello\");\n\
+             match opt {\n\
+                 ref x @ Some(y) => { println(y); }\n\
+                 None => { println(\"none\"); }\n\
+             }\n\
+             match opt {\n\
+                 Some(z) => { println(z); }\n\
+                 None => { }\n\
+             }\n\
+         }",
+    );
+    assert_eq!(out, "hello\nhello\n");
+}

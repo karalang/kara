@@ -2277,6 +2277,19 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 }
                 self.bind_pattern_types(pattern, &expected_ty);
+                // `@`-bearing let patterns additionally route through
+                // `check_pattern_against` (the `if let` / `let-else`
+                // path): it owns the cannot-double-consume rule
+                // (`let x @ Foo { a } = foo` is the let-form of the
+                // match-arm conflict) and records the `Ref` borrow
+                // modes codegen's ref-shims need for `let ref x @ …`.
+                // Gated on `contains_at_binding` so ordinary lets keep
+                // the `bind_pattern_types`-only path unchanged.
+                if pattern.contains_at_binding() {
+                    let (mode, dispatch_ty) = ScrutineeMode::classify(&expected_ty);
+                    let dispatch_ty = dispatch_ty.clone();
+                    self.check_pattern_against(pattern, &dispatch_ty, mode);
+                }
             }
             StmtKind::LetUninit {
                 is_mut: _,

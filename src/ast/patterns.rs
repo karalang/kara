@@ -38,6 +38,36 @@ impl Pattern {
         out
     }
 
+    /// Whether the pattern tree contains an `@` binding anywhere.
+    /// Used by the typechecker's `Let` arm to route `@`-bearing let
+    /// patterns through `check_pattern_against` (which owns the
+    /// cannot-double-consume rule and the `ref name @` borrow-mode
+    /// recording) without changing the path for ordinary lets.
+    pub fn contains_at_binding(&self) -> bool {
+        match &self.kind {
+            PatternKind::AtBinding { .. } => true,
+            PatternKind::Binding(_)
+            | PatternKind::Wildcard
+            | PatternKind::Literal(_)
+            | PatternKind::RangePattern { .. } => false,
+            PatternKind::Tuple(patterns) | PatternKind::TupleVariant { patterns, .. } => {
+                patterns.iter().any(|p| p.contains_at_binding())
+            }
+            PatternKind::Struct { fields, .. } => fields
+                .iter()
+                .any(|f| f.pattern.as_ref().is_some_and(|p| p.contains_at_binding())),
+            PatternKind::Or(alts) => alts.iter().any(|p| p.contains_at_binding()),
+            PatternKind::Slice {
+                prefix,
+                rest: _,
+                suffix,
+            } => prefix
+                .iter()
+                .chain(suffix.iter())
+                .any(|p| p.contains_at_binding()),
+        }
+    }
+
     fn collect_bindings(&self, out: &mut Vec<String>) {
         match &self.kind {
             PatternKind::Binding(name) => out.push(name.clone()),
@@ -65,7 +95,7 @@ impl Pattern {
                     first.collect_bindings(out);
                 }
             }
-            PatternKind::AtBinding { name, pattern } => {
+            PatternKind::AtBinding { name, pattern, .. } => {
                 out.push(name.clone());
                 pattern.collect_bindings(out);
             }
@@ -115,7 +145,7 @@ impl Pattern {
                     first.collect_binding_name_spans(out);
                 }
             }
-            PatternKind::AtBinding { name, pattern } => {
+            PatternKind::AtBinding { name, pattern, .. } => {
                 out.push((name.clone(), self.span.clone()));
                 pattern.collect_binding_name_spans(out);
             }
@@ -156,6 +186,11 @@ pub enum PatternKind {
     AtBinding {
         name: String,
         pattern: Box<Pattern>,
+        /// `ref name @ PATTERN` — the outer alias (and, by mode
+        /// propagation, every binding in the subtree) borrows even
+        /// under an owned scrutinee (design.md § @ Bindings,
+        /// "Explicit `ref` on the `@` binding").
+        by_ref: bool,
     },
     Struct {
         path: Vec<String>,

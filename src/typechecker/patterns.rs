@@ -373,6 +373,92 @@ impl<'a> super::TypeChecker<'a> {
     /// `ScrutineeMode::wrap_binding_ty` so a `ref T` scrutinee yields
     /// `ref FieldType` bindings — design.md § Match Arm Binding Modes.
     /// Owned scrutinees keep the prior behaviour exactly (no wrap).
+    /// Mirror `bind_pattern_types`'s side-table writes so codegen can
+    /// reconstitute struct payloads and dispatch methods/fields on
+    /// pattern bindings. Shared by the `Binding` leaf arm and the
+    /// `AtBinding` outer-alias arm of `check_pattern_against` (the
+    /// alias has the scrutinee's type at its position — without this,
+    /// `x @ Foo { … }` left `x` untyped in codegen's `var_type_names`
+    /// and `x.field` silently read 0).
+    ///
+    /// `Type::Str` registers `"String"` parallel to how
+    /// `Type::Named { name: "Vec" }` registers `"Vec"` — required by
+    /// the tuple-payload destructure path (`pattern_payload_word_count`)
+    /// for variant-payload tuples containing String elements (Theme 5,
+    /// 2026-05-10). `Type::Shared(name)` registers under its bare
+    /// struct name so codegen's `shared_type_for_expr` lookup finds the
+    /// heap layout for `node.field` access after a `Some(node)` pattern
+    /// binding. A refinement records its *base*'s surface name (codegen
+    /// dispatches a refined value as its base, phase-9 step 5a) —
+    /// `local_scope` keeps the real refinement type for type-checking.
+    fn record_pattern_binding_surface_types(&mut self, pattern: &Pattern, expected: &Type) {
+        let expected = strip_refinement(expected);
+        if let Type::Named {
+            name: type_name, ..
+        } = expected
+        {
+            self.pattern_binding_types
+                .insert(SpanKey::from_span(&pattern.span), type_name.clone());
+        } else if matches!(expected, Type::Str) {
+            self.pattern_binding_types
+                .insert(SpanKey::from_span(&pattern.span), "String".to_string());
+        } else if let Type::Shared(type_name) = expected {
+            self.pattern_binding_types
+                .insert(SpanKey::from_span(&pattern.span), type_name.clone());
+        } else if matches!(expected, Type::Bool) {
+            // Match-arm parallel to the `bind_pattern_types` bool
+            // case — see that site for the trunc-narrowing
+            // motivation.
+            self.pattern_binding_types
+                .insert(SpanKey::from_span(&pattern.span), "bool".to_string());
+        } else if matches!(expected, Type::Pointer { .. }) {
+            // Match-arm parallel to the `bind_pattern_types`
+            // pointer case — record `*const T` / `*mut T` so
+            // `raii_check` can detect raw-pointer-typed bindings
+            // held across a yield point.
+            self.pattern_binding_types
+                .insert(SpanKey::from_span(&pattern.span), type_display(expected));
+        } else if let Some(narrow) = narrow_int_surface_name(expected) {
+            // Match-arm parallel to the `bind_pattern_types`
+            // narrow-int case — record `u8` / `i32` / `char` /
+            // … so codegen narrows the i64 payload word back to
+            // the binding's real width (e.g. `Vec[u8].pop()`'s
+            // `Some(b) => b == other_u8`).
+            self.pattern_binding_types
+                .insert(SpanKey::from_span(&pattern.span), narrow);
+        }
+        // PB sibling slice (2026-05-09): mirror
+        // `bind_pattern_types`'s sibling-table write so direct
+        // method dispatch on a pattern-bound `Vec[T]` / `Slice[T]`
+        // payload (the canonical match-arm shape) routes through
+        // the right element-typed path.
+        self.record_pattern_inner_type(pattern, expected);
+    }
+
+    /// Emit `E_AT_BINDING_DOUBLE_CONSUME` for `inner_name` against the
+    /// nearest enclosing consuming `@`-binding outer, if any. No-op when
+    /// no consuming outer is on the stack (the top-level `@` itself, or
+    /// borrow-mode subtrees, never conflict). Wording per the phase-8
+    /// `@`-binding entry slice 4 / design.md § @ Bindings "Owned
+    /// scrutinee".
+    fn report_at_binding_double_consume(&mut self, inner_name: &str, inner_span: &Span) {
+        let Some((outer, _)) = self.owned_at_binding_outers.last() else {
+            return;
+        };
+        let outer = outer.clone();
+        self.type_error(
+            format!(
+                "error[E_AT_BINDING_DOUBLE_CONSUME]: cannot bind both \
+                 '{outer}' and '{inner_name}' as owned — '{outer}' would \
+                 consume the whole value while '{inner_name}' would consume \
+                 a field; use 'ref {outer}' to borrow, or omit one of the \
+                 two bindings"
+            ),
+            inner_span.clone(),
+            TypeErrorKind::AtBindingDoubleConsume,
+        );
+    }
+
     pub(super) fn check_pattern_against(
         &mut self,
         pattern: &Pattern,
@@ -395,64 +481,19 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 }
+                // Cannot-double-consume rule: a by-move non-Copy leaf
+                // binding inside a consuming `@` outer claims heap content
+                // the outer already owns (design.md § @ Bindings).
+                if matches!(mode, ScrutineeMode::Owned)
+                    && !self.owned_at_binding_outers.is_empty()
+                    && !self.is_copy_type_during_check(expected)
+                {
+                    self.report_at_binding_double_consume(name, &pattern.span);
+                }
                 let binding_ty = mode.wrap_binding_ty(expected.clone());
                 self.local_scope.insert(name.clone(), binding_ty);
                 self.record_pattern_binding_borrow_mode(&pattern.span, mode, expected);
-                // Mirror bind_pattern_types's side-table write so codegen
-                // can reconstitute struct payloads for match-arm bindings.
-                // `Type::Str` registers `"String"` parallel to how
-                // `Type::Named { name: "Vec" }` registers `"Vec"` —
-                // required by the tuple-payload destructure path
-                // (`pattern_payload_word_count`) for variant-payload
-                // tuples containing String elements (Theme 5, 2026-05-10).
-                // `Type::Shared(name)` registers under its bare struct
-                // name so codegen's `shared_type_for_expr` lookup finds
-                // the heap layout for `node.field` access after a
-                // `Some(node)` pattern binding. A refinement records its
-                // *base*'s surface name (codegen dispatches a refined value
-                // as its base, phase-9 step 5a) — `local_scope` above keeps
-                // the real refinement type for type-checking.
-                let expected = strip_refinement(expected);
-                if let Type::Named {
-                    name: type_name, ..
-                } = expected
-                {
-                    self.pattern_binding_types
-                        .insert(SpanKey::from_span(&pattern.span), type_name.clone());
-                } else if matches!(expected, Type::Str) {
-                    self.pattern_binding_types
-                        .insert(SpanKey::from_span(&pattern.span), "String".to_string());
-                } else if let Type::Shared(type_name) = expected {
-                    self.pattern_binding_types
-                        .insert(SpanKey::from_span(&pattern.span), type_name.clone());
-                } else if matches!(expected, Type::Bool) {
-                    // Match-arm parallel to the `bind_pattern_types` bool
-                    // case — see that site for the trunc-narrowing
-                    // motivation.
-                    self.pattern_binding_types
-                        .insert(SpanKey::from_span(&pattern.span), "bool".to_string());
-                } else if matches!(expected, Type::Pointer { .. }) {
-                    // Match-arm parallel to the `bind_pattern_types`
-                    // pointer case — record `*const T` / `*mut T` so
-                    // `raii_check` can detect raw-pointer-typed bindings
-                    // held across a yield point.
-                    self.pattern_binding_types
-                        .insert(SpanKey::from_span(&pattern.span), type_display(expected));
-                } else if let Some(narrow) = narrow_int_surface_name(expected) {
-                    // Match-arm parallel to the `bind_pattern_types`
-                    // narrow-int case — record `u8` / `i32` / `char` /
-                    // … so codegen narrows the i64 payload word back to
-                    // the binding's real width (e.g. `Vec[u8].pop()`'s
-                    // `Some(b) => b == other_u8`).
-                    self.pattern_binding_types
-                        .insert(SpanKey::from_span(&pattern.span), narrow);
-                }
-                // PB sibling slice (2026-05-09): mirror
-                // `bind_pattern_types`'s sibling-table write so direct
-                // method dispatch on a pattern-bound `Vec[T]` / `Slice[T]`
-                // payload (the canonical match-arm shape) routes through
-                // the right element-typed path.
-                self.record_pattern_inner_type(pattern, expected);
+                self.record_pattern_binding_surface_types(pattern, expected);
             }
             PatternKind::Literal(_) => {
                 // Type checking of literal patterns deferred
@@ -575,6 +616,16 @@ impl<'a> super::TypeChecker<'a> {
                             // `ref`/`mut ref` scrutinee, the binding type is
                             // wrapped per the match-arm binding-mode rule
                             // (design.md § Match Arm Binding Modes).
+                            //
+                            // Cannot-double-consume rule — shorthand parallel
+                            // to the `Binding` leaf arm: `x @ Foo { a }` with
+                            // a non-Copy field `a` claims content `x` owns.
+                            if matches!(mode, ScrutineeMode::Owned)
+                                && !self.owned_at_binding_outers.is_empty()
+                                && !self.is_copy_type_during_check(&field_ty)
+                            {
+                                self.report_at_binding_double_consume(&field.name, &field.span);
+                            }
                             let binding_ty = mode.wrap_binding_ty(field_ty.clone());
                             self.local_scope.insert(field.name.clone(), binding_ty);
                             // Record borrow mode keyed by the field's span
@@ -600,14 +651,45 @@ impl<'a> super::TypeChecker<'a> {
             PatternKind::AtBinding {
                 name,
                 pattern: inner,
+                by_ref,
             } => {
-                let binding_ty = mode.wrap_binding_ty(expected.clone());
+                // `ref name @ PATTERN` flips the whole subtree to borrow
+                // mode (design.md § @ Bindings, "Explicit `ref` on the
+                // `@` binding") — the outer alias is `ref T` and every
+                // inner binding borrows into the (still-owned) scrutinee.
+                let effective_mode = if *by_ref { ScrutineeMode::Ref } else { mode };
+                let binding_ty = effective_mode.wrap_binding_ty(expected.clone());
                 self.local_scope.insert(name.clone(), binding_ty);
                 // The `name @` outer alias is recorded against the outer
                 // pattern's span; the inner sub-pattern records its own
-                // bindings via the recursive call.
-                self.record_pattern_binding_borrow_mode(&pattern.span, mode, expected);
-                self.check_pattern_against(inner, expected, mode);
+                // bindings via the recursive call. The surface-type
+                // side-tables make `x.field` / method dispatch on the
+                // alias work in codegen (pre-existing silent-zero gap,
+                // surfaced by the slice-4 E2E: the alias was never
+                // registered in `var_type_names`).
+                self.record_pattern_binding_borrow_mode(&pattern.span, effective_mode, expected);
+                self.record_pattern_binding_surface_types(pattern, expected);
+                // Cannot-double-consume rule (design.md § @ Bindings,
+                // "Owned scrutinee"): a consuming `@` outer owns the whole
+                // value, so any by-move non-Copy binding inside the
+                // sub-pattern would own the same heap content twice.
+                let consuming_outer = !*by_ref
+                    && matches!(effective_mode, ScrutineeMode::Owned)
+                    && !self.is_copy_type_during_check(expected);
+                if consuming_outer {
+                    // A nested consuming `@` is itself an inner by-move
+                    // claim against the nearest enclosing outer (slice 8
+                    // granularity: `outer @ Foo { f: inner @ Bar(v) }`
+                    // reports `inner` against `outer`, then `v` against
+                    // `inner` via the recursion below).
+                    self.report_at_binding_double_consume(name, &pattern.span);
+                    self.owned_at_binding_outers
+                        .push((name.clone(), pattern.span.clone()));
+                }
+                self.check_pattern_against(inner, expected, effective_mode);
+                if consuming_outer {
+                    self.owned_at_binding_outers.pop();
+                }
             }
             PatternKind::Or(alternatives) => {
                 for alt in alternatives {
@@ -1176,7 +1258,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {}
-            PatternKind::AtBinding { name, pattern } => {
+            PatternKind::AtBinding { name, pattern, .. } => {
                 self.local_scope.insert(name.clone(), ty.clone());
                 self.bind_pattern_types(pattern, ty);
             }

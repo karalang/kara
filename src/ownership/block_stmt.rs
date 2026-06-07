@@ -53,8 +53,14 @@ impl<'a> super::OwnershipChecker<'a> {
             StmtKind::Let { pattern, value, .. } => {
                 // If the RHS is a closure, detect once-callability before
                 // processing so we can check which outer bindings it consumed.
-                // Value is consumed by the let binding
-                self.check_expr_consuming(value, states, param_types, param_usage);
+                // Value is consumed by the let binding — unless the pattern
+                // is `ref name @ PATTERN` (design.md § @ Bindings): the
+                // whole subtree borrows, so the RHS is read, not moved.
+                if matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. }) {
+                    self.check_expr_reading(value, states, param_types, param_usage);
+                } else {
+                    self.check_expr_consuming(value, states, param_types, param_usage);
+                }
 
                 // Define bindings as Live
                 self.define_pattern_states(pattern, states);
@@ -170,7 +176,13 @@ impl<'a> super::OwnershipChecker<'a> {
                 else_block,
                 ..
             } => {
-                self.check_expr_consuming(value, states, param_types, param_usage);
+                // `let ref name @ PATTERN = … else { }` — borrow, not move
+                // (same rule as the `Let` arm above).
+                if matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. }) {
+                    self.check_expr_reading(value, states, param_types, param_usage);
+                } else {
+                    self.check_expr_consuming(value, states, param_types, param_usage);
+                }
                 self.define_pattern_states(pattern, states);
                 let mut else_states = states.clone();
                 self.check_block(else_block, &mut else_states, param_types, param_usage);

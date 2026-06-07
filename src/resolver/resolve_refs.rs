@@ -336,7 +336,7 @@ impl<'a> super::Resolver<'a> {
             PatternKind::RangePattern { .. } => {
                 // No bindings to define
             }
-            PatternKind::AtBinding { name, pattern } => {
+            PatternKind::AtBinding { name, pattern, .. } => {
                 let _ = self.table.define(
                     name.clone(),
                     SymbolKind::Variable { is_mut: false },
@@ -433,7 +433,7 @@ impl<'a> super::Resolver<'a> {
                     self.define_pattern_bindings(first, is_mut);
                 }
             }
-            PatternKind::AtBinding { name, pattern } => {
+            PatternKind::AtBinding { name, pattern, .. } => {
                 if let Err(e) = self.table.define(
                     name.clone(),
                     SymbolKind::Variable { is_mut },

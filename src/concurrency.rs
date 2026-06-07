@@ -1299,7 +1299,7 @@ impl<'a> ConcurrencyChecker<'a> {
             PatternKind::Binding(name) => {
                 defines.insert(name.clone());
             }
-            PatternKind::AtBinding { name, pattern } => {
+            PatternKind::AtBinding { name, pattern, .. } => {
                 defines.insert(name.clone());
                 self.collect_pattern_bindings(pattern, defines);
             }

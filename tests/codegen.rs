@@ -2623,6 +2623,96 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_match_at_binding_struct_alias_field_access() {
+        // Pre-existing silent-zero gap surfaced by the slice-4 E2E
+        // work: the `@` alias's surface type was never recorded
+        // (`check_pattern_against`'s AtBinding arm skipped the
+        // `pattern_binding_types` write the Binding leaf arm does),
+        // so `x.n` on the alias compiled against an unknown type and
+        // read 0. Copy fields keep this clear of the
+        // double-consume rejection.
+        let out = run_program(
+            r#"
+struct Foo { a: i64, n: i64 }
+fn main() {
+    let foo = Foo { a: 1, n: 7 };
+    match foo {
+        x @ Foo { a, n } => {
+            println(a);
+            println(n);
+            println(x.n);
+        }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["1", "7", "7"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_match_ref_at_binding_struct_heap_field() {
+        // `ref x @ Foo { a, n }` under an OWNED scrutinee (design.md
+        // § @ Bindings, "Explicit `ref` on the `@` binding"): the whole
+        // subtree borrows — `a` reads the String without taking
+        // ownership, `x` aliases the whole struct, and `foo` stays
+        // live (and droppable exactly once) after the match. The
+        // by_ref bind path suppresses the pattern bindings' heap
+        // cleanup registration (`pattern_binding_is_borrow`) while
+        // `pattern_consumes_field` keeps the source's drop intact —
+        // a double-free here means one of the two halves regressed.
+        let out = run_program(
+            r#"
+struct Foo { a: String, n: i64 }
+fn main() {
+    let foo = Foo { a: "hi", n: 7 };
+    match foo {
+        ref x @ Foo { a, n } => {
+            println(a);
+            println(n);
+            println(x.n);
+        }
+    }
+    println(foo.a);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["hi", "7", "7", "hi"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_match_ref_at_binding_option_string_payload() {
+        // `ref x @ Some(y)` over `Option[String]` — the y binding is a
+        // borrow of the payload; the scrutinee is re-matchable after
+        // (not consumed), and the String payload is freed exactly once
+        // at `opt`'s scope exit.
+        let out = run_program(
+            r#"
+fn main() {
+    let opt = Some("hello");
+    match opt {
+        ref x @ Some(y) => { println(y); }
+        None => { println("none"); }
+    }
+    match opt {
+        Some(z) => { println(z); }
+        None => { }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["hello", "hello"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_match_at_binding_or() {
         // `@` + or-pattern composition: the alias binds from the first
         // alternative and the condition ORs each alternative's test.

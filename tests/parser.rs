@@ -6623,8 +6623,14 @@ fn test_at_binding_pattern() {
     if let Item::Function(f) = &prog.items[0] {
         if let Some(expr) = &f.body.final_expr {
             if let ExprKind::Match { arms, .. } = &expr.kind {
-                if let PatternKind::AtBinding { name, pattern } = &arms[0].pattern.kind {
+                if let PatternKind::AtBinding {
+                    name,
+                    pattern,
+                    by_ref,
+                } = &arms[0].pattern.kind
+                {
                     assert_eq!(name, "x");
+                    assert!(!by_ref, "plain `x @` must parse with by_ref = false");
                     assert!(matches!(&pattern.kind, PatternKind::TupleVariant { .. }));
                 } else {
                     panic!("Expected AtBinding");
@@ -6700,6 +6706,87 @@ fn test_at_binding_nested_at() {
          fn f(foo: Foo) -> i32 { \
          match foo { outer @ Foo { field: inner @ Bar.B(value) } => value, _ => 0 } \
          }",
+    );
+}
+
+// ── `ref name @ PATTERN` — explicit-ref @ bindings (design.md § @
+// Bindings, "Explicit `ref` on the `@` binding") ─────────────────────
+
+#[test]
+fn test_ref_at_binding_parses_in_match_arm() {
+    let prog = parse_ok(
+        "fn f(o: Option[i32]) -> i32 { \
+         match o { ref x @ Option.Some(_) => 0, _ => 1 } \
+         }",
+    );
+    if let Item::Function(f) = &prog.items[0] {
+        if let Some(expr) = &f.body.final_expr {
+            if let ExprKind::Match { arms, .. } = &expr.kind {
+                if let PatternKind::AtBinding {
+                    name,
+                    pattern,
+                    by_ref,
+                } = &arms[0].pattern.kind
+                {
+                    assert_eq!(name, "x");
+                    assert!(by_ref, "`ref x @` must parse with by_ref = true");
+                    assert!(matches!(&pattern.kind, PatternKind::TupleVariant { .. }));
+                } else {
+                    panic!("Expected AtBinding, got {:?}", arms[0].pattern.kind);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_ref_at_binding_parses_in_let_pattern() {
+    parse_ok(
+        "struct Foo { a: i32 } \
+         fn main() { let foo = Foo { a: 1 }; let ref x @ Foo { a } = foo; }",
+    );
+}
+
+#[test]
+fn test_ref_at_binding_formatter_roundtrip() {
+    let src = "fn f(o: Option[i32]) -> i32 { match o { ref x @ Option.Some(_) => 0, _ => 1 } }\n";
+    let prog = parse_ok(src);
+    let formatted = karac::formatter::format_program(&prog);
+    assert!(
+        formatted.contains("ref x @ "),
+        "`ref x @` must round-trip through the formatter; got:\n{formatted}",
+    );
+    // Idempotence: re-parsing the formatted output preserves by_ref.
+    let reparsed = parse_ok(&formatted);
+    if let Item::Function(f) = &reparsed.items[0] {
+        let expr = f.body.final_expr.as_ref().expect("fn body tail expr");
+        if let ExprKind::Match { arms, .. } = &expr.kind {
+            assert!(
+                matches!(
+                    &arms[0].pattern.kind,
+                    PatternKind::AtBinding { by_ref: true, .. }
+                ),
+                "by_ref must survive the round-trip; got {:?}",
+                arms[0].pattern.kind
+            );
+        } else {
+            panic!("expected match tail expr after reformat");
+        }
+    }
+}
+
+#[test]
+fn test_ref_without_at_binding_rejected() {
+    // `ref` in a pattern is ONLY valid on an `@` binding — a bare
+    // `ref x` arm gets the focused rejection (binding modes otherwise
+    // flow from the scrutinee type, design.md § Match Arm Binding
+    // Modes).
+    let (_, errors) = parse_with_errors("fn f(o: Option[i32]) -> i32 { match o { ref x => 0 } }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("only valid on an '@' binding")),
+        "expected the focused ref-without-@ rejection, got: {errors:?}"
     );
 }
 

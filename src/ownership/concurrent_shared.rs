@@ -407,7 +407,9 @@ fn record_pattern_inner(
                 }
             }
         }
-        PatternKind::AtBinding { name, pattern: sub } => {
+        PatternKind::AtBinding {
+            name, pattern: sub, ..
+        } => {
             let key = SpanKey::from_span(&pattern.span);
             if let Some(head) = pbt.get(&key) {
                 if let Some(kind) = classify(head) {

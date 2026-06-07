@@ -283,6 +283,15 @@ impl<'a> UseClassifier<'a> {
                 // origins before walking and re-check after, so the
                 // detection is local to this let-binding and doesn't
                 // confuse with prior closures in the same function.
+                // `let ref name @ PATTERN = rhs` borrows the RHS
+                // (design.md § @ Bindings) — read, not consume. Mirrors
+                // the `block_stmt` Let-arm gate in the legacy walker.
+                let rhs_mode =
+                    if matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. }) {
+                        Mode::Reading
+                    } else {
+                        Mode::Consuming
+                    };
                 let rhs_is_closure = matches!(value.kind, ExprKind::Closure { .. });
                 let pre_capture_count = if rhs_is_closure {
                     self.classification
@@ -293,7 +302,7 @@ impl<'a> UseClassifier<'a> {
                 } else {
                     0
                 };
-                self.walk_expr(value, Mode::Consuming);
+                self.walk_expr(value, rhs_mode);
                 if rhs_is_closure {
                     let post_capture_count = self
                         .classification
@@ -310,9 +319,19 @@ impl<'a> UseClassifier<'a> {
             }
             StmtKind::LetUninit { .. } => {}
             StmtKind::LetElse {
-                value, else_block, ..
+                pattern,
+                value,
+                else_block,
+                ..
             } => {
-                self.walk_expr(value, Mode::Consuming);
+                // Same `ref name @` borrow gate as the Let arm above.
+                let rhs_mode =
+                    if matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. }) {
+                        Mode::Reading
+                    } else {
+                        Mode::Consuming
+                    };
+                self.walk_expr(value, rhs_mode);
                 self.walk_block(else_block, Mode::Reading);
             }
             StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
@@ -763,7 +782,10 @@ impl<'a> UseClassifier<'a> {
                 false
             }
             PatternKind::Binding(name) => !self.unit_variant_names.contains(name),
-            PatternKind::AtBinding { .. } => true,
+            // `ref name @ PATTERN` flips the whole subtree to borrow mode
+            // (design.md § @ Bindings) — nothing under it binds by-move.
+            // Mirrors `ownership::expr_check::pattern_binds_anything`.
+            PatternKind::AtBinding { by_ref, .. } => !by_ref,
             PatternKind::Tuple(patterns) | PatternKind::TupleVariant { patterns, .. } => {
                 patterns.iter().any(|p| self.pattern_binds_anything(p))
             }

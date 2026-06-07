@@ -539,13 +539,34 @@ impl<'ctx> super::Codegen<'ctx> {
             PatternKind::AtBinding {
                 name,
                 pattern: inner,
+                by_ref,
             } => {
+                // `ref name @ PATTERN` (design.md § @ Bindings): the whole
+                // subtree borrows — the scrutinee's owner keeps drop
+                // responsibility (`pattern_consumes_field` returns false,
+                // so no source-cap zeroing happens), and the bindings here
+                // must not register their own heap cleanup against the
+                // same buffers. Reuse the `pattern_binding_is_borrow`
+                // suppression (the borrow-returning-scrutinee mechanism)
+                // for the duration of the subtree bind; the typechecker
+                // recorded `Ref` borrow modes for every binding span in
+                // the subtree, so each leaf also gets the ref-shim ABI.
+                // The bindings are copy-aliases (slice-3a semantics) —
+                // correct for immutable `ref`; write-through is not a
+                // requirement (`mut ref name @` does not exist).
+                let saved_borrow_flag = self.pattern_binding_is_borrow;
+                if *by_ref {
+                    self.pattern_binding_is_borrow = true;
+                }
                 let synthetic = Pattern {
                     kind: PatternKind::Binding(name.clone()),
                     span: pattern.span.clone(),
                 };
-                self.bind_pattern_values(&synthetic, scrut)?;
-                self.bind_pattern_values(inner, scrut)?;
+                let bind_result = self
+                    .bind_pattern_values(&synthetic, scrut)
+                    .and_then(|()| self.bind_pattern_values(inner, scrut));
+                self.pattern_binding_is_borrow = saved_borrow_flag;
+                bind_result?;
                 Ok(())
             }
             _ => Ok(()),
@@ -835,6 +856,10 @@ impl<'ctx> super::Codegen<'ctx> {
             PatternKind::AtBinding {
                 name,
                 pattern: inner,
+                // `by_ref` is a no-op here: the pointer-source path
+                // already binds borrows into the scrutinee storage —
+                // exactly what `ref name @` asks for.
+                by_ref: _,
             } => {
                 self.emit_ref_leaf_binding_at_ptr(name, scrut_ptr, pointee_ty.into(), "at.refshim");
                 self.bind_pattern_values_via_ptr(inner, scrut_ptr, pointee_ty)

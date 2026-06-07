@@ -124,7 +124,11 @@ impl<'a> super::OwnershipChecker<'a> {
                 false
             }
             PatternKind::Binding(name) => !self.is_unit_variant_name(name),
-            PatternKind::AtBinding { .. } => true,
+            // `ref name @ PATTERN` flips the whole subtree to borrow mode
+            // (design.md § @ Bindings) — nothing under it binds by-move,
+            // so it never consumes the scrutinee. A plain `name @` binds
+            // the whole value by-move.
+            PatternKind::AtBinding { by_ref, .. } => !by_ref,
             PatternKind::Tuple(patterns) | PatternKind::TupleVariant { patterns, .. } => {
                 patterns.iter().any(|p| self.pattern_binds_anything(p))
             }

@@ -1103,7 +1103,7 @@ pub(crate) fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
                     walk(sp, out);
                 }
             }
-            PatternKind::AtBinding { name, pattern } => {
+            PatternKind::AtBinding { name, pattern, .. } => {
                 out.push(name.clone());
                 walk(pattern, out);
             }
