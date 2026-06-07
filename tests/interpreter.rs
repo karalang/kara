@@ -5382,6 +5382,38 @@ fn test_bufwriter_with_capacity_write_flush() {
 }
 
 #[test]
+fn test_bufwriter_write_all_writes_whole_buffer() {
+    // write_all loops until the whole buffer is accepted and returns Unit;
+    // flush then drains it to disk. Read-back proves every byte landed.
+    let tmp = std::env::temp_dir().join("karac_test_bufwriter_write_all.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    let src = format!(
+        "fn main() {{
+             match File.create(\"{path}\") {{
+                 Ok(f) => {{
+                     let bw = BufWriter.new(f);
+                     let data = [119u8, 120u8, 121u8, 122u8];
+                     match bw.write_all(data[0..4]) {{
+                         Ok(_) => println(\"wrote all\"),
+                         Err(_) => println(\"write err\"),
+                     }}
+                     let _ = bw.flush();
+                 }}
+                 Err(_) => println(\"create err\"),
+             }}
+             match FileSystem.read_to_string(\"{path}\") {{
+                 Ok(s) => println(\"contents=[\" + s + \"]\"),
+                 Err(_) => println(\"read err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "wrote all\ncontents=[wxyz]\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
 fn test_bufwriter_drop_flushes_pending_writes() {
     // Omit the explicit flush — std::io::BufWriter's own Drop flushes the
     // buffered bytes through the cloned fd when the `Value::BufWriter` Arc

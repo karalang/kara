@@ -904,6 +904,33 @@ fn bufwriter_write_then_flush_then_yield_accepted() {
 }
 
 #[test]
+fn bufwriter_write_all_then_yield_rejected() {
+    // write_all leaves bytes buffered just like write, so it carries the
+    // same #[cancel_unsafe_until(method = "flush")] annotation and a yield
+    // before a clearing flush is rejected.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(bw: BufWriter[File], data: Slice[u8]) {
+             let _w = bw.write_all(data);
+             fetch();
+         }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected one E_RAII_ACROSS_YIELD for `bw` soiled by .write_all across yield: {:?}",
+        errors
+    );
+    let sv = errors[0]
+        .state_violation
+        .as_ref()
+        .expect("slice-3b violation must carry state_violation payload");
+    assert_eq!(sv.soiling_method, "write_all");
+    assert_eq!(sv.clear_method_name, "flush");
+}
+
+#[test]
 fn bufwriter_param_without_write_held_across_yield_accepted() {
     // A BufWriter alone is cancel-safe; only the `write` call soils it.
     let (_program, _typed, errors) = run_raii_check(

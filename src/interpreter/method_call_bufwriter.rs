@@ -41,15 +41,17 @@ impl<'a> super::Interpreter<'a> {
             return None;
         };
         match method {
-            "write" => {
+            "write" | "write_all" => {
                 self.track_effect("writes(FileSystem)");
-                // `write(buf: Slice[u8]) -> Result[usize, IoError]`.
-                // Identical shape to `File.write`: read the slice's bytes
-                // into a temporary Vec<u8>, write through the buffered
-                // writer's locked handle, return the byte count.
+                // `write(buf: Slice[u8]) -> Result[usize, IoError]` returns
+                // the byte count; `write_all(buf) -> Result[Unit, IoError]`
+                // loops until the whole buffer is accepted and returns Unit.
+                // Both read the slice's bytes into a temporary Vec<u8> and
+                // push through the buffered writer's locked handle — only the
+                // std call and the Ok payload shape differ.
                 let Some(buf_arg) = args.first() else {
                     return Some(self.record_runtime_error(
-                        "BufWriter.write expects a `Slice[u8]` buffer argument".to_string(),
+                        format!("BufWriter.{method} expects a `Slice[u8]` buffer argument"),
                         span,
                     ));
                 };
@@ -85,20 +87,31 @@ impl<'a> super::Interpreter<'a> {
                     other => {
                         return Some(self.record_runtime_error(
                             format!(
-                                "BufWriter.write expects a `Slice[u8]` buffer, got `{}`",
+                                "BufWriter.{method} expects a `Slice[u8]` buffer, got `{}`",
                                 other.variant_name()
                             ),
                             span,
                         ));
                     }
                 };
-                let write_result = {
-                    let mut guard = writer_arc.lock().unwrap();
-                    guard.write(&bytes)
-                };
-                match write_result {
-                    Ok(n) => Some(io_ok(Value::Int(n as i64))),
-                    Err(e) => Some(io_err_value(io_error_from_std(&e))),
+                if method == "write_all" {
+                    let write_result = {
+                        let mut guard = writer_arc.lock().unwrap();
+                        guard.write_all(&bytes)
+                    };
+                    match write_result {
+                        Ok(()) => Some(io_ok(Value::Unit)),
+                        Err(e) => Some(io_err_value(io_error_from_std(&e))),
+                    }
+                } else {
+                    let write_result = {
+                        let mut guard = writer_arc.lock().unwrap();
+                        guard.write(&bytes)
+                    };
+                    match write_result {
+                        Ok(n) => Some(io_ok(Value::Int(n as i64))),
+                        Err(e) => Some(io_err_value(io_error_from_std(&e))),
+                    }
                 }
             }
             "flush" => {

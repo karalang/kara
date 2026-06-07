@@ -8726,6 +8726,27 @@ fn test_bufwriter_write_returns_result_usize() {
 }
 
 #[test]
+fn test_bufwriter_write_all_returns_result_unit() {
+    // bw.write_all(buf: Slice[u8]) -> Result[Unit, IoError]; returns Unit
+    // (not a byte count), so the Ok arm binds nothing.
+    typecheck_ok(
+        "fn driver() with writes(FileSystem) {
+             match File.create(\"x.txt\") {
+                 Ok(f) => {
+                     let bw = BufWriter.new(f);
+                     let data = [104u8, 105u8];
+                     match bw.write_all(data[0..2]) {
+                         Ok(_) => {}
+                         Err(_) => {}
+                     }
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
 fn test_bufwriter_flush_returns_result_unit() {
     typecheck_ok(
         "fn driver() with writes(FileSystem) {

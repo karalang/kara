@@ -71,6 +71,17 @@ impl[W] BufWriter[W] {
     #[cancel_unsafe_until(method = "flush")]
     fn write(ref self, buf: Slice[u8]) -> Result[usize, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
+    // Write the *entire* `buf`, looping internally until every byte is
+    // accepted (or a real error occurs). Returns `Unit` on success rather
+    // than a byte count — the ergonomic call most user code wants, since a
+    // partial `write` is rarely what you mean. Mirrors Rust's
+    // `Write::write_all`. Like `write`, it leaves bytes in the internal
+    // buffer until they fill / `flush` / drop, so it carries the same
+    // `#[cancel_unsafe_until(method = "flush")]` cancel-safety annotation.
+    #[compiler_builtin]
+    #[cancel_unsafe_until(method = "flush")]
+    fn write_all(ref self, buf: Slice[u8]) -> Result[Unit, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+
     // Flush all buffered bytes to the underlying writer. Returns Unit on
     // success. Mirrors Rust's `Write::flush`.
     #[compiler_builtin]

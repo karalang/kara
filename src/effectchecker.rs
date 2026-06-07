@@ -786,7 +786,7 @@ impl<'a> EffectChecker<'a> {
             // observable write, so they seed no effect. Same
             // bridge-the-`with`-clause-into-inference rationale as the
             // `File.*` / `BufReader.*` blocks above.
-            for fn_name in ["BufWriter.write", "BufWriter.flush"] {
+            for fn_name in ["BufWriter.write", "BufWriter.write_all", "BufWriter.flush"] {
                 let mut set = EffectSet::new();
                 set.add(
                     writes_fs.clone(),
