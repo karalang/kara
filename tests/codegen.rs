@@ -35109,4 +35109,108 @@ fn main() {
             assert_eq!(out.trim(), "5");
         }
     }
+
+    // ── F-string accumulator pre-sizing (kata-22 perf lever, 2026-06-06) ──
+
+    #[test]
+    fn test_ir_fstring_pure_parts_presized_single_malloc() {
+        // Side-effect-free parts (identifier + literal): the pre-sized
+        // fast path renders all parts first, mallocs ONCE at the summed
+        // size, and memcpys at running offsets — no per-append grow
+        // (`fsa.grow`) blocks. The append path's grow-per-part cost two
+        // mallocs + two full copies on the canonical snapshot-concat
+        // `f"{cur}("` (kata-22 bench: ~2x of the clang mirror).
+        let ir = ir_for(
+            r#"
+fn extend(cur: String) -> String {
+    f"{cur}("
+}
+
+fn main() {
+    let s = extend("ab");
+    println(s);
+}
+"#,
+        );
+        let extend_fn = ir
+            .split("define internal { ptr, i64, i64 } @extend")
+            .nth(1)
+            .and_then(|rest| rest.split("\n}\n").next())
+            .expect("extend fn body in IR");
+        assert!(
+            !extend_fn.contains("fsa.grow"),
+            "pure-part f-string must take the pre-sized path (no grow blocks):\n{}",
+            extend_fn
+        );
+        assert!(
+            extend_fn.contains("fstr.alloc") && extend_fn.contains("fstr.buf"),
+            "pure-part f-string must malloc once at the summed size:\n{}",
+            extend_fn
+        );
+        assert_eq!(
+            extend_fn.matches("call ptr @malloc").count(),
+            1,
+            "exactly one malloc for the whole f-string:\n{}",
+            extend_fn
+        );
+    }
+
+    #[test]
+    fn test_ir_fstring_call_part_takes_append_fallback() {
+        // A part with call machinery can mutate/consume what an earlier
+        // String part's (ptr, len) aliases — those f-strings keep the
+        // snapshot-per-part append path (grow blocks present).
+        let ir = ir_for(
+            r#"
+fn dyn_part() -> String {
+    "x"
+}
+
+fn main() {
+    let s = "a";
+    let out = f"{s}{dyn_part()}";
+    println(out);
+}
+"#,
+        );
+        assert!(
+            ir.contains("fsa.grow"),
+            "call-part f-string must take the append fallback:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_e2e_fstring_presize_mixed_parts() {
+        // End-to-end byte-correctness of the pre-sized path across part
+        // kinds: literal text, String identifier, negative int, unsigned
+        // narrow int, float, bool, char (multi-byte UTF-8), indexed
+        // element, arithmetic, empty-string part, and an all-empty
+        // result (max(total,1) keeps the cap owned).
+        let out = run_program(
+            r#"
+fn main() {
+    let s = "world";
+    let n = -42;
+    let u: u8 = 200;
+    let f = 2.5;
+    let b = true;
+    let c = 'é';
+    println(f"hello {s}! n={n} u={u} f={f} b={b} c={c}");
+    let v: Array[i64, 3] = [10, 20, 30];
+    println(f"idx={v[1]} sum={v[0] + v[2]}");
+    let e = "";
+    println(f"[{e}]");
+    let empty = f"{e}";
+    println(empty.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "hello world! n=-42 u=200 f=2.5 b=true c=é\nidx=20 sum=40\n[]\n0"
+            );
+        }
+    }
 }

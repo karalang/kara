@@ -156,33 +156,140 @@ impl<'ctx> super::Codegen<'ctx> {
                 let u8_ty: BasicTypeEnum<'ctx> = self.context.i8_type().into();
                 self.track_vec_var(acc, Some(u8_ty));
 
-                for part in parts {
-                    match part {
-                        ParsedInterpolationPart::Text(text) => {
-                            if !text.is_empty() {
-                                let gptr = self
-                                    .builder
-                                    .build_global_string_ptr(text, "fstr.text")
-                                    .unwrap();
-                                let text_len = i64_t.const_int(text.len() as u64, false);
-                                self.emit_string_append_raw(acc, gptr.as_pointer_value(), text_len);
+                // Pre-sized fast path: when every expr part is side-effect-
+                // free, render all parts to (ptr, len) pairs first, sum the
+                // lengths, malloc ONCE at the exact size, then memcpy each
+                // part at its running offset. The append-per-part fallback
+                // below pays a grow (malloc + full re-copy) per appended
+                // part for the canonical snapshot-concat `f"{cur}("` —
+                // first append sizes the buffer to exactly `cur.len()`, the
+                // one-byte second append re-grows and re-copies — i.e. two
+                // mallocs + two copies where C-style assembly pays one of
+                // each (kata-22 bench: ~2× of the clang mirror, attributed
+                // to exactly this). Pre-sizing needs the purity gate
+                // because a String part's (ptr, len) aliases its source
+                // buffer until the deferred memcpy runs: a later part with
+                // side effects (a call mutating/consuming that source)
+                // could invalidate it, whereas the interpreter — and the
+                // fallback path — snapshot each part's bytes before the
+                // next part evaluates. Side-effect-free parts (identifier /
+                // field / index / arithmetic / literal shapes) cannot
+                // invalidate anything, and they are essentially every hot
+                // f-string. Renders into per-site entry allocas (snprintf
+                // bufs, char bufs) stay valid across the deferred copies —
+                // each render site owns a distinct alloca.
+                let presize_ok = parts.iter().all(|p| match p {
+                    ParsedInterpolationPart::Text(_) => true,
+                    ParsedInterpolationPart::Expr(e) => Self::fstr_part_is_side_effect_free(e),
+                });
+                if presize_ok {
+                    // Pass 1: render every part (left-to-right, same
+                    // evaluation order as the fallback).
+                    let mut rendered: Vec<(
+                        inkwell::values::PointerValue<'ctx>,
+                        inkwell::values::IntValue<'ctx>,
+                    )> = Vec::with_capacity(parts.len());
+                    for part in parts {
+                        match part {
+                            ParsedInterpolationPart::Text(text) => {
+                                if !text.is_empty() {
+                                    let gptr = self
+                                        .builder
+                                        .build_global_string_ptr(text, "fstr.text")
+                                        .unwrap();
+                                    let text_len = i64_t.const_int(text.len() as u64, false);
+                                    rendered.push((gptr.as_pointer_value(), text_len));
+                                }
+                            }
+                            ParsedInterpolationPart::Expr(e) => {
+                                let is_char = self.expr_is_char(e);
+                                let val = self.compile_expr(e)?;
+                                let pair = if is_char {
+                                    self.emit_codepoint_to_utf8(val.into_int_value())
+                                } else {
+                                    self.compile_fstr_part_to_cstr(val, e)
+                                };
+                                rendered.push(pair);
                             }
                         }
-                        ParsedInterpolationPart::Expr(e) => {
-                            // Char arm — render as glyph (the codepoint
-                            // value would otherwise hit the generic
-                            // `%lld` integer path inside
-                            // `compile_fstr_part_to_cstr`, since `char`
-                            // lowers to `i32`). Detection mirrors
-                            // `compile_print`'s char arm.
-                            let is_char = self.expr_is_char(e);
-                            let val = self.compile_expr(e)?;
-                            let (src_ptr, src_len) = if is_char {
-                                self.emit_codepoint_to_utf8(val.into_int_value())
-                            } else {
-                                self.compile_fstr_part_to_cstr(val, e)
-                            };
-                            self.emit_string_append_raw(acc, src_ptr, src_len);
+                    }
+                    // total = Σ lens (literal lens are constants — LLVM
+                    // folds the chain down to runtime-len adds only).
+                    let mut total = i64_t.const_int(0, false);
+                    for (_, len) in &rendered {
+                        total = self.builder.build_int_add(total, *len, "fstr.tot").unwrap();
+                    }
+                    // alloc_bytes = max(total, 1): keeps `cap > 0` so the
+                    // scope-exit free stays armed even for an all-empty
+                    // result (cap == 0 means "non-owning" everywhere else).
+                    let one = i64_t.const_int(1, false);
+                    let is_zero = self
+                        .builder
+                        .build_int_compare(inkwell::IntPredicate::ULT, total, one, "fstr.tot.zero")
+                        .unwrap();
+                    let alloc_bytes = self
+                        .builder
+                        .build_select(is_zero, one, total, "fstr.alloc")
+                        .unwrap()
+                        .into_int_value();
+                    let buf = self
+                        .builder
+                        .build_call(self.malloc_fn, &[alloc_bytes.into()], "fstr.buf")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_pointer_value();
+                    // Pass 2: memcpy each part at its running offset.
+                    let i8_ty = self.context.i8_type();
+                    let mut offset = i64_t.const_int(0, false);
+                    for (ptr, len) in &rendered {
+                        let dest = unsafe {
+                            self.builder
+                                .build_gep(i8_ty, buf, &[offset], "fstr.dest")
+                                .unwrap()
+                        };
+                        self.builder.build_memcpy(dest, 1, *ptr, 1, *len).unwrap();
+                        offset = self
+                            .builder
+                            .build_int_add(offset, *len, "fstr.off")
+                            .unwrap();
+                    }
+                    self.builder.build_store(data_pp, buf).unwrap();
+                    self.builder.build_store(len_p, total).unwrap();
+                    self.builder.build_store(cap_p, alloc_bytes).unwrap();
+                } else {
+                    for part in parts {
+                        match part {
+                            ParsedInterpolationPart::Text(text) => {
+                                if !text.is_empty() {
+                                    let gptr = self
+                                        .builder
+                                        .build_global_string_ptr(text, "fstr.text")
+                                        .unwrap();
+                                    let text_len = i64_t.const_int(text.len() as u64, false);
+                                    self.emit_string_append_raw(
+                                        acc,
+                                        gptr.as_pointer_value(),
+                                        text_len,
+                                    );
+                                }
+                            }
+                            ParsedInterpolationPart::Expr(e) => {
+                                // Char arm — render as glyph (the codepoint
+                                // value would otherwise hit the generic
+                                // `%lld` integer path inside
+                                // `compile_fstr_part_to_cstr`, since `char`
+                                // lowers to `i32`). Detection mirrors
+                                // `compile_print`'s char arm.
+                                let is_char = self.expr_is_char(e);
+                                let val = self.compile_expr(e)?;
+                                let (src_ptr, src_len) = if is_char {
+                                    self.emit_codepoint_to_utf8(val.into_int_value())
+                                } else {
+                                    self.compile_fstr_part_to_cstr(val, e)
+                                };
+                                self.emit_string_append_raw(acc, src_ptr, src_len);
+                            }
                         }
                     }
                 }
@@ -1298,6 +1405,46 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`Foo { body: b }` / `return b`) are already handled by
     /// `suppress_source_vec_cleanup_for_arg`. Call AFTER `compile_expr`
     /// (which stages the acc) and BEFORE the scope-cleanup walk.
+    /// Conservative side-effect-freedom check for f-string interpolation
+    /// parts — the gate for the pre-sized single-malloc fast path in the
+    /// `InterpolatedStringLit` arm. A part that passes can neither mutate
+    /// nor free any buffer another part's rendered `(ptr, len)` aliases,
+    /// so the deferred copies observe the same bytes the interpreter's
+    /// (and the fallback path's) snapshot-per-part order does. Anything
+    /// with call machinery (free fn, method, optional-chain, pipe) or
+    /// control flow returns false and takes the append-per-part fallback
+    /// — correct, just not pre-sized. `Index` can panic on OOB but cannot
+    /// mutate; a mid-build panic aborts the process, so partial
+    /// accumulator state is unobservable either way.
+    fn fstr_part_is_side_effect_free(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Identifier(_)
+            | ExprKind::SelfValue
+            | ExprKind::Path { .. }
+            | ExprKind::Integer(_, _)
+            | ExprKind::Float(_, _)
+            | ExprKind::Bool(_)
+            | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_) => true,
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                Self::fstr_part_is_side_effect_free(object)
+            }
+            ExprKind::Index { object, index } => {
+                Self::fstr_part_is_side_effect_free(object)
+                    && Self::fstr_part_is_side_effect_free(index)
+            }
+            ExprKind::Unary { operand, .. } => Self::fstr_part_is_side_effect_free(operand),
+            ExprKind::Binary { left, right, .. } => {
+                Self::fstr_part_is_side_effect_free(left)
+                    && Self::fstr_part_is_side_effect_free(right)
+            }
+            ExprKind::Cast { expr, .. } => Self::fstr_part_is_side_effect_free(expr),
+            _ => false,
+        }
+    }
+
     pub(super) fn suppress_fstr_acc_if_moved_out(&mut self, value: &Expr) {
         if matches!(value.kind, ExprKind::InterpolatedStringLit(_)) {
             if let Some(acc) = self.last_fstr_acc.take() {
