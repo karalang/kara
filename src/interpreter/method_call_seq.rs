@@ -292,6 +292,42 @@ impl<'a> super::Interpreter<'a> {
                     return Some(self.eval_vec_deque_method(method, &obj, object, args));
                 }
             }
+            // `Vec[T].remove(idx: i64) -> T` — remove the element at `idx`,
+            // shift the tail down by one, return the removed value. Mirrors
+            // codegen's `vec_method.rs` remove arm (load + memmove + len--)
+            // and the typechecker contract at `expr_method_call.rs` (returns
+            // `T`, not `Option[T]`). Mutates the shared `Arc`-backed storage
+            // in place, so a `mut ref Vec[T]` receiver writes back to the
+            // caller's vector — the same aliasing the `push` arm relies on.
+            // The design pins out-of-bounds as UB (no graceful Option), but
+            // the tree-walk interpreter would otherwise panic deep inside
+            // `Vec::remove`; we surface a clean runtime error at the call
+            // site instead, matching the `index out of bounds` shape.
+            "remove" => {
+                if let Value::Array(rc) = &obj {
+                    let idx_val = args
+                        .first()
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    let idx = match idx_val {
+                        Value::Int(i) => i as usize,
+                        _ => return Some(Value::Unit),
+                    };
+                    let label = match &object.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    let mut guard = try_write_or_panic(rc, &label);
+                    let len = guard.len();
+                    if idx >= len {
+                        return Some(self.record_runtime_error(
+                            format!("Vec.remove: index {} out of bounds (len {})", idx, len),
+                            span,
+                        ));
+                    }
+                    return Some(guard.remove(idx));
+                }
+            }
             // ── Slice[T] / Vec[T] / Array[T,N] shared read-only methods ──────────
             // The interpreter uses Value::Array for all sequence types (Vec,
             // Array, Slice). Each arm only returns when `obj` IS a

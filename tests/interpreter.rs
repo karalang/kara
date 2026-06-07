@@ -969,6 +969,96 @@ fn test_let_else_match_and_diverge() {
     );
 }
 
+// ── Vec.remove (interpreter parity with codegen) ───────────────
+
+#[test]
+fn test_vec_remove_local() {
+    // `Vec.remove(idx) -> T` on a local: returns the removed element,
+    // shifts the tail down, decrements len. Interpreter parity with
+    // codegen's `test_e2e_vec_remove_local` (same program + output).
+    assert_eq!(
+        run("fn main() {\n\
+                 let mut xs: Vec[i64] = Vec.new();\n\
+                 xs.push(10);\n\
+                 xs.push(20);\n\
+                 xs.push(30);\n\
+                 let removed: i64 = xs.remove(1);\n\
+                 println(removed);\n\
+                 println(xs.len());\n\
+                 println(xs[0]);\n\
+                 println(xs[1]);\n\
+             }"),
+        "20\n2\n10\n30\n"
+    );
+}
+
+#[test]
+fn test_vec_remove_first_and_last() {
+    // Remove the head (memmoves the whole tail down) then the new last.
+    // Mirrors codegen's `test_e2e_vec_remove_first` / `_last` semantics.
+    assert_eq!(
+        run("fn main() {\n\
+                 let mut xs: Vec[i64] = Vec.new();\n\
+                 xs.push(1);\n\
+                 xs.push(2);\n\
+                 xs.push(3);\n\
+                 let _ = xs.remove(0);\n\
+                 println(xs[0]);\n\
+                 println(xs.len());\n\
+                 let _ = xs.remove(1);\n\
+                 println(xs[0]);\n\
+                 println(xs.len());\n\
+             }"),
+        "2\n2\n2\n1\n"
+    );
+}
+
+#[test]
+fn test_vec_remove_through_mut_ref_param() {
+    // The case that first surfaced this gap: `Vec.remove` on a
+    // `mut ref Vec[T]` receiver must write back to the caller's vector.
+    // The interpreter's `Value::Array` shares its `Arc`-backed storage
+    // across the borrow, so the removal propagates — same aliasing the
+    // `push` arm relies on.
+    assert_eq!(
+        run("fn drain_first(v: mut ref Vec[i64]) -> i64 {\n\
+                 v.remove(0)\n\
+             }\n\
+             fn main() {\n\
+                 let mut xs: Vec[i64] = Vec.new();\n\
+                 xs.push(10);\n\
+                 xs.push(20);\n\
+                 xs.push(30);\n\
+                 let a = drain_first(mut xs);\n\
+                 println(a);\n\
+                 println(xs.len());\n\
+                 println(xs[0]);\n\
+             }"),
+        "10\n2\n20\n"
+    );
+}
+
+#[test]
+fn test_vec_remove_out_of_bounds_is_runtime_error() {
+    // design.md pins OOB as UB, but the tree-walk interpreter surfaces a
+    // clean runtime error at the call site rather than panicking deep in
+    // `Vec::remove` — matching the `index out of bounds` shape.
+    let errs = runtime_errors(
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             v.push(2);\n\
+             let _ = v.remove(5);\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("Vec.remove: index 5 out of bounds")),
+        "expected OOB runtime error, got: {:?}",
+        errs
+    );
+}
+
 // ── Functions ──────────────────────────────────────────────────
 
 #[test]
