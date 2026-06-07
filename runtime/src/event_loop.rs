@@ -128,6 +128,13 @@ pub struct Wakeup {
     pub direction: IoDirection,
 }
 
+// SAFETY: same justification as `FdState` above — `parked` is an opaque
+// pointer the event loop never derefs; it is only carried back to the
+// scheduler that registered it. `Send` is required because a shutdown
+// drain stashes `Wakeup`s in the `pending` Mutex inside the
+// thread-shared `Arc<EventLoop>` for redelivery by the next `run_once`.
+unsafe impl Send for Wakeup {}
+
 /// Event loop. `Sync` — register / deregister / wake from any thread;
 /// `run_once` serializes via an interior Mutex.
 ///
@@ -157,6 +164,19 @@ pub struct EventLoop {
     /// deregister, and during the post-poll wakeup-extraction phase
     /// of `run_once`.
     fds: Mutex<EventLoopFds>,
+    /// Real-fd wakeups consumed by a shutdown drain
+    /// ([`Self::drain_for_shutdown`]), awaiting redelivery. mio
+    /// registrations are edge-triggered, so whichever poll observes a
+    /// readiness event consumes it — the kernel will not re-report the
+    /// edge. The shutdown drains exist to eat a pending edge-armed
+    /// *waker* event, but any real fd that became ready in the
+    /// shutdown window is swept up by the same non-blocking poll;
+    /// discarding it would wedge the parked task behind a
+    /// never-again-reported edge. Stashing here lets the next
+    /// `run_once` (a post-shutdown direct `poll`, or a restarted
+    /// poller/dispatcher) deliver it as if the drain never happened.
+    /// Empty in steady state — only a shutdown drain pushes.
+    pending: Mutex<Vec<Wakeup>>,
 }
 
 struct EventLoopPoll {
@@ -192,6 +212,7 @@ impl EventLoop {
                 by_token: HashMap::new(),
                 next_token: 1,
             }),
+            pending: Mutex::new(Vec::new()),
         })
     }
 
@@ -423,16 +444,44 @@ impl EventLoop {
     /// **Locking.** Holds the `poll` Mutex throughout (so only one
     /// thread polls at a time). Acquires the `fds` Mutex briefly
     /// after the poll syscall returns, to translate ready events
-    /// into [`Wakeup`]s. Lock order is consistently poll → fds.
+    /// into [`Wakeup`]s. Lock order is consistently poll → fds. The
+    /// `pending` Mutex is taken alone, before the poll lock — never
+    /// nested.
     pub fn run_once(&self, max_wait: Option<Duration>) -> io::Result<Vec<Wakeup>> {
+        // Redeliver wakeups a shutdown drain stashed (see the `pending`
+        // field doc). When the stash is non-empty, don't block — sweep
+        // fresh events non-blocking and return stash + fresh together,
+        // so a blocking caller isn't parked while deliverable readiness
+        // sits in hand.
+        let mut stashed: Vec<Wakeup> = {
+            let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+            std::mem::take(&mut *pending)
+        };
+        let max_wait = if stashed.is_empty() {
+            max_wait
+        } else {
+            Some(Duration::ZERO)
+        };
         let mut poll_guard = self.poll.lock().unwrap_or_else(|p| p.into_inner());
         let EventLoopPoll {
             ref mut poll,
             ref mut events,
         } = *poll_guard;
-        poll.poll(events, max_wait)?;
+        if let Err(e) = poll.poll(events, max_wait) {
+            // Don't lose the stash on a poll error — put it back for
+            // the next call.
+            if !stashed.is_empty() {
+                let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+                let mut restored = stashed;
+                restored.extend(pending.drain(..));
+                *pending = restored;
+            }
+            return Err(e);
+        }
         let fds = self.fds.lock().unwrap_or_else(|p| p.into_inner());
-        let mut wakeups = Vec::new();
+        // Stashed wakeups (oldest readiness) deliver ahead of this
+        // poll's fresh events.
+        let mut wakeups = std::mem::take(&mut stashed);
         for event in events.iter() {
             if event.token() == WAKER_TOKEN {
                 continue;
@@ -456,6 +505,33 @@ impl EventLoop {
             });
         }
         Ok(wakeups)
+    }
+
+    /// Shutdown-path drain: consume a pending edge-armed *waker* event
+    /// without losing real-fd readiness.
+    ///
+    /// Called by `karac_runtime_event_loop_shutdown_background_thread`
+    /// and `karac_runtime_scheduler_shutdown_dispatcher` after their
+    /// threads have joined. If a poller/dispatcher thread observed the
+    /// shutdown flag before the shutdown `wake()` reached its `poll()`,
+    /// mio's edge-armed waker leaves an event pending; consuming it
+    /// here leaves the loop in a known-clean state for a follow-up
+    /// direct poll or a restart. But the same non-blocking poll also
+    /// consumes any *real* fd readiness that fired in the shutdown
+    /// window — and edge-triggered registrations are never re-reported,
+    /// so discarding those wakeups would wedge their parked tasks
+    /// (bugs.md, surfaced 2026-06-06). Real wakeups are stashed in
+    /// `pending` instead; the next `run_once` on this loop delivers
+    /// them ahead of fresh events.
+    pub fn drain_for_shutdown(&self) {
+        let Ok(wakeups) = self.run_once(Some(Duration::ZERO)) else {
+            return;
+        };
+        if wakeups.is_empty() {
+            return;
+        }
+        let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        pending.extend(wakeups);
     }
 
     #[cfg(test)]
@@ -1325,12 +1401,14 @@ pub extern "C" fn karac_runtime_event_loop_shutdown_background_thread() -> i32 {
     // the shutdown flag *before* our `wake()` was delivered to its `poll()`
     // call, mio's edge-armed waker leaves the event pending — the next thread
     // to poll that shard would receive it as a spurious empty wakeup. A
-    // non-blocking `run_once` per shard consumes it and leaves every event
-    // loop in a known-clean state. BACKGROUND_POLLER is already None here (we
+    // non-blocking drain per shard consumes it and leaves every event
+    // loop in a known-clean state; real-fd readiness swept up alongside the
+    // waker event is stashed for redelivery, not discarded (see
+    // `drain_for_shutdown`). BACKGROUND_POLLER is already None here (we
     // took the Arc out at the top), so these polls don't compete with any
     // background polling.
     for ev in event_loops() {
-        let _ = ev.run_once(Some(Duration::ZERO));
+        ev.drain_for_shutdown();
     }
     0
 }
@@ -3987,10 +4065,12 @@ pub extern "C" fn karac_runtime_scheduler_shutdown_dispatcher() -> i32 {
     DISPATCHER_ACTIVE.store(false, Ordering::Release);
     // Drain any pending waker event each shard's exit left armed (mio's
     // edge-armed waker), so a follow-up direct poll / re-start sees a clean
-    // loop. The dispatcher slot is already None, so these don't race a live
-    // combined thread.
+    // loop; real-fd readiness swept up alongside the waker event is stashed
+    // for redelivery, not discarded (see `drain_for_shutdown`). The
+    // dispatcher slot is already None, so these don't race a live combined
+    // thread.
     for ev in event_loops() {
-        let _ = ev.run_once(Some(Duration::ZERO));
+        ev.drain_for_shutdown();
     }
     0
 }
@@ -4328,6 +4408,121 @@ mod tests {
             0,
             "deregister should remove the fd from internal state"
         );
+    }
+
+    /// Regression (bugs.md, 2026-06-06): a shutdown drain must not eat
+    /// real fd readiness. mio registrations are edge-triggered, so the
+    /// pre-fix `let _ = ev.run_once(Some(ZERO))` drain consumed — and
+    /// discarded — any real-fd event that fired in the shutdown window;
+    /// a follow-up poll never saw that readiness again and the parked
+    /// task wedged. `drain_for_shutdown` stashes real wakeups for the
+    /// next `run_once` to deliver. A pre-armed waker event is still
+    /// consumed silently (the drain's original purpose) — covered by
+    /// the sibling test below. A byte written to a `socketpair(2)` end
+    /// makes the registered peer readable synchronously, so the single
+    /// non-blocking drain deterministically sweeps the real event.
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_drain_stashes_real_fd_readiness_for_next_poll() {
+        use std::io::Write;
+        use std::os::unix::io::AsRawFd;
+
+        let (mut writer, reader) = std::os::unix::net::UnixStream::pair().unwrap();
+        let ev = EventLoop::new().unwrap();
+
+        let marker: u64 = 0xFEED_FACE_0BAD_F00D;
+        let parked = std::ptr::addr_of!(marker) as *mut c_void;
+        let raw = reader.as_raw_fd();
+        let mut source = mio::unix::SourceFd(&raw);
+        let token = ev
+            .register(&mut source, IoDirection::Read, None, parked)
+            .unwrap();
+
+        // Make the registered end readable, then drain as the shutdown
+        // paths do. The drain must sweep the event (edge consumed) and
+        // stash it rather than discard it. Drain twice: a second drain's
+        // inner `run_once` takes the stash and must re-stash it, so a
+        // double shutdown (poller then dispatcher) loses nothing either.
+        writer.write_all(&[1]).unwrap();
+        ev.drain_for_shutdown();
+        ev.drain_for_shutdown();
+
+        // A blocking follow-up poll must surface the stashed wakeup
+        // immediately — both the delivery and the don't-block-while-
+        // holding-deliverable-readiness conversion.
+        let start = Instant::now();
+        let wakeups = ev.run_once(Some(Duration::from_secs(2))).unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(
+            wakeups.len(),
+            1,
+            "the drained real-fd readiness must be redelivered, not lost"
+        );
+        assert_eq!(wakeups[0].token, token);
+        assert_eq!(wakeups[0].parked, parked);
+        assert_eq!(wakeups[0].direction, IoDirection::Read);
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "run_once with a non-empty stash must not block, took {elapsed:?}"
+        );
+
+        // Stash is one-shot: redelivery happened, nothing left behind.
+        let again = ev.run_once(Some(Duration::ZERO)).unwrap();
+        assert!(
+            again.is_empty(),
+            "stash must be cleared after redelivery, got {again:?}"
+        );
+
+        ev.deregister(&mut source, token).unwrap();
+    }
+
+    /// Sibling to the above: the drain's original purpose — consuming a
+    /// pending edge-armed *waker* event so a follow-up poll doesn't see
+    /// a spurious wakeup — still holds. Waker events are filtered, never
+    /// stashed.
+    #[test]
+    fn shutdown_drain_still_consumes_waker_event_silently() {
+        let ev = EventLoop::new().unwrap();
+        ev.handle().wake().unwrap();
+        ev.drain_for_shutdown();
+        let wakeups = ev.run_once(Some(Duration::ZERO)).unwrap();
+        assert!(
+            wakeups.is_empty(),
+            "a drained waker event must not be stashed or redelivered, got {wakeups:?}"
+        );
+    }
+
+    /// Combined window: waker armed AND a real fd ready when the drain
+    /// runs — the exact shutdown-window shape from bugs.md. The waker
+    /// event is eaten; the real readiness survives to the next poll.
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_drain_separates_waker_from_real_readiness() {
+        use std::io::Write;
+        use std::os::unix::io::AsRawFd;
+
+        let (mut writer, reader) = std::os::unix::net::UnixStream::pair().unwrap();
+        let ev = EventLoop::new().unwrap();
+
+        let raw = reader.as_raw_fd();
+        let mut source = mio::unix::SourceFd(&raw);
+        let token = ev
+            .register(&mut source, IoDirection::Read, None, std::ptr::null_mut())
+            .unwrap();
+
+        writer.write_all(&[1]).unwrap();
+        ev.handle().wake().unwrap();
+        ev.drain_for_shutdown();
+
+        let wakeups = ev.run_once(Some(Duration::ZERO)).unwrap();
+        assert_eq!(
+            wakeups.len(),
+            1,
+            "exactly the real-fd wakeup must survive the drain, got {wakeups:?}"
+        );
+        assert_eq!(wakeups[0].token, token);
+
+        ev.deregister(&mut source, token).unwrap();
     }
 
     /// Regression: `karac_runtime_tcp_bind` must produce a listener
