@@ -14328,6 +14328,59 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_in_string_bytes_scan() {
+        // `for b in s.bytes()` — the byte-wise sibling of `.chars()`.
+        // Regression: before the `.bytes()` peel arm, this iterable fell
+        // through to the dispatcher's silent `_ =>` arm and the loop body
+        // never ran (compiled `n` stayed 0 while the interpreter counted
+        // correctly) — a silent miscompile surfaced by kata-71's byte
+        // scan. Counts the bytes and the '/' (47) bytes in "/a/b/".
+        let out = run_program(
+            r#"
+fn main() {
+    let s = "/a/b/";
+    let mut n: i64 = 0_i64;
+    let mut slashes: i64 = 0_i64;
+    let slash: u8 = 47_u8;
+    for b in s.bytes() {
+        n = n + 1_i64;
+        if b == slash {
+            slashes = slashes + 1_i64;
+        }
+    }
+    println(n);
+    println(slashes);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // 5 bytes total, 3 of them '/'.
+            assert_eq!(out.trim(), "5\n3");
+        }
+    }
+
+    #[test]
+    fn test_e2e_for_in_string_bytes_multibyte_count() {
+        // `é` is two UTF-8 bytes — `.bytes()` yields both (byte count, not
+        // char count). Pins that the loop iterates raw bytes.
+        let out = run_program(
+            r#"
+fn main() {
+    let s = "é";
+    let mut n: i64 = 0_i64;
+    for _b in s.bytes() {
+        n = n + 1_i64;
+    }
+    println(n);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_in_string_literal_chars() {
         // String-literal iterable (no variable binding) — verifies the
         // `ExprKind::StringLit` arm in the for-loop dispatcher that the

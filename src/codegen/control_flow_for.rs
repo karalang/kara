@@ -132,6 +132,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 return self.compile_for_string_chars_inner(label, pattern, data, len, body);
             }
+            // `for b in <receiver>.bytes()` — the byte-wise sibling of
+            // `.chars()`. Same peel-and-drive shape, but each iteration
+            // binds the raw `u8` byte (no UTF-8 decode). Without this arm
+            // the `.bytes()` MethodCall iterable falls through to the
+            // dispatcher's silent `_ =>` arm and the body never runs — a
+            // silent miscompile (kata-71's byte-scan probe surfaced it:
+            // `for b in s.bytes()` iterated zero times in compiled mode
+            // while the interpreter iterated correctly).
+            if args.is_empty() && method == "bytes" {
+                let val = self.compile_expr(object)?;
+                let sv = val.into_struct_value();
+                let data = self
+                    .builder
+                    .build_extract_value(sv, 0, "for.b.recv.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_extract_value(sv, 1, "for.b.recv.len")
+                    .unwrap()
+                    .into_int_value();
+                return self.compile_for_string_bytes_inner(label, pattern, data, len, body);
+            }
             // `for j in (start..end).step_by(n)` — the only chained
             // iterator-adaptor codegen surface supported in v1.
             // Lowers to a Range loop with a custom step (default 1).
@@ -1015,6 +1038,116 @@ impl<'ctx> super::Codegen<'ctx> {
         // a separate block so `continue` (which branches to incr_bb)
         // routes through one stable label.
         self.builder.position_at_end(incr_bb);
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// Inner per-byte loop driver — the `.bytes()` sibling of
+    /// [`compile_for_string_chars_inner`]. Takes already-extracted `data`
+    /// and `len` from a String value and iterates the raw bytes, binding
+    /// each as a `u8` (LLVM `i8`) — no UTF-8 decode.
+    ///
+    /// Shape:
+    /// - `idx` alloca (i64), initialised to 0.
+    /// - cond block: `idx < len` (empty string falls straight to exit).
+    /// - body block: load `data[idx]` as `i8`, bind the pattern, run the
+    ///   user body, then `idx += 1`.
+    /// - incr block: branch back to cond.
+    pub(super) fn compile_for_string_bytes_inner(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        data: PointerValue<'ctx>,
+        len: IntValue<'ctx>,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let i8_t = self.context.i8_type();
+
+        let idx = self.create_entry_alloca(fn_val, "for.b.idx", i64_t.into());
+        self.builder
+            .build_store(idx, i64_t.const_int(0, false))
+            .unwrap();
+
+        let cond_bb = self.context.append_basic_block(fn_val, "for.b.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "for.b.body");
+        let incr_bb = self.context.append_basic_block(fn_val, "for.b.incr");
+        let exit_bb = self.context.append_basic_block(fn_val, "for.b.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            label: label.map(str::to_string),
+            continue_bb: incr_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+        });
+
+        // Condition: idx < len.
+        self.builder.position_at_end(cond_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), idx, "for.b.i")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, cur, len, "for.b.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        // Body: load data[idx] as i8, bind, execute.
+        self.builder.position_at_end(body_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), idx, "for.b.i")
+            .unwrap()
+            .into_int_value();
+        let byte_ptr = unsafe {
+            self.builder
+                .build_gep(i8_t, data, &[cur], "for.b.ptr")
+                .unwrap()
+        };
+        let byte_val = self
+            .builder
+            .build_load(i8_t, byte_ptr, "for.b.byte")
+            .unwrap();
+        self.bind_pattern(pattern, byte_val)?;
+        // Tag the binding as `u8` so downstream rendering / dispatch treats
+        // it as an integer byte (not a `char` glyph like the chars loop).
+        if let PatternKind::Binding(bind_name) = &pattern.kind {
+            self.var_type_names
+                .insert(bind_name.clone(), "u8".to_string());
+        }
+        self.compile_block(body)?;
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            self.builder.build_unconditional_branch(incr_bb).unwrap();
+        }
+
+        // Increment: idx += 1, branch back to cond.
+        self.builder.position_at_end(incr_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), idx, "for.b.i")
+            .unwrap()
+            .into_int_value();
+        let next = self
+            .builder
+            .build_int_add(cur, i64_t.const_int(1, false), "for.b.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
         self.loop_stack.pop();
