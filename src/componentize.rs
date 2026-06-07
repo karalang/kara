@@ -253,6 +253,17 @@ mod tests {
     }
 
     #[test]
+    // The fake `wasm-tools` below is a `#!/bin/sh` script made executable via
+    // unix permission bits — `Command::new` can't run it on Windows (not a PE
+    // executable, no extension), so `resolve_wasm_tools` returns "not found"
+    // there instead of the version-mismatch error this test asserts on. The
+    // pin-mismatch logic itself is platform-independent and stays covered on
+    // the Linux/macOS runners; skip on Windows rather than fabricate a fragile
+    // `.bat` fake that depends on Command's implicit cmd.exe handling.
+    #[cfg_attr(
+        windows,
+        ignore = "fake wasm-tools is a #!/bin/sh script, not a Windows executable"
+    )]
     fn pin_mismatch_is_a_hard_error_naming_both_versions() {
         // Drive resolve_wasm_tools through a fake `wasm-tools` so the
         // test doesn't depend on (or pass because of) a host install.
