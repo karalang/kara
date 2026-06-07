@@ -6716,6 +6716,36 @@ fn main() {
     }
 
     #[test]
+    fn test_standalone_array_literal_range_slice_fails_loud() {
+        // `let x = [1,2,3][a..b]` (standalone, not a call arg) routes through
+        // compile_index, where the literal's element type isn't recoverable.
+        // Rather than fall through to a confusing downstream error (or risk a
+        // Vec mis-stride silent miscompile), codegen fails loud with an
+        // actionable "bind it to a variable first" message. (The call-arg
+        // form `f([1,2,3][a..b])` works — see the tests above.)
+        let mut parsed = karac::parse(
+            "fn main() {\n\
+                 let x = [10u8, 20u8, 30u8, 40u8][1..3];\n\
+                 println(x.len());\n\
+             }",
+        );
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, None, None)
+            .expect_err("standalone array-literal range-slice must fail loud");
+        assert!(
+            err.contains("anonymous array/Vec literal") && err.contains("bind it to a variable"),
+            "expected the actionable bind-first message, got: {err}"
+        );
+    }
+
+    #[test]
     fn test_ir_array_len_constant_fold() {
         // `Array[i64, 3]` annotation pins the fixed-array `len()` constant
         // fold (bare `[…]` is now a Vec, whose `len()` loads the len field —

@@ -739,6 +739,28 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(elem_ty) = self.infer_elem_from_source(object) {
                 return self.compile_range_slice(object, start, end, *inclusive, elem_ty);
             }
+            // Standalone range-slice of an anonymous array/Vec literal —
+            // `let x = [1, 2, 3][a..b]`. The call-arg form (`f([1,2,3][a..b])`)
+            // works via `coerce_to_slice`, but a standalone binding routes
+            // here, where the literal's element type isn't recoverable
+            // (`infer_elem_from_source` needs a named source, and a Vec
+            // literal's element type is LLVM-erased — driving the slice with
+            // the wrong stride would silently miscompile). Fail loud with an
+            // actionable message instead of falling through to a confusing
+            // downstream "no handler"/"non-array type" error at the use site.
+            // The interpreter accepts this form; binding the literal first
+            // (`let a = [...]; let x = a[lo..hi];`) works in compiled mode too.
+            if matches!(&object.kind, ExprKind::ArrayLiteral(_))
+                || matches!(&object.kind, ExprKind::PrefixCollectionLiteral { type_name, .. }
+                    if type_name == "Vec")
+            {
+                return Err(format!(
+                    "range-slicing an anonymous array/Vec literal is not supported \
+                     in compiled mode at {}:{}; bind it to a variable first \
+                     (`let a = [...]; let x = a[lo..hi];`)",
+                    object.span.line, object.span.column
+                ));
+            }
         }
 
         // Nested indexed read (`grid[i][j]` / `factors[v][0]`): the
