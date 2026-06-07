@@ -2950,6 +2950,107 @@ fn main() {
         );
     }
 
+    // ── pattern-arm unbound heap-field drop (B) ──
+    //
+    // docs/spikes/pattern-arm-unbound-field-drop.md: a fresh-temp enum
+    // scrutinee (`if let Full(_, n) = make()`) had no source `EnumDrop`, so an
+    // arm leaving a heap payload field UNBOUND leaked it (IR-proven; invisible
+    // on macOS — no LeakSanitizer). The fix materializes the temp +
+    // `track_enum_var` so the enum drop walk frees unbound fields, and zeroes
+    // the cap of any field the pattern MOVED into a binding so it isn't
+    // double-freed. The bound-field case is the macOS-reliable gate here: an
+    // over-eager EnumDrop (suppression not firing) would double-free the moved
+    // buffer against the binding's own cleanup. Loops amplify any per-iteration
+    // imbalance into a deterministic fault.
+
+    const B_ASAN_PRELUDE: &str = r#"
+enum Holder { Full(Vec[i64], i64), Empty }
+fn make() -> Holder {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    v.push(2_i64);
+    return Holder.Full(v, 42_i64);
+}
+"#;
+
+    #[test]
+    fn asan_iflet_freshtemp_enum_bound_field_no_double_free() {
+        // `if let Full(v, n) = make()` — the Vec is moved into `v`. The
+        // materialized temp's EnumDrop must SKIP that field (cap zeroed by
+        // suppression); `v`'s own cleanup frees it once. Without suppression
+        // this double-frees under macOS ASAN.
+        let src = format!(
+            "{B_ASAN_PRELUDE}\nfn main() {{\n    let mut i = 0;\n    while i < 8 {{\n        if let Holder.Full(v, n) = make() {{ println(v.len() + n); }}\n        i = i + 1;\n    }}\n    println(i);\n}}\n"
+        );
+        assert_clean_asan_run(
+            &src,
+            &["44", "44", "44", "44", "44", "44", "44", "44", "8"],
+            "iflet_freshtemp_enum_bound_field_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_iflet_freshtemp_enum_unbound_field_clean() {
+        // `if let Full(_, n) = make()` — the Vec is UNBOUND. The enum drop walk
+        // frees it (Linux leak oracle). macOS verifies the added drop doesn't
+        // fault (e.g. freeing a garbage/aliased pointer).
+        let src = format!(
+            "{B_ASAN_PRELUDE}\nfn main() {{\n    let mut i = 0;\n    while i < 8 {{\n        if let Holder.Full(_, n) = make() {{ println(n); }}\n        i = i + 1;\n    }}\n    println(i);\n}}\n"
+        );
+        assert_clean_asan_run(
+            &src,
+            &["42", "42", "42", "42", "42", "42", "42", "42", "8"],
+            "iflet_freshtemp_enum_unbound_field_clean",
+        );
+    }
+
+    #[test]
+    fn asan_match_freshtemp_enum_unbound_field_clean() {
+        // `match make() { Full(_, n) => …, Empty => … }` — match surface of the
+        // unbound-field drop. The matched `Full(_, _)` arm's unbound Vec is
+        // freed by the materialized temp's EnumDrop.
+        let src = format!(
+            "{B_ASAN_PRELUDE}\nfn main() {{\n    let mut i = 0;\n    while i < 8 {{\n        match make() {{ Holder.Full(_, n) => println(n), Holder.Empty => println(0) }}\n        i = i + 1;\n    }}\n    println(i);\n}}\n"
+        );
+        assert_clean_asan_run(
+            &src,
+            &["42", "42", "42", "42", "42", "42", "42", "42", "8"],
+            "match_freshtemp_enum_unbound_field_clean",
+        );
+    }
+
+    #[test]
+    fn asan_iflet_freshtemp_enum_miss_wholesale_clean() {
+        // Miss edge: `make()` returns `Full(Vec, _)` but the pattern is
+        // `Empty`, so the arm misses and the whole heap-bearing temp must drop
+        // wholesale before/at the else. No suppression runs on the miss edge,
+        // so the enum drop walk frees the entire payload. Looped leak/UAF gate.
+        let src = format!(
+            "{B_ASAN_PRELUDE}\nfn main() {{\n    let mut i = 0;\n    while i < 8 {{\n        if let Holder.Empty = make() {{ println(1); }} else {{ println(2); }}\n        i = i + 1;\n    }}\n    println(i);\n}}\n"
+        );
+        assert_clean_asan_run(
+            &src,
+            &["2", "2", "2", "2", "2", "2", "2", "2", "8"],
+            "iflet_freshtemp_enum_miss_wholesale_clean",
+        );
+    }
+
+    #[test]
+    fn asan_letelse_freshtemp_enum_bound_field_no_double_free() {
+        // let-else surface, bound field: `let Full(v, n) = make() else { … }`.
+        // The escaped `v` binding frees the Vec; the materialized temp's
+        // EnumDrop (drained at enclosing-scope exit) must skip it. macOS
+        // double-free gate for the let-else suppression edge.
+        let src = format!(
+            "{B_ASAN_PRELUDE}\nfn count() -> i64 {{\n    let Holder.Full(v, n) = make() else {{ return 0 }}\n    return v.len() + n\n}}\nfn main() {{\n    let mut i = 0;\n    while i < 8 {{\n        println(count());\n        i = i + 1;\n    }}\n    println(i);\n}}\n"
+        );
+        assert_clean_asan_run(
+            &src,
+            &["44", "44", "44", "44", "44", "44", "44", "44", "8"],
+            "letelse_freshtemp_enum_bound_field_no_double_free",
+        );
+    }
+
     // ── general owned-temp tracking, slice 1 (phase-6 line 489/497) ──
     //
     // docs/spikes/general-owned-temp-tracking.md slice 1: a fresh-owned

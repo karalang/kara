@@ -1,11 +1,59 @@
 # Design spike — pattern-arm unbound heap-field drop (codegen)
 
-**Status:** **identified 2026-06-07, not started.** A real, IR-proven leak found
-while scoping slice 4 of [`general-owned-temp-tracking.md`](general-owned-temp-tracking.md).
-Distinct mechanism from that spike (move-out-aware *partial* drop inside
-pattern-bind codegen, not chokepoint routing of a whole temp), so it gets its own
-scope doc and is sequenced as its own slice. See that spike's slice-4 discussion
-for why the two are separable.
+**Status:** **landed for if-let / match / let-else 2026-06-07; while-let +
+deep-nesting deferred.** A real, IR-proven leak found while scoping slice 4 of
+[`general-owned-temp-tracking.md`](general-owned-temp-tracking.md).
+
+**Implementation finding (reshaped the fix — simpler than §4's "new per-field
+free codegen"):** an ownership-loaded IR probe showed the leak is *only* for a
+**fresh-temp** enum scrutinee (`if let Full(_, n) = make()`). A **bound-variable**
+scrutinee (`let x = make(); if let Full(_, n) = x`) already frees the unbound
+field — its `let`-site `track_enum_var` registered an `EnumDrop` (`__karac_drop_<E>`)
+that frees all heap payload words, and `match` additionally calls
+`suppress_destructured_enum_payload_cleanup` to zero the cap of *moved-into-binding*
+fields so they aren't double-freed. The fresh temp simply had **no source
+`EnumDrop`**. So the fix reuses the existing machinery rather than writing new
+per-field free codegen: `materialize_freshtemp_enum_scrutinee`
+(`src/codegen/control_flow_match.rs`) stores the fresh-temp enum value into an
+alloca and `track_enum_var`s it; the existing suppression (refactored into a
+`…_at(slot_ptr, enum_name, pattern)` core) then zeroes the moved-in fields'
+caps. **Net result is move-out-aware partial drop** — unbound heap fields freed
+by the drop walk, moved-in fields freed once by their binding, and on a **miss
+edge** (no suppression) the whole temp drops wholesale (which also closes the
+fresh-temp half of the sibling spike's slice-4 "scrutinee wholesale drop" for
+if-let/match/let-else). The earlier no-ownership probe falsely showed a
+bound-variable double-free; that was a `compile_to_ir(None, None)` artifact — the
+real (ownership-loaded) build is clean, confirmed by the passing ASAN corpus.
+
+**Landed (2026-06-07):** if-let (`compile_if_let`), match (`compile_match`),
+let-else (`compile_let_else`) — fresh-temp enum `TupleVariant` / `Struct` /
+unit-variant scrutinees. Gated to fresh `Call`/`MethodCall` scrutinees
+(`expr_yields_fresh_owned_temp`); a place scrutinee keeps its own `EnumDrop` and
+is untouched (negative-test pinned). Tests: `test_ir_iflet_freshtemp_enum_*` /
+`test_ir_match_freshtemp_enum_*` / `test_ir_letelse_freshtemp_enum_*` /
+`test_ir_iflet_place_scrutinee_not_materialized` (codegen.rs, the macOS-reliable
+gate); `asan_iflet_freshtemp_enum_{bound_field_no_double_free,unbound_field_clean,
+miss_wholesale_clean}`, `asan_match_freshtemp_enum_unbound_field_clean`,
+`asan_letelse_freshtemp_enum_bound_field_no_double_free` (memory_sanitizer.rs).
+
+**Deferred (still leak, not miscompile — noted per memory
+`prefer-failloud-over-silent-miscompile`; these are pre-existing leaks the fix
+doesn't widen):**
+- **`while let`** fresh-temp enum scrutinee with an unbound heap field — needs
+  the materialize+`track_enum_var` placed in the *per-iteration* body frame (so
+  it drains each iteration), plus handling for a heap-bearing *miss* variant at
+  loop exit. The other three constructs share one enclosing-frame shape;
+  `while let` is the per-iteration outlier, so it's a separate follow-up.
+- **Deep nesting** (`if let Some(Full(_, n)) = make_opt_holder()`): the
+  materialize keys on the *outer* enum (`Option`), whose `__karac_drop_Option`
+  frees its payload as one unit but does not recurse into a nested *enum*
+  payload's own heap fields. One-level destructure of the scrutinee's direct
+  enum is covered; enum-in-enum unbound fields remain a deferred leak.
+
+Distinct mechanism from the sibling spike (move-out-aware *partial* drop reusing
+`EnumDrop` + cap-suppression, not chokepoint routing of a whole temp), so it gets
+its own scope doc. See that spike's slice-4 discussion for why the two are
+separable.
 
 **Doc footprint** (update these together — see memory `maintain-scope-doc-index`):
 

@@ -38,6 +38,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // a bare-arg `Option[shared]` leaf gets its per-branch inc.
         let tail = self.tail_ret_inner.take();
         let val = self.compile_expr(value)?;
+        // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
+        // scrutinee with a heap-bearing payload has no source `EnumDrop`, so an
+        // arm that leaves a heap field unbound leaks it (and the miss edge
+        // leaks the whole temp). Materialize + `track_enum_var` here so the
+        // enum's drop walk frees the unbound fields at the enclosing scope's
+        // exit; the suppression after `bind_pattern_values` (then-arm only)
+        // zeroes the caps of fields the pattern moved into bindings. No-op for
+        // non-fresh / non-enum scrutinees.
+        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val);
         let cond = self.compile_pattern_condition(pattern, val)?;
         // Reuse if-else codegen
         let fn_val = self.current_fn.unwrap();
@@ -51,6 +60,13 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(then_bb);
         self.bind_pattern_values(pattern, val)?;
+        // B-track: zero the caps of moved-in fields so the source EnumDrop
+        // (registered above) frees only the *unbound* heap fields, not the ones
+        // the pattern's bindings now own. Then-arm only — the else/miss edge
+        // runs no suppression so the drop walk frees the temp wholesale.
+        if let Some((alloca, enum_name)) = &freshtemp_enum {
+            self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
+        }
         self.tail_ret_inner = tail;
         let then_val = self.compile_block_with_frame(then_block)?;
         let then_terminated = self
@@ -196,6 +212,13 @@ impl<'ctx> super::Codegen<'ctx> {
         else_block: &Block,
     ) -> Result<(), String> {
         let val = self.compile_expr(value)?;
+        // B-track (pattern-arm unbound heap-field drop): same fresh-temp enum
+        // scrutinee fix as `compile_if_let`. The `EnumDrop` registered here
+        // drains at the enclosing scope's exit on the match edge (after the
+        // escaped bindings), and at the divergent else edge's
+        // `emit_scope_cleanup` walk on the miss edge (wholesale). Suppression
+        // on the match edge zeroes the caps of moved-in fields.
+        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val);
         let cond = self.compile_pattern_condition(pattern, val)?;
 
         let fn_val = self.current_fn.unwrap();
@@ -226,6 +249,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // through. `val` is defined before the branch and dominates here.
         self.builder.position_at_end(match_bb);
         self.bind_pattern_values(pattern, val)?;
+        if let Some((alloca, enum_name)) = &freshtemp_enum {
+            self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
+        }
         Ok(())
     }
 

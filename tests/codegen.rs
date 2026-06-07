@@ -9447,6 +9447,117 @@ fn main() {
         );
     }
 
+    // ── pattern-arm unbound heap-field drop (B) ──
+    //
+    // docs/spikes/pattern-arm-unbound-field-drop.md: a fresh-temp enum
+    // scrutinee (`if let Full(_, n) = make()`) has no source `EnumDrop`, so an
+    // arm that leaves a heap payload field unbound leaks it. The fix
+    // materializes the temp into `__freshtemp_enum_scrut` + `track_enum_var`
+    // (the `__karac_drop_<E>` walk frees unbound fields); the per-arm
+    // suppression zeroes the caps of fields the pattern moved into bindings.
+    // These IR tests are the macOS-reliable gate (no LeakSanitizer there);
+    // the ASAN suite adds the bound-field double-free gate.
+
+    const B_ENUM_PRELUDE: &str = r#"
+enum Holder { Full(Vec[i64], i64), Empty }
+fn make() -> Holder {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    return Holder.Full(v, 42_i64);
+}
+"#;
+
+    #[test]
+    fn test_ir_iflet_freshtemp_enum_unbound_field_freed() {
+        // `if let Full(_, n) = make()` — the Vec field is `_` (unbound). Before
+        // the fix the payload words were extracted with no `free` (IR-proven
+        // leak). Now the temp is materialized and the enum drop walk frees the
+        // unbound Vec.
+        let src = format!(
+            "{B_ENUM_PRELUDE}\nfn main() {{ if let Holder.Full(_, n) = make() {{ println(n); }} }}\n"
+        );
+        let ir = ir_for_with_ownership(&src);
+        assert!(
+            ir.contains("__freshtemp_enum_scrut"),
+            "expected the fresh-temp enum scrutinee materialized; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__karac_drop_Holder("),
+            "expected the enum drop walk to free the unbound Vec field; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_match_freshtemp_enum_unbound_field_freed() {
+        // `match make() { Full(_, n) => …, Empty => … }` — same leak, match
+        // surface. Confirms the fresh-temp materialization fires in
+        // compile_match (the bound-variable path already worked via the source
+        // binding's EnumDrop).
+        let src = format!(
+            "{B_ENUM_PRELUDE}\nfn main() {{ match make() {{ Holder.Full(_, n) => println(n), Holder.Empty => println(0) }} }}\n"
+        );
+        let ir = ir_for_with_ownership(&src);
+        assert!(
+            ir.contains("__freshtemp_enum_scrut") && ir.contains("@__karac_drop_Holder("),
+            "expected fresh-temp match scrutinee materialized + enum-dropped; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_iflet_freshtemp_enum_bound_field_suppressed() {
+        // `if let Full(v, n) = make()` — the Vec is MOVED into `v`. The
+        // materialized temp gets an EnumDrop, but the suppression must zero the
+        // moved field's cap (`match.dest.cap.suppress.p` ← 0) so the drop walk
+        // skips it — `v`'s own cleanup frees it exactly once (no double-free).
+        let src = format!(
+            "{B_ENUM_PRELUDE}\nfn main() {{ if let Holder.Full(v, n) = make() {{ println(v.len() + n); }} }}\n"
+        );
+        let ir = ir_for_with_ownership(&src);
+        assert!(
+            ir.contains("__freshtemp_enum_scrut"),
+            "expected the fresh-temp enum scrutinee materialized; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("match.dest.cap.suppress.p"),
+            "expected the moved Vec field's cap zeroed (suppression) to avoid a \
+             double-free against the enum drop walk; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_iflet_place_scrutinee_not_materialized() {
+        // Negative / double-free guard: a *place* scrutinee (a let-bound enum
+        // `x`) already owns its `EnumDrop`. Materializing a second one for it
+        // would double-free, so `materialize_freshtemp_enum_scrutinee` gates to
+        // fresh Call/MethodCall temps only — `if let Full(_, n) = x` must NOT
+        // emit a `__freshtemp_enum_scrut`.
+        let src = format!(
+            "{B_ENUM_PRELUDE}\nfn main() {{ let x = make(); if let Holder.Full(_, n) = x {{ println(n); }} }}\n"
+        );
+        let ir = ir_for_with_ownership(&src);
+        assert!(
+            !ir.contains("__freshtemp_enum_scrut"),
+            "a place (bound-variable) scrutinee must not materialize a second \
+             enum temp (would double-free against its own drop); got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_letelse_freshtemp_enum_unbound_field_freed() {
+        // `let Full(_, n) = make() else { return };` — let-else surface. The
+        // unbound Vec is freed by the materialized temp's EnumDrop (on the
+        // match edge at enclosing-scope exit; on the miss edge the divergent
+        // else's cleanup walk frees it wholesale).
+        let src = format!(
+            "{B_ENUM_PRELUDE}\nfn main() {{\n    let Holder.Full(_, n) = make() else {{ return }}\n    println(n);\n}}\n"
+        );
+        let ir = ir_for_with_ownership(&src);
+        assert!(
+            ir.contains("__freshtemp_enum_scrut") && ir.contains("@__karac_drop_Holder("),
+            "expected fresh-temp let-else scrutinee materialized + enum-dropped; got:\n{ir}"
+        );
+    }
+
     #[test]
     fn test_ir_let_else_emits_branch_not_noop() {
         // phase-6-runtime.md line 489: `let … else` lowers to a real branch

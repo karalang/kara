@@ -62,6 +62,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 None
             };
         let scrut = self.compile_expr(scrutinee)?;
+        // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
+        // scrutinee (`match make() { … }`) has no source `EnumDrop`, so any arm
+        // that leaves a heap payload field unbound leaks it. Materialize +
+        // `track_enum_var` once here (enum name resolved from any variant arm —
+        // all arms share the scrutinee's enum); each arm's per-arm suppression
+        // below then zeroes the caps of fields THAT arm moved into bindings.
+        // No-op for non-fresh / non-enum / ref scrutinees.
+        let freshtemp_enum = if scrut_ref_ptr.is_none() {
+            arms.iter()
+                .map(|a| &a.pattern)
+                .find(|p| self.variant_pattern_enum_name(p).is_some())
+                .and_then(|p| self.materialize_freshtemp_enum_scrutinee(scrutinee, p, scrut))
+        } else {
+            None
+        };
         // Detect borrow-returning scrutinees so pattern bindings don't
         // register a `FreeVecBuffer` against a buffer the container still
         // owns. `Map.get` is the canonical case (the returned `Option[V]`
@@ -187,7 +202,19 @@ impl<'ctx> super::Codegen<'ctx> {
             // matches don't need this — the source isn't owned by the
             // match, no double-free risk.
             if scrut_ref_ptr.is_none() {
-                self.suppress_destructured_enum_payload_cleanup(scrutinee, &arm.pattern);
+                if let Some((alloca, enum_name)) = &freshtemp_enum {
+                    // Fresh-temp scrutinee: suppress against the materialized
+                    // alloca (no identifier to resolve). The source EnumDrop
+                    // registered before the arm loop frees this arm's unbound
+                    // heap fields at scope exit.
+                    self.suppress_destructured_enum_payload_cleanup_at(
+                        *alloca,
+                        enum_name,
+                        &arm.pattern,
+                    );
+                } else {
+                    self.suppress_destructured_enum_payload_cleanup(scrutinee, &arm.pattern);
+                }
             }
 
             let arm_val = self.compile_tail_final_expr(&arm.body, tail)?;
@@ -593,6 +620,45 @@ impl<'ctx> super::Codegen<'ctx> {
     /// enum; the unqualified fallback keeps type and tag from one layout so
     /// they at least agree. Used by the nested-variant condition recursion
     /// and `reconstruct_payload_value`.
+    /// Resolve the **enum name** a variant sub-pattern belongs to, by the
+    /// same qualified-segment-preferred / user-vs-seed-fallback logic as
+    /// [`Self::variant_pattern_enum_and_tag`] (which returns the LLVM type +
+    /// tag from one layout). Used by the B-track fresh-temp scrutinee
+    /// materialization (`materialize_freshtemp_enum_scrutinee`) — which needs
+    /// the *name* to drive `track_enum_var` / `emit_enum_drop_switch` /
+    /// `suppress_destructured_enum_payload_cleanup_at`, all keyed on the
+    /// `enum_layouts` map by name. `None` for non-variant patterns.
+    pub(super) fn variant_pattern_enum_name(&self, pat: &Pattern) -> Option<String> {
+        let segments: Vec<&str> = match &pat.kind {
+            PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
+                path.iter().map(|s| s.as_str()).collect()
+            }
+            PatternKind::Binding(name) => name.split('.').collect(),
+            _ => return None,
+        };
+        let variant_name = *segments.last()?;
+        if segments.len() >= 2 {
+            let qualifier = segments[segments.len() - 2];
+            if let Some(layout) = self.enum_layouts.get(qualifier) {
+                if layout.tags.contains_key(variant_name) {
+                    return Some(qualifier.to_string());
+                }
+            }
+        }
+        let mut user_hit: Option<String> = None;
+        let mut seed_hit: Option<String> = None;
+        for (en, l) in &self.enum_layouts {
+            if l.tags.contains_key(variant_name) {
+                if self.seeded_enum_names.contains(en) {
+                    seed_hit.get_or_insert_with(|| en.clone());
+                } else {
+                    user_hit.get_or_insert_with(|| en.clone());
+                }
+            }
+        }
+        user_hit.or(seed_hit)
+    }
+
     pub(super) fn variant_pattern_enum_and_tag(
         &self,
         pat: &Pattern,
@@ -1259,7 +1325,26 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(n) => n.clone(),
             None => return,
         };
-        let layout = match self.enum_layouts.get(&enum_name) {
+        self.suppress_destructured_enum_payload_cleanup_at(slot.ptr, &enum_name, pattern);
+    }
+
+    /// Core of [`Self::suppress_destructured_enum_payload_cleanup`], keyed on
+    /// the source enum's alloca + name directly rather than resolving them
+    /// from an identifier scrutinee. The B-track fresh-temp path
+    /// (`materialize_freshtemp_enum_scrutinee`) has no identifier to resolve —
+    /// it minted its own alloca for the temporary — so it calls this directly
+    /// with that alloca. For every payload position the arm's pattern *moves*
+    /// into a binding (`pattern_consumes_field`), zero the cap word in the
+    /// source so the enum's `__karac_drop_<E>` walk skips it (the binding's own
+    /// cleanup frees that buffer); unbound heap fields keep their cap and are
+    /// freed by the drop walk.
+    pub(super) fn suppress_destructured_enum_payload_cleanup_at(
+        &self,
+        slot_ptr: PointerValue<'ctx>,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) {
+        let layout = match self.enum_layouts.get(enum_name) {
             Some(l) => l.clone(),
             None => return,
         };
@@ -1312,13 +1397,71 @@ impl<'ctx> super::Codegen<'ctx> {
             let cap_index = (start_word + num_words) as u32;
             if let Ok(cap_ptr) = self.builder.build_struct_gep(
                 layout.llvm_type,
-                slot.ptr,
+                slot_ptr,
                 cap_index,
                 "match.dest.cap.suppress.p",
             ) {
                 let _ = self.builder.build_store(cap_ptr, zero);
             }
         }
+    }
+
+    /// B-track (pattern-arm unbound heap-field drop, see
+    /// `docs/spikes/pattern-arm-unbound-field-drop.md`): when an if-let /
+    /// while-let / let-else / match scrutinee is a FRESH-OWNED enum
+    /// *temporary* (a `Call` / `MethodCall` return), it has no source
+    /// `EnumDrop` registered — so any heap-bearing payload field the arm
+    /// leaves UNBOUND leaks (IR-proven on `main`: `if let Full(_, n) = make()`
+    /// extracts the `{ptr,len,cap}` words but emits no `free`). Materialize the
+    /// scrutinee value into an alloca and `track_enum_var` it, so the enum's
+    /// `__karac_drop_<E>` walk frees its heap payload at scope exit. The caller
+    /// then runs `suppress_destructured_enum_payload_cleanup_at(alloca,
+    /// enum_name, pattern)` after binding, which zeroes the caps of fields the
+    /// pattern moved into bindings — leaving only the *unbound* heap fields for
+    /// the drop walk (move-out-aware partial drop). On a miss edge the caller
+    /// runs no suppression, so the drop walk frees the whole temp wholesale.
+    ///
+    /// Gated to fresh-temp `Call` / `MethodCall` scrutinees: a *place*
+    /// scrutinee (an existing binding / field) is owned elsewhere and already
+    /// has its own `EnumDrop`, so minting a second would double-free.
+    /// `track_enum_var` registers the drop in the *current* scope frame (the
+    /// one active when the construct is compiled), so the EnumDrop fires at the
+    /// enclosing scope's exit on every path. Returns `(alloca, enum_name)` for
+    /// the suppression call, or `None` (no-op, prior leak behavior) when the
+    /// scrutinee isn't a fresh-temp non-shared enum with a heap-bearing layout.
+    pub(super) fn materialize_freshtemp_enum_scrutinee(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        val: BasicValueEnum<'ctx>,
+    ) -> Option<(PointerValue<'ctx>, String)> {
+        if !Self::expr_yields_fresh_owned_temp(scrutinee) {
+            return None;
+        }
+        let BasicValueEnum::StructValue(sv) = val else {
+            return None;
+        };
+        let enum_name = self.variant_pattern_enum_name(pattern)?;
+        let layout = self.enum_layouts.get(&enum_name)?;
+        if layout.is_shared {
+            return None;
+        }
+        // Only materialize when some variant actually has a heap-bearing
+        // payload to drop — otherwise `track_enum_var` is a no-op (and
+        // `emit_enum_drop_switch` returns None), so the alloca would be dead.
+        let has_droppable = layout
+            .field_drop_kinds
+            .values()
+            .any(|ks| ks.iter().any(|k| *k != super::state::EnumDropKind::None));
+        if !has_droppable {
+            return None;
+        }
+        let llvm_ty = layout.llvm_type;
+        let fn_val = self.current_fn?;
+        let alloca = self.create_entry_alloca(fn_val, "__freshtemp_enum_scrut", llvm_ty.into());
+        let _ = self.builder.build_store(alloca, sv);
+        self.track_enum_var(&enum_name, alloca);
+        Some((alloca, enum_name))
     }
 }
 

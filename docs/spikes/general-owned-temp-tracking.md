@@ -326,12 +326,22 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    bounded, ASAN-gated slice; none blocks slices 4–6 (the scrutinee/tail/drop-
    order payoff needs the receiver-temp mechanism this slice establishes, which
    `materialize_owned_temp` now provides).
-4. **Scrutinee sub-frame (= line-489 slice 3). — BLOCKED on B's recursive
-   payload-drop machinery (finding 2026-06-07, IR-probed).** Dedicated scrutinee
-   frame in if-let/while-let/let-else; drain on miss-before-else,
-   hit-at-arm-exit, per-iteration. **Gate to the wholesale-drop case** — a
-   scrutinee whose bindings are all borrows / non-heap (nothing moved out of the
-   temp), so the whole temp drops as one unit and partial-drop is never needed.
+4. **Scrutinee sub-frame (= line-489 slice 3). — fresh-temp enum wholesale +
+   partial drop LANDED via B (2026-06-07) for if-let/match/let-else; while-let +
+   nesting + non-enum scrutinees remain.** Dedicated scrutinee frame in
+   if-let/while-let/let-else; drain on miss-before-else, hit-at-arm-exit,
+   per-iteration. **Gate to the wholesale-drop case** — a scrutinee whose
+   bindings are all borrows / non-heap (nothing moved out of the temp), so the
+   whole temp drops as one unit and partial-drop is never needed. **Update
+   (2026-06-07):** the B track ([`pattern-arm-unbound-field-drop.md`](pattern-arm-unbound-field-drop.md))
+   landed `materialize_freshtemp_enum_scrutinee` + `track_enum_var` for fresh-temp
+   *enum* scrutinees in if-let/match/let-else — which already delivers BOTH the
+   wholesale-drop on the miss edge (no suppression → the enum drop walk frees the
+   whole temp) AND the move-out-aware partial drop on the hit edge. So slice 4's
+   wholesale case is **done for those three constructs over enum scrutinees**.
+   What's left under this slice: `while let` (per-iteration frame placement),
+   deep-nested enum scrutinees, and the guard-style borrow-returning-method
+   scrutinee (still gated on 3b — see below).
    **Why this is not a bounded chokepoint slice:** an IR probe on `main` showed
    that every *realizable* scrutinee is an `Option`/`Result`/enum carrying heap
    in a *payload* (`if let Holder.Empty = make()` where `make() -> Holder` has a
