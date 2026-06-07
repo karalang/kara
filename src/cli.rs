@@ -224,6 +224,19 @@ pub enum Command {
         /// per-target registry — hard error otherwise; `help` prints
         /// the annotated listing and exits.
         target_features: Option<String>,
+        /// `--features=wasm-threads`: shared-memory multithreading opt-in
+        /// for `wasm_browser` builds (phase-10; design.md § WASM
+        /// Concurrency Lowering). Emits a second, threaded module
+        /// (`<stem>.threads.wasm` — Web Worker pool + SharedArrayBuffer +
+        /// atomics on the `wasm32-wasip1-threads` substrate, auto-par
+        /// re-enabled) alongside the sequential one; the JS glue picks at
+        /// load time by SAB/COI feature-detection. Hard error off
+        /// `wasm_browser` (wasi-threads and the component model don't
+        /// compose) and with `--bindings=component`. CLI-only enable —
+        /// the manifest's `[wasm]` table tunes (pool size, fallback
+        /// posture, max memory) but never enables, keeping the COOP/COEP
+        /// deployment contract visible at the flag.
+        wasm_threads: bool,
         /// `--monomorphization-budget=warn:N,error:M` (v1.x, single-file
         /// only): per-generic instantiation ceiling enforced after
         /// typecheck. A disabled (all-`None`) budget — the default — skips
@@ -285,6 +298,10 @@ pub enum Command {
         /// `--target-features=<list|help>` — see `Build.target_features`
         /// above. Same project-manifest tier note as `target_cpu`.
         target_features: Option<String>,
+        /// `--features=wasm-threads` — see `Build.wasm_threads` above.
+        /// Same scope rules; the threaded module lands at
+        /// `dist/wasm/<pkg>.threads.wasm`.
+        wasm_threads: bool,
         /// `--release` — see `Build.release` above. Same debug/release
         /// semantics (strips debug-only runtime checks — contracts today —
         /// not an optimizer toggle) and the same OR-composition with
@@ -654,6 +671,7 @@ pub fn execute(cmd: Command) {
             bindings,
             target_cpu,
             target_features,
+            wasm_threads,
             monomorphization_budget,
             release,
             lint_overrides,
@@ -669,6 +687,7 @@ pub fn execute(cmd: Command) {
             bindings,
             target_cpu.as_deref(),
             target_features.as_deref(),
+            wasm_threads,
             monomorphization_budget,
             release,
             lint_overrides,
@@ -682,6 +701,7 @@ pub fn execute(cmd: Command) {
             bindings,
             target_cpu,
             target_features,
+            wasm_threads,
             release,
         } => cmd_build_project(
             output,
@@ -692,6 +712,7 @@ pub fn execute(cmd: Command) {
             bindings,
             target_cpu.as_deref(),
             target_features.as_deref(),
+            wasm_threads,
             release,
         ),
         Command::Query {
@@ -4806,6 +4827,43 @@ fn resolve_effective_bindings(
     }))
 }
 
+/// `--features wasm-threads` scope gate, shared by single-file and
+/// project build (phase-10 wasm-threads entry). The flag is
+/// `wasm_browser`-only: the threaded substrate is the wasi-threads ABI
+/// (`wasi.thread-spawn` / `wasi_thread_start`), which the component
+/// model does not compose with — and `wasm_wasi`'s default bindings are
+/// component (host-thread integration for wasm_wasi stays the design.md
+/// § WASM Concurrency Lowering future concern). The same reasoning
+/// rejects an explicit `--bindings=component` on a `wasm_browser`
+/// threaded build; `--bindings=none` is fine (both modules are emitted,
+/// the embedder owns `wasi.thread-spawn`). No-op when the flag is off.
+#[cfg(feature = "llvm")]
+fn validate_wasm_threads_scope(
+    wasm_threads: bool,
+    build_target: &str,
+    effective_bindings: Option<BindingsMode>,
+) {
+    if !wasm_threads {
+        return;
+    }
+    if build_target != "wasm_browser" {
+        eprintln!(
+            "error: --features wasm-threads requires --target=wasm_browser (got `{build_target}`). \
+             The threaded lowering rides the wasi-threads ABI, which the component model \
+             (wasm_wasi's default bindings) does not compose with. Drop the flag or switch targets."
+        );
+        process::exit(1);
+    }
+    if effective_bindings == Some(BindingsMode::Component) {
+        eprintln!(
+            "error: --features wasm-threads is incompatible with --bindings=component \
+             (wasi-threads and the component model do not compose). \
+             Use --bindings=browser (default) or --bindings=none."
+        );
+        process::exit(1);
+    }
+}
+
 // CLI dispatch helpers naturally land more flag-shaped arguments
 // than the clippy default; factoring them into a struct here would
 // just move the flag list rather than tighten it.
@@ -4822,6 +4880,7 @@ fn cmd_build(
     bindings: Option<BindingsMode>,
     target_cpu: Option<&str>,
     target_features: Option<&str>,
+    wasm_threads: bool,
     monomorphization_budget: crate::monomorphization::MonomorphizationBudget,
     release: bool,
     lint_overrides: crate::lints::CliLintOverrides,
@@ -4881,6 +4940,15 @@ fn cmd_build(
             );
             process::exit(1);
         }
+        // `--features wasm-threads` scope gate (phase-10 wasm-threads
+        // entry). The flag is wasm_browser-only: wasi-threads (the
+        // preview1-era host-threading ABI the threaded substrate builds
+        // on) and the component model don't compose, and wasm_wasi's
+        // default bindings are component — host-thread integration for
+        // wasm_wasi is a design.md § WASM Concurrency Lowering future
+        // concern, not a v1 surface. Same reasoning rejects an explicit
+        // `--bindings=component` on a wasm_browser threaded build.
+        validate_wasm_threads_scope(wasm_threads, build_target, effective_bindings);
         // Derive the output stem early — embedded component bindings
         // need it as the WIT package name before codegen runs.
         let exe_name = std::path::Path::new(filename)
@@ -5166,6 +5234,10 @@ fn cmd_build(
         // flag is accepted-but-inert here, consistent with --offline /
         // --target.
         let _ = monomorphization_budget;
+        // `--features wasm-threads` shapes WASM codegen+link, which the
+        // non-llvm fallback doesn't reach — accepted-but-inert, the
+        // `--bindings` posture.
+        let _ = wasm_threads;
         eprintln!("note: karac build requires the llvm feature; falling back to type check");
         cmd_check(
             filename,
@@ -5443,6 +5515,7 @@ fn cmd_build_project(
     bindings: Option<BindingsMode>,
     target_cpu: Option<&str>,
     target_features: Option<&str>,
+    wasm_threads: bool,
     release: bool,
 ) {
     // Phase-10: v1 target names are classified the same way as in
@@ -5466,6 +5539,14 @@ fn cmd_build_project(
         );
         process::exit(1);
     }
+    // `--features wasm-threads` scope gate — single-file contract
+    // (see `validate_wasm_threads_scope`): wasm_browser-only, no
+    // component bindings. Runs pre-manifest so the failure mode is
+    // identical from any directory.
+    #[cfg(feature = "llvm")]
+    validate_wasm_threads_scope(wasm_threads, build_target, effective_bindings);
+    #[cfg(not(feature = "llvm"))]
+    let _ = wasm_threads;
     // `--target-cpu=help` / `--target-features=help` exit before
     // manifest discovery so the listing works from any directory — it
     // needs only the active target, not a project. Name validation for

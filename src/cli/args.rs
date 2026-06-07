@@ -384,6 +384,7 @@ fn parse_build_command(args: &[String]) -> Command {
     let mut bindings: Option<BindingsMode> = None;
     let mut target_cpu: Option<String> = None;
     let mut target_features: Option<String> = None;
+    let mut wasm_threads = false;
     let mut monomorphization_budget = crate::monomorphization::MonomorphizationBudget::default();
     let mut release = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
@@ -481,6 +482,23 @@ fn parse_build_command(args: &[String]) -> Command {
             }
             target_features = Some(args[i + 1].trim().to_string());
             i += 1;
+        } else if let Some(rest) = arg.strip_prefix("--features=") {
+            // `--features=<list|help>` — build-feature opt-ins (phase-10;
+            // design.md § WASM Concurrency Lowering). Closed set, validated
+            // at the parse layer so a typo is an error with the valid set
+            // listed. Distinct from `--target-features` (LLVM feature
+            // strings): this namespace selects karac-level build shapes.
+            wasm_threads = parse_features_value(rest);
+        } else if arg == "--features" {
+            // Space-separated form, mirroring `--target <triple>`.
+            if i + 1 >= args.len() {
+                eprintln!(
+                    "error: --features requires a value. Use wasm-threads (or `help` to list them)."
+                );
+                process::exit(1);
+            }
+            wasm_threads = parse_features_value(&args[i + 1]);
+            i += 1;
         } else if let Some(rest) = arg.strip_prefix("--bindings=") {
             // `--bindings=browser|component|none` — WASM output-shape
             // selector (phase-10; design.md § Target Build Artifacts).
@@ -535,6 +553,7 @@ fn parse_build_command(args: &[String]) -> Command {
             bindings,
             target_cpu,
             target_features,
+            wasm_threads,
             monomorphization_budget,
             release,
             lint_overrides,
@@ -568,8 +587,39 @@ fn parse_build_command(args: &[String]) -> Command {
                 bindings,
                 target_cpu,
                 target_features,
+                wasm_threads,
                 release,
             }
+        }
+    }
+}
+
+/// Parse a `--features` value (phase-10 build-feature opt-ins). The set
+/// is closed at one — `wasm-threads` (design.md § WASM Concurrency
+/// Lowering: Web Worker pool + SharedArrayBuffer + atomics on
+/// `wasm_browser`) — and an unknown value is a hard error listing it,
+/// so a typo can't silently produce a sequential-only build the user
+/// thought was threaded. `help` prints the set and exits 0 (the set is
+/// static — no LLVM needed, so it resolves at parse time, unlike
+/// `--target-cpu=help`). Returns the `wasm_threads` flag; a future
+/// second feature widens this to a struct.
+fn parse_features_value(value: &str) -> bool {
+    match value.trim() {
+        "wasm-threads" => true,
+        "help" => {
+            println!("Available --features values:");
+            println!(
+                "  wasm-threads    shared-memory multithreading on wasm_browser \
+                 (Web Worker pool + SharedArrayBuffer + atomics; deploy with \
+                 COOP/COEP headers)"
+            );
+            process::exit(0);
+        }
+        other => {
+            eprintln!(
+                "error: unknown --features value '{other}'. Use wasm-threads (or `help` to list them)."
+            );
+            process::exit(1);
         }
     }
 }

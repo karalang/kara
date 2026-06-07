@@ -316,6 +316,31 @@ OPTIONS:
                             targets `+simd128` is the default (Vector
                             ops lower to v128); `-simd128` opts back
                             down to an MVP-clean scalarized module.
+    --features=<list>       Build-feature opt-ins (`--features=help` lists
+                            them). The set is closed at one:
+                            `wasm-threads` — shared-memory multithreading
+                            for `--target=wasm_browser`. Emits a SECOND
+                            module, `<stem>.threads.wasm` (project mode:
+                            `dist/wasm/<pkg>.threads.wasm`), built on the
+                            wasm32-wasip1-threads substrate: spawn() /
+                            TaskGroup / par {} run on a Web Worker pool
+                            over SharedArrayBuffer + atomics, and
+                            auto-parallelization is re-enabled. The JS
+                            glue picks at load time: threaded when SAB +
+                            cross-origin isolation are available (deploy
+                            with COOP/COEP headers), otherwise it
+                            console.warns and falls back to the
+                            sequential module (set `[wasm] fallback =
+                            false` in kara.toml to hard-error instead;
+                            `[wasm] pool-size` overrides the
+                            navigator.hardwareConcurrency default and
+                            `[wasm] max-memory-pages` the shared-memory
+                            maximum). Requires the threaded runtime
+                            archive (libkarac_runtime_wasm_threads.a)
+                            and the rustup target wasm32-wasip1-threads.
+                            Incompatible with --bindings=component
+                            (wasi-threads and the component model do not
+                            compose). Accepts `--features <list>` too.
     --monomorphization-budget=warn:N,error:M
                             Cap per-generic instantiations. After typecheck
                             (before codegen), any generic instantiated >= N
