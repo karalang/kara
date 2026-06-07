@@ -2072,3 +2072,62 @@ fn test_reduction_recognized_for_chain_after_lowering() {
     assert_eq!(main_fc.loop_reductions[0].accumulator, "sum");
     assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Add);
 }
+
+// ── mut-ref call arguments create write dependencies ────────────
+//
+// Kata-22 regression pair (2026-06-06). `collect_expr_inner_writes`
+// had a MethodCall receiver-mutation arm but NO Call arm, so a free-
+// function call passing `mut out` recorded zero writes: the analyzer
+// saw `add_one(mut out)` and `println(out.len())` as two reads of
+// `out`, grouped them, and `compile_par_groups` captured `out` into
+// the par env BY VALUE — the callee's Vec-header writeback (len/cap/
+// data after push-grow) landed in the env copy and the caller's
+// binding stayed a stale empty Vec. Both detection paths are pinned:
+// the call-site `mut` marker, and the callee's declared `mut ref`
+// param mode (unmarked forwarding).
+
+#[test]
+fn test_mut_marked_call_arg_serializes() {
+    let analysis = analyze(
+        r#"
+        fn add_one(out: mut ref Vec[i64]) {
+            out.push(7);
+        }
+        fn main() {
+            let mut out: Vec[i64] = Vec.new();
+            add_one(mut out);
+            println(out.len());
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.parallel_groups.is_empty(),
+        "mut-marked call arg must serialize against the subsequent read, got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_mut_ref_forwarding_call_serializes() {
+    // No call-site marker — `out` is already `mut ref` in scope, so the
+    // forwarding form is unmarked (design.md Feature 4 Part 1½). The
+    // write is derived from the CALLEE's declared param mode instead.
+    let analysis = analyze(
+        r#"
+        fn add_one(out: mut ref Vec[i64]) {
+            out.push(7);
+        }
+        fn helper(out: mut ref Vec[i64]) {
+            add_one(out);
+            println(out.len());
+        }
+        "#,
+    );
+    let helper_fc = get_function(&analysis, "helper");
+    assert!(
+        helper_fc.parallel_groups.is_empty(),
+        "unmarked mut-ref forwarding must serialize against the subsequent read, got {:?}",
+        helper_fc.parallel_groups
+    );
+}

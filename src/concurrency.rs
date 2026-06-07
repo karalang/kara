@@ -1634,6 +1634,41 @@ impl<'a> ConcurrencyChecker<'a> {
                     self.collect_expr_inner_writes(&arg.value, writes);
                 }
             }
+            ExprKind::Call { callee, args } => {
+                // A free-function call mutates caller-visible state through
+                // `mut ref T` / `mut Slice[T]` parameters — record each
+                // mutably-passed argument's root identifier as a write so
+                // subsequent statements that read it serialize against the
+                // call. Without this arm, `add_one(mut out); println(out.len())`
+                // in `main` records no write on `out`, the dependency check
+                // sees two reads, and the auto-parallelizer races the two
+                // statements via `karac_par_run` — with `out` captured into
+                // the par env BY VALUE, so the callee's header writeback
+                // (len/cap/data after a push-grow) lands in the env copy and
+                // the caller observes a stale empty Vec (kata 22, 2026-06-06).
+                //
+                // Two detection paths, OR'd:
+                //   - the call-site `mut` marker (`f(mut x)` — required for
+                //     fresh owned bindings per design.md Feature 4 Part 1½);
+                //   - the callee's declared param mode when its body is in
+                //     this program (`function_bodies`) — covers the unmarked
+                //     mut-ref forwarding form (`x` already `mut ref` in
+                //     scope) and any future marker-elision sites.
+                let callee_params = self
+                    .extract_callee_name(callee)
+                    .and_then(|n| self.function_bodies.get(&n))
+                    .map(|f| f.params.as_slice());
+                for (i, arg) in args.iter().enumerate() {
+                    let param_is_mut_ref =
+                        callee_params.and_then(|ps| ps.get(i)).is_some_and(|p| {
+                            matches!(p.ty.kind, TypeKind::MutRef(_) | TypeKind::MutSlice(_))
+                        });
+                    if arg.mut_marker || param_is_mut_ref {
+                        self.collect_assign_target_defines(&arg.value, writes);
+                    }
+                    self.collect_expr_inner_writes(&arg.value, writes);
+                }
+            }
             _ => {}
         }
     }
