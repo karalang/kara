@@ -129,6 +129,17 @@ pulldown-cmark = { version = "0.13.3", default-features = false, features = ["ht
 # `preserve_order` feature gives insertion-order Object iteration per
 # locked design choice (ii).
 serde_json = { version = "1", features = ["preserve_order"] }
+# Phase-10 embedded-WIT componentization (`--bindings component`,
+# src/componentize.rs): the `wasi_snapshot_preview1` **command** adapter
+# bytes that `wasm-tools component new --adapt` needs to lift karac's
+# wasm32-wasip1 C-ABI core modules into WASI 0.2 components. Vendored as
+# a crate (wasmtime's own release artifact, pinned via Cargo.lock) rather
+# than a downloaded blob so builds are reproducible and offline; the bytes
+# are written to a temp file at componentize time (`KARAC_WASI_ADAPTER`
+# overrides with an on-disk adapter). The componentization *transform*
+# stays in the external `wasm-tools` binary per design.md § Component
+# Model emission — this dep is pure data, no Component Model machinery.
+wasi-preview1-component-adapter-provider = "45.0.1"
 
 # Native-only deps. The browser playground (tracker line 703) builds
 # `karac` for `wasm32-unknown-unknown`; `ureq` (sync HTTP client) and

@@ -57,14 +57,22 @@ pub enum BindingsMode {
     /// ES-module JS glue next to the `.wasm` (`<stem>.js` — host fn
     /// import plumbing + WASI preview-1 polyfill; see `wasm_glue`).
     Browser,
-    /// Component Model output — the paired interim shape design.md §
-    /// Target Build Artifacts sanctions until Component Model runtime
-    /// support is broadly stable: the C-ABI core module plus a
-    /// `<stem>.component.wit` WIT interface descriptor (see `wit`) for
-    /// wrapping by external tools. The embedded-WIT swap (single
-    /// componentized `.wasm` via a pinned external tool) is the
-    /// separate phase-10 "embedded-WIT migration" entry.
+    /// Component Model output — a single embedded-WIT component
+    /// (`<stem>.wasm` IS the component; wasmtime/jco-class hosts run
+    /// it directly): the C-ABI core module is lifted via the external
+    /// `wasm-tools` binary (`componentize`; pinnable through
+    /// `kara.toml` `[toolchain]`), with `host fn` imports lowered to
+    /// canonical-ABI `kara:<pkg>/host` entries (see `wit` /
+    /// `target::wasm_component_host_package`). The phase-10
+    /// "embedded-WIT migration" swap of the former paired default.
     Component,
+    /// **Deprecated** — the former paired Component Model shape: the
+    /// C-ABI core module (`kara_host` imports) plus a
+    /// `<stem>.component.wit` WIT interface descriptor (see `wit`) for
+    /// wrapping by external tools. Retained one release past the
+    /// embedded-WIT swap (design.md § Target Build Artifacts); selects
+    /// with a deprecation notice on stderr.
+    ComponentPaired,
     /// Raw `.wasm` only — no glue, no declarations. For users wrapping
     /// Kāra WASM with custom host integration.
     None,
@@ -4800,6 +4808,22 @@ fn resolve_effective_bindings(
     }))
 }
 
+/// The paired form's one-release deprecation notice (design.md §
+/// Target Build Artifacts: "downstream tooling that consumes the
+/// paired shape gets a deprecation notice one release before the
+/// swap"). Printed once per build, on stderr, by every path that
+/// resolves `--bindings component-paired` — single-file and project
+/// mode alike. The spelling (and this notice) is removed one release
+/// after the embedded-WIT swap ships.
+fn emit_component_paired_deprecation() {
+    eprintln!(
+        "warning: --bindings component-paired (core module + .component.wit descriptor) is \
+         deprecated — `--bindings component` now emits a single embedded-WIT component that \
+         wasmtime/jco-class hosts run directly; the paired form will be removed one release \
+         after this notice"
+    );
+}
+
 // CLI dispatch helpers naturally land more flag-shaped arguments
 // than the clippy default; factoring them into a struct here would
 // just move the flag list rather than tighten it.
@@ -4875,6 +4899,44 @@ fn cmd_build(
             );
             process::exit(1);
         }
+        // Derive the output stem early — embedded component bindings
+        // need it as the WIT package name before codegen runs.
+        let exe_name = std::path::Path::new(filename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        // Embedded-WIT component bindings (phase-10 "embedded-WIT
+        // migration"): resolve the external componentization tool up
+        // front — a missing or mis-pinned wasm-tools fails before any
+        // pipeline work, the `--target-cpu` fail-fast posture — and
+        // install the package name that flips codegen's host-fn import
+        // attachment to canonical-ABI `kara:<pkg>/host` naming. The
+        // pin rides the same lazy manifest walk-up as the `[release]`
+        // chain (`[toolchain] wasm-tools`). The deprecated paired form
+        // keeps the C-ABI shape and announces its one-release
+        // deprecation here, once, on stderr.
+        let wasm_tools = match effective_bindings {
+            Some(BindingsMode::Component) => {
+                let pin = manifest_release_field_for(filename, output, |m| {
+                    m.toolchain_wasm_tools.clone()
+                });
+                match crate::componentize::resolve_wasm_tools(pin.as_deref()) {
+                    Ok(tool) => {
+                        crate::target::set_wasm_component_host_package(exe_name);
+                        Some(tool)
+                    }
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        process::exit(1);
+                    }
+                }
+            }
+            Some(BindingsMode::ComponentPaired) => {
+                emit_component_paired_deprecation();
+                None
+            }
+            _ => None,
+        };
         let source = read_source(filename);
         let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
         pipeline.resolve();
@@ -4982,11 +5044,8 @@ fn cmd_build(
             }
         }
 
-        // Derive output executable name from the source filename.
-        let exe_name = std::path::Path::new(filename)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("output");
+        // Output executable name — the stem derived before the
+        // component-bindings setup above.
         let obj_path = format!("/tmp/karac_{exe_name}.o");
         let exe_path = if is_wasm {
             // WASI command module — the artifact is loaded by a wasm
@@ -5023,7 +5082,15 @@ fn cmd_build(
             eprintln!("error: codegen failed: {e}");
             process::exit(1);
         }
-        match crate::codegen::link_executable(&obj_path, &exe_path) {
+        // For embedded component bindings, wasm-ld's output is an
+        // intermediate — link the C-ABI core module to a scratch path,
+        // then lift it into the single component at `exe_path` below.
+        let link_out = if wasm_tools.is_some() {
+            format!("/tmp/karac_{exe_name}.core.wasm")
+        } else {
+            exe_path.clone()
+        };
+        match crate::codegen::link_executable(&obj_path, &link_out) {
             Err(e) => {
                 eprintln!("error: link failed: {e}");
                 let _ = std::fs::remove_file(&obj_path);
@@ -5031,20 +5098,36 @@ fn cmd_build(
             }
             Ok(()) => {
                 let _ = std::fs::remove_file(&obj_path);
+                if let Some(tool) = &wasm_tools {
+                    let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
+                    let result = crate::componentize::componentize(
+                        tool,
+                        std::path::Path::new(&link_out),
+                        &host_fns,
+                        exe_name,
+                        std::path::Path::new(&exe_path),
+                    );
+                    let _ = std::fs::remove_file(&link_out);
+                    if let Err(e) = result {
+                        eprintln!("error: componentize failed: {e}");
+                        process::exit(1);
+                    }
+                }
                 // Companion artifacts keyed on the resolved bindings
                 // mode — not the target name: `--target=wasm_browser
                 // --bindings=none` suppresses them (raw module) and
                 // `--target=wasm_wasi --bindings=browser` opts a wasi
-                // module in (both wasm targets lower host fns to the
-                // same `kara_host` import entries, so each companion is
-                // target-agnostic). Browser bindings ship the ES-module
-                // glue (host fn import plumbing + WASI preview-1
-                // polyfill; see `wasm_glue`) plus its TypeScript
-                // declarations; component bindings ship the paired
-                // `<stem>.component.wit` WIT interface descriptor (see
-                // `wit` — design.md § Target Build Artifacts, the
-                // interim shape until the embedded-WIT swap). The
-                // `(json key, path)` pairs feed both output modes.
+                // module in (browser/none/paired all lower host fns to
+                // the same `kara_host` import entries, so each
+                // companion is target-agnostic). Browser bindings ship
+                // the ES-module glue (host fn import plumbing + WASI
+                // preview-1 polyfill; see `wasm_glue`) plus its
+                // TypeScript declarations; embedded component bindings
+                // ship NO companion — `<stem>.wasm` is the single
+                // self-describing component; the deprecated paired form
+                // ships the `<stem>.component.wit` WIT interface
+                // descriptor (see `wit`). The `(json key, path)` pairs
+                // feed both output modes.
                 let mut companions: Vec<(&str, String)> = Vec::new();
                 match effective_bindings {
                     Some(BindingsMode::Browser) => {
@@ -5064,7 +5147,7 @@ fn cmd_build(
                         }
                         companions.push(("dts", dts_path));
                     }
-                    Some(BindingsMode::Component) => {
+                    Some(BindingsMode::ComponentPaired) => {
                         let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
                         let wit = crate::wit::render_component_wit(&host_fns, exe_name, &exe_path);
                         let wit_path = format!("{exe_name}.component.wit");
@@ -5074,7 +5157,7 @@ fn cmd_build(
                         }
                         companions.push(("wit", wit_path));
                     }
-                    Some(BindingsMode::None) | None => {}
+                    Some(BindingsMode::Component) | Some(BindingsMode::None) | None => {}
                 }
                 match output {
                     OutputMode::Text => {
@@ -5509,6 +5592,39 @@ fn cmd_build_project(
     #[cfg(not(feature = "llvm"))]
     let _ = (target_cpu, target_features);
 
+    // Embedded-WIT component bindings — the single-file `cmd_build`
+    // contract: resolve the external wasm-tools up front (failing fast
+    // on missing/mis-pinned, pin from the project's own `[toolchain]`
+    // table — already loaded, no walk-up needed) and install the
+    // package name that flips codegen's host-fn import attachment to
+    // canonical-ABI `kara:<pkg>/host` naming. The deprecated paired
+    // form announces its one-release deprecation instead. Runtime-
+    // gated on the llvm feature: the non-llvm fallback builds nothing,
+    // so a missing tool must not fail what is effectively a check run.
+    let wasm_tools = if cfg!(feature = "llvm") {
+        match effective_bindings {
+            Some(BindingsMode::Component) => {
+                match crate::componentize::resolve_wasm_tools(mf.toolchain_wasm_tools.as_deref()) {
+                    Ok(tool) => {
+                        crate::target::set_wasm_component_host_package(&mf.name);
+                        Some(tool)
+                    }
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        process::exit(1);
+                    }
+                }
+            }
+            Some(BindingsMode::ComponentPaired) => {
+                emit_component_paired_deprecation();
+                None
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     // Phase-7 line 5 sub-item 3 — target gating. Hot-swap requires dynamic
     // symbol resolution at runtime, which embedded and kernel profiles
     // do not provide. Reject the combination before any work.
@@ -5641,6 +5757,7 @@ fn cmd_build_project(
             release,
             is_wasm,
             effective_bindings,
+            wasm_tools.as_ref(),
         );
     }
 
@@ -5906,12 +6023,13 @@ enum BuildCodegenStatus {
     /// `cmd_build` no-llvm branch.
     NoLlvmFeature,
     /// All phases succeeded; the linked artifact is at `exe_path` (a
-    /// native executable, or `dist/wasm/<pkg>.wasm` on a wasm target).
-    /// Browser-bindings WASM builds additionally carry the companion
-    /// ES-module glue (`<pkg>.js`) and TypeScript declarations
-    /// (`<pkg>.d.ts`); component-bindings builds carry the paired WIT
-    /// interface descriptor (`<pkg>.component.wit`) — each `None` on
-    /// every other build shape.
+    /// native executable, or `dist/wasm/<pkg>.wasm` on a wasm target —
+    /// under embedded component bindings that single file IS the
+    /// componentized output). Browser-bindings WASM builds additionally
+    /// carry the companion ES-module glue (`<pkg>.js`) and TypeScript
+    /// declarations (`<pkg>.d.ts`); the deprecated paired form carries
+    /// the WIT interface descriptor (`<pkg>.component.wit`) — each
+    /// `None` on every other build shape.
     Built {
         exe_path: PathBuf,
         glue_path: Option<PathBuf>,
@@ -5963,6 +6081,7 @@ fn run_multi_file_codegen(
     release: bool,
     is_wasm: bool,
     effective_bindings: Option<BindingsMode>,
+    wasm_tools: Option<&crate::componentize::WasmTools>,
 ) -> BuildCodegenStatus {
     // 1. Topological emission order — dependencies before dependents.
     let order = module::emission_order(tree);
@@ -6152,8 +6271,20 @@ fn run_multi_file_codegen(
             message: format!("codegen failed: {e}"),
         };
     }
+    // For embedded component bindings, wasm-ld's output is an
+    // intermediate — link the C-ABI core module to a scratch path, then
+    // lift it into the single component at `dist/wasm/<pkg>.wasm`.
+    let link_out = if wasm_tools.is_some() {
+        std::env::temp_dir().join(format!(
+            "karac_proj_{}_{}.core.wasm",
+            std::process::id(),
+            mf.name.replace(['/', '\\'], "_"),
+        ))
+    } else {
+        exe_path.clone()
+    };
     if let Err(e) =
-        crate::codegen::link_executable(&obj_path.to_string_lossy(), &exe_path.to_string_lossy())
+        crate::codegen::link_executable(&obj_path.to_string_lossy(), &link_out.to_string_lossy())
     {
         let _ = std::fs::remove_file(&obj_path);
         return BuildCodegenStatus::Failed {
@@ -6162,14 +6293,26 @@ fn run_multi_file_codegen(
         };
     }
     let _ = std::fs::remove_file(&obj_path);
+    if let Some(tool) = wasm_tools {
+        let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
+        let result =
+            crate::componentize::componentize(tool, &link_out, &host_fns, &mf.name, &exe_path);
+        let _ = std::fs::remove_file(&link_out);
+        if let Err(e) = result {
+            return BuildCodegenStatus::Failed {
+                phase: "componentize".to_string(),
+                message: format!("componentize failed: {e}"),
+            };
+        }
+    }
 
     // Companion artifacts next to the module in `dist/wasm/`, keyed on
     // the resolved bindings mode — exactly the single-file `cmd_build`
     // contract: browser bindings ship the ES-module glue + TypeScript
     // declarations (`<pkg>.js` / `<pkg>.d.ts`, see `wasm_glue`);
-    // component bindings ship the paired `<pkg>.component.wit` WIT
-    // interface descriptor (see `wit` — design.md § Target Build
-    // Artifacts, the interim shape until the embedded-WIT swap).
+    // embedded component bindings ship NO companion (`<pkg>.wasm` IS
+    // the self-describing component); the deprecated paired form ships
+    // the `<pkg>.component.wit` WIT interface descriptor (see `wit`).
     let mut glue_path = None;
     let mut dts_path = None;
     let mut wit_path = None;
@@ -6200,7 +6343,7 @@ fn run_multi_file_codegen(
             }
             dts_path = Some(dts);
         }
-        Some(BindingsMode::Component) => {
+        Some(BindingsMode::ComponentPaired) => {
             let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
             let wasm_filename = format!("{}.wasm", mf.name);
             let wit = exe_path.with_extension("component.wit");
@@ -6215,7 +6358,7 @@ fn run_multi_file_codegen(
             }
             wit_path = Some(wit);
         }
-        Some(BindingsMode::None) | None => {}
+        Some(BindingsMode::Component) | Some(BindingsMode::None) | None => {}
     }
     BuildCodegenStatus::Built {
         exe_path,
@@ -6238,6 +6381,7 @@ fn run_multi_file_codegen(
     _release: bool,
     _is_wasm: bool,
     _effective_bindings: Option<BindingsMode>,
+    _wasm_tools: Option<&crate::componentize::WasmTools>,
 ) -> BuildCodegenStatus {
     BuildCodegenStatus::NoLlvmFeature
 }

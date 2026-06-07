@@ -10932,7 +10932,49 @@ fn wasm_build_skip_reason(stderr: &str) -> Option<&'static str> {
     if stderr.contains("self-contained sysroot not found") {
         return Some("rustup target wasm32-wasip1 not installed");
     }
+    // Embedded component bindings shell out to the external wasm-tools
+    // binary (phase-10 "embedded-WIT migration"); a missing install is
+    // missing infrastructure, not a regression.
+    if stderr.contains("wasm-tools not found") {
+        return Some("wasm-tools not installed (cargo install wasm-tools)");
+    }
     None
+}
+
+/// A wasm binary's preamble distinguishes a Component Model component
+/// from a core module without external tooling: bytes 4..8 are the
+/// version+layer field — `0x0d 0x00 0x01 0x00` for a component
+/// (layer one) vs `0x01 0x00 0x00 0x00` for a core module (layer
+/// zero). Load-immune shape check for the embedded-component tests.
+fn wasm_artifact_kind(path: &std::path::Path) -> &'static str {
+    let bytes = std::fs::read(path).expect("wasm artifact must be readable");
+    assert!(
+        bytes.len() >= 8 && &bytes[0..4] == b"\0asm",
+        "not a wasm binary: {}",
+        path.display()
+    );
+    match &bytes[4..8] {
+        [0x0d, 0x00, 0x01, 0x00] => "component",
+        [0x01, 0x00, 0x00, 0x00] => "core module",
+        _ => "unknown wasm layer",
+    }
+}
+
+/// Path to an installed `wasm-tools`, when one is on PATH — the
+/// embedded-component tests use it for WIT round-trip assertions that
+/// go beyond the preamble shape check (import naming, world contents).
+/// `None` skips those deeper assertions, not the test.
+fn wasm_tools_on_path() -> Option<&'static str> {
+    let ok = std::process::Command::new("wasm-tools")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if ok {
+        Some("wasm-tools")
+    } else {
+        None
+    }
 }
 
 /// `--target=gpu` is a recognized v1 name that is not standalone-
@@ -11023,7 +11065,15 @@ fn wasm_wasi_build_aborts_on_target_gate_violation() {
     .unwrap();
 
     let out = karac_bin()
-        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        // `--bindings=none` keeps this a pure effect-gate test — the
+        // component default would first resolve wasm-tools, an
+        // unrelated infrastructure dependency.
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
         .current_dir(&tmp)
         .output()
         .unwrap();
@@ -11090,7 +11140,15 @@ fn main() {
     .unwrap();
 
     let out = karac_bin()
-        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        // `--bindings=none`: node's `node:wasi` host runs core modules,
+        // not components — this test exercises the raw-module embedder
+        // shape (the wasm_wasi default is now the embedded component).
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
         .current_dir(&tmp)
         // The dev-tier fallback must resolve the wasm archive — a
         // native KARAC_RUNTIME override in the environment would be
@@ -11148,10 +11206,14 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Server-WASM `host fn` lowering E2E (phase-10): on `wasm_wasi`,
+/// Server-WASM `host fn` lowering E2E (phase-10): on `wasm_wasi` under
+/// `--bindings none` (and browser / the deprecated paired form),
 /// `host fn` declarations lower to the same `kara_host` import entries
-/// as the browser target — the interim "C-ABI call + thin shim" shape,
-/// where the embedder's hand-rolled import object IS the shim. No JS
+/// as the browser target — the "C-ABI call + thin shim" shape, where
+/// the embedder's hand-rolled import object IS the shim. (Embedded
+/// component builds — the wasm_wasi default — rename the imports to
+/// canonical-ABI `kara:<pkg>/host` entries instead; see the
+/// `bindings_explicit_component_emits_embedded_component` test.) No JS
 /// glue is emitted; the WASI host instantiates with
 /// `{ ...wasi.getImportObject(), kara_host: {...} }` (the hand-rolled
 /// pattern design.md § Host Functions documents). Asserts:
@@ -11191,7 +11253,18 @@ fn main() {
     .unwrap();
 
     let out = karac_bin()
-        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        // `--bindings=none`: this test pins the raw-module embedder
+        // shape — `kara_host` C-ABI imports hand-rolled by a node
+        // `node:wasi` host (which runs core modules, not components;
+        // the wasm_wasi default is now the embedded component, whose
+        // imports carry canonical-ABI `kara:<pkg>/host` naming
+        // instead).
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
         .current_dir(&tmp)
         .env_remove("KARAC_RUNTIME")
         .output()
@@ -11318,7 +11391,15 @@ fn main() {
     .unwrap();
 
     let out = karac_bin()
-        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        // `--bindings=none` keeps this a pure link-diagnostic test —
+        // the component default would also resolve wasm-tools, an
+        // unrelated infrastructure dependency.
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
         .current_dir(&tmp)
         .env_remove("KARAC_RUNTIME")
         .output()
@@ -11537,13 +11618,15 @@ fn wasm_project_bindings_none_emits_raw_module_only() {
 }
 
 /// Project-mode `--target=wasm_wasi` with the *inferred* component
-/// default emits the paired component shape: the C-ABI core module at
-/// `dist/wasm/<pkg>.wasm` plus the `<pkg>.component.wit` WIT interface
-/// descriptor (package name from `kara.toml`; the host fn lives in a
-/// non-entry module, pinning that the merged super-program feeds the
-/// descriptor) — no browser glue, no caveat note.
+/// default emits a single embedded-WIT component at
+/// `dist/wasm/<pkg>.wasm` (phase-10 "embedded-WIT migration": the
+/// paired `.component.wit` sidecar is gone from this mode; the
+/// artifact is self-describing). The host fn lives in a non-entry
+/// module, pinning that the merged super-program feeds the embedded
+/// world — its import must carry the canonical-ABI
+/// `kara:<pkg>/host` naming, not the C-ABI `kara_host` shape.
 #[test]
-fn wasm_project_wasi_emits_core_module_and_wit_descriptor() {
+fn wasm_project_wasi_emits_embedded_component() {
     let tmp = wasm_test_dir("bprojwasi");
     write_wasm_project_fixture(&tmp, "wasipkg");
 
@@ -11555,35 +11638,98 @@ fn wasm_project_wasi_emits_core_module_and_wit_descriptor() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     if let Some(reason) = wasm_build_skip_reason(&stderr) {
-        eprintln!("skip: wasm_project_wasi_emits_core_module_and_wit_descriptor — {reason}");
+        eprintln!("skip: wasm_project_wasi_emits_embedded_component — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
     }
     assert!(out.status.success(), "project wasi build failed: {stderr}");
     assert!(
-        !stderr.contains("core module only"),
-        "inferred component default must stay silent, got: {stderr}",
+        !stderr.contains("deprecated"),
+        "inferred component default must stay notice-free, got: {stderr}",
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("wasipkg.wasm") && stdout.contains("wasipkg.component.wit"),
-        "Built line must name the paired artifacts, got: {stdout}",
+        stdout.contains("wasipkg.wasm") && !stdout.contains("wasipkg.component.wit"),
+        "Built line must name only the single component artifact, got: {stdout}",
     );
     let dist = tmp.join("dist").join("wasm");
-    assert!(dist.join("wasipkg.wasm").exists(), "missing dist .wasm");
-    let wit = std::fs::read_to_string(dist.join("wasipkg.component.wit"))
-        .expect("missing dist .component.wit descriptor");
-    assert!(
-        wit.contains("package kara:wasipkg;"),
-        "descriptor must key the package name from kara.toml, got:\n{wit}",
+    let component = dist.join("wasipkg.wasm");
+    assert!(component.exists(), "missing dist .wasm");
+    assert_eq!(
+        wasm_artifact_kind(&component),
+        "component",
+        "the artifact must be a Component Model component, not a core module",
     );
     assert!(
-        wit.contains("report: func(value: s64) -> s64;"),
-        "host fn from the non-entry module must reach the descriptor, got:\n{wit}",
+        !dist.join("wasipkg.component.wit").exists()
+            && !dist.join("wasipkg.js").exists()
+            && !dist.join("wasipkg.d.ts").exists(),
+        "embedded component bindings must emit no companion artifacts",
+    );
+    // Deeper WIT round-trip when wasm-tools is available: the embedded
+    // world must import the host interface under canonical-ABI naming
+    // with the boundary-typed signature from the non-entry module.
+    if let Some(tool) = wasm_tools_on_path() {
+        let wit_dump = std::process::Command::new(tool)
+            .args(["component", "wit"])
+            .arg(&component)
+            .output()
+            .unwrap();
+        assert!(
+            wit_dump.status.success(),
+            "wasm-tools component wit must round-trip the artifact: {}",
+            String::from_utf8_lossy(&wit_dump.stderr)
+        );
+        let wit = String::from_utf8_lossy(&wit_dump.stdout);
+        assert!(
+            wit.contains("import kara:wasipkg/host;"),
+            "embedded world must import the canonical-ABI host instance, got:\n{wit}",
+        );
+        assert!(
+            wit.contains("report: func(value: s64) -> s64;"),
+            "host fn from the non-entry module must reach the embedded WIT, got:\n{wit}",
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A `[toolchain] wasm-tools` pin that doesn't match the discovered
+/// binary is a hard error naming both versions, before any artifact is
+/// emitted — the pin exists for reproducible builds, so drift must not
+/// silently componentize with whatever is on PATH.
+#[test]
+fn wasm_project_toolchain_pin_mismatch_fails() {
+    let tmp = wasm_test_dir("bprojpin");
+    write_wasm_project_fixture(&tmp, "pinpkg");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"pinpkg\"\n\n[toolchain]\nwasm-tools = \"0.0.0-bogus\"\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", "--target=wasm_wasi"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_project_toolchain_pin_mismatch_fails — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        !out.status.success(),
+        "a pin mismatch must fail the build, got success",
     );
     assert!(
-        !dist.join("wasipkg.js").exists() && !dist.join("wasipkg.d.ts").exists(),
-        "component bindings must not emit browser glue",
+        stderr.contains("version mismatch") && stderr.contains("0.0.0-bogus"),
+        "error must name the pinned version, got: {stderr}",
+    );
+    assert!(
+        !tmp.join("dist").join("wasm").join("pinpkg.wasm").exists(),
+        "no artifact may be emitted on a pin mismatch",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -11902,7 +12048,7 @@ fn bindings_flag_unknown_value_rejected() {
     assert!(!out.status.success());
     assert!(
         stderr.contains("unknown --bindings value 'xml'")
-            && stderr.contains("browser, component, or none"),
+            && stderr.contains("browser, component, component-paired (deprecated), or none"),
         "expected the valid-set listing, got: {stderr}",
     );
 }
@@ -12008,14 +12154,13 @@ fn bindings_browser_on_wasi_emits_glue() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Explicit `--bindings=component` emits the paired shape (phase-10
-/// "WASM Component Model artifact emission"): the C-ABI core module
-/// plus the `<stem>.component.wit` WIT interface descriptor, with the
-/// `Built:` line naming both — and no follow-up caveat note (the
-/// descriptor *is* the sanctioned interim form, design.md § Target
-/// Build Artifacts).
+/// Explicit `--bindings=component` emits a single embedded-WIT
+/// component (phase-10 "embedded-WIT migration"): `<stem>.wasm` IS the
+/// component — no `.component.wit` sidecar, no deprecation notice —
+/// with `host fn` imports lowered to the canonical-ABI
+/// `kara:<pkg>/host` instance the embedded world declares.
 #[test]
-fn bindings_explicit_component_emits_wit_descriptor() {
+fn bindings_explicit_component_emits_embedded_component() {
     let tmp = wasm_test_dir("bcomp");
     let path = tmp.join("compmod.kara");
     std::fs::write(
@@ -12039,25 +12184,115 @@ fn bindings_explicit_component_emits_wit_descriptor() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     if let Some(reason) = wasm_build_skip_reason(&stderr) {
-        eprintln!("skip: bindings_explicit_component_emits_wit_descriptor — {reason}");
+        eprintln!("skip: bindings_explicit_component_emits_embedded_component — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
     }
     assert!(out.status.success(), "build failed: {stderr}");
     assert!(
-        !stderr.contains("core module only"),
-        "the WIT-follow-up caveat note is retired, got: {stderr}",
+        !stderr.contains("deprecated"),
+        "the embedded default carries no deprecation notice, got: {stderr}",
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("Built: compmod.wasm + compmod.component.wit"),
+        stdout.contains("Built: compmod.wasm") && !stdout.contains("compmod.component.wit"),
+        "Built line must name only the single component artifact, got: {stdout}",
+    );
+    let component = tmp.join("compmod.wasm");
+    assert!(component.exists(), "missing .wasm artifact");
+    assert_eq!(
+        wasm_artifact_kind(&component),
+        "component",
+        "the artifact must be a Component Model component, not a core module",
+    );
+    assert!(
+        !tmp.join("compmod.component.wit").exists()
+            && !tmp.join("compmod.js").exists()
+            && !tmp.join("compmod.d.ts").exists(),
+        "embedded component bindings must emit no companion artifacts",
+    );
+    if let Some(tool) = wasm_tools_on_path() {
+        let wit_dump = std::process::Command::new(tool)
+            .args(["component", "wit"])
+            .arg(&component)
+            .output()
+            .unwrap();
+        assert!(
+            wit_dump.status.success(),
+            "wasm-tools component wit must round-trip the artifact: {}",
+            String::from_utf8_lossy(&wit_dump.stderr)
+        );
+        let wit = String::from_utf8_lossy(&wit_dump.stdout);
+        assert!(
+            wit.contains("import kara:compmod/host;"),
+            "embedded world must import the canonical-ABI host instance, got:\n{wit}",
+        );
+        assert!(
+            wit.contains("report: func(value: s64) -> s64;"),
+            "host fn must map per the WIT boundary contract (i64 ⇒ s64), got:\n{wit}",
+        );
+        assert!(
+            wit.contains("export wasi:cli/run@"),
+            "the adapter must synthesize the command entry point, got:\n{wit}",
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// `--bindings=component-paired` keeps the former paired shape — the
+/// C-ABI core module (`kara_host` imports) plus the
+/// `<stem>.component.wit` descriptor — behind a one-release
+/// deprecation notice on stderr (design.md § Target Build Artifacts).
+/// No external tool involved, so this needs no wasm-tools skip.
+#[test]
+fn bindings_component_paired_emits_descriptor_with_deprecation() {
+    let tmp = wasm_test_dir("bcomppaired");
+    let path = tmp.join("pairmod.kara");
+    std::fs::write(
+        &path,
+        "effect resource Reporter;\n\n\
+         host fn report(value: i64) -> i64 with writes(Reporter);\n\n\
+         fn main() {\n    report(42);\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=component-paired",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: bindings_component_paired_emits_descriptor_with_deprecation — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "build failed: {stderr}");
+    assert!(
+        stderr.contains("component-paired") && stderr.contains("deprecated"),
+        "the paired form must announce its one-release deprecation, got: {stderr}",
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("Built: pairmod.wasm + pairmod.component.wit"),
         "Built line must name the paired artifacts, got: {stdout}",
     );
-    assert!(tmp.join("compmod.wasm").exists(), "missing .wasm artifact");
-    let wit = std::fs::read_to_string(tmp.join("compmod.component.wit"))
+    let module = tmp.join("pairmod.wasm");
+    assert_eq!(
+        wasm_artifact_kind(&module),
+        "core module",
+        "the paired form ships the C-ABI core module, not a component",
+    );
+    let wit = std::fs::read_to_string(tmp.join("pairmod.component.wit"))
         .expect("missing .component.wit descriptor");
     assert!(
-        wit.contains("package kara:compmod;"),
+        wit.contains("package kara:pairmod;"),
         "descriptor must carry the package header, got:\n{wit}",
     );
     assert!(
@@ -12065,14 +12300,17 @@ fn bindings_explicit_component_emits_wit_descriptor() {
         "host fn must map per the WIT boundary contract (i64 ⇒ s64), got:\n{wit}",
     );
     assert!(
-        wit.contains("world compmod {")
+        wit.contains("world pairmod {")
             && wit.contains("import host;")
             && wit.contains("export run: func();"),
-        "world must import the host interface and export the entry point, got:\n{wit}",
+        "descriptor world must import the host interface and export the entry point, got:\n{wit}",
     );
+    // The core module keeps the C-ABI `kara_host` import shape — the
+    // canonical-ABI rename applies only to embedded component builds.
+    let descriptor_doc = wit.contains("core import `kara_host.report`");
     assert!(
-        !tmp.join("compmod.js").exists() && !tmp.join("compmod.d.ts").exists(),
-        "component bindings must not emit browser glue or declarations",
+        descriptor_doc,
+        "descriptor doc lines must record the kara_host core import, got:\n{wit}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }

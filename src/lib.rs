@@ -16,6 +16,7 @@ pub mod cli;
 #[cfg(feature = "llvm")]
 pub mod codegen;
 pub mod codegen_queries;
+pub mod componentize;
 pub mod concurrency;
 pub mod concurrency_report;
 pub mod cost_summary;

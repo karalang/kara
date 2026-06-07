@@ -271,12 +271,20 @@ OPTIONS:
     --bindings=<mode>       WASM output shape: browser (emit `.js`
                             ES-module glue + `.d.ts` TypeScript
                             declarations next to the `.wasm`),
-                            component (Component Model; emits the C-ABI
-                            core module paired with a `.component.wit`
-                            WIT interface descriptor for wrapping by
-                            external tools — the interim shape until
-                            the embedded-WIT swap), or none (raw
-                            `.wasm`, no glue).
+                            component (a single embedded-WIT Component
+                            Model `.wasm` that wasmtime/jco-class hosts
+                            run directly; componentized via the
+                            external `wasm-tools` binary — install with
+                            `cargo install wasm-tools`, pin the exact
+                            version via `[toolchain] wasm-tools = <v>`
+                            in kara.toml, point KARAC_WASM_TOOLS at a
+                            specific binary), component-paired
+                            (DEPRECATED: the former paired shape — the
+                            C-ABI core module plus a `.component.wit`
+                            WIT descriptor for wrapping by external
+                            tools; removed one release after the
+                            embedded-WIT swap), or none (raw `.wasm`,
+                            no glue).
                             Default is inferred from the target:
                             wasm_browser -> browser, wasm_wasi ->
                             component. Ignored on non-WASM targets.

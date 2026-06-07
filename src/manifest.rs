@@ -210,6 +210,16 @@ pub struct Manifest {
     /// registry) is validated at build time, not here — same containment
     /// rationale as `release_target_cpu` above. `None` when absent.
     pub release_target_features: Option<String>,
+    /// `[toolchain] wasm-tools = "<version>"` — exact-version pin for the
+    /// external `wasm-tools` binary that `--bindings component` shells out
+    /// to for embedded-WIT componentization (design.md § Component Model
+    /// emission — the spec stays out of the compiler; the pin keeps builds
+    /// reproducible). Checked verbatim against `wasm-tools --version` at
+    /// build time by `componentize::resolve_wasm_tools`; a mismatch is a
+    /// hard error there, not here (the manifest layer never probes PATH).
+    /// `None` when the table or key is absent — any discovered version is
+    /// then accepted.
+    pub toolchain_wasm_tools: Option<String>,
     pub warnings: Vec<ManifestWarning>,
 }
 
@@ -640,6 +650,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     let lints = parse_lints_table(path, &table, &mut warnings)?;
     let (release_target_cpu, release_target_features) =
         parse_release_table(path, &table, &mut warnings)?;
+    let toolchain_wasm_tools = parse_toolchain_table(path, &table, &mut warnings)?;
 
     // Stable order across package-key + dependency warnings — same sort key
     // (message string) used as before, but now applied after the full
@@ -665,6 +676,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         lints,
         release_target_cpu,
         release_target_features,
+        toolchain_wasm_tools,
         warnings,
     })
 }
@@ -729,6 +741,54 @@ fn parse_release_table(
         }
     }
     Ok((target_cpu, target_features))
+}
+
+/// Parse the `[toolchain]` table when present. Recognised keys at v1:
+/// `wasm-tools` (non-empty string — the exact version the discovered
+/// `wasm-tools` binary must report, e.g. `"1.251.0"`), per design.md
+/// § Component Model emission. Unknown keys soft-warn (reserved for
+/// later external-tool pins, e.g. `wit-bindgen`); a wrong-typed or
+/// empty value hard-errors so a typo can't silently drop the pin.
+/// Absent table → `None`.
+fn parse_toolchain_table(
+    path: &Path,
+    table: &toml::Table,
+    warnings: &mut Vec<ManifestWarning>,
+) -> Result<Option<String>, ManifestError> {
+    let Some(value) = table.get("toolchain") else {
+        return Ok(None);
+    };
+    let toolchain_table = value
+        .as_table()
+        .ok_or_else(|| ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "toolchain".to_string(),
+            expected: "a table (e.g. `[toolchain]`)",
+        })?;
+    let mut wasm_tools = None;
+    for (key, val) in toolchain_table {
+        match key.as_str() {
+            "wasm-tools" => match val {
+                toml::Value::String(s) if !s.trim().is_empty() => {
+                    wasm_tools = Some(s.trim().to_string());
+                }
+                _ => {
+                    return Err(ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: "toolchain.wasm-tools".to_string(),
+                        expected: "a non-empty exact version string (e.g. \"1.251.0\")",
+                    });
+                }
+            },
+            other => warnings.push(ManifestWarning {
+                line: None,
+                message: format!(
+                    "unknown key `[toolchain].{other}` — ignored in v1 (reserved for a later release)"
+                ),
+            }),
+        }
+    }
+    Ok(wasm_tools)
 }
 
 /// Parse the `[lints]` table when present. Recognised keys at v1:
@@ -2843,6 +2903,56 @@ target-features = "+aes,-outline-atomics"
                 }
             }
         }
+    }
+
+    #[test]
+    fn toolchain_wasm_tools_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[toolchain]
+wasm-tools = "1.251.0"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.toolchain_wasm_tools.as_deref(), Some("1.251.0"));
+        assert!(m.warnings.is_empty());
+        // Absent table → None; empty [toolchain] table is also fine.
+        let src = "[package]\nname = \"hello\"\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(m.toolchain_wasm_tools.is_none());
+        let src = "[package]\nname = \"hello\"\n\n[toolchain]\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(m.toolchain_wasm_tools.is_none());
+    }
+
+    #[test]
+    fn toolchain_wasm_tools_wrong_type_is_hard_error_and_unknown_key_soft_warns() {
+        // A typo'd pin must not silently accept any version — same posture
+        // as `[release].target-cpu`.
+        for src in [
+            "[package]\nname = \"hello\"\n\n[toolchain]\nwasm-tools = 1\n",
+            "[package]\nname = \"hello\"\n\n[toolchain]\nwasm-tools = \"\"\n",
+        ] {
+            let err = parse_manifest(&p(), src).unwrap_err();
+            match err {
+                ManifestError::InvalidFieldType { key, .. } => {
+                    assert_eq!(key, "toolchain.wasm-tools")
+                }
+                other => {
+                    panic!("expected InvalidFieldType on `toolchain.wasm-tools`, got {other:?}")
+                }
+            }
+        }
+        let src = "[package]\nname = \"hello\"\n\n[toolchain]\nwit-bindgen = \"0.40.0\"\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(m.toolchain_wasm_tools.is_none());
+        assert!(
+            m.warnings
+                .iter()
+                .any(|w| w.message.contains("unknown key `[toolchain].wit-bindgen`")),
+            "expected a soft warning for the unknown key, got: {:?}",
+            m.warnings,
+        );
     }
 
     #[test]

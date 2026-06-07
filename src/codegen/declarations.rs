@@ -3673,23 +3673,41 @@ impl<'ctx> super::Codegen<'ctx> {
         // This IS the tracker's interim "C-ABI call + thin shim"
         // server-WASM lowering: a core-wasm import entry is exactly a
         // C-ABI call resolved by the host, and the embedder-side impl
-        // is the thin shim. The Component Model migration (WIT-backed
-        // calls, post-v1) swaps the lowering at this one site without
-        // touching the source-level `host fn` surface. Plain
-        // `extern "C"` declarations deliberately get no attributes, so
-        // an unresolved one is still a loud undefined-symbol link
-        // error on both wasm targets.
+        // is the thin shim. Plain `extern "C"` declarations
+        // deliberately get no attributes, so an unresolved one is
+        // still a loud undefined-symbol link error on both wasm
+        // targets.
+        //
+        // Under embedded-WIT component bindings (`--bindings
+        // component` — the Component Model migration this comment
+        // long promised would swap the lowering "at this one site"),
+        // the canonical ABI dictates the import strings instead:
+        // module `kara:<pkg>/host`, kebab-case names — exactly what
+        // the world `wasm-tools component embed` bakes in declares,
+        // sourced from the same `wit.rs` helpers so the two can't
+        // drift. The C-ABI `kara_host` shape remains for every other
+        // consumer (browser glue, hand-rolled wasi embedders, the
+        // deprecated paired form). Source-level `host fn` declarations
+        // are unchanged by the swap, per design.md § Host Functions
+        // "Component Model migration path".
         if ext.abi == "host" && crate::target::active_target_is_wasm() {
             use inkwell::attributes::AttributeLoc;
+            let (module, name) = match crate::target::wasm_component_host_package() {
+                Some(pkg) => (
+                    crate::wit::host_import_module(pkg),
+                    crate::wit::host_import_name(&ext.name),
+                ),
+                None => ("kara_host".to_string(), ext.name.clone()),
+            };
             fn_val.add_attribute(
                 AttributeLoc::Function,
                 self.context
-                    .create_string_attribute("wasm-import-module", "kara_host"),
+                    .create_string_attribute("wasm-import-module", &module),
             );
             fn_val.add_attribute(
                 AttributeLoc::Function,
                 self.context
-                    .create_string_attribute("wasm-import-name", &ext.name),
+                    .create_string_attribute("wasm-import-name", &name),
             );
         }
     }

@@ -487,6 +487,7 @@ mod tests {
             lints: manifest::ManifestLints::default(),
             release_target_cpu: None,
             release_target_features: None,
+            toolchain_wasm_tools: None,
             warnings: Vec::new(),
         }
     }

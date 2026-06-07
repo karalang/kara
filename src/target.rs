@@ -131,6 +131,31 @@ pub fn target_features_override() -> Option<&'static str> {
     TARGET_FEATURES_OVERRIDE.get().map(|s| s.as_str())
 }
 
+/// Package name under embedded-WIT component bindings (phase-10
+/// "embedded-WIT migration"). Set by the CLI before codegen when the
+/// effective `--bindings` mode is `component` on a wasm target; its
+/// presence is what flips codegen's `host fn` import attachment from
+/// the C-ABI `kara_host`/snake_case shape (browser glue, wasi
+/// embedders, the deprecated paired form) to the canonical-ABI
+/// `kara:<pkg>/host`/kebab-case shape `wasm-tools component embed`
+/// resolves against (`wit::host_import_module` / `host_import_name` —
+/// the single source of those strings). Lives here (plain string, no
+/// LLVM types) for the same codegen-containment reason as the CPU
+/// override above.
+static WASM_COMPONENT_HOST_PACKAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Install the component-bindings package name. First-set wins, same
+/// as [`set_target_cpu_override`].
+pub fn set_wasm_component_host_package(pkg: &str) {
+    let _ = WASM_COMPONENT_HOST_PACKAGE.set(pkg.to_string());
+}
+
+/// The component-bindings package name for this process, if embedded
+/// component bindings are active.
+pub fn wasm_component_host_package() -> Option<&'static str> {
+    WASM_COMPONENT_HOST_PACKAGE.get().map(|s| s.as_str())
+}
+
 /// Parsed form of one `#[target(...)]` attribute. Per the no-boolean-
 /// logic rule the list is either all positive or all negative — the
 /// parser rejects mixed lists, so `negated` applies to the whole set.

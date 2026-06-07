@@ -10264,15 +10264,22 @@ karac build --target wasm_browser --bindings none       # raw .wasm only
 |---|---|
 | `dist/wasm/<pkg>.wasm` | Component Model module with WIT interfaces embedded per the spec. Usable by wasmtime, jco, and other Component Model hosts. |
 
-Until Component Model runtime support is stable across the target ecosystem (see the `host fn` lowering note at [Host Functions](#host-functions)), `--bindings component` may emit a paired `<pkg>.wasm` (C-ABI core module) + `<pkg>.component.wit` (WIT interface) for wrapping by external tools. Migration to embedded-WIT Component Model format is non-breaking at the source level; downstream tooling that consumes the paired shape gets a deprecation notice one release before the swap.
+*Shipped status:* the **embedded-WIT single-component form is the live default** (phase-10 "embedded-WIT migration"; the gate — wasmtime/jco-class hosts running embedded-WIT components natively, with the paired-form wrapper no longer the common case — was re-evaluated and met 2026-06-06: wasmtime runs components with no flag, jco 1.0 is stable, and every comparable toolchain ships a single component as its artifact). Project mode lands `dist/wasm/<pkg>.wasm` (package name from `kara.toml`; single-file builds emit `<stem>.wasm` in the CWD); the artifact is a WASI 0.2 command component — the preview1 command adapter synthesizes `export wasi:cli/run` from the core module's `_start` — whose embedded world imports `kara:<pkg>/host` (every `host fn`, typed per the WIT boundary mapping — 64-bit ints ⇒ `s64`/`u64`, raw pointers ⇒ wasm32 `u32` addresses, opaque handles at their field's scalar width). `wasmtime run <pkg>.wasm` works directly. Per-export WIT signatures beyond the entry point extend the embedded world when [entry point discovery](#entry-point-discovery) lands.
 
-*Shipped status:* the **paired form** is live — project mode lands `dist/wasm/<pkg>.{wasm,component.wit}` (package name from `kara.toml`; single-file builds emit `<stem>.{wasm,component.wit}` in the CWD). The descriptor declares the `host` interface (every `host fn`, typed per the WIT boundary mapping — 64-bit ints ⇒ `s64`/`u64`, raw pointers ⇒ wasm32 `u32` addresses, opaque handles at their field's scalar width) and a world importing it with `export run: func()` standing for the core module's `_start`; each function's doc comment records its Kāra-surface signature and `kara_host` core-import name. Per-export WIT signatures beyond the entry point extend the descriptor when [entry point discovery](#entry-point-discovery) lands. The embedded-WIT single-file swap is the tracked follow-up (phase-10 "embedded-WIT migration").
+The former **paired form** — `<pkg>.wasm` (C-ABI core module, `kara_host` imports) + `<pkg>.component.wit` (WIT interface descriptor) for wrapping by external tools — remains selectable as `--bindings component-paired` with a deprecation notice on stderr, and is removed one release after the swap (this is the spec'd "deprecation notice one release before the swap" contract, discharged at the swap itself: the swap landed pre-first-release, when no downstream consumers of the paired shape existed). Migration is non-breaking at the source level — `host fn` declarations and effect contracts are unchanged.
 
 **Raw `.wasm` (`--bindings none`).** Produces only `dist/wasm/<pkg>.wasm`. For users who want to write their own glue or target an unusual host.
 
 #### Component Model emission
 
-Kāra never bakes the Component Model spec into the compiler — that would couple compiler releases to a specification that is still evolving. The shipped paired form needs no Component Model machinery at all: the `.component.wit` descriptor is plain text rendered by `karac` itself, and componentization is the downstream wrapper's job. When the embedded-WIT form becomes the default, `karac` calls into the componentization tooling (`wasm-tools` / `wit-bindgen`) as an **external tool**, with the version pinned in the package's `kara.toml` `[toolchain]` section so builds are reproducible. Migration to in-compiler Component Model emission is a post-v1 decision, dependent on spec stability.
+Kāra never bakes the Component Model spec into the compiler — that would couple compiler releases to a specification that is still evolving. The embedded-WIT default delegates the spec-coupled transform to `wasm-tools` as an **external tool**: `karac` renders the WIT world itself (plain text — `wit.rs`, no spec machinery), then shells out to `wasm-tools component embed` (host-fn builds only) and `wasm-tools component new`. The binary resolves from `KARAC_WASM_TOOLS` then `PATH`, and the package can pin the exact version in `kara.toml`:
+
+```toml
+[toolchain]
+wasm-tools = "1.251.0"   # exact match against `wasm-tools --version`; drift is a hard error
+```
+
+Unpinned builds accept whatever version is discovered; a missing binary is a hard error naming the install recipe and the escape hatches (`--bindings component-paired` / `none`). The one spec-adjacent data ingredient — the `wasi_snapshot_preview1` **command** adapter that lifts the preview1-ABI core module — is vendored into `karac` through the `wasi-preview1-component-adapter-provider` crate (wasmtime's own release artifact, pinned by karac's `Cargo.lock`); `KARAC_WASI_ADAPTER=<path>` substitutes an on-disk adapter. No wasi WIT files are vendored anywhere: the adapter contributes the `wasi:cli/run` export and the `wasi:*` imports at `component new` time. The deprecated paired form still needs no Component Model machinery at all. Migration to in-compiler Component Model emission is a post-v1 decision, dependent on spec stability.
 
 #### Entry point discovery
 
@@ -12615,7 +12622,7 @@ A `host fn` declaration names a function **provided by the compilation host** �
 
 - **Native:** to an `extern "C"` call of the same signature (identical code path to a plain `extern`).
 - **Browser-WASM:** to a WASM `import` entry under the **`kara_host`** import-module namespace, with compiler-generated JS glue (wasm-bindgen-compatible calling convention so existing JS tooling works). Shipped — see "Browser-WASM lowering (v1 shape)" below.
-- **Server-WASM (WASI / Component Model):** to the same WASM `import` entry under `kara_host` as the browser target — the interim C-ABI shape, where the embedder's import object is the thin shim. No glue file is generated; the WASI embedder provides the implementations at instantiation. Shipped — see "Server-WASM lowering (v1 shape)" below. A WIT-backed Component Model lowering replaces this when runtime support is stable; the user-facing `host fn` surface is stable across that migration.
+- **Server-WASM (WASI / Component Model):** under the default `--bindings component`, to a WIT-backed import — the canonical-ABI instance `kara:<pkg>/host` with kebab-case function names, matching the `interface host` the embedded world declares; the Component Model host supplies the implementation at component instantiation. Under `--bindings none` / `browser` / the deprecated `component-paired`, the C-ABI shape remains: the same `kara_host` import entry as the browser target, where the embedder's import object is the thin shim. No glue file is generated either way. Both shipped — see "Server-WASM lowering (v1 shape)" below. The user-facing `host fn` surface is identical across all shapes.
 
 A library author declares a browser API once as `host fn`; the same source file compiles against all three targets.
 
@@ -12669,7 +12676,7 @@ Opaque handles do **not** participate in Kāra's RC. A handle is a scalar; copyi
 |---|---|
 | Native | `extern "C"` call (identical code path to a hand-written `extern "C"` with the same signature). |
 | Browser-WASM | WASM `import` entry under the `kara_host` namespace + generated JS glue (wasm-bindgen-compatible calling convention). Shipped — v1 shape below. |
-| Server-WASM (WASI / Component Model) | WASM `import` entry under the `kara_host` namespace, implementations supplied by the embedder at instantiation (the interim C-ABI shape). Shipped — v1 shape below. WIT-backed Component Model call replaces it when runtime support is stable. |
+| Server-WASM (WASI / Component Model) | Default (`--bindings component`): WIT-backed import under the canonical-ABI `kara:<pkg>/host` instance, supplied at component instantiation. `--bindings none`/`browser`/`component-paired`: WASM `import` entry under the `kara_host` namespace, implementations supplied by the embedder at instantiation (the C-ABI shape). Both shipped — v1 shape below. |
 
 The lowering layer lives in the compiler (Phase 10). The user-facing `host fn` surface is stable across all three paths; migration from the interim import-entry shape to Component Model for server-WASM is non-breaking at the source level.
 
@@ -12684,12 +12691,12 @@ The lowering layer lives in the compiler (Phase 10). The user-facing `host fn` s
 
 ### Server-WASM lowering (v1 shape)
 
-`karac build <file>.kara --target=wasm_wasi` lowers `host fn` declarations to the **same `kara_host` import entries** as the browser target — one contract, both WASM targets. This is the interim "C-ABI + shim" lowering the migration plan named: a core-wasm import entry *is* a C-ABI call resolved by the host, and the embedder-side implementation is the thin shim. The committed v1 decisions:
+`karac build <file>.kara --target=wasm_wasi --bindings none` (and the browser/paired shapes) lowers `host fn` declarations to the **same `kara_host` import entries** as the browser target — one C-ABI contract across those shapes. A core-wasm import entry *is* a C-ABI call resolved by the host, and the embedder-side implementation is the thin shim. The committed v1 decisions:
 
 - **No glue file.** Server-WASM hosts are heterogeneous (wasmtime, node, jco, edge runtimes) and each has a first-class import-object/linker surface already; generated glue would pick a winner. The embedder instantiates with both namespaces — `WebAssembly.instantiate(mod, { ...wasi.getImportObject(), kara_host: {...} })` under node, `linker.func_wrap("kara_host", "<name>", ...)` under wasmtime.
 - **Boundary types are core-wasm types.** The contract is the module's import signatures: i64/u64/isize/usize as wasm `i64`, everything else (including wasm32 pointers) as `i32`/`f32`/`f64` scalars; strings cross as `(ptr, len)` pairs read from the exported linear memory. How those surface in the host language is the host's convention (JS hosts: `i64` ↔ `BigInt`, pointers as numbers — same as the browser glue documents), not part of the Kāra contract.
 - **`extern "C"` differential preserved:** plain `extern "C"` declarations get no import entries on either WASM target — an unresolved one stays a hard undefined-symbol link error. Only `host fn` opts into host-provided resolution.
-- **Component Model migration path:** when WIT/Component-Model runtime support is production-ready, this lowering swaps to WIT-backed calls at the single compiler site that attaches the import attributes. Source-level `host fn` declarations and their effect contracts are unchanged by that swap.
+- **Component Model migration path — discharged.** The promised swap landed with the embedded-WIT migration, at exactly the single compiler site that attaches the import attributes: under `--bindings component` the same declarations lower to `wasm-import-module = "kara:<pkg>/host"` with kebab-case `wasm-import-name`s (the canonical-ABI strings the embedded world declares — both sourced from the same `wit.rs` helpers so they cannot drift). Source-level `host fn` declarations and their effect contracts were unchanged by the swap, as committed.
 
 ---
 

@@ -40,6 +40,8 @@ cp target/wasm32-wasip1/release/libkarac_runtime.a target/release/libkarac_runti
 
 Without this, the E2E tests (including all `tests/memory_sanitizer.rs` cases) skip with a stderr notice rather than exercise real binaries — they pass vacuously. `tests/memory_sanitizer.rs` additionally requires a `cc` that supports `-fsanitize=address`; if missing (or if `KARAC_SKIP_ASAN_TESTS=1` is set), it skips gracefully.
 
+**Embedded-component wasm tests additionally need `wasm-tools`** (`cargo install wasm-tools` or `brew install wasm-tools`): `--bindings component` — the `wasm_wasi` default — shells out to it for componentization (phase-10 embedded-WIT migration; design.md § Component Model emission). Without it, the embedded-component E2E tests in `tests/cli.rs` skip with a stderr notice (same vacuous-pass caveat as the archives). The wasi preview1 adapter is vendored in karac itself (`wasi-preview1-component-adapter-provider` crate) — no extra setup.
+
 ## Branch management
 
 **All dev work in karac-rust happens in an isolated worktree, not on the primary `main` checkout.** Every implementation slice — feature, fix, refactor, even single-line bug fixes — starts with `EnterWorktree` (which honors `.claude/settings.local.json`'s `worktree.baseRef: "head"`, so the new worktree picks up local-but-unpushed `main` commits). Commit inside the worktree, then `git rebase main` from the worktree and `git merge --ff-only <branch>` from the primary to integrate. Direct commits to `main` from the primary checkout are reserved for pure recovery operations (the `update-ref` failure-mode dance below) — never for normal feature/fix work, even if "it's just two lines."
