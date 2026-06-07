@@ -4955,7 +4955,13 @@ fn resolve_effective_bindings(
 /// rejects an explicit `--bindings=component` on a `wasm_browser`
 /// threaded build; `--bindings=none` is fine (both modules are emitted,
 /// the embedder owns `wasi.thread-spawn`). No-op when the flag is off.
-#[cfg(feature = "llvm")]
+///
+/// Pure argument validation — no codegen, no LLVM types — so it is NOT
+/// `llvm`-gated: the flag/target rejection must be identical whether or
+/// not karac was built with the backend. (A `#[cfg(feature = "llvm")]`
+/// guard here silently let the gate fall through to manifest discovery
+/// in non-llvm project builds, surfacing "no kara.toml" instead of the
+/// scope rejection.)
 fn validate_wasm_threads_scope(
     wasm_threads: bool,
     build_target: &str,
@@ -5693,11 +5699,10 @@ fn cmd_build_project(
     // `--features wasm-threads` scope gate — single-file contract
     // (see `validate_wasm_threads_scope`): wasm_browser-only, no
     // component bindings. Runs pre-manifest so the failure mode is
-    // identical from any directory.
-    #[cfg(feature = "llvm")]
+    // identical from any directory — and llvm-independent, so a
+    // non-llvm build rejects the flag here rather than tripping the
+    // manifest-not-found check below.
     validate_wasm_threads_scope(wasm_threads, build_target, effective_bindings);
-    #[cfg(not(feature = "llvm"))]
-    let _ = wasm_threads;
     // `--target-cpu=help` / `--target-features=help` exit before
     // manifest discovery so the listing works from any directory — it
     // needs only the active target, not a project. Name validation for
