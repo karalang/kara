@@ -101,7 +101,7 @@ fn print_sorted[T: Ord + Display](items: Vec[T]) {
 }
 ```
 
-### Why [T] instead of <T>?
+### Why `[T]` instead of `<T>`?
 
 No ambiguity with comparison operators. `Vec[i32]` can't be misread as "is Vec less than i32." No turbofish needed. The tradeoff is that `[` does double duty for generics and indexing, but the parser disambiguates by context:
 
