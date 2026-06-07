@@ -1790,6 +1790,15 @@ pub(super) struct Codegen<'ctx> {
     /// v1, `KARAC_AUTO_PAR=0` is the only way to flip the gate. See
     /// `phase-8-stdlib-floor.md` § "Auto-Concurrency Codegen —
     /// Parallax-lite Workload".
+    ///
+    /// Also forced on for wasm targets (phase-10 "WASM concurrency
+    /// lowering — sequential default"): the target is single-threaded,
+    /// so an auto-par fan-out is pure overhead (branch-fn synthesis +
+    /// runtime dispatch) with no parallelism to buy — the untransformed
+    /// sequential program *is* the sequential lowering. Explicit
+    /// `par {}` blocks are unaffected: they still lower through
+    /// `karac_par_run` (sequential in the wasm runtime archive) so
+    /// their cancellation/result-slot semantics are preserved.
     pub(crate) auto_par_disabled: bool,
     // ── Theme 6: `with_provider[R]` trait-method dispatch ──────────
     /// Resource name → stable u32 ID assigned at codegen init from the
@@ -3993,7 +4002,10 @@ impl<'ctx> Codegen<'ctx> {
             karac_par_reduce_fn,
             spawn_sites: Vec::new(),
             runtime_debug_metadata_enabled: read_runtime_debug_metadata_env(),
-            auto_par_disabled: !read_auto_par_env(),
+            // Env gate OR wasm target — see the field doc-comment
+            // (auto-par fan-out is pure overhead on a single-threaded
+            // target; phase-10 sequential default).
+            auto_par_disabled: !read_auto_par_env() || crate::target::active_target_is_wasm(),
             provider_resource_ids: HashMap::new(),
             provider_resource_traits: HashMap::new(),
             provider_trait_methods: HashMap::new(),

@@ -1358,7 +1358,7 @@ mod tests {
                     let start = Instant::now();
                     for _ in 0..CALLS {
                         unsafe {
-                            karac_par_run(branches.as_ptr(), n, 0, std::ptr::null());
+                            karac_par_run(branches.as_ptr(), n as u64, 0, std::ptr::null());
                         }
                     }
                     start.elapsed()
@@ -1408,7 +1408,7 @@ mod tests {
                 let par_ns = median_ns(1, 9, || {
                     let start = Instant::now();
                     unsafe {
-                        karac_par_run(branches.as_ptr(), N, 0, std::ptr::null());
+                        karac_par_run(branches.as_ptr(), N as u64, 0, std::ptr::null());
                     }
                     start.elapsed()
                 });

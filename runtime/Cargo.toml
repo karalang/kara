@@ -59,8 +59,11 @@ default = ["tls", "net"]
 # these deps compile on wasm32 (`mio`/`socket2` carry `compile_error!`s;
 # tokio's `rt-multi-thread`/`net` features need OS threads + sockets), so
 # the wasm runtime archive is built `--no-default-features` — phase-10
-# `--target wasm_wasi` programs get vec/string/map/json/file/clone, no
-# native net. `tls` requires `net` (tokio-rustls wraps tokio streams).
+# `--target wasm_wasi` programs get vec/string/map/json/file/clone plus
+# the *sequential* spawn/TaskGroup/par surface (`seq_scheduler.rs` +
+# `seq_par_run`, cfg'd on `target_family = "wasm"` — phase-10 "WASM
+# concurrency lowering — sequential default"), no native net. `tls`
+# requires `net` (tokio-rustls wraps tokio streams).
 net = [
     "dep:hyper",
     "dep:hyper-util",

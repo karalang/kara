@@ -11206,6 +11206,163 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// phase-10 "WASM concurrency lowering — sequential default", explicit
+/// `par {}` leg: the block still lowers through `karac_par_run`
+/// (`tests/wasm_codegen.rs` pins the IR shape), and the wasm runtime
+/// archive's sequential body (`seq_par_run`) runs the branches in
+/// source order on the calling thread. The output is therefore
+/// **deterministic** — branch order then the post-join statement — where
+/// the native pool's output would be racy. Same node:wasi embedder
+/// shape as `wasm_wasi_build_and_run_e2e`.
+#[test]
+fn wasm_wasi_explicit_par_block_runs_sequentially() {
+    let tmp = wasm_test_dir("par-seq");
+    let path = tmp.join("par_seq.kara");
+    std::fs::write(
+        &path,
+        r#"
+fn main() {
+    par {
+        println(100);
+        println(200);
+        println(300);
+    }
+    println(999);
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_wasi_explicit_par_block_runs_sequentially — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm build failed: {stderr}");
+    let wasm_path = tmp.join("par_seq.wasm");
+    assert!(wasm_path.exists(), "expected par_seq.wasm in the build cwd");
+
+    let Some(node_out) = run_wasm_under_node(&tmp, &wasm_path) else {
+        eprintln!("skip: wasm_wasi_explicit_par_block_runs_sequentially — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "par module failed under node:wasi: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert_eq!(
+        node_stdout, "100\n200\n300\n999\n",
+        "par branches must run in source order, joined before the \
+         following statement; stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// phase-10 "WASM concurrency lowering — sequential default", `spawn` /
+/// `TaskGroup` leg: the wasm archive's `seq_scheduler.rs` provides the
+/// `karac_runtime_spawn` / `taskgroup_*` / `task_join` surface (absent
+/// before this slice — spawn programs failed at wasm link on the
+/// missing net-gated symbols). The program pins all three contract
+/// points of the cooperative sequential scheduler:
+///
+/// 1. **spawn is deferred** — the `0` printed after the five
+///    `tg.spawn(...)` calls appears BEFORE the workers' output: spawn
+///    enqueues, it does not run inline;
+/// 2. **the group drop drives the queue FIFO** — worker output arrives
+///    in spawn order `1..=5` (deterministic, where native is racy), and
+///    main's exit code pins that the join barrier completed;
+/// 3. **`h.join()` transports the result** — the free-spawned task's
+///    `40 + 2` crosses back through the handle's result buffer.
+#[test]
+fn wasm_wasi_spawn_taskgroup_sequential_e2e() {
+    let tmp = wasm_test_dir("spawn-seq");
+    let path = tmp.join("spawn_seq.kara");
+    std::fs::write(
+        &path,
+        r#"
+fn worker(id: i64) {
+    println(id);
+}
+
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+fn main() {
+    let h: TaskHandle[i64] = spawn(|| add(40, 2));
+    let r: i64 = h.join();
+    println(r);
+
+    let mut tg = TaskGroup.new();
+    tg.spawn(|| worker(1));
+    tg.spawn(|| worker(2));
+    tg.spawn(|| worker(3));
+    tg.spawn(|| worker(4));
+    tg.spawn(|| worker(5));
+    println(0);
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_wasi_spawn_taskgroup_sequential_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm build failed: {stderr}");
+    let wasm_path = tmp.join("spawn_seq.wasm");
+    assert!(
+        wasm_path.exists(),
+        "expected spawn_seq.wasm in the build cwd"
+    );
+
+    let Some(node_out) = run_wasm_under_node(&tmp, &wasm_path) else {
+        eprintln!("skip: wasm_wasi_spawn_taskgroup_sequential_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "spawn module failed under node:wasi: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert_eq!(
+        node_stdout, "42\n0\n1\n2\n3\n4\n5\n",
+        "expected join-transported 42, then the deferred-spawn sentinel 0 \
+         BEFORE the workers, then FIFO worker order; stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The `Vector[T, N]` program the WASM SIMD-128 tests share (phase-10
 /// "WASM SIMD-128 lowering"). The `a` lane inputs flow from function
 /// params so the ops survive at `KARAC_OPT_LEVEL=0` (constant inputs

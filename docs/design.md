@@ -10172,13 +10172,15 @@ This is a load-bearing commitment. It keeps the door open for compiler-managed t
 
 On `wasm_browser` and `wasm_wasi`, `spawn`/`par`/channel operations lower by default to **sequential cooperative scheduling** on the main thread. No Web Workers, no SharedArrayBuffer, no COOP/COEP deployment constraints, no Web Worker startup latency. Smallest bundle, widest deployment profile.
 
+> **Shipped status (2026-06-07).** The sequential default is live for `spawn()`/`TaskGroup` and `par {}`: the wasm runtime archive carries a cooperative FIFO scheduler (`runtime/src/seq_scheduler.rs` — spawn enqueues, join points drive the queue) and a sequential `karac_par_run` (source-order branches, cancel-cascade semantics preserved); auto-par fan-out is skipped at codegen on wasm targets (the sequential program *is* the lowering — explicit `par {}` keeps its `karac_par_run` dispatch for cancellation/result semantics). Channel ops await their AOT codegen lowering on every target (channels are interpreter-only today — phase-6-runtime.md "Channel AOT codegen lowering"); the yield-to-event-loop-on-recv contract is the phase-10 scheduler entry layered on the same ready queue.
+
 For compute-bound workloads where single-thread performance is insufficient, `--features wasm-threads` opts into **shared-memory multithreading** using Web Workers + SharedArrayBuffer + atomics. This requires the user to deploy with COOP/COEP headers — a real-world constraint that belongs in the user's hands rather than as a default cost. Shared-memory multithreading is strictly additive: the same source compiles both ways; the opt-in swaps the lowering of `spawn` and channels from sequential to worker-based without changing any source.
 
 | Build shape | `spawn` / channel lowering | User deployment action |
 |---|---|---|
 | `--target wasm_browser` (default) | Cooperative sequential on main thread | — |
 | `--target wasm_browser --features wasm-threads` | Web Worker pool + SAB + atomics | Set COOP/COEP headers |
-| `--target wasm_wasi` (default) | Host-provided threading if available, else sequential | Depends on host runtime |
+| `--target wasm_wasi` (default) | Cooperative sequential on main thread (host-thread integration is a wasm-threads-era concern) | — |
 | `--target native` | OS threads + runtime scheduler | — |
 
 Ambitious shapes — compiler-managed transparent worker partitioning (ownership already proves data-race freedom, so no `--features` flag would be needed; the compiler infers the partition), WASM stack-switching for fiber-weight tasks over a small worker pool, and a design targeting the W3C shared-everything-threads proposal — are **deferred to post-v1** with concrete re-evaluation triggers in [deferred.md § Compiler-Managed Transparent Threading on WASM](deferred.md#compiler-managed-transparent-threading-on-wasm). The source-level commitments above keep those paths open without requiring a source break to land later.

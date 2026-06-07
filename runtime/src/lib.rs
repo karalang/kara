@@ -40,6 +40,13 @@ mod file;
 mod map;
 #[cfg(feature = "net")]
 pub mod scheduler;
+// Sequential spawn/TaskGroup scheduler — the WASM-default concurrency
+// lowering (phase-10 "WASM concurrency lowering — sequential default").
+// Compiled under cfg(test) on native too so the queue/join logic is
+// unit-testable without a wasm host; its `karac_runtime_*` exports are
+// wasm-gated inside the module.
+#[cfg(any(target_family = "wasm", test))]
+pub mod seq_scheduler;
 #[cfg(feature = "tls")]
 pub mod tls;
 pub mod tracing;
@@ -295,11 +302,18 @@ pub fn __preserve_no_mangle_symbols() -> usize {
 }
 
 use std::cell::Cell;
+#[cfg(not(target_family = "wasm"))]
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
+// Pool-substrate imports — native-only, like the pool itself (the
+// WASM-default concurrency lowering is sequential; see `seq_par_run` /
+// `seq_scheduler.rs`).
+#[cfg(not(target_family = "wasm"))]
+use std::sync::{Arc, Condvar};
+#[cfg(not(target_family = "wasm"))]
 use std::thread;
 
 /// A single branch of a `par {}` block: a function pointer and its opaque
@@ -839,6 +853,13 @@ impl Drop for FrameGuard {
 /// `track_frames = false`, defaults elsewhere) and pushes one `Task` onto
 /// the global `Pool`. The cancel + notify machinery is reused for the
 /// spawn-side join wait. See `scheduler.rs` for the dispatch surface.
+///
+/// The whole pool substrate (ParCall / Task / Pool / workers / the
+/// dispatch + wait helpers) is native-only: the WASM-default lowering is
+/// sequential (phase-10 "WASM concurrency lowering — sequential
+/// default"), so the wasm archive compiles it out entirely — see
+/// `seq_par_run` and `seq_scheduler.rs` for the sequential surface.
+#[cfg(not(target_family = "wasm"))]
 pub(crate) struct ParCall {
     pub(crate) cancel: AtomicBool,
     /// Number of tasks not yet completed (decremented by each task on
@@ -864,17 +885,20 @@ pub(crate) struct ParCall {
 /// per dispatched task; for the workload sizes the runtime targets
 /// (1–18 workers per call), that's negligible vs the thread-scheduling
 /// overhead the pool was built to avoid.
+#[cfg(not(target_family = "wasm"))]
 pub(crate) struct Task {
     pub(crate) call: Arc<ParCall>,
     pub(crate) branch_idx: u32,
     pub(crate) run: Box<dyn FnOnce(&AtomicBool) + Send>,
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub(crate) struct Pool {
     pub(crate) queue: Mutex<VecDeque<Task>>,
     pub(crate) cv: Condvar,
 }
 
+#[cfg(not(target_family = "wasm"))]
 static POOL: OnceLock<Arc<Pool>> = OnceLock::new();
 
 /// Resolve the auto-par worker count.
@@ -897,6 +921,7 @@ static POOL: OnceLock<Arc<Pool>> = OnceLock::new();
 /// there anyway, and `karac_par_reduce`'s per-call read is cheap libc
 /// getenv that lets a user override the count for a single command-line
 /// invocation without rebuilding.
+#[cfg(not(target_family = "wasm"))]
 fn resolve_pool_workers() -> usize {
     if let Ok(s) = std::env::var("KARAC_PAR_WORKERS") {
         if let Ok(n) = s.parse::<usize>() {
@@ -911,6 +936,7 @@ fn resolve_pool_workers() -> usize {
         .max(2)
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn pool() -> &'static Arc<Pool> {
     POOL.get_or_init(|| {
         let n = resolve_pool_workers();
@@ -926,6 +952,7 @@ pub(crate) fn pool() -> &'static Arc<Pool> {
     })
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn worker_loop(pool: Arc<Pool>) {
     loop {
         let task = {
@@ -945,6 +972,7 @@ fn worker_loop(pool: Arc<Pool>) {
 /// the boxed closure under a `FrameGuard` (when frame-tracking is on)
 /// and `catch_unwind`. Always decrements `remaining` and signals `notify`
 /// on the last task — even on panic, so the caller doesn't hang.
+#[cfg(not(target_family = "wasm"))]
 fn execute_task(task: Task) {
     let Task {
         call,
@@ -1035,14 +1063,50 @@ fn execute_task(task: Task) {
 #[no_mangle]
 pub unsafe extern "C" fn karac_par_run(
     branches: *const KaracBranch,
-    count: usize,
+    // `u64`, not `usize`: codegen declares this parameter `i64` (one
+    // declaration for every target), and wasm32 traps signature
+    // mismatches at the call — a `usize` here is i32-width on the wasm
+    // archive and the call site lands on a `signature_mismatch` stub
+    // (same class as the `__karac_malloc64` size_t note in
+    // `Codegen::new`). ABI-identical on 64-bit native.
+    count: u64,
     spawn_site_id: u32,
     parent_cancel: *const AtomicBool,
 ) {
+    let count = count as usize;
     if count == 0 {
         return;
     }
 
+    // phase-10 "WASM concurrency lowering — sequential default": the
+    // target is single-threaded, so there is no pool to dispatch to —
+    // run the branches in source order on the calling thread. Cancel /
+    // cascade / frame-tracking semantics live in `seq_par_run`.
+    #[cfg(target_family = "wasm")]
+    {
+        seq_par_run(branches, count, spawn_site_id, parent_cancel);
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    {
+        karac_par_run_pooled(branches, count, spawn_site_id, parent_cancel);
+    }
+}
+
+/// Native `karac_par_run` body — pool dispatch + work-helping join.
+/// Split out of the extern shell so the wasm sequential path above can
+/// swap in without `#[cfg]`-wrapping the whole emission.
+///
+/// # Safety
+///
+/// Same contract as [`karac_par_run`].
+#[cfg(not(target_family = "wasm"))]
+unsafe fn karac_par_run_pooled(
+    branches: *const KaracBranch,
+    count: usize,
+    spawn_site_id: u32,
+    parent_cancel: *const AtomicBool,
+) {
     let track_frames = runtime_debug_metadata_enabled();
     let parent_addr: usize = if track_frames {
         CURRENT_FRAME.with(|c| c.get()) as usize
@@ -1088,6 +1152,73 @@ pub unsafe extern "C" fn karac_par_run(
     par_join_wait(&call, p, parent_cancel);
 }
 
+/// Sequential `par {}` execution — the WASM-default lowering (phase-10
+/// "WASM concurrency lowering — sequential default"). Runs the branches
+/// in source order on the calling thread; the join is implicit (the loop
+/// returns only when every branch has run). Semantics preserved from the
+/// pooled path, modulo scheduling:
+///
+/// - **Per-call cancel flag**: every branch receives the same
+///   `*const AtomicBool` the pooled dispatch hands out; a branch that
+///   fails stores through it (codegen's result-slot/err machinery) and
+///   later branches observe it at their compiler-inserted entry +
+///   effect-boundary checks — fail-fast at branch granularity, exactly
+///   the native contract, with "later" now meaning source order.
+/// - **Nested cascade**: an enclosing region's `parent_cancel` is polled
+///   before each branch (the sequential analogue of `par_join_wait`'s
+///   1 ms poll) and folded into this region's flag.
+/// - **Frame tracking**: when `KARAC_RUNTIME_DEBUG_METADATA` is on, each
+///   branch runs under a `FrameGuard` carrying the same
+///   `(parent, spawn_site_id, worker_index)` triple the pool workers
+///   register, so `std.runtime::list_par_blocks()` sees the running
+///   branch on this target too.
+/// - **Panic**: the wasm release archive builds `panic = "abort"`, so a
+///   panicking branch aborts the module — the same observable outcome as
+///   the native release archive (whose `catch_unwind` never runs under
+///   `panic = "abort"` either).
+///
+/// Compiled under `cfg(test)` on native as well so the ordering/cascade
+/// behavior is unit-testable without a wasm host.
+///
+/// # Safety
+///
+/// Same contract as [`karac_par_run`].
+#[cfg(any(target_family = "wasm", test))]
+pub(crate) unsafe fn seq_par_run(
+    branches: *const KaracBranch,
+    count: usize,
+    spawn_site_id: u32,
+    parent_cancel: *const AtomicBool,
+) {
+    let track_frames = runtime_debug_metadata_enabled();
+    let parent_addr: usize = if track_frames {
+        CURRENT_FRAME.with(|c| c.get()) as usize
+    } else {
+        0
+    };
+
+    let cancel = AtomicBool::new(false);
+    for i in 0..count {
+        // Cascade an enclosing cancellation inward before each branch.
+        if !parent_cancel.is_null() && (*parent_cancel).load(Ordering::Relaxed) {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        let b = &*branches.add(i);
+        if track_frames {
+            let frame = KaracFrame {
+                parent: parent_addr as *const KaracFrame,
+                spawn_site_id,
+                worker_index: i as u32,
+                wait_target: KaracWaitTarget::None,
+            };
+            let _guard = FrameGuard::new(&frame);
+            (b.func)(b.ctx, &cancel as *const AtomicBool);
+        } else {
+            (b.func)(b.ctx, &cancel as *const AtomicBool);
+        }
+    }
+}
+
 /// Block until `call.remaining` hits zero, opportunistically executing
 /// pending pool tasks while waiting so a nested `karac_par_run` from a pool
 /// worker can't exhaust the pool / deadlock.
@@ -1109,6 +1240,7 @@ pub unsafe extern "C" fn karac_par_run(
 /// `wait` — no polling overhead on the common path. Worst-case cascade
 /// latency is the poll cadence plus the inner effect-boundary distance,
 /// summed along the nesting path, matching the spec's stated bound.
+#[cfg(not(target_family = "wasm"))]
 unsafe fn par_join_wait(call: &Arc<ParCall>, p: &Arc<Pool>, parent_cancel: *const AtomicBool) {
     loop {
         // Done?
@@ -1199,6 +1331,7 @@ unsafe fn par_join_wait(call: &Arc<ParCall>, p: &Arc<Pool>, parent_cancel: *cons
 /// pool's queue, notifies workers, then blocks until `call.remaining` hits
 /// zero — opportunistically executing pool tasks while waiting so nested
 /// par-block-inside-par-block calls from inside the pool can't deadlock.
+#[cfg(not(target_family = "wasm"))]
 fn dispatch_and_wait(call: &Arc<ParCall>, tasks: Vec<Task>) {
     let p = pool();
     {
@@ -1296,6 +1429,7 @@ unsafe impl Sync for KaracReduceDescriptor {}
 /// same calibration. Threshold = `pool_workers * this`; when the loop's
 /// estimated total work falls below, the runtime skips dispatch and runs
 /// the worker once in the caller's thread.
+#[cfg(not(target_family = "wasm"))]
 const DISPATCH_OVERHEAD_PER_CALL_UNITS_RT: u64 = 10_000;
 
 /// Split a loop's iteration space across N workers; each accumulates a
@@ -1341,6 +1475,37 @@ pub unsafe extern "C" fn karac_par_reduce(
         return;
     }
 
+    // phase-10 "WASM concurrency lowering — sequential default": the
+    // single-threaded target takes the single-worker shape the native
+    // fast path below already defines — one `worker_fn` call over the
+    // full range, directly into `out_slot`, no slot buffer, no combine
+    // (and no pool, which doesn't exist on this target). Codegen
+    // additionally skips emitting reduction fan-outs on wasm entirely
+    // (auto-par is pure overhead with no parallelism), so this arm is
+    // the semantic backstop, not the expected hot path.
+    #[cfg(target_family = "wasm")]
+    {
+        let dummy = AtomicBool::new(false);
+        (desc.worker_fn)(out_slot, 0, desc.iter_total, desc.ctx, &dummy);
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    karac_par_reduce_pooled(desc, out_slot, _spawn_site_id);
+}
+
+/// Native `karac_par_reduce` body — worker fan-out across the pool plus
+/// the serial combine. Split out of the extern shell so the wasm
+/// sequential arm above can swap in.
+///
+/// # Safety
+///
+/// Same contract as [`karac_par_reduce`].
+#[cfg(not(target_family = "wasm"))]
+unsafe fn karac_par_reduce_pooled(
+    desc: &KaracReduceDescriptor,
+    out_slot: *mut u8,
+    _spawn_site_id: u32,
+) {
     // Worker count: cap at `iter_total` so each worker gets at least one
     // iteration, and at least 1 so the single-thread fast path below
     // doesn't divide by zero. `resolve_pool_workers` honors
@@ -1454,6 +1619,7 @@ pub unsafe extern "C" fn karac_par_reduce(
 /// power of two — the caller (`karac_par_reduce` above) gets `align` from
 /// the FFI descriptor, where the codegen guarantees `align` is the
 /// natural alignment of a Kara primitive type (1, 2, 4, or 8).
+#[cfg(not(target_family = "wasm"))]
 #[inline]
 fn align_up(n: usize, align: usize) -> usize {
     debug_assert!(align.is_power_of_two(), "align must be a power of two");
@@ -5747,6 +5913,92 @@ mod tests {
         assert_eq!(std::mem::size_of::<KaracWaitTarget>(), 1);
     }
 
+    // ── seq_par_run (phase-10 WASM sequential default) ─────────────────
+    //
+    // The wasm archive's `karac_par_run` body. Compiled on native under
+    // cfg(test) precisely so these tests can pin its semantics without a
+    // wasm host: source-order execution, parent-cancel cascade, and
+    // branch-to-later-branch cancel visibility.
+
+    /// Branch fn: appends its id to a shared order log.
+    /// ctx points at `(id: i64, log: *mut Vec<i64>)`.
+    unsafe extern "C" fn seq_branch_log(ctx: *mut c_void, _cancel: *const AtomicBool) {
+        let (id, log) = *(ctx as *const (i64, *mut Vec<i64>));
+        (*log).push(id);
+    }
+
+    /// Branch fn: records whether the per-call cancel flag was set when
+    /// it ran. ctx points at `*mut bool`.
+    unsafe extern "C" fn seq_branch_observe_cancel(ctx: *mut c_void, cancel: *const AtomicBool) {
+        let slot = *(ctx as *const *mut bool);
+        *slot = (*cancel).load(Ordering::Relaxed);
+    }
+
+    /// Branch fn: stores `true` through the per-call cancel flag —
+    /// stands in for codegen's fail-fast store on a branch Err.
+    unsafe extern "C" fn seq_branch_set_cancel(_ctx: *mut c_void, cancel: *const AtomicBool) {
+        (*cancel).store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn test_seq_par_run_executes_branches_in_source_order() {
+        let mut log: Vec<i64> = Vec::new();
+        let log_ptr = &mut log as *mut Vec<i64>;
+        let ctxs: Vec<(i64, *mut Vec<i64>)> = (1..=4).map(|i| (i, log_ptr)).collect();
+        let branches: Vec<KaracBranch> = ctxs
+            .iter()
+            .map(|c| KaracBranch {
+                func: seq_branch_log,
+                ctx: c as *const (i64, *mut Vec<i64>) as *mut c_void,
+            })
+            .collect();
+        unsafe {
+            seq_par_run(branches.as_ptr(), branches.len(), 0, std::ptr::null());
+        }
+        assert_eq!(log, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_seq_par_run_cascades_parent_cancel_into_branch_flag() {
+        let mut observed = false;
+        let observed_ptr: *mut bool = &mut observed;
+        let branch = KaracBranch {
+            func: seq_branch_observe_cancel,
+            ctx: &observed_ptr as *const *mut bool as *mut c_void,
+        };
+        let parent_cancel = AtomicBool::new(true);
+        unsafe {
+            seq_par_run(&branch, 1, 0, &parent_cancel as *const AtomicBool);
+        }
+        assert!(
+            observed,
+            "an enclosing cancellation must cascade into this region's flag"
+        );
+    }
+
+    #[test]
+    fn test_seq_par_run_branch_cancel_visible_to_later_branches() {
+        let mut observed = false;
+        let observed_ptr: *mut bool = &mut observed;
+        let branches = [
+            KaracBranch {
+                func: seq_branch_set_cancel,
+                ctx: std::ptr::null_mut(),
+            },
+            KaracBranch {
+                func: seq_branch_observe_cancel,
+                ctx: &observed_ptr as *const *mut bool as *mut c_void,
+            },
+        ];
+        unsafe {
+            seq_par_run(branches.as_ptr(), branches.len(), 0, std::ptr::null());
+        }
+        assert!(
+            observed,
+            "a branch's fail-fast cancel store must be visible to later branches"
+        );
+    }
+
     #[test]
     fn test_parse_query_pairs_basic() {
         assert_eq!(
@@ -5863,7 +6115,12 @@ mod tests {
             .collect();
 
         unsafe {
-            karac_par_run(branches.as_ptr(), branches.len(), 42, std::ptr::null());
+            karac_par_run(
+                branches.as_ptr(),
+                branches.len() as u64,
+                42,
+                std::ptr::null(),
+            );
         }
 
         let slots = capture.slots.lock().unwrap();
@@ -5935,7 +6192,7 @@ mod tests {
             unsafe {
                 karac_par_run(
                     inner_branches.as_ptr(),
-                    inner_branches.len(),
+                    inner_branches.len() as u64,
                     99,
                     std::ptr::null(),
                 );
@@ -5955,7 +6212,7 @@ mod tests {
         unsafe {
             karac_par_run(
                 outer_branches.as_ptr(),
-                outer_branches.len(),
+                outer_branches.len() as u64,
                 7,
                 std::ptr::null(),
             );
@@ -6054,7 +6311,12 @@ mod tests {
             ctx: &ctx as *const _ as *mut c_void,
         }];
         unsafe {
-            karac_par_run(branches.as_ptr(), branches.len(), 0, std::ptr::null());
+            karac_par_run(
+                branches.as_ptr(),
+                branches.len() as u64,
+                0,
+                std::ptr::null(),
+            );
         }
         assert!(
             ctx.ran_to_end.load(Ordering::Acquire),
@@ -6117,7 +6379,7 @@ mod tests {
             unsafe {
                 karac_par_run(
                     branches_addr as *const KaracBranch,
-                    count,
+                    count as u64,
                     11,
                     std::ptr::null(),
                 );
@@ -6236,7 +6498,12 @@ mod tests {
             },
         ];
         unsafe {
-            karac_par_run(branches.as_ptr(), branches.len(), 0, std::ptr::null());
+            karac_par_run(
+                branches.as_ptr(),
+                branches.len() as u64,
+                0,
+                std::ptr::null(),
+            );
         }
 
         let tags = capture.tags.lock().unwrap();
