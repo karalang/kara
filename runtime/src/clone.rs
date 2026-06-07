@@ -85,6 +85,83 @@ pub unsafe extern "C" fn karac_string_clone(src: *const c_void, dst: *mut c_void
     dst.cap = src.len; // capacity matches len — fresh buffer, no headroom.
 }
 
+/// Slice a Kāra `String`: `s[start..end]` → a fresh heap `String` buffer
+/// holding the bytes `data[start..end]`. Returns the new buffer pointer
+/// (NUL-terminated, `end - start` content bytes); the codegen caller builds
+/// the `{ptr, len, cap}` aggregate with `len = cap = end - start`. The
+/// empty-slice case (`start == end`) returns null, matching
+/// `karac_string_clone`'s empty-String convention (`data = null`,
+/// `cap = 0`), so the scope-exit free path treats it as a no-op.
+///
+/// Validation mirrors the interpreter (`src/interpreter/eval_expr.rs`
+/// range-index `Value::String` arm) and Rust's `&s[a..b]`:
+///
+/// * Bounds: `0 <= start <= end <= len`, else a fatal `string slice bounds
+///   … out of range` runtime error.
+/// * UTF-8 char boundaries: both `start` and `end` must fall on a char
+///   boundary (a byte index `i` is a boundary iff `i == 0`, `i == len`, or
+///   `data[i]` is not a `0b10xxxxxx` continuation byte), else a fatal
+///   `E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY` runtime error.
+///
+/// Both fatal paths print to stderr and `exit(1)`, matching codegen's
+/// `emit_panic` shape (a non-boundary slice is a panic, not a recoverable
+/// error — same as Rust).
+///
+/// # Safety
+///
+/// * `data` must point to a readable buffer of at least `len` bytes when
+///   `len > 0`.
+/// * The returned pointer (when non-null) owns a heap allocation the caller
+///   must register with the String scope-cleanup machinery (same `cap == len`
+///   contract as `karac_string_clone`).
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_slice(
+    data: *const u8,
+    len: i64,
+    start: i64,
+    end: i64,
+) -> *mut u8 {
+    if start < 0 || end < start || end > len {
+        eprintln!(
+            "runtime error: string slice bounds {}..{} out of range (len {})",
+            start, end, len
+        );
+        std::process::exit(1);
+    }
+    let len_us = len as usize;
+    let start_us = start as usize;
+    let end_us = end as usize;
+    let bytes: &[u8] = if len_us == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(data, len_us)
+    };
+    // A byte index `i` is a UTF-8 char boundary iff it's the start/end of
+    // the buffer or `bytes[i]` is not a `0b10xxxxxx` continuation byte. The
+    // `i == len_us` short-circuit keeps `bytes[i]` from indexing past the end.
+    let is_boundary = |i: usize| i == 0 || i == len_us || (bytes[i] & 0xC0) != 0x80;
+    if !is_boundary(start_us) || !is_boundary(end_us) {
+        eprintln!(
+            "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range \
+             {}..{} does not fall on UTF-8 char boundaries",
+            start, end
+        );
+        std::process::exit(1);
+    }
+    let n = end_us - start_us;
+    if n == 0 {
+        return ptr::null_mut();
+    }
+    // Alloc `n + 1` and NUL-terminate so the result stays printf-compatible,
+    // matching `karac_string_clone`'s buffer contract (`cap == n`, buffer is
+    // `n + 1` bytes).
+    let layout = Layout::array::<u8>(n + 1).unwrap();
+    let new_data = alloc(layout);
+    ptr::copy_nonoverlapping(data.add(start_us), new_data, n);
+    *new_data.add(n) = 0;
+    new_data
+}
+
 /// Decode the next UTF-8 character starting at `byte_offset` in the byte
 /// slice `(data, len)`. Writes the Unicode scalar value (codepoint) through
 /// `out_codepoint` and returns the byte offset after the decoded character.
@@ -263,5 +340,54 @@ pub unsafe extern "C" fn karac_string_encode_char(cp: u32, out: *mut u8) -> i64 
         *out.add(1) = 0xBF;
         *out.add(2) = 0xBD;
         3
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Read back the heap buffer `karac_string_slice` returns as a `&str`.
+    /// `n` is the expected content length (`end - start`).
+    unsafe fn slice_str(s: &str, start: i64, end: i64, n: usize) -> String {
+        let ptr = karac_string_slice(s.as_ptr(), s.len() as i64, start, end);
+        assert!(!ptr.is_null(), "non-empty slice must return a buffer");
+        let bytes = std::slice::from_raw_parts(ptr, n);
+        let out = String::from_utf8(bytes.to_vec()).unwrap();
+        // NUL terminator at [n] keeps the buffer printf-compatible.
+        assert_eq!(*ptr.add(n), 0, "buffer must be NUL-terminated");
+        out
+    }
+
+    #[test]
+    fn slice_half_open_copies_subrange() {
+        unsafe {
+            assert_eq!(slice_str("hello world", 0, 5, 5), "hello");
+            assert_eq!(slice_str("hello world", 6, 11, 5), "world");
+        }
+    }
+
+    #[test]
+    fn slice_full_range_copies_all() {
+        unsafe {
+            assert_eq!(slice_str("hello", 0, 5, 5), "hello");
+        }
+    }
+
+    #[test]
+    fn slice_empty_returns_null() {
+        unsafe {
+            let ptr = karac_string_slice("hello".as_ptr(), 5, 2, 2);
+            assert!(ptr.is_null(), "empty slice (start == end) returns null");
+        }
+    }
+
+    #[test]
+    fn slice_multibyte_on_boundary() {
+        // "héllo": 'h'=byte 0, 'é'=bytes 1..3, so 1..3 is a clean 'é'.
+        unsafe {
+            assert_eq!(slice_str("héllo", 1, 3, 2), "é");
+            assert_eq!(slice_str("héllo", 0, 1, 1), "h");
+        }
     }
 }

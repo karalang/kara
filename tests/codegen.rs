@@ -114,17 +114,17 @@ mod codegen_tests {
             .expect("codegen failed")
     }
 
-    // ── String slicing fail-loud guard (phase-8 line 737) ────────
+    // ── String slicing `s[a..b]` codegen (phase-8 line 737) ──────
     //
-    // `s[a..b]` String slicing is interpreter-only at this slice. In
-    // codegen the range branch would otherwise fall through to the
-    // integer-index tail and SILENTLY miscompile (empty output instead
-    // of the substring). The guard converts that into a hard codegen
-    // error — fail loud, never silently wrong.
+    // `s[a..b]` lowers to a `karac_string_slice` runtime call that
+    // validates bounds + UTF-8 char boundaries and returns a fresh
+    // String buffer. (Earlier this silently miscompiled — the range
+    // branch fell through to the integer-index tail and produced empty
+    // output; the lowering replaces that.)
 
     #[test]
-    fn string_slice_in_codegen_fails_loud_not_silent_miscompile() {
-        let mut parsed = karac::parse(
+    fn string_slice_lowers_to_runtime_helper() {
+        let ir = ir_for(
             "fn main() {\n\
                  let s = \"hello world\";\n\
                  let mid = s[6..11];\n\
@@ -132,20 +132,60 @@ mod codegen_tests {
              }",
         );
         assert!(
-            parsed.errors.is_empty(),
-            "parse errors: {:?}",
-            parsed.errors
+            ir.contains("karac_string_slice"),
+            "expected `s[a..b]` to lower to a karac_string_slice call; IR:\n{ir}"
         );
-        let resolved = karac::resolve(&parsed.program);
-        let typed = karac::typecheck(&parsed.program, &resolved);
-        karac::lower(&mut parsed.program, &typed);
-        let result = compile_to_ir(&parsed.program, None, None);
-        let err = result
-            .expect_err("String slicing must FAIL codegen (fail-loud), not silently miscompile");
-        assert!(
-            err.contains("String slicing") && err.contains("interpreter-only"),
-            "expected the fail-loud String-slicing message, got: {err}"
-        );
+    }
+
+    #[test]
+    fn e2e_string_slice_basic_forms() {
+        // Half-open, open-ended, full, inclusive, and empty — must match
+        // the interpreter output exactly (the result is a real String).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s = \"hello world\";\n\
+                 println(s[0..5]);\n\
+                 println(s[6..]);\n\
+                 println(s[..5]);\n\
+                 println(s[0..=4]);\n\
+                 println(\"[\" + s[3..3] + \"]\");\n\
+             }",
+        ) {
+            assert_eq!(out, "hello\nworld\nhello\nhello\n[]\n");
+        }
+    }
+
+    #[test]
+    fn e2e_string_slice_result_is_string_and_concatenates() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s = \"hello world\";\n\
+                 let mid = s[6..11];\n\
+                 println(mid + \"!\");\n\
+             }",
+        ) {
+            assert_eq!(out, "world!\n");
+        }
+    }
+
+    #[test]
+    fn e2e_string_slice_non_char_boundary_panics() {
+        // `é` is two bytes at offsets 1..3, so byte 2 is mid-char: the
+        // runtime helper must exit(1) with E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY
+        // (mirroring Rust + the interpreter), not silently slice.
+        if let Some(cap) = run_program_capturing(
+            "fn main() {\n\
+                 let s = \"héllo\";\n\
+                 println(s[0..2]);\n\
+             }",
+        ) {
+            assert!(
+                cap.stderr.contains("E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY"),
+                "expected char-boundary panic on stderr, got stdout={:?} stderr={:?}",
+                cap.stdout,
+                cap.stderr,
+            );
+        }
     }
 
     // ── Basic arithmetic ─────────────────────────────────────────

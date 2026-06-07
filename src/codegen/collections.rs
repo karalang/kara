@@ -724,28 +724,17 @@ impl<'ctx> super::Codegen<'ctx> {
             inclusive,
         } = &index.kind
         {
-            // String slicing `s[a..b]` -> fresh `String` is interpreter-only
-            // at this slice (phase-8 line 737). It is NOT yet supported in
-            // compiled (codegen) mode: `infer_elem_from_source` returns None
-            // for a String, so without this guard the range branch falls
-            // through to the integer-index tail and silently miscompiles
-            // (the compiled binary produced empty output instead of the
-            // substring). Fail loud here until the codegen lowering lands —
-            // see the deferred codegen sub-item under the line-737 entry.
-            // `string_typed_exprs` is the typechecker's per-expression
-            // String flag, keyed by span (offset, length).
+            // String slicing `s[a..b]` -> a fresh `String` (phase-8 line
+            // 737), NOT a `Slice[T]`. `infer_elem_from_source` returns None
+            // for a String, so this must be handled before the array/slice
+            // element path below (and before the integer-index tail, which
+            // would otherwise silently miscompile). `string_typed_exprs` is
+            // the typechecker's per-expression String flag, keyed by span.
             if self
                 .string_typed_exprs
                 .contains(&(object.span.offset, object.span.length))
             {
-                return Err(format!(
-                    "String slicing `s[a..b]` is interpreter-only at this slice \
-                     and not yet supported in compiled (codegen) mode \
-                     (phase-8 line 737); at {}:{}. Run via the interpreter \
-                     (`karac run`), or extract the substring with a char loop \
-                     until the codegen lowering lands.",
-                    object.span.line, object.span.column
-                ));
+                return self.compile_string_slice(object, start, end, *inclusive);
             }
             if let Some(elem_ty) = self.infer_elem_from_source(object) {
                 return self.compile_range_slice(object, start, end, *inclusive, elem_ty);
@@ -990,6 +979,109 @@ impl<'ctx> super::Codegen<'ctx> {
             // above. Anything still reaching here is genuinely not indexable.
             Err("Index operator applied to non-array type".to_string())
         }
+    }
+
+    /// String slicing `s[a..b]` -> a fresh `String` (phase-8 line 737).
+    /// Extracts the `{ptr, len, cap}` aggregate, resolves the byte bounds
+    /// (`a..` -> end = len; `..b` -> start = 0; `a..=b` includes byte `b`),
+    /// and delegates the bounds + UTF-8 char-boundary validation, allocation,
+    /// and copy to the `karac_string_slice` runtime helper (which exit(1)s
+    /// with `E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY` / a bounds message on a bad
+    /// index — mirroring the interpreter and Rust's `&s[a..b]`). The helper
+    /// returns the new buffer pointer (null for an empty slice, matching
+    /// `karac_string_clone`'s empty-String convention); this builds the
+    /// result `{ptr, len, cap}` with `len = cap = end - start`. The result is
+    /// a normal owned String, so the enclosing let/temp machinery frees it at
+    /// scope exit exactly like a concat result.
+    pub(super) fn compile_string_slice(
+        &mut self,
+        object: &Expr,
+        start: &Option<Box<Expr>>,
+        end: &Option<Box<Expr>>,
+        inclusive: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+
+        // The String aggregate `{ptr, i64 len, i64 cap}`.
+        let agg = self.compile_expr(object)?.into_struct_value();
+        let data_ptr = self
+            .builder
+            .build_extract_value(agg, 0, "s.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let str_len = self
+            .builder
+            .build_extract_value(agg, 1, "s.len")
+            .unwrap()
+            .into_int_value();
+
+        // start (default 0) and raw end (default len), coerced to i64.
+        let start_i = match start {
+            Some(e) => {
+                let v = self.compile_expr(e)?;
+                self.coerce_scalar_to_type(v, i64_t.into()).into_int_value()
+            }
+            None => i64_t.const_int(0, false),
+        };
+        let raw_end = match end {
+            Some(e) => {
+                let v = self.compile_expr(e)?;
+                self.coerce_scalar_to_type(v, i64_t.into()).into_int_value()
+            }
+            None => str_len,
+        };
+        // Inclusive `a..=b` includes byte `b`, so the exclusive end is b + 1.
+        let end_i = if inclusive {
+            self.builder
+                .build_int_add(raw_end, i64_t.const_int(1, false), "end.incl")
+                .unwrap()
+        } else {
+            raw_end
+        };
+
+        // karac_string_slice(data, len, start, end) -> new buffer ptr.
+        let new_ptr = self
+            .builder
+            .build_call(
+                self.karac_string_slice_fn,
+                &[
+                    data_ptr.into(),
+                    str_len.into(),
+                    start_i.into(),
+                    end_i.into(),
+                ],
+                "str.slice",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let new_len = self
+            .builder
+            .build_int_sub(end_i, start_i, "slice.len")
+            .unwrap();
+
+        // Build the result String aggregate {ptr, len, cap} with cap == len
+        // (fresh buffer, no headroom — same contract as karac_string_clone).
+        let str_ty = self.vec_struct_type();
+        let mut out = str_ty.get_undef();
+        out = self
+            .builder
+            .build_insert_value(out, new_ptr, 0, "slice.ptr")
+            .unwrap()
+            .into_struct_value();
+        out = self
+            .builder
+            .build_insert_value(out, new_len, 1, "slice.len.f")
+            .unwrap()
+            .into_struct_value();
+        out = self
+            .builder
+            .build_insert_value(out, new_len, 2, "slice.cap")
+            .unwrap()
+            .into_struct_value();
+        Ok(out.into())
     }
 
     /// Index into a `Vec[T]` variable: `v[i]`. Handles both owned Vec values

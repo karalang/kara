@@ -99,6 +99,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // String + comparison runtime (`runtime/src/clone.rs` + this file).
     keep!(
         clone::karac_string_clone,
+        clone::karac_string_slice,
         clone::karac_string_decode_char,
         clone::karac_string_encode_char,
         karac_string_cmp,

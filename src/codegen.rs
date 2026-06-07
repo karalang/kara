@@ -2001,6 +2001,7 @@ pub(super) struct Codegen<'ctx> {
     /// `{data, len, cap}` to `dst`. Static-literal sources (cap = 0) get
     /// a heap-owned copy so scope-exit cleanup fires; source untouched.
     pub(crate) karac_string_clone_fn: FunctionValue<'ctx>,
+    pub(crate) karac_string_slice_fn: FunctionValue<'ctx>,
     /// Per-type clone function cache. Keyed on the canonical mangled type
     /// name (`display_mangle_te`). Each emitted fn has signature
     /// `void karac_clone_<typename>(*const T src, *mut T dst)` — caller
@@ -3792,6 +3793,17 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // karac_string_slice(data: ptr, len: i64, start: i64, end: i64) -> ptr
+        // Returns a fresh heap buffer holding `data[start..end]` (NUL-
+        // terminated); null for an empty slice. Validates bounds + UTF-8
+        // char boundaries, exit(1) on violation. See `runtime/src/clone.rs`.
+        let string_slice_ty = ptr_type.fn_type(&[ptr_md, i64_ty, i64_ty, i64_ty], false);
+        let karac_string_slice_fn = module.add_function(
+            "karac_string_slice",
+            string_slice_ty,
+            Some(Linkage::External),
+        );
+
         // ── Error return trace runtime ────────────────────────────────
         // karac_error_trace_push(file_ptr: ptr, file_len: i64, line: i32, col: i32) -> void
         let i32_ty = context.i32_type();
@@ -4021,6 +4033,7 @@ impl<'ctx> Codegen<'ctx> {
             karac_map_entry_fn,
             karac_map_lookup_slot_fn,
             karac_string_clone_fn,
+            karac_string_slice_fn,
             clone_fn_cache: HashMap::new(),
             drop_fn_cache: HashMap::new(),
             map_mono_methods: HashMap::new(),
