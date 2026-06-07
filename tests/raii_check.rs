@@ -847,6 +847,79 @@ fn user_annotated_type_participates() {
     assert_eq!(sv.clear_method_name, "commit");
 }
 
+// ── Phase 6 line 155 slice 3b — BufWriter[W] cancel-safety ──────────
+//
+// `BufWriter.write` carries `#[cancel_unsafe_until(method = "flush")]`
+// in `runtime/stdlib/bufwriter.kara` — buffered bytes that haven't
+// reached the underlying writer would be silently dropped if the task
+// is cancelled between `write` and `flush`. Exactly mirrors `File.write`
+// (slice 3a); these tests pin the generic `BufWriter[W]` receiver type
+// resolving to the bare `BufWriter` annotation key.
+
+#[test]
+fn bufwriter_write_then_yield_rejected() {
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(bw: BufWriter[File], data: Slice[u8]) {
+             let _w = bw.write(data);
+             fetch();
+         }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected one E_RAII_ACROSS_YIELD for `bw` soiled by .write across yield: {:?}",
+        errors
+    );
+    assert_eq!(errors[0].fn_key, "driver");
+    assert_eq!(errors[0].binding_name, "bw");
+    assert_eq!(errors[0].type_name, "BufWriter");
+    let sv = errors[0]
+        .state_violation
+        .as_ref()
+        .expect("slice-3b violation must carry state_violation payload");
+    assert_eq!(sv.soiling_method, "write");
+    assert_eq!(sv.clear_method_name, "flush");
+}
+
+#[test]
+fn bufwriter_write_then_flush_then_yield_accepted() {
+    // The clearing `flush()` lands before the yield: state flips back to
+    // Clean and the walker emits no error.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(bw: BufWriter[File], data: Slice[u8]) {
+             let _w = bw.write(data);
+             let _f = bw.flush();
+             fetch();
+         }",
+    );
+    assert!(
+        errors.is_empty(),
+        "write-then-flush-then-yield must accept: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn bufwriter_param_without_write_held_across_yield_accepted() {
+    // A BufWriter alone is cancel-safe; only the `write` call soils it.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(bw: BufWriter[File]) {
+             fetch();
+         }",
+    );
+    assert!(
+        errors.is_empty(),
+        "BufWriter held across yield with no preceding write must accept: {:?}",
+        errors
+    );
+}
+
 // ── Slice 3 — branch-precise flow merging ───────────────────────────
 //
 // These pin the soundness/precision the merge buys over the prior

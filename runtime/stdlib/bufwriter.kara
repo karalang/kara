@@ -57,7 +57,18 @@ impl[W] BufWriter[W] {
     // writer if the buffer fills. Returns the byte count accepted.
     // Mirrors Rust's `Write::write` contract for `BufWriter` (a short
     // write is possible only when an underlying flush partially fails).
+    //
+    // **Cancel-safety (phase-6 line 155 slice 3b).** `write` leaves bytes
+    // in the internal buffer that have not yet reached the underlying
+    // writer, so a yield between `write` and `flush` can silently drop
+    // buffered data if the task is cancelled. The
+    // `#[cancel_unsafe_until(method = "flush")]` attribute flips the
+    // receiver to a cancel-unsafe state on `write`, cleared by `flush` —
+    // exactly mirroring `File.write` in `io.kara`. The RAII flow-walker
+    // (`src/raii_check.rs`) rejects a yield while a `BufWriter` binding is
+    // in the soiled state.
     #[compiler_builtin]
+    #[cancel_unsafe_until(method = "flush")]
     fn write(ref self, buf: Slice[u8]) -> Result[usize, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     // Flush all buffered bytes to the underlying writer. Returns Unit on
