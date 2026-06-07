@@ -11151,6 +11151,73 @@ fn test_unknown_method_on_user_enum_errors() {
 }
 
 #[test]
+fn test_unknown_method_on_numeric_primitive_errors() {
+    // An unknown method on a numeric primitive used to return `Type::Error`
+    // (poison) silently — typechecking clean and only exploding in the
+    // backend (codegen "no handler" / interpreter ICE). Numeric primitives
+    // have a closed method surface, so the typechecker now fires
+    // `NoMethodFound` naming the primitive.
+    for (lit, ty) in [("5i64", "i64"), ("5u32", "u32"), ("2.5f64", "f64")] {
+        let src = format!("fn main() {{ let x = {lit}; let _ = x.totally_bogus_method(); }}");
+        let errors = typecheck_errors(&src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("no method 'totally_bogus_method'")
+                    && e.message.contains(ty)),
+            "expected 'no method' diagnostic naming '{ty}', got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn test_unknown_primitive_method_poison_no_longer_assignable() {
+    // The soundness symptom of the silent-poison hole: the poison `Type::Error`
+    // returned for an unknown primitive method is universally assignable, so
+    // `let s: String = x.bogus()` typechecked clean. Closing the hole makes
+    // this a hard error.
+    let errors =
+        typecheck_errors("fn main() { let x = 5i64; let s: String = x.bogus(); let _ = s; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no method 'bogus'") && e.message.contains("i64")),
+        "expected the bogus primitive method to be rejected, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_abs_on_signed_and_float_typechecks() {
+    // `abs` is a built-in value-receiver method on signed-integer and float
+    // primitives, typed as `-> Self`. It must NOT trip the numeric
+    // `NoMethodFound` tightening above.
+    typecheck_ok(
+        "fn main() {
+             let a: i64 = (-5i64).abs();
+             let b: i32 = (-5i32).abs();
+             let c: f64 = (-2.5f64).abs();
+             let _ = a; let _ = b; let _ = c;
+         }",
+    );
+}
+
+#[test]
+fn test_abs_on_unsigned_rejected() {
+    // No `abs` on unsigned integers (matches Rust — `u*` has no `abs`); it
+    // falls through to the numeric `NoMethodFound` tightening.
+    let errors = typecheck_errors("fn main() { let x = 5u64; let _ = x.abs(); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no method 'abs'") && e.message.contains("u64")),
+        "expected abs-on-u64 to be rejected, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_known_method_on_user_struct_still_works() {
     // Regression: a method that *is* declared in an impl block continues
     // to typecheck. Confirms the tightening only fires on actually-missing

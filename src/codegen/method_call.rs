@@ -899,6 +899,43 @@ impl<'ctx> super::Codegen<'ctx> {
         // Equal=1, Greater=2); the `Vec.sort_by` bridge thunk relies on
         // that ordering to turn the tag into a `-1 / 0 / +1` comparator
         // via `tag - 1`.
+        // Built-in `abs` on signed-integer / float primitives (typed in
+        // expr_method_call.rs). Integer abs reuses the checked-neg lowering:
+        // `abs(x) = select(x < 0, 0 - x, x)` where `0 - x` goes through the
+        // same `ssub.with.overflow` trap path as unary `-`, so `iN::MIN.abs()`
+        // traps as `integer overflow` (the neg is computed for all x but only
+        // overflows at `iN::MIN`; for x ≥ 0, `0 - x` is in range). Float abs is
+        // `select(x < 0.0, -x, x)` — correct for finite values (−0.0/NaN sign
+        // edge cases are immaterial here and not exercised).
+        if method == "abs" && args.is_empty() {
+            let v = self.compile_expr(object)?;
+            match v {
+                BasicValueEnum::IntValue(iv) => {
+                    let zero = iv.get_type().const_zero();
+                    let is_neg = self
+                        .builder
+                        .build_int_compare(IntPredicate::SLT, iv, zero, "abs.isneg")
+                        .unwrap();
+                    let neg = self
+                        .compile_unaryop(&UnaryOp::Neg, iv.into())?
+                        .into_int_value();
+                    let r = self.builder.build_select(is_neg, neg, iv, "abs").unwrap();
+                    return Ok(r);
+                }
+                BasicValueEnum::FloatValue(fv) => {
+                    let zero = fv.get_type().const_zero();
+                    let is_neg = self
+                        .builder
+                        .build_float_compare(inkwell::FloatPredicate::OLT, fv, zero, "fabs.isneg")
+                        .unwrap();
+                    let neg = self.builder.build_float_neg(fv, "fabs.neg").unwrap();
+                    let r = self.builder.build_select(is_neg, neg, fv, "fabs").unwrap();
+                    return Ok(r);
+                }
+                _ => {}
+            }
+        }
+
         if method == "cmp" && args.len() == 1 {
             let lhs = self.compile_expr(object)?;
             let rhs = self.compile_expr(&args[0].value)?;

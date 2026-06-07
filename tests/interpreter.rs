@@ -36,6 +36,49 @@ fn test_integer_arithmetic() {
 }
 
 #[test]
+fn test_abs_signed_int() {
+    assert_eq!(run("fn main() { println((-5i64).abs()); }"), "5\n");
+    assert_eq!(run("fn main() { println((7i64).abs()); }"), "7\n");
+    assert_eq!(run("fn main() { println((0i64).abs()); }"), "0\n");
+}
+
+#[test]
+fn test_abs_float() {
+    assert_eq!(run("fn main() { println((-2.5f64).abs()); }"), "2.5\n");
+    assert_eq!(run("fn main() { println((2.5f64).abs()); }"), "2.5\n");
+}
+
+#[test]
+fn test_abs_int_min_traps() {
+    // `iN::MIN.abs()` has no representable result and traps as integer
+    // overflow, matching the checked-neg arm — not a panic/ICE.
+    let errors =
+        runtime_errors("fn main() { let x = -9223372036854775807i64 - 1i64; println(x.abs()); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("integer overflow")),
+        "expected integer-overflow trap, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_unknown_primitive_method_is_runtime_error_not_ice() {
+    // `karac run` bypasses typecheck enforcement, so an unknown method on a
+    // primitive reaches the interpreter. It used to hit `unreachable!` and
+    // panic (ICE); it now records a structured runtime error.
+    let errors = runtime_errors("fn main() { let x = 5i64; let _ = x.bogus(); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("bogus") && e.message.contains("i64")),
+        "expected a structured runtime error, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_integer_subtraction() {
     assert_eq!(run("fn main() { println(10 - 3); }"), "7\n");
 }

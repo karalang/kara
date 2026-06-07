@@ -8795,6 +8795,66 @@ fn main() {
         }
     }
 
+    // ── Built-in `abs` on numeric primitives ──────────────────────────
+    // `x.abs() -> Self` on signed ints (checked: `iN::MIN.abs()` traps as
+    // integer overflow, reusing the checked-neg lowering) and floats.
+
+    #[test]
+    fn test_e2e_abs_signed_int() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    println((-5i64).abs());
+    println((7i64).abs());
+    println((0i64).abs());
+}
+"#,
+        ) {
+            assert_eq!(out, "5\n7\n0\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_abs_float() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    println((-2.5f64).abs());
+    println((2.5f64).abs());
+}
+"#,
+        ) {
+            assert_eq!(out, "2.5\n2.5\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_abs_int_min_traps() {
+        // `iN::MIN.abs()` is the one input with no representable result —
+        // it must trap as integer overflow, matching the interpreter.
+        // Built via `let mut` + reassignment so the fault isn't const-folded.
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let mut x = -9223372036854775807;
+    x = x - 1;
+    println(x.abs());
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("integer overflow"),
+                "expected integer-overflow trap on iN::MIN.abs(), got stdout={:?}",
+                c.stdout
+            );
+            assert!(
+                !c.stdout.contains("-9223372036854775808"),
+                "the un-negated MIN value must not print"
+            );
+        }
+    }
+
     // ── Arithmetic fault traps (design.md § Arithmetic Overflow) ───────
     // AOT parity with the interpreter's checked arithmetic
     // (src/interpreter/eval_ops.rs): + - * trap "integer overflow",

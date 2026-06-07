@@ -1858,6 +1858,22 @@ impl<'a> super::TypeChecker<'a> {
                 return Type::Error;
             }
         }
+        // Built-in `abs` on signed-integer and float primitives — `x.abs() ->
+        // Self`. Handled here as a dedicated value-receiver method rather than
+        // through the registered builtin-impl table: those `Neg`/`Ord` impls
+        // model the *type-receiver* / operator-lowering form (`self` in the
+        // params list, e.g. `i64.cmp(a, b)`), whose arity is incompatible with
+        // the value-receiver `x.abs()` shape. Restricted to `Int` (signed) and
+        // `Float`; unsigned `abs` is rejected (no `abs` on `u*`, matching
+        // Rust), falling through to the `NoMethodFound` arm below. Backends:
+        // interpreter `method_call.rs` (`checked_abs`, traps on `iN::MIN`),
+        // codegen `method_call.rs` (`select(x<0, trapping(-x), x)`).
+        if method == "abs"
+            && args.is_empty()
+            && matches!(&receiver_for_lookup, Type::Int(_) | Type::Float(_))
+        {
+            return receiver_for_lookup.clone();
+        }
         let (type_name, type_args) = match &receiver_for_lookup {
             Type::Named { name, args } => (name.clone(), args.clone()),
             // A refinement receiver that survived the base-deref above
@@ -1924,6 +1940,57 @@ impl<'a> super::TypeChecker<'a> {
                 // For non-named types, just type-check args and return Error
                 for arg in args {
                     self.infer_expr(&arg.value);
+                }
+                // Close the primitive silent-poison hole for *numeric* receivers
+                // (`i64`, `u32`, `f64`, …). Numeric primitives have a closed
+                // method surface — the registered builtin ops (add/sub/cmp/eq/…)
+                // plus a small value-receiver special set — so an unknown method
+                // here is a genuine typo, not a partially-implicit prelude
+                // surface. Without this it returns `Type::Error` (poison, which
+                // is universally assignable, so `let s: String = x.bogus()`
+                // typechecked clean) and then exploded in the backend: codegen's
+                // "no handler" error, or the interpreter's `unreachable!` ICE.
+                // Fire `NoMethodFound` instead. `String`/`bool`/`char` are left
+                // on the historical silent fall-through (String has a large
+                // partially-implicit method surface not modelled in the impl
+                // table). Type-arg-bearing calls (`x.cast[T]()`) resolve through
+                // their own path and don't reach here.
+                if matches!(
+                    &receiver_for_lookup,
+                    Type::Int(_) | Type::UInt(_) | Type::Float(_)
+                ) {
+                    if let Some(prim) = method_callee_type_name(&receiver_for_lookup) {
+                        // Value-receiver methods that work today via dedicated
+                        // backend arms / Display fallback rather than the impl
+                        // table — keep poisoning so those paths still handle
+                        // them. (`abs` is handled above for Int/Float and so
+                        // never reaches here; for `u*` it is correctly absent
+                        // and falls through to the error.)
+                        const PRIMITIVE_VALUE_METHODS: &[&str] = &[
+                            "cmp",
+                            "eq",
+                            "ne",
+                            "lt",
+                            "le",
+                            "gt",
+                            "ge",
+                            "to_string",
+                            "clone",
+                            "cast",
+                        ];
+                        let known = PRIMITIVE_VALUE_METHODS.contains(&method)
+                            || !self
+                                .env
+                                .find_methods_with_args(&prim, &[], method)
+                                .is_empty();
+                        if !known {
+                            self.type_error(
+                                format!("no method '{}' on type '{}'", method, prim),
+                                span.clone(),
+                                TypeErrorKind::NoMethodFound,
+                            );
+                        }
+                    }
                 }
                 return Type::Error;
             }

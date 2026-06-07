@@ -683,6 +683,25 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Built-in `abs` on signed-integer / float primitives (typed in
+        // expr_method_call.rs). `iN::MIN.abs()` doesn't fit and traps as
+        // `integer overflow`, matching the `checked_neg` arm in eval_ops.rs;
+        // float abs follows IEEE (`f64::abs`). The primitive Eq/Ord block
+        // above intentionally excludes `Value::Float`, so this is its own
+        // arm handling both numeric value shapes.
+        if method == "abs" && args.is_empty() {
+            match &obj {
+                Value::Int(n) => {
+                    return match n.checked_abs() {
+                        Some(a) => Value::Int(a),
+                        None => self.record_runtime_error("integer overflow".to_string(), span),
+                    };
+                }
+                Value::Float(f) => return Value::Float(f.abs()),
+                _ => {}
+            }
+        }
+
         // Try to find method via impl block
         let type_name = self.value_type_name(&obj);
         let method_key = format!("{}.{}", type_name, method);
@@ -843,11 +862,20 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
-        unreachable!(
-            "method '{}' not found on type '{}' at {}:{}; \
-             either an interpreter dispatch arm is missing for this method \
-             or the typechecker accepted a call to an unresolved method",
-            method, type_name, span.line, span.column
+        // No dispatch arm matched. For well-typed programs the typechecker has
+        // already rejected unresolved methods (e.g. the numeric-primitive
+        // `NoMethodFound` in expr_method_call.rs), so reaching here means an
+        // interpreter dispatch arm is genuinely missing for a method the
+        // typechecker accepted — emit a structured runtime error rather than
+        // panicking (the "every phase emits diagnostics, never panic" rule;
+        // `karac run` bypasses typecheck, so a typo on a primitive used to ICE
+        // here instead of producing a clean error).
+        self.record_runtime_error(
+            format!(
+                "method '{}' not found on type '{}' (no interpreter dispatch arm)",
+                method, type_name
+            ),
+            span,
         )
     }
 }
