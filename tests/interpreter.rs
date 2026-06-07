@@ -880,6 +880,95 @@ fn test_loop_break() {
     );
 }
 
+// ── while let / let else (phase-6 line 489, interpreter parity) ─
+
+#[test]
+fn test_while_let_drains_and_binds() {
+    // Re-evaluates the scrutinee each iteration, binds the payload, and
+    // exits when it stops matching (`None`). Mirrors the codegen E2E test
+    // `test_e2e_while_let_drains_and_binds` (Vec.pop yields 30, 20, 10).
+    assert_eq!(
+        run("fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(10_i64);\n\
+                 v.push(20_i64);\n\
+                 v.push(30_i64);\n\
+                 let mut sum = 0_i64;\n\
+                 while let Some(x) = v.pop() {\n\
+                     sum = sum + x;\n\
+                     println(x);\n\
+                 }\n\
+                 println(sum);\n\
+             }"),
+        "30\n20\n10\n60\n"
+    );
+}
+
+#[test]
+fn test_while_let_break() {
+    // `break` exits the while-let loop (Vec.pop yields 4, 3, then x==2).
+    assert_eq!(
+        run("fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(1_i64);\n\
+                 v.push(2_i64);\n\
+                 v.push(3_i64);\n\
+                 v.push(4_i64);\n\
+                 while let Some(x) = v.pop() {\n\
+                     if x == 2_i64 { break; }\n\
+                     println(x);\n\
+                 }\n\
+                 println(99_i64);\n\
+             }"),
+        "4\n3\n99\n"
+    );
+}
+
+#[test]
+fn test_while_let_continue() {
+    // `continue` skips the rest of the iteration (3 is skipped).
+    assert_eq!(
+        run("fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(1_i64);\n\
+                 v.push(2_i64);\n\
+                 v.push(3_i64);\n\
+                 v.push(4_i64);\n\
+                 while let Some(x) = v.pop() {\n\
+                     if x == 3_i64 { continue; }\n\
+                     println(x);\n\
+                 }\n\
+             }"),
+        "4\n2\n1\n"
+    );
+}
+
+#[test]
+fn test_let_else_match_and_diverge() {
+    // Match edge binds and continues; non-match edge runs the else block,
+    // which diverges (`return`). Mirrors the codegen E2E test
+    // `test_e2e_let_else_binds_then_else_diverges`.
+    assert_eq!(
+        run("fn make(empty: bool) -> Option[i64] {\n\
+                 if empty { return Option.None; }\n\
+                 return Option.Some(7_i64);\n\
+             }\n\
+             fn check(empty: bool) {\n\
+                 let Some(x) = make(empty) else {\n\
+                     println(0_i64);\n\
+                     return\n\
+                 }\n\
+                 println(x);\n\
+             }\n\
+             fn main() {\n\
+                 check(false);\n\
+                 check(true);\n\
+                 println(99_i64);\n\
+             }"),
+        "7\n0\n99\n"
+    );
+}
+
 // ── Functions ──────────────────────────────────────────────────
 
 #[test]

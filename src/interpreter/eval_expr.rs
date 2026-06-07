@@ -545,6 +545,64 @@ impl<'a> super::Interpreter<'a> {
                 Value::Unit
             }
 
+            // While-let loop — re-evaluate the scrutinee each iteration and
+            // test it against the pattern (the loop condition). On a match,
+            // bind the pattern's names in a per-iteration scope and run the
+            // body; on a non-match, exit. Mirrors the `For` loop's scope +
+            // break/continue handling (pop_scope on every exit path).
+            ExprKind::WhileLet {
+                pattern,
+                value,
+                body,
+                label,
+                ..
+            } => {
+                loop {
+                    let val = self.eval_expr_inner(value);
+                    // A control-flow signal raised while evaluating the
+                    // scrutinee (e.g. a `?` early-return) propagates — stop.
+                    if self.check_cf() {
+                        break;
+                    }
+                    if !self.try_match_pattern(pattern, &val) {
+                        break;
+                    }
+                    self.env.push_scope();
+                    self.bind_pattern(pattern, val);
+                    match self.eval_block_inner(body) {
+                        Ok(_) => {}
+                        Err(ControlFlow::Break {
+                            label: ref bl,
+                            value: ref v,
+                        }) => {
+                            self.env.pop_scope();
+                            if bl.is_none() || bl.as_deref() == label.as_deref() {
+                                return v.clone().unwrap_or(Value::Unit);
+                            } else {
+                                return self.set_cf(ControlFlow::Break {
+                                    label: bl.clone(),
+                                    value: v.clone(),
+                                });
+                            }
+                        }
+                        Err(ControlFlow::Continue { label: ref cl }) => {
+                            self.env.pop_scope();
+                            if cl.is_none() || cl.as_deref() == label.as_deref() {
+                                continue;
+                            } else {
+                                return self.set_cf(ControlFlow::Continue { label: cl.clone() });
+                            }
+                        }
+                        Err(cf) => {
+                            self.env.pop_scope();
+                            return self.set_cf(cf);
+                        }
+                    }
+                    self.env.pop_scope();
+                }
+                Value::Unit
+            }
+
             // For loop
             ExprKind::For {
                 pattern,
