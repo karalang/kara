@@ -957,22 +957,45 @@ fn main() {
     /// multiple branches err, the par-block must surface the
     /// source-order earliest one regardless of which branch's Err
     /// landed in its slot first. Branch 0 returns Err(11) after
-    /// burning CPU; branch 2 returns Err(33) immediately. A naive
+    /// burning CPU; branch 1 returns Err(33) before it. A naive
     /// "first slot to be written wins" implementation would print
     /// 33; the slice-2 atomicrmw-umin path must print 11.
     ///
-    /// The artificial work in branch 0 (`spin_ok` returning Ok'd
-    /// values that get discarded) makes the order-of-completion
-    /// observably differ from source order — without it the test
-    /// could pass vacuously on a single-core scheduler that runs
-    /// branches sequentially.
+    /// Load-immunity protocol (bugs.md flake, fixed 2026-06-06). The
+    /// original shape (free-running spin in branch 0, immediate Err
+    /// in branch 1) flaked under full-suite CPU saturation
+    /// (reproduced ~1/50 under 24-way load): branch 0's worker could
+    /// start late enough that branch 1's recorded Err had already
+    /// set the cooperative-cancel flag, branch 0 was then cancelled
+    /// at its branch-start / pre-call check and never recorded
+    /// Err(11) — and per design.md § Parallel Failure and Cleanup
+    /// (join-then-cleanup step 3: a cancelled sibling "abandons its
+    /// current work"; source-order precedence applies among errors
+    /// actually recorded), 33 winning in that schedule is correct
+    /// semantics, so the old test over-specified. The gate makes the
+    /// race one-directional: branch 1 holds its Err(33) until
+    /// branch 0 has entered `slow_err` — i.e. until branch 0 is past
+    /// its last cooperative-cancel point (checks exist at branch
+    /// start and before branch-body call sites only, never inside a
+    /// callee). No error can exist before `slow_err` is entered, so
+    /// branch 0's checks always pass and Err(11) is always recorded;
+    /// branch 1's Err(33) then lands first in wall-clock while 11
+    /// still must win by source order. Deterministic under any
+    /// scheduler load (verified 30/30 under 20-way saturation). The
+    /// suppressed-Err schedule is pinned by the companion test
+    /// `test_e2e_par_block_cancelled_branch_err_not_recorded` below.
     #[test]
     fn test_e2e_par_block_result_source_order_earliest_branch_wins() {
         let out = run_program(
             r#"
-fn maybe_err(v: i64) -> Result[i64, i64] { Err(v) }
+par struct Gate { v: Atomic[i64] }
+impl Gate {
+    fn open(ref self) { self.v.store(1, MemoryOrdering.SeqCst) }
+    fn is_open(ref self) -> bool { self.v.load(MemoryOrdering.SeqCst) == 1 }
+}
 
-fn slow_err(v: i64) -> Result[i64, i64] {
+fn slow_err(v: i64, g: Gate) -> Result[i64, i64] {
+    g.open();
     let mut acc: i64 = 0_i64;
     let mut i: i64 = 0_i64;
     while i < 1000000_i64 {
@@ -986,10 +1009,16 @@ fn slow_err(v: i64) -> Result[i64, i64] {
     }
 }
 
+fn gated_err(v: i64, g: Gate) -> Result[i64, i64] {
+    while not g.is_open() { }
+    Err(v)
+}
+
 fn main() {
+    let g = Gate { v: Atomic.new(0) };
     let r: Result[i64, i64] = par {
-        let r1: Result[i64, i64] = slow_err(11_i64);
-        let r2: Result[i64, i64] = maybe_err(33_i64);
+        let r1: Result[i64, i64] = slow_err(11_i64, g);
+        let r2: Result[i64, i64] = gated_err(33_i64, g);
         Ok(7_i64)
     };
     match r {
@@ -1007,6 +1036,68 @@ fn main() {
                  over later-source-order branch (idx 1, Err(33)) even \
                  when the later branch lands in its slot first; \
                  got {out:?}"
+            );
+        }
+    }
+
+    /// Companion pinning the cancellation side of the source-order
+    /// rule (design.md § Parallel Failure and Cleanup): a sibling
+    /// cancelled before recording its own Err contributes nothing to
+    /// the scope's return value — source-order precedence applies
+    /// among errors *actually recorded*, not errors a branch would
+    /// have produced had it not been cancelled. Branch 0
+    /// (source-earliest) spins on a gate that is never opened, so
+    /// its only exit is the cooperative-cancel check emitted before
+    /// the in-loop `g.is_open()` call; branch 1's immediate Err(33)
+    /// sets the cancel flag, branch 0 abandons without ever reaching
+    /// `would_err(11)`, and the scope deterministically returns 33.
+    /// Doubles as a liveness check that cooperative cancellation
+    /// reaches a busy sibling (if the in-loop cancel check were
+    /// elided — e.g. by callee-effectful narrowing misclassifying
+    /// the atomic-load method — this test would hang, not fail).
+    #[test]
+    fn test_e2e_par_block_cancelled_branch_err_not_recorded() {
+        let out = run_program(
+            r#"
+par struct Gate { v: Atomic[i64] }
+impl Gate {
+    fn is_open(ref self) -> bool { self.v.load(MemoryOrdering.SeqCst) == 1 }
+}
+
+fn fast_err(v: i64) -> Result[i64, i64] { Err(v) }
+
+fn would_err(v: i64) -> Result[i64, i64] {
+    if v < 0 {
+        return Ok(v);
+    }
+    Err(v)
+}
+
+fn main() {
+    let g = Gate { v: Atomic.new(0) };
+    let r: Result[i64, i64] = par {
+        let r1: Result[i64, i64] = {
+            while not g.is_open() { }
+            would_err(11_i64)
+        };
+        let r2: Result[i64, i64] = fast_err(33_i64);
+        Ok(7_i64)
+    };
+    match r {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "33",
+                "a branch cancelled before recording its Err must not \
+                 contribute to the scope's return value — the recorded \
+                 Err(33) wins even though a source-earlier branch would \
+                 have erred with 11; got {out:?}"
             );
         }
     }
