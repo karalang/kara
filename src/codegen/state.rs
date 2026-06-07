@@ -27,6 +27,20 @@ pub(crate) struct VarSlot<'ctx> {
     pub(crate) ty: BasicTypeEnum<'ctx>,
 }
 
+/// Codegen-side view of a `Tensor[T, Shape]` binding (phase-11
+/// numerical stdlib). The runtime value is a single pointer to one
+/// malloc'd block laid out `[i64 rank][rank × i64 dims][C-order data]`
+/// — see `src/codegen/tensor.rs` for the layout helpers. `elem` is the
+/// element's LLVM type; `dims` mirrors `TensorTypeInfo.dims`:
+/// `Some(n)` per statically-known dim (stride folding, bounds-check
+/// elision), `None` per runtime dim (loaded from the header, which is
+/// always authoritative).
+#[derive(Clone)]
+pub(crate) struct TensorVarInfo<'ctx> {
+    pub(crate) elem: BasicTypeEnum<'ctx>,
+    pub(crate) dims: Vec<Option<i64>>,
+}
+
 /// Resolved view of a slice-pattern scrutinee (`Array[T, N]`, `Vec[T]`,
 /// or `Slice[T]`) — `data_ptr` is normalized to a `T*` element pointer
 /// and `len` is the runtime element count as i64. `mutable` mirrors the
@@ -313,6 +327,17 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Closes the 2026-05-13 leak documented in `deferred.md` §
         /// *Recursive Drop for Heap-Owned Collection Elements*.
         elem_ty: Option<BasicTypeEnum<'ctx>>,
+    },
+    /// Free an owned `Tensor[T, Shape]`'s single heap block at scope
+    /// exit. The binding's slot holds one pointer to the
+    /// `[rank][dims][data]` allocation (`src/codegen/tensor.rs`); the
+    /// drain loads it and frees when non-null. Move-out sites
+    /// (tail return, by-value call arg, `let b = a;`) suppress by
+    /// storing null into the slot — the null check is the Tensor
+    /// analog of `FreeVecBuffer`'s `cap > 0` guard.
+    FreeTensor {
+        /// Alloca pointer of the tensor binding's `ptr` slot.
+        tensor_alloca: PointerValue<'ctx>,
     },
     /// Free the per-group heap buffers of a SoA-laid-out `Vec[T]` at scope
     /// exit. SoA storage is multi-allocation — one buffer per hot group

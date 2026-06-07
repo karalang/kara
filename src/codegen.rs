@@ -67,6 +67,7 @@ mod synth_display;
 mod synth_drop;
 mod task_group;
 mod tcp;
+mod tensor;
 mod test_assert;
 mod tls;
 mod types_lowering;
@@ -1450,6 +1451,30 @@ pub(super) struct Codegen<'ctx> {
     /// dispatch arm — `String` and `Vec[u8]` are indistinguishable from
     /// the LLVM value alone, so the span-set is what tells them apart.
     pub(crate) string_typed_exprs: HashSet<(usize, usize)>,
+    /// Per-expression Tensor type info (element TypeExpr + static dims),
+    /// keyed by `(span.offset, span.length)`. Populated from
+    /// `Program.tensor_typed_exprs` (lowering pass, from
+    /// `TypeCheckResult.expr_types`). Consumed at `Tensor.from(...)`
+    /// construction sites, unannotated tensor let-bindings, and indexing
+    /// dispatch. See `src/codegen/tensor.rs` for the value layout this
+    /// drives.
+    pub(crate) tensor_typed_exprs: HashMap<(usize, usize), crate::ast::TensorTypeInfo>,
+    /// Per-binding Tensor registration: element LLVM type + static dims
+    /// (`Some(n)` = concrete literal usable for stride folding /
+    /// bounds-check elision; `None` = read the dim from the value's
+    /// runtime header). Populated by `register_var_from_type_expr`'s
+    /// Tensor arm (annotations, params, for-bindings) and the let-path
+    /// side-table fallback for unannotated bindings. Consulted by
+    /// `compile_index` / `compile_index_store` / method dispatch.
+    pub(crate) tensor_var_infos: HashMap<String, state::TensorVarInfo<'ctx>>,
+    /// Expected-type threading for `Tensor.zeros` / `ones` / `full` —
+    /// these constructors can't recover the element type or rank from
+    /// their `dims: Vec[i64]` argument, so the let-binding path stashes
+    /// the destination binding's registered `TensorVarInfo` here before
+    /// compiling the RHS (the exact `pending_let_elem_type` mechanism
+    /// `Vec.with_capacity` uses). `Tensor.from` never needs it (dims and
+    /// element type both come from the literal).
+    pub(crate) pending_let_tensor_info: Option<state::TensorVarInfo<'ctx>>,
     /// Set of `(span.offset, span.length)` keys for every expression whose
     /// Kāra type is a `Vector[T, N]` with an unsigned-integer element.
     /// Populated from `Program.unsigned_vector_exprs`. The LLVM `<N x iX>`
@@ -3893,6 +3918,9 @@ impl<'ctx> Codegen<'ctx> {
             call_effect_subs: crate::ast::CallEffectSubsTable::new(),
             method_unwrap_inner_types: HashMap::new(),
             string_typed_exprs: HashSet::new(),
+            tensor_typed_exprs: HashMap::new(),
+            tensor_var_infos: HashMap::new(),
+            pending_let_tensor_info: None,
             unsigned_vector_exprs: HashSet::new(),
             expr_struct_type_names: HashMap::new(),
             user_ord_typed_exprs: HashMap::new(),
@@ -4602,6 +4630,10 @@ impl<'ctx> Codegen<'ctx> {
         // LLVM struct shape is identical to `Vec[u8]` and a few other
         // 3-word types, so the value alone can't distinguish them.
         self.string_typed_exprs = program.string_typed_exprs.clone();
+        // Sibling: per-span Tensor element-type + static-dims info for
+        // construction / let-registration / indexing dispatch (see
+        // `src/codegen/tensor.rs`).
+        self.tensor_typed_exprs = program.tensor_typed_exprs.clone();
         // Sibling: spans of unsigned-element vector expressions, so the SIMD
         // `reduce_min/max` codegen picks `ult`/`ugt` over the signed default.
         self.unsigned_vector_exprs = program.unsigned_vector_exprs.clone();

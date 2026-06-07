@@ -87,6 +87,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 if name == "Slice" {
                     return self.slice_struct_type().into();
                 }
+                if name == "Tensor" {
+                    // `Tensor[T, Shape]` is a single pointer to one
+                    // malloc'd `[rank][dims][data]` block — see
+                    // `src/codegen/tensor.rs`. Without this branch the
+                    // baked `struct Tensor[T, ...S] { handle_id: i64 }`
+                    // shape would lower as a 1-field struct and every
+                    // tensor-typed slot would mis-size.
+                    return self.context.ptr_type(AddressSpace::default()).into();
+                }
                 if name == "Atomic" {
                     // `Atomic[T]` is a transparent wrapper over `T` —
                     // baked as `struct Atomic[T] { }` in
@@ -759,6 +768,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 return;
             }
+        }
+        // Tensor[T, Shape] — register the element type + static dims so
+        // indexing / method dispatch and the cleanup tracker recognise
+        // the binding (`src/codegen/tensor.rs`). Splice-bearing shapes
+        // return None from the extractor and deliberately skip
+        // registration: rank unknown, and the only ops the typechecker
+        // admits on them (shape()/rank()) dispatch via the side-table /
+        // method path without needing a per-var registration.
+        if let Some(info) = self.tensor_var_info_from_type_expr(te) {
+            self.tensor_var_infos.insert(var_name.to_string(), info);
+            return;
         }
         if let Some(elem_ty) = self.extract_vec_elem_type(te) {
             self.vec_elem_types.insert(var_name.to_string(), elem_ty);

@@ -1694,6 +1694,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_unconditional_branch(join_bb).unwrap();
                 self.builder.position_at_end(join_bb);
             }
+            CleanupAction::FreeTensor { tensor_alloca } => {
+                // Tensor binding: the slot holds one pointer to the
+                // `[rank][dims][data]` block (`src/codegen/tensor.rs`).
+                // Null = moved-out (the move-suppression sentinel, the
+                // Tensor analog of Vec's `cap = 0`); skip the free.
+                let t_ptr = self
+                    .builder
+                    .build_load(ptr_ty, *tensor_alloca, "cleanup.t")
+                    .unwrap()
+                    .into_pointer_value();
+                let null = ptr_ty.const_null();
+                let live = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, t_ptr, null, "cleanup.t.live")
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(fn_val, "cleanup.t.free");
+                let skip_bb = self.context.append_basic_block(fn_val, "cleanup.t.skip");
+                self.builder
+                    .build_conditional_branch(live, free_bb, skip_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                self.builder
+                    .build_call(self.free_fn, &[t_ptr.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(skip_bb).unwrap();
+                self.builder.position_at_end(skip_bb);
+            }
             CleanupAction::FreeVecBuffer {
                 vec_alloca,
                 elem_ty,

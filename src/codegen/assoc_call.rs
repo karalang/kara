@@ -26,6 +26,19 @@ impl<'ctx> super::Codegen<'ctx> {
         _args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let args = _args;
+        // Phase 11 numerical stdlib — Tensor constructors. zeros/ones/
+        // full thread the destination binding's element type + static
+        // dims via `pending_let_tensor_info` (the `Vec.with_capacity`
+        // expected-type mechanism); `from` is fully self-contained
+        // (dims from the literal's nesting, element type from the first
+        // leaf). See `src/codegen/tensor.rs`.
+        if type_name == "Tensor" {
+            match method {
+                "zeros" | "ones" | "full" => return self.compile_tensor_new(method, args),
+                "from" => return self.compile_tensor_from(args),
+                _ => {}
+            }
+        }
         // Phase 6 line 218 slice 5: `TaskGroup.new()` — allocate a
         // runtime-side group via `karac_runtime_taskgroup_new()` and
         // wrap the returned pointer (cast to i64) as `TaskGroup { id: <i64> }`.

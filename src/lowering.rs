@@ -17,7 +17,9 @@
 use crate::ast::*;
 use crate::resolver::SpanKey;
 use crate::token::Span;
-use crate::typechecker::{FloatSize, IntSize, Type, TypeCheckResult, UIntSize};
+use crate::typechecker::{
+    ConstArg, DimArg, FloatSize, IntSize, Type, TypeCheckResult, TypeChecker, UIntSize,
+};
 
 /// Rewrite operator expressions across the entire program in place.
 pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
@@ -92,6 +94,42 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             } else {
                 None
             }
+        })
+        .collect();
+    // Sibling to `string_typed_exprs`: for every `Tensor[T, Shape]`-typed
+    // expression whose rank is statically known (concrete `Type::Shape`,
+    // no `...` splice), record the element type (as a TypeExpr, lowered
+    // by codegen via `llvm_type_for_type_expr`) and the per-dim static
+    // values (`Some(n)` for concrete literals, `None` for `?` / dim
+    // params / unresolved dim metavars — codegen reads those from the
+    // tensor value's runtime header, which is always authoritative).
+    // Splice-bearing / bare-param shapes are skipped: rank unknown, and
+    // the only ops the typechecker admits on them read the header.
+    program.tensor_typed_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Named { name, args } if name == "Tensor" && args.len() == 2 => {
+                let Type::Shape(dim_args) = &args[1] else {
+                    return None;
+                };
+                let mut dims = Vec::with_capacity(dim_args.len());
+                for d in dim_args {
+                    match d {
+                        DimArg::Splice(_) | DimArg::SpliceVar(_) => return None,
+                        DimArg::Const(ConstArg::Literal(v)) => dims.push(Some(*v)),
+                        _ => dims.push(None),
+                    }
+                }
+                Some((
+                    (k.0, k.1),
+                    crate::ast::TensorTypeInfo {
+                        elem: TypeChecker::type_to_type_expr(&args[0]),
+                        dims,
+                    },
+                ))
+            }
+            _ => None,
         })
         .collect();
     // Sibling to `string_typed_exprs`: spans of every `Vector[T, N]`-typed

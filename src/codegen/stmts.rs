@@ -979,6 +979,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     let mut detected = false;
                     // Explicit type annotation: let v: Vec[T] = ... or let s: String = ...
                     if let Some(ref te) = ty {
+                        // `let t: Tensor[T, [dims]] = ...` — register the
+                        // binding's element type + static dims
+                        // (`src/codegen/tensor.rs`); the pending-info
+                        // threading below makes them visible to the
+                        // `Tensor.zeros/ones/full` constructor arms.
+                        if let Some(info) = self.tensor_var_info_from_type_expr(te) {
+                            self.tensor_var_infos.insert(var_name.clone(), info);
+                            detected = true;
+                        }
                         if let Some(elem_ty) = self.extract_vec_elem_type(te) {
                             self.vec_elem_types.insert(var_name.clone(), elem_ty);
                             if let Some(inner) = vec_inner_type_expr(te) {
@@ -1340,13 +1349,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 // from the annotation (or pattern_binding_inner_types
                 // for the no-annotation path). Cleared after compile.
                 let saved_pending_let_elem = self.pending_let_elem_type.take();
+                // Sibling threading for `Tensor.zeros/ones/full` in the
+                // RHS — those constructors can't recover the element
+                // type or rank from their `dims: Vec[i64]` argument;
+                // `tensor_var_infos[var_name]` was populated above from
+                // the annotation. Cleared after compile.
+                let saved_pending_let_tensor = self.pending_let_tensor_info.take();
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     if let Some(&elem_ty) = self.vec_elem_types.get(var_name.as_str()) {
                         self.pending_let_elem_type = Some(elem_ty);
                     }
+                    if let Some(info) = self.tensor_var_infos.get(var_name.as_str()) {
+                        self.pending_let_tensor_info = Some(info.clone());
+                    }
                 }
                 let val = self.compile_expr(value)?;
                 self.pending_let_elem_type = saved_pending_let_elem;
+                self.pending_let_tensor_info = saved_pending_let_tensor;
                 // Sibling to the Assign arm's f-string staged-acc capture.
                 // The slot is consumed below at the tracked-Vec/String let-
                 // binding site (it transfers ownership of the buffer to
@@ -1930,6 +1949,30 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.emit_option_inner_rc_inc_for_loaded(loaded, info.heap_type);
                             }
                         }
+                    }
+                }
+                // Track Tensor bindings for scope cleanup. Unannotated
+                // bindings (`let t = Tensor.from(...)`, or a tensor-
+                // returning call) register here from the lowering
+                // side-table at the RHS span; annotated ones registered
+                // above. The move-suppression call handles `let b = a;`
+                // (source slot nulled — see `FreeTensor`'s null guard).
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if !self.tensor_var_infos.contains_key(var_name.as_str()) {
+                        let key = (value.span.offset, value.span.length);
+                        if let Some(ti) = self.tensor_typed_exprs.get(&key).cloned() {
+                            let info = self.tensor_var_info_from_table(&ti);
+                            self.tensor_var_infos.insert(var_name.clone(), info);
+                        }
+                    }
+                    if self.tensor_var_infos.contains_key(var_name.as_str()) {
+                        if let Some(slot) = self.variables.get(var_name.as_str()) {
+                            if matches!(slot.ty, BasicTypeEnum::PointerType(_)) {
+                                let slot_ptr = slot.ptr;
+                                self.track_tensor_var(slot_ptr);
+                            }
+                        }
+                        self.suppress_source_vec_cleanup_for_arg(value);
                     }
                 }
                 // Track Vec variables for scope cleanup.

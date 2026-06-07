@@ -1016,6 +1016,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(soa) = self.soa_layouts.get(name.as_str()).cloned() {
                     return self.compile_soa_method(name, &soa, slot, method, args);
                 }
+                // Tensor instance methods — shape()/rank() read the
+                // `[rank][dims][data]` header (`src/codegen/tensor.rs`).
+                // The shape-transform family (iter_axis/reshape/...) is
+                // a follow-on codegen slice; reaching one of those here
+                // errors loudly rather than falling through to the
+                // silent-0 default.
+                if self.tensor_var_infos.contains_key(name.as_str()) {
+                    match method {
+                        "shape" | "rank" => {
+                            let t_ptr = self.tensor_ptr_for_var(name)?;
+                            return self.compile_tensor_shape_method(t_ptr, method);
+                        }
+                        "iter_axis" | "reshape" | "permute" | "slice" | "squeeze" => {
+                            return Err(format!(
+                                "Tensor.{} is not lowered to native code yet (phase-11 \
+                                 follow-on slice) — run under `karac run` for now",
+                                method
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
                 // Vec/String methods (owned or ref)
                 if self.vec_elem_types.contains_key(name.as_str()) {
                     let data_ptr = self.get_data_ptr(name).unwrap();

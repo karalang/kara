@@ -34667,4 +34667,180 @@ fn main() {
             );
         }
     }
+
+    // ── Tensor codegen (phase-11 numerical stdlib, core slice) ─────
+    // Value layout: one malloc'd `[i64 rank][rank × i64 dims][C-order
+    // data]` block, tensor value = single pointer. See
+    // `src/codegen/tensor.rs`.
+
+    #[test]
+    fn test_tensor_static_literal_index_elides_bounds_checks() {
+        // Fully-static dims + literal indices: the typechecker already
+        // proved the access in-bounds, so codegen emits no `t.idx.oob`
+        // compare — the bounds-check elision the tracker commits to.
+        let ir = ir_for(
+            "fn main() {\n\
+                 let t: Tensor[f64, [2, 3]] = Tensor.zeros([2, 3]);\n\
+                 let x = t[1, 2];\n\
+                 println(x);\n\
+             }\n",
+        );
+        assert!(
+            !ir.contains("t.idx.oob"),
+            "static-dim literal-index access must elide bounds checks:\n{}",
+            ir
+        );
+        // The construction-boundary dim asserts ARE present (array-
+        // literal dims are runtime values checked against static dims).
+        assert!(
+            ir.contains("t.guard.fail"),
+            "construction-boundary static-dim asserts must be emitted:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_tensor_runtime_index_emits_bounds_check() {
+        let ir = ir_for(
+            "fn main() {\n\
+                 let t: Tensor[f64, [2, 3]] = Tensor.zeros([2, 3]);\n\
+                 let i = 1;\n\
+                 let x = t[i, 2];\n\
+                 println(x);\n\
+             }\n",
+        );
+        assert!(
+            ir.contains("t.idx.oob"),
+            "runtime-index access must emit a bounds check:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_e2e_tensor_constructors_index_shape() {
+        let out = run_program(
+            "fn main() {\n\
+                 let t: Tensor[f64, [2, 3]] = Tensor.zeros([2, 3]);\n\
+                 println(t.rank());\n\
+                 let s = t.shape();\n\
+                 println(s[0]);\n\
+                 println(s[1]);\n\
+                 println(t[1, 2]);\n\
+                 let mut u: Tensor[i64, [2, 2]] = Tensor.full([2, 2], 7);\n\
+                 u[0, 1] = 42;\n\
+                 println(u[0, 0]);\n\
+                 println(u[0, 1]);\n\
+                 let f = Tensor.from([[1.5, 2.5], [3.5, 4.5]]);\n\
+                 println(f[1, 0]);\n\
+                 println(f.rank());\n\
+                 let o: Tensor[f64, [4]] = Tensor.ones([4]);\n\
+                 println(o[3]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "2\n2\n3\n0\n7\n42\n3.5\n2\n1\n",
+                "tensor constructors / multi-dim index / shape must match \
+                 the interpreter's semantics",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_dynamic_dims_fn_boundary_moves() {
+        // `?` dims read from the value header; tensors cross fn
+        // boundaries as single pointers (owned arg + return); `let b =
+        // a;` moves without double-free (FreeTensor null-guard +
+        // move-suppression null store).
+        let out = run_program(
+            "fn make() -> Tensor[f64, [2, 2]] {\n\
+                 let t: Tensor[f64, [2, 2]] = Tensor.full([2, 2], 9.0);\n\
+                 t\n\
+             }\n\
+             fn first(t: Tensor[f64, [2, 2]]) -> f64 {\n\
+                 t[0, 0]\n\
+             }\n\
+             fn main() {\n\
+                 let d: Tensor[f64, [2, ?]] = Tensor.zeros([2, 5]);\n\
+                 let s = d.shape();\n\
+                 println(s[1]);\n\
+                 println(d[1, 4]);\n\
+                 let m = make();\n\
+                 println(m[1, 1]);\n\
+                 let x = first(make());\n\
+                 println(x);\n\
+                 let a = Tensor.from([[1, 2], [3, 4]]);\n\
+                 let b = a;\n\
+                 println(b[1, 0]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "5\n0\n9\n9\n3\n",
+                "dynamic dims / fn-boundary / move semantics must hold",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_construction_dim_mismatch_panics() {
+        // The construction-boundary check of design.md § Runtime
+        // equality check: runtime dims must agree with every static
+        // annotated dim.
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let bad: Tensor[f64, [3, ?]] = Tensor.zeros([7, 5]);\n\
+                 println(bad.rank());\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout
+                    .contains("runtime dim 0 does not match the annotated static dim"),
+                "expected the construction-boundary dim assert, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("\n3\n"),
+                "must trap before reaching the post-construction println"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_runtime_index_oob_panics() {
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let t: Tensor[f64, [2, ?]] = Tensor.zeros([2, 5]);\n\
+                 let i = 9;\n\
+                 println(t[1, i]);\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("tensor index out of bounds for dim 1"),
+                "expected the runtime index bounds trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_dims_from_vec_variable() {
+        // Non-literal dims argument: read through the Vec value, with
+        // the rank-agreement assert.
+        let out = run_program(
+            "fn main() {\n\
+                 let dims = [2, 3];\n\
+                 let t: Tensor[i64, [2, 3]] = Tensor.zeros(dims);\n\
+                 println(t[1, 2]);\n\
+                 println(t.rank());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "0\n2\n", "Vec-variable dims must construct correctly");
+        }
+    }
 }

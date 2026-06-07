@@ -800,6 +800,18 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Tensor variable indexing: `t[i, j, k]` (the parser desugars to
+        // a single tuple index). Routed before the Vec/Slice paths —
+        // tensor bindings are single-pointer slots and dispatch through
+        // the `[rank][dims][data]` layout helpers in
+        // `src/codegen/tensor.rs`.
+        if let ExprKind::Identifier(name) = &object.kind {
+            if let Some(info) = self.tensor_var_infos.get(name.as_str()).cloned() {
+                let t_ptr = self.tensor_ptr_for_var(name)?;
+                return self.compile_tensor_index(t_ptr, &info, index);
+            }
+        }
+
         // Slice variable indexing: before the fast-path alloca lookup, check
         // whether the object is a slice variable. Slices use a 2-field
         // `{ptr, len}` representation and dispatch to a dedicated path.
@@ -1594,6 +1606,15 @@ impl<'ctx> super::Codegen<'ctx> {
         index: &Expr,
         val: BasicValueEnum<'ctx>,
     ) -> Result<(), String> {
+        // Tensor element store: `t[i, j] = v` — same layout helpers as
+        // the read path (`src/codegen/tensor.rs`).
+        if let ExprKind::Identifier(name) = &object.kind {
+            if let Some(info) = self.tensor_var_infos.get(name.as_str()).cloned() {
+                let t_ptr = self.tensor_ptr_for_var(name)?;
+                return self.compile_tensor_index_store(t_ptr, &info, index, val);
+            }
+        }
+
         // Slice[T] / mut Slice[T] element store: the slice is a `{ptr, i64}`
         // value; the index path GEPs through the stored data pointer. The
         // ownership checker is responsible for rejecting stores through a

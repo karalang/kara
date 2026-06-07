@@ -748,7 +748,7 @@ impl<'a> super::TypeChecker<'a> {
     /// which `llvm_type_for_type_expr` lowers to i64 — adequate for the
     /// element-type registration use case (those payloads are not
     /// supported in pattern-bound Vec/Slice element positions today).
-    pub(super) fn type_to_type_expr(ty: &Type) -> TypeExpr {
+    pub(crate) fn type_to_type_expr(ty: &Type) -> TypeExpr {
         let span = Span::default();
         let path = |name: &str, args: Vec<TypeExpr>| TypeExpr {
             kind: TypeKind::Path(PathExpr {

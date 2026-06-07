@@ -1470,6 +1470,14 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             return;
         }
+        // Tensor binding: null the source slot so its `FreeTensor`
+        // cleanup's null-guard skips — the consumer (tail return, by-
+        // value call arg, `let b = a;`) now owns the single heap block.
+        // The null store is the Tensor analog of Vec's `cap = 0`.
+        if self.tensor_var_infos.contains_key(var_name) {
+            let _ = self.builder.build_store(slot.ptr, ptr_ty.const_null());
+            return;
+        }
         // Shared-struct / shared-enum binding (RC-tier): the binding
         // holds a `ptr` whose pointee is the heap object with the i64
         // refcount header. The let-site `track_rc_var` queued a scope-

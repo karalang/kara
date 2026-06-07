@@ -4081,4 +4081,66 @@ fn main() {
             "[{label}] unexpected stdout (ASAN passed, output mismatched)"
         );
     }
+
+    /// Tensor heap lifecycle (phase-11 codegen core slice): one malloc'd
+    /// `[rank][dims][data]` block per tensor, freed once at scope exit
+    /// via `FreeTensor`'s null-guard. Exercises every ownership-transfer
+    /// shape in one program — construction (all four constructors,
+    /// including the temporary-dims-Vec eager free), mutation, `let b =
+    /// a;` move (source slot nulled — double-free would trip ASAN),
+    /// fn-boundary moves (owned arg + tail return), and `shape()`'s
+    /// fresh Vec (its own FreeVecBuffer). Leak detection on Linux
+    /// (detect_leaks=1) additionally catches a missing free.
+    #[test]
+    fn asan_tensor_lifecycle_clean() {
+        let label = "tensor_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn make() -> Tensor[f64, [2, 2]] {
+    let t: Tensor[f64, [2, 2]] = Tensor.full([2, 2], 9.0);
+    t
+}
+
+fn first(t: Tensor[f64, [2, 2]]) -> f64 {
+    t[0, 0]
+}
+
+fn main() {
+    let z: Tensor[f64, [2, 3]] = Tensor.zeros([2, 3]);
+    println(z[1, 2]);
+    let o: Tensor[i64, [4]] = Tensor.ones([4]);
+    println(o[3]);
+    let mut f = Tensor.from([[1, 2], [3, 4]]);
+    f[0, 1] = 42;
+    println(f[0, 1]);
+    let s = f.shape();
+    println(s[0]);
+    let moved = f;
+    println(moved[1, 0]);
+    let m = make();
+    println(m[1, 1]);
+    println(first(make()));
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check FreeTensor double-free/leak on the move-suppression paths",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["0", "1", "42", "2", "3", "9", "9"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
 }

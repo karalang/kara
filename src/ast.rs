@@ -286,6 +286,36 @@ pub type PatternBindingInnerTypesTable = std::collections::HashMap<(usize, usize
 /// without taking a full `TypeCheckResult` dependency.
 pub type StringTypedExprsTable = std::collections::HashSet<(usize, usize)>;
 
+/// Plain-data record describing a `Tensor[T, Shape]`-typed expression for
+/// codegen (phase-11 numerical stdlib). `elem` is the element type as an
+/// AST `TypeExpr` (codegen lowers it via `llvm_type_for_type_expr`);
+/// `dims` has one entry per static-rank dim — `Some(n)` when the dim is a
+/// concrete literal in the type (codegen may fold strides / elide bounds
+/// checks), `None` when it is `?` / a dim param / an unresolved dim
+/// metavariable (codegen reads the dim from the tensor value's header at
+/// runtime — the header is always authoritative). Plain data only: the
+/// codegen-containment invariant (CLAUDE.md § Architecture) forbids LLVM
+/// types in upstream-phase outputs.
+#[derive(Debug, Clone)]
+pub struct TensorTypeInfo {
+    pub elem: TypeExpr,
+    pub dims: Vec<Option<i64>>,
+}
+
+/// Side-table populated by the lowering pass from the typechecker's
+/// `expr_types` map: for every expression whose Kāra type is
+/// `Tensor[T, Shape]` with a statically-known rank (a concrete
+/// `Type::Shape` carrying no `...` splice), maps `(span.offset,
+/// span.length)` to its [`TensorTypeInfo`]. Codegen consumes this to
+/// learn a tensor expression's element type and static dims — at
+/// `Tensor.from(...)` construction sites, let-binding registration for
+/// unannotated tensor bindings, and indexing on non-identifier
+/// receivers. Splice-bearing / bare-param shapes are deliberately
+/// absent: their rank isn't statically known, and the only operations
+/// the typechecker admits on them (`shape()` / `rank()`) read the
+/// tensor value's runtime header instead.
+pub type TensorTypedExprsTable = std::collections::HashMap<(usize, usize), TensorTypeInfo>;
+
 /// Side-table populated by the lowering pass from the typechecker's
 /// `expr_types` map: the set of `(span.offset, span.length)` keys for every
 /// expression whose Kāra type is a `Vector[T, N]` with an **unsigned-integer**
@@ -411,6 +441,10 @@ pub struct Program {
     /// the same `{ptr, i64, i64}` LLVM struct shape without taking a
     /// `TypeCheckResult` dependency.
     pub string_typed_exprs: StringTypedExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: for
+    /// every `Tensor[T, Shape]`-typed expression with statically-known
+    /// rank, its element type + static dims. See [`TensorTypedExprsTable`].
+    pub tensor_typed_exprs: TensorTypedExprsTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: spans of
     /// every expression whose Kāra type is a `Vector[T, N]` with an
     /// unsigned-integer element. Lets the SIMD codegen pick the unsigned
