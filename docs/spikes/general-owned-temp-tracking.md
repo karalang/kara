@@ -1,9 +1,29 @@
 # Design spike — general owned-temp tracking (codegen)
 
-**Status:** scoping, 2026-06-06. **Not yet started.** This doc scopes the work;
-no code has landed. It is the designated *unblocker* for the phase-6 line-489
-remainder (scrutinee-temp drop scope) and the phase-6 line-497 tail-expr leak
-carve-out — both of those are blocked on the gap described here.
+**Status:** **slice 1 landed 2026-06-06** (chokepoint + statement-position
+discard); slices 2–6 not started. This doc scopes the work and is the designated
+*unblocker* for the phase-6 line-489 remainder (scrutinee-temp drop scope) and
+the phase-6 line-497 tail-expr leak carve-out — both blocked on the gap here.
+
+**Scope decision (2026-06-06):** build the `materialize_owned_temp` chokepoint +
+slice 1 for its standalone architectural value (it stops the special-case
+accretion noted in §2), then reassess before committing to the full line-489
+chain. Slice 1 is the low-risk entry point: a *discarded* statement value has no
+binding, so the double-free-vs-move-into-`let` risk (§6) does not arise.
+
+**Key finding that reshapes slices 2–6:** codegen does **not** receive the full
+`expr_types: HashMap<SpanKey, Type>` map from the typechecker — only *derived
+hint sets* (`string_typed_exprs`, `method_callee_types`, `user_ord_typed_exprs`,
+…), per the codegen-containment rule in CLAUDE.md (analysis phases communicate
+via plain-data hint records, not the type map). Consequence: **Vec/String temps
+are detectable from the LLVM value type** (`llvm_ty_is_vec_struct` — Vec and
+String share `{ptr,len,cap}`), but **Map handles and RC boxes are not** (both are
+plain pointers/handles, indistinguishable by LLVM type). So full generality
+(Map/RC/user-Drop temps) requires a **new lowering-pass hint table** — e.g.
+`owned_temp_drops: HashMap<SpanKey, TempDropKind>` derived from `expr_types`
+during lowering and consumed by codegen. That table is the real prerequisite for
+slices 2/6 and is the architecturally-correct next slice, not an incremental
+widen of LLVM-type sniffing.
 
 **Doc footprint** (update these together — see memory `maintain-scope-doc-index`):
 
@@ -162,16 +182,39 @@ suite, and the relevant `--features llvm` suites. New leak/UAF coverage goes in
 `tests/memory_sanitizer.rs` (Linux `detect_leaks=1` is the leak oracle; the
 existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
 
-1. **Chokepoint + statement-position temps.** Add `materialize_owned_temp` +
-   the type-classification reuse; wrap `StmtKind::Expr` in a one-shot temp frame.
-   Fold `free_discarded_request_builder_temp` into it (or leave as the immediate
-   special-case and document why). Tests: `asan_expr_stmt_discarded_vec_freed`,
-   `_map_freed`, `_rc_freed`. *This slice alone fixes the most common leak (a).*
-2. **Generalize call-arg / operand temps.** Replace the Vec-only
-   `ref_rvalue_arg` path with `materialize_owned_temp` (Map/RC + `elem_ty:
-   Some`); cover operator operands. Tests: `asan_ref_arg_map_freed`,
-   `asan_ref_arg_nested_vec_elem_freed` (the `None`→`Some` nested-leak fix),
-   `asan_operand_temp_freed`.
+1. **Chokepoint + statement-position temps. — DONE 2026-06-06.**
+   `materialize_owned_temp` (`src/codegen/runtime.rs`) mints an `__owned_tmp`
+   entry alloca, stores the value, and queues a `FreeVecBuffer` on the current
+   frame **iff** the value is `llvm_ty_is_vec_struct` (Vec/String). The
+   `StmtKind::Expr` arm (`src/codegen/stmts.rs`) wraps the discard in a one-shot
+   frame (`push` → compile → `materialize_owned_temp` → `drain_top_frame_with_emit`)
+   gated by `expr_yields_fresh_owned_temp` (Call/MethodCall only — excludes
+   place expressions, so no double-free against a binding; `ref`-returns are
+   `ptr`-typed and rejected by the vec-struct check). `free_discarded_request_builder_temp`
+   left as its own immediate special-case (different runtime free fn,
+   shape-detected — folding it in buys nothing). **Map/RC discard deferred to
+   the hint table (see status note) — not LLVM-type-detectable.**
+   **macOS test note:** macOS ASAN has no LeakSanitizer, so the *leak* direction
+   can't be caught at runtime here; the leak-closure is gated by an
+   **archive-independent IR test** (`test_ir_discarded_vec_temp_emits_free` +
+   negative `test_ir_discarded_unit_call_no_owned_temp` in `tests/codegen.rs`,
+   asserting the `__owned_tmp` slot + `cleanup.free` drain), and the ASAN tests
+   (`asan_discarded_vec_temp_freed_no_double_free`,
+   `asan_discarded_string_temp_coexists_with_bound_string`) gate the *double-free*
+   direction (which does fault on macOS) and, on Linux CI, the leak too. Gates
+   green: fmt, clippy `--all --all-targets --features llvm`, codegen (1240),
+   memory_sanitizer (97), non-llvm suite.
+2. **Generalize call-arg / operand temps + the lowering-pass hint table.**
+   First add `owned_temp_drops: HashMap<SpanKey, TempDropKind>` to the lowering
+   pass (derived from `expr_types`) so codegen can classify Map/RC/user-Drop
+   temps it cannot sniff from LLVM type — **this is the real generality
+   prerequisite, surfaced by slice 1's finding.** Then route fresh-temp args /
+   operator operands through `materialize_owned_temp`, migrating the Vec-only
+   `ref_rvalue_arg` path onto the chokepoint (Map/RC + `elem_ty: Some`, closing
+   its `None` nested-leak). Tests: `asan_ref_arg_map_freed`,
+   `asan_ref_arg_nested_vec_elem_freed`, `asan_operand_temp_freed`, plus
+   `asan_expr_stmt_discarded_map_freed` / `_rc_freed` (the slice-1 follow-on now
+   unblocked by the hint table).
 3. **Method-chain intermediates.** Route chain receivers/intermediates through
    the chokepoint against the statement frame. Tests:
    `asan_method_chain_intermediate_vec_freed`.

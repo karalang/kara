@@ -2707,6 +2707,69 @@ fn main() {
         );
     }
 
+    // ── general owned-temp tracking, slice 1 (phase-6 line 489/497) ──
+    //
+    // docs/spikes/general-owned-temp-tracking.md slice 1: a fresh-owned
+    // Vec/String produced in statement-discard position (`make_vec();`) has
+    // no binding to drop it; the owned-temp chokepoint materializes it into an
+    // `__owned_tmp` slot and frees it at the `;`. On Linux this is a leak gate
+    // (LeakSanitizer flags the unfreed buffer); on macOS (no LSan) it is a
+    // *double-free* gate — if the chokepoint wrongly freed a buffer that some
+    // other cleanup also owns, the repeated discard in a loop faults under
+    // ASAN's quarantine. The `make()` call in a loop amplifies any
+    // per-iteration imbalance into a deterministic crash, mirroring
+    // `asan_ref_arg_repeated_calls_no_compound_leak`.
+    #[test]
+    fn asan_discarded_vec_temp_freed_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn make_vec() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    v.push(2_i64);
+    return v;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 8 {
+        make_vec();
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &["done"],
+            "discarded_vec_temp_freed_no_double_free",
+        );
+    }
+
+    // A discarded fresh String from a MethodCall (`s.to_upper();` shape —
+    // here `concat()`-style via `+` wrapped in a returning fn, called and
+    // discarded). Confirms the chokepoint covers String (same `{ptr,len,cap}`
+    // layout as Vec) and that draining the one-shot statement frame does not
+    // double-free the *bound* `keep` String living in the same function.
+    #[test]
+    fn asan_discarded_string_temp_coexists_with_bound_string() {
+        assert_clean_asan_run(
+            r#"
+fn make_str() -> String {
+    let a = "discarded ";
+    let b = "temp";
+    return a + b;
+}
+
+fn main() {
+    let keep = "kept value";
+    make_str();
+    println(keep);
+}
+"#,
+            &["kept value"],
+            "discarded_string_temp_coexists_with_bound_string",
+        );
+    }
+
     // ── while let / let else drop paths (phase-6 line 489) ───────
 
     #[test]

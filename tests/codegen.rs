@@ -8938,6 +8938,61 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_discarded_vec_temp_emits_free() {
+        // General owned-temp tracking, slice 1
+        // (docs/spikes/general-owned-temp-tracking.md): a fresh-owned
+        // Vec/String produced in statement position (`make_vec();`) is a
+        // discarded temporary with no binding to drop it. The owned-temp
+        // chokepoint materializes it into an `__owned_tmp` slot and queues a
+        // `FreeVecBuffer` that drains at the `;`. Archive-independent — proves
+        // the leak is closed at the IR level (macOS ASAN has no LeakSanitizer,
+        // so the leak direction can't be caught at runtime here). Regression
+        // against the prior behaviour where the buffer leaked silently.
+        let src = r#"
+fn make_vec() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    return v;
+}
+
+fn main() {
+    make_vec();
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__owned_tmp"),
+            "expected discarded Vec temp materialized into __owned_tmp slot; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.free"),
+            "expected a FreeVecBuffer drain (cleanup.free block) for the discarded temp; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_discarded_unit_call_no_owned_temp() {
+        // Negative: a discarded Call/MethodCall that does NOT yield a
+        // Vec/String (here a unit-returning `println`) must not spuriously
+        // allocate an `__owned_tmp` slot — `materialize_owned_temp` gates on
+        // the `{ptr,len,cap}` LLVM value type, so non-heap discards are
+        // untouched. Guards against the chokepoint over-reaching.
+        let src = r#"
+fn main() {
+    println("x");
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            !ir.contains("__owned_tmp"),
+            "unit-returning discard must not materialize an owned temp; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_let_else_emits_branch_not_noop() {
         // phase-6-runtime.md line 489: `let … else` lowers to a real branch
         // (match edge binds + falls through, else edge diverges). Regression

@@ -709,6 +709,50 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// General owned-temporary chokepoint (phase-6 line-489/497 unblocker —
+    /// see `docs/spikes/general-owned-temp-tracking.md`). Given a freshly
+    /// produced rvalue `val`, if it is a heap-owning Vec/String struct value
+    /// (`{ptr, len, cap}`), store it into a `__owned_tmp` entry alloca and
+    /// queue a `FreeVecBuffer` on the **current** scope frame so it drops
+    /// when that frame drains (the same LIFO drain block locals use). No-op —
+    /// returns `None` — for any non-Vec/String value, including borrow (`ptr`
+    /// ABI) returns, which are never owned. Returns the temp slot when one
+    /// was created, for callers that need its address.
+    ///
+    /// This is the single seam unnamed owned temporaries are meant to funnel
+    /// through, replacing ad-hoc `track_vec_var(temp, _)` calls (e.g. the
+    /// `ref_rvalue_arg` materialization in `call_dispatch.rs`, a slice-2
+    /// migration candidate). **Slice 1 covers only the Vec/String case**,
+    /// which is detectable from the LLVM value type. Map handles and RC boxes
+    /// are *not* distinguishable by LLVM type alone, and codegen does not
+    /// carry the full `expr_types` map (only derived hint sets like
+    /// `string_typed_exprs`) — so Map/RC/user-Drop temps need a lowering-pass
+    /// type-hint table and land in a later slice (the spike's slices 2–6).
+    ///
+    /// Caller obligation: only pass values that are genuinely *fresh-owned*.
+    /// A value reloaded from an existing tracked binding (a place expression)
+    /// must NOT be routed here — its buffer is already owned by the binding's
+    /// own cleanup, so a second `FreeVecBuffer` would double-free. The
+    /// statement-discard call site enforces this with
+    /// `expr_yields_fresh_owned_temp` (Call / MethodCall only).
+    pub(super) fn materialize_owned_temp(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        elem_ty: Option<BasicTypeEnum<'ctx>>,
+    ) -> Option<PointerValue<'ctx>> {
+        if !self.llvm_ty_is_vec_struct(val.get_type()) {
+            return None;
+        }
+        let cur_fn = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())?;
+        let slot = self.create_entry_alloca(cur_fn, "__owned_tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        self.track_vec_var(slot, elem_ty);
+        Some(slot)
+    }
+
     /// Register a SoA-laid-out Vec for scope-exit cleanup. Mirrors
     /// `track_vec_var` but emits a `FreeSoaGroups` action whose cleanup
     /// loops over every hot group pointer and (if present) the cold
