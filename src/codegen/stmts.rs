@@ -2240,9 +2240,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (design.md § Temporary Lifetime Rules — statement-position
                 // temporaries drop at the `;`). Gated to Call/MethodCall so a
                 // discarded *place* expression is never double-freed against
-                // its binding's own cleanup; `materialize_owned_temp` further
-                // narrows to Vec/String (the LLVM-type-detectable case). When
-                // the gate is false the arm behaves exactly as before.
+                // its binding's own cleanup. `materialize_owned_temp` handles
+                // Vec/String (LLVM-type-detectable) plus Map/Set handles and
+                // RC boxes via the `owned_temp_drops` hint table keyed on the
+                // expression span. When the gate is false the arm behaves
+                // exactly as before.
                 let track_temp = Self::expr_yields_fresh_owned_temp(expr);
                 if track_temp {
                     self.scope_cleanup_actions.push(Vec::new());
@@ -2254,7 +2256,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // already-sent chains).
                 self.free_discarded_request_builder_temp(expr, val);
                 if track_temp {
-                    self.materialize_owned_temp(val, None);
+                    self.materialize_owned_temp(val, (expr.span.offset, expr.span.length));
                     self.drain_top_frame_with_emit();
                 }
                 Ok(())
@@ -3207,21 +3209,23 @@ impl<'ctx> super::Codegen<'ctx> {
         None
     }
 
-    /// General owned-temp tracking, slice 1 gate (see
+    /// General owned-temp tracking discard gate (see
     /// `docs/spikes/general-owned-temp-tracking.md`): does `expr`, in
     /// statement-discard position, produce a *fresh-owned* value whose heap
-    /// buffer this scope must drop? Restricted to `Call` / `MethodCall` —
+    /// storage this scope must drop? Restricted to `Call` / `MethodCall` —
     /// the dominant fresh-temp sources, and the only shapes guaranteed not to
     /// alias an existing tracked binding. A `Call`/`MethodCall` returning an
-    /// *owned* `Vec[T]` / `String` transfers a fresh buffer to the caller
-    /// (callee move-out); a `ref`-returning callee yields a `ptr` value that
-    /// `materialize_owned_temp` rejects, so borrows are excluded
-    /// automatically. *Place* expressions (`Identifier` / field / index) are
-    /// deliberately excluded: their value reloads an existing binding's
-    /// buffer, which a second free would double-free. Conservative by design
-    /// — when unsure, leak (safe) rather than double-free (UB). Discarded
-    /// literals / operator results (`[1, 2, 3];`, `"a" + "b";`) are rare and
-    /// left to a later slice.
+    /// *owned* `Vec[T]` / `String` / `Map`/`Set` handle / shared-struct RC box
+    /// transfers fresh storage to the caller (callee move-out);
+    /// `materialize_owned_temp` then classifies the kind (Vec/String by LLVM
+    /// type, Map/RC via the `owned_temp_drops` hint table) and a
+    /// `ref`-returning callee yields a `ptr` value with no hint entry, so
+    /// borrows are excluded automatically. *Place* expressions (`Identifier`
+    /// / field / index) are deliberately excluded: their value reloads an
+    /// existing binding's storage, which a second free/dec would double-free.
+    /// Conservative by design — when unsure, leak (safe) rather than
+    /// double-free (UB). Discarded literals / operator results (`[1, 2, 3];`,
+    /// `"a" + "b";`) are rare and left to a later slice.
     pub(super) fn expr_yields_fresh_owned_temp(expr: &Expr) -> bool {
         matches!(
             &expr.kind,

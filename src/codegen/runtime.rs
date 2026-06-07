@@ -711,46 +711,144 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// General owned-temporary chokepoint (phase-6 line-489/497 unblocker —
     /// see `docs/spikes/general-owned-temp-tracking.md`). Given a freshly
-    /// produced rvalue `val`, if it is a heap-owning Vec/String struct value
-    /// (`{ptr, len, cap}`), store it into a `__owned_tmp` entry alloca and
-    /// queue a `FreeVecBuffer` on the **current** scope frame so it drops
-    /// when that frame drains (the same LIFO drain block locals use). No-op —
-    /// returns `None` — for any non-Vec/String value, including borrow (`ptr`
-    /// ABI) returns, which are never owned. Returns the temp slot when one
-    /// was created, for callers that need its address.
+    /// produced rvalue `val` and the `(offset, length)` span of the
+    /// expression that produced it, queue the matching scope-exit cleanup on
+    /// the **current** frame so the temporary drops when that frame drains
+    /// (the same LIFO drain block locals use). Returns the temp slot when one
+    /// was created, for callers that need its address (`None` for RC boxes —
+    /// there is no slot — and for any value that is not a tracked owned
+    /// temporary, e.g. a borrow `ptr`-ABI return or a primitive scalar).
     ///
-    /// This is the single seam unnamed owned temporaries are meant to funnel
-    /// through, replacing ad-hoc `track_vec_var(temp, _)` calls (e.g. the
-    /// `ref_rvalue_arg` materialization in `call_dispatch.rs`, a slice-2
-    /// migration candidate). **Slice 1 covers only the Vec/String case**,
-    /// which is detectable from the LLVM value type. Map handles and RC boxes
-    /// are *not* distinguishable by LLVM type alone, and codegen does not
-    /// carry the full `expr_types` map (only derived hint sets like
-    /// `string_typed_exprs`) — so Map/RC/user-Drop temps need a lowering-pass
-    /// type-hint table and land in a later slice (the spike's slices 2–6).
+    /// Three kinds are handled:
+    /// - **Vec / String** (`{ptr, len, cap}`) — detectable from the LLVM
+    ///   value type alone, so this fires even without a hint-table entry
+    ///   (preserving slice-1 behavior). When `owned_temp_drops` carries the
+    ///   producing expression's `TypeExpr`, the element type is recovered and
+    ///   threaded to `track_vec_var` — closing the nested-heap leak slice 1's
+    ///   `None` left open (`Vec[String]` / `Vec[Vec[T]]` inner buffers).
+    /// - **Map / Set handle** — a plain pointer, indistinguishable from any
+    ///   other heap pointer by LLVM type; recognized only via the hint
+    ///   table's `Map[K, V]` / `Set[T]` `TypeExpr`, from which the per-half
+    ///   Vec/shared classification is derived exactly as the let-binding path
+    ///   does (`map_temp_cleanup_parts`).
+    /// - **Shared-struct / shared-enum RC box** — also a plain pointer; the
+    ///   hint table's `TypeExpr` head names the shared type, so its heap
+    ///   layout is looked up in `shared_types` and an `rc_dec` queued.
+    ///
+    /// This is the single seam unnamed owned temporaries funnel through,
+    /// replacing ad-hoc `track_vec_var(temp, _)` calls (e.g. the
+    /// `ref_rvalue_arg` materialization in `call_dispatch.rs`, a later-slice
+    /// migration candidate).
     ///
     /// Caller obligation: only pass values that are genuinely *fresh-owned*.
     /// A value reloaded from an existing tracked binding (a place expression)
-    /// must NOT be routed here — its buffer is already owned by the binding's
-    /// own cleanup, so a second `FreeVecBuffer` would double-free. The
+    /// must NOT be routed here — its storage is already owned by the
+    /// binding's own cleanup, so a second free/dec would double-free. The
     /// statement-discard call site enforces this with
     /// `expr_yields_fresh_owned_temp` (Call / MethodCall only).
     pub(super) fn materialize_owned_temp(
         &mut self,
         val: BasicValueEnum<'ctx>,
-        elem_ty: Option<BasicTypeEnum<'ctx>>,
+        span_key: (usize, usize),
     ) -> Option<PointerValue<'ctx>> {
-        if !self.llvm_ty_is_vec_struct(val.get_type()) {
-            return None;
-        }
         let cur_fn = self
             .builder
             .get_insert_block()
             .and_then(|bb| bb.get_parent())?;
-        let slot = self.create_entry_alloca(cur_fn, "__owned_tmp", val.get_type());
-        self.builder.build_store(slot, val).unwrap();
-        self.track_vec_var(slot, elem_ty);
-        Some(slot)
+
+        // Vec / String: LLVM-type detectable on its own. The hint table only
+        // *adds* the element type, so a missing entry degrades to slice-1
+        // behavior (outer buffer freed, inner elements leak) — never a
+        // double-free or a regression.
+        if self.llvm_ty_is_vec_struct(val.get_type()) {
+            let elem_ty = self
+                .owned_temp_drops
+                .get(&span_key)
+                .cloned()
+                .and_then(|te| self.extract_vec_elem_type(&te));
+            let slot = self.create_entry_alloca(cur_fn, "__owned_tmp", val.get_type());
+            self.builder.build_store(slot, val).unwrap();
+            self.track_vec_var(slot, elem_ty);
+            return Some(slot);
+        }
+
+        // Map handles and RC boxes are both plain pointers — the lowering-pass
+        // hint table is the only signal. No entry → not a tracked owned temp
+        // (or a kind this slice doesn't handle) → no cleanup.
+        let te = self.owned_temp_drops.get(&span_key).cloned()?;
+        let head = match &te.kind {
+            TypeKind::Path(p) => p.segments.first().map(|s| s.as_str()).unwrap_or(""),
+            _ => return None,
+        };
+
+        // Map / Set handle: store the handle pointer into an alloca and queue
+        // a `FreeMapHandle`, classifying the K/V halves from the `TypeExpr`.
+        if head == "Map" || head == "Set" {
+            if !val.is_pointer_value() {
+                return None;
+            }
+            let (key_is_vec, val_is_vec, key_shared, val_shared) = self.map_temp_cleanup_parts(&te);
+            let slot = self.create_entry_alloca(cur_fn, "__owned_tmp", val.get_type());
+            self.builder.build_store(slot, val).unwrap();
+            self.track_map_var(slot, key_is_vec, val_is_vec, val_shared, key_shared);
+            return Some(slot);
+        }
+
+        // Shared-struct / shared-enum RC box: a discarded fresh value owns one
+        // reference, so a single `rc_dec` at the `;` is the correct drop
+        // (refcount → 0 frees via the lazily-synthesized recursive drop fn).
+        // `track_rc_var` takes the pointer directly; the one-shot discard
+        // frame drains in the same block, so the SSA pointer dominates the dec.
+        if let Some(heap_type) = self.shared_types.get(head).map(|i| i.heap_type) {
+            if val.is_pointer_value() {
+                self.track_rc_var("__owned_tmp", val.into_pointer_value(), heap_type);
+            }
+            return None;
+        }
+
+        None
+    }
+
+    /// Derive the four `track_map_var` classification args for a `Map[K, V]`
+    /// / `Set[T]` temporary straight from its surface `TypeExpr`. Mirrors the
+    /// let-binding derivation in `stmts.rs` (which reads per-binding
+    /// side-tables keyed by variable name) — a temporary has no binding name
+    /// and so no side-table entry, so the K/V `TypeExpr`s carried in
+    /// `owned_temp_drops` are the source of truth. Returns
+    /// `(key_is_vec, val_is_vec, key_shared_heap, val_shared_heap)`; a `Set`
+    /// lowers to `Map[T, ()]`, so its value half is inert.
+    fn map_temp_cleanup_parts(
+        &self,
+        te: &TypeExpr,
+    ) -> (
+        bool,
+        bool,
+        Option<StructType<'ctx>>,
+        Option<StructType<'ctx>>,
+    ) {
+        fn nth(path: &PathExpr, i: usize) -> Option<&TypeExpr> {
+            match path.generic_args.as_ref()?.get(i)? {
+                GenericArg::Type(t) => Some(t),
+                _ => None,
+            }
+        }
+        let path = match &te.kind {
+            TypeKind::Path(p) => p,
+            _ => return (false, false, None, None),
+        };
+        let head = path.segments.first().map(|s| s.as_str()).unwrap_or("");
+        let k = nth(path, 0);
+        let key_is_vec =
+            k.is_some_and(|t| self.llvm_ty_is_vec_struct(self.llvm_type_for_type_expr(t)));
+        let key_shared = k.and_then(|t| self.shared_heap_type_for_type_expr(t));
+        if head == "Set" {
+            return (key_is_vec, false, key_shared, None);
+        }
+        let v = nth(path, 1);
+        let val_is_vec =
+            v.is_some_and(|t| self.llvm_ty_is_vec_struct(self.llvm_type_for_type_expr(t)));
+        let val_shared = v.and_then(|t| self.shared_heap_type_for_type_expr(t));
+        (key_is_vec, val_is_vec, key_shared, val_shared)
     }
 
     /// Register a SoA-laid-out Vec for scope-exit cleanup. Mirrors

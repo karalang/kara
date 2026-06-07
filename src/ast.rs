@@ -276,6 +276,22 @@ pub type PatternBindingTypesTable = std::collections::HashMap<(usize, usize), St
 pub type PatternBindingInnerTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
 /// Side-table populated by the lowering pass from the typechecker's
+/// `expr_types` map: for every expression that produces a heap-owning
+/// *temporary* — a `Vec`/`VecDeque`/`String`, a `Map`/`Set` handle, or a
+/// shared-struct RC box — maps `(span.offset, span.length)` to that
+/// expression's surface `TypeExpr`. Codegen's `materialize_owned_temp`
+/// keys this by span to reconstruct the scope-exit cleanup for an
+/// *unnamed* temporary: the element type that closes the `Vec` nested-heap
+/// leak, the key/val classification a `Map` handle needs, or the heap
+/// layout an RC box needs — none of which is recoverable from the LLVM
+/// value alone (a `Map` handle and an RC box are both plain pointers).
+/// Mirrors the existing TypeExpr-valued hint tables (e.g.
+/// [`PatternBindingInnerTypesTable`]) so codegen stays free of a full
+/// `TypeCheckResult` dependency (codegen containment, CLAUDE.md). See
+/// `docs/spikes/general-owned-temp-tracking.md` (slice 2).
+pub type OwnedTempDropsTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
+/// Side-table populated by the lowering pass from the typechecker's
 /// `expr_types` map: the set of `(span.offset, span.length)` keys for every
 /// expression whose Kāra type is `String`. Codegen consults this to
 /// distinguish `String` from `Vec[T]` and other 3-word `{ptr, len, cap}`
@@ -466,6 +482,12 @@ pub struct Program {
     /// derive-equivalent field cascade, preserving custom orderings
     /// (e.g. reverse, multi-key tiebreaks).
     pub user_ord_typed_exprs: UserOrdTypedExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: surface
+    /// `TypeExpr` per heap-owning *temporary* expression (Vec/String,
+    /// Map/Set, shared-struct RC box). Consumed by codegen's
+    /// `materialize_owned_temp` to scope-drop unnamed temporaries. See
+    /// [`OwnedTempDropsTable`].
+    pub owned_temp_drops: OwnedTempDropsTable,
     /// Set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_borrow_modes`. Consumed by codegen
     /// to apply the ref-binding shim at match-arm leaf bindings under a

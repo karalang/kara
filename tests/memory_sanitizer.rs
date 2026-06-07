@@ -2770,6 +2770,134 @@ fn main() {
         );
     }
 
+    // ── General owned-temp tracking, slice 2: Map / RC / nested-elem ──
+    // (docs/spikes/general-owned-temp-tracking.md). Map handles and RC
+    // boxes are plain pointers — slice 1 (LLVM-type Vec/String detection)
+    // leaked them; the lowering-pass `owned_temp_drops` hint table now lets
+    // `materialize_owned_temp` classify and drop them. The 8-iteration loop
+    // amplifies any per-iteration imbalance into a deterministic double-free
+    // fault under macOS ASAN; Linux `detect_leaks=1` is the leak oracle.
+
+    #[test]
+    fn asan_discarded_map_temp_freed() {
+        // A discarded fresh `Map[i64, i64]` handle: no binding to drop it,
+        // recognized only via the hint table's `Map[K, V]` TypeExpr. Both
+        // halves primitive → `karac_map_free` (no per-entry vec walk). Faults
+        // on macOS if the handle is double-freed; leaks on Linux if untracked.
+        assert_clean_asan_run(
+            r#"
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 2_i64);
+    m.insert(3_i64, 4_i64);
+    return m;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 8 {
+        make_map();
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &["done"],
+            "discarded_map_temp_freed",
+        );
+    }
+
+    #[test]
+    fn asan_discarded_nested_vec_string_temp_freed() {
+        // A discarded `Vec[String]`: slice 1 freed the outer buffer but
+        // leaked the inner String element buffers (elem_ty was `None`). The
+        // hint table supplies the element type, so the recursive `FreeVecBuffer`
+        // walk frees each element. The bound `keep` String in the same frame
+        // pins that draining the one-shot discard frame doesn't double-free a
+        // live binding. Leak oracle (Linux) is the real gate for the element
+        // closure; macOS catches any double-free.
+        assert_clean_asan_run(
+            r#"
+fn make_vv() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alpha");
+    v.push("beta");
+    return v;
+}
+
+fn main() {
+    let keep = "kept";
+    let mut i = 0;
+    while i < 8 {
+        make_vv();
+        i = i + 1;
+    }
+    println(keep);
+}
+"#,
+            &["kept"],
+            "discarded_nested_vec_string_temp_freed",
+        );
+    }
+
+    #[test]
+    fn asan_discarded_rc_temp_freed() {
+        // A discarded fresh shared-struct (RC box): the producing call returns
+        // one owned reference, so `materialize_owned_temp` queues a single
+        // `rc_dec` at the `;` (refcount → 0 frees via the recursive drop fn).
+        // Faults on macOS if the box is double-freed (e.g. the return-move-out
+        // also decs); leaks on Linux if the discard goes untracked.
+        assert_clean_asan_run(
+            r#"
+shared struct Counter { val: i64 }
+
+fn make_counter() -> Counter {
+    return Counter { val: 7 };
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 8 {
+        make_counter();
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &["done"],
+            "discarded_rc_temp_freed",
+        );
+    }
+
+    #[test]
+    fn asan_returned_map_explicit_return_no_double_free() {
+        // Regression for the explicit-`return m;` map-suppression gap fixed
+        // alongside slice 2 (src/codegen/exprs.rs `ExprKind::Return`): the
+        // tail-expression path suppressed a returned Map's `FreeMapHandle`,
+        // but the explicit-`return` path did not — so a callee returning a
+        // map via `return m;` freed the handle *and* returned it, and the
+        // caller's binding then freed the dangling pointer (double-free under
+        // AOT). Here the callee uses `return m;` and the caller binds and
+        // reads it; without the fix this double-frees. Sibling to the
+        // discarded-map case, pinning the *bound* return shape.
+        assert_clean_asan_run(
+            r#"
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 2_i64);
+    return m;
+}
+
+fn main() {
+    let m2 = make_map();
+    println(m2.len());
+}
+"#,
+            &["1"],
+            "returned_map_explicit_return_no_double_free",
+        );
+    }
+
     // ── while let / let else drop paths (phase-6 line 489) ───────
 
     #[test]

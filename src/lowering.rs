@@ -206,6 +206,32 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     // of the user-`impl Drop` dispatch slice — see
     // `docs/implementation_checklist/phase-7-codegen.md`.
     program.drop_method_keys = tc.drop_method_keys.clone();
+    // Surface `TypeExpr` of every expression that produces a heap-owning
+    // *temporary*. Codegen's `materialize_owned_temp` keys this by span to
+    // reconstruct the scope-exit cleanup an unnamed temp needs: the element
+    // type that closes the `Vec` nested-heap leak, the `Map`/`Set` key/val
+    // classification, or the shared-struct RC heap layout — none recoverable
+    // from the LLVM value (a `Map` handle and an RC box are both plain
+    // pointers). Restricted to the kinds `materialize_owned_temp` handles so
+    // the table stays small; any other type is simply absent and the temp
+    // path falls through to "no cleanup". Vec/String are still LLVM-type
+    // detectable on their own (slice 1) — the entry only *adds* the element
+    // type, so a missing entry degrades to slice-1 behavior, never a leak
+    // regression. See `docs/spikes/general-owned-temp-tracking.md` (slice 2).
+    program.owned_temp_drops = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| {
+            let droppable = match ty {
+                Type::Shared(_) => true,
+                Type::Named { name, .. } => {
+                    matches!(name.as_str(), "Vec" | "VecDeque" | "String" | "Map" | "Set")
+                }
+                _ => false,
+            };
+            droppable.then(|| ((k.0, k.1), TypeChecker::type_to_type_expr(ty)))
+        })
+        .collect();
 }
 
 struct Lowerer<'a> {

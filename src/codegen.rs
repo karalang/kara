@@ -1511,6 +1511,14 @@ pub(super) struct Codegen<'ctx> {
     /// consults this map before the field-aware cascade so the user's
     /// `cmp` runs instead of a synthesized derive-equivalent lex compare.
     pub(crate) user_ord_typed_exprs: HashMap<(usize, usize), String>,
+    /// Surface `TypeExpr` per heap-owning *temporary* expression —
+    /// populated from `Program.owned_temp_drops` (set by the lowering pass
+    /// from `TypeCheckResult.expr_types`). `materialize_owned_temp` keys
+    /// this by the producing expression's span to reconstruct an unnamed
+    /// temporary's scope-exit cleanup (Vec element type / Map key-val
+    /// classification / RC heap layout). See
+    /// `docs/spikes/general-owned-temp-tracking.md` (slice 2).
+    pub(crate) owned_temp_drops: HashMap<(usize, usize), TypeExpr>,
     /// Per-pattern-binding surface type table — populated from
     /// `Program.pattern_binding_types` (set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_types`). Key: pattern's
@@ -3949,6 +3957,7 @@ impl<'ctx> Codegen<'ctx> {
             unsigned_vector_exprs: HashSet::new(),
             expr_struct_type_names: HashMap::new(),
             user_ord_typed_exprs: HashMap::new(),
+            owned_temp_drops: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
             pattern_binding_borrow_modes: HashMap::new(),
@@ -4676,6 +4685,11 @@ impl<'ctx> Codegen<'ctx> {
         // direct call.
         self.user_ord_typed_exprs = program.user_ord_typed_exprs.clone();
 
+        // Surface TypeExpr per heap-owning temporary expression. Keyed by
+        // span; `materialize_owned_temp` consults it to scope-drop unnamed
+        // Vec/String (with element type), Map/Set handles, and RC boxes.
+        self.owned_temp_drops = program.owned_temp_drops.clone();
+
         // Phase 6 line 26 slice 8ab: snapshot the per-call effect-
         // variable substitution table. Slice 8y (entry 32) reads
         // this in `compile_generic_call` to gate per-mono state-
@@ -5203,6 +5217,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_unsigned_vector_exprs = tp.unsigned_vector_exprs.clone();
         let mut t_expr_struct_type_names = tp.expr_struct_type_names.clone();
         let mut t_user_ord_typed_exprs = tp.user_ord_typed_exprs.clone();
+        let mut t_owned_temp_drops = tp.owned_temp_drops.clone();
         let mut t_call_effect_subs = tp.call_effect_subs.clone();
         let mut t_method_unwrap_inner_types = tp.method_unwrap_inner_types.clone();
         let mut t_pattern_binding_types = tp.pattern_binding_types.clone();
@@ -5223,6 +5238,7 @@ impl<'ctx> Codegen<'ctx> {
                     &mut t_expr_struct_type_names,
                 );
                 std::mem::swap(&mut self.user_ord_typed_exprs, &mut t_user_ord_typed_exprs);
+                std::mem::swap(&mut self.owned_temp_drops, &mut t_owned_temp_drops);
                 std::mem::swap(&mut self.call_effect_subs, &mut t_call_effect_subs);
                 std::mem::swap(
                     &mut self.method_unwrap_inner_types,

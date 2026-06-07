@@ -1,9 +1,13 @@
 # Design spike — general owned-temp tracking (codegen)
 
-**Status:** **slice 1 landed 2026-06-06** (chokepoint + statement-position
-discard); slices 2–6 not started. This doc scopes the work and is the designated
-*unblocker* for the phase-6 line-489 remainder (scrutinee-temp drop scope) and
-the phase-6 line-497 tail-expr leak carve-out — both blocked on the gap here.
+**Status:** **slices 1–2 (hint-table half) landed 2026-06-06**. Slice 1:
+chokepoint + statement-position discard (Vec/String). Slice 2 part A: the
+lowering-pass `owned_temp_drops` hint table + Map/Set-handle and shared-struct
+RC-box discard + Vec element-type closing (nested-heap leak). Slice 2 part B
+(call-arg / operand-temp migration onto the chokepoint) and slices 3–6 not
+started. This doc scopes the work and is the designated *unblocker* for the
+phase-6 line-489 remainder (scrutinee-temp drop scope) and the phase-6 line-497
+tail-expr leak carve-out — both blocked on the gap here.
 
 **Scope decision (2026-06-06):** build the `materialize_owned_temp` chokepoint +
 slice 1 for its standalone architectural value (it stops the special-case
@@ -19,11 +23,18 @@ via plain-data hint records, not the type map). Consequence: **Vec/String temps
 are detectable from the LLVM value type** (`llvm_ty_is_vec_struct` — Vec and
 String share `{ptr,len,cap}`), but **Map handles and RC boxes are not** (both are
 plain pointers/handles, indistinguishable by LLVM type). So full generality
-(Map/RC/user-Drop temps) requires a **new lowering-pass hint table** — e.g.
-`owned_temp_drops: HashMap<SpanKey, TempDropKind>` derived from `expr_types`
-during lowering and consumed by codegen. That table is the real prerequisite for
-slices 2/6 and is the architecturally-correct next slice, not an incremental
-widen of LLVM-type sniffing.
+(Map/RC/user-Drop temps) requires a **new lowering-pass hint table**. **Landed
+form (slice 2):** `owned_temp_drops: HashMap<(usize, usize), TypeExpr>` — the
+surface `TypeExpr` of each heap-owning temp expression, derived in lowering from
+`tc.expr_types` via `TypeChecker::type_to_type_expr` (filtered to
+Vec/VecDeque/String/Map/Set/shared). `TypeExpr` (not a bespoke `TempDropKind`
+enum) because the existing codegen helpers already consume `TypeExpr`:
+`materialize_owned_temp` recovers the Vec element type via `extract_vec_elem_type`
+(closing the nested leak), the Map key/val classification via
+`map_temp_cleanup_parts` (`shared_heap_type_for_type_expr` + `llvm_ty_is_vec_struct`,
+mirroring the let-site), and the RC heap layout via `shared_types`. This reuses the
+TypeExpr-valued hint-table precedent (`pattern_binding_inner_types`,
+`method_unwrap_inner_types`), so no new derivation machinery was needed.
 
 **Doc footprint** (update these together — see memory `maintain-scope-doc-index`):
 
@@ -204,17 +215,36 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    direction (which does fault on macOS) and, on Linux CI, the leak too. Gates
    green: fmt, clippy `--all --all-targets --features llvm`, codegen (1240),
    memory_sanitizer (97), non-llvm suite.
-2. **Generalize call-arg / operand temps + the lowering-pass hint table.**
-   First add `owned_temp_drops: HashMap<SpanKey, TempDropKind>` to the lowering
-   pass (derived from `expr_types`) so codegen can classify Map/RC/user-Drop
-   temps it cannot sniff from LLVM type — **this is the real generality
-   prerequisite, surfaced by slice 1's finding.** Then route fresh-temp args /
+2. **Part A — lowering-pass hint table + Map/RC/elem discard. — DONE 2026-06-06.**
+   Added `owned_temp_drops: HashMap<(usize, usize), TypeExpr>` to `Program`
+   (`src/ast.rs`), populated in `src/lowering.rs` from `tc.expr_types` via
+   `TypeChecker::type_to_type_expr` (filtered to Vec/VecDeque/String/Map/Set/
+   shared), wired onto codegen state (`src/codegen.rs`, incl. the
+   `compile_stdlib_program` swap-all set). `materialize_owned_temp`
+   (`src/codegen/runtime.rs`) now takes the producing expr's `span_key` instead
+   of an `elem_ty` arg and dispatches three ways: **Vec/String** (LLVM-type
+   detectable; elem type recovered from the table via `extract_vec_elem_type`,
+   closing slice 1's `None` nested-leak), **Map/Set** (`map_temp_cleanup_parts`
+   derives the K/V Vec/shared classification from the `TypeExpr`, → `track_map_var`
+   → `FreeMapHandle`), **shared-struct RC box** (`shared_types` heap layout →
+   `track_rc_var` → `rc_dec`). The discard caller (`src/codegen/stmts.rs`) passes
+   the span. **Adjacent fix:** the explicit-`return m;` path
+   (`src/codegen/exprs.rs`) never had the Map tail-return suppression the
+   tail-*expression* path carries, so a callee returning a map via `return m;`
+   freed the handle *and* returned it → double-free under AOT (latent; no prior
+   AOT test returned a user-fn map). Added `suppress_map_cleanup_for_tail_identifier`
+   to the explicit-return Identifier arm. **Tests:** IR —
+   `test_ir_discarded_map_temp_emits_free` (`__owned_tmp` + `karac_map_free`),
+   `test_ir_discarded_nested_vec_elem_freed` (`cleanup.drop.cond` recursive
+   element free proves elem_ty flowed). ASAN — `asan_discarded_map_temp_freed`,
+   `asan_discarded_nested_vec_string_temp_freed`, `asan_discarded_rc_temp_freed`,
+   `asan_returned_map_explicit_return_no_double_free` (the return-suppression
+   regression). All gates green.
+   **Part B (not started) — call-arg / operand temps.** Route fresh-temp args /
    operator operands through `materialize_owned_temp`, migrating the Vec-only
-   `ref_rvalue_arg` path onto the chokepoint (Map/RC + `elem_ty: Some`, closing
-   its `None` nested-leak). Tests: `asan_ref_arg_map_freed`,
-   `asan_ref_arg_nested_vec_elem_freed`, `asan_operand_temp_freed`, plus
-   `asan_expr_stmt_discarded_map_freed` / `_rc_freed` (the slice-1 follow-on now
-   unblocked by the hint table).
+   `ref_rvalue_arg` path (`call_dispatch.rs`) onto the chokepoint (now Map/RC +
+   `elem_ty: Some`, closing its `None` nested-leak). Tests: `asan_ref_arg_map_freed`,
+   `asan_ref_arg_nested_vec_elem_freed`, `asan_operand_temp_freed`.
 3. **Method-chain intermediates.** Route chain receivers/intermediates through
    the chokepoint against the statement frame. Tests:
    `asan_method_chain_intermediate_vec_freed`.

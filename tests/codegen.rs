@@ -9067,6 +9067,77 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_discarded_map_temp_emits_free() {
+        // General owned-temp tracking, slice 2
+        // (docs/spikes/general-owned-temp-tracking.md): a discarded fresh Map
+        // handle (`make_map();`) is a plain pointer — indistinguishable from
+        // any heap pointer by LLVM type, so slice 1 leaked it. The
+        // lowering-pass `owned_temp_drops` hint table carries the producing
+        // expression's `Map[K, V]` TypeExpr; `materialize_owned_temp` keys it
+        // by span, materializes an `__owned_tmp` slot, and queues a
+        // `FreeMapHandle` → `karac_map_free` (both halves primitive). Archive-
+        // independent leak-closure gate (macOS ASAN has no LeakSanitizer).
+        let src = r#"
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 2_i64);
+    return m;
+}
+
+fn main() {
+    make_map();
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__owned_tmp"),
+            "expected discarded Map temp materialized into __owned_tmp slot; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("karac_map_free"),
+            "expected a FreeMapHandle drain (karac_map_free call) for the discarded Map temp; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_discarded_nested_vec_elem_freed() {
+        // General owned-temp tracking, slice 2: a discarded `Vec[String]`
+        // temp's *outer* buffer was already freed by slice 1, but its inner
+        // String element buffers leaked because slice 1 passed `elem_ty:
+        // None`. The hint table now supplies the element `TypeExpr`, so
+        // `materialize_owned_temp` derives the element LLVM type via
+        // `extract_vec_elem_type` and threads it to `track_vec_var` — the
+        // `FreeVecBuffer` cleanup then emits its recursive per-element free
+        // loop (`cleanup.drop.cond` block). Its presence proves the nested
+        // leak is closed; a primitive-element discard (slice 1) never emits it.
+        let src = r#"
+fn make_vv() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("a");
+    return v;
+}
+
+fn main() {
+    make_vv();
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__owned_tmp"),
+            "expected discarded Vec[String] temp materialized into __owned_tmp slot; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.drop.cond"),
+            "expected the recursive per-element free loop (elem_ty flowed from \
+             owned_temp_drops, closing the nested-String leak); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_let_else_emits_branch_not_noop() {
         // phase-6-runtime.md line 489: `let … else` lowers to a real branch
         // (match edge binds + falls through, else edge diverges). Regression

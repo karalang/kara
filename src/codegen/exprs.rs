@@ -463,6 +463,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `suppress_cleanup_for_tail_return`.
                     if let ExprKind::Identifier(name) = &e.kind {
                         self.suppress_user_drop_for_var(name);
+                        // Map/Set tail-return suppression at an explicit
+                        // `return m;`: mirror the tail-expression path in
+                        // `suppress_cleanup_for_tail_return`. The binding's
+                        // `FreeMapHandle` (queued at `let m = Map.new()`) must
+                        // be dropped from the cleanup queue here, or the drain
+                        // below frees the handle the caller is about to receive,
+                        // leaving a dangling pointer (double-free under AOT —
+                        // surfaced by the slice-2 `make_map(); ` discard, where
+                        // both callee and caller then free the same handle).
+                        // The Vec/String sibling above (`suppress_source_vec_
+                        // cleanup_for_arg`) flips an in-slot `cap = 0` sentinel;
+                        // Map's cleanup is queue-driven, so we retain it out.
+                        self.suppress_map_cleanup_for_tail_identifier(name);
                     }
                     // `Option[shared T]` return compensation at an explicit
                     // `return expr;` — mirrors the per-branch TAIL machinery
