@@ -566,6 +566,12 @@ impl<'a> super::Interpreter<'a> {
                         return v;
                     }
                 }
+                // Literal constructor — dims from the argument's syntactic
+                // nesting (the walk is total: it returns a Value or a
+                // recorded runtime error, never falls through).
+                "Tensor.from" => {
+                    return self.eval_tensor_from(args, span);
+                }
                 "Semaphore.new" => {
                     if let Some(v) = self.eval_semaphore_new(args) {
                         return v;

@@ -13765,3 +13765,83 @@ fn test_tensor_display_renders_shape() {
     );
     assert_eq!(out, "Tensor[2, 3]\n");
 }
+
+#[test]
+fn test_tensor_from_values_c_order() {
+    // Literal constructor: dims from nesting, elements land in
+    // row-major order.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             println(t.rank());\n\
+             println(t.shape()[0]);\n\
+             println(t.shape()[1]);\n\
+             println(t[0, 0]);\n\
+             println(t[0, 1]);\n\
+             println(t[1, 0]);\n\
+             println(t[1, 1]);\n\
+         }",
+    );
+    assert_eq!(out, "2\n2\n2\n1\n2\n3\n4\n");
+}
+
+#[test]
+fn test_tensor_from_rank1_and_rank3() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let v = Tensor.from([10, 20, 30]);\n\
+             println(v.rank());\n\
+             println(v[2]);\n\
+             let t = Tensor.from([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]);\n\
+             println(t.rank());\n\
+             println(t[1, 0, 1]);\n\
+             println(t[0, 1, 0]);\n\
+         }",
+    );
+    assert_eq!(out, "1\n30\n3\n6\n3\n");
+}
+
+#[test]
+fn test_tensor_from_expression_leaves() {
+    // Leaves are ordinary expressions, evaluated in C-order.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let x = 5.0;\n\
+             let e = Tensor.from([[x, x + 1.0], [x * 2.0, 0.0]]);\n\
+             println(e[0, 1]);\n\
+             println(e[1, 0]);\n\
+         }",
+    );
+    assert_eq!(out, "6\n10\n");
+}
+
+#[test]
+fn test_tensor_from_mutation_after_construction() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut t = Tensor.from([[1, 2], [3, 4]]);\n\
+             t[0, 1] = 99;\n\
+             println(t[0, 1]);\n\
+             println(t[1, 1]);\n\
+         }",
+    );
+    assert_eq!(out, "99\n4\n");
+}
+
+#[test]
+fn test_tensor_from_ragged_runtime_error() {
+    // The interpreter walks the literal syntax itself (run_program
+    // doesn't gate on typecheck), so raggedness is also a runtime
+    // error on the interpreter-only path.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0]]);\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("ragged tensor literal: level at depth 1 has 1 element(s), expected 2")),
+        "{errors:?}",
+    );
+}

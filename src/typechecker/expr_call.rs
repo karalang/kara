@@ -15,7 +15,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 use super::inference::{expr_as_type_expr, is_literal_const_arg_expr};
-use super::types::{type_display, ConstArg, IntSize, Type, UIntSize};
+use super::types::{type_display, ConstArg, DimArg, IntSize, Type, UIntSize};
 use super::TypeErrorKind;
 
 impl<'a> super::TypeChecker<'a> {
@@ -714,6 +714,21 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Phase-11 Tensor literal constructor: `Tensor.from(nested array
+        // literal)` — dims are inferred from the literal's nesting
+        // structure at compile time (design.md § Numerical Types;
+        // tracker `phase-11-stdlib-longtail.md` Tensor sub-item "`from`
+        // literal constructor"). The argument must be a syntactic array
+        // literal: structure (dims) comes from the syntax, leaves are
+        // ordinary expressions. A local binding shadowing `Tensor` is
+        // routed to method dispatch by the uppercase-receiver rewrite
+        // above before this arm is reached.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 && segments[0] == "Tensor" && segments[1] == "from" {
+                return self.infer_tensor_from(args, span);
+            }
+        }
+
         // Built-in output functions: println() / print() / eprintln().
         // Accept 0 or 1 Display-implementing argument; return Unit.
         if let ExprKind::Identifier(name) = &callee.kind {
@@ -953,4 +968,168 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
     }
+
+    /// `Tensor.from(nested array literal)` — phase-11 Tensor literal
+    /// constructor. Dims come from the literal's *syntactic* nesting
+    /// (leftmost spine establishes the rank; every sibling level is
+    /// checked against it — raggedness is a compile error), the element
+    /// type from the first leaf (remaining leaves are checked against
+    /// it). Produces a fully concrete `Tensor[T, [d0, d1, ...]]`, so an
+    /// annotated binding gets `E_SHAPE` agreement for free via
+    /// `check_assignable`. Leaf array literals are always structure,
+    /// never data — runtime-shaped data goes through `Tensor.zeros` /
+    /// `Tensor.full` + indexed writes. Interpreter twin (same
+    /// syntax-walk, since runtime `Value`s can't distinguish a nested
+    /// row from a leaf `Vec`): `eval_tensor_from` in
+    /// `src/interpreter/method_call_tensor.rs`.
+    fn infer_tensor_from(&mut self, args: &[CallArg], span: &Span) -> Type {
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "Tensor.from takes exactly 1 argument (a nested array literal), found {}",
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+        let data = &args[0].value;
+        if !matches!(data.kind, ExprKind::ArrayLiteral(_)) {
+            self.type_error(
+                "Tensor.from requires an array-literal argument — dims are inferred \
+                 from the literal's nesting (`Tensor.from([[1.0, 2.0], [3.0, 4.0]])`); \
+                 for runtime-shaped data use `Tensor.zeros(dims)` / `Tensor.full(dims, \
+                 value)` plus indexed writes"
+                    .to_string(),
+                data.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            self.infer_expr(data);
+            return Type::Error;
+        }
+        let mut dims: Vec<i64> = Vec::new();
+        let mut leaves: Vec<&Expr> = Vec::new();
+        if let Err((msg, err_span)) = collect_tensor_literal(data, 0, &mut dims, &mut leaves) {
+            self.type_error(msg, err_span, TypeErrorKind::TypeMismatch);
+            return Type::Error;
+        }
+        // `leaves` is non-empty by construction — empty levels error in
+        // the walk above.
+        let elem_ty = self.infer_expr(leaves[0]);
+        for leaf in &leaves[1..] {
+            self.check_expr(leaf, &elem_ty);
+        }
+        let ty = Type::Named {
+            name: "Tensor".to_string(),
+            args: vec![
+                elem_ty,
+                Type::Shape(
+                    dims.iter()
+                        .map(|&d| DimArg::Const(ConstArg::Literal(d)))
+                        .collect(),
+                ),
+            ],
+        };
+        self.record_expr_type(span, &ty);
+        ty
+    }
+}
+
+/// Recursive walk for `Tensor.from`'s literal argument. The leftmost
+/// spine *establishes* `dims` (first visit at each depth pushes its
+/// length); every other visit *checks* against the established entry —
+/// length mismatch or nesting-depth mismatch is raggedness. Leaf
+/// expressions (non-array-literal elements) are collected in C-order;
+/// the caller infers their types. Errors carry the user-facing message
+/// plus the offending sub-literal's span.
+fn collect_tensor_literal<'e>(
+    expr: &'e Expr,
+    depth: usize,
+    dims: &mut Vec<i64>,
+    leaves: &mut Vec<&'e Expr>,
+) -> Result<(), (String, Span)> {
+    let ExprKind::ArrayLiteral(elements) = &expr.kind else {
+        // Reached only on a depth mismatch where an established deeper
+        // dim expects nesting but this element is a scalar expression.
+        return Err((
+            format!(
+                "ragged tensor literal: expected a nested level at depth {} \
+                 (rank established as {} by the first element), found a scalar",
+                depth,
+                dims.len()
+            ),
+            expr.span.clone(),
+        ));
+    };
+    if elements.is_empty() {
+        return Err((
+            "cannot infer tensor dims from an empty literal level — \
+             zero-size tensors go through `Tensor.zeros(dims)`"
+                .to_string(),
+            expr.span.clone(),
+        ));
+    }
+    let len = elements.len() as i64;
+    let first_visit = dims.len() == depth;
+    if first_visit {
+        dims.push(len);
+    } else if dims[depth] != len {
+        return Err((
+            format!(
+                "ragged tensor literal: level at depth {} has {} element(s), expected {}",
+                depth, len, dims[depth]
+            ),
+            expr.span.clone(),
+        ));
+    }
+    let nested = if first_visit {
+        // Establishing visit — nesting is whatever the elements say,
+        // but mixing scalars and arrays in one level is ragged.
+        let any_array = elements
+            .iter()
+            .any(|e| matches!(e.kind, ExprKind::ArrayLiteral(_)));
+        let all_array = elements
+            .iter()
+            .all(|e| matches!(e.kind, ExprKind::ArrayLiteral(_)));
+        if any_array && !all_array {
+            return Err((
+                "ragged tensor literal: level mixes scalar and nested elements".to_string(),
+                expr.span.clone(),
+            ));
+        }
+        any_array
+    } else {
+        // Revisit — the established rank dictates whether this level
+        // holds rows or leaves.
+        let expect_nested = dims.len() > depth + 1;
+        if !expect_nested {
+            if let Some(arr) = elements
+                .iter()
+                .find(|e| matches!(e.kind, ExprKind::ArrayLiteral(_)))
+            {
+                return Err((
+                    format!(
+                        "ragged tensor literal: expected a scalar leaf at depth {} \
+                         (rank established as {} by the first element), found a nested level",
+                        depth + 1,
+                        dims.len()
+                    ),
+                    arr.span.clone(),
+                ));
+            }
+        }
+        expect_nested
+    };
+    if nested {
+        for elem in elements {
+            collect_tensor_literal(elem, depth + 1, dims, leaves)?;
+        }
+    } else {
+        leaves.extend(elements.iter());
+    }
+    Ok(())
 }

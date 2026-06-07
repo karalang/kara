@@ -15,7 +15,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use crate::ast::CallArg;
+use crate::ast::{CallArg, Expr, ExprKind};
 use crate::interpreter::value::Value;
 use crate::token::Span;
 
@@ -41,6 +41,80 @@ pub(super) fn tensor_offset(dims: &[i64], idx: &[i64]) -> Result<usize, String> 
         offset = offset * (d as usize) + (i as usize);
     }
     Ok(offset)
+}
+
+/// Syntax walk for `Tensor.from`'s literal argument — interpreter twin
+/// of the typechecker's `collect_tensor_literal`
+/// (`src/typechecker/expr_call.rs`): the leftmost spine establishes
+/// `dims`, every other visit checks against the established entry, leaf
+/// expressions collect in C-order for evaluation. Errors carry the
+/// user-facing message for `record_runtime_error`.
+fn collect_tensor_literal_dims<'e>(
+    expr: &'e Expr,
+    depth: usize,
+    dims: &mut Vec<i64>,
+    leaves: &mut Vec<&'e Expr>,
+) -> Result<(), String> {
+    let ExprKind::ArrayLiteral(elements) = &expr.kind else {
+        return Err(format!(
+            "ragged tensor literal: expected a nested level at depth {} \
+             (rank established as {} by the first element), found a scalar",
+            depth,
+            dims.len()
+        ));
+    };
+    if elements.is_empty() {
+        return Err("cannot infer tensor dims from an empty literal level — \
+             zero-size tensors go through `Tensor.zeros(dims)`"
+            .to_string());
+    }
+    let len = elements.len() as i64;
+    let first_visit = dims.len() == depth;
+    if first_visit {
+        dims.push(len);
+    } else if dims[depth] != len {
+        return Err(format!(
+            "ragged tensor literal: level at depth {} has {} element(s), expected {}",
+            depth, len, dims[depth]
+        ));
+    }
+    let nested = if first_visit {
+        let any_array = elements
+            .iter()
+            .any(|e| matches!(e.kind, ExprKind::ArrayLiteral(_)));
+        let all_array = elements
+            .iter()
+            .all(|e| matches!(e.kind, ExprKind::ArrayLiteral(_)));
+        if any_array && !all_array {
+            return Err(
+                "ragged tensor literal: level mixes scalar and nested elements".to_string(),
+            );
+        }
+        any_array
+    } else {
+        let expect_nested = dims.len() > depth + 1;
+        if !expect_nested
+            && elements
+                .iter()
+                .any(|e| matches!(e.kind, ExprKind::ArrayLiteral(_)))
+        {
+            return Err(format!(
+                "ragged tensor literal: expected a scalar leaf at depth {} \
+                 (rank established as {} by the first element), found a nested level",
+                depth + 1,
+                dims.len()
+            ));
+        }
+        expect_nested
+    };
+    if nested {
+        for elem in elements {
+            collect_tensor_literal_dims(elem, depth + 1, dims, leaves)?;
+        }
+    } else {
+        leaves.extend(elements.iter());
+    }
+    Ok(())
 }
 
 /// Extract the dim components of an evaluated index value — `Int` for
@@ -111,6 +185,45 @@ impl<'a> super::Interpreter<'a> {
             dims: Arc::new(dims),
             data: Arc::new(RwLock::new(data)),
         })
+    }
+
+    /// `Tensor.from(nested array literal)` — literal constructor. Walks
+    /// the argument's *syntax* (not its evaluated value: a runtime
+    /// `Value::Array` can't distinguish a nested row from a leaf `Vec`
+    /// element), mirroring the typechecker's `infer_tensor_from` rule:
+    /// the leftmost spine establishes dims, sibling levels are checked
+    /// against it, leaves evaluate in C-order. Errors are emitted here
+    /// too (not just at typecheck) because `karac run`'s `run_program`
+    /// path doesn't gate on typecheck errors.
+    pub(super) fn eval_tensor_from(&mut self, args: &[CallArg], span: &Span) -> Value {
+        let Some(data) = args.first().map(|a| &a.value) else {
+            return self.record_runtime_error(
+                "Tensor.from takes exactly 1 argument (a nested array literal)".to_string(),
+                span,
+            );
+        };
+        if !matches!(data.kind, ExprKind::ArrayLiteral(_)) {
+            return self.record_runtime_error(
+                "Tensor.from requires an array-literal argument — dims are inferred \
+                 from the literal's nesting; for runtime-shaped data use \
+                 `Tensor.zeros(dims)` / `Tensor.full(dims, value)` plus indexed writes"
+                    .to_string(),
+                span,
+            );
+        }
+        let mut dims: Vec<i64> = Vec::new();
+        let mut leaves: Vec<&Expr> = Vec::new();
+        if let Err(msg) = collect_tensor_literal_dims(data, 0, &mut dims, &mut leaves) {
+            return self.record_runtime_error(msg, span);
+        }
+        let mut elements = Vec::with_capacity(leaves.len());
+        for leaf in leaves {
+            elements.push(self.eval_expr_inner(leaf));
+        }
+        Value::Tensor {
+            dims: Arc::new(dims),
+            data: Arc::new(RwLock::new(elements)),
+        }
     }
 
     /// Instance methods on `Value::Tensor`: `shape()` -> Vec[i64] (as

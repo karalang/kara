@@ -23381,6 +23381,180 @@ fn test_tensor_matmul_end_to_end_signature() {
     );
 }
 
+// ── Tensor.from literal constructor (phase-11 sub-slice) ───────────
+
+#[test]
+fn test_tensor_from_infers_dims_and_element_type() {
+    // bool-slot probe: the synthesized type must be Tensor[f64, [2, 2]]
+    // with no annotation — indexing it yields f64, not bool.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let flag: bool = t[1, 0];\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'bool', found 'f64'")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_from_inferred_dims_bounds_checked() {
+    // The inferred static dims drive the same compile-time literal
+    // bounds check as annotated shapes.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let x = t[2, 0];\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("index 2 out of bounds for dim 0 (size 2)")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_from_flows_through_dim_unified_signature() {
+    // Inferred Tensor[f64, [2, 2]] unifies against [K, N] params, and
+    // annotated bindings agree with the synthesized shape.
+    typecheck_ok(
+        "fn matmul[M, K, N](a: Tensor[f64, [M, K]], b: Tensor[f64, [K, N]]) -> Tensor[f64, [M, N]] { todo() }\n\
+         fn main() {\n\
+             let a: Tensor[f64, [2, 2]] = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let b = Tensor.from([[1.0, 0.0], [0.0, 1.0]]);\n\
+             let c = matmul(a, b);\n\
+             let r3 = Tensor.from([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]);\n\
+             let probe: i64 = r3[1, 0, 1];\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_tensor_from_ragged_length_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0]]);\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("ragged tensor literal: level at depth 1 has 1 element(s), expected 2")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_from_ragged_depth_rejected_both_directions() {
+    // Nested where the established rank expects a scalar leaf…
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.0], [[2.0]]]);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected a scalar leaf at depth 2")),
+        "{errors:?}",
+    );
+    // …and scalar where the established rank expects a nested level.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[[2.0]], [1.0]]);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected a nested level at depth 2")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_from_mixed_level_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([1.0, [2.0]]);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("mixes scalar and nested elements")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_from_empty_literal_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([]);\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("cannot infer tensor dims from an empty literal level")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_from_non_literal_arg_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let v: Vec[f64] = [1.0, 2.0];\n\
+             let t = Tensor.from(v);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("requires an array-literal argument")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_from_annotation_shape_mismatch_e_shape() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t: Tensor[f64, [3, 3]] = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("error[E_SHAPE]: shape dim 0 mismatch")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_from_leaf_type_mismatch_rejected() {
+    // First leaf establishes T; later leaves are checked against it.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0, \"x\"]]);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'f64', found 'String'")),
+        "{errors:?}",
+    );
+}
+
 // ── Effect-resource dispatch types untyped `let` bindings ─────────
 //
 // bugs.md "Untyped `let` from an effect-resource method call doesn't
