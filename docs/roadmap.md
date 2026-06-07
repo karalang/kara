@@ -328,12 +328,13 @@ Note: Basic diagnostics (`--output=json`, source spans, error suggestions) are b
 
 **Concurrency staging — 100K → 250K → 1M+ (public v1 launch gated on M3).**
 
-| Milestone | Target | Gate to next |
+| Milestone | Target | Status |
 |---|---|---|
-| **M1** | 100K stable idle connections | Flagship demo (Parallax-shape) runs the workload at 100K |
-| **M2** | 250K stable idle connections | Same demo, 2.5× scale, no P99 cliff |
-| **M3** | **1M+ stable idle connections** | Same demo + cross-platform parity (Linux io_uring, macOS kqueue, Windows IOCP), no regression vs. M2 baseline |
-| **v1 public launch** | **gated on M3 hitting target** | M3 verified end-to-end on flagship demo |
+| **M1** | 100K stable idle connections | ✅ done — subsumed by M3 (1M+), exceeded 20× |
+| **M2** | 250K stable idle connections | ✅ done — comparator set measured at 250K; Kāra holds 1M+ with no P99 cliff |
+| **M3 (count)** | **1M+ stable idle connections** | ✅ done — 1M & 2M idle (arm64), 1M idle (x86), 1M active cross-box, 0 failed, 12.1 KB/conn scale- & ISA-invariant ([`bench/REPORT.md`](../examples/ws_idle_holder/bench/REPORT.md)) |
+| **M3 (parity)** | cross-platform parity | ⬜ open — Linux io_uring, macOS kqueue @1M, Windows IOCP; **this is the remaining v1-launch gate** (2026-06-07 decision: parity gates launch) |
+| **v1 public launch** | **gated on M3 parity** | ⬜ blocked on the M3 cross-platform-parity clause above |
 
 The 1M+ headline number is consolidated reality at launch — "Kāra ships at 1M+" rather than "ship at 100K, promise 1M". CI benchmark gates run against the flagship demo at every PR; >5% regression on steady-state P50/P95/P99/P99.9 blocks merge without explicit override + justification.
 
