@@ -504,6 +504,21 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 option_elem
             }
+            // `Slice[T].get_unchecked(i: i64) -> T` — unsafe direct-index read,
+            // returns `T` by value (no `Option` wrap, no bounds check). The
+            // escape hatch for hot scanners (e.g. KMP `needle[j]`, where `j`
+            // rewinds via the LPS table — provably in-range but not
+            // compiler-provable). UB on out-of-range; must be called in an
+            // `unsafe` block — enforced via the `("Slice", "get_unchecked")`
+            // seed in `unsafe_lint::build_unsafe_fn_registry`. Mirrors
+            // `Vec.get_unchecked`. See phase-7-codegen.md § BCE table-range tier.
+            "get_unchecked" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                }
+                elem
+            }
             "contains" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);

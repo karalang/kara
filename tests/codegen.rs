@@ -13561,6 +13561,68 @@ fn main() {
         }
     }
 
+    // ── Slice.get_unchecked — unsafe direct-index, no bounds check ──────
+    //
+    // The Slice mirror of Vec.get_unchecked: the escape hatch for hot
+    // scanners (KMP `needle[j]`, merge `nums1[k]`) where the in-range fact
+    // is programmer-provable but not compiler-provable. Returns T by value;
+    // sound for the Copy element types scanners use. Tested in NON-reduction
+    // loops — slice get_unchecked inside an auto-par REDUCTION worker is a
+    // tracked gap (captured slices don't register in the worker's
+    // slice_elem_types; use `xs[i]` or KARAC_AUTO_PAR=0 there). See
+    // phase-7-codegen.md § BCE table-range tier.
+
+    #[test]
+    fn test_e2e_slice_get_unchecked_in_bounds_returns_element() {
+        let out = run_program(
+            r#"
+fn at(xs: Slice[i64], i: i64) -> i64 {
+    unsafe { xs.get_unchecked(i) }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    println(at(v, 0));
+    println(at(v, 1));
+    println(at(v, 2));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "10\n20\n30");
+        }
+    }
+
+    #[test]
+    fn test_e2e_slice_get_unchecked_in_scan_loop() {
+        // KMP-shaped use: read a Slice element with the bounds check skipped
+        // inside a non-reduction while loop (the real scanner pattern).
+        let out = run_program(
+            r#"
+fn scan(xs: Slice[i64], n: i64) {
+    let mut i = 0i64;
+    while i < n {
+        // SAFETY: i < n <= xs.len() by construction at the call site.
+        println(unsafe { xs.get_unchecked(i) });
+        i = i + 1i64;
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(5);
+    v.push(15);
+    v.push(25);
+    scan(v, 3);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5\n15\n25");
+        }
+    }
+
     // ── Bounds-check elision via dominating loop guard ────────────────
     //
     // The same indexing pattern `Vec.get_unchecked` skips at runtime, but

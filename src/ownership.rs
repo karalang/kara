@@ -1972,9 +1972,19 @@ pub(crate) fn stdlib_method_self_borrow_kind(key: &str) -> Option<BorrowKind> {
         // Array[T, N] / Slice[T] read methods (the snapshot fence in the
         // interpreter materializes Slice → Array, so the same method
         // names appear under both type prefixes).
-        "Array.len" | "Array.is_empty" | "Array.first" | "Array.last" | "Array.get"
-        | "Array.iter" | "Slice.len" | "Slice.is_empty" | "Slice.first" | "Slice.last"
-        | "Slice.get" | "Slice.iter" => ImmRef,
+        "Array.len"
+        | "Array.is_empty"
+        | "Array.first"
+        | "Array.last"
+        | "Array.get"
+        | "Array.iter"
+        | "Slice.len"
+        | "Slice.is_empty"
+        | "Slice.first"
+        | "Slice.last"
+        | "Slice.get"
+        | "Slice.get_unchecked"
+        | "Slice.iter" => ImmRef,
         // Mutating methods on Slice / Array — only `mut Slice[T]` carries
         // these in v1; the receiver-side push fires regardless because
         // mut Slice has its own slice-form borrow tracking.

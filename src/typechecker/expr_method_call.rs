@@ -1464,17 +1464,35 @@ impl<'a> super::TypeChecker<'a> {
         // `phase-7-codegen.md:481`; surfaced as the perf lever for the
         // bounds-check tax measured on kata #5 (see `wip-kata5-perf.md`).
         if method == "get_unchecked" && args.len() == 1 {
-            let element_ty = match &obj_ty {
-                Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
-                    Some(args[0].clone())
-                }
-                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
-                    Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+            // Bare `Slice[T]` receivers dispatch earlier via
+            // `infer_slice_method`; this arm covers `Vec[T]` and
+            // `ref`/`mut ref` of Vec/Slice.
+            // Accepts `Vec[T]` and `Slice[T]` (and `ref`/`mut ref` of either),
+            // returning `T` by value — sound for the Copy element types hot
+            // scanners use (i64/u8). The `Slice.get_unchecked` escape mirrors
+            // the landed `Vec.get_unchecked` so a `Slice[T]` / `mut Slice[T]`
+            // param can skip the bounds check the source-level dominator pass
+            // can't reach (e.g. KMP's `needle[j]`, where `j` rewinds via the
+            // LPS table — provably in-range, not compiler-provable). See
+            // phase-7-codegen.md § BCE table-range tier.
+            // `Slice[T]` reaches here as either `Type::Slice { element }` (slice
+            // expressions / coercions) or `Type::Named { name: "Slice" }`
+            // (declared params) — match both, plus `Vec[T]`, through one
+            // optional layer of `ref`/`mut ref`.
+            fn get_unchecked_elem(t: &Type) -> Option<Type> {
+                match t {
+                    Type::Named { name, args }
+                        if (name == "Vec" || name == "Slice") && args.len() == 1 =>
+                    {
                         Some(args[0].clone())
                     }
+                    Type::Slice { element, .. } => Some((**element).clone()),
                     _ => None,
-                },
-                _ => None,
+                }
+            }
+            let element_ty = match &obj_ty {
+                Type::Ref(inner) | Type::MutRef(inner) => get_unchecked_elem(inner.as_ref()),
+                other => get_unchecked_elem(other),
             };
             if let Some(elem) = element_ty {
                 let arg_ty = self.infer_expr(&args[0].value);

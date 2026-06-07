@@ -1078,6 +1078,42 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .unwrap();
                             return Ok(is_empty.into());
                         }
+                        // `Slice[T].get_unchecked(i) -> T` — direct-index read
+                        // with NO bounds check (mirror of `Vec.get_unchecked`,
+                        // `vec_method.rs`). GEP field 0 → load data ptr → GEP
+                        // elem at idx → load, skipping `emit_split_bounds_check`.
+                        // UB on out-of-range; the unsafe-block requirement is
+                        // enforced upstream by `unsafe_lint`. Reaching here
+                        // means that check already passed.
+                        "get_unchecked" => {
+                            if args.is_empty() {
+                                return Err(
+                                    "Slice.get_unchecked requires an index argument".to_string()
+                                );
+                            }
+                            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                            let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
+                            let idx_val = self.compile_expr(&args[0].value)?.into_int_value();
+                            let data_pp = self
+                                .builder
+                                .build_struct_gep(slice_ty, slot.ptr, 0, "s.uchk.data.pp")
+                                .unwrap();
+                            let data = self
+                                .builder
+                                .build_load(ptr_ty, data_pp, "s.uchk.data")
+                                .unwrap()
+                                .into_pointer_value();
+                            let elem_ptr = unsafe {
+                                self.builder
+                                    .build_gep(elem_ty, data, &[idx_val], "s.uchk.elem.ptr")
+                                    .unwrap()
+                            };
+                            let val = self
+                                .builder
+                                .build_load(elem_ty, elem_ptr, "s.uchk.elem")
+                                .unwrap();
+                            return Ok(val);
+                        }
                         _ => {
                             return Err(format!(
                                 "codegen: no handler for slice method '{}' on '{}'",

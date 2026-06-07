@@ -521,9 +521,12 @@ fn build_unsafe_fn_registry(program: &Program) -> UnsafeFnRegistry {
     // user-declared `impl` block to carry an `is_unsafe` flag, so the
     // unsafe-required diagnostic is wired by seeding the registry here.
     // Currently:
-    //   - `Vec.get_unchecked(i)`: skips the runtime bounds check — UB on
-    //     out-of-range index. Counterpart to the deferred Slice variant.
+    //   - `Vec.get_unchecked(i)` / `Slice.get_unchecked(i)`: skip the runtime
+    //     bounds check — UB on out-of-range index. The Slice variant is the
+    //     escape hatch for hot scanners (e.g. KMP `needle[j]`) where the
+    //     in-range fact is provable by the programmer but not the compiler.
     impl_method_unsafe.insert(("Vec".to_string(), "get_unchecked".to_string()));
+    impl_method_unsafe.insert(("Slice".to_string(), "get_unchecked".to_string()));
 
     // Built-in module-path `unsafe fn` functions. Same seeding rationale
     // as the `impl_method_unsafe` block above — these have no
