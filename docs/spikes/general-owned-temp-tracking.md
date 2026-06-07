@@ -7,8 +7,11 @@ Vec element-type closing (nested-heap leak). Slice 2 part B: the `ref_rvalue_arg
 call-arg path migrated onto the owned-temp classification (Vec element closing +
 Map-handle cleanup). Slice 3: method-chain receiver temps for the Vec/String
 `len`/`is_empty` fast path (the canonical `make_vec().len()` leak). Slice 3b
-(element-type-aware / user-method receivers + operator operands) and slices 4–6
-not started. This doc scopes the work and is the
+(element-type-aware `get`/`first`/`contains` on temp receivers) **attempted
+2026-06-07 and reverted** — blocked on a `MethodCall.span == receiver.span`
+collision that needs a typechecker-recorded receiver-element-type table (see
+slice 3b note below); slices 3b/4–6 not started. This doc scopes the work and is
+the
 designated *unblocker* for the phase-6 line-489 remainder (scrutinee-temp drop
 scope) and the phase-6 line-497 tail-expr leak carve-out — both blocked on the
 gap here.
@@ -282,9 +285,23 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    `asan_method_chain_field_receiver_no_double_free`).
    **Deferred to a follow-up (slice 3b):** (a) element-type-aware Vec/String/Map
    receiver methods on temps (`get`/`contains`/`iter`, `Map.get` etc.) — these
-   currently fall through to dispatch-fail for non-identifier receivers
-   (`method_call.rs` already notes the "materialize to a temp alloca + register
-   elem_ty" follow-up), so there's no leak to plug until that dispatch lands;
+   hard-error today (no non-identifier handler) and dispatch via the synth-alloca
+   redispatch the `RequestBuilder` chain uses (`compile_vec_method` on a
+   registered synth name). **Blocker found 2026-06-07 (attempted, reverted):**
+   `compile_vec_method` needs the receiver's *element* LLVM type to shape the
+   `Option[T]` payload of `get`/`first`/`last`, but it cannot be recovered for a
+   temp receiver — the parser sets `MethodCall.span == receiver.span`, so
+   `make_vec()` (receiver) and `.get(0)` (outer) collide at one `expr_types`
+   key, and `owned_temp_drops[span]` holds the *method-result* type
+   (`Option[i64]`), not the receiver's `Vec[i64]`. (LLVM-type detection gives
+   only the type-erased `{ptr,len,cap}`, no element.) **Fix path:** a dedicated
+   typechecker-recorded table mapping the method-call span → the receiver's
+   element `TypeExpr`, populated in `infer_method_call` (where the receiver type
+   is known) and forwarded through lowering — exactly the pattern
+   `method_callee_types` uses to dodge the same span-collision race. That makes
+   3b a small cross-phase slice (typechecker + lowering + the codegen
+   redispatch), not codegen-only. Until it lands these methods on temps stay a
+   hard error (fail-loud, no silent leak);
    (b) user-`impl` methods on fresh-temp receivers (also unsupported today);
    (c) **operator-operand temps** (`make_str() + "x"`) — the lowered
    `String.add(make_str(), "x")` passes the fresh operand as an *owned* arg to
