@@ -30899,6 +30899,146 @@ fn main() {
         }
     }
 
+    // ── Lean large-N sort (runtime path) ────────────────────────────
+    //
+    // N > 64 routes `sort_by` to the runtime `karac_vec_sort_by`, now a
+    // hand-rolled stable, panic-free merge sort (replaced `slice::sort_by`
+    // to drop the ~262 KiB DWARF symbolizer floor). These exercise that
+    // path for correctness (asc/desc, multiple elem sizes) and stability.
+    // See docs/implementation_checklist/phase-7-codegen.md "Lean large-N
+    // sort entry".
+
+    #[test]
+    fn test_e2e_large_n_sort_by_ascending() {
+        // 100 pseudo-shuffled i64 (> 64 → runtime merge sort). Assert fully
+        // sorted by counting inversions in-program (0 ⇒ sorted).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 100 {
+        v.push((i * 37 + 11) % 100);
+        i = i + 1;
+    }
+    v.sort_by(|a, b| a.cmp(b));
+    let mut bad: i64 = 0;
+    let mut prev: i64 = -1;
+    for x in v.iter() {
+        if x < prev { bad = bad + 1; }
+        prev = x;
+    }
+    println(bad);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "0");
+        }
+    }
+
+    #[test]
+    fn test_e2e_large_n_sort_by_descending() {
+        // Custom descending comparator over 80 elements (> 64).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 80 {
+        v.push((i * 53 + 7) % 80);
+        i = i + 1;
+    }
+    v.sort_by(|a, b| b.cmp(a));
+    let mut bad: i64 = 0;
+    let mut prev: i64 = 1000000;
+    for x in v.iter() {
+        if x > prev { bad = bad + 1; }
+        prev = x;
+    }
+    println(bad);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "0");
+        }
+    }
+
+    #[test]
+    fn test_e2e_large_n_sort_by_generic_elem_size() {
+        // 24-byte element (3-tuple) exercises the generic (non-8/16) element
+        // path. Sort 80 records by their first field; assert sorted.
+        // (Tuple, not struct: struct-field comparator thunks on the runtime
+        // path are a separate pre-existing gap — see the
+        // phase-7-codegen.md follow-up; tuples drive the same merge sort.)
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[(i64, i64, i64)] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 80 {
+        v.push(((i * 29 + 3) % 80, i, i * 2));
+        i = i + 1;
+    }
+    v.sort_by(|x, y| x.0.cmp(y.0));
+    let mut bad: i64 = 0;
+    let mut prev: i64 = -1;
+    let mut j: i64 = 0;
+    while j < 80 {
+        let t = v.get(j).unwrap();
+        if t.0 < prev { bad = bad + 1; }
+        prev = t.0;
+        j = j + 1;
+    }
+    println(bad);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "0");
+        }
+    }
+
+    #[test]
+    fn test_e2e_large_n_sort_by_is_stable() {
+        // Stability gate: 80 records with duplicate keys (`.0 = i % 8`) and a
+        // strictly increasing tag (`.1 = i`). Sorting by `.0` ALONE must
+        // keep equal-key records in original (`.1`-ascending) order. Counts
+        // both unsorted-key and stability violations; 0 ⇒ stable sort.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 80 {
+        v.push((i % 8, i));
+        i = i + 1;
+    }
+    v.sort_by(|x, y| x.0.cmp(y.0));
+    let mut bad: i64 = 0;
+    let mut pk: i64 = -1;
+    let mut po: i64 = -1;
+    let mut j: i64 = 0;
+    while j < 80 {
+        let t = v.get(j).unwrap();
+        if t.0 < pk { bad = bad + 1; }
+        if t.0 == pk {
+            if t.1 < po { bad = bad + 1; }
+        }
+        pk = t.0;
+        po = t.1;
+        j = j + 1;
+    }
+    println(bad);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "0");
+        }
+    }
+
     #[test]
     fn test_e2e_vec_sort_by_key_identity_ascending() {
         // `sort_by_key(|x| x)` sorts in ascending order — the canonical key

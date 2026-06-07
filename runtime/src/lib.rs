@@ -5721,44 +5721,119 @@ pub unsafe extern "C" fn karac_vec_sort_by(
     let n = len as usize;
     let sz = elem_size as usize;
 
-    // Typed-slice fast paths for the two element widths that cover the bulk
-    // of real workloads: `i64` and `(i64, i64)`. Sorting `&mut [[u8; N]]`
-    // in-place is dramatically cheaper than indices+permute (no extra
-    // allocation, no second memory pass, and the comparator's load through
-    // the element pointer hits warm cache).
-    match sz {
-        8 => {
-            let slice = std::slice::from_raw_parts_mut(data as *mut [u8; 8], n);
-            slice.sort_by(|a, b| cmp(ctx, a.as_ptr(), b.as_ptr()).cmp(&0));
-            return;
-        }
-        16 => {
-            let slice = std::slice::from_raw_parts_mut(data as *mut [u8; 16], n);
-            slice.sort_by(|a, b| cmp(ctx, a.as_ptr(), b.as_ptr()).cmp(&0));
-            return;
-        }
-        _ => {}
+    // Stable bottom-up merge sort over an index permutation, built from raw
+    // `std::alloc` and pointer arithmetic. The element representation is
+    // opaque bytes, so we sort `usize` indices (comparing the elements they
+    // point at via `cmp`) and permute the buffer once at the end — cheap
+    // index moves, one element pass, stable on equal keys (the merge takes
+    // the left run on a tie).
+    //
+    // Why hand-rolled rather than `slice::sort_by` / `Vec`: the whole point
+    // of this entry is to keep a lean seq binary that *sorts* from paying
+    // the ~262 KiB DWARF backtrace-symbolizer floor. That floor survives
+    // `-dead_strip` whenever the default panic hook stays reachable, and
+    // `slice::sort_by` (total-order violation `panic!`) and `Vec` /
+    // `(0..n).collect()` (capacity-overflow `panic!`) each keep it
+    // reachable. This body has *no reachable panic*: every allocation is a
+    // null-checked raw `alloc` (no-op return on failure), indexing is
+    // unchecked pointer arithmetic, and there is no `unwrap`/`assert`. So
+    // the symbolizer dead-strips and the binary returns to its no-sort
+    // floor. See docs/implementation_checklist/phase-7-codegen.md
+    // "Lean large-N sort entry". Stability is required by design.md
+    // ("In-place stable sort"), which also rules out heapsort/introsort.
+
+    // Total permute-buffer size, guarded against usize overflow.
+    let total_bytes = match n.checked_mul(sz) {
+        Some(v) => v,
+        None => return,
+    };
+    let idx_layout = match std::alloc::Layout::array::<usize>(n) {
+        Ok(l) => l,
+        Err(_) => return,
+    };
+    let tmp_layout = match std::alloc::Layout::from_size_align(total_bytes, 1) {
+        Ok(l) => l,
+        Err(_) => return,
+    };
+    let idx = std::alloc::alloc(idx_layout) as *mut usize;
+    if idx.is_null() {
+        return;
+    }
+    let buf = std::alloc::alloc(idx_layout) as *mut usize;
+    if buf.is_null() {
+        std::alloc::dealloc(idx as *mut u8, idx_layout);
+        return;
+    }
+    let tmp = std::alloc::alloc(tmp_layout);
+    if tmp.is_null() {
+        std::alloc::dealloc(idx as *mut u8, idx_layout);
+        std::alloc::dealloc(buf as *mut u8, idx_layout);
+        return;
     }
 
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        let ap = data.add(a * sz);
-        let bp = data.add(b * sz);
-        let ord = cmp(ctx, ap, bp);
-        ord.cmp(&0)
-    });
-    // Scratch buffer for the permute. Every byte is overwritten by the loop
-    // below; the `vec![0u8; _]` zero-fill is wasted work but matters only on
-    // the fallback path (element sizes other than 8 / 16), and avoids the
-    // `clippy::uninit_vec` footgun of `set_len` on `Vec::with_capacity`.
-    let total_bytes = n * sz;
-    let mut tmp: Vec<u8> = vec![0u8; total_bytes];
-    for (new_i, &old_i) in indices.iter().enumerate() {
-        let src = data.add(old_i * sz);
-        let dst = tmp.as_mut_ptr().add(new_i * sz);
-        ptr::copy_nonoverlapping(src, dst, sz);
+    // Identity permutation.
+    let mut i = 0usize;
+    while i < n {
+        *idx.add(i) = i;
+        i += 1;
     }
-    ptr::copy_nonoverlapping(tmp.as_ptr(), data, total_bytes);
+
+    // Bottom-up merge: double the run width each pass, merging adjacent runs
+    // from `src` into `dst` and ping-ponging the two index buffers. `src`
+    // always points at the buffer holding the live permutation.
+    let mut src = idx;
+    let mut dst = buf;
+    let mut width = 1usize;
+    while width < n {
+        let mut lo = 0usize;
+        while lo < n {
+            let mid = (lo + width).min(n);
+            let hi = (lo + 2 * width).min(n);
+            let mut a = lo;
+            let mut b = mid;
+            let mut k = lo;
+            while a < mid && b < hi {
+                let ia = *src.add(a);
+                let ib = *src.add(b);
+                // `<= 0` keeps the left (earlier) element first on a tie —
+                // the stability guarantee.
+                if cmp(ctx, data.add(ia * sz), data.add(ib * sz)) <= 0 {
+                    *dst.add(k) = ia;
+                    a += 1;
+                } else {
+                    *dst.add(k) = ib;
+                    b += 1;
+                }
+                k += 1;
+            }
+            while a < mid {
+                *dst.add(k) = *src.add(a);
+                a += 1;
+                k += 1;
+            }
+            while b < hi {
+                *dst.add(k) = *src.add(b);
+                b += 1;
+                k += 1;
+            }
+            lo += 2 * width;
+        }
+        std::mem::swap(&mut src, &mut dst);
+        width *= 2;
+    }
+
+    // Permute the elements into sorted order via `tmp`, then copy back.
+    let mut k = 0usize;
+    while k < n {
+        let old_i = *src.add(k);
+        ptr::copy_nonoverlapping(data.add(old_i * sz), tmp.add(k * sz), sz);
+        k += 1;
+    }
+    ptr::copy_nonoverlapping(tmp, data, total_bytes);
+
+    std::alloc::dealloc(idx as *mut u8, idx_layout);
+    std::alloc::dealloc(buf as *mut u8, idx_layout);
+    std::alloc::dealloc(tmp, tmp_layout);
 }
 
 /// In-place reverse of a raw byte buffer (`len` elements of `elem_size` bytes).
@@ -5969,6 +6044,147 @@ mod tests {
     #[test]
     fn test_wait_target_size_pinned() {
         assert_eq!(std::mem::size_of::<KaracWaitTarget>(), 1);
+    }
+
+    // ── karac_vec_sort_by (lean large-N sort) ──────────────────────────
+    //
+    // The body is a hand-rolled stable, panic-free merge sort (replaced
+    // `slice::sort_by` to drop the ~262 KiB DWARF symbolizer floor — see
+    // phase-7-codegen.md "Lean large-N sort entry"). These pin the two
+    // properties that matter and that the E2E codegen tests can't isolate
+    // from the comparator-thunk layer: stability, and correctness across
+    // element sizes (the 8/16-byte special-cases were removed, so every
+    // size now flows through the one merge path).
+
+    /// Comparator over the first `i64` of each element (the sort key);
+    /// ignores trailing bytes, so equal-key records exercise stability.
+    extern "C" fn cmp_first_i64(_ctx: *mut u8, a: *const u8, b: *const u8) -> i64 {
+        // SAFETY: the sort hands back pointers to whole elements whose
+        // first 8 bytes are an i64 key by construction in these tests.
+        unsafe {
+            let ka = (a as *const i64).read_unaligned();
+            let kb = (b as *const i64).read_unaligned();
+            (ka > kb) as i64 - (ka < kb) as i64
+        }
+    }
+
+    #[test]
+    fn karac_vec_sort_by_is_stable() {
+        // 16-byte records (key, ord): duplicate keys (`i % 8`) with a
+        // strictly increasing `ord`. A stable sort by key alone must leave
+        // equal-key records in original (`ord`-ascending) order.
+        let n = 200usize;
+        let mut data: Vec<i64> = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            data.push((i % 8) as i64);
+            data.push(i as i64);
+        }
+        unsafe {
+            karac_vec_sort_by(
+                data.as_mut_ptr() as *mut u8,
+                n as i64,
+                16,
+                cmp_first_i64,
+                std::ptr::null_mut(),
+            );
+        }
+        let (mut pk, mut po) = (i64::MIN, i64::MIN);
+        for r in 0..n {
+            let (k, o) = (data[r * 2], data[r * 2 + 1]);
+            assert!(k >= pk, "not sorted by key at record {r}");
+            if k == pk {
+                assert!(o > po, "stability violated at record {r}");
+            }
+            pk = k;
+            po = o;
+        }
+    }
+
+    #[test]
+    fn karac_vec_sort_by_sorts_various_elem_sizes() {
+        // Correctness across 8 / 24 / 12-byte elements (the last is a
+        // non-word-multiple, exercising the generic byte permute). Each
+        // record's key is the first i64; trailing bytes are padding.
+        for &words in &[1usize, 3, 2] {
+            let elem_size = if words == 2 {
+                12i64
+            } else {
+                (words * 8) as i64
+            };
+            let n = 150usize;
+            // Build n records of `words` i64 each (12-byte case overlays the
+            // key into the first 8 of 12 bytes via a byte buffer).
+            let bytes_per = elem_size as usize;
+            let mut buf = vec![0u8; n * bytes_per];
+            for i in 0..n {
+                let key = ((i * 31 + 7) % n) as i64;
+                let off = i * bytes_per;
+                buf[off..off + 8].copy_from_slice(&key.to_ne_bytes());
+            }
+            unsafe {
+                karac_vec_sort_by(
+                    buf.as_mut_ptr(),
+                    n as i64,
+                    elem_size,
+                    cmp_first_i64,
+                    std::ptr::null_mut(),
+                );
+            }
+            let mut prev = i64::MIN;
+            for i in 0..n {
+                let off = i * bytes_per;
+                let mut k8 = [0u8; 8];
+                k8.copy_from_slice(&buf[off..off + 8]);
+                let k = i64::from_ne_bytes(k8);
+                assert!(k >= prev, "elem_size {elem_size}: unsorted at {i}");
+                prev = k;
+            }
+        }
+    }
+
+    #[test]
+    fn karac_vec_sort_by_edge_cases() {
+        // n < 2 and elem_size <= 0 are no-ops (never crash).
+        let mut one = [5i64];
+        unsafe {
+            karac_vec_sort_by(
+                one.as_mut_ptr() as *mut u8,
+                1,
+                8,
+                cmp_first_i64,
+                std::ptr::null_mut(),
+            );
+            karac_vec_sort_by(
+                std::ptr::null_mut(),
+                0,
+                8,
+                cmp_first_i64,
+                std::ptr::null_mut(),
+            );
+        }
+        assert_eq!(one, [5]);
+        // Already-sorted and reverse-sorted i64 both end ascending.
+        let mut asc: Vec<i64> = (0..100).collect();
+        let mut desc: Vec<i64> = (0..100).rev().collect();
+        unsafe {
+            karac_vec_sort_by(
+                asc.as_mut_ptr() as *mut u8,
+                100,
+                8,
+                cmp_first_i64,
+                std::ptr::null_mut(),
+            );
+            karac_vec_sort_by(
+                desc.as_mut_ptr() as *mut u8,
+                100,
+                8,
+                cmp_first_i64,
+                std::ptr::null_mut(),
+            );
+        }
+        let want: Vec<i64> = (0..100).collect();
+        assert_eq!(asc, want);
+        assert_eq!(desc, want);
     }
 
     // ── seq_par_run (phase-10 WASM sequential default) ─────────────────
