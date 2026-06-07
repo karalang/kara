@@ -2,14 +2,14 @@
 //
 // `Tensor[T, Shape]` — N-dimensional dense container carrying shape
 // information in the type (Phase 11 numerical stdlib; design.md
-// § Numerical Types > Tensor — shape types). Interpreter MVP slice:
-// constructors (`zeros` / `ones` / `full`), `shape()` / `rank()`, and
-// multi-dim indexing get + set (the parser desugars `t[i, j, k]` to a
-// single tuple index per design.md § Indexing). `from` literal
-// construction, `iter_axis`, reshape / permute / slice / squeeze, and
-// the Arrow-layout codegen lowering are follow-on sub-slices —
-// tracker at `phase-11-stdlib-longtail.md § Numerical and
-// data-science stdlib`.
+// § Numerical Types > Tensor — shape types). Interpreter surface so
+// far: constructors (`zeros` / `ones` / `full`, plus the `from`
+// literal constructor), `shape()` / `rank()`, multi-dim indexing get +
+// set (the parser desugars `t[i, j, k]` to a single tuple index per
+// design.md § Indexing), and `iter_axis(n)` axis iteration. Reshape /
+// permute / slice / squeeze and the Arrow-layout codegen lowering are
+// follow-on sub-slices — tracker at `phase-11-stdlib-longtail.md
+// § Numerical and data-science stdlib`.
 //
 // **Dispatch.** Constructors fire through `eval_call.rs`'s
 // `"Tensor.zeros"` / `"Tensor.ones"` / `"Tensor.full"` path-string
@@ -87,5 +87,22 @@ impl[T, ...S] Tensor[T, S] {
     #[compiler_builtin]
     fn rank(ref self) -> i64 {
         0
+    }
+
+    // Axis iteration — `t.iter_axis(n)` yields the `dims[n]` sub-tensors
+    // obtained by fixing the index along axis `n` (the axis is dropped:
+    // a `[2, 3, 4]` tensor's `iter_axis(1)` yields 3 tensors of shape
+    // `[2, 4]`), as a Vec of copies — directly `for`-iterable. A rank-1
+    // receiver yields the scalar elements (`Vec[T]`). The declared
+    // return type below is surface-only: the real result type depends
+    // on the receiver's shape and the axis value, so the typechecker
+    // (`infer_tensor_iter_axis`) and the interpreter
+    // (`eval_tensor_iter_axis`) both intercept before this signature is
+    // consulted. With a literal axis the item shape is exact (the
+    // receiver's dims minus slot `n`); with a runtime axis it is rank−1
+    // all-`?`.
+    #[compiler_builtin]
+    fn iter_axis(ref self, n: i64) -> Vec[Tensor[T, S]] {
+        Vec.new()
     }
 }

@@ -18,8 +18,8 @@ use std::collections::HashMap;
 use super::env::{FunctionSig, ImplInfo};
 use super::inference::{resolve_type_var_top, substitute_type_params, unify_types};
 use super::types::{
-    clone_self_type_for, iterator_item_type_for, method_callee_type_name,
-    receiver_for_method_lookup, type_display, ConstArg, IntSize, SubstValue, Type,
+    clone_self_type_for, is_integer, iterator_item_type_for, method_callee_type_name,
+    receiver_for_method_lookup, type_display, ConstArg, DimArg, IntSize, SubstValue, Type,
 };
 use super::TypeErrorKind;
 
@@ -1120,6 +1120,26 @@ impl<'a> super::TypeChecker<'a> {
                     .insert(SpanKey::from_span(span), ((**element).clone(), n));
             }
             return self.infer_vector_method(element, lanes, method, args, span);
+        }
+
+        // `Tensor[T, Shape].iter_axis(n)` — phase-11 axis iteration. The
+        // result type (a `Vec` of rank−1 sub-tensors, or `Vec[T]` for a
+        // rank-1 receiver) isn't expressible in the baked stdlib signature,
+        // so it's computed here before the impl-table search; `shape()` /
+        // `rank()` keep flowing through normal impl dispatch. See
+        // `infer_tensor_iter_axis` for the typing rules.
+        if method == "iter_axis" {
+            let tensor_args = match &obj_ty {
+                Type::Named { name, args } if name == "Tensor" => Some(args),
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args } if name == "Tensor" => Some(args),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(tensor_args) = tensor_args.cloned() {
+                return self.infer_tensor_iter_axis(&tensor_args, args, span);
+            }
         }
 
         // Iterator-source methods: `iter()` / `into_iter()` on any iterable
@@ -3284,6 +3304,133 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Error
             }
+        }
+    }
+
+    /// `Tensor[T, Shape].iter_axis(n)` — phase-11 axis iteration
+    /// (tracker `phase-11-stdlib-longtail.md` Tensor sub-item
+    /// "`iter_axis(n)`"). Yields the sub-tensors obtained by fixing the
+    /// index along axis `n` (the axis is *dropped* — NumPy
+    /// `take(i, axis=n)` semantics), as a `Vec` of copies: directly
+    /// `for`-iterable / indexable / `len()`-able, and honest about the
+    /// eager-copy semantics (the interpreter has no view/stride
+    /// machinery, and a lazy view type is v1.5+ work).
+    ///
+    /// Typing rules:
+    /// - rank ≥ 2, literal axis: compile-time axis bounds check; result
+    ///   is `Vec[Tensor[T, dims-with-slot-n-removed]]` — concrete dims,
+    ///   `?` dims, and named dim params all survive positionally.
+    /// - rank ≥ 2, runtime axis: which dim is dropped isn't statically
+    ///   known, so the item shape is rank−1 all-`?` (the same
+    ///   partially-dynamic posture reshape / squeeze commit to until
+    ///   v1.5 shape arithmetic).
+    /// - rank 1: result is `Vec[T]` — the sub-tensors would be rank-0,
+    ///   which isn't expressible (`[]` shape literals are rejected), and
+    ///   scalars are the natural yield.
+    /// - bare-`S` / splice-bearing shapes (inside a shape-generic fn):
+    ///   focused error — rank-polymorphic axis iteration needs v1.5
+    ///   shape arithmetic.
+    ///
+    /// Interpreter twin: `eval_tensor_iter_axis`
+    /// (`src/interpreter/method_call_tensor.rs`) re-checks the axis at
+    /// runtime since `run_program` doesn't gate on typecheck errors.
+    fn infer_tensor_iter_axis(
+        &mut self,
+        tensor_args: &[Type],
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "iter_axis takes exactly 1 argument (the axis), found {}",
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+        let axis_ty = self.infer_expr(&args[0].value);
+        if !is_integer(&axis_ty) && axis_ty != Type::Error {
+            self.type_error(
+                format!(
+                    "iter_axis axis must be an integer, found '{}'",
+                    type_display(&axis_ty)
+                ),
+                args[0].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return Type::Error;
+        }
+        let (elem_ty, shape) = match tensor_args {
+            [elem, Type::Shape(dims)] => (elem.clone(), dims.clone()),
+            _ => {
+                self.type_error(
+                    "iter_axis requires the receiver's rank to be statically known; \
+                     inside a shape-generic fn the shape is a bare parameter — call \
+                     iter_axis at a concrete-shape call site instead (rank-polymorphic \
+                     axis iteration is v1.5 shape arithmetic)"
+                        .to_string(),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+        };
+        if shape
+            .iter()
+            .any(|d| matches!(d, DimArg::Splice(_) | DimArg::SpliceVar(_)))
+        {
+            self.type_error(
+                "iter_axis requires the receiver's rank to be statically known; \
+                 this shape carries a `...` splice — call iter_axis at a \
+                 concrete-shape call site instead (rank-polymorphic axis \
+                 iteration is v1.5 shape arithmetic)"
+                    .to_string(),
+                span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return Type::Error;
+        }
+        let rank = shape.len();
+        let literal_axis = match &args[0].value.kind {
+            ExprKind::Integer(i, _) => {
+                if *i < 0 || *i as usize >= rank {
+                    self.type_error(
+                        format!("axis {} out of bounds for rank-{} tensor", i, rank),
+                        args[0].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                Some(*i as usize)
+            }
+            _ => None,
+        };
+        let item_ty = if rank == 1 {
+            elem_ty
+        } else {
+            let item_dims: Vec<DimArg> = match literal_axis {
+                Some(n) => shape
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != n)
+                    .map(|(_, d)| d.clone())
+                    .collect(),
+                None => vec![DimArg::Dynamic; rank - 1],
+            };
+            Type::Named {
+                name: "Tensor".to_string(),
+                args: vec![elem_ty, Type::Shape(item_dims)],
+            }
+        };
+        Type::Named {
+            name: "Vec".to_string(),
+            args: vec![item_ty],
         }
     }
 

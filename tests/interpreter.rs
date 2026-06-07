@@ -13934,3 +13934,106 @@ fn test_tensor_from_ragged_runtime_error() {
         "{errors:?}",
     );
 }
+
+#[test]
+fn test_tensor_iter_axis_rows_and_cols() {
+    // Axis 0 yields the rows; axis 1 yields the columns (axis dropped,
+    // C-order preserved within each sub-tensor).
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);\n\
+             let rows = t.iter_axis(0);\n\
+             println(rows.len());\n\
+             for r in rows {\n\
+                 println(r.shape()[0]);\n\
+                 println(r[0]);\n\
+                 println(r[2]);\n\
+             }\n\
+             let cols = t.iter_axis(1);\n\
+             println(cols.len());\n\
+             for c in cols {\n\
+                 println(c[0]);\n\
+                 println(c[1]);\n\
+             }\n\
+         }",
+    );
+    assert_eq!(out, "2\n3\n1\n3\n3\n4\n6\n3\n1\n4\n2\n5\n3\n6\n");
+}
+
+#[test]
+fn test_tensor_iter_axis_rank3_middle_axis() {
+    // [2, 3, 2] tensor, axis 1: three [2, 2] sub-tensors; slab i holds
+    // the elements whose middle coordinate is i.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[[1, 2], [3, 4], [5, 6]], [[7, 8], [9, 10], [11, 12]]]);\n\
+             let slabs = t.iter_axis(1);\n\
+             println(slabs.len());\n\
+             let s = slabs[1];\n\
+             println(s.rank());\n\
+             println(s[0, 0]);\n\
+             println(s[0, 1]);\n\
+             println(s[1, 0]);\n\
+             println(s[1, 1]);\n\
+         }",
+    );
+    assert_eq!(out, "3\n2\n3\n4\n9\n10\n");
+}
+
+#[test]
+fn test_tensor_iter_axis_rank1_yields_scalars() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let v = Tensor.from([10.0, 20.0, 30.0]);\n\
+             for x in v.iter_axis(0) {\n\
+                 println(x);\n\
+             }\n\
+         }",
+    );
+    assert_eq!(out, "10\n20\n30\n");
+}
+
+#[test]
+fn test_tensor_iter_axis_yields_copies() {
+    // Sub-tensors are copies, not views: writing through one leaves
+    // the source (and sibling sub-tensors) untouched.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2], [3, 4]]);\n\
+             let rows = t.iter_axis(0);\n\
+             let mut r0 = rows[0];\n\
+             r0[0] = 99;\n\
+             println(r0[0]);\n\
+             println(t[0, 0]);\n\
+         }",
+    );
+    assert_eq!(out, "99\n1\n");
+}
+
+#[test]
+fn test_tensor_iter_axis_runtime_axis_value() {
+    // The axis can be a runtime value; bounds are checked at runtime.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let n = 1;\n\
+             let cols = t.iter_axis(n);\n\
+             println(cols[1][0]);\n\
+             println(cols[1][1]);\n\
+         }",
+    );
+    assert_eq!(out, "2\n4\n");
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let n = 6;\n\
+             let bad = t.iter_axis(n);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("axis 6 out of bounds for rank-2 tensor")),
+        "{errors:?}",
+    );
+}

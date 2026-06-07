@@ -23555,6 +23555,173 @@ fn test_tensor_from_leaf_type_mismatch_rejected() {
     );
 }
 
+// ── Tensor iter_axis (phase-11 sub-slice) ──────────────────────────
+
+#[test]
+fn test_tensor_iter_axis_literal_axis_exact_item_shape() {
+    // Literal axis drops the named slot exactly: [2, 3] → axis 0 yields
+    // Vec[Tensor[f64, [3]]], axis 1 yields Vec[Tensor[f64, [2]]]. Both
+    // annotations must agree, and the rank-1 items flow through a
+    // dim-unified signature.
+    typecheck_ok(
+        "fn first_elem[T, N: Dim](t: Tensor[T, [N]]) -> T { t[0] }\n\
+         fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);\n\
+             let rows: Vec[Tensor[f64, [3]]] = t.iter_axis(0);\n\
+             let cols: Vec[Tensor[f64, [2]]] = t.iter_axis(1);\n\
+             let x: f64 = first_elem(rows[0]);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_tensor_iter_axis_item_shape_mismatch_rejected() {
+    // Wrong item-dim annotation: the synthesized item shape is [3].
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);\n\
+             let rows: Vec[Tensor[f64, [4]]] = t.iter_axis(0);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("found 'Vec<Tensor<f64, [3]>>'")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_iter_axis_rank1_yields_scalars() {
+    // Rank-1 receiver: rank-0 tensors aren't expressible, so the items
+    // are the scalar elements (Vec[T]). bool-probe pins the f64.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let v = Tensor.from([10.0, 20.0, 30.0]);\n\
+             let xs: Vec[f64] = v.iter_axis(0);\n\
+             let flag: bool = xs[0];\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'bool', found 'f64'")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_iter_axis_literal_axis_bounds_checked() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let s = t.iter_axis(2);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("axis 2 out of bounds for rank-2 tensor")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_iter_axis_runtime_axis_dynamic_item_shape() {
+    // Non-literal axis: which dim drops isn't statically known — the
+    // item shape is rank−1 all-`?`, which an all-dynamic annotation
+    // accepts (the `?` dims are weak bindings).
+    typecheck_ok(
+        "fn main() {\n\
+             let t = Tensor.from([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]]);\n\
+             let n = 1;\n\
+             let subs: Vec[Tensor[f64, [?, ?]]] = t.iter_axis(n);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_tensor_iter_axis_non_integer_axis_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let s = t.iter_axis(\"zero\");\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("iter_axis axis must be an integer, found 'String'")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_iter_axis_wrong_arity_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let s = t.iter_axis(0, 1);\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("iter_axis takes exactly 1 argument (the axis), found 2")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_iter_axis_shape_generic_receiver_rejected() {
+    // Bare-`S` shape param: rank isn't statically known.
+    let errors = typecheck_errors(
+        "fn probe[T, ...S](t: Tensor[T, S]) -> i64 {\n\
+             let subs = t.iter_axis(0);\n\
+             0\n\
+         }\n\
+         fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let n = probe(t);\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("iter_axis requires the receiver's rank to be statically known")),
+        "{errors:?}",
+    );
+    // Splice-bearing shape literal: same restriction, splice wording.
+    let errors = typecheck_errors(
+        "fn probe[T, ...S, N: Dim](t: Tensor[T, [...S, N]]) -> i64 {\n\
+             let subs = t.iter_axis(0);\n\
+             0\n\
+         }\n\
+         fn main() {\n\
+             let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let n = probe(t);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("this shape carries a `...` splice")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_iter_axis_dynamic_dims_survive_literal_axis() {
+    // A `?` dim in a slot the literal axis doesn't drop survives into
+    // the item shape: [2, ?] → axis 0 yields Vec[Tensor[f64, [?]]].
+    typecheck_ok(
+        "fn main() {\n\
+             let t: Tensor[f64, [2, ?]] = Tensor.zeros([2, 5]);\n\
+             let rows: Vec[Tensor[f64, [?]]] = t.iter_axis(0);\n\
+         }\n",
+    );
+}
+
 // ── Effect-resource dispatch types untyped `let` bindings ─────────
 //
 // bugs.md "Untyped `let` from an effect-resource method call doesn't

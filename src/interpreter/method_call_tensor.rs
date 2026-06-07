@@ -1,7 +1,7 @@
 //! `Tensor[T, Shape]` interpreter intrinsics (phase-11 numerical
 //! stdlib, MVP slice). Constructors dispatch through `eval_call.rs`'s
 //! `"Tensor.zeros"` / `"Tensor.ones"` / `"Tensor.full"` path-string
-//! arms; instance methods (`shape` / `rank`) through
+//! arms; instance methods (`shape` / `rank` / `iter_axis`) through
 //! `try_eval_tensor_method` in the method-dispatch chain. Element
 //! storage is C-order (row-major) in the same `Arc<RwLock<Vec<Value>>>`
 //! shared-cell shape as `Value::Array` (par-block capture shares Values
@@ -227,16 +227,17 @@ impl<'a> super::Interpreter<'a> {
     }
 
     /// Instance methods on `Value::Tensor`: `shape()` -> Vec[i64] (as
-    /// the interpreter's Array value), `rank()` -> i64. Returns `None`
-    /// for non-Tensor receivers / unknown methods (caller falls
-    /// through).
+    /// the interpreter's Array value), `rank()` -> i64, `iter_axis(n)`
+    /// -> Vec of sub-tensors. Returns `None` for non-Tensor receivers /
+    /// unknown methods (caller falls through).
     pub(super) fn try_eval_tensor_method(
         &mut self,
         method: &str,
         obj: &Value,
-        _span: &Span,
+        args: &[CallArg],
+        span: &Span,
     ) -> Option<Value> {
-        let Value::Tensor { dims, .. } = obj else {
+        let Value::Tensor { dims, data } = obj else {
             return None;
         };
         match method {
@@ -244,7 +245,76 @@ impl<'a> super::Interpreter<'a> {
                 dims.iter().map(|&d| Value::Int(d)).collect(),
             )))),
             "rank" => Some(Value::Int(dims.len() as i64)),
+            "iter_axis" => Some(self.eval_tensor_iter_axis(dims, data, args, span)),
             _ => None,
         }
+    }
+
+    /// `t.iter_axis(n)` — axis iteration. Yields the `dims[n]`
+    /// sub-tensors obtained by fixing the index along axis `n` (the axis
+    /// is dropped — NumPy `take(i, axis=n)` semantics), as a Vec of
+    /// *copies*. A rank-1 receiver yields the raw scalar elements
+    /// (`Vec[T]`) — rank-0 tensors aren't expressible. One flat C-order
+    /// pass buckets each element by its axis-`n` coordinate, which
+    /// preserves C-order of the remaining dims within every bucket. The
+    /// axis is bounds-checked here too (not just at typecheck) because
+    /// `karac run`'s `run_program` path doesn't gate on typecheck
+    /// errors, and a runtime-valued axis is never statically checkable.
+    fn eval_tensor_iter_axis(
+        &mut self,
+        dims: &[i64],
+        data: &Arc<RwLock<Vec<Value>>>,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Value {
+        let Some(axis_arg) = args.first() else {
+            return self.record_runtime_error(
+                "iter_axis takes exactly 1 argument (the axis)".to_string(),
+                span,
+            );
+        };
+        let axis_val = self.eval_expr_inner(&axis_arg.value);
+        let Value::Int(axis) = axis_val else {
+            return self
+                .record_runtime_error("iter_axis axis must be an integer".to_string(), span);
+        };
+        let rank = dims.len();
+        if axis < 0 || axis as usize >= rank {
+            return self.record_runtime_error(
+                format!("axis {} out of bounds for rank-{} tensor", axis, rank),
+                span,
+            );
+        }
+        let axis = axis as usize;
+        let guard = data.read().unwrap();
+        if rank == 1 {
+            // Rank-1: yield the scalar elements directly.
+            return Value::Array(Arc::new(RwLock::new(guard.clone())));
+        }
+        // Sub-tensor shape: dims with the axis slot dropped. The
+        // axis-coordinate of flat index f is (f / stride) % dims[axis],
+        // where stride is the product of the dims to the right of the
+        // axis.
+        let sub_dims: Vec<i64> = dims
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != axis)
+            .map(|(_, &d)| d)
+            .collect();
+        let stride: usize = dims[axis + 1..].iter().map(|&d| d as usize).product();
+        let bucket_len: usize = sub_dims.iter().map(|&d| d as usize).product();
+        let n_buckets = dims[axis] as usize;
+        let mut buckets: Vec<Vec<Value>> = vec![Vec::with_capacity(bucket_len); n_buckets];
+        for (f, v) in guard.iter().enumerate() {
+            buckets[(f / stride) % n_buckets].push(v.clone());
+        }
+        let out: Vec<Value> = buckets
+            .into_iter()
+            .map(|b| Value::Tensor {
+                dims: Arc::new(sub_dims.clone()),
+                data: Arc::new(RwLock::new(b)),
+            })
+            .collect();
+        Value::Array(Arc::new(RwLock::new(out)))
     }
 }
