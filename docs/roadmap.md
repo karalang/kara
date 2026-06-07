@@ -958,7 +958,7 @@ Semantics in `design.md § Numerical Types`, `§ Numeric Semantics > Literal-inv
 ### Codegen Optimization (IR quality pass)
 - [ ] Inline hints: emit `alwaysinline` / `noinline` attributes based on call-site analysis
 - [ ] Alias metadata: `noalias` on owned parameters, `tbaa` type-based alias analysis tags
-- [ ] Arithmetic flags: `nsw`/`nuw` on integer ops where overflow is defined-UB in Kāra semantics
+- [ ] Arithmetic flags: `nsw`/`nuw` on integer ops once AOT overflow trapping lands — the no-trap path provably doesn't wrap, making the flags sound. (Kāra overflow is never UB: defined-trap on `app`/`lib`, defined-wrap on `embedded` — see `design.md` § Arithmetic Overflow and the AOT-trapping entry in `implementation_checklist/phase-7-codegen.md`.)
 - [ ] LTO: enable link-time optimization in `karac build --release`
 - [ ] Static branch hints from effect analysis (`llvm.expect` emission): emit `llvm.expect` intrinsic on branch conditions where effect analysis can predict likelihood. **This is not PGO** — no instrumentation, no profile collection, no recompile loop. Real PGO (instrumented + AutoFDO) is deferred to post-v1; see [`deferred.md § Profile-Guided Optimization Loop`](deferred.md#profile-guided-optimization-loop).
 
