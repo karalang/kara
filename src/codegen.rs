@@ -666,6 +666,83 @@ pub fn compile_to_object_with_hot_swap(
         .map_err(|e| format!("Failed to write object file: {}", e))
 }
 
+/// Compile the **threaded pass** of a `--features wasm-threads` build to
+/// a wasm32-wasip1-threads object (phase-10 "WASM concurrency lowering —
+/// `--features wasm-threads` opt-in"). The dual-artifact sibling of the
+/// sequential pass's [`compile_to_object_with_hot_swap`] call: the
+/// front-end ran once; this pass re-emits with
+///
+/// - the real concurrency analysis (auto-par re-enabled via
+///   [`Codegen::set_wasm_threaded_pass`] — the threaded module has a
+///   worker pool, so fan-outs pay off there),
+/// - the threaded target machine (`wasm32-wasip1-threads` triple +
+///   `+atomics,+bulk-memory,+mutable-globals` — wasm-ld refuses
+///   `--shared-memory` against an object without them), whose triple +
+///   datalayout re-pin the module after `Codegen::new`'s
+///   active-target-keyed default (datalayout is identical across the
+///   two wasm triples; the re-pin keeps the emitted IR honest).
+///
+/// No hot-swap parameter: `--enable-hot-swap` is rejected on every wasm
+/// target before codegen. `coro` stays on for parity with the
+/// sequential pass's CLI call (network-boundary fns can't exist on wasm
+/// — E0411 gates them — so it's inert either way).
+pub fn compile_to_object_wasm_threaded(
+    program: &Program,
+    output_path: &str,
+    ownership: Option<&OwnershipCheckResult>,
+    concurrency: Option<&ConcurrencyAnalysis>,
+    source_filename: Option<&str>,
+    source_text: Option<&str>,
+    release: bool,
+) -> Result<(), String> {
+    let context = Context::create();
+    let target_machine = driver::create_target_machine_threaded()?;
+    let mut cg = Codegen::new(&context, "karac_module");
+    cg.module.set_triple(&target_machine.get_triple());
+    cg.module
+        .set_data_layout(&target_machine.get_target_data().get_data_layout());
+    cg.load_rc_fallback(ownership);
+    cg.load_concurrency_analysis(concurrency);
+    cg.set_source_filename(source_filename);
+    cg.set_source_text(source_text);
+    if release {
+        cg.set_strip_contracts(true);
+        cg.set_strip_error_trace(true);
+    }
+    cg.set_coro_enabled(true);
+    cg.set_wasm_threaded_pass(true);
+    cg.compile_program(program)?;
+
+    apply_optimization_passes(&cg.module, &target_machine)?;
+    target_machine
+        .write_to_file(&cg.module, FileType::Object, Path::new(output_path))
+        .map_err(|e| format!("Failed to write object file: {}", e))
+}
+
+/// IR-text sibling of [`compile_to_object_wasm_threaded`] for the
+/// wasm-target IR pins in `tests/wasm_codegen.rs` (and debugging): same
+/// threaded-pass configuration, returns the textual IR instead of
+/// writing an object. The threaded-pass selection is parameter-passed
+/// (a `Codegen` setter), never a process-global — so this can share a
+/// test binary with sequential-pass pins without racing them.
+pub fn compile_to_ir_wasm_threaded(
+    program: &Program,
+    ownership: Option<&OwnershipCheckResult>,
+    concurrency: Option<&ConcurrencyAnalysis>,
+) -> Result<String, String> {
+    let context = Context::create();
+    let target_machine = driver::create_target_machine_threaded()?;
+    let mut cg = Codegen::new(&context, "karac_module");
+    cg.module.set_triple(&target_machine.get_triple());
+    cg.module
+        .set_data_layout(&target_machine.get_target_data().get_data_layout());
+    cg.load_rc_fallback(ownership);
+    cg.load_concurrency_analysis(concurrency);
+    cg.set_wasm_threaded_pass(true);
+    cg.compile_program(program)?;
+    Ok(cg.module.print_to_string().to_string())
+}
+
 /// Phase-7 L558 sub-step (a): MCJIT sanity-check prototype.
 ///
 /// Compile `program` through the existing codegen pipeline, load the
@@ -4272,6 +4349,24 @@ impl<'ctx> Codegen<'ctx> {
     /// docs/spikes/network-async-coroutine-transform.md § 6¾.
     pub(crate) fn set_coro_enabled(&mut self, enabled: bool) {
         self.coro_enabled = enabled;
+    }
+
+    /// Mark this compile as the **threaded pass** of a `--features
+    /// wasm-threads` dual-artifact build (phase-10 wasm-threads entry):
+    /// re-derives `auto_par_disabled` with the wasm disable lifted —
+    /// the threaded module has a real worker pool, so auto-par fan-outs
+    /// are re-enabled there (the env gate still applies). Deliberately
+    /// a plain-data setter, NOT a process-global: one build process
+    /// runs codegen twice (sequential pass then threaded pass), and the
+    /// sequential pass must keep today's wasm-disabled derivation —
+    /// flipping a global between passes would also retroactively skew
+    /// every other `active_target_is_wasm()`-keyed read. Race-free,
+    /// mirroring `set_strip_contracts`. Must run before
+    /// `compile_program` (it only re-derives the construction-time
+    /// field; nothing reads `auto_par_disabled` earlier).
+    pub(crate) fn set_wasm_threaded_pass(&mut self, threaded: bool) {
+        self.auto_par_disabled =
+            !read_auto_par_env() || (crate::target::active_target_is_wasm() && !threaded);
     }
 
     /// Whether `fn_key` is compiled as a coroutine this run (A2 slice 2b.3) —

@@ -59,7 +59,7 @@ pub fn link_executable(obj_path: &str, exe_path: &str) -> Result<(), String> {
 /// instead of silently corrupting the data section.
 fn link_wasm_executable(obj_path: &str, exe_path: &str) -> Result<(), String> {
     let (linker, flavor_args) = resolve_wasm_linker()?;
-    let sysroot = resolve_wasi_self_contained_dir()?;
+    let sysroot = resolve_wasi_self_contained_dir("wasm32-wasip1")?;
     let crt1 = sysroot.join("crt1-command.o");
     let libc = sysroot.join("libc.a");
     for (what, p) in [("crt1-command.o", &crt1), ("libc.a", &libc)] {
@@ -72,7 +72,7 @@ fn link_wasm_executable(obj_path: &str, exe_path: &str) -> Result<(), String> {
             ));
         }
     }
-    let runtime_path = resolve_wasm_runtime_path()?;
+    let runtime_path = resolve_wasm_runtime_path(false)?;
 
     let mut cmd = std::process::Command::new(&linker);
     cmd.args(&flavor_args);
@@ -88,6 +88,85 @@ fn link_wasm_executable(obj_path: &str, exe_path: &str) -> Result<(), String> {
     if !output.status.success() {
         return Err(format!(
             "wasm-ld failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
+/// Link a wasm32 object into a **shared-memory threaded** WASI command
+/// module — the second artifact of a `--features wasm-threads` build
+/// (phase-10 "WASM concurrency lowering — `--features wasm-threads`
+/// opt-in"). Differences from [`link_wasm_executable`]:
+///
+///   - Sysroot + crt1 + libc come from the **`wasm32-wasip1-threads`**
+///     self-contained dir — the only rustup-shipped wasi-libc built with
+///     `+atomics`/`+bulk-memory` (wasm-ld refuses `--shared-memory`
+///     against any object lacking them) and the one whose pthreads ride
+///     the wasi-threads ABI (`wasi.thread-spawn` import /
+///     `wasi_thread_start` export, serviced by the JS glue's Web
+///     Workers).
+///   - Runtime archive is `libkarac_runtime_wasm_threads.a` (the
+///     `--features wasm-threads` build — pool-backed scheduler).
+///   - `--import-memory --export-memory --shared-memory
+///     --max-memory=<bytes>`: shared memories must be imported (the glue
+///     creates the `WebAssembly.Memory({shared: true})` and hands it to
+///     every worker instantiation) and must declare a maximum.
+///     `--export-memory` re-exports the import so the glue's existing
+///     `instance.exports.memory` reads keep working. This flag set
+///     mirrors rustc's own wasm32-wasip1-threads link line (verified via
+///     `--print link-args`); rust-lld auto-handles the TLS exports
+///     (`__wasm_init_tls` & co.) under `--shared-memory`, no extra
+///     flags.
+///
+/// `max_memory_bytes` comes from the manifest's `[wasm]
+/// max-memory-pages` knob (default 16384 pages = 1 GiB — rustc's own
+/// default for this target) via the CLI layer.
+pub fn link_wasm_executable_threaded(
+    obj_path: &str,
+    exe_path: &str,
+    max_memory_bytes: u64,
+) -> Result<(), String> {
+    let (linker, flavor_args) = resolve_wasm_linker()?;
+    let sysroot = resolve_wasi_self_contained_dir("wasm32-wasip1-threads")?;
+    let crt1 = sysroot.join("crt1-command.o");
+    let libc = sysroot.join("libc.a");
+    for (what, p) in [("crt1-command.o", &crt1), ("libc.a", &libc)] {
+        if !p.exists() {
+            return Err(format!(
+                "{} not found at {} — reinstall the wasm32-wasip1-threads target \
+                 (`rustup target add wasm32-wasip1-threads`)",
+                what,
+                p.display()
+            ));
+        }
+    }
+    let runtime_path = resolve_wasm_runtime_path(true)?;
+
+    let mut cmd = std::process::Command::new(&linker);
+    cmd.args(&flavor_args);
+    cmd.arg(&crt1);
+    cmd.arg(obj_path);
+    cmd.arg(&runtime_path);
+    cmd.arg(&libc);
+    cmd.args([
+        "-z",
+        "stack-size=1048576",
+        "--stack-first",
+        "--import-memory",
+        "--export-memory",
+        "--shared-memory",
+        &format!("--max-memory={max_memory_bytes}"),
+        "-o",
+        exe_path,
+    ]);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to invoke {}: {}", linker.display(), e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "wasm-ld (threaded) failed: {}",
             String::from_utf8_lossy(&output.stderr)
         ));
     }
@@ -143,16 +222,19 @@ fn resolve_wasm_linker() -> Result<(std::path::PathBuf, Vec<String>), String> {
     )
 }
 
-/// The Rust toolchain's self-contained wasi sysroot for `wasm32-wasip1`
-/// (`<target-libdir>/self-contained` — holds `crt1-command.o` and
-/// wasi-libc's `libc.a`).
-fn resolve_wasi_self_contained_dir() -> Result<std::path::PathBuf, String> {
-    let libdir = rustc_print(&["--print", "target-libdir", "--target", "wasm32-wasip1"])?;
+/// The Rust toolchain's self-contained wasi sysroot for the given wasm
+/// triple (`<target-libdir>/self-contained` — holds `crt1-command.o` and
+/// wasi-libc's `libc.a`). `wasm32-wasip1` for the sequential module;
+/// `wasm32-wasip1-threads` for the threaded one (its libc is built with
+/// atomics + pthreads-over-wasi-threads — the two are not
+/// interchangeable under `--shared-memory`).
+fn resolve_wasi_self_contained_dir(triple: &str) -> Result<std::path::PathBuf, String> {
+    let libdir = rustc_print(&["--print", "target-libdir", "--target", triple])?;
     let dir = std::path::Path::new(libdir.trim()).join("self-contained");
     if !dir.is_dir() {
         return Err(format!(
-            "wasm32-wasip1 self-contained sysroot not found at {} — install it with \
-             `rustup target add wasm32-wasip1`",
+            "{triple} self-contained sysroot not found at {} — install it with \
+             `rustup target add {triple}`",
             dir.display()
         ));
     }
@@ -183,45 +265,70 @@ fn rustc_host_triple() -> Result<String, String> {
         .ok_or_else(|| "rustc -vV printed no host line".to_string())
 }
 
-/// Resolve the wasm runtime archive. Mirrors [`resolve_runtime_path`]'s
-/// tiers with the `_wasm` artifact name, plus the cargo target-dir
-/// location as a dev convenience (where the documented build command
-/// leaves it before the `cp` step):
+/// Resolve a wasm runtime archive. Mirrors [`resolve_runtime_path`]'s
+/// tiers with the `_wasm` / `_wasm_threads` artifact name, plus the
+/// cargo target-dir location as a dev convenience (where the documented
+/// build command leaves it before the `cp` step):
 ///   1. `KARAC_RUNTIME` — verbatim, same contract as native.
-///   2. Installed: `<karac-bin-dir>/../lib/libkarac_runtime_wasm.a`.
-///   3. Dev: `<workspace>/target/release/libkarac_runtime_wasm.a`.
-///   4. Dev: `<workspace>/target/wasm32-wasip1/release/libkarac_runtime.a`.
-fn resolve_wasm_runtime_path() -> Result<String, String> {
+///   2. Installed: `<karac-bin-dir>/../lib/libkarac_runtime_wasm[_threads].a`.
+///   3. Dev: `<workspace>/target/release/libkarac_runtime_wasm[_threads].a`.
+///   4. Dev: `<workspace>/target/<wasm-triple>/release/libkarac_runtime.a`.
+///
+/// `threaded` selects the `--features wasm-threads` archive built for
+/// `wasm32-wasip1-threads` (pool-backed scheduler, atomics-clean
+/// objects) — the sequential and threaded archives are never
+/// interchangeable: wasm-ld rejects the sequential one under
+/// `--shared-memory` (no atomics features) and the threaded one without
+/// it (shared-memory objects need the threaded link).
+fn resolve_wasm_runtime_path(threaded: bool) -> Result<String, String> {
     if let Ok(p) = std::env::var("KARAC_RUNTIME") {
         return Ok(p);
     }
+    let (installed_name, dev_rels, recipe): (_, [&str; 2], _) = if threaded {
+        (
+            "../lib/libkarac_runtime_wasm_threads.a",
+            [
+                "target/release/libkarac_runtime_wasm_threads.a",
+                "target/wasm32-wasip1-threads/release/libkarac_runtime.a",
+            ],
+            "libkarac_runtime_wasm_threads.a not found; set KARAC_RUNTIME or build it: \
+             `cargo rustc -p karac-runtime --release --target wasm32-wasip1-threads \
+             --no-default-features --features wasm-threads --crate-type staticlib` then copy \
+             target/wasm32-wasip1-threads/release/libkarac_runtime.a to \
+             target/release/libkarac_runtime_wasm_threads.a (see CLAUDE.md / design.md § \
+             Runtime Distribution)",
+        )
+    } else {
+        (
+            "../lib/libkarac_runtime_wasm.a",
+            [
+                "target/release/libkarac_runtime_wasm.a",
+                "target/wasm32-wasip1/release/libkarac_runtime.a",
+            ],
+            "libkarac_runtime_wasm.a not found; set KARAC_RUNTIME or build it: \
+             `cargo rustc -p karac-runtime --release --target wasm32-wasip1 \
+             --no-default-features --crate-type staticlib` then copy \
+             target/wasm32-wasip1/release/libkarac_runtime.a to \
+             target/release/libkarac_runtime_wasm.a (see CLAUDE.md / design.md § \
+             Runtime Distribution)",
+        )
+    };
     if let Ok(exe) = std::env::current_exe() {
         if let Some(bin_dir) = exe.parent() {
-            let installed = bin_dir.join("../lib/libkarac_runtime_wasm.a");
+            let installed = bin_dir.join(installed_name);
             if installed.exists() {
                 return Ok(installed.to_string_lossy().into_owned());
             }
         }
     }
     let dev_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    for rel in [
-        "target/release/libkarac_runtime_wasm.a",
-        "target/wasm32-wasip1/release/libkarac_runtime.a",
-    ] {
+    for rel in dev_rels {
         let p = dev_root.join(rel);
         if p.exists() {
             return Ok(p.to_string_lossy().into_owned());
         }
     }
-    Err(
-        "libkarac_runtime_wasm.a not found; set KARAC_RUNTIME or build it: \
-         `cargo rustc -p karac-runtime --release --target wasm32-wasip1 \
-         --no-default-features --crate-type staticlib` then copy \
-         target/wasm32-wasip1/release/libkarac_runtime.a to \
-         target/release/libkarac_runtime_wasm.a (see CLAUDE.md / design.md § \
-         Runtime Distribution)"
-            .to_string(),
-    )
+    Err(recipe.to_string())
 }
 
 /// Link like [`link_executable`], but prepend extra flags to the `cc` invocation
@@ -591,6 +698,47 @@ fn create_wasm_target_machine(cpu_override: Option<&str>) -> Result<TargetMachin
             CodeModel::Default,
         )
         .ok_or_else(|| "Failed to create wasm32 target machine".to_string())
+}
+
+/// Target machine for the **threaded pass** of a `--features
+/// wasm-threads` build (phase-10 wasm-threads entry): triple
+/// `wasm32-wasip1-threads` with the threading feature set rustc uses
+/// for that target — `+atomics` (the emitted object must carry it or
+/// wasm-ld refuses `--shared-memory`), `+bulk-memory` (`memory.init`
+/// guarded data segments + `memory.atomic.*`), `+mutable-globals` (the
+/// per-thread `__stack_pointer`/TLS globals), plus the `+simd128`
+/// default shared with the sequential machine. The `--target-features`
+/// override still appends last-wins via [`combined_features`] — a user
+/// `-simd128` composes; stripping `-atomics` would just fail the link,
+/// which is the right loud failure.
+pub(super) fn create_target_machine_threaded() -> Result<TargetMachine, String> {
+    create_wasm_target_machine_threaded(crate::target::target_cpu_override())
+}
+
+fn create_wasm_target_machine_threaded(
+    cpu_override: Option<&str>,
+) -> Result<TargetMachine, String> {
+    Target::initialize_webassembly(&InitializationConfig::default());
+
+    let triple = inkwell::targets::TargetTriple::create("wasm32-wasip1-threads");
+    let target = Target::from_triple(&triple)
+        .map_err(|e| format!("Failed to get wasm32-threads target: {}", e))?;
+
+    target
+        .create_target_machine(
+            &triple,
+            cpu_override.unwrap_or("generic"),
+            // Threading features first (see the doc comment on
+            // `create_target_machine_threaded` for what each buys),
+            // `+simd128` kept from the sequential default — same
+            // rationale and same `-simd128` opt-out path (last-wins via
+            // `combined_features`).
+            &combined_features("+atomics,+bulk-memory,+mutable-globals,+simd128"),
+            backend_optimization_level(),
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .ok_or_else(|| "Failed to create wasm32-threads target machine".to_string())
 }
 
 fn create_native_target_machine(cpu_override: Option<&str>) -> Result<TargetMachine, String> {

@@ -1,5 +1,6 @@
 //! WASM-target IR pins (phase-10 "WASM concurrency lowering —
-//! sequential default").
+//! sequential default" + the "`--features wasm-threads` opt-in"'s
+//! threaded pass).
 //!
 //! **Why a dedicated test binary.** `target::set_active_target` is a
 //! process-global (one artifact per invocation); flipping it inside a
@@ -9,10 +10,13 @@
 //! subprocess for this exact reason). This binary sets `wasm_wasi` from
 //! every test, so intra-binary parallelism is safe — all writers store
 //! the same value. **Do not add native-target IR tests to this file.**
+//! The threaded-pass pins are safe in this same binary because the
+//! threaded-pass selection is parameter-passed (a `Codegen` setter via
+//! `compile_to_ir_wasm_threaded`), never another process-global.
 
 #[cfg(feature = "llvm")]
 mod wasm_codegen_tests {
-    use karac::codegen::compile_to_ir_with_options;
+    use karac::codegen::{compile_to_ir_wasm_threaded, compile_to_ir_with_options};
 
     /// Pin this process to the wasm_wasi target, then run the same
     /// pipeline shape as `par_codegen.rs::ir_for_with_concurrency`
@@ -33,6 +37,31 @@ mod wasm_codegen_tests {
         let analysis = karac::concurrency_analyze(&parsed.program, &effects);
         compile_to_ir_with_options(&parsed.program, None, Some(&analysis), None, None)
             .expect("codegen failed")
+    }
+
+    /// Same pipeline shape as [`wasm_ir_for_with_concurrency`], emitted
+    /// through the **threaded pass** (`compile_to_ir_wasm_threaded` —
+    /// the second pass of a `--features wasm-threads` dual-artifact
+    /// build). Still stores the same `wasm_wasi` value to the
+    /// process-global active target as every other test in this binary
+    /// (the threaded/sequential split is the parameter-passed setter,
+    /// not the target name — the CLI's browser-only flag scoping is a
+    /// CLI-layer rule, orthogonal to the IR shape pinned here).
+    fn wasm_threaded_ir_for_with_concurrency(src: &str) -> String {
+        karac::target::set_active_target("wasm_wasi").expect("wasm_wasi is a valid v1 target");
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        compile_to_ir_wasm_threaded(&parsed.program, None, Some(&analysis))
+            .expect("threaded codegen failed")
     }
 
     /// The auto-par fixture that emits exactly one `karac_par_run`
@@ -104,6 +133,49 @@ fn main() {
         assert!(
             ir.contains("__par_branch_0_0") && ir.contains("__par_branch_0_1"),
             "explicit par branch fns must be synthesized on wasm; IR:\n{ir}"
+        );
+    }
+
+    /// The threaded pass of a `--features wasm-threads` build re-enables
+    /// auto-par (phase-10 wasm-threads entry): the SAME fixture that
+    /// must emit zero fan-outs on sequential wasm (the first test above)
+    /// must emit exactly one `karac_par_run` + its synthesized branch
+    /// fns through `compile_to_ir_wasm_threaded` — the threaded module
+    /// has a real worker pool, so the fan-out pays off there. Also pins
+    /// the threaded module's triple (the wasip1-threads machine is what
+    /// makes the emitted object carry `+atomics` — without it wasm-ld
+    /// rejects the `--shared-memory` link).
+    #[test]
+    fn wasm_threaded_pass_emits_auto_par_fan_out() {
+        let ir = wasm_threaded_ir_for_with_concurrency(
+            r#"
+effect resource Net;
+effect resource Disk;
+effect resource Db;
+
+fn fetch_net() -> i64 reads(Net) { 1 }
+fn fetch_disk() -> i64 reads(Disk) { 2 }
+fn fetch_db() -> i64 reads(Db) { 3 }
+
+fn main() {
+    let _ = fetch_net();
+    let _ = fetch_disk();
+    let _ = fetch_db();
+}
+"#,
+        );
+        assert_eq!(
+            ir.matches("call void @karac_par_run").count(),
+            1,
+            "the threaded pass must re-enable the auto-par fan-out; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("__par_branch_"),
+            "auto-par branch fns must be synthesized on the threaded pass; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("target triple = \"wasm32-wasip1-threads\""),
+            "the threaded pass must emit for the wasip1-threads triple; IR:\n{ir}"
         );
     }
 }
