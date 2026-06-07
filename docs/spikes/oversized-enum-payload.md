@@ -17,15 +17,32 @@ The fail-loud `E_ENUM_PAYLOAD_OVERSIZED` error is **removed** — the capability
 guarded now works.
 
 **Remaining follow-ups (box-free coverage):**
-- **Fresh-temp scrutinee box-free** — `Vec[Wide].pop()` / `Map[K,Wide].get()` →
-  `match` produces a boxed `Option` with no named binding, so v1's let-site drop
-  doesn't free it (the box leaks; invisible on macOS — no LeakSanitizer). Tie-in:
-  re-widen `asan_soa_pop_remove_no_leak_or_uaf` back to 4-field `Entity` once this
-  lands (it was narrowed to 3-field as the B#1 stop-gap workaround).
-- **Move-OUT of a boxed payload** — `match boxed_opt { Some(h) => … }` where `h`
-  owns heap copies the inner pointers; freeing both `h` and the box double-frees.
-  v1 ASAN coverage isolates the move-IN suppression (no `match`); the move-out
-  interaction needs the `suppress_destructured_enum_payload_cleanup` keying.
+- **Fresh-temp scrutinee box-free + move-OUT — LANDED 2026-06-07.**
+  `Vec[Wide].pop()` / `Map[K,Wide].get()` → `match` / `if let` / `while let` /
+  `let … else` produces a boxed `Option`/`Result` with no named binding, so v1's
+  let-site drop didn't free it (the box leaked; invisible on macOS — no
+  LeakSanitizer). Fixed by `track_freshtemp_boxed_enum_scrutinee`
+  (`src/codegen/control_flow_match.rs`), called at the same hook point as the
+  user-enum `materialize_freshtemp_enum_scrutinee` in all four constructs (and
+  mutually exclusive with it — seeded `Option`/`Result` carry all-`None` drop
+  kinds, so the user-enum path no-ops on them). It recovers `T`'s width from the
+  bound payload sub-pattern (`pattern_payload_word_count > area`, the unbox
+  mirror of `reconstruct_payload_value`), materializes the enum struct into an
+  alloca, and queues a `BoxedEnumDrop` for the box. **Box-only free**
+  (`inner_struct_name = None`): the bound payload owns `T`'s inner heap and frees
+  it via its own binding cleanup, so this resolves the move-OUT double-free
+  (`match boxed_opt { Some(h) => … }` where `h` owns heap) by construction — the
+  box drop never touches `T`. Tie-in done: `asan_soa_pop_remove_no_leak_or_uaf`
+  re-widened to 4-field `Entity` (reads the 4th word `label` back through the box
+  + box-free clean). Tests: `test_ir_freshtemp_boxed_option_{match,iflet}_frees_box`
+  (leak gate — `boxdrop` block presence) and
+  `asan_freshtemp_boxed_option_match_move_out_no_double_free` (move-out
+  double-free gate, `H` owns a `Vec`). **Narrow remaining (deferred):** an
+  *unbound* heap-owning boxed payload (`Some(_)` where `T` owns heap) leaks its
+  inner heap — a wildcard pattern doesn't carry `T`'s width, so detection needs
+  the scrutinee's static type; never a double-free, no regression. A
+  `Result`-loop terminating on a boxed `Err` `while let` miss is likewise rare
+  and deferred (an `Option` loop terminates on `None`, which carries no box).
 - **Untyped-let inference** (`let o = make_opt()` with no annotation) and
   **`Result.Err` boxing** beyond the annotated-Ok/Err cases.
 
@@ -98,8 +115,9 @@ when the decomposed word count exceeded `num_words`, instead of truncating — a
 hard compile error beat garbage (memory `prefer-failloud-over-silent-miscompile`)
 while the real representation was designed. The boxing slices **removed** that
 error; the capability it guarded now works. The B#1 corpus workaround that
-narrowed `asan_soa_pop_remove_no_leak_or_uaf` to a 3-word struct still stands —
-re-widen it once the fresh-temp-scrutinee box-free (§1) lands.
+narrowed `asan_soa_pop_remove_no_leak_or_uaf` to a 3-word struct has been
+**reverted 2026-06-07** — the fresh-temp-scrutinee box-free (§1) landed, so the
+test is back to its 4-word `Entity` and reads the boxed 4th word.
 
 ## 4. The chosen representation — box-oversized (LANDED)
 
@@ -135,8 +153,9 @@ nesting" drop-recursion**: dropping a boxed `Option[H]` is "run
 **Resolved design questions** (the §4 open list): box only when *strictly* wider
 than the area (fitting payloads stay byte-identical); keep the seeded
 `{tag, w0, …}` layout with the box pointer in `w0` (no niche — a later
-optimization); `Result` boxes per-variant at its 5-word area. The move-out
-suppression interaction is the remaining open item (§1 follow-ups).
+optimization); `Result` boxes per-variant at its 5-word area. The move-out suppression
+interaction is **resolved** (the fresh-temp box-only free, §1 LANDED) — the
+remaining open items are untyped-let inference and `Result.Err` boxing.
 
 ## 5. Doc footprint (update these together — see memory `maintain-scope-doc-index`)
 
@@ -150,7 +169,11 @@ suppression interaction is the remaining open item (§1 follow-ups).
 - `src/codegen/calls.rs` (`.unwrap()`/`.expect()` helper) — unwrap/unbox
 - `src/codegen/{state,runtime}.rs` — `BoxedEnumDrop` action + `track_boxed_enum_var`
 - `src/codegen/types_lowering.rs` `boxed_enum_payload_variants` — let-site predicate
-- `tests/codegen.rs` `test_{e2e,ir}_boxed_*` — round-trip + box-free regressions
-- `tests/memory_sanitizer.rs` `asan_boxed_option_*` — box-free double-free gate;
-  `asan_soa_pop_remove_no_leak_or_uaf` — narrowed to fit (re-widen after the
-  fresh-temp-scrutinee box-free, §1)
+- `src/codegen/control_flow_match.rs` `track_freshtemp_boxed_enum_scrutinee` +
+  `src/codegen/control_flow.rs` (if-let/while-let/let-else hooks) — §1 fresh-temp
+  scrutinee box-free
+- `tests/codegen.rs` `test_{e2e,ir}_boxed_*`, `test_ir_freshtemp_boxed_option_*`
+  — round-trip + box-free regressions
+- `tests/memory_sanitizer.rs` `asan_boxed_option_*` /
+  `asan_freshtemp_boxed_option_*` — box-free double-free gate;
+  `asan_soa_pop_remove_no_leak_or_uaf` — re-widened to 4-field `Entity` (§1 landed)

@@ -77,6 +77,15 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             None
         };
+        // Oversized-enum-payload §1/§2: a fresh-temp scrutinee whose payload was
+        // heap-boxed (Option[Wide] / Result[Wide,_]) needs the box freed too.
+        // Mutually exclusive with the user-enum path above — seeded Option /
+        // Result have all-`None` drop kinds, so `materialize_freshtemp_enum_
+        // scrutinee` returns None for them; the gate makes that explicit.
+        if scrut_ref_ptr.is_none() && freshtemp_enum.is_none() {
+            let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
+            self.track_freshtemp_boxed_enum_scrutinee(scrutinee, &pats, scrut);
+        }
         // Detect borrow-returning scrutinees so pattern bindings don't
         // register a `FreeVecBuffer` against a buffer the container still
         // owns. `Map.get` is the canonical case (the returned `Option[V]`
@@ -1489,6 +1498,86 @@ impl<'ctx> super::Codegen<'ctx> {
         let _ = self.builder.build_store(alloca, sv);
         self.track_enum_var(&enum_name, alloca);
         Some((alloca, enum_name))
+    }
+
+    /// Oversized-enum-payload follow-up §1/§2
+    /// ([`docs/spikes/oversized-enum-payload.md`]): a fresh-temp scrutinee
+    /// (`match v.pop() { … }`, `if let Some(e) = v.pop()`) whose payload `T`
+    /// was heap-boxed because its LLVM word count exceeds the seeded area
+    /// (Option = 3, Result = 5 — see `coerce_to_payload_words`) has no named
+    /// binding, so the let-site `track_boxed_enum_var` never queues the box
+    /// free → the box leaks (invisible on macOS: no LeakSanitizer). When an
+    /// arm binds the boxed variant's payload we recover `T`'s width from the
+    /// pattern (mirroring `reconstruct_payload_value`'s `want > area` unbox
+    /// predicate); materialize the Option/Result struct into an alloca and
+    /// queue a `BoxedEnumDrop` for the box.
+    ///
+    /// **Box-only free** (`inner_struct_name = None`): the bound payload now
+    /// owns `T`'s inner heap and frees it through its own binding cleanup, so
+    /// re-dropping `T` here would double-free (the §2 move-out interaction).
+    /// Freeing just the box is sound for both the all-inline payload (the §1
+    /// `Entity` repro — no inner heap to leak) and the heap-owning bound
+    /// payload. The narrow remaining leak — an *unbound* heap-owning boxed
+    /// payload (`Some(_)` where `T` owns heap) — needs the scrutinee's static
+    /// type, which a wildcard pattern doesn't carry; deferred (spike §1).
+    ///
+    /// Gated to fresh `Call` / `MethodCall` scrutinees so a *place* scrutinee
+    /// (owned elsewhere, with its own let-site box drop) is untouched.
+    /// Registers in the *current* scope frame, matching
+    /// `materialize_freshtemp_enum_scrutinee`'s per-construct framing (enclosing
+    /// frame for match/if-let/let-else, per-iteration body frame for while-let).
+    /// No-op (the prior leak behavior) for non-fresh / non-Option-Result /
+    /// fitting-payload scrutinees.
+    pub(super) fn track_freshtemp_boxed_enum_scrutinee(
+        &mut self,
+        scrutinee: &Expr,
+        patterns: &[&Pattern],
+        val: BasicValueEnum<'ctx>,
+    ) {
+        if !Self::expr_yields_fresh_owned_temp(scrutinee) {
+            return;
+        }
+        let BasicValueEnum::StructValue(sv) = val else {
+            return;
+        };
+        for pat in patterns {
+            let PatternKind::TupleVariant {
+                path,
+                patterns: subs,
+            } = &pat.kind
+            else {
+                continue;
+            };
+            let Some(enum_name) = self.variant_pattern_enum_name(pat) else {
+                continue;
+            };
+            let area = match enum_name.as_str() {
+                "Option" => 3usize,
+                "Result" => 5usize,
+                _ => continue,
+            };
+            let Some(payload) = subs.first() else {
+                continue;
+            };
+            if self.pattern_payload_word_count(payload) <= area {
+                continue;
+            }
+            let Some(variant) = path.last().cloned() else {
+                continue;
+            };
+            let llvm_ty = match self.enum_layouts.get(enum_name.as_str()) {
+                Some(l) => l.llvm_type,
+                None => continue,
+            };
+            let Some(fn_val) = self.current_fn else {
+                return;
+            };
+            let alloca =
+                self.create_entry_alloca(fn_val, "__freshtemp_boxed_scrut", llvm_ty.into());
+            let _ = self.builder.build_store(alloca, sv);
+            self.track_boxed_enum_var(&enum_name, alloca, &enum_name, &variant, None);
+            return;
+        }
     }
 
     /// Wholesale-drop a fresh-temp enum scrutinee on a *miss* edge — the

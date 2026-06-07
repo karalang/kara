@@ -47,6 +47,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // zeroes the caps of fields the pattern moved into bindings. No-op for
         // non-fresh / non-enum scrutinees.
         let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val);
+        // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
+        // Option[Wide]/Result[Wide,_] scrutinee (box-only — the bound payload
+        // owns its inner heap). Registers in the enclosing frame, so the box
+        // frees on both the match and miss edges.
+        if freshtemp_enum.is_none() {
+            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val);
+        }
         let cond = self.compile_pattern_condition(pattern, val)?;
         // Reuse if-else codegen
         let fn_val = self.current_fn.unwrap();
@@ -202,6 +209,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // heap-bearing *miss* variant at loop exit (the final non-matching
         // scrutinee) is freed wholesale on the `miss_bb` edge below.
         let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val);
+        // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
+        // boxed-payload scrutinee, registered in the per-iteration body frame
+        // (drains each iteration). An `Option` loop terminates on `None` (no
+        // box), so no miss-edge box free is needed; a `Result`-terminating
+        // boxed `Err` miss is deferred (spike §1, rare shape).
+        if freshtemp_enum.is_none() {
+            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val);
+        }
         self.bind_pattern_values(pattern, val)?;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
@@ -263,6 +278,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // `emit_scope_cleanup` walk on the miss edge (wholesale). Suppression
         // on the match edge zeroes the caps of moved-in fields.
         let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val);
+        // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
+        // boxed-payload scrutinee (box-only). Registers in the enclosing frame,
+        // so it frees after the escaped bindings on the match edge and via the
+        // divergent else edge's cleanup walk on the miss edge.
+        if freshtemp_enum.is_none() {
+            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val);
+        }
         let cond = self.compile_pattern_condition(pattern, val)?;
 
         let fn_val = self.current_fn.unwrap();

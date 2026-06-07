@@ -3238,6 +3238,42 @@ fn main() {
         );
     }
 
+    /// Oversized-enum-payload §1/§2 (fresh-temp scrutinee box-free, move-OUT):
+    /// `match make(i) { Some(h) => … }` over a fresh-temp boxed `Option[H]`
+    /// where `H` owns a `Vec` (5 words → boxed). The bound `h` now owns the
+    /// inner Vec and frees it via its own scope cleanup; the fresh-temp
+    /// `BoxedEnumDrop` must free ONLY the box (no inner struct drop) or the
+    /// Vec buffer is freed twice. The loop turns any imbalance into a
+    /// deterministic ASAN double-free. Complements
+    /// `asan_boxed_option_inner_heap_no_double_free` (which isolates the
+    /// move-IN suppression with no `match`).
+    #[test]
+    fn asan_freshtemp_boxed_option_match_move_out_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct H { v: Vec[i64], a: i64, b: i64 }
+fn make(i: i64) -> Option[H] {
+    let mut vv: Vec[i64] = Vec.new();
+    vv.push(i);
+    return Some(H { v: vv, a: 1, b: 2 });
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        match make(i) {
+            Some(h) => println(h.v[0] + h.a),
+            None => println(-1),
+        }
+        i = i + 1;
+    }
+    println(99);
+}
+"#,
+            &["1", "2", "3", "4", "5", "99"],
+            "freshtemp_boxed_option_match_move_out_no_double_free",
+        );
+    }
+
     // ── general owned-temp tracking, slice 1 (phase-6 line 489/497) ──
     //
     // docs/spikes/general-owned-temp-tracking.md slice 1: a fresh-owned
@@ -3694,37 +3730,45 @@ fn main() {
         // groups exercise the per-group shift loop. (Primitive fields
         // only — heap-owning fields are rejected at layout validation.)
         //
-        // The struct is exactly 3 i64 words on purpose: `pop()` returns
-        // `Option[Entity]`, and Option's payload area is 3 words. A 4th
-        // field (the original `cold { label }` group) would overflow it,
-        // which now fails loud as E_ENUM_PAYLOAD_OVERSIZED rather than
-        // silently truncating the popped value (see
-        // docs/spikes/oversized-enum-payload.md). Cold-group *layout*
+        // The struct is 4 i64 words (`label` in a cold group): `pop()`
+        // returns `Option[Entity]`, whose payload area is only 3 words, so
+        // the popped 4-word `Entity` is heap-BOXED (see
+        // docs/spikes/oversized-enum-payload.md). Re-widened from the 3-word
+        // B#1 stop-gap now that the fresh-temp-scrutinee box-free (§1) lands:
+        // `match entities.pop() { Some(e) => … }` reads the 4th word `label`
+        // back through the box (was truncated/garbage before boxing) AND the
+        // `BoxedEnumDrop` queued for this fresh-temp scrutinee frees the box,
+        // so the run must stay ASAN-clean (a leaked box or a double-free with
+        // the SoA group cleanup would surface here). Cold-group *layout*
         // codegen is covered separately in tests/codegen.rs.
         assert_clean_asan_run(
             r#"
-struct Entity { x: i64, y: i64, hp: i64 }
+struct Entity { x: i64, y: i64, hp: i64, label: i64 }
 layout entities: Vec[Entity] {
     group physics { x, y }
     group combat { hp }
+    group meta { label }
 }
 fn main() {
     let mut entities: Vec[Entity] = Vec.new();
     let mut i: i64 = 0;
     while i < 6 {
-        entities.push(Entity { x: i, y: i * 10, hp: i * 100 });
+        entities.push(Entity { x: i, y: i * 10, hp: i * 100, label: i * 1000 + 7 });
         i = i + 1;
     }
     let _front = entities.pop_front();
     let _middle = entities.remove(2);
     match entities.pop() {
-        Some(e) => println(e.x),
+        Some(e) => {
+            println(e.x);
+            println(e.label);
+        }
         None => println(-1),
     }
     println(entities.len());
 }
 "#,
-            &["5", "3"],
+            &["5", "5007", "3"],
             "soa_pop_remove_no_leak_or_uaf",
         );
     }

@@ -17797,6 +17797,54 @@ fn main() {
         );
     }
 
+    /// Oversized-enum-payload §1 (fresh-temp scrutinee box-free): a
+    /// `match v.pop() { … }` over a boxed `Option[Entity]` (4 words > 3 area)
+    /// has no named binding, so before §1 the box leaked. The fresh-temp
+    /// materialization must now queue a `BoxedEnumDrop` — the `boxdrop`
+    /// cleanup block — so the box is freed at scope exit. (Leak gate; macOS
+    /// has no LeakSanitizer.)
+    #[test]
+    fn test_ir_freshtemp_boxed_option_match_frees_box() {
+        let src = r#"
+struct Entity { x: i64, y: i64, hp: i64, label: i64 }
+fn main() {
+    let mut v: Vec[Entity] = Vec.new();
+    v.push(Entity { x: 1, y: 2, hp: 3, label: 5000 });
+    match v.pop() {
+        Some(e) => println(e.label),
+        None => println(-1),
+    }
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            ir.contains("boxdrop"),
+            "fresh-temp boxed Option scrutinee must free its box (boxdrop block); got:\n{ir}"
+        );
+    }
+
+    /// Oversized-enum-payload §1: same fix for the `if let` construct over a
+    /// fresh-temp boxed `Option[Wide]` returned by a call.
+    #[test]
+    fn test_ir_freshtemp_boxed_option_iflet_frees_box() {
+        let src = r#"
+struct Wide { a: i64, b: i64, c: i64, d: i64 }
+fn make() -> Option[Wide] {
+    return Some(Wide { a: 1, b: 2, c: 3, d: 4 });
+}
+fn main() {
+    if let Some(e) = make() {
+        println(e.d);
+    }
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            ir.contains("boxdrop"),
+            "fresh-temp boxed Option if-let scrutinee must free its box; got:\n{ir}"
+        );
+    }
+
     // ── Concurrency analysis plumbing ──
 
     /// Slice 1 wiring sanity-check: full pipeline through
