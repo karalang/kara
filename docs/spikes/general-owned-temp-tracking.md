@@ -51,6 +51,8 @@ TypeExpr-valued hint-table precedent (`pattern_binding_inner_types`,
   temporary scope* (v60 item 28, ~9775–9823) — the line-497 consumer
 - `docs/implementation_checklist/phase-6-runtime.md` line 489 (scrutinee scope)
   and line 497 (tail-expr temp leak carve-out) — both reference this gap
+- `docs/spikes/pattern-arm-unbound-field-drop.md` — the separate "move-out
+  partial drop" track surfaced while scoping slice 4 (see slice 4 below)
 
 ---
 
@@ -294,8 +296,20 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    `materialize_owned_temp` now provides).
 4. **Scrutinee sub-frame (= line-489 slice 3).** Dedicated scrutinee frame in
    if-let/while-let/let-else; drain on miss-before-else, hit-at-arm-exit,
-   per-iteration. Tests: `asan_if_let_scrutinee_temp_freed_on_miss` +
-   `_on_hit_at_arm_exit`, `asan_while_let_scrutinee_temp_freed_per_iteration`,
+   per-iteration. **Gate to the wholesale-drop case** — a scrutinee whose
+   bindings are all borrows / non-heap (nothing moved out of the temp), so the
+   whole temp drops as one unit and partial-drop is never needed. The
+   *moved-out* case (free unbound heap fields while not double-freeing bound
+   ones) is a **separate mechanism** tracked in
+   [`pattern-arm-unbound-field-drop.md`](pattern-arm-unbound-field-drop.md) — an
+   IR-proven leak (`if let Full(_, n) = make()` leaks the unbound `Vec` field).
+   Keeping slice 4 gated to wholesale-drop is what keeps the two cleanly
+   separable. **Prerequisite (slice 3b):** the guard-style scrutinee
+   (`mu.lock().get(k)`) needs borrow-returning receiver methods to dispatch on
+   *temp* receivers — deferred 3b work — before a scrutinee temp that lives
+   through the arm even compiles. Tests:
+   `asan_if_let_scrutinee_temp_freed_on_miss` + `_on_hit_at_arm_exit`,
+   `asan_while_let_scrutinee_temp_freed_per_iteration`,
    `asan_let_else_scrutinee_temp_freed_before_else`. **Interpreter parity:** the
    tree-walk interpreter is Arc-refcounted so it does not leak, but add matching
    `tests/interpreter.rs` drop-observation tests once slice 6 lands a Drop type.
