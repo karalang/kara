@@ -958,6 +958,27 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_borrow_return_if_multi_source() {
+        // Tier 2 (B-2026-06-07-5): `longer`-style `if` over two `ref`
+        // params returns a borrow from whichever branch runs — phi of
+        // pointers, deref'd correctly at the let-bound caller.
+        let out = run_program(
+            "fn longer(a: ref String, b: ref String) -> ref String {\n\
+             \x20   if a.len() > b.len() { a } else { b }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let x = \"hi\"; let y = \"wordy\";\n\
+             \x20   let n = longer(x, y); println(n);\n\
+             \x20   let p = \"aaaaaa\"; let q = \"bb\";\n\
+             \x20   let m = longer(p, q); println(m);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "wordy\naaaaaa");
+        }
+    }
+
+    #[test]
     fn test_e2e_ambient_resource_clock_now_and_env_set() {
         // Ambient built-in resource methods lower to runtime FFIs
         // (`karac_runtime_env_set` / `karac_runtime_clock_now`) — the

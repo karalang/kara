@@ -13,7 +13,7 @@
 use crate::ast::*;
 
 use inkwell::types::{BasicTypeEnum, StructType};
-use inkwell::values::{BasicValueEnum, PointerValue, VectorValue};
+use inkwell::values::{BasicValue, BasicValueEnum, PointerValue, VectorValue};
 use inkwell::AddressSpace;
 use inkwell::{FloatPredicate, IntPredicate};
 
@@ -109,8 +109,62 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 None
             }
+            // Borrow returned from a conditional: compile each branch to a
+            // borrow pointer and phi them at the merge. Covers `longer`-style
+            // `if a.len() > b.len() { a } else { b }` (Tier 2 — multi-source
+            // overapproximation, design.md § Feature 4 Part 3). A value `if`
+            // requires an `else`; both branches must themselves be
+            // borrowable, else the whole `if` is unsupported (`None`).
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                let else_e = else_branch.as_deref()?;
+                let fn_val = self.current_fn?;
+                let cond = self.compile_expr(condition).ok()?.into_int_value();
+                let then_bb = self.context.append_basic_block(fn_val, "refret.then");
+                let else_bb = self.context.append_basic_block(fn_val, "refret.else");
+                let merge_bb = self.context.append_basic_block(fn_val, "refret.merge");
+                self.builder
+                    .build_conditional_branch(cond, then_bb, else_bb)
+                    .ok()?;
+                self.builder.position_at_end(then_bb);
+                let then_ptr = self.ref_return_ptr_of_block(then_block)?;
+                let then_end = self.builder.get_insert_block()?;
+                self.builder.build_unconditional_branch(merge_bb).ok()?;
+                self.builder.position_at_end(else_bb);
+                let else_ptr = self.compile_ref_return_ptr(else_e)?;
+                let else_end = self.builder.get_insert_block()?;
+                self.builder.build_unconditional_branch(merge_bb).ok()?;
+                self.builder.position_at_end(merge_bb);
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let phi = self.builder.build_phi(ptr_ty, "refret.phi").ok()?;
+                phi.add_incoming(&[
+                    (&then_ptr as &dyn BasicValue, then_end),
+                    (&else_ptr as &dyn BasicValue, else_end),
+                ]);
+                Some(phi.as_basic_value().into_pointer_value())
+            }
+            // A block in borrow-return position (an `if`/`else` arm, or a
+            // bare `{ ... }`): only a statement-free borrow tail is
+            // supported today.
+            ExprKind::Block(b) => self.ref_return_ptr_of_block(b),
             _ => None,
         }
+    }
+
+    /// Borrow pointer produced by a block's tail expression, for blocks
+    /// sitting in borrow-return position. Tier-2 scope: statement-free
+    /// blocks only — a block with preceding statements returns `None`, so
+    /// the source-pinning check reports it as a not-yet-supported form
+    /// rather than miscompiling.
+    fn ref_return_ptr_of_block(&mut self, b: &Block) -> Option<PointerValue<'ctx>> {
+        if !b.stmts.is_empty() {
+            return None;
+        }
+        let tail = b.final_expr.as_deref()?;
+        self.compile_ref_return_ptr(tail)
     }
 
     pub(super) fn compile_field_access(

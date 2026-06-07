@@ -168,8 +168,24 @@ fn classify_borrow_return(
             // access, a call, …) — valid per spec but Tier-2/3 codegen.
             _ => Some(BorrowReturnShape::UnsupportedForm),
         },
+        // Conditional borrow return (`longer`-style Tier 2): every branch
+        // must itself be a borrowable shape. A value `if` needs an `else`.
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        } => {
+            let Some(else_e) = else_branch.as_deref() else {
+                return Some(BorrowReturnShape::UnsupportedForm);
+            };
+            combine_borrow_shapes(
+                classify_borrow_return_block(then_block, ref_params, ref_locals),
+                classify_borrow_return(else_e, ref_params, ref_locals),
+            )
+        }
+        ExprKind::Block(b) => classify_borrow_return_block(b, ref_params, ref_locals),
         // Literals and temporaries are unambiguously dangling; the rest
-        // (`if`/`match`/`Call`/`MethodCall`/…) are valid-but-unsupported.
+        // (`match`/`Call`/`MethodCall`/…) are valid-but-unsupported.
         ExprKind::Integer(..)
         | ExprKind::Float(..)
         | ExprKind::Bool(..)
@@ -178,6 +194,38 @@ fn classify_borrow_return(
         | ExprKind::ArrayLiteral(..)
         | ExprKind::StructLiteral { .. }
         | ExprKind::Tuple(..) => Some(BorrowReturnShape::DanglingSource),
+        _ => Some(BorrowReturnShape::UnsupportedForm),
+    }
+}
+
+/// Classify a block's tail as a borrow source. Matches codegen's Tier-2
+/// capability: statement-free blocks only (a block with preceding
+/// statements is reported as not-yet-supported, never miscompiled).
+fn classify_borrow_return_block(
+    b: &Block,
+    ref_params: &HashSet<String>,
+    ref_locals: &HashSet<String>,
+) -> Option<BorrowReturnShape> {
+    if !b.stmts.is_empty() {
+        return Some(BorrowReturnShape::UnsupportedForm);
+    }
+    match &b.final_expr {
+        Some(e) => classify_borrow_return(e, ref_params, ref_locals),
+        None => Some(BorrowReturnShape::UnsupportedForm),
+    }
+}
+
+/// Merge two branch classifications. `None` is OK; a genuinely dangling
+/// branch dominates (it's a real source-pinning error), otherwise any
+/// not-yet-supported branch makes the whole form unsupported.
+fn combine_borrow_shapes(
+    a: Option<BorrowReturnShape>,
+    b: Option<BorrowReturnShape>,
+) -> Option<BorrowReturnShape> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(BorrowReturnShape::DanglingSource), _)
+        | (_, Some(BorrowReturnShape::DanglingSource)) => Some(BorrowReturnShape::DanglingSource),
         _ => Some(BorrowReturnShape::UnsupportedForm),
     }
 }

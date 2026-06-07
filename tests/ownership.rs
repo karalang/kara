@@ -7372,11 +7372,12 @@ fn test_borrow_return_dangling_local_errors() {
 
 #[test]
 fn test_borrow_return_unsupported_form_errors() {
-    // `if` of two ref params is valid per spec but a Tier-2 codegen
-    // follow-on — reported as not-yet-supported, not dangling.
+    // `match` of ref params is valid per spec but still a codegen
+    // follow-on — reported as not-yet-supported, not dangling. (`if` of
+    // ref params is supported as of Tier 2; see the `_if_` tests.)
     let errors = ownership_errors(
-        "fn longer(a: ref String, b: ref String) -> ref String {\n\
-        \x20   if a.len() > b.len() { a } else { b }\n\
+        "fn pick(a: ref String, b: ref String, flag: bool) -> ref String {\n\
+        \x20   match flag { true => a, false => b }\n\
          }\n",
     );
     assert!(errors.iter().any(|e| matches!(
@@ -7425,4 +7426,62 @@ fn test_borrow_return_no_move_ok() {
         \x20   read_age(u)\n\
          }\n",
     );
+}
+
+// ── Tier 2: borrow returns from `if` of ref params (B-2026-06-07-5) ──
+
+#[test]
+fn test_borrow_return_if_of_ref_params_ok() {
+    ownership_ok(
+        "fn longer(a: ref String, b: ref String) -> ref String {\n\
+        \x20   if a.len() > b.len() { a } else { b }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_borrow_return_else_if_chain_of_ref_params_ok() {
+    ownership_ok(
+        "fn pick(a: ref String, b: ref String, c: ref String) -> ref String {\n\
+        \x20   if a.len() > 9 { a } else if b.len() > 9 { b } else { c }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_borrow_return_if_dangling_branch_errors() {
+    let errors = ownership_errors(
+        "fn bad(a: ref String, b: String) -> ref String {\n\
+        \x20   if a.len() > 0 { a } else { b }\n\
+         }\n",
+    );
+    assert!(errors.iter().any(|e| matches!(
+        e.kind,
+        OwnershipErrorKind::BorrowReturnNotSourcePinned {
+            shape: BorrowReturnShape::DanglingSource
+        }
+    )));
+}
+
+#[test]
+fn test_borrow_return_if_move_source_while_live_errors() {
+    // 3b across a multi-source (`if`) borrow: moving either source while
+    // the returned borrow is live is a use-after-free.
+    let errors = ownership_errors(
+        "fn longer(a: ref String, b: ref String) -> ref String {\n\
+        \x20   if a.len() > b.len() { a } else { b }\n\
+         }\n\
+         fn sink(x: String) -> i64 { x.len() }\n\
+         fn use_after(p: String, q: String) -> i64 {\n\
+        \x20   let n = longer(p, q);\n\
+        \x20   let g = sink(p);\n\
+        \x20   g\n\
+         }\n",
+    );
+    assert!(errors.iter().any(|e| matches!(
+        e.kind,
+        OwnershipErrorKind::SliceBorrowConflict {
+            shape: SliceConflictShape::MoveOfBorrowed
+        }
+    )));
 }
