@@ -57,6 +57,15 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // Forward the channel-op element-type table so codegen's
+    // `karac_runtime_channel_*` lowering knows the LLVM shape of `T` to size
+    // the type-erased transfer + shape the recv/try_recv out slot. Sibling
+    // to `method_unwrap_inner_types`; same keying (MethodCall span).
+    program.channel_elem_types = tc
+        .channel_elem_types
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Forward the pattern-binding type table so codegen can reconstitute
     // struct payloads (single-field error wrappers, etc.) from the i64
     // word at match-arm bind sites. Without this, `Err(e) => e.field`

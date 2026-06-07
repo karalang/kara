@@ -167,6 +167,120 @@ fn expr_has_early_exit(expr: &Expr) -> bool {
     }
 }
 
+/// `true` iff this statement performs a channel operation — `Channel.new()`,
+/// or a `Sender.send` / `Receiver.recv` / `Receiver.try_recv` method call
+/// anywhere in its expression tree. Used by `find_parallel_groups` to keep
+/// channel-bearing statements out of auto-par groups.
+///
+/// Channels are explicit concurrency/communication primitives: a `send` must
+/// happen-before the matching `recv` for the value to transfer, but `send`
+/// (`allocates(Heap)`) and `recv` (`suspends`) carry no mutually-conflicting
+/// resource effect, so the effect-conflict gate treats them as independent
+/// and would fan them into separate `__par_branch` workers — reordering the
+/// communication (the non-blocking floor's `recv` would observe an empty
+/// queue) AND isolating the channel-end bindings into the branch's captured
+/// variable scope. Auto-par is a compute optimization; it must never relocate
+/// a channel op. This AST-level guard catches the cases the effect-based
+/// `effects_mark_coroutine_boundary` (`suspends`) misses — `send`'s
+/// `allocates`-only effect, and a `recv` whose method-call effect didn't
+/// resolve (e.g. nested inside `println(rx.recv())`).
+fn stmt_has_channel_op(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Let { value, .. }
+        | StmtKind::Assign { value, .. }
+        | StmtKind::CompoundAssign { value, .. }
+        | StmtKind::Expr(value) => expr_has_channel_op(value),
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => expr_has_channel_op(value) || block_has_channel_op(else_block),
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => block_has_channel_op(body),
+        StmtKind::LetUninit { .. } => false,
+    }
+}
+
+fn block_has_channel_op(block: &Block) -> bool {
+    block.stmts.iter().any(stmt_has_channel_op)
+        || block
+            .final_expr
+            .as_ref()
+            .is_some_and(|e| expr_has_channel_op(e))
+}
+
+fn expr_has_channel_op(expr: &Expr) -> bool {
+    match &expr.kind {
+        // `Channel.new()` — the constructor (a 2-segment `Channel.new` path
+        // callee).
+        ExprKind::Call { callee, args } => {
+            let is_channel_new = matches!(
+                &callee.kind,
+                ExprKind::Path { segments, .. }
+                    if segments.len() == 2 && segments[0] == "Channel" && segments[1] == "new"
+            );
+            is_channel_new
+                || expr_has_channel_op(callee)
+                || args.iter().any(|a| expr_has_channel_op(&a.value))
+        }
+        // `tx.send(..)` / `rx.recv()` / `rx.try_recv()`. The bare method
+        // names are channel-specific (network types use `send_text` /
+        // `recv_text`); even if a user type reused one, excluding its
+        // statement from auto-par only forfeits a compute optimization.
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            matches!(method.as_str(), "send" | "recv" | "try_recv")
+                || expr_has_channel_op(object)
+                || args.iter().any(|a| expr_has_channel_op(&a.value))
+        }
+        ExprKind::Block(b) => block_has_channel_op(b),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            expr_has_channel_op(condition)
+                || block_has_channel_op(then_block)
+                || else_branch.as_ref().is_some_and(|e| expr_has_channel_op(e))
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            expr_has_channel_op(value)
+                || block_has_channel_op(then_block)
+                || else_branch.as_ref().is_some_and(|e| expr_has_channel_op(e))
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            expr_has_channel_op(scrutinee) || arms.iter().any(|a| expr_has_channel_op(&a.body))
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => expr_has_channel_op(condition) || block_has_channel_op(body),
+        ExprKind::For { iterable, body, .. } => {
+            expr_has_channel_op(iterable) || block_has_channel_op(body)
+        }
+        ExprKind::Loop { body, .. } => block_has_channel_op(body),
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::Pipe { left, right }
+        | ExprKind::NilCoalesce { left, right } => {
+            expr_has_channel_op(left) || expr_has_channel_op(right)
+        }
+        ExprKind::Unary { operand, .. } => expr_has_channel_op(operand),
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            expr_has_channel_op(object)
+        }
+        ExprKind::Index { object, index } => {
+            expr_has_channel_op(object) || expr_has_channel_op(index)
+        }
+        ExprKind::Tuple(elems) => elems.iter().any(expr_has_channel_op),
+        _ => false,
+    }
+}
+
 // ── Result Types ───────────────────────────────────────────────
 
 /// The full result of concurrency analysis across all functions.
@@ -336,6 +450,12 @@ struct StmtInfo {
     /// from inside the branch produces invalid IR ("return instr that
     /// returns non-void in Function of void return type").
     has_early_exit: bool,
+    /// Whether this statement performs a channel operation (`Channel.new()`
+    /// / `Sender.send` / `Receiver.recv` / `Receiver.try_recv`). Such
+    /// statements are kept out of auto-par groups — channels are explicit
+    /// communication primitives whose ordering auto-par must not disturb.
+    /// See `stmt_has_channel_op` and the `find_parallel_groups` guards.
+    has_channel_op: bool,
     /// Whether this statement is a constant-cost initializer — a
     /// `let`/`assign` of a literal or bare identifier, or a `let
     /// uninit`. These are O(1) and run in ~zero time. Used by the
@@ -948,6 +1068,7 @@ impl<'a> ConcurrencyChecker<'a> {
             calls_polymorphic: false,
             is_seq,
             has_early_exit: stmt_has_early_exit(stmt),
+            has_channel_op: stmt_has_channel_op(stmt),
             is_constant_init: stmt_is_constant_init(stmt),
         };
 
@@ -1159,6 +1280,18 @@ impl<'a> ConcurrencyChecker<'a> {
                 continue;
             }
 
+            // A channel operation (`Channel.new` / `send` / `recv` /
+            // `try_recv`) is never auto-parallelized — channels are explicit
+            // communication primitives whose send-before-recv ordering a
+            // par fan-out would break (and whose channel-end bindings would
+            // be isolated into a branch's captured scope). Mirrors the
+            // early-exit / coroutine-boundary seed guards. See
+            // `stmt_has_channel_op`.
+            if infos[start].has_channel_op {
+                assigned[start] = true;
+                continue;
+            }
+
             let mut group_indices = vec![start];
             assigned[start] = true;
 
@@ -1192,6 +1325,12 @@ impl<'a> ConcurrencyChecker<'a> {
                 // sibling either (see the seed-side guard above). End the group
                 // at this boundary.
                 if effects_mark_coroutine_boundary(&infos[candidate].effects) {
+                    break;
+                }
+
+                // A channel-op statement ends the group at its sibling
+                // boundary too (seed-side guard's candidate mirror).
+                if infos[candidate].has_channel_op {
                     break;
                 }
 

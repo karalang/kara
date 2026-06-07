@@ -5183,4 +5183,65 @@ fn main() {
             "ref_at_binding_option_string_payload_single_free",
         );
     }
+
+    #[test]
+    fn asan_channel_send_recv_clone_single_free() {
+        // Phase 6 "Channel AOT codegen lowering": the refcount Drop
+        // (`CleanupAction::DropChannelEnd`) must reclaim the channel exactly
+        // once. `Channel.new()` mints refcount 2 (the destructured `tx`/`rx`),
+        // `tx.clone()` increments to 3, and the three scope-exit drops bring
+        // it to 0 — a single free of the `KaracChannel`. A miscount would
+        // surface here as an ASAN double-free (over-drop) or, on Linux CI's
+        // LeakSanitizer, a leak (under-drop). Run through the full pipeline
+        // (concurrency on) so the `stmt_has_channel_op` auto-par exclusion is
+        // exercised — without it the `send`/`recv` fan into branch workers and
+        // the channel-end allocas land in a captured scope, which would also
+        // trip ASAN. String payloads exercise the multi-word transfer too.
+        assert_clean_asan_run_with_concurrency(
+            r#"
+fn main() {
+    let (tx, rx): (Sender[String], Receiver[String]) = Channel.new();
+    tx.send("first");
+    let tx2 = tx.clone();
+    tx2.send("second");
+    println(rx.recv());
+    println(rx.recv());
+    match rx.try_recv() {
+        Some(v) => println(v),
+        None => println("drained"),
+    }
+}
+"#,
+            &["first", "second", "drained"],
+            "channel_send_recv_clone_single_free",
+        );
+    }
+
+    #[test]
+    fn asan_channel_move_into_spawn_single_free() {
+        // Move-across-spawn: `tx` is captured into the spawned closure and
+        // consumed by `worker(tx)`. The channel `new` mints refcount 2 (`tx`
+        // / `rx`); `main` drops both at scope exit (the moved-in `tx` param
+        // isn't a `bind_pattern` binding, so the worker registers no second
+        // drop), balancing to a single free AFTER `h.join()` guarantees the
+        // worker's `send` already ran (no use-after-free on the worker side,
+        // no double-free on `main`'s). Verified leak-balanced at runtime
+        // (1 alloc / 1 free); ASAN guards the double-free / UAF edges.
+        assert_clean_asan_run_with_concurrency(
+            r#"
+fn worker(tx: Sender[i64]) -> i64 {
+    tx.send(42);
+    0
+}
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    let h: TaskHandle[i64] = spawn(|| worker(tx));
+    h.join();
+    println(rx.recv());
+}
+"#,
+            &["42"],
+            "channel_move_into_spawn_single_free",
+        );
+    }
 }

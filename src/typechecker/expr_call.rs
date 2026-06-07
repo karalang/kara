@@ -547,6 +547,38 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `Channel.new() -> (Sender[T], Receiver[T])`. Like the collection
+        // `.new` constructors above, `Channel` has no syntactic `impl Channel
+        // { fn new }` in stdlib (`channel.kara` bakes only the `struct
+        // Channel[=T] {}` shape) — the sender/receiver pair is minted here. A
+        // single shared fresh typevar links the two ends so a later
+        // `tx.send(x)` / `rx.recv()` (`infer_channel_method`) pins the same
+        // `T`. Without this arm the call falls through to the
+        // `resolve_path_type` rejection ("no associated function 'new' on
+        // type 'Channel'") — which is exactly why channels only ever worked
+        // under the typecheck-bypassing interpreter path before the AOT
+        // codegen lowering; `karac build` runs the typechecker.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && segments[0] == "Channel"
+                && segments[1] == "new"
+                && args.is_empty()
+            {
+                let elem = self.env.fresh_type_var();
+                let sender = Type::Named {
+                    name: "Sender".to_string(),
+                    args: vec![elem.clone()],
+                };
+                let receiver = Type::Named {
+                    name: "Receiver".to_string(),
+                    args: vec![elem],
+                };
+                let ty = Type::Tuple(vec![sender, receiver]);
+                self.record_expr_type(span, &ty);
+                return ty;
+            }
+        }
+
         // `Vec.filled(n: i64, val: T) -> Vec[T]` — produces n copies of
         // `val`. Codegen lives at src/codegen/assoc_call.rs:911 (malloc +
         // fill-loop emitting the {data, len=n, cap=n} aggregate). Joins

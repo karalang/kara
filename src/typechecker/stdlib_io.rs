@@ -6,8 +6,10 @@
 
 use crate::ast::*;
 use crate::cross_task_safe::is_cross_task_safe_with;
+use crate::resolver::SpanKey;
 use crate::token::Span;
 
+use super::inference::resolve_type_var_top;
 use super::types::{IntSize, Type, UIntSize};
 use super::TypeErrorKind;
 
@@ -368,6 +370,28 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
     ) -> Type {
         let elem = element.clone();
+
+        // Record the channel element `T` for codegen, keyed by the
+        // MethodCall span (same no-collision rationale as
+        // `method_unwrap_inner_types` — element type, not receiver type).
+        // Dual purpose: (1) `send`/`recv`/`try_recv` read it for the
+        // per-call `elem_size` + recv out-slot shape; (2) codegen's
+        // channel-method *dispatch gate* keys off the mere presence of an
+        // entry at the call span — a scope-stable signal that this is a
+        // channel op, since only this function populates the table (the
+        // `var_type_names`-based receiver-type lookup is too volatile: the
+        // statement-hoisting pre-pass binds then resets it before the
+        // method-call pass runs). `clone` is recorded too so it dispatches
+        // through the same gate even though its lowering ignores the size.
+        // The element `T` is statically known here (the typed
+        // `Sender[T]`/`Receiver[T]` receiver) but NOT at `Channel.new()`,
+        // so it travels per call site.
+        if matches!(method, "send" | "recv" | "try_recv" | "clone") {
+            let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
+            let te = Self::type_to_type_expr(&resolved);
+            self.channel_elem_types.insert(SpanKey::from_span(span), te);
+        }
+
         let sender_elem = Type::Named {
             name: "Sender".to_string(),
             args: vec![elem.clone()],

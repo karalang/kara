@@ -164,6 +164,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 if name == "File" {
                     return self.context.ptr_type(AddressSpace::default()).into();
                 }
+                // Channel ends (`Sender[T]` / `Receiver[T]`) are opaque heap
+                // pointers to the runtime's refcounted `KaracChannel`
+                // (`runtime/src/channel.rs`). Both ends carry the same
+                // pointer; the element type erases into the queue's byte
+                // blobs, so the LLVM type is just `ptr` regardless of `T`.
+                // `Channel` itself is only ever used as `Channel.new()` (an
+                // associated call), never as a value type — but lower it the
+                // same way for uniformity. Drop at scope exit via
+                // `CleanupAction::DropChannelEnd` (refcount decrement).
+                if name == "Sender" || name == "Receiver" || name == "Channel" {
+                    return self.context.ptr_type(AddressSpace::default()).into();
+                }
                 self.llvm_type_for_name(name)
             }
             TypeKind::Tuple(elems) if elems.is_empty() => {

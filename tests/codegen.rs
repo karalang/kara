@@ -37494,4 +37494,49 @@ fn main() {
             );
         }
     }
+
+    #[test]
+    fn e2e_channel_send_recv_tryrecv_clone() {
+        // Phase 6 "Channel AOT codegen lowering": `Channel.new()` destructure,
+        // `Sender.send` / `Sender.clone`, `Receiver.recv` / `Receiver.try_recv`
+        // through the `karac_runtime_channel_*` runtime. Exercises:
+        //  - i64 + String (multi-word) element types,
+        //  - `clone` (a second sender into the same queue),
+        //  - `try_recv` Some/None (drained queue → None),
+        //  - a control-flow construct BEFORE the channel pair, which used to
+        //    let auto-par fan `send`/`recv` into separate `__par_branch`
+        //    workers (reordering the transfer + isolating the channel-end
+        //    bindings) — now excluded via `stmt_has_channel_op`. Runs under
+        //    the default auto-par-ON build.
+        let out = run_program_capturing(
+            r#"
+fn main() {
+    let n = 3;
+    if n > 0 { println(n); }
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    tx.send(100);
+    let tx2 = tx.clone();
+    tx2.send(5);
+    match rx.try_recv() {
+        Some(v) => println(v),
+        None => println(-1),
+    }
+    match rx.try_recv() {
+        Some(v) => println(v),
+        None => println(-1),
+    }
+    match rx.try_recv() {
+        Some(v) => println(v),
+        None => println(-1),
+    }
+    let (stx, srx): (Sender[String], Receiver[String]) = Channel.new();
+    stx.send("hello channel");
+    println(srx.recv());
+}
+"#,
+        );
+        if let Some(c) = out {
+            assert_eq!(c.stdout.trim(), "3\n100\n5\n-1\nhello channel");
+        }
+    }
 }

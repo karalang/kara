@@ -438,6 +438,20 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Alloca that holds the opaque `*mut KaracFile` pointer.
         file_alloca: PointerValue<'ctx>,
     },
+    /// Phase 6 "Channel AOT codegen lowering": scope-exit refcount-drop for
+    /// a channel-end (`Sender`/`Receiver`) binding. The alloca holds the
+    /// opaque `*mut KaracChannel` pointer both ends share. The drain emits
+    /// `karac_runtime_channel_drop(load(chan_alloca))`, which decrements the
+    /// refcount and frees the queue at zero — so a `Channel.new()` (refcount
+    /// 2) is reclaimed once both its `Sender` and `Receiver` bindings have
+    /// dropped, and a `Sender.clone()` (refcount++) balances against its own
+    /// binding's drop. Null-handle is a no-op runtime-side, so no guard
+    /// here. Mirrors `FreeFileHandle`'s shape (opaque handle, single
+    /// scope-exit call) plus refcount semantics.
+    DropChannelEnd {
+        /// Alloca that holds the opaque `*mut KaracChannel` pointer.
+        chan_alloca: PointerValue<'ctx>,
+    },
     /// Run a per-enum drop function on a value-type (non-shared) enum
     /// alloca at scope exit. The drop function is synthesized once per
     /// enum type by `emit_enum_drop_switch` (one `__karac_drop_<EnumName>`

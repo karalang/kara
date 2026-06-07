@@ -1303,6 +1303,25 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_atomic_method(object, method, args);
         }
 
+        // Phase 6 "Channel AOT codegen lowering": `Sender.send/clone` and
+        // `Receiver.recv/try_recv` on a channel-end receiver. `Sender`/
+        // `Receiver` are empty stdlib structs (no impl bodies), so this must
+        // intercept BEFORE the user-impl dispatch below — otherwise the
+        // qualified `Sender.send` lookup misses and the call falls through to
+        // a "no such method" error. The gate is the presence of a
+        // typechecker-recorded `channel_elem_types` entry at this call span:
+        // only `infer_channel_method` populates that table, so an entry is an
+        // unambiguous, scope-stable "this is a channel op" signal (the
+        // `var_type_names` receiver-type lookup is unreliable here — the
+        // statement-hoisting pre-pass binds channel ends then resets
+        // `var_type_names` before this method-call pass runs).
+        if self
+            .channel_elem_types
+            .contains_key(&(call_span.offset, call_span.length))
+        {
+            return self.compile_channel_method(object, method, args, call_span);
+        }
+
         // User impl-block method on a struct receiver: route `obj.method(args)`
         // through the `Type.method` function emitted by the impl-block pass.
         // Requires knowing the object's declared type; the typechecker stashes

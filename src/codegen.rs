@@ -25,6 +25,7 @@ use crate::token::Span;
 mod assoc_call;
 mod call_dispatch;
 mod calls;
+mod channel;
 mod clone_drop;
 mod closures;
 mod collections;
@@ -1540,6 +1541,13 @@ pub(super) struct Codegen<'ctx> {
     /// Codegen's `unwrap` arm uses this to lower the inner type to its
     /// LLVM shape and reconstitute the payload words back to a value.
     pub(crate) method_unwrap_inner_types: HashMap<(usize, usize), TypeExpr>,
+    /// Per-channel-op MethodCall → element `TypeExpr` side-table — populated
+    /// from `Program.channel_elem_types`. Key: `(span.offset, span.length)`
+    /// of the `Sender.send` / `Receiver.recv` / `Receiver.try_recv`
+    /// MethodCall. Value: the channel element `T`. The channel-op arm of
+    /// `compile_method_call` lowers `T` to its LLVM shape to size the
+    /// `karac_runtime_channel_*` transfer and shape the recv out slot.
+    pub(crate) channel_elem_types: HashMap<(usize, usize), TypeExpr>,
     /// Set of `(span.offset, span.length)` keys for every expression whose
     /// Kāra type is `String`. Populated from `Program.string_typed_exprs`
     /// (which the lowering pass derives from `TypeCheckResult.expr_types`).
@@ -3527,6 +3535,68 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // Phase 6 "Channel AOT codegen lowering" — `Channel[T]` runtime FFI.
+        // The type-erased queue lives in `runtime/src/channel.rs` (compiled
+        // into every archive — a queue has no scheduler dependency). Both
+        // channel ends (`Sender`/`Receiver`) lower to the opaque
+        // `*mut KaracChannel` these return/consume. `elem_size` is `u64`
+        // (ABI-identical on wasm32 + native — the `__karac_malloc64` size_t
+        // discipline) and is threaded per send/recv call: the element type is
+        // statically known at each op site (the typed receiver) but NOT at
+        // `Channel.new()`, so `channel_new` itself is type-agnostic.
+        //
+        // `karac_runtime_channel_new() -> ptr` — fresh channel, refcount 2
+        // (the Sender + Receiver of one `Channel.new()`).
+        let channel_new_ty = ptr_type.fn_type(&[], false);
+        module.add_function(
+            "karac_runtime_channel_new",
+            channel_new_ty,
+            Some(Linkage::External),
+        );
+
+        // `karac_runtime_channel_clone(ch: ptr) -> ptr` — backs
+        // `Sender.clone()`: same pointer, refcount++.
+        let channel_clone_ty = ptr_type.fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_channel_clone",
+            channel_clone_ty,
+            Some(Linkage::External),
+        );
+
+        // `karac_runtime_channel_drop(ch: ptr)` — refcount--, free at zero.
+        // Emitted at each channel end's scope exit (`DropChannelEnd`).
+        let channel_drop_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_channel_drop",
+            channel_drop_ty,
+            Some(Linkage::External),
+        );
+
+        // `karac_runtime_channel_send(ch: ptr, val_ptr: ptr, elem_size: u64)`
+        // — copy `elem_size` bytes from `*val_ptr` into the queue.
+        // `Sender.send`.
+        let channel_send_ty = context
+            .void_type()
+            .fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_channel_send",
+            channel_send_ty,
+            Some(Linkage::External),
+        );
+
+        // `karac_runtime_channel_recv(ch: ptr, out_ptr: ptr, elem_size: u64)
+        // -> u8` — pop the front blob into `*out_ptr`; returns 1 on value, 0
+        // on empty (out slot zero-filled). `recv` ignores the discriminant
+        // (result is `T`); `try_recv` builds `Some`/`None` from it.
+        let channel_recv_ty = context
+            .i8_type()
+            .fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_channel_recv",
+            channel_recv_ty,
+            Some(Linkage::External),
+        );
+
         // `karac_runtime_ws_send_text(fd: i32, msg_ptr: *const u8,
         // msg_len: i64) -> i64` — backs the encode + write step
         // inside `WebSocket.send_text`'s codegen lowering. Caller
@@ -4046,6 +4116,7 @@ impl<'ctx> Codegen<'ctx> {
             method_callee_types: HashMap::new(),
             call_effect_subs: crate::ast::CallEffectSubsTable::new(),
             method_unwrap_inner_types: HashMap::new(),
+            channel_elem_types: HashMap::new(),
             string_typed_exprs: HashSet::new(),
             tensor_typed_exprs: HashMap::new(),
             tensor_var_infos: HashMap::new(),
@@ -4819,6 +4890,7 @@ impl<'ctx> Codegen<'ctx> {
         // maps to the inner `TypeExpr`. Read by the codegen `unwrap` arm
         // to know how to reconstitute the payload back to a value of T.
         self.method_unwrap_inner_types = program.method_unwrap_inner_types.clone();
+        self.channel_elem_types = program.channel_elem_types.clone();
 
         // Side-table set by `lowering::lower_program`: each pattern-
         // binding's span maps to its surface type name. Read by
@@ -5337,6 +5409,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_owned_temp_drops = tp.owned_temp_drops.clone();
         let mut t_call_effect_subs = tp.call_effect_subs.clone();
         let mut t_method_unwrap_inner_types = tp.method_unwrap_inner_types.clone();
+        let mut t_channel_elem_types = tp.channel_elem_types.clone();
         let mut t_pattern_binding_types = tp.pattern_binding_types.clone();
         let mut t_pattern_binding_inner_types = tp.pattern_binding_inner_types.clone();
         let mut t_pattern_binding_borrow_modes = tp.pattern_binding_borrow_modes.clone();
@@ -5361,6 +5434,7 @@ impl<'ctx> Codegen<'ctx> {
                     &mut self.method_unwrap_inner_types,
                     &mut t_method_unwrap_inner_types,
                 );
+                std::mem::swap(&mut self.channel_elem_types, &mut t_channel_elem_types);
                 std::mem::swap(
                     &mut self.pattern_binding_types,
                     &mut t_pattern_binding_types,

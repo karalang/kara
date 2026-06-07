@@ -1269,6 +1269,18 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Phase 6 "Channel AOT codegen lowering": register a channel-end
+    /// (`Sender`/`Receiver`) binding for scope-exit refcount drop. Pushed
+    /// from `bind_pattern`'s `Binding` arm when the typechecker's
+    /// `pattern_binding_types` records the binding's surface type as
+    /// `Sender`/`Receiver`. The drain emits
+    /// `karac_runtime_channel_drop(load(chan_alloca))`.
+    pub(super) fn track_channel_var(&mut self, chan_alloca: PointerValue<'ctx>) {
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::DropChannelEnd { chan_alloca });
+        }
+    }
+
     /// Phase 7.2 Slice DP — resolve a let-binding's surface enum name
     /// from the let-statement's annotation and RHS shape, for the
     /// `track_enum_var` registration site. Tries in order:
@@ -2404,6 +2416,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     .expect("karac_runtime_file_close declared in Codegen::new");
                 self.builder
                     .build_call(close_fn, &[handle.into()], "")
+                    .unwrap();
+            }
+            // Phase 6 "Channel AOT codegen lowering" — refcount-drop a
+            // channel end at scope exit. Load the shared `*mut KaracChannel`
+            // and hand it to `karac_runtime_channel_drop`, which decrements
+            // the refcount and frees the queue at zero. Null-handle is a
+            // no-op runtime-side.
+            CleanupAction::DropChannelEnd { chan_alloca } => {
+                let handle = self
+                    .builder
+                    .build_load(ptr_ty, *chan_alloca, "cleanup.chan.handle")
+                    .unwrap()
+                    .into_pointer_value();
+                let drop_fn = self
+                    .module
+                    .get_function("karac_runtime_channel_drop")
+                    .expect("karac_runtime_channel_drop declared in Codegen::new");
+                self.builder
+                    .build_call(drop_fn, &[handle.into()], "")
                     .unwrap();
             }
             // Phase 7.2 Slice DP — invoke the per-enum drop

@@ -842,6 +842,12 @@ pub struct TypeCheckResult {
     /// there does not apply here because we record the inner *element*
     /// type, not the receiver's whole type.
     pub method_unwrap_inner_types: HashMap<SpanKey, TypeExpr>,
+    /// Channel-op element types: span of a `Sender.send` / `Receiver.recv` /
+    /// `Receiver.try_recv` MethodCall → the channel element `T` `TypeExpr`.
+    /// Same key shape / no-collision rationale as `method_unwrap_inner_types`
+    /// (records the element type, not the receiver's whole type). Drives
+    /// codegen's `karac_runtime_channel_*` `elem_size` + out-slot shape.
+    pub channel_elem_types: HashMap<SpanKey, TypeExpr>,
     /// Bare-call dispatch resolutions: span of a `Call(Identifier(name))` →
     /// resolved target type name (e.g. `"Wrapper"`). Populated when expected-
     /// type inference resolves a bare associated-function call to a concrete
@@ -1075,6 +1081,10 @@ pub struct TypeChecker<'a> {
     /// dispatch. See the public copy on `TypeCheckResult` for the full
     /// rationale.
     pub(super) method_unwrap_inner_types: HashMap<SpanKey, TypeExpr>,
+    /// MethodCall span → channel element `TypeExpr` for `Sender.send` /
+    /// `Receiver.recv` / `Receiver.try_recv`. See the public copy on
+    /// `TypeCheckResult` for the full rationale.
+    pub(super) channel_elem_types: HashMap<SpanKey, TypeExpr>,
     /// User-declared `effect resource` names → optional provider trait
     /// (`effect resource Store: KvStore;` → `Some("KvStore")`; bare
     /// `effect resource Store;` → `None`). Populated from
@@ -1254,6 +1264,7 @@ impl<'a> TypeChecker<'a> {
             method_callee_types: HashMap::new(),
             impl_trait_captures: HashMap::new(),
             method_unwrap_inner_types: HashMap::new(),
+            channel_elem_types: HashMap::new(),
             user_effect_resources: HashMap::new(),
             user_resource_override_types: HashMap::new(),
             bare_assoc_fn_targets: HashMap::new(),
@@ -1388,6 +1399,7 @@ impl<'a> TypeChecker<'a> {
             method_callee_types: self.method_callee_types,
             impl_trait_captures: self.impl_trait_captures,
             method_unwrap_inner_types: self.method_unwrap_inner_types,
+            channel_elem_types: self.channel_elem_types,
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,
             path_call_method_dispatch: self.path_call_method_dispatch,
             call_type_subs: self.call_type_subs,

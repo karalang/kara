@@ -256,6 +256,17 @@ pub type MethodCalleeTypesTable = std::collections::HashMap<(usize, usize), Stri
 pub type MethodUnwrapInnerTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
 /// Side-table populated by the lowering pass from the typechecker's
+/// `channel_elem_types` map. Maps each `Sender.send` / `Receiver.recv` /
+/// `Receiver.try_recv` `MethodCall` expression's span to the channel
+/// element `T` `TypeExpr`. Codegen consults it in the channel-op arm of
+/// `compile_method_call` to size the type-erased `karac_runtime_channel_*`
+/// transfer (`elem_size`) and to shape the `recv`/`try_recv` out slot. The
+/// element type is statically known at each op site (the typed receiver)
+/// but NOT at `Channel.new()`, so it travels per call site, not on the
+/// channel handle.
+pub type ChannelElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
+/// Side-table populated by the lowering pass from the typechecker's
 /// `pattern_binding_types` map. Maps each pattern-binding's span (offset,
 /// length) to the canonical surface type name (e.g. `"MyError"`). Used by
 /// codegen at match-arm bind sites: when binding a tuple-variant payload
@@ -446,6 +457,10 @@ pub struct Program {
     /// Set by the lowering pass from
     /// `TypeCheckResult.method_unwrap_inner_types`; empty otherwise.
     pub method_unwrap_inner_types: MethodUnwrapInnerTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.channel_elem_types`;
+    /// empty otherwise. Channel-op element types for codegen's
+    /// `karac_runtime_channel_*` lowering.
+    pub channel_elem_types: ChannelElemTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.pattern_binding_types`.
     pub pattern_binding_types: PatternBindingTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.pattern_binding_inner_types`.

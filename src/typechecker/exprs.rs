@@ -64,6 +64,31 @@ impl<'a> super::TypeChecker<'a> {
                             self.record_expr_type(&expr.span, expected);
                             return expected.clone();
                         }
+                        // `Channel.new()` at an annotated check-mode position
+                        // (`let (tx, rx): (Sender[i64], Receiver[i64]) =
+                        // Channel.new();`). Its synth-mode return is
+                        // `(Sender[?T], Receiver[?T])`; the fresh typevar
+                        // nested inside the tuple's `Named` args doesn't unify
+                        // against the declared element type through
+                        // `types_compatible`, which rejects with "expected
+                        // (Sender<i64>, Receiver<i64>), found (Sender<?T0>,
+                        // Receiver<?T0>)". Adopt the expected tuple directly
+                        // when it is the `(Sender[T], Receiver[T])` shape —
+                        // the same recovery the collection constructors above
+                        // get. (Unannotated `let (tx, rx) = Channel.new();`
+                        // takes the synth path and pins `?T` from a downstream
+                        // `tx.send(x)` / `rx.recv()` instead.)
+                        if collection == "Channel" {
+                            if let Type::Tuple(elems) = expected {
+                                let is_channel_pair = elems.len() == 2
+                                    && matches!(&elems[0], Type::Named { name, .. } if name == "Sender")
+                                    && matches!(&elems[1], Type::Named { name, .. } if name == "Receiver");
+                                if is_channel_pair {
+                                    self.record_expr_type(&expr.span, expected);
+                                    return expected.clone();
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -2905,6 +2905,22 @@ impl<'ctx> super::Codegen<'ctx> {
                         ty: val.get_type(),
                     },
                 );
+                // Phase 6 "Channel AOT codegen lowering": register a channel
+                // end (`Sender`/`Receiver`) bound here for scope-exit refcount
+                // drop. Keyed off the typechecker's `pattern_binding_types`
+                // (span-stable — unlike `var_type_names`, which the
+                // statement-hoisting pre-pass resets), so it fires for both
+                // the `let (tx, rx) = Channel.new()` destructure and the
+                // single-binding `let tx2 = tx.clone()` (both funnel through
+                // this arm). The matching `karac_runtime_channel_new` returns
+                // refcount 2 and `clone` increments, so one drop per binding
+                // balances the channel's lifetime to zero.
+                let key = (pattern.span.offset, pattern.span.length);
+                if let Some(surface) = self.pattern_binding_types.get(&key) {
+                    if surface == "Sender" || surface == "Receiver" {
+                        self.track_channel_var(alloca);
+                    }
+                }
                 Ok(())
             }
             PatternKind::Wildcard => Ok(()),

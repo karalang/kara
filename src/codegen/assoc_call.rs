@@ -75,6 +75,44 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(result.into());
         }
 
+        // Phase 6 "Channel AOT codegen lowering": `Channel.new()` — allocate
+        // a runtime channel (refcount 2) and return it as the `(Sender[T],
+        // Receiver[T])` tuple. Both ends carry the *same* opaque pointer
+        // (mirroring the interpreter's `Arc::clone` of one queue); the
+        // refcount-2 from `channel_new` accounts for the two scope-exit
+        // `DropChannelEnd` cleanups the destructured `tx`/`rx` bindings emit.
+        // Element type erases here — it travels per send/recv call — so this
+        // path needs no generic-arg info.
+        if type_name == "Channel" && method == "new" && _args.is_empty() {
+            let new_fn = self
+                .module
+                .get_function("karac_runtime_channel_new")
+                .expect("karac_runtime_channel_new declared in Codegen::new");
+            let call = self
+                .builder
+                .build_call(new_fn, &[], "__channel_new")
+                .unwrap();
+            let ch_ptr = call
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let tuple_ty = self
+                .context
+                .struct_type(&[ptr_ty.into(), ptr_ty.into()], false);
+            let undef = tuple_ty.get_undef();
+            let with_sender = self
+                .builder
+                .build_insert_value(undef, ch_ptr, 0, "channel.sender")
+                .unwrap();
+            let pair = self
+                .builder
+                .build_insert_value(with_sender, ch_ptr, 1, "channel.pair")
+                .unwrap()
+                .into_struct_value();
+            return Ok(pair.into());
+        }
+
         // Numeric primitive From: `T.from(x)` for integer/float widening.
         // Codegen currently represents all ints as LLVM i64 and floats as
         // f64, so widening is a passthrough at this layer. When narrower

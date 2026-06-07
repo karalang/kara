@@ -32,6 +32,7 @@
 //! 4. **Crash-report `parallel_context` field** — co-developed with these
 //!    globals, lands with `std.panic` (separate Phase 8 entry).
 
+mod channel;
 mod clone;
 mod emutls;
 #[cfg(feature = "net")]
@@ -114,6 +115,16 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         map::karac_map_iter_free,
         map::karac_map_entry,
         map::karac_map_lookup_slot,
+    );
+    // Channel runtime (`runtime/src/channel.rs`). Without these the LLJIT
+    // path's `dlsym` symbol-search generator can't resolve `Channel.new()` /
+    // `Sender.send` / `Receiver.recv` call sites.
+    keep!(
+        channel::karac_runtime_channel_new,
+        channel::karac_runtime_channel_clone,
+        channel::karac_runtime_channel_drop,
+        channel::karac_runtime_channel_send,
+        channel::karac_runtime_channel_recv,
     );
     // String + comparison runtime (`runtime/src/clone.rs` + this file).
     keep!(
