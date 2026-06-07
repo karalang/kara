@@ -1,20 +1,30 @@
 # Design spike — general owned-temp tracking (codegen)
 
-**Status:** **slices 1–2 landed 2026-06-06/07**. Slice 1: chokepoint +
+**Status:** **slices 1–3 + 5 landed 2026-06-06/07**. Slice 1: chokepoint +
 statement-position discard (Vec/String). Slice 2 part A: the lowering-pass
 `owned_temp_drops` hint table + Map/Set-handle and shared-struct RC-box discard +
 Vec element-type closing (nested-heap leak). Slice 2 part B: the `ref_rvalue_arg`
 call-arg path migrated onto the owned-temp classification (Vec element closing +
 Map-handle cleanup). Slice 3: method-chain receiver temps for the Vec/String
-`len`/`is_empty` fast path (the canonical `make_vec().len()` leak). Slice 3b
-(element-type-aware `get`/`first`/`contains` on temp receivers) **attempted
-2026-06-07 and reverted** — blocked on a `MethodCall.span == receiver.span`
-collision that needs a typechecker-recorded receiver-element-type table (see
-slice 3b note below); slices 3b/4–6 not started. This doc scopes the work and is
-the
+`len`/`is_empty` fast path (the canonical `make_vec().len()` leak). Slice 5: the
+tail-expr temp leak — a fresh owned temp in the tail of a *discarded* block
+(`{ make() }` / `let _ = { make() };`) routed through the chokepoint via the new
+`discarded_owned_temp_tail` block-peel helper (closes the phase-6 line-497
+carve-out). Slice 3b (element-type-aware `get`/`first`/`contains` on temp
+receivers) **attempted 2026-06-07 and reverted** — blocked on a
+`MethodCall.span == receiver.span` collision that needs a typechecker-recorded
+receiver-element-type table (see slice 3b note below). **Slice 4 (scrutinee
+sub-frame) is NOT cleanly landable on the chokepoint** (finding 2026-06-07,
+IR-probed): every realizable `if let`/`while let`/`let…else` scrutinee is an
+`Option`/`Result`/enum carrying heap in a *payload*, so dropping it needs
+recursive payload drop — the **same machinery as [the pattern-arm unbound-field
+drop](pattern-arm-unbound-field-drop.md) (B)**, not chokepoint routing — and the
+guard-style scrutinee additionally needs slice 3b. Sequence slice 4 *after* B (or
+fold the wholesale-drop case into B's mechanism); it is not a bounded
+chokepoint slice. Slice 6 not started. This doc scopes the work and is the
 designated *unblocker* for the phase-6 line-489 remainder (scrutinee-temp drop
-scope) and the phase-6 line-497 tail-expr leak carve-out — both blocked on the
-gap here.
+scope) and the phase-6 line-497 tail-expr leak carve-out — the latter now closed
+by slice 5.
 
 **Scope decision (2026-06-06):** build the `materialize_owned_temp` chokepoint +
 slice 1 for its standalone architectural value (it stops the special-case
@@ -316,29 +326,69 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    bounded, ASAN-gated slice; none blocks slices 4–6 (the scrutinee/tail/drop-
    order payoff needs the receiver-temp mechanism this slice establishes, which
    `materialize_owned_temp` now provides).
-4. **Scrutinee sub-frame (= line-489 slice 3).** Dedicated scrutinee frame in
-   if-let/while-let/let-else; drain on miss-before-else, hit-at-arm-exit,
-   per-iteration. **Gate to the wholesale-drop case** — a scrutinee whose
-   bindings are all borrows / non-heap (nothing moved out of the temp), so the
-   whole temp drops as one unit and partial-drop is never needed. The
-   *moved-out* case (free unbound heap fields while not double-freeing bound
-   ones) is a **separate mechanism** tracked in
-   [`pattern-arm-unbound-field-drop.md`](pattern-arm-unbound-field-drop.md) — an
-   IR-proven leak (`if let Full(_, n) = make()` leaks the unbound `Vec` field).
-   Keeping slice 4 gated to wholesale-drop is what keeps the two cleanly
-   separable. **Prerequisite (slice 3b):** the guard-style scrutinee
-   (`mu.lock().get(k)`) needs borrow-returning receiver methods to dispatch on
-   *temp* receivers — deferred 3b work — before a scrutinee temp that lives
-   through the arm even compiles. Tests:
+4. **Scrutinee sub-frame (= line-489 slice 3). — BLOCKED on B's recursive
+   payload-drop machinery (finding 2026-06-07, IR-probed).** Dedicated scrutinee
+   frame in if-let/while-let/let-else; drain on miss-before-else,
+   hit-at-arm-exit, per-iteration. **Gate to the wholesale-drop case** — a
+   scrutinee whose bindings are all borrows / non-heap (nothing moved out of the
+   temp), so the whole temp drops as one unit and partial-drop is never needed.
+   **Why this is not a bounded chokepoint slice:** an IR probe on `main` showed
+   that every *realizable* scrutinee is an `Option`/`Result`/enum carrying heap
+   in a *payload* (`if let Holder.Empty = make()` where `make() -> Holder` has a
+   `Full(Vec[i64])` variant leaks the Vec on the else edge; `Option[Vec[i64]]`
+   likewise). Those are **not chokepoint-routable** — `materialize_owned_temp`
+   handles only top-level Vec/String/Map/Set/RC, and the scrutinee flows as an
+   SSA aggregate (`owned_tmp=0` in the probe). Dropping it needs **recursive
+   payload drop of an enum/struct value**, which is exactly the mechanism in
+   [`pattern-arm-unbound-field-drop.md`](pattern-arm-unbound-field-drop.md) (B):
+   B frees the *unbound* heap fields on the hit path; slice-4 wholesale frees
+   *all* fields on the miss/exit path. Both need "given an owned aggregate, free
+   its heap-bearing fields (optionally minus the bound ones)." **So sequence
+   slice 4 after B** (or fold the wholesale case into B's recursive-drop
+   helper) — it is not separable from B as originally hoped. The *moved-out*
+   case is B itself — an IR-proven leak (`if let Full(_, n) = make()` leaks the
+   unbound `Vec` field). **Additional prerequisite (slice 3b):** the guard-style
+   scrutinee (`mu.lock().get(k)`) needs borrow-returning receiver methods to
+   dispatch on *temp* receivers — deferred 3b work — before a scrutinee temp
+   that lives through the arm even compiles. Tests:
    `asan_if_let_scrutinee_temp_freed_on_miss` + `_on_hit_at_arm_exit`,
    `asan_while_let_scrutinee_temp_freed_per_iteration`,
    `asan_let_else_scrutinee_temp_freed_before_else`. **Interpreter parity:** the
    tree-walk interpreter is Arc-refcounted so it does not leak, but add matching
    `tests/interpreter.rs` drop-observation tests once slice 6 lands a Drop type.
-5. **Tail-expr temp drop (= closes line-497 carve-out).** Route block tail
-   temps through the chokepoint. Verify the existing LIFO order is preserved
-   (`test_ir_*` ordering assertion) and the leak closes
-   (`asan_tail_expr_temp_freed`).
+5. **Tail-expr temp drop (= closes line-497 carve-out). — DONE.** A fresh owned
+   temp produced in the tail of a *discarded* block (`{ make() }` in statement
+   position, or `let _ = { make() };`) is the block's return value: the block's
+   own frame (`compile_block_with_frame`) drops only its block-local lets, so
+   the escaping tail temp was never freed (IR-probed on `main`: `{ make() }`
+   emitted `%call = call @make()` with no `free`). **What landed:** a new
+   `discarded_owned_temp_tail` helper (`src/codegen/stmts.rs`) peels
+   *single-tail* block wrappers (`Block` / `Seq` / `Unsafe` / `LabeledBlock`)
+   down to the tail `Expr` a discarded value originates from, returning it iff
+   it yields a fresh owned temp. Two discard sites consume it: (a) the
+   `StmtKind::Expr` discard arm now sees through block wrappers (the
+   `compile_expr` value IS the block's tail value; the chokepoint is keyed on
+   the *tail* expr's span so element/Map/RC hint-table lookups resolve), and
+   (b) a new early `StmtKind::Let { Wildcard, .. }` arm routes `let _ = …`
+   discards through the same path (`pending_map_insert_old_dec` is set above the
+   `match` and consumed inside `compile_expr`, so the `let _ = m.insert(k,v)`
+   displaced-value dec is untouched; the chokepoint no-ops on the returned
+   `Option`). **Branching tails excluded** (`if`/`match` in discard position):
+   an aliasing place-expr branch would double-free, so they stay a safe leak
+   for a later slice (pinned by `test_ir_discarded_branching_tail_temp_not_tracked`).
+   **Drop *order* (tail temp vs the block's own locals) is a slice-6 concern** —
+   the tail temp drops in the discard arm's one-shot frame *after* the block
+   frame drained its locals, the reverse of the spec's single-frame LIFO; that
+   is unobservable without a user-`Drop` type (slice 6) and leak/UAF-clean
+   either way. Tests: `test_ir_discarded_block_tail_temp_freed`,
+   `test_ir_let_wildcard_block_tail_temp_freed`,
+   `test_ir_discarded_branching_tail_temp_not_tracked` (codegen.rs);
+   `asan_discarded_block_tail_temp_freed` (Vec[String] nested-elem free),
+   `asan_let_wildcard_block_tail_temp_freed` (Map handle via wildcard-let),
+   `asan_discarded_block_tail_temp_with_block_local_no_double_free`
+   (block-local + tail temp each freed once). Gates green: fmt, clippy
+   `--all --all-targets --features llvm`, codegen + memory_sanitizer
+   (`--features llvm`), full non-llvm suite.
 6. **Drop-order *observation* (= line-489 slice 4).** Add a user-`Drop` type (a
    minimal instrumented destructor type, or the `MutexGuard` shape if cheap) so
    the canonical `mu.lock().get(k)` drop-*order* tests from the spec test plan

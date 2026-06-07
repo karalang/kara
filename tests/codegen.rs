@@ -9352,6 +9352,102 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_discarded_block_tail_temp_freed() {
+        // Slice 5 (tail-expr temp drop): a fresh `Vec` produced in the tail
+        // of a statement-position block (`{ make_vec() }`) is the block's
+        // return value — its frame drops only block-local lets, so the tail
+        // Vec escaped uncleaned and leaked. `discarded_owned_temp_tail` now
+        // peels the block to its `make_vec()` tail, and the discard arm
+        // routes it through `materialize_owned_temp` (keyed on the *tail*
+        // expr's span). Archive-independent (macOS ASAN has no LeakSanitizer).
+        let src = r#"
+fn make_vec() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    return v;
+}
+
+fn main() {
+    { make_vec() }
+    println(0);
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__owned_tmp"),
+            "expected the block-tail Vec temp materialized into __owned_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.free"),
+            "expected a FreeVecBuffer drain for the discarded block-tail temp; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_let_wildcard_block_tail_temp_freed() {
+        // Slice 5: `let _ = { make_vec() };` discards the block's tail temp
+        // through the wildcard-`let` path. The early Wildcard arm routes the
+        // peeled tail (`make_vec()`) through the chokepoint. The hint table is
+        // keyed on the tail call's span, so a `Vec[String]` would recover its
+        // element type — here a `Vec[i64]` only needs the outer-buffer free.
+        let src = r#"
+fn make_vec() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    return v;
+}
+
+fn main() {
+    let _ = { make_vec() };
+    println(0);
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__owned_tmp"),
+            "expected the wildcard-let block-tail Vec temp materialized; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.free"),
+            "expected a FreeVecBuffer drain for the wildcard-let discarded temp; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_discarded_branching_tail_temp_not_tracked() {
+        // Negative / double-free guard: slice 5 peels only *single-tail* block
+        // wrappers. A branching tail (`if … { make() } else { other }`) in
+        // discard position is conservatively NOT routed through the chokepoint
+        // — an aliasing place-expr branch would be double-freed. Construction
+        // uses no other fresh-temp discard, so the absence of `__owned_tmp`
+        // proves the branching tail stayed untracked (a safe leak, deferred).
+        let src = r#"
+fn make_vec() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    return v;
+}
+
+fn main() {
+    let cond = true;
+    { if cond { make_vec() } else { make_vec() } }
+    println(0);
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            !ir.contains("__owned_tmp"),
+            "a branching discard tail must stay untracked in slice 5 \
+             (single-tail wrappers only); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_let_else_emits_branch_not_noop() {
         // phase-6-runtime.md line 489: `let … else` lowers to a real branch
         // (match edge binds + falls through, else edge diverges). Regression

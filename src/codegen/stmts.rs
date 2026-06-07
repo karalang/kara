@@ -971,6 +971,32 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         match &stmt.kind {
+            // Slice 5 (general owned-temp tracking): `let _ = make();` /
+            // `let _ = { make() };` discards a fresh owned temp with no
+            // binding to drop it, so its heap buffer would leak. Route the
+            // discarded tail through the owned-temp chokepoint inside a
+            // one-shot frame so it drops at the `;`. Gated to a Wildcard
+            // pattern whose RHS tail yields a fresh owned temp — every other
+            // `let` shape (real bindings, f-string RHS, `let _ = <place>`)
+            // falls through to the general arm unchanged. `pending_map_insert_
+            // old_dec` for the `let _ = m.insert(k, v)` shape was already set
+            // above the `match` and is consumed inside `compile_expr`; the
+            // chokepoint no-ops on the returned `Option`, so the displaced-
+            // value rc_dec path is untouched.
+            StmtKind::Let { pattern, value, .. }
+                if matches!(&pattern.kind, PatternKind::Wildcard)
+                    && Self::discarded_owned_temp_tail(value).is_some() =>
+            {
+                let tail = Self::discarded_owned_temp_tail(value)
+                    .expect("guard guarantees a discarded owned-temp tail");
+                let tail_key = (tail.span.offset, tail.span.length);
+                self.scope_cleanup_actions.push(Vec::new());
+                let val = self.compile_expr(value)?;
+                self.free_discarded_request_builder_temp(value, val);
+                self.materialize_owned_temp(val, tail_key);
+                self.drain_top_frame_with_emit();
+                Ok(())
+            }
             StmtKind::Let {
                 pattern, value, ty, ..
             } => {
@@ -2276,8 +2302,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // RC boxes via the `owned_temp_drops` hint table keyed on the
                 // expression span. When the gate is false the arm behaves
                 // exactly as before.
-                let track_temp = Self::expr_yields_fresh_owned_temp(expr);
-                if track_temp {
+                // Slice 5 extends the gate through single-tail block wrappers:
+                // `{ make() }` in statement position discards the block's tail
+                // temp (the block returns it; its frame drops only the block-
+                // local lets), so route that tail through the chokepoint too.
+                // `compile_expr(expr)` returns the block's tail value, and the
+                // hint table is keyed on the *tail* expr's span (not the
+                // block's), so element/Map/RC types resolve correctly. Direct
+                // `make();` is the degenerate tail == expr case — unchanged.
+                let tail = Self::discarded_owned_temp_tail(expr);
+                if tail.is_some() {
                     self.scope_cleanup_actions.push(Vec::new());
                 }
                 let val = self.compile_expr(expr)?;
@@ -2286,8 +2320,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // abandoned HTTP_BUILDERS handle (no-op for non-builder /
                 // already-sent chains).
                 self.free_discarded_request_builder_temp(expr, val);
-                if track_temp {
-                    self.materialize_owned_temp(val, (expr.span.offset, expr.span.length));
+                if let Some(tail) = tail {
+                    self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
                     self.drain_top_frame_with_emit();
                 }
                 Ok(())
@@ -3282,6 +3316,37 @@ impl<'ctx> super::Codegen<'ctx> {
             &expr.kind,
             ExprKind::Call { .. } | ExprKind::MethodCall { .. }
         )
+    }
+
+    /// General owned-temp tracking, slice 5 (see
+    /// `docs/spikes/general-owned-temp-tracking.md`): peel single-tail block
+    /// wrappers (`{ … make() }`, `unsafe { … }`, a labeled block) down to the
+    /// tail expression a *discarded* value actually originates from, so a
+    /// fresh owned temp produced in a block tail position — `{ make() }` in
+    /// statement position, or `let _ = { make() };` — routes through the
+    /// owned-temp chokepoint at the discard site instead of leaking. Returns
+    /// the tail `Expr` (whose span keys the `owned_temp_drops` hint table)
+    /// iff it yields a fresh owned temp; `None` leaves the value untracked,
+    /// exactly as before.
+    ///
+    /// Only *single-tail* wrappers are peeled. Branching tails (`if` / `match`
+    /// in tail position) are deliberately excluded: a branch whose tail is a
+    /// *place* expression (an aliased binding) would be double-freed against
+    /// its own cleanup, so discarded branching tails stay a (safe) leak for a
+    /// later slice. Phi-merged fresh-temp branches are the only thing lost by
+    /// this conservatism, and they are rare in discard position.
+    pub(super) fn discarded_owned_temp_tail(expr: &Expr) -> Option<&Expr> {
+        match &expr.kind {
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. } => Some(expr),
+            ExprKind::Block(block)
+            | ExprKind::Seq(block)
+            | ExprKind::Unsafe(block)
+            | ExprKind::LabeledBlock { body: block, .. } => block
+                .final_expr
+                .as_deref()
+                .and_then(Self::discarded_owned_temp_tail),
+            _ => None,
+        }
     }
 
     /// Phase-8 line 39 follow-up — does `expr` evaluate to a live

@@ -2840,6 +2840,116 @@ fn main() {
         );
     }
 
+    // ── general owned-temp tracking, slice 5 (phase-6 line 497) ──
+    //
+    // docs/spikes/general-owned-temp-tracking.md slice 5 closes the
+    // *tail-expr temp leak*: a fresh owned temp produced in the tail of a
+    // *discarded* block (`{ make() }` in statement position, or
+    // `let _ = { make() };`) is the block's return value — its own frame
+    // drops only the block-local lets, so the escaping tail temp was never
+    // freed. `discarded_owned_temp_tail` peels the single-tail block wrapper
+    // and routes the tail through the owned-temp chokepoint. On Linux the
+    // unfreed buffer is the LeakSanitizer oracle; on macOS (no LSan) the
+    // repeated discard in a loop is a *double-free* gate — a tail temp freed
+    // against a buffer some other cleanup also owns would fault under ASAN.
+
+    #[test]
+    fn asan_discarded_block_tail_temp_freed() {
+        // `{ make_vv() }` in statement position. `Vec[String]` so the
+        // *nested* element buffers must also free (the element TypeExpr flows
+        // from `owned_temp_drops` keyed on the peeled tail call's span); an
+        // elem_ty: None regression would leak the inner Strings on Linux.
+        // 8-iteration loop amplifies any per-iteration imbalance into a
+        // deterministic macOS fault.
+        assert_clean_asan_run(
+            r#"
+fn make_vv() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alpha");
+    v.push("beta");
+    return v;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 8 {
+        { make_vv() }
+        i = i + 1;
+    }
+    println(i);
+}
+"#,
+            &["8"],
+            "discarded_block_tail_temp_freed",
+        );
+    }
+
+    #[test]
+    fn asan_let_wildcard_block_tail_temp_freed() {
+        // `let _ = { make_map() };` — wildcard-let discard of a block-tail
+        // Map handle. Routes through the early Wildcard arm; the chokepoint
+        // recognizes the `Map[K,V]` TypeExpr (hint table) and queues a
+        // `karac_map_free` against the peeled tail. Looped to turn any
+        // double-free of the map handle into a macOS fault.
+        assert_clean_asan_run(
+            r#"
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 2_i64);
+    return m;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 8 {
+        let _ = { make_map() };
+        i = i + 1;
+    }
+    println(i);
+}
+"#,
+            &["8"],
+            "let_wildcard_block_tail_temp_freed",
+        );
+    }
+
+    #[test]
+    fn asan_discarded_block_tail_temp_with_block_local_no_double_free() {
+        // The block carries BOTH a heap-local `let` (`local`, dropped by the
+        // block's own frame at block exit) AND a fresh-owned tail temp
+        // (`make_vv()`, dropped by the discard arm's one-shot frame). Each
+        // must free exactly once — a regression that materialized the tail
+        // against the block-local's slot, or double-counted, would double-free
+        // under macOS ASAN. (Drop *order* — tail before local — is a slice-6
+        // observation concern and not asserted here; this pins leak/UAF
+        // cleanliness only.)
+        assert_clean_asan_run(
+            r#"
+fn make_vv() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("x");
+    return v;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 8 {
+        {
+            let mut local: Vec[String] = Vec.new();
+            local.push("y");
+            println(local.len());
+            make_vv()
+        }
+        i = i + 1;
+    }
+    println(i);
+}
+"#,
+            &["1", "1", "1", "1", "1", "1", "1", "1", "8"],
+            "discarded_block_tail_temp_with_block_local_no_double_free",
+        );
+    }
+
     // ── general owned-temp tracking, slice 1 (phase-6 line 489/497) ──
     //
     // docs/spikes/general-owned-temp-tracking.md slice 1: a fresh-owned
