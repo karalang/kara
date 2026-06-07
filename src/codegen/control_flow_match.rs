@@ -963,6 +963,33 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        // Oversized boxed payload (see `coerce_to_payload_words`): when
+        // `T`'s LLVM word count exceeds the payload words we were handed,
+        // the pack side heap-boxed it and stored the box pointer in word
+        // 0. `inttoptr` it, load `T` back, and re-decompose into its true
+        // words so every reconstruction branch below runs identically to
+        // the inline path. The predicate `want > field_words.len()` is the
+        // unpack mirror of pack's `out.len() > num_words`; pre-boxing,
+        // oversized payloads errored at pack and never reached here, so a
+        // `want` over the area unambiguously means boxed.
+        let want = self.pattern_payload_word_count(sub_pat);
+        let deboxed_words;
+        let field_words: &[inkwell::values::IntValue<'ctx>] =
+            if want > field_words.len() && !field_words.is_empty() {
+                let whole_ty = self.pattern_payload_llvm_type(sub_pat);
+                let box_ptr = self
+                    .builder
+                    .build_int_to_ptr(field_words[0], ptr_ty, "enumbox.p")
+                    .unwrap();
+                let loaded = self
+                    .builder
+                    .build_load(whole_ty, box_ptr, "enumbox.ld")
+                    .unwrap();
+                deboxed_words = self.coerce_to_payload_words(loaded, want)?;
+                deboxed_words.as_slice()
+            } else {
+                field_words
+            };
         // Tuple sub-pattern: walk per-element, reconstruct each into its
         // own LLVM aggregate (or single word for primitive elements),
         // then pack into a tuple struct value. The element word counts

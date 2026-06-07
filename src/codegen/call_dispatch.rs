@@ -1842,19 +1842,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// under-shoot — a primitive into Option's 3-word area, or a
     /// conservative `payload_word_count_for_type_expr` over-estimate).
     ///
-    /// If it is **larger** the function fails loud with
-    /// `E_ENUM_PAYLOAD_OVERSIZED` rather than silently dropping the
-    /// overflow words. A seeded enum (`Option` = 3 payload words,
-    /// `Result` = 5) has a fixed payload area; packing a struct / tuple
-    /// wider than that — which `Vec.pop()` / `Map.get()` / a
-    /// `-> Option[Wide]` return all route through here — used to truncate
-    /// and hand back garbage for the dropped fields (read: a silent
-    /// miscompile). The hard error is the stop-gap until native
-    /// oversized-payload support lands; see
+    /// If it is **larger** the value is **heap-boxed**: `T` is malloc'd,
+    /// stored, and the box pointer occupies word 0 (the rest of the area
+    /// stays zero). A seeded enum (`Option` = 3 payload words, `Result` =
+    /// 5) has a fixed payload area; a struct / tuple wider than that —
+    /// which `Vec.pop()` / `Map.get()` / a `-> Option[Wide]` return all
+    /// route through here — used to truncate and hand back garbage (a
+    /// silent miscompile), then briefly errored (`E_ENUM_PAYLOAD_OVERSIZED`),
+    /// and is now boxed natively. The unpack and drop sites recompute the
+    /// same `llvm_type_word_count(T) > area` predicate and `inttoptr` word
+    /// 0 to load / free `T`; the decision is a pure function of the static
+    /// type so all sites stay coherent. See
     /// `docs/spikes/oversized-enum-payload.md`. Genuine nested *enum*
-    /// payloads are rejected earlier by the typechecker's
-    /// `E_ENUM_NESTED_ENUM_PAYLOAD`, so this guard's live surface is
-    /// oversized struct / tuple payloads.
+    /// payloads are still rejected earlier by the typechecker's
+    /// `E_ENUM_NESTED_ENUM_PAYLOAD`, so the boxed surface is oversized
+    /// struct / tuple payloads.
     pub(super) fn coerce_to_payload_words(
         &self,
         val: BasicValueEnum<'ctx>,
@@ -1915,27 +1917,53 @@ impl<'ctx> super::Codegen<'ctx> {
                 out.push(self.coerce_to_i64(val)?);
             }
         }
-        // Fail loud on over-shoot: silently dropping the overflow words
-        // is a miscompile (the dropped fields read back as garbage). See
-        // the doc comment above for the design context + remedy.
+        // Oversized payload: heap-box the value and store the box pointer
+        // in word 0 (the rest of the area stays zero). A seeded enum
+        // (`Option` = 3 payload words, `Result` = 5) has a fixed area; a
+        // struct / tuple `T` wider than it — which `Vec.pop()` /
+        // `Map.get()` / a `-> Option[Wide]` return all route through here
+        // — cannot be inlined. Boxing keeps the common small payload
+        // byte-identical and confines the heap indirection to the wide
+        // case. The unpack (`reconstruct_payload_value`,
+        // `rebuild_value_from_payload_words`) and drop sites recompute the
+        // SAME `llvm_type_word_count(T) > area` predicate — here it is
+        // `out.len() > num_words` — and `inttoptr` word 0 to load / free
+        // `T`. The decision is a pure function of the static type, so all
+        // sites stay coherent by construction. See
+        // docs/spikes/oversized-enum-payload.md.
+        let i64_t = self.context.i64_type();
         if out.len() > num_words {
-            return Err(format!(
-                "error[E_ENUM_PAYLOAD_OVERSIZED]: enum payload value occupies {} words but \
-                 the variant's payload area is only {} words — the extra {} word(s) would be \
-                 silently dropped (a miscompile). This typically comes from `Option[T]` / \
-                 `Result[T, _]` (or a collection op such as `Vec.pop()` / `Map.get()` returning \
-                 one) where `T` is a struct or tuple wider than the payload area (`Option` holds \
-                 3 words, `Result` 5). Workarounds: make `T` a `shared struct` / `shared enum` \
-                 (stored as a 1-word RC pointer), reduce `T`'s field count, or split out the wide \
-                 fields. Native oversized-payload support is not yet implemented — see \
-                 docs/spikes/oversized-enum-payload.md.",
-                out.len(),
-                num_words,
-                out.len() - num_words,
-            ));
+            let val_ty = val.get_type();
+            let raw_size = val_ty.size_of().ok_or_else(|| {
+                "coerce_to_payload_words: cannot size oversized enum payload for boxing".to_string()
+            })?;
+            let size = if raw_size.get_type().get_bit_width() == 64 {
+                raw_size
+            } else {
+                self.builder
+                    .build_int_z_extend(raw_size, i64_t, "enumbox.sz64")
+                    .unwrap()
+            };
+            let box_ptr = self
+                .builder
+                .build_call(self.malloc_fn, &[size.into()], "enumbox")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            self.builder.build_store(box_ptr, val).unwrap();
+            let box_word = self
+                .builder
+                .build_ptr_to_int(box_ptr, i64_t, "enumbox.w")
+                .unwrap();
+            let mut boxed = Vec::with_capacity(num_words);
+            boxed.push(box_word);
+            while boxed.len() < num_words {
+                boxed.push(i64_t.const_int(0, false));
+            }
+            return Ok(boxed);
         }
         // Zero-pad the under-shoot to the exact width.
-        let i64_t = self.context.i64_type();
         while out.len() < num_words {
             out.push(i64_t.const_int(0, false));
         }

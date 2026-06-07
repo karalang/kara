@@ -17663,45 +17663,98 @@ fn main() {
         );
     }
 
-    /// Fail-loud guard for the oversized-enum-payload truncation bug
-    /// (found 2026-06-07 while scoping the pattern-arm unbound-field-drop
-    /// spike's "deep nesting" follow-up). `Option`'s payload area is 3
-    /// i64 words; a 4-field struct packed into `Some(...)` — here via
-    /// `Vec.pop()` returning `Option[Entity]` — used to silently drop the
-    /// 4th field, which then read back as garbage. Codegen must now reject
-    /// it with `E_ENUM_PAYLOAD_OVERSIZED` rather than miscompile. See
-    /// `docs/spikes/oversized-enum-payload.md`.
+    // ── Oversized enum payload — native boxing ──────────────────────
+    //
+    // `Option`'s payload area is 3 i64 words, `Result`'s is 5. A struct /
+    // tuple `T` wider than the area cannot be inlined; it used to silently
+    // truncate (the spike's `Entity{x,y,hp,label}.pop()` read `label` as
+    // garbage `8271692032`), then briefly errored (E_ENUM_PAYLOAD_OVERSIZED),
+    // and is now heap-boxed: malloc `T`, box pointer in word 0. Pack
+    // (`coerce_to_payload_words`), unpack (`reconstruct_payload_value`,
+    // the unwrap helper in calls.rs), and drop recompute the same
+    // `llvm_type_word_count(T) > area` predicate. See
+    // docs/spikes/oversized-enum-payload.md.
+
+    /// The spike's exact repro: a 4-word `Entity` round-trips through
+    /// `Vec.pop() -> Option[Entity]` and a `Some(e) =>` arm. The field
+    /// that used to read back as garbage (`label`) must now be correct.
     #[test]
-    fn test_codegen_rejects_oversized_option_payload() {
+    fn test_e2e_boxed_option_field_reads_correct_value() {
         let src = r#"
 struct Entity { x: i64, y: i64, hp: i64, label: i64 }
 fn main() {
     let mut v: Vec[Entity] = Vec.new();
-    v.push(Entity { x: 1, y: 2, hp: 3, label: 4 });
+    v.push(Entity { x: 1, y: 2, hp: 3, label: 5000 });
     match v.pop() {
-        Some(e) => println(e.x),
+        Some(e) => println(e.label),
         None => println(-1),
     }
 }
 "#;
-        let mut parsed = karac::parse(src);
+        if let Some(out) = run_program(src) {
+            assert_eq!(out.trim(), "5000");
+        }
+    }
+
+    /// IR shape: an oversized `Option[Entity]` payload emits a `malloc`
+    /// box at construction (the `enumbox` markers) instead of erroring.
+    #[test]
+    fn test_ir_boxes_oversized_option_payload() {
+        let src = r#"
+struct Entity { x: i64, y: i64, hp: i64, label: i64 }
+fn main() {
+    let mut v: Vec[Entity] = Vec.new();
+    v.push(Entity { x: 1, y: 2, hp: 3, label: 5000 });
+    match v.pop() {
+        Some(e) => println(e.label),
+        None => println(-1),
+    }
+}
+"#;
+        let ir = ir_for_with_ownership(src);
         assert!(
-            parsed.errors.is_empty(),
-            "parse errors: {:?}",
-            parsed.errors
+            ir.contains("enumbox") && ir.contains("@malloc"),
+            "oversized Option payload must box via malloc; got:\n{ir}"
         );
-        let resolved = karac::resolve(&parsed.program);
-        let typed = karac::typecheck(&parsed.program, &resolved);
-        karac::lower(&mut parsed.program, &typed);
-        let ownership = karac::ownershipcheck(&parsed.program, &typed);
-        let err = compile_to_ir(&parsed.program, Some(&ownership), None).expect_err(
-            "expected codegen to reject a 4-word struct packed into Option's 3-word payload",
-        );
-        assert!(
-            err.contains("E_ENUM_PAYLOAD_OVERSIZED"),
-            "expected oversized-payload diagnostic; got: {}",
-            err
-        );
+    }
+
+    /// `Some(big)` constructed directly (no collection op) and read via
+    /// `.unwrap()` — exercises the calls.rs unbox path with the true area
+    /// (Option = 3). A 5-word struct (> 3) must box and round-trip.
+    #[test]
+    fn test_e2e_boxed_option_unwrap_reads_correct_value() {
+        let src = r#"
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64 }
+fn main() {
+    let o: Option[Wide] = Some(Wide { a: 1, b: 2, c: 3, d: 4, e: 99 });
+    let w = o.unwrap();
+    println(w.e);
+}
+"#;
+        if let Some(out) = run_program(src) {
+            assert_eq!(out.trim(), "99");
+        }
+    }
+
+    /// `Result[Wide, i64]` with a 6-word `Ok` payload (> Result's 5-word
+    /// area) boxes and round-trips through a `match Ok(w) =>` arm.
+    #[test]
+    fn test_e2e_boxed_result_ok_reads_correct_value() {
+        let src = r#"
+struct Wide6 { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }
+fn make() -> Result[Wide6, i64] {
+    return Ok(Wide6 { a: 1, b: 2, c: 3, d: 4, e: 5, f: 600 });
+}
+fn main() {
+    match make() {
+        Ok(w) => println(w.f),
+        Err(n) => println(n),
+    }
+}
+"#;
+        if let Some(out) = run_program(src) {
+            assert_eq!(out.trim(), "600");
+        }
     }
 
     // ── Concurrency analysis plumbing ──

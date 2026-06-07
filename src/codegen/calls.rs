@@ -1137,7 +1137,25 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Reconstruct based on the inner type's LLVM shape.
         let inner_ll = self.llvm_type_for_type_expr(&inner_te);
-        let value = self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?;
+        // Oversized boxed payload (see `coerce_to_payload_words`): if `T`'s
+        // LLVM word count exceeds this enum's payload area, the pack side
+        // heap-boxed it and w0 holds the box pointer. The area is the
+        // receiver's field count minus the tag (Option → 3, Result → 5),
+        // so a `Result` payload that legitimately fits in 5 words is not
+        // mistaken for boxed. Mirror of `reconstruct_payload_value`'s unbox.
+        let area = (recv_struct.get_type().count_fields() as usize).saturating_sub(1);
+        let value = if Self::llvm_type_word_count(inner_ll) > area {
+            let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+            let box_ptr = self
+                .builder
+                .build_int_to_ptr(w0, ptr_ty, "enumbox.uw.p")
+                .unwrap();
+            self.builder
+                .build_load(inner_ll, box_ptr, "enumbox.uw.ld")
+                .unwrap()
+        } else {
+            self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?
+        };
         Ok(Some(value))
     }
 
