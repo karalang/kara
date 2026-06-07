@@ -1837,12 +1837,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// destructure via `extract_value` over their LLVM-field layout and
     /// recurse on each field.
     ///
-    /// If the supplied value's natural word count differs from the
-    /// requested `num_words`, the result is padded with zeros (over-shoot)
-    /// or truncated (under-shoot). Both branches log nothing — they're
-    /// the safety nets for the fallback paths in
-    /// `payload_word_count_for_type_expr` (which conservatively
-    /// returns 1 for unknown types).
+    /// If the supplied value's natural word count is **smaller** than the
+    /// requested `num_words` the result is zero-padded (the common
+    /// under-shoot — a primitive into Option's 3-word area, or a
+    /// conservative `payload_word_count_for_type_expr` over-estimate).
+    ///
+    /// If it is **larger** the function fails loud with
+    /// `E_ENUM_PAYLOAD_OVERSIZED` rather than silently dropping the
+    /// overflow words. A seeded enum (`Option` = 3 payload words,
+    /// `Result` = 5) has a fixed payload area; packing a struct / tuple
+    /// wider than that — which `Vec.pop()` / `Map.get()` / a
+    /// `-> Option[Wide]` return all route through here — used to truncate
+    /// and hand back garbage for the dropped fields (read: a silent
+    /// miscompile). The hard error is the stop-gap until native
+    /// oversized-payload support lands; see
+    /// `docs/spikes/oversized-enum-payload.md`. Genuine nested *enum*
+    /// payloads are rejected earlier by the typechecker's
+    /// `E_ENUM_NESTED_ENUM_PAYLOAD`, so this guard's live surface is
+    /// oversized struct / tuple payloads.
     pub(super) fn coerce_to_payload_words(
         &self,
         val: BasicValueEnum<'ctx>,
@@ -1869,7 +1881,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Recurse: a struct field can itself be an aggregate
                     // (e.g. a user struct whose field is a String). Each
                     // top-level LLVM field of `sv` contributes its own
-                    // word count to the running total.
+                    // word count to the running total. Push every word —
+                    // the oversize check below sees the true count.
                     let sub_count = match f {
                         BasicValueEnum::StructValue(ssv) => ssv.get_type().count_fields() as usize,
                         BasicValueEnum::ArrayValue(av) => av.get_type().len() as usize,
@@ -1880,11 +1893,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         self.coerce_to_payload_words(f, sub_count)?
                     };
-                    for w in sub_words {
-                        if out.len() < num_words {
-                            out.push(w);
-                        }
-                    }
+                    out.extend(sub_words);
                 }
             }
             BasicValueEnum::ArrayValue(av) => {
@@ -1899,9 +1908,6 @@ impl<'ctx> super::Codegen<'ctx> {
                                 i, e
                             )
                         })?;
-                    if out.len() >= num_words {
-                        break;
-                    }
                     out.push(self.coerce_to_i64(f)?);
                 }
             }
@@ -1909,12 +1915,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 out.push(self.coerce_to_i64(val)?);
             }
         }
-        // Pad / truncate to exact width.
+        // Fail loud on over-shoot: silently dropping the overflow words
+        // is a miscompile (the dropped fields read back as garbage). See
+        // the doc comment above for the design context + remedy.
+        if out.len() > num_words {
+            return Err(format!(
+                "error[E_ENUM_PAYLOAD_OVERSIZED]: enum payload value occupies {} words but \
+                 the variant's payload area is only {} words — the extra {} word(s) would be \
+                 silently dropped (a miscompile). This typically comes from `Option[T]` / \
+                 `Result[T, _]` (or a collection op such as `Vec.pop()` / `Map.get()` returning \
+                 one) where `T` is a struct or tuple wider than the payload area (`Option` holds \
+                 3 words, `Result` 5). Workarounds: make `T` a `shared struct` / `shared enum` \
+                 (stored as a 1-word RC pointer), reduce `T`'s field count, or split out the wide \
+                 fields. Native oversized-payload support is not yet implemented — see \
+                 docs/spikes/oversized-enum-payload.md.",
+                out.len(),
+                num_words,
+                out.len() - num_words,
+            ));
+        }
+        // Zero-pad the under-shoot to the exact width.
         let i64_t = self.context.i64_type();
         while out.len() < num_words {
             out.push(i64_t.const_int(0, false));
         }
-        out.truncate(num_words);
         Ok(out)
     }
 

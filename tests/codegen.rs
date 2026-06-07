@@ -16928,6 +16928,47 @@ fn main() {
         );
     }
 
+    /// Fail-loud guard for the oversized-enum-payload truncation bug
+    /// (found 2026-06-07 while scoping the pattern-arm unbound-field-drop
+    /// spike's "deep nesting" follow-up). `Option`'s payload area is 3
+    /// i64 words; a 4-field struct packed into `Some(...)` — here via
+    /// `Vec.pop()` returning `Option[Entity]` — used to silently drop the
+    /// 4th field, which then read back as garbage. Codegen must now reject
+    /// it with `E_ENUM_PAYLOAD_OVERSIZED` rather than miscompile. See
+    /// `docs/spikes/oversized-enum-payload.md`.
+    #[test]
+    fn test_codegen_rejects_oversized_option_payload() {
+        let src = r#"
+struct Entity { x: i64, y: i64, hp: i64, label: i64 }
+fn main() {
+    let mut v: Vec[Entity] = Vec.new();
+    v.push(Entity { x: 1, y: 2, hp: 3, label: 4 });
+    match v.pop() {
+        Some(e) => println(e.x),
+        None => println(-1),
+    }
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, Some(&ownership), None).expect_err(
+            "expected codegen to reject a 4-word struct packed into Option's 3-word payload",
+        );
+        assert!(
+            err.contains("E_ENUM_PAYLOAD_OVERSIZED"),
+            "expected oversized-payload diagnostic; got: {}",
+            err
+        );
+    }
+
     // ── Concurrency analysis plumbing ──
 
     /// Slice 1 wiring sanity-check: full pipeline through

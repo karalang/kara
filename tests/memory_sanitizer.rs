@@ -3557,22 +3557,28 @@ fn main() {
         // memmoves run against the same group buffers the cleanup will
         // later free, so a wrong shift pointer / wrong byte count
         // would surface as ASAN heap-buffer-overflow or UAF. Two hot
-        // groups + cold ensures the per-group shift loop covers each
-        // path. (Primitive fields only — heap-owning fields are
-        // rejected at layout validation.)
+        // groups exercise the per-group shift loop. (Primitive fields
+        // only — heap-owning fields are rejected at layout validation.)
+        //
+        // The struct is exactly 3 i64 words on purpose: `pop()` returns
+        // `Option[Entity]`, and Option's payload area is 3 words. A 4th
+        // field (the original `cold { label }` group) would overflow it,
+        // which now fails loud as E_ENUM_PAYLOAD_OVERSIZED rather than
+        // silently truncating the popped value (see
+        // docs/spikes/oversized-enum-payload.md). Cold-group *layout*
+        // codegen is covered separately in tests/codegen.rs.
         assert_clean_asan_run(
             r#"
-struct Entity { x: i64, y: i64, hp: i64, label: i64 }
+struct Entity { x: i64, y: i64, hp: i64 }
 layout entities: Vec[Entity] {
     group physics { x, y }
     group combat { hp }
-    cold { label }
 }
 fn main() {
     let mut entities: Vec[Entity] = Vec.new();
     let mut i: i64 = 0;
     while i < 6 {
-        entities.push(Entity { x: i, y: i * 10, hp: i * 100, label: i * 1000 });
+        entities.push(Entity { x: i, y: i * 10, hp: i * 100 });
         i = i + 1;
     }
     let _front = entities.pop_front();

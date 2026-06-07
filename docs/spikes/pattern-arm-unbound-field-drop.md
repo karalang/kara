@@ -1,9 +1,12 @@
 # Design spike — pattern-arm unbound heap-field drop (codegen)
 
 **Status:** **DONE for all four pattern-matching constructs over enum-variant
-patterns (if-let / match / let-else / while-let), 2026-06-07.** Two out-of-mechanism
-remainders (deep nesting, plain-struct destructure) carved to separate follow-ups
-— see "Remaining" below. A real, IR-proven leak found while scoping slice 4 of
+patterns (if-let / match / let-else / while-let), 2026-06-07.** Out-of-mechanism
+remainders carved to separate follow-ups — see "Remaining" below. Note the
+"deep nesting" follow-up was **reclassified 2026-06-07** from a drop gap to a
+representation-level silent miscompile (oversized enum payload), now tracked in
+[`oversized-enum-payload.md`](oversized-enum-payload.md) and fixed loud. A
+real, IR-proven leak found while scoping slice 4 of
 [`general-owned-temp-tracking.md`](general-owned-temp-tracking.md).
 
 **Implementation finding (reshaped the fix — simpler than §4's "new per-field
@@ -47,15 +50,21 @@ miss_wholesale_clean}`, `asan_match_freshtemp_enum_unbound_field_clean`,
 
 **Remaining — out of B's mechanism, each its own follow-up (still leak, not
 miscompile; pre-existing, this fix doesn't widen them):**
-- **Deep nesting** (`if let Some(Full(_, n)) = make_opt_holder()`) — **needs the
-  core enum-drop machinery extended, not B's path.** IR-probed: `materialize`
-  correctly *declines* (returns `mat=0`) because the outer `Option`'s payload is
-  a nested enum, marked `EnumDropKind::None` — and even if forced,
-  `__karac_drop_Option` cannot free the nested `Holder`'s `Vec` because the
-  drop-switch only knows `None`/`VecOrString` (no nested-enum/struct/Map
-  recursion). This limits *bound-variable* `Option[Holder]` scrutinees equally,
-  so it's a general `EnumDropKind` + `emit_enum_drop_switch` recursion
-  enhancement, tracked separately — not a B regression.
+- **Deep nesting** (`if let Some(Full(_, n)) = make_opt_holder()`) — **PREMISE
+  CORRECTED 2026-06-07: this is NOT a drop gap. It is a representation-level
+  silent miscompile, tracked in
+  [`oversized-enum-payload.md`](oversized-enum-payload.md).** The earlier
+  framing ("extend `EnumDropKind` + `emit_enum_drop_switch` to recurse and free
+  the nested `Holder`'s `Vec`") was wrong. An ownership-loaded probe of the
+  actual repro showed `Option[Holder]` *truncates* the inner enum: `Holder.Full`
+  needs 4 payload words but `Option`'s area is 3, so the high words (`Vec.cap`
+  and `n`) are packed as `0`. `n` prints `0` not `42`; the zeroed `Vec.cap` is
+  precisely *why* no free was emitted (the leak was a downstream symptom). There
+  is nothing sound to recurse into — the value is destroyed before drop. The fix
+  is a sound representation first (recommend boxing); the `EnumDropKind`
+  recursion then becomes the box's drop walk. The truncation is now a hard
+  error (`E_ENUM_PAYLOAD_OVERSIZED`), so this case fails loud instead of
+  miscompiling.
 - **`while let` heap-bearing *miss* variant** — the final non-matching scrutinee
   (evaluated in `cond_bb`, never entering the body) isn't dropped. Narrow: the
   common drain ends on a heap-free `None`/`Empty`. Tracked, not closed.
@@ -77,6 +86,8 @@ separable.
 **Doc footprint** (update these together — see memory `maintain-scope-doc-index`):
 
 - this file — the scope + design (entry point)
+- `docs/spikes/oversized-enum-payload.md` — the reclassified "deep nesting"
+  follow-up (representation miscompile, not a drop gap)
 - `docs/spikes/general-owned-temp-tracking.md` — slice-4 note cross-references
   this as the separate "move-out partial drop" track
 - `docs/implementation_checklist/phase-6-runtime.md` line 489 (if-let / while-let
