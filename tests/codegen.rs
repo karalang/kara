@@ -37644,4 +37644,77 @@ fn main() {
             assert_eq!(c.stdout.trim(), "3\n100\n5\n-1\nhello channel");
         }
     }
+
+    #[test]
+    fn e2e_channel_blocking_recv_until_send() {
+        // Blocking `recv`: `main` reaches `rx.recv()` while the spawned worker
+        // is still busy-computing, so it MUST park until the worker sends —
+        // load-immune evidence of blocking (a non-blocking recv would read the
+        // empty queue and return 0 before the worker ran). The received value
+        // is the worker's full sum (0+1+…+(N-1)), so a short-circuited recv
+        // would print 0, not the sum.
+        let out = run_program_capturing(
+            r#"
+fn worker(tx: Sender[i64]) -> i64 {
+    let mut acc = 0;
+    let mut i = 0;
+    while i < 5000000 {
+        acc = acc + i;
+        i = i + 1;
+    }
+    tx.send(acc);
+    0
+}
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    let h: TaskHandle[i64] = spawn(|| worker(tx));
+    let v = rx.recv();
+    h.join();
+    println(v);
+}
+"#,
+        );
+        if let Some(c) = out {
+            assert_eq!(c.stdout.trim(), "12499997500000");
+        }
+    }
+
+    #[test]
+    fn e2e_channel_producer_consumer_close_terminates() {
+        // The canonical producer-consumer-with-spawn pattern, which deadlocked
+        // before cross-task sender-drop: the producer (spawned task) sends 3
+        // values then finishes; its moved `Sender` is dropped BY THE TASK
+        // (not the parent), which CLOSES the channel and wakes the consumer's
+        // blocking `recv`, terminating the drain loop. The whole program both
+        // produces the right sum AND exits (no hang).
+        let out = run_program_capturing(
+            r#"
+fn producer(tx: Sender[i64]) -> i64 {
+    tx.send(10);
+    tx.send(20);
+    tx.send(30);
+    0
+}
+fn consume(rx: Receiver[i64]) -> i64 {
+    let mut sum = 0;
+    let mut go = true;
+    while go {
+        let v = rx.recv();
+        if v == 0 { go = false; } else { sum = sum + v; }
+    }
+    sum
+}
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    let h: TaskHandle[i64] = spawn(|| producer(tx));
+    let total = consume(rx);
+    h.join();
+    println(total);
+}
+"#,
+        );
+        if let Some(c) = out {
+            assert_eq!(c.stdout.trim(), "60");
+        }
+    }
 }

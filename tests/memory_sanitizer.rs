@@ -5244,4 +5244,41 @@ fn main() {
             "channel_move_into_spawn_single_free",
         );
     }
+
+    #[test]
+    fn asan_channel_producer_consumer_close_single_free() {
+        // Cross-task sender-drop: the producer (spawned task) sends 2 values
+        // then finishes — its moved `Sender` is dropped BY THE TASK (the
+        // wrapper), which both closes the channel (terminating the consumer's
+        // blocking `recv` drain) and releases exactly one reference. The
+        // parent's drop of the moved `Sender` is suppressed, so the channel is
+        // freed exactly once (no double-free here, no leak on Linux LSan) —
+        // and the program terminates rather than deadlocking.
+        assert_clean_asan_run_with_concurrency(
+            r#"
+fn producer(tx: Sender[i64]) -> i64 {
+    tx.send(10);
+    tx.send(20);
+    0
+}
+fn consume(rx: Receiver[i64]) -> i64 {
+    let mut sum = 0;
+    let mut go = true;
+    while go {
+        let v = rx.recv();
+        if v == 0 { go = false; } else { sum = sum + v; }
+    }
+    sum
+}
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    let h: TaskHandle[i64] = spawn(|| producer(tx));
+    println(consume(rx));
+    h.join();
+}
+"#,
+            &["30"],
+            "channel_producer_consumer_close_single_free",
+        );
+    }
 }

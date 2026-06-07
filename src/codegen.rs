@@ -3578,7 +3578,7 @@ impl<'ctx> Codegen<'ctx> {
         );
 
         // `karac_runtime_channel_clone(ch: ptr) -> ptr` — backs
-        // `Sender.clone()`: same pointer, refcount++.
+        // `Sender.clone()`: same pointer, sender + total count++.
         let channel_clone_ty = ptr_type.fn_type(&[ptr_type.into()], false);
         module.add_function(
             "karac_runtime_channel_clone",
@@ -3586,11 +3586,20 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
-        // `karac_runtime_channel_drop(ch: ptr)` — refcount--, free at zero.
-        // Emitted at each channel end's scope exit (`DropChannelEnd`).
+        // `karac_runtime_channel_drop_sender(ch: ptr)` /
+        // `karac_runtime_channel_drop_receiver(ch: ptr)` — scope-exit drop,
+        // split by end so the last `Sender` drop can *close* the channel
+        // (waking blocked receivers). Both release one `total` reference
+        // (free at zero). Emitted by `DropChannelEnd { is_sender }` keyed off
+        // the binding's `Sender`/`Receiver` surface type.
         let channel_drop_ty = context.void_type().fn_type(&[ptr_type.into()], false);
         module.add_function(
-            "karac_runtime_channel_drop",
+            "karac_runtime_channel_drop_sender",
+            channel_drop_ty,
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_runtime_channel_drop_receiver",
             channel_drop_ty,
             Some(Linkage::External),
         );
@@ -3608,14 +3617,23 @@ impl<'ctx> Codegen<'ctx> {
         );
 
         // `karac_runtime_channel_recv(ch: ptr, out_ptr: ptr, elem_size: u64)
-        // -> u8` — pop the front blob into `*out_ptr`; returns 1 on value, 0
-        // on empty (out slot zero-filled). `recv` ignores the discriminant
-        // (result is `T`); `try_recv` builds `Some`/`None` from it.
+        // -> u8` — **blocking** receive (parks while empty + open on
+        // threads-targets; non-blocking on sequential wasm). Returns 1 with a
+        // value, 0 on closed-empty (out slot zero-filled). `recv` ignores the
+        // discriminant (result is `T`, the 0 case is the zero-value answer).
+        // `karac_runtime_channel_try_recv` has the same signature but is
+        // **non-blocking** on every target — `try_recv` builds `Some`/`None`
+        // from its discriminant.
         let channel_recv_ty = context
             .i8_type()
             .fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_channel_recv",
+            channel_recv_ty,
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_runtime_channel_try_recv",
             channel_recv_ty,
             Some(Linkage::External),
         );

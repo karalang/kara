@@ -129,8 +129,10 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(val)
     }
 
-    /// `rx.try_recv()` → `Option[T]`. Same FFI as `recv`, but the presence
-    /// discriminant drives a `Some`/`None` build (the Map.get template).
+    /// `rx.try_recv()` → `Option[T]`. Routes through the **non-blocking**
+    /// `karac_runtime_channel_try_recv` (NOT the blocking `recv`); the
+    /// presence discriminant drives a `Some`/`None` build (the Map.get
+    /// template).
     fn compile_channel_try_recv(
         &mut self,
         object: &Expr,
@@ -144,8 +146,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let size_const = self.context.i64_type().const_int(elem_size, false);
         let recv_fn = self
             .module
-            .get_function("karac_runtime_channel_recv")
-            .expect("karac_runtime_channel_recv declared in Codegen::new");
+            .get_function("karac_runtime_channel_try_recv")
+            .expect("karac_runtime_channel_try_recv declared in Codegen::new");
         let found_i8 = self
             .builder
             .build_call(

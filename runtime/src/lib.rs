@@ -122,9 +122,11 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     keep!(
         channel::karac_runtime_channel_new,
         channel::karac_runtime_channel_clone,
-        channel::karac_runtime_channel_drop,
+        channel::karac_runtime_channel_drop_sender,
+        channel::karac_runtime_channel_drop_receiver,
         channel::karac_runtime_channel_send,
         channel::karac_runtime_channel_recv,
+        channel::karac_runtime_channel_try_recv,
     );
     // String + comparison runtime (`runtime/src/clone.rs` + this file).
     keep!(

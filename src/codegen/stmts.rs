@@ -2976,8 +2976,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // balances the channel's lifetime to zero.
                 let key = (pattern.span.offset, pattern.span.length);
                 if let Some(surface) = self.pattern_binding_types.get(&key) {
+                    // `Sender` drop may close the channel (waking blocked
+                    // receivers); `Receiver` drop only releases its reference.
                     if surface == "Sender" || surface == "Receiver" {
-                        self.track_channel_var(alloca);
+                        let is_sender = surface == "Sender";
+                        self.track_channel_var(alloca, is_sender);
                     }
                 }
                 Ok(())

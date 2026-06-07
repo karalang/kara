@@ -438,19 +438,22 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Alloca that holds the opaque `*mut KaracFile` pointer.
         file_alloca: PointerValue<'ctx>,
     },
-    /// Phase 6 "Channel AOT codegen lowering": scope-exit refcount-drop for
-    /// a channel-end (`Sender`/`Receiver`) binding. The alloca holds the
-    /// opaque `*mut KaracChannel` pointer both ends share. The drain emits
-    /// `karac_runtime_channel_drop(load(chan_alloca))`, which decrements the
-    /// refcount and frees the queue at zero — so a `Channel.new()` (refcount
-    /// 2) is reclaimed once both its `Sender` and `Receiver` bindings have
-    /// dropped, and a `Sender.clone()` (refcount++) balances against its own
-    /// binding's drop. Null-handle is a no-op runtime-side, so no guard
-    /// here. Mirrors `FreeFileHandle`'s shape (opaque handle, single
-    /// scope-exit call) plus refcount semantics.
+    /// Phase 6 "Channel AOT codegen lowering": scope-exit drop for a
+    /// channel-end (`Sender`/`Receiver`) binding. The alloca holds the opaque
+    /// `*mut KaracChannel` pointer both ends share. The drain emits
+    /// `karac_runtime_channel_drop_sender` (`is_sender`) or `_drop_receiver`
+    /// — the split lets the last `Sender` drop *close* the channel (waking
+    /// blocked `recv`s); both release one `total` reference and free the
+    /// queue at zero. So a `Channel.new()` (`total` 2) is reclaimed once both
+    /// ends drop, and a `Sender.clone()` (`total`++) balances its own
+    /// binding's drop. `is_sender` comes from the binding's `Sender`/
+    /// `Receiver` surface type at registration. Null-handle is a no-op
+    /// runtime-side. Mirrors `FreeFileHandle`'s shape plus refcount + close.
     DropChannelEnd {
         /// Alloca that holds the opaque `*mut KaracChannel` pointer.
         chan_alloca: PointerValue<'ctx>,
+        /// `true` for a `Sender` end (drop may close), `false` for `Receiver`.
+        is_sender: bool,
     },
     /// Run a per-enum drop function on a value-type (non-shared) enum
     /// alloca at scope exit. The drop function is synthesized once per

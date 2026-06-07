@@ -48,9 +48,9 @@
 //!   when no annotation is recoverable.
 
 use crate::ast::*;
-use crate::codegen::state::VarSlot;
+use crate::codegen::state::{CleanupAction, VarSlot};
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
-use inkwell::values::BasicValueEnum;
+use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -280,6 +280,52 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Channel-end captures: the spawned task OWNS a moved `Sender`/
+        // `Receiver` and must drop it when the task finishes — a moved
+        // `Sender`'s drop is what CLOSES the channel, waking a receiver that
+        // blocked on `recv` (the producer-consumer terminator). The parent's
+        // `DropChannelEnd` for these is suppressed at the outer site below
+        // (otherwise the channel would be double-dropped, and worse, the
+        // *close* would be owned by the parent thread — which may itself be
+        // blocked on `recv`, deadlocking). Push a wrapper-scope cleanup frame
+        // now (so its drops drain at task exit, AFTER the body's sends) and
+        // register each captured channel end against its wrapper-local alloca.
+        //
+        // Detect channel-end captures from the parent's queued
+        // `DropChannelEnd` (matched by the capture's PARENT alloca, still
+        // present here — the suppression runs later at the outer site), NOT
+        // from `var_type_names`/`saved_var_types`, which the statement-
+        // hoisting pre-pass resets (the same volatility the dispatch gate
+        // hit). `is_sender` rides along from the parent action.
+        self.scope_cleanup_actions.push(Vec::new());
+        let mut channel_caps: Vec<(PointerValue<'ctx>, bool)> = Vec::new();
+        for var_name in &free_vars {
+            let Some(parent_slot) = saved_vars.get(var_name) else {
+                continue;
+            };
+            let parent_ptr = parent_slot.ptr;
+            let mut is_sender = None;
+            for frame in &self.scope_cleanup_actions {
+                for action in frame {
+                    if let CleanupAction::DropChannelEnd {
+                        chan_alloca,
+                        is_sender: s,
+                    } = action
+                    {
+                        if *chan_alloca == parent_ptr {
+                            is_sender = Some(*s);
+                        }
+                    }
+                }
+            }
+            if let Some(s) = is_sender {
+                channel_caps.push((self.variables[var_name].ptr, s));
+            }
+        }
+        for (wrapper_alloca, is_sender) in channel_caps {
+            self.track_channel_var(wrapper_alloca, is_sender);
+        }
+
         // Compile the closure body inside the wrapper context. For the
         // non-blocking coroutine spawn, flip the call-site intercept into
         // "ramp with this runtime-owned slot, don't wait" mode for the
@@ -323,6 +369,12 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_unconditional_branch(skip_block).unwrap();
             self.builder.position_at_end(skip_block);
         }
+
+        // Drain the wrapper-scope channel-end-capture frame: the task is
+        // finishing, so drop each captured `Sender`/`Receiver` now (a last
+        // `Sender` drop closes the channel + wakes blocked receivers). Runs
+        // after the body's sends, before the env free.
+        self.drain_top_frame_with_emit();
 
         // Free the heap-allocated env before returning.
         let free_fn = self
@@ -403,6 +455,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // every capture.
             for var_name in &free_vars {
                 self.suppress_user_drop_for_var(var_name);
+                // Channel ends moved into the task: the wrapper now owns the
+                // drop (registered above), so the parent must not also drop —
+                // the parent's drop would double-free and, for a `Sender`,
+                // hand channel-*close* ownership to a thread that may be
+                // blocked on `recv` (deadlock). Mirrors the user-Drop
+                // suppression; a no-op for non-channel captures.
+                self.suppress_channel_drop_for_var(var_name);
             }
         }
 
