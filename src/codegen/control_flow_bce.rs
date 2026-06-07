@@ -19,7 +19,7 @@
 
 use crate::ast::*;
 
-use super::state::AssertedIndexBound;
+use super::state::{AssertedIndexBound, MonotoneDir, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Walk a boolean expression that holds true at the entry to a body
@@ -220,6 +220,596 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             ExprKind::Identifier(name) => self.len_alias.get(name.as_str()).cloned(),
             _ => None,
+        }
+    }
+}
+
+// ── Monotone loop variables → `llvm.assume` range facts ─────────
+//
+// The split-check elision above handles bounds the source GUARD proves.
+// This section handles the complementary class the 2026-06-07 diagnostic
+// pinned (docs/investigations/bce_monotonic_assume.md): conditionally-
+// updated monotone variables (compaction write heads, merge cursors),
+// whose phis are not AddRecs — SCEV and LVI both give up on them, so
+// LLVM keeps the bounds check even when its post-inline constant
+// knowledge could complete the proof. karac supplies the half it can
+// prove syntactically — "x never moves above/below its loop-entry
+// value" — as an `llvm.assume` at body entry; LLVM combines it with
+// the facts only it can see (inlined parameter constants, dominating
+// guards) and folds the check. The assume is consumed by the optimizer
+// (zero residue measured on the kata-26/88 shapes).
+//
+// SOUNDNESS. `assume(x <= init)` for a decreasing variable holds only
+// if the update cannot wrap below MIN (a wrap would produce a huge
+// positive value, violating the assume → UB injection). This is
+// guaranteed by AOT integer-overflow trapping (landed 2026-06-07,
+// same-day prerequisite — see phase-7-codegen.md § AOT integer-overflow
+// trapping): a wrapping `x = x - c` panics before the wrapped value
+// exists. The scan itself is fail-closed three ways:
+//   1. The stmt/expr walks match `StmtKind`/`ExprKind` EXHAUSTIVELY (no
+//      wildcard arm), so a new AST variant breaks this file at compile
+//      time instead of silently escaping the write analysis.
+//   2. Any write shape other than the recognized `x = x ± <non-negative
+//      int literal>` forms — including plain reassignment, mut-marked
+//      call args, method calls on `x` (mut-ref receivers), `ptr.*`
+//      aliasing, and shadowing rebinds (`let x`, pattern bindings,
+//      closure params) — poisons the name.
+//   3. Emission is gated to names that appear inside an `Index`
+//      expression's index subtree (the only consumers of the fact),
+//      bounding assume count.
+// Updates inside nested loops/branches/closures stay eligible —
+// monotonicity cares about direction, not update count per iteration.
+
+#[derive(Default)]
+struct MonotoneScan {
+    /// Names with at least one recognized monotone update, and the
+    /// (so-far) consistent direction. Inconsistent directions poison.
+    dirs: std::collections::HashMap<String, MonotoneDir>,
+    /// Names disqualified by any non-monotone write/alias/shadow.
+    poisoned: std::collections::HashSet<String>,
+    /// Names appearing inside an `Index` expression's index subtree.
+    index_used: std::collections::HashSet<String>,
+}
+
+impl MonotoneScan {
+    fn poison(&mut self, name: &str) {
+        self.poisoned.insert(name.to_string());
+    }
+
+    fn record(&mut self, name: &str, dir: MonotoneDir) {
+        match self.dirs.get(name) {
+            None => {
+                self.dirs.insert(name.to_string(), dir);
+            }
+            Some(d) if *d == dir => {}
+            Some(_) => self.poison(name),
+        }
+    }
+}
+
+/// `x = x + c` / `c + x` / `x - c` with `c` a non-negative integer
+/// literal — in both the surface `Binary` form and the trait-method-
+/// lowered `Call { Path([ty, "add"|"sub"]), [x, c] }` form (mirror of
+/// `walk_guard_conjuncts`' comparison handling). Anything else: None.
+fn classify_monotone_rhs(x: &str, value: &Expr) -> Option<MonotoneDir> {
+    match &value.kind {
+        ExprKind::Binary { op, left, right } => match op {
+            BinOp::Add => match (&left.kind, &right.kind) {
+                (ExprKind::Identifier(l), ExprKind::Integer(c, _)) if l == x && *c >= 0 => {
+                    Some(MonotoneDir::Increasing)
+                }
+                (ExprKind::Integer(c, _), ExprKind::Identifier(r)) if r == x && *c >= 0 => {
+                    Some(MonotoneDir::Increasing)
+                }
+                _ => None,
+            },
+            BinOp::Sub => match (&left.kind, &right.kind) {
+                (ExprKind::Identifier(l), ExprKind::Integer(c, _)) if l == x && *c >= 0 => {
+                    Some(MonotoneDir::Decreasing)
+                }
+                _ => None,
+            },
+            _ => None,
+        },
+        ExprKind::Call { callee, args } => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return None;
+            };
+            if segments.len() != 2 || args.len() != 2 {
+                return None;
+            }
+            let dir = match segments[1].as_str() {
+                "add" => MonotoneDir::Increasing,
+                "sub" => MonotoneDir::Decreasing,
+                _ => return None,
+            };
+            match (&args[0].value.kind, &args[1].value.kind) {
+                (ExprKind::Identifier(l), ExprKind::Integer(c, _)) if l == x && *c >= 0 => {
+                    Some(dir)
+                }
+                // `add` is commutative; `sub` is not.
+                (ExprKind::Integer(c, _), ExprKind::Identifier(r))
+                    if r == x && *c >= 0 && dir == MonotoneDir::Increasing =>
+                {
+                    Some(dir)
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Root identifier of a place expression (`x`, `x.f`, `x[i]`, `x.0`,
+/// `*x`, `x?`-chains). None for non-place shapes (literals, calls,
+/// temporaries) — those have no aliasable local to poison.
+fn place_root_ident(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Identifier(name) => Some(name.as_str()),
+        ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. }
+        | ExprKind::Index { object, .. }
+        | ExprKind::OptionalChain { object, .. } => place_root_ident(object),
+        ExprKind::Unary { operand, .. } => place_root_ident(operand),
+        ExprKind::Question(inner) => place_root_ident(inner),
+        _ => None,
+    }
+}
+
+/// Collect identifiers in an index subtree for the emission gate.
+/// Over- and under-collection are both SAFE here (this set only gates
+/// which assumes are emitted, never their truth), so a wildcard-armed
+/// walk over the common index shapes is fine.
+fn collect_index_idents(expr: &Expr, out: &mut std::collections::HashSet<String>) {
+    match &expr.kind {
+        ExprKind::Identifier(name) => {
+            out.insert(name.clone());
+        }
+        ExprKind::Binary { left, right, .. } => {
+            collect_index_idents(left, out);
+            collect_index_idents(right, out);
+        }
+        ExprKind::Unary { operand, .. } => collect_index_idents(operand, out),
+        ExprKind::Call { args, .. } => {
+            for a in args {
+                collect_index_idents(&a.value, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_index_idents(object, out);
+            for a in args {
+                collect_index_idents(&a.value, out);
+            }
+        }
+        ExprKind::Index { object, index } => {
+            collect_index_idents(object, out);
+            collect_index_idents(index, out);
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            collect_index_idents(object, out);
+        }
+        ExprKind::Cast { expr, .. } => collect_index_idents(expr, out),
+        _ => {}
+    }
+}
+
+fn mono_scan_block(b: &Block, s: &mut MonotoneScan) {
+    for stmt in &b.stmts {
+        mono_scan_stmt(stmt, s);
+    }
+    if let Some(e) = &b.final_expr {
+        mono_scan_expr(e, s);
+    }
+}
+
+fn mono_scan_stmt(stmt: &Stmt, s: &mut MonotoneScan) {
+    match &stmt.kind {
+        StmtKind::Let { pattern, value, .. } => {
+            // A body-local `let x` shadows (or re-initializes) the name —
+            // by-name tracking can no longer tell the bindings apart.
+            for n in pattern.binding_names() {
+                s.poison(&n);
+            }
+            mono_scan_expr(value, s);
+        }
+        StmtKind::LetUninit { name, .. } => s.poison(name),
+        StmtKind::LetElse {
+            pattern,
+            value,
+            else_block,
+            ..
+        } => {
+            for n in pattern.binding_names() {
+                s.poison(&n);
+            }
+            mono_scan_expr(value, s);
+            mono_scan_block(else_block, s);
+        }
+        StmtKind::Defer { body } => mono_scan_block(body, s),
+        StmtKind::ErrDefer { binding, body } => {
+            if let Some(b) = binding {
+                s.poison(b);
+            }
+            mono_scan_block(body, s);
+        }
+        StmtKind::Assign { target, value } => {
+            if let ExprKind::Identifier(x) = &target.kind {
+                match classify_monotone_rhs(x, value) {
+                    Some(dir) => s.record(x, dir),
+                    None => s.poison(x),
+                }
+            } else {
+                // Field / index / deref store — the root local's contents
+                // change in a shape we don't model.
+                if let Some(root) = place_root_ident(target) {
+                    s.poison(root);
+                }
+                mono_scan_expr(target, s);
+            }
+            mono_scan_expr(value, s);
+        }
+        StmtKind::CompoundAssign { target, op, value } => {
+            if let ExprKind::Identifier(x) = &target.kind {
+                let dir = match (op, &value.kind) {
+                    (CompoundOp::Add, ExprKind::Integer(c, _)) if *c >= 0 => {
+                        Some(MonotoneDir::Increasing)
+                    }
+                    (CompoundOp::Sub, ExprKind::Integer(c, _)) if *c >= 0 => {
+                        Some(MonotoneDir::Decreasing)
+                    }
+                    _ => None,
+                };
+                match dir {
+                    Some(d) => s.record(x, d),
+                    None => s.poison(x),
+                }
+            } else {
+                if let Some(root) = place_root_ident(target) {
+                    s.poison(root);
+                }
+                mono_scan_expr(target, s);
+            }
+            mono_scan_expr(value, s);
+        }
+        StmtKind::Expr(e) => mono_scan_expr(e, s),
+    }
+}
+
+fn mono_scan_call_args(args: &[CallArg], s: &mut MonotoneScan) {
+    for a in args {
+        if a.mut_marker {
+            // `f(mut x)` — the callee takes `mut ref` and may write x.
+            if let Some(root) = place_root_ident(&a.value) {
+                s.poison(root);
+            }
+        }
+        mono_scan_expr(&a.value, s);
+    }
+}
+
+/// EXHAUSTIVE over `ExprKind` — no wildcard arm, by design (see the
+/// module-section comment's fail-closed rationale).
+fn mono_scan_expr(e: &Expr, s: &mut MonotoneScan) {
+    match &e.kind {
+        ExprKind::Integer(_, _)
+        | ExprKind::Float(_, _)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::MultiStringLit(_)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::Bool(_)
+        | ExprKind::Identifier(_)
+        | ExprKind::Path { .. }
+        | ExprKind::SelfValue
+        | ExprKind::SelfType
+        | ExprKind::PipePlaceholder
+        | ExprKind::Continue { .. }
+        | ExprKind::Error => {}
+        ExprKind::InterpolatedStringLit(parts) => {
+            for p in parts {
+                if let ParsedInterpolationPart::Expr(inner) = p {
+                    mono_scan_expr(inner, s);
+                }
+            }
+        }
+        ExprKind::Binary { left, right, .. } => {
+            mono_scan_expr(left, s);
+            mono_scan_expr(right, s);
+        }
+        ExprKind::Unary { operand, .. } => mono_scan_expr(operand, s),
+        ExprKind::Question(inner) => mono_scan_expr(inner, s),
+        ExprKind::OptionalChain { object, args, .. } => {
+            // Method-call-like: the receiver may be taken `mut ref self`.
+            if let Some(root) = place_root_ident(object) {
+                s.poison(root);
+            }
+            mono_scan_expr(object, s);
+            if let Some(a) = args {
+                mono_scan_call_args(a, s);
+            }
+        }
+        ExprKind::NilCoalesce { left, right } => {
+            mono_scan_expr(left, s);
+            mono_scan_expr(right, s);
+        }
+        ExprKind::Call { callee, args } => {
+            // `ptr.*` builtins can take a local's address and write through
+            // it later — poison every place root in the argument list.
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                if segments.first().is_some_and(|s0| s0 == "ptr") {
+                    for a in args {
+                        if let Some(root) = place_root_ident(&a.value) {
+                            s.poison(root);
+                        }
+                    }
+                }
+            }
+            mono_scan_expr(callee, s);
+            mono_scan_call_args(args, s);
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            // Methods may take `mut ref self` — poison the receiver root.
+            if let Some(root) = place_root_ident(object) {
+                s.poison(root);
+            }
+            mono_scan_expr(object, s);
+            mono_scan_call_args(args, s);
+        }
+        ExprKind::FieldAccess { object, .. } => mono_scan_expr(object, s),
+        ExprKind::TupleIndex { object, .. } => mono_scan_expr(object, s),
+        ExprKind::Index { object, index } => {
+            let mut idx_idents = std::collections::HashSet::new();
+            collect_index_idents(index, &mut idx_idents);
+            s.index_used.extend(idx_idents);
+            mono_scan_expr(object, s);
+            mono_scan_expr(index, s);
+        }
+        ExprKind::Block(b) => mono_scan_block(b, s),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            mono_scan_expr(condition, s);
+            mono_scan_block(then_block, s);
+            if let Some(e) = else_branch {
+                mono_scan_expr(e, s);
+            }
+        }
+        ExprKind::IfLet {
+            pattern,
+            value,
+            then_block,
+            else_branch,
+        } => {
+            for n in pattern.binding_names() {
+                s.poison(&n);
+            }
+            mono_scan_expr(value, s);
+            mono_scan_block(then_block, s);
+            if let Some(e) = else_branch {
+                mono_scan_expr(e, s);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            mono_scan_expr(scrutinee, s);
+            for arm in arms {
+                for n in arm.pattern.binding_names() {
+                    s.poison(&n);
+                }
+                if let Some(g) = &arm.guard {
+                    mono_scan_expr(g, s);
+                }
+                mono_scan_expr(&arm.body, s);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            mono_scan_expr(condition, s);
+            mono_scan_block(body, s);
+        }
+        ExprKind::WhileLet {
+            pattern,
+            value,
+            body,
+            ..
+        } => {
+            for n in pattern.binding_names() {
+                s.poison(&n);
+            }
+            mono_scan_expr(value, s);
+            mono_scan_block(body, s);
+        }
+        ExprKind::For {
+            pattern,
+            iterable,
+            body,
+            ..
+        } => {
+            for n in pattern.binding_names() {
+                s.poison(&n);
+            }
+            mono_scan_expr(iterable, s);
+            mono_scan_block(body, s);
+        }
+        ExprKind::Loop { body, .. } => mono_scan_block(body, s),
+        ExprKind::LabeledBlock { body, .. } => mono_scan_block(body, s),
+        ExprKind::Closure { params, body, .. } => {
+            for cp in params {
+                for n in cp.pattern.binding_names() {
+                    s.poison(&n);
+                }
+            }
+            mono_scan_expr(body, s);
+        }
+        ExprKind::Return(opt) => {
+            if let Some(inner) = opt {
+                mono_scan_expr(inner, s);
+            }
+        }
+        ExprKind::Break { value, .. } => {
+            if let Some(v) = value {
+                mono_scan_expr(v, s);
+            }
+        }
+        ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) => {
+            for x in exprs {
+                mono_scan_expr(x, s);
+            }
+        }
+        ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for x in items {
+                mono_scan_expr(x, s);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            mono_scan_expr(value, s);
+            mono_scan_expr(count, s);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs {
+                mono_scan_expr(k, s);
+                mono_scan_expr(v, s);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                mono_scan_expr(&f.value, s);
+            }
+            if let Some(sp) = spread {
+                mono_scan_expr(sp, s);
+            }
+        }
+        ExprKind::Pipe { left, right } => {
+            mono_scan_expr(left, s);
+            mono_scan_expr(right, s);
+        }
+        ExprKind::Cast { expr, .. } => mono_scan_expr(expr, s),
+        ExprKind::OffsetOf { .. } => {}
+        ExprKind::Range { start, end, .. } => {
+            if let Some(st) = start {
+                mono_scan_expr(st, s);
+            }
+            if let Some(en) = end {
+                mono_scan_expr(en, s);
+            }
+        }
+        ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) | ExprKind::Par(b) => {
+            mono_scan_block(b, s);
+        }
+        ExprKind::Lock { body, .. } => mono_scan_block(body, s),
+        ExprKind::Providers { bindings, body } => {
+            for pb in bindings {
+                mono_scan_expr(&pb.value, s);
+            }
+            mono_scan_block(body, s);
+        }
+    }
+}
+
+/// One monotone variable prepared for assume emission: its slot, the
+/// direction, and the loop-entry value loaded in the preheader.
+pub(super) struct MonotoneInit<'ctx> {
+    name: String,
+    dir: MonotoneDir,
+    slot: VarSlot<'ctx>,
+    init: inkwell::values::IntValue<'ctx>,
+}
+
+impl<'ctx> super::Codegen<'ctx> {
+    /// Scan a loop guard + body and return the qualifying monotone index
+    /// variables, deterministically ordered. See the monotone-scan
+    /// section comment above for the qualification rules.
+    pub(super) fn collect_monotone_index_vars(
+        &self,
+        guard: Option<&Expr>,
+        body: &Block,
+    ) -> Vec<(String, MonotoneDir)> {
+        let mut scan = MonotoneScan::default();
+        if let Some(g) = guard {
+            mono_scan_expr(g, &mut scan);
+        }
+        mono_scan_block(body, &mut scan);
+        let MonotoneScan {
+            dirs,
+            poisoned,
+            index_used,
+        } = scan;
+        let mut out: Vec<(String, MonotoneDir)> = dirs
+            .into_iter()
+            .filter(|(name, _)| !poisoned.contains(name) && index_used.contains(name))
+            .collect();
+        // HashMap order is nondeterministic; sort so IR output is stable
+        // across runs (build reproducibility + IR-test pinning).
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// Load each monotone variable's loop-entry value at the current
+    /// builder position (the loop PREHEADER — must be called before the
+    /// branch into the loop machinery). Skips names without an int-typed
+    /// local slot (module bindings, non-int types).
+    pub(super) fn load_monotone_inits(
+        &self,
+        vars: &[(String, MonotoneDir)],
+    ) -> Vec<MonotoneInit<'ctx>> {
+        let mut out = Vec::new();
+        for (name, dir) in vars {
+            let Some(slot) = self.variables.get(name).copied() else {
+                continue;
+            };
+            if !slot.ty.is_int_type() {
+                continue;
+            }
+            let init = self
+                .builder
+                .build_load(slot.ty, slot.ptr, &format!("{name}.mono.init"))
+                .unwrap()
+                .into_int_value();
+            out.push(MonotoneInit {
+                name: name.clone(),
+                dir: *dir,
+                slot,
+                init,
+            });
+        }
+        out
+    }
+
+    /// Emit `llvm.assume(x >= init)` (Increasing) / `(x <= init)`
+    /// (Decreasing) at the current builder position — the loop BODY
+    /// entry. The optimizer consumes the assumes (zero residue measured);
+    /// soundness rests on AOT overflow trapping (see section comment).
+    pub(super) fn emit_monotone_assumes(&self, inits: &[MonotoneInit<'ctx>]) {
+        if inits.is_empty() {
+            return;
+        }
+        let assume =
+            inkwell::intrinsics::Intrinsic::find("llvm.assume").expect("llvm.assume must exist");
+        // Not overloaded, so empty param-types is correct (mirror of
+        // reduce.rs's existing llvm.assume emission).
+        let assume_fn = assume
+            .get_declaration(&self.module, &[])
+            .expect("llvm.assume declaration");
+        for mi in inits {
+            let cur = self
+                .builder
+                .build_load(mi.slot.ty, mi.slot.ptr, &format!("{}.mono.cur", mi.name))
+                .unwrap()
+                .into_int_value();
+            let pred = match mi.dir {
+                MonotoneDir::Increasing => inkwell::IntPredicate::SGE,
+                MonotoneDir::Decreasing => inkwell::IntPredicate::SLE,
+            };
+            let fact = self
+                .builder
+                .build_int_compare(pred, cur, mi.init, &format!("{}.mono.fact", mi.name))
+                .unwrap();
+            self.builder
+                .build_call(assume_fn, &[fact.into()], "")
+                .unwrap();
         }
     }
 }

@@ -765,6 +765,21 @@ pub(crate) enum AssertedIndexBound {
     UpperBound { idx_var: String, vec_var: String },
 }
 
+/// Direction of a syntactically-monotone loop variable — a `let mut`
+/// binding whose every write inside a loop body is `x = x + c` /
+/// `x += c` (Increasing) or `x = x - c` / `x -= c` (Decreasing) with a
+/// non-negative integer literal `c`. Sound to emit `llvm.assume(x >=
+/// init)` / `(x <= init)` at body entry because AOT arithmetic traps
+/// on overflow (design.md § Arithmetic Overflow; landed 2026-06-07) —
+/// a wrapping update panics before the wrapped value could violate
+/// the assume. See `control_flow_bce.rs` § monotone scan and
+/// `docs/investigations/bce_monotonic_assume.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MonotoneDir {
+    Increasing,
+    Decreasing,
+}
+
 // ── Spawn-site metadata (Debugger Contract slice 3) ────────────
 
 /// One row of the `KARAC_SPAWN_SITES` metadata table.

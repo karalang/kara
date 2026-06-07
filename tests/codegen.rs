@@ -9011,6 +9011,217 @@ fn main() {
         );
     }
 
+    // ── Monotone-variable BCE — llvm.assume range facts ────────────────
+    // control_flow_bce.rs § monotone scan: a `let mut` cursor whose every
+    // in-loop write is `x = x ± <non-negative literal>` gets
+    // `llvm.assume(x >=/<= loop-entry value)` at body entry, letting LLVM
+    // fold bounds checks on conditionally-updated write heads (the
+    // kata-26/88 shape — docs/investigations/bce_monotonic_assume.md).
+    // Sound because AOT arithmetic traps on overflow (the update panics
+    // before a wrapped value could violate the assume).
+
+    #[test]
+    fn test_ir_monotone_index_var_emits_assume() {
+        let ir = ir_for(
+            r#"
+fn dedup(v: mut Slice[i64], n: i64) -> i64 {
+    let mut k = 1;
+    for i in 1..n {
+        if v[i] != v[k - 1] {
+            v[k] = v[i];
+            k = k + 1;
+        }
+    }
+    k
+}
+"#,
+        );
+        assert!(
+            ir.contains("llvm.assume"),
+            "monotone index var must emit llvm.assume, IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("k.mono.fact"),
+            "assume operand must carry the k.mono.fact label, IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("k.mono.init"),
+            "preheader must load the loop-entry value, IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_mixed_direction_var_emits_no_assume() {
+        // k moves both directions — not monotone, scan must reject.
+        let ir = ir_for(
+            r#"
+fn wobble(v: mut Slice[i64], n: i64) -> i64 {
+    let mut k = 1;
+    for i in 1..n {
+        if v[i] > 0 {
+            k = k + 1;
+        } else {
+            k = k - 1;
+        }
+        v[k] = v[i];
+    }
+    k
+}
+"#,
+        );
+        assert!(
+            !ir.contains("k.mono.fact"),
+            "mixed-direction var must not get an assume, IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_mut_arg_escape_emits_no_assume() {
+        // k escapes through a `mut` call-site marker — the callee may
+        // write it arbitrarily; scan must poison.
+        let ir = ir_for(
+            r#"
+fn bump(x: mut ref i64) {
+    *x = *x + 1;
+}
+fn run(v: mut Slice[i64], n: i64) -> i64 {
+    let mut k = 1;
+    for i in 1..n {
+        v[k] = v[i];
+        k = k + 1;
+        bump(mut k);
+    }
+    k
+}
+"#,
+        );
+        assert!(
+            !ir.contains("k.mono.fact"),
+            "mut-marked escape must poison the var, IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_plain_reassign_emits_no_assume() {
+        // `k = v[i]` is a non-monotone write — scan must poison.
+        let ir = ir_for(
+            r#"
+fn track(v: mut Slice[i64], n: i64) -> i64 {
+    let mut k = 1;
+    for i in 1..n {
+        v[k] = v[i];
+        k = v[i];
+    }
+    k
+}
+"#,
+        );
+        assert!(
+            !ir.contains("k.mono.fact"),
+            "plain reassignment must poison the var, IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_monotone_dedup_results_unchanged() {
+        // The kata-26 shape end-to-end: assumes must not perturb results.
+        let out = run_program(
+            r#"
+fn remove_duplicates(nums: mut Slice[i64], len: i64) -> i64 {
+    if len == 0 {
+        return 0;
+    }
+    let mut k = 1;
+    for i in 1..len {
+        if nums[i] != nums[k - 1] {
+            nums[k] = nums[i];
+            k = k + 1;
+        }
+    }
+    k
+}
+fn main() {
+    let mut a: Array[i64, 10] = [0, 0, 1, 1, 1, 2, 2, 3, 3, 4];
+    let k = remove_duplicates(mut a, 10);
+    println(k);
+    for i in 0..k {
+        println(a[i]);
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "5\n0\n1\n2\n3\n4\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_monotone_var_overflow_traps_before_assume_misleads() {
+        // Soundness pin: the monotone update that would wrap MUST trap —
+        // the assume is only sound because the wrapped value never exists.
+        // k is index-used (so the assume IS emitted) and driven to
+        // overflow by a large literal step.
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.filled(4, 7);
+    let mut k = 0;
+    let mut i = 0;
+    while i < 100 {
+        if k < 4 {
+            println(v[k]);
+        }
+        k = k + 4611686018427387904;
+        i = i + 1;
+    }
+    println(k);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("integer overflow"),
+                "wrapping monotone update must trap, got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_monotone_decreasing_cursor_results_unchanged() {
+        // Kata-88 shape: decreasing write head + decreasing read cursors.
+        let out = run_program(
+            r#"
+fn merge(nums1: mut Slice[i64], m: i64, nums2: Slice[i64], n: i64) {
+    let mut i = m - 1;
+    let mut j = n - 1;
+    let mut k = m + n - 1;
+    while j >= 0 {
+        if i >= 0 and nums1[i] > nums2[j] {
+            nums1[k] = nums1[i];
+            i = i - 1;
+        } else {
+            nums1[k] = nums2[j];
+            j = j - 1;
+        }
+        k = k - 1;
+    }
+}
+fn main() {
+    let mut a: Array[i64, 6] = [1, 2, 3, 0, 0, 0];
+    let b: Array[i64, 3] = [2, 5, 6];
+    merge(mut a, 3, b, 3);
+    for i in 0..6 {
+        println(a[i]);
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1\n2\n2\n3\n5\n6\n");
+        }
+    }
+
     // ── Level 2 crash diagnostics (design.md § Crash diagnostics) ──────
     // When a source filename is threaded into codegen (the CLI build/run
     // path), panics report `panic at <file>:<line>:<col> in <fn>: <msg>`.

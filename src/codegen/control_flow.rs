@@ -725,6 +725,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let body_bb = self.context.append_basic_block(fn_val, "while.body");
         let exit_bb = self.context.append_basic_block(fn_val, "while.exit");
 
+        // Monotone-variable BCE (control_flow_bce.rs § monotone scan):
+        // load each qualifying variable's loop-entry value here in the
+        // preheader; the matching `llvm.assume`s are emitted at body
+        // entry below.
+        let mono_vars = self.collect_monotone_index_vars(Some(condition), body);
+        let mono_inits = self.load_monotone_inits(&mono_vars);
+
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
         self.loop_stack.push(LoopFrame {
@@ -749,6 +756,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let pushed_bounds = self.collect_asserted_bounds_from_guard(condition);
         let pushed_count = pushed_bounds.len();
         self.asserted_index_bounds.extend(pushed_bounds);
+        // Monotone facts: `x >= / <= its preheader value`, consumed by
+        // LLVM's range passes to fold checks the source guard can't
+        // express (conditionally-updated write heads / cursors).
+        self.emit_monotone_assumes(&mono_inits);
         // Per-iteration scope frame, same shape as compile_for_range — see
         // its comment for the leak rationale.
         self.scope_cleanup_actions.push(Vec::new());

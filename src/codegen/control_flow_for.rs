@@ -547,6 +547,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let counter = self.create_entry_alloca(fn_val, "for.i", i64_t.into());
         self.builder.build_store(counter, start_val).unwrap();
 
+        // Monotone-variable BCE preheader loads (control_flow_bce.rs §
+        // monotone scan) — the loop var itself is covered by the
+        // for-range bounds below; this targets body-updated `let mut`
+        // cursors (e.g. a compaction write head `k`).
+        let mono_vars = self.collect_monotone_index_vars(None, body);
+        let mono_inits = self.load_monotone_inits(&mono_vars);
+
         let cond_bb = self.context.append_basic_block(fn_val, "for.cond");
         let body_bb = self.context.append_basic_block(fn_val, "for.body");
         let incr_bb = self.context.append_basic_block(fn_val, "for.incr");
@@ -602,6 +609,9 @@ impl<'ctx> super::Codegen<'ctx> {
             self.collect_asserted_bounds_from_for_range(pattern, start, end, inclusive);
         let pushed_for_count = pushed_for_bounds.len();
         self.asserted_index_bounds.extend(pushed_for_bounds);
+        // Monotone facts at body entry (pairs with the preheader loads
+        // above) — see compile_while's twin call for rationale.
+        self.emit_monotone_assumes(&mono_inits);
         // Per-iteration scope frame for body-local lets — the alloca lives
         // for the whole function (entry-block one-shot), but a `let node
         // = SharedT { … }` rebound on every iteration must drop the
