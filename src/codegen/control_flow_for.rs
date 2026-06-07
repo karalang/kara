@@ -559,6 +559,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
         });
 
         // Condition: i < end (or i <= end for inclusive)
@@ -704,6 +705,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
         });
 
         self.builder.position_at_end(cond_bb);
@@ -815,6 +817,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
         });
 
         // Condition: i < len
@@ -958,6 +961,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
         });
 
         // Condition: byte_offset < len. (Empty string: len == 0, falls
@@ -1085,6 +1089,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
         });
 
         // Condition: idx < len.
@@ -1228,6 +1233,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: loop_bb,
             break_bb: exit_bb,
             result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
         });
 
         // loop_bb: advance iterator; branch on result.
@@ -1351,6 +1357,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: loop_bb,
             break_bb: exit_bb,
             result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
         });
 
         self.builder.position_at_end(loop_bb);
@@ -1435,6 +1442,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
         });
 
         // Condition: i < N

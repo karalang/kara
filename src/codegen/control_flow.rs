@@ -59,6 +59,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(then_bb);
+        // The cleanup frame is pushed BEFORE the pattern bind (mirroring
+        // `compile_while_let`'s body frame and match arms) so a shared
+        // pattern binding's scope-exit `RcDec` (`bind_pattern_values`'
+        // alias acquire) drains at the END OF THIS ARM — not in the
+        // enclosing frame, where a then-block inside a loop would inc once
+        // per iteration but dec only once at the enclosing scope's exit.
+        self.scope_cleanup_actions.push(Vec::new());
         self.bind_pattern_values(pattern, val)?;
         // B-track: zero the caps of moved-in fields so the source EnumDrop
         // (registered above) frees only the *unbound* heap fields, not the ones
@@ -68,13 +75,18 @@ impl<'ctx> super::Codegen<'ctx> {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
         }
         self.tail_ret_inner = tail;
-        let then_val = self.compile_block_with_frame(then_block)?;
+        let then_val = self.compile_block(then_block)?;
         let then_terminated = self
             .builder
             .get_insert_block()
             .unwrap()
             .get_terminator()
             .is_some();
+        if !then_terminated {
+            self.drain_top_frame_with_emit();
+        } else {
+            self.scope_cleanup_actions.pop();
+        }
         let then_end = self.builder.get_insert_block().unwrap();
         if !then_terminated {
             self.builder.build_unconditional_branch(merge_bb).unwrap();
@@ -157,6 +169,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: cond_bb,
             break_bb: exit_bb,
             result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
         });
 
         // Header: re-evaluate the scrutinee and test the pattern every
@@ -703,6 +716,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: cond_bb,
             break_bb: exit_bb,
             result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
         });
 
         self.builder.position_at_end(cond_bb);
@@ -765,6 +779,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: loop_bb,
             break_bb: exit_bb,
             result_slot: Some(result_slot),
+            cleanup_depth: self.scope_cleanup_actions.len(),
         });
 
         self.builder.build_unconditional_branch(loop_bb).unwrap();
@@ -869,6 +884,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: continue_unreachable_bb,
             break_bb: exit_bb,
             result_slot: Some(result_slot),
+            cleanup_depth: self.scope_cleanup_actions.len(),
         });
 
         // Compile the body. `compile_block` returns the tail expression's
@@ -935,6 +951,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.build_store(slot, val).unwrap();
                 }
             }
+            // Drain the frames INSIDE the loop being exited (per-iteration
+            // frame + any nested block / `if let` / match-arm frames between
+            // here and the loop boundary) — the back-edge / scope-end drains
+            // are on paths this branch skips. Emit-only: the compile-time
+            // stack is untouched, the fall-through path keeps its own drains.
+            self.emit_scope_cleanup_from(frame.cleanup_depth);
             self.builder
                 .build_unconditional_branch(frame.break_bb)
                 .unwrap();
@@ -960,6 +982,9 @@ impl<'ctx> super::Codegen<'ctx> {
             None => self.loop_stack.last().cloned(),
         };
         if let Some(frame) = frame {
+            // Same early-exit drain as `compile_break`: `continue` jumps to
+            // the loop header, skipping the body-end back-edge drain.
+            self.emit_scope_cleanup_from(frame.cleanup_depth);
             self.builder
                 .build_unconditional_branch(frame.continue_bb)
                 .unwrap();

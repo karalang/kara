@@ -49,7 +49,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the heap struct.
                 let key = (pattern.span.offset, pattern.span.length);
                 if let Some(type_name) = self.pattern_binding_types.get(&key).cloned() {
-                    if self.shared_types.contains_key(&type_name) {
+                    if let Some(info) = self.shared_types.get(&type_name).cloned() {
                         let ptr_ty = self.context.ptr_type(AddressSpace::default());
                         let ptr_val = match scrut {
                             BasicValueEnum::IntValue(iv) => self
@@ -69,7 +69,40 @@ impl<'ctx> super::Codegen<'ctx> {
                                 ty: ptr_ty.into(),
                             },
                         );
-                        self.record_var_type_name(name.clone(), type_name);
+                        self.record_var_type_name(name.clone(), type_name.clone());
+                        // Alias acquire — pattern-binding sibling of the
+                        // let-path receive-inc (`stmts.rs` shared_info arm)
+                        // and the kata-21 field-let acquire. The binding
+                        // aliases a payload OWNED BY ITS SOURCE (an enum
+                        // payload word, typically an `Option[shared]`
+                        // field); without its own +1, any store that
+                        // displaces the source's ref while the binding is
+                        // live frees the node under it — kata #24's
+                        // pair-swap (`if let Some(second) = first.next {
+                        // first.next = second.next; ... }`) reads `second`
+                        // through freed memory. The scope-exit `RcDec`
+                        // (`track_rc_var`, drained at the binding scope's
+                        // end — if-let arm / match arm / while-let body
+                        // frame) balances the inc; the entry-block null
+                        // init keeps the early-exit drains' reload-by-name
+                        // guard sound on paths where the bind never ran.
+                        //
+                        // Skipped for b2 count-free roles (fresh nodes /
+                        // cursors / C2a borrowed-family walk bindings —
+                        // nothing is freed mid-scope in those families, so
+                        // count-free aliases never dangle) and for
+                        // headerless (phase-D) members, which have no rc
+                        // word to touch — an inc would corrupt the first
+                        // user field. b2 is a structural precondition of
+                        // headerless, so the role check alone covers most
+                        // of it; the explicit layout check keeps the two
+                        // gates independent.
+                        if !self.b2_skips_counts(name) && !self.headerless_here(&type_name) {
+                            let ptr_v = ptr_val.into_pointer_value();
+                            self.emit_refcount_inc(name, info.heap_type, ptr_v);
+                            self.track_rc_var(name, alloca, info.heap_type);
+                            self.null_init_slot_in_entry_block(alloca);
+                        }
                         return Ok(());
                     }
                     // Phase 8 `File` handle slice F4: same int→ptr

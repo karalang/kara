@@ -4810,4 +4810,103 @@ fn main() {
             "owned_vec_param_assign_move",
         );
     }
+
+    // ── kata-#24: pattern-binding alias acquire ───────────────────
+
+    #[test]
+    fn asan_if_let_shared_binding_field_displacement() {
+        // The kata-#24 minimal UAF: `if let Some(second) = first.next`
+        // bound a NON-retained alias; `first.next = second.next`
+        // released the field's only ref to that node, freeing it under
+        // the live binding — the `second.val` read below is a
+        // heap-use-after-free pre-fix. `bind_pattern_values`' alias
+        // acquire (+1 at bind, scope-exit RcDec) keeps it alive.
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn from3() -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let n2 = ListNode { val: 2, next: None };
+    let n3 = ListNode { val: 3, next: None };
+    n2.next = Some(n3);
+    head.next = Some(n2);
+    Some(head)
+}
+fn poke(head: Option[ListNode]) {
+    if let Some(first) = head {
+        if let Some(second) = first.next {
+            first.next = second.next;
+            println(second.val);
+        }
+    }
+}
+fn main() {
+    poke(from3());
+}
+"#,
+            &["2"],
+            "if_let_shared_binding_field_displacement",
+        );
+    }
+
+    #[test]
+    fn asan_swap_pairs_pair_relink_loop() {
+        // Full kata-#24 iterative pair-swap over a fresh 6-node chain:
+        // per-pair three-store re-link with `break` exits from inside
+        // `if let` arms holding live bindings. Catches both halves of
+        // the fix under ASAN — the binding acquire (UAF on `second`)
+        // and the break-drain (whose absence leaks; whose
+        // over-aggressive form would double-free on the fall-through
+        // path).
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build(n: i64) -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    for i in 2..n + 1 {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+fn swap_pairs(head: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut prev = dummy;
+    loop {
+        if let Some(first) = prev.next {
+            if let Some(second) = first.next {
+                first.next = second.next;
+                second.next = Some(first);
+                prev.next = Some(second);
+                prev = first;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    dummy.next
+}
+fn main() {
+    let mut cur = swap_pairs(build(6));
+    let mut sum = 0;
+    loop {
+        match cur {
+            Some(node) => {
+                sum = sum + node.val;
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+    println(sum);
+}
+"#,
+            &["21"],
+            "swap_pairs_pair_relink_loop",
+        );
+    }
 }

@@ -1457,12 +1457,36 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `emit_scope_cleanup_for_error_path` instead, which runs errdefers
     /// in phase 1 before reaching this same drop+defer drain in phase 2.
     pub(super) fn emit_scope_cleanup(&mut self) {
+        self.emit_scope_cleanup_from(0);
+    }
+
+    /// Emit-only drain of cleanup frames `[start_frame..]`, innermost
+    /// first — the compile-time stack is left untouched (no pop), so the
+    /// textual fall-through path still drains its frames at their own
+    /// scope boundaries. Two callers:
+    ///
+    /// - `emit_scope_cleanup` (start 0): function-exit / early-`return`
+    ///   parity drain of every live frame.
+    /// - `compile_break` / `compile_continue` (start =
+    ///   `LoopFrame::cleanup_depth`): drain only the frames INSIDE the
+    ///   loop / labeled block being exited — the per-iteration frame plus
+    ///   any nested block / `if let` / match-arm frames between the jump
+    ///   site and the loop boundary. Frames outside the loop stay live
+    ///   and drain at their own boundaries. Every action goes through
+    ///   `emit_cleanup_action_at`, inheriting the reload-by-name +
+    ///   null-sentinel guards, so an action whose binding didn't execute
+    ///   on this path no-ops at runtime.
+    ///
+    /// `UserErrDefer` is skipped — `break`/`continue`/`return` are normal
+    /// exits; errdefers only run on the error path
+    /// (`emit_scope_cleanup_for_error_path`).
+    pub(super) fn emit_scope_cleanup_from(&mut self, start_frame: usize) {
         let vec_ty = self.vec_struct_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.unwrap();
 
-        for frame_idx in (0..self.scope_cleanup_actions.len()).rev() {
+        for frame_idx in (start_frame..self.scope_cleanup_actions.len()).rev() {
             let n = self.scope_cleanup_actions[frame_idx].len();
             for action_idx in (0..n).rev() {
                 if matches!(

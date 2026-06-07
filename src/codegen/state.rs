@@ -726,6 +726,18 @@ pub(crate) struct LoopFrame<'ctx> {
     /// always `Some` and stores both the body's tail value (on normal
     /// fall-through) and any `break label expr` value (on early exit).
     pub(crate) result_slot: Option<PointerValue<'ctx>>,
+    /// `scope_cleanup_actions.len()` at the moment this frame was pushed
+    /// — i.e. the index of the first cleanup frame INSIDE the loop /
+    /// labeled block. `compile_break` / `compile_continue` drain frames
+    /// `[cleanup_depth..]` (emit-only, stack untouched) before branching
+    /// out, so bindings tracked in the per-iteration frame and in any
+    /// nested block / `if let` / match-arm frames between the jump and
+    /// the loop boundary get their scope-exit cleanup on the early-exit
+    /// path too. Without it, a `break` past a tracked shared binding
+    /// skipped its `RcDec` — one leaked ref per early exit (surfaced by
+    /// kata #24's `if let`-bound pair-swap cursors, latent for every
+    /// loop-body `let` + `break` shape before that).
+    pub(crate) cleanup_depth: usize,
 }
 
 /// One half of a Vec-index safety fact, asserted by a dominating

@@ -4304,6 +4304,224 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_if_let_shared_binding_survives_field_displacement() {
+        // Regression for the kata-#24 (swap-nodes-in-pairs) UAF
+        // (2026-06-07): an `if let Some(second) = first.next` binding
+        // was a NON-retained alias of the field's payload, so the
+        // store `first.next = second.next` — which releases the
+        // field's (only) ref to that node — freed it while the binding
+        // was still live; the following read printed freed memory.
+        // `bind_pattern_values` now gives pattern-bound shared aliases
+        // their own +1 (`emit_refcount_inc` + `track_rc_var`, the
+        // pattern sibling of the let-path receive-inc), drained at the
+        // binding scope's end. Pre-fix: prints 3 (the freed chunk's
+        // neighbor) instead of 2.
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn from3() -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let n2 = ListNode { val: 2, next: None };
+    let n3 = ListNode { val: 3, next: None };
+    n2.next = Some(n3);
+    head.next = Some(n2);
+    Some(head)
+}
+fn poke(head: Option[ListNode]) {
+    if let Some(first) = head {
+        if let Some(second) = first.next {
+            first.next = second.next;
+            println(second.val);
+        }
+    }
+}
+fn main() {
+    poke(from3());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2");
+        }
+    }
+
+    #[test]
+    fn test_e2e_swap_pairs_iterative_pair_relink() {
+        // The full kata-#24 iterative shape: a dummy-anchored cursor
+        // loop that re-links each adjacent pair via three stores
+        // (`first.next = second.next; second.next = Some(first);
+        // prev.next = Some(second)`), with `break` exiting from inside
+        // the `if let` arms while bindings are live. Exercises the
+        // pattern-binding alias acquire (the `second` node's only ref
+        // between stores 1 and 3 is the binding) AND the
+        // `break`-past-frames drain (`first` is bound when the inner
+        // else-arm breaks). Pre-fix: SIGSEGV / garbage output.
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build(n: i64) -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    for i in 2..n + 1 {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+fn swap_pairs(head: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut prev = dummy;
+    loop {
+        if let Some(first) = prev.next {
+            if let Some(second) = first.next {
+                first.next = second.next;
+                second.next = Some(first);
+                prev.next = Some(second);
+                prev = first;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    dummy.next
+}
+fn main() {
+    let mut cur = swap_pairs(build(5));
+    loop {
+        match cur {
+            Some(node) => {
+                println(node.val);
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let got: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(got, ["2", "1", "4", "3", "5"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_swap_pairs_recursive_mixed_returns() {
+        // Recursive kata-#24 form: `first.next = swap_pairs(second.next)`
+        // consumes a fresh +1 chain while `second.next = Some(first)`
+        // stores an alias that must retain — both store flavors on
+        // re-parented nodes, with the base case returning the bare
+        // `head` param (the per-branch-compensation mix from kata #21's
+        // fca1e3ea). Pre-fix: SIGBUS.
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build(n: i64) -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    for i in 2..n + 1 {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+fn swap_pairs(head: Option[ListNode]) -> Option[ListNode] {
+    if let Some(first) = head {
+        if let Some(second) = first.next {
+            first.next = swap_pairs(second.next);
+            second.next = Some(first);
+            Some(second)
+        } else {
+            head
+        }
+    } else {
+        None
+    }
+}
+fn main() {
+    let mut cur = swap_pairs(build(6));
+    let mut sum = 0;
+    let mut acc = 0;
+    loop {
+        match cur {
+            Some(node) => {
+                acc = acc * 10 + node.val;
+                sum = sum + node.val;
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+    println(acc);
+    println(sum);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let got: Vec<&str> = out.trim().lines().collect();
+            // [2, 1, 4, 3, 6, 5] → digits 214365, sum 21.
+            assert_eq!(got, ["214365", "21"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_continue_drains_loop_body_shared_binding() {
+        // `continue` sibling of the `break` drain: jumping to the loop
+        // header skips the body-end back-edge drain, so a shared
+        // binding bound earlier in the iteration kept its +1 forever
+        // (leak) — and the next iteration's re-bind inc'd again.
+        // `compile_continue` now drains frames `[cleanup_depth..]`
+        // before branching (emit-only, null-guarded reload-by-name).
+        // The observable here is correctness of the counts: the chain
+        // must still be fully walkable afterward (an over-dec variant
+        // would free nodes mid-walk and print garbage).
+        let out = run_program(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build(n: i64) -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    for i in 2..n + 1 {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+fn sum_odd_positions(head: Option[ListNode]) -> i64 {
+    let mut total = 0;
+    let mut cur = head;
+    let mut idx = 0;
+    loop {
+        if let Some(node) = cur {
+            cur = node.next;
+            idx = idx + 1;
+            if idx - (idx / 2) * 2 == 0 {
+                continue;
+            }
+            total = total + node.val;
+        } else {
+            break;
+        }
+    }
+    total
+}
+fn main() {
+    let head = build(6);
+    println(sum_odd_positions(head)); // 1 + 3 + 5 = 9
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "9");
+        }
+    }
+
+    #[test]
     fn test_e2e_option_shared_chain_through_call_result_arg() {
         // The wip-doc "bug #2" repro shape: a call-result
         // `Option[shared T]` temporary passed directly as an owned arg
