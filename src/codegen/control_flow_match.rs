@@ -1463,6 +1463,59 @@ impl<'ctx> super::Codegen<'ctx> {
         self.track_enum_var(&enum_name, alloca);
         Some((alloca, enum_name))
     }
+
+    /// Wholesale-drop a fresh-temp enum scrutinee on a *miss* edge — the
+    /// pattern did not match, so nothing was bound out and the entire
+    /// value's heap is freed by a single `__karac_drop_<E>` call (no
+    /// cap-suppression, unlike the match edge). Used by
+    /// `compile_while_let`'s loop-exit block: the final non-matching
+    /// scrutinee is evaluated in the header and never enters the
+    /// per-iteration body frame, so without this its heap leaks (B
+    /// follow-up #2 — the `while let` heap-bearing miss variant). Unlike
+    /// `materialize_freshtemp_enum_scrutinee`, this emits the drop call
+    /// inline rather than registering a `track_enum_var` cleanup action,
+    /// because the miss edge is a one-shot exit, not a scope whose frame
+    /// drains. Same fresh-temp / non-shared / has-heap gate, so it is a
+    /// no-op for place scrutinees (owned elsewhere — a wholesale free
+    /// would double-free against that owner's cleanup) and for heap-free
+    /// enums. The builder must be positioned at the miss block.
+    pub(super) fn drop_freshtemp_enum_scrutinee_on_miss(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        if !Self::expr_yields_fresh_owned_temp(scrutinee) {
+            return;
+        }
+        let BasicValueEnum::StructValue(sv) = val else {
+            return;
+        };
+        let Some(enum_name) = self.variant_pattern_enum_name(pattern) else {
+            return;
+        };
+        // Snapshot the layout bits before the mutable `emit_enum_drop_switch`
+        // borrow; `is_shared` enums use the RC path, not the drop switch.
+        let (llvm_ty, is_shared) = match self.enum_layouts.get(&enum_name) {
+            Some(l) => (l.llvm_type, l.is_shared),
+            None => return,
+        };
+        if is_shared {
+            return;
+        }
+        // `None` ⇒ no heap-bearing variant anywhere ⇒ nothing to drop.
+        let Some(drop_fn) = self.emit_enum_drop_switch(&enum_name) else {
+            return;
+        };
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let alloca = self.create_entry_alloca(fn_val, "__whilelet_miss_scrut", llvm_ty.into());
+        let _ = self.builder.build_store(alloca, sv);
+        self.builder
+            .build_call(drop_fn, &[alloca.into()], "")
+            .unwrap();
+    }
 }
 
 /// Whether a payload-position sub-pattern *consumes* ownership of its

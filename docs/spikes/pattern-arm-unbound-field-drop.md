@@ -65,9 +65,22 @@ miscompile; pre-existing, this fix doesn't widen them):**
   recursion then becomes the box's drop walk. The truncation is now a hard
   error (`E_ENUM_PAYLOAD_OVERSIZED`), so this case fails loud instead of
   miscompiling.
-- **`while let` heap-bearing *miss* variant** — the final non-matching scrutinee
-  (evaluated in `cond_bb`, never entering the body) isn't dropped. Narrow: the
-  common drain ends on a heap-free `None`/`Empty`. Tracked, not closed.
+- **`while let` heap-bearing *miss* variant** — **LANDED 2026-06-07.** The final
+  non-matching scrutinee (evaluated in the header, never entering the per-iteration
+  body) was dropped on the floor at loop exit; common drains end on a heap-free
+  `None`/`Empty`, but a heap-bearing non-matching variant (e.g.
+  `enum Item { Go(Vec), Stop(Vec) }`, matching `Go`, terminating on `Stop`)
+  leaked. Fix: `compile_while_let` now routes the false edge through a dedicated
+  `whilelet.miss` block, and `drop_freshtemp_enum_scrutinee_on_miss`
+  (`src/codegen/control_flow_match.rs`) wholesale-drops the final fresh-temp enum
+  there via `__karac_drop_<E>` (no cap-suppression — a miss binds nothing out).
+  Same fresh-temp / non-shared / has-heap gate as
+  `materialize_freshtemp_enum_scrutinee`, so a place scrutinee (owned elsewhere)
+  is untouched (would otherwise double-free). Tests:
+  `test_ir_whilelet_miss_variant_freed` /
+  `test_ir_whilelet_place_scrutinee_miss_not_dropped` (codegen.rs, the
+  macOS-reliable leak gate); `asan_whilelet_miss_variant_no_double_free`
+  (memory_sanitizer.rs, the double-free gate).
 - **Plain-struct destructure** (`let Point { items: _, count } = make()`) —
   fresh-temp *struct* (non-enum) temp with an unbound heap field leaks
   (IR-probed `mat=0`; `materialize_freshtemp_enum_scrutinee` is enum-only). A

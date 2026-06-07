@@ -9808,6 +9808,73 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_whilelet_miss_variant_freed() {
+        // B follow-up #2: the final non-matching fresh-temp enum scrutinee at
+        // loop exit (here `Item.Stop(vec)` — heap-bearing, does not match
+        // `Go`) is freed wholesale on the dedicated `whilelet.miss` edge. Pre-
+        // fix the miss branched straight to exit and that Vec leaked.
+        let src = r#"
+enum Item { Go(Vec[i64]), Stop(Vec[i64]) }
+fn mk() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    return v;
+}
+fn step(c: i64) -> Item {
+    if c < 2 {
+        return Item.Go(mk());
+    }
+    return Item.Stop(mk());
+}
+fn main() {
+    let mut c: i64 = 0;
+    while let Go(xs) = step(c) {
+        c = c + 1;
+    }
+    println(c);
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            ir.contains("whilelet.miss"),
+            "expected a dedicated whilelet.miss block; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("__whilelet_miss_scrut")
+                && ir.contains("@__karac_drop_Item(ptr %__whilelet_miss_scrut"),
+            "expected the final non-matching scrutinee dropped wholesale on the \
+             miss edge; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_whilelet_place_scrutinee_miss_not_dropped() {
+        // A *place* scrutinee (a binding, owned by its own scope) must NOT be
+        // wholesale-dropped on the miss edge — that would double-free against
+        // the binding's own scope-exit cleanup. The miss helper is gated to
+        // fresh temps, so no `__whilelet_miss_scrut` is emitted here.
+        let src = r#"
+enum Item { Go(Vec[i64]), Stop(Vec[i64]) }
+fn mk() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    return v;
+}
+fn main() {
+    let item = Item.Stop(mk());
+    while let Go(_) = item {
+        break;
+    }
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            !ir.contains("__whilelet_miss_scrut"),
+            "place scrutinee must not be materialized/dropped on the miss edge; got:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_let_else_emits_branch_not_noop() {
         // phase-6-runtime.md line 489: `let … else` lowers to a real branch
         // (match edge binds + falls through, else edge diverges). Regression

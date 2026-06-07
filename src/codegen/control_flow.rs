@@ -160,6 +160,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self.current_fn.unwrap();
         let cond_bb = self.context.append_basic_block(fn_val, "whilelet.cond");
         let body_bb = self.context.append_basic_block(fn_val, "whilelet.body");
+        // The miss edge gets its own block (rather than branching straight to
+        // exit) so the final non-matching fresh-temp scrutinee can be dropped
+        // there — see the loop-exit handling below.
+        let miss_bb = self.context.append_basic_block(fn_val, "whilelet.miss");
         let exit_bb = self.context.append_basic_block(fn_val, "whilelet.exit");
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();
@@ -180,7 +184,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let val = self.compile_expr(value)?;
         let cond = self.compile_pattern_condition(pattern, val)?;
         self.builder
-            .build_conditional_branch(cond.into_int_value(), body_bb, exit_bb)
+            .build_conditional_branch(cond.into_int_value(), body_bb, miss_bb)
             .unwrap();
 
         self.builder.position_at_end(body_bb);
@@ -194,10 +198,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // body frame (pushed just above) so the EnumDrop drains at the bottom
         // of each iteration and the entry alloca is overwritten by the next
         // iteration's scrutinee before being read again. The store emits here
-        // in `body_bb` (dominated by `cond_bb` where `val` is defined).
-        // Limitation: a heap-bearing *miss* variant at loop exit (the final
-        // non-matching scrutinee, evaluated in `cond_bb` and never entering the
-        // body) is not dropped — a narrow, separately-tracked leak.
+        // in `body_bb` (dominated by `cond_bb` where `val` is defined). The
+        // heap-bearing *miss* variant at loop exit (the final non-matching
+        // scrutinee) is freed wholesale on the `miss_bb` edge below.
         let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val);
         self.bind_pattern_values(pattern, val)?;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
@@ -218,6 +221,19 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         self.loop_stack.pop();
+
+        // Miss edge (loop exit): the final scrutinee did not match the
+        // pattern. If it is a fresh-temp enum carrying heap in its (unmatched)
+        // variant, free it wholesale here — it never entered the per-iteration
+        // body frame, so this is the only place it can be dropped (B
+        // follow-up #2). A miss binds nothing out, so no cap-suppression: the
+        // whole value drops. `val` is defined in `cond_bb`, which dominates
+        // `miss_bb`. Place / heap-free scrutinees are a no-op (the helper's
+        // gate), so a place scrutinee keeps its owner's cleanup untouched.
+        self.builder.position_at_end(miss_bb);
+        self.drop_freshtemp_enum_scrutinee_on_miss(value, pattern, val);
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
     }

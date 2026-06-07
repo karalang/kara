@@ -3104,6 +3104,44 @@ fn next(i: i64) -> Holder {
         );
     }
 
+    #[test]
+    fn asan_whilelet_miss_variant_no_double_free() {
+        // B follow-up #2: the loop terminates on a *heap-bearing* non-matching
+        // variant (`Stop(Vec)` vs the matched `Go`). The final scrutinee is
+        // freed wholesale on the new `whilelet.miss` edge. This guards the fix
+        // against a double-free (macOS ASAN has no LeakSanitizer, so the leak
+        // closure itself is pinned by the IR test; here we verify the
+        // wholesale miss-drop doesn't double-free against the per-iteration
+        // bound-field cleanup of the matched iterations). Several matches then
+        // one miss.
+        assert_clean_asan_run(
+            r#"
+enum Item { Go(Vec[i64]), Stop(Vec[i64]) }
+fn mk(x: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(x);
+    return v;
+}
+fn step(c: i64) -> Item {
+    if c < 3 {
+        return Item.Go(mk(c));
+    }
+    return Item.Stop(mk(99));
+}
+fn main() {
+    let mut c: i64 = 0;
+    while let Go(xs) = step(c) {
+        println(xs.len() + c);
+        c = c + 1;
+    }
+    println(c);
+}
+"#,
+            &["1", "2", "3", "3"],
+            "whilelet_miss_variant_no_double_free",
+        );
+    }
+
     // ── general owned-temp tracking, slice 1 (phase-6 line 489/497) ──
     //
     // docs/spikes/general-owned-temp-tracking.md slice 1: a fresh-owned
