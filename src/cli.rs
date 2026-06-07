@@ -260,10 +260,19 @@ pub enum Command {
         no_proxy: bool,
         /// `--target=<triple>`: active target triple for the build.
         /// Drives `[target.<triple>.dependencies]` / `[target.<triple>.
-        /// profile]` overlay selection (tracker line 882). Precedence
-        /// is `--target=<triple>` > `[build].target` from the manifest
-        /// > `build_cache::host_target_triple()`.
+        /// profile]` overlay selection (tracker line 882). Precedence:
+        /// `--target=<triple>`, then `[build].target` from the
+        /// manifest, then `build_cache::host_target_triple()`. A v1
+        /// target *name* (`native` / `wasm_wasi` / `wasm_browser`)
+        /// instead selects the compilation target, as in single-file
+        /// mode — wasm names drive the `dist/wasm/<pkg>.*` artifact
+        /// layout and pin the overlay triple to `wasm32-wasip1`.
         target: Option<String>,
+        /// `--bindings=browser|component|none` — see `Build.bindings`
+        /// above. Shapes the project-mode WASM artifact set
+        /// (`dist/wasm/<pkg>.wasm` [+ `<pkg>.js` + `<pkg>.d.ts` under
+        /// browser bindings]); accepted-but-inert on non-WASM targets.
+        bindings: Option<BindingsMode>,
         /// `--target-cpu=<name|help>` — see `Build.target_cpu` above.
         /// Same precedence chain; the manifest tier reads the project's
         /// own `kara.toml` (already loaded for the build) instead of a
@@ -666,6 +675,7 @@ pub fn execute(cmd: Command) {
             enable_hot_swap,
             no_proxy,
             target,
+            bindings,
             target_cpu,
             target_features,
             release,
@@ -675,6 +685,7 @@ pub fn execute(cmd: Command) {
             enable_hot_swap,
             no_proxy,
             target.as_deref(),
+            bindings,
             target_cpu.as_deref(),
             target_features.as_deref(),
             release,
@@ -4763,6 +4774,42 @@ fn resolve_build_target(target: Option<&str>) -> &'static str {
     }
 }
 
+/// Phase-10 `--bindings` flag: resolve the effective WASM output shape
+/// for a build (single-file and project mode share this). Explicit flag
+/// wins; omitted, the mode is inferred from the target (`wasm_browser`
+/// → browser, `wasm_wasi` → component — design.md § Target Build
+/// Artifacts: the `--target` choice already declares the host family,
+/// so defaulting off it avoids silent browser-lock-in). On a non-WASM
+/// target the flag is accepted-but-inert per the tracker entry — there
+/// is no glue concept for a native binary.
+fn resolve_effective_bindings(
+    build_target: &str,
+    bindings: Option<BindingsMode>,
+) -> Option<BindingsMode> {
+    let is_wasm = build_target == "wasm_wasi" || build_target == "wasm_browser";
+    if !is_wasm {
+        return None;
+    }
+    // Explicitly requested `component` deserves the honest caveat: the
+    // wit-bindgen WIT-descriptor emission is the separate "WASM
+    // Component Model artifact emission" entry, so today the build
+    // produces the C-ABI core module only. The *inferred* component
+    // default (a bare `--target=wasm_wasi` build) stays silent — that
+    // is just the established wasi output.
+    if bindings == Some(BindingsMode::Component) {
+        eprintln!(
+            "note: --bindings=component emits the C-ABI core module only today — \
+             WIT descriptor / Component Model emission is a follow-up \
+             (design.md § Target Build Artifacts)"
+        );
+    }
+    Some(bindings.unwrap_or(if build_target == "wasm_browser" {
+        BindingsMode::Browser
+    } else {
+        BindingsMode::Component
+    }))
+}
+
 // CLI dispatch helpers naturally land more flag-shaped arguments
 // than the clippy default; factoring them into a struct here would
 // just move the flag list rather than tighten it.
@@ -4827,37 +4874,17 @@ fn cmd_build(
             })
         }));
         let is_wasm = build_target == "wasm_wasi" || build_target == "wasm_browser";
-        // Phase-10 `--bindings` flag: resolve the effective WASM output
-        // shape. Explicit flag wins; omitted, the mode is inferred from
-        // the target (`wasm_browser` → browser, `wasm_wasi` → component
-        // — design.md § Target Build Artifacts: the `--target` choice
-        // already declares the host family, so defaulting off it avoids
-        // silent browser-lock-in). On a non-WASM target the flag is
-        // accepted-but-inert per the tracker entry — there is no glue
-        // concept for a native binary.
-        let effective_bindings = if is_wasm {
-            // Explicitly requested `component` deserves the honest
-            // caveat: the wit-bindgen WIT-descriptor emission is the
-            // separate "WASM Component Model artifact emission" entry,
-            // so today the build produces the C-ABI core module only.
-            // The *inferred* component default (a bare
-            // `--target=wasm_wasi` build) stays silent — that is just
-            // the established wasi output.
-            if bindings == Some(BindingsMode::Component) {
-                eprintln!(
-                    "note: --bindings=component emits the C-ABI core module only today — \
-                     WIT descriptor / Component Model emission is a follow-up \
-                     (design.md § Target Build Artifacts)"
-                );
-            }
-            Some(bindings.unwrap_or(if build_target == "wasm_browser" {
-                BindingsMode::Browser
-            } else {
-                BindingsMode::Component
-            }))
-        } else {
-            None
-        };
+        let effective_bindings = resolve_effective_bindings(build_target, bindings);
+        // Hot-swap requires dynamic symbol resolution at runtime; a wasm
+        // module has none. Same gate as project mode (the wasm half of
+        // the phase-7 hot-swap target gating).
+        if enable_hot_swap && is_wasm {
+            eprintln!(
+                "error: --enable-hot-swap is incompatible with --target={build_target} \
+                 (no dynamic-symbol-resolution machinery on wasm hosts)"
+            );
+            process::exit(1);
+        }
         let source = read_source(filename);
         let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
         pipeline.resolve();
@@ -5026,26 +5053,35 @@ fn cmd_build(
                 // module into it (both wasm targets lower host fns to
                 // the same `kara_host` import entries, so the glue is
                 // target-agnostic).
-                let glue_path = if effective_bindings == Some(BindingsMode::Browser) {
+                let glue_paths = if effective_bindings == Some(BindingsMode::Browser) {
                     let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
                     let glue = crate::wasm_glue::render_glue(&host_fns, &exe_path);
-                    let path = format!("{exe_name}.js");
-                    if let Err(e) = std::fs::write(&path, glue) {
-                        eprintln!("error: failed to write JS glue {path}: {e}");
+                    let js_path = format!("{exe_name}.js");
+                    if let Err(e) = std::fs::write(&js_path, glue) {
+                        eprintln!("error: failed to write JS glue {js_path}: {e}");
                         process::exit(1);
                     }
-                    Some(path)
+                    // TypeScript declarations for the glue module — the
+                    // third browser-bindings artifact (phase-10 "WASM
+                    // browser artifact emission").
+                    let dts = crate::wasm_glue::render_dts(&host_fns, &exe_path);
+                    let dts_path = format!("{exe_name}.d.ts");
+                    if let Err(e) = std::fs::write(&dts_path, dts) {
+                        eprintln!("error: failed to write TS declarations {dts_path}: {e}");
+                        process::exit(1);
+                    }
+                    Some((js_path, dts_path))
                 } else {
                     None
                 };
                 match output {
-                    OutputMode::Text => match &glue_path {
-                        Some(js) => println!("Built: {exe_path} + {js}"),
+                    OutputMode::Text => match &glue_paths {
+                        Some((js, dts)) => println!("Built: {exe_path} + {js} + {dts}"),
                         None => println!("Built: {exe_path}"),
                     },
-                    OutputMode::Json => match &glue_path {
-                        Some(js) => println!(
-                            "{{\"status\":\"ok\",\"output\":\"{exe_path}\",\"glue\":\"{js}\"}}"
+                    OutputMode::Json => match &glue_paths {
+                        Some((js, dts)) => println!(
+                            "{{\"status\":\"ok\",\"output\":\"{exe_path}\",\"glue\":\"{js}\",\"dts\":\"{dts}\"}}"
                         ),
                         None => println!("{{\"status\":\"ok\",\"output\":\"{exe_path}\"}}"),
                     },
@@ -5350,22 +5386,29 @@ fn cmd_build_project(
     enable_hot_swap: bool,
     no_proxy: bool,
     target: Option<&str>,
+    bindings: Option<BindingsMode>,
     target_cpu: Option<&str>,
     target_features: Option<&str>,
     release: bool,
 ) {
     // Phase-10: v1 target names are classified the same way as in
-    // single-file mode, but the wasm project build (super-program codegen
-    // → `dist/wasm/<pkg>.wasm` artifact layout) is the separate "WASM raw
-    // artifact emission" tracker entry — reject loudly rather than emit a
-    // native binary under a wasm flag. Triples pass through to the
-    // manifest `[target.<triple>.*]` overlay merge below unchanged.
+    // single-file mode. A wasm name selects the project-mode WASM build:
+    // super-program codegen → wasm-ld → the `dist/wasm/<pkg>.wasm`
+    // artifact layout (+ `<pkg>.js` / `<pkg>.d.ts` under browser
+    // bindings — the "WASM browser artifact emission" entry). Triples
+    // pass through to the manifest `[target.<triple>.*]` overlay merge
+    // below unchanged.
     let build_target = resolve_build_target(target);
-    if build_target == "wasm_wasi" || build_target == "wasm_browser" {
+    let is_wasm = build_target == "wasm_wasi" || build_target == "wasm_browser";
+    let effective_bindings = resolve_effective_bindings(build_target, bindings);
+    // Hot-swap requires dynamic symbol resolution at runtime; a wasm
+    // module has none (no dlopen in a browser/WASI host). This is the
+    // wasm half of the phase-7 hot-swap target gating, actionable now
+    // that `--target=wasm_*` reaches project mode.
+    if enable_hot_swap && is_wasm {
         eprintln!(
-            "error: `--target={build_target}` is single-file-only today — project-mode WASM \
-             builds (dist/wasm/<pkg>.wasm) are a phase-10 follow-up. Build the entry \
-             file directly: karac build <file.kara> --target={build_target}"
+            "error: --enable-hot-swap is incompatible with --target={build_target} \
+             (no dynamic-symbol-resolution machinery on wasm hosts)"
         );
         process::exit(1);
     }
@@ -5414,11 +5457,21 @@ fn cmd_build_project(
     // Resolve the active target triple for `[target.<triple>.*]` overlay
     // selection (tracker line 882). Precedence: `--target=<triple>` >
     // `[build].target` > host triple. Recorded as a single owned value
-    // so the overlay merge consumes a stable reference.
-    let active_target: String = target
-        .map(str::to_string)
-        .or_else(|| raw_manifest.build_default_target.clone())
-        .unwrap_or_else(crate::build_cache::host_target_triple);
+    // so the overlay merge consumes a stable reference. A v1 target
+    // *name* is not a triple: a wasm name pins the overlay triple to
+    // the real compilation triple (`wasm32-wasip1` — both wasm names
+    // build the same module flavor), and an explicit `native` pins the
+    // host triple (an explicit flag outranks `[build].target`, the
+    // chain's documented precedence).
+    let active_target: String = match target {
+        Some(t) if !crate::target::is_v1_target_name(t) => t.to_string(),
+        Some(_) if is_wasm => "wasm32-wasip1".to_string(),
+        Some(_) => crate::build_cache::host_target_triple(),
+        None => raw_manifest
+            .build_default_target
+            .clone()
+            .unwrap_or_else(crate::build_cache::host_target_triple),
+    };
 
     // Merge `[target.<triple>].dependencies` / `[target.<triple>].profile`
     // overlays onto the manifest before any downstream consumer reads it
@@ -5573,7 +5626,15 @@ fn cmd_build_project(
         && resolve_errors.is_empty()
         && type_errors.is_empty()
     {
-        codegen_status = run_multi_file_codegen(&tree, &mf, &root, enable_hot_swap, release);
+        codegen_status = run_multi_file_codegen(
+            &tree,
+            &mf,
+            &root,
+            enable_hot_swap,
+            release,
+            is_wasm,
+            effective_bindings,
+        );
     }
 
     let failed = !parse_errors.is_empty()
@@ -5625,8 +5686,16 @@ fn cmd_build_project(
                 process::exit(1);
             }
             match &codegen_status {
-                BuildCodegenStatus::Built { exe_path } => {
-                    println!("Built: {}", exe_path.display());
+                BuildCodegenStatus::Built {
+                    exe_path,
+                    glue_path,
+                    dts_path,
+                } => {
+                    let mut line = format!("Built: {}", exe_path.display());
+                    for extra in [glue_path, dts_path].into_iter().flatten() {
+                        line.push_str(&format!(" + {}", extra.display()));
+                    }
+                    println!("{line}");
                 }
                 BuildCodegenStatus::NoLlvmFeature => {
                     eprintln!(
@@ -5662,10 +5731,29 @@ fn cmd_build_project(
             let modules = render_walked_modules_json(&walked);
             let status = if failed { "error" } else { "ok" };
             let output_field = match &codegen_status {
-                BuildCodegenStatus::Built { exe_path } => format!(
-                    ",\"output\":{}",
-                    json_string(&exe_path.display().to_string()),
-                ),
+                BuildCodegenStatus::Built {
+                    exe_path,
+                    glue_path,
+                    dts_path,
+                } => {
+                    let mut field = format!(
+                        ",\"output\":{}",
+                        json_string(&exe_path.display().to_string())
+                    );
+                    if let Some(js) = glue_path {
+                        field.push_str(&format!(
+                            ",\"glue\":{}",
+                            json_string(&js.display().to_string())
+                        ));
+                    }
+                    if let Some(dts) = dts_path {
+                        field.push_str(&format!(
+                            ",\"dts\":{}",
+                            json_string(&dts.display().to_string())
+                        ));
+                    }
+                    field
+                }
                 _ => String::new(),
             };
             println!(
@@ -5732,14 +5820,29 @@ fn cmd_build_project(
                     ),
                 );
             }
-            if let BuildCodegenStatus::Built { exe_path } = &codegen_status {
-                emit_jsonl_event(
-                    "build_artifact",
-                    &format!(
-                        "\"output\":{}",
-                        json_string(&exe_path.display().to_string())
-                    ),
+            if let BuildCodegenStatus::Built {
+                exe_path,
+                glue_path,
+                dts_path,
+            } = &codegen_status
+            {
+                let mut fields = format!(
+                    "\"output\":{}",
+                    json_string(&exe_path.display().to_string())
                 );
+                if let Some(js) = glue_path {
+                    fields.push_str(&format!(
+                        ",\"glue\":{}",
+                        json_string(&js.display().to_string())
+                    ));
+                }
+                if let Some(dts) = dts_path {
+                    fields.push_str(&format!(
+                        ",\"dts\":{}",
+                        json_string(&dts.display().to_string())
+                    ));
+                }
+                emit_jsonl_event("build_artifact", &fields);
             }
             emit_jsonl_event(
                 "build_complete",
@@ -5780,8 +5883,16 @@ enum BuildCodegenStatus {
     /// but no executable can be produced. Mirrors the single-file
     /// `cmd_build` no-llvm branch.
     NoLlvmFeature,
-    /// All phases succeeded; the linked executable is at `exe_path`.
-    Built { exe_path: PathBuf },
+    /// All phases succeeded; the linked artifact is at `exe_path` (a
+    /// native executable, or `dist/wasm/<pkg>.wasm` on a wasm target).
+    /// Browser-bindings WASM builds additionally carry the companion
+    /// ES-module glue (`<pkg>.js`) and TypeScript declarations
+    /// (`<pkg>.d.ts`) — `None` on every other build shape.
+    Built {
+        exe_path: PathBuf,
+        glue_path: Option<PathBuf>,
+        dts_path: Option<PathBuf>,
+    },
     /// Late-phase failure (effect / ownership / concurrency / codegen /
     /// link). `phase` names the failing phase for the diagnostic output;
     /// `message` is the rendered error.
@@ -5818,12 +5929,15 @@ impl BuildCodegenStatus {
 /// diagnostics for parse / cycles / resolve / typecheck still fire
 /// upstream of this call.
 #[cfg(feature = "llvm")]
+#[allow(clippy::too_many_arguments)]
 fn run_multi_file_codegen(
     tree: &ProgramTree,
     mf: &crate::manifest::Manifest,
     project_root: &std::path::Path,
     enable_hot_swap: bool,
     release: bool,
+    is_wasm: bool,
+    effective_bindings: Option<BindingsMode>,
 ) -> BuildCodegenStatus {
     // 1. Topological emission order — dependencies before dependents.
     let order = module::emission_order(tree);
@@ -5962,8 +6076,22 @@ fn run_multi_file_codegen(
     }
 
     // 4. Codegen — write to a temp object then link to the manifest's
-    // `name` field as the binary basename in the project root.
-    let exe_path = project_root.join(&mf.name);
+    // `name` field as the binary basename in the project root. A wasm
+    // build instead lands in the `dist/wasm/<pkg>.wasm` artifact layout
+    // (phase-10 WASM artifact emission; `link_executable` dispatches to
+    // wasm-ld off the active target, same as single-file mode).
+    let exe_path = if is_wasm {
+        let dist = project_root.join("dist").join("wasm");
+        if let Err(e) = std::fs::create_dir_all(&dist) {
+            return BuildCodegenStatus::Failed {
+                phase: "link".to_string(),
+                message: format!("cannot create {}: {e}", dist.display()),
+            };
+        }
+        dist.join(format!("{}.wasm", mf.name))
+    } else {
+        project_root.join(&mf.name)
+    };
     let obj_path = std::env::temp_dir().join(format!(
         "karac_proj_{}_{}.o",
         std::process::id(),
@@ -5974,7 +6102,15 @@ fn run_multi_file_codegen(
         &pipeline.parsed.program,
         &obj_path.to_string_lossy(),
         pipeline.ownership.as_ref(),
-        pipeline.concurrency.as_ref(),
+        // WASM concurrency lowering is its own phase-10 entry — until it
+        // lands, suppress auto-par groups on wasm so modules lower
+        // sequentially instead of emitting spawn-site calls into a
+        // runtime archive with no scheduler (the single-file posture).
+        if is_wasm {
+            None
+        } else {
+            pipeline.concurrency.as_ref()
+        },
         None,
         None,
         enable_hot_swap,
@@ -6001,19 +6137,61 @@ fn run_multi_file_codegen(
         };
     }
     let _ = std::fs::remove_file(&obj_path);
-    BuildCodegenStatus::Built { exe_path }
+
+    // Browser-bindings WASM builds ship the companion ES-module glue +
+    // TypeScript declarations next to the module in `dist/wasm/` —
+    // `<pkg>.js` / `<pkg>.d.ts` keyed on the resolved bindings mode,
+    // exactly the single-file `cmd_build` contract (see `wasm_glue`).
+    let (glue_path, dts_path) = if effective_bindings == Some(BindingsMode::Browser) {
+        let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
+        let wasm_filename = format!("{}.wasm", mf.name);
+        let glue_path = exe_path.with_extension("js");
+        if let Err(e) = std::fs::write(
+            &glue_path,
+            crate::wasm_glue::render_glue(&host_fns, &wasm_filename),
+        ) {
+            return BuildCodegenStatus::Failed {
+                phase: "link".to_string(),
+                message: format!("failed to write JS glue {}: {e}", glue_path.display()),
+            };
+        }
+        let dts_path = exe_path.with_extension("d.ts");
+        if let Err(e) = std::fs::write(
+            &dts_path,
+            crate::wasm_glue::render_dts(&host_fns, &wasm_filename),
+        ) {
+            return BuildCodegenStatus::Failed {
+                phase: "link".to_string(),
+                message: format!(
+                    "failed to write TS declarations {}: {e}",
+                    dts_path.display()
+                ),
+            };
+        }
+        (Some(glue_path), Some(dts_path))
+    } else {
+        (None, None)
+    };
+    BuildCodegenStatus::Built {
+        exe_path,
+        glue_path,
+        dts_path,
+    }
 }
 
 /// Stub for the no-llvm build — never invoked because the caller gates
 /// on `cfg!(feature = "llvm")`. Kept as a parallel signature so the call
 /// site doesn't need cfg gating itself.
 #[cfg(not(feature = "llvm"))]
+#[allow(clippy::too_many_arguments)]
 fn run_multi_file_codegen(
     _tree: &ProgramTree,
     _mf: &crate::manifest::Manifest,
     _project_root: &std::path::Path,
     _enable_hot_swap: bool,
     _release: bool,
+    _is_wasm: bool,
+    _effective_bindings: Option<BindingsMode>,
 ) -> BuildCodegenStatus {
     BuildCodegenStatus::NoLlvmFeature
 }

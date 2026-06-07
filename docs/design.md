@@ -10256,6 +10256,8 @@ karac build --target wasm_browser --bindings none       # raw .wasm only
 | `dist/wasm/<pkg>.js` | ES-module glue with wasm-bindgen-compatible calling convention. Default loaders in vite / webpack / esbuild / rollup work without custom configuration. |
 | `dist/wasm/<pkg>.d.ts` | TypeScript declarations for every exported function, including the JS-side shapes for `Result` / `Option` and any exported struct. |
 
+*Shipped status:* the project-mode `dist/wasm/<pkg>.{wasm,js,d.ts}` layout is live (package name from `kara.toml`; single-file builds emit the same set as `<stem>.{wasm,js,d.ts}` in the CWD). The `.d.ts` today declares the glue module's full surface plus a `HostImpls` interface typing every `host fn` per the boundary contract; per-export function signatures (including the `Result`/`Option` shapes above) extend the generator when [entry point discovery](#entry-point-discovery) lands — `_start` is the only exported user entry point until then.
+
 **Component Model bindings (`--bindings component`).** Produces a single Component Model file:
 
 | File | Purpose |

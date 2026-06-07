@@ -255,9 +255,12 @@ OPTIONS:
                             a WASI preview-1 command module;
                             `--target=wasm_browser` emits `<stem>.wasm`
                             plus `<stem>.js` ES-module glue (host fn
-                            imports + WASI polyfill) for browser hosts
-                            (both single-file mode only today). Any other
-                            value is a target TRIPLE selecting which
+                            imports + WASI polyfill) and `<stem>.d.ts`
+                            TypeScript declarations for browser hosts.
+                            Project mode (no file argument) lands the
+                            same set as `dist/wasm/<pkg>.{wasm,js,d.ts}`
+                            with the package name from kara.toml.
+                            Any other value is a target TRIPLE selecting which
                             `[target.<triple>.*]` overlay merges onto
                             the manifest (dependencies, dev-
                             dependencies, profile). Precedence:
@@ -265,14 +268,16 @@ OPTIONS:
                             manifest > host triple. Accepts the space-
                             separated form `--target <triple>` too.
                             See the TARGETS section.
-    --bindings=<mode>       WASM output shape: browser (emit `<stem>.js`
-                            ES-module glue next to the `.wasm`),
+    --bindings=<mode>       WASM output shape: browser (emit `.js`
+                            ES-module glue + `.d.ts` TypeScript
+                            declarations next to the `.wasm`),
                             component (Component Model; emits the C-ABI
                             core module only today — WIT emission is a
                             follow-up), or none (raw `.wasm`, no glue).
                             Default is inferred from the target:
                             wasm_browser -> browser, wasm_wasi ->
                             component. Ignored on non-WASM targets.
+                            Works in single-file and project mode.
                             Accepts `--bindings <mode>` too.
     --target-cpu=<name>     CPU baseline override for codegen (e.g.
                             `apple-m4`, `x86-64-v3`, `neoverse-v1`).
@@ -320,11 +325,14 @@ TARGETS:
     and the link step all key on it. `--target=wasm_wasi` builds a
     headless WASM module (`<stem>.wasm`, runnable under wasmtime /
     node:wasi). `--target=wasm_browser` builds the same wasip1
-    module flavor plus `<stem>.js` ES-module glue: every `host fn`
-    becomes a WASM import under the `kara_host` namespace the glue
-    wires to your implementations, and the glue's inline WASI
-    polyfill replaces the WASI host (works in browsers and node;
-    bundlers need no custom loader). Both require the wasm runtime
+    module flavor plus `<stem>.js` ES-module glue and `<stem>.d.ts`
+    TypeScript declarations: every `host fn` becomes a WASM import
+    under the `kara_host` namespace the glue wires to your
+    implementations, and the glue's inline WASI polyfill replaces
+    the WASI host (works in browsers and node; bundlers need no
+    custom loader). In project mode the artifacts land as
+    `dist/wasm/<pkg>.{wasm,js,d.ts}` named from kara.toml's
+    `[package].name`. Both targets require the wasm runtime
     archive (`libkarac_runtime_wasm.a`) and a wasm linker (wasm-ld
     or rust-lld; override with KARAC_WASM_LD).
 

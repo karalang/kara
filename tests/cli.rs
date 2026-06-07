@@ -10960,24 +10960,48 @@ fn target_flag_gpu_rejected() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Project-mode wasm builds (dist/wasm artifact layout) are the
-/// separate artifact-emission entry — `karac build --target=wasm_wasi`
-/// with no file argument rejects with the single-file pointer, and the
-/// check fires before any manifest is read (an empty dir suffices).
+/// `--enable-hot-swap` is incompatible with wasm targets — a wasm
+/// module has no dynamic-symbol-resolution machinery (the wasm half of
+/// the phase-7 hot-swap target gating). Project mode rejects before
+/// manifest discovery (an empty dir suffices); single-file rejects
+/// before any pipeline pass.
 #[test]
-fn target_flag_wasm_wasi_project_mode_rejected() {
-    let tmp = wasm_test_dir("proj");
+fn hot_swap_rejected_on_wasm_targets() {
+    let tmp = wasm_test_dir("hotswap");
+    // Project mode (no file argument) — fires pre-manifest.
     let out = karac_bin()
-        .args(["build", "--target=wasm_wasi"])
+        .args(["build", "--target=wasm_wasi", "--enable-hot-swap"])
         .current_dir(&tmp)
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
     assert!(
-        stderr.contains("single-file-only") && stderr.contains("karac build <file.kara>"),
-        "expected the project-mode wasm rejection, got: {stderr}",
+        stderr.contains("--enable-hot-swap is incompatible with --target=wasm_wasi"),
+        "expected the project-mode hot-swap/wasm rejection, got: {stderr}",
     );
+    // Single-file — same gate (rides the llvm build path; the non-llvm
+    // fallback type-checks instead, so skip the assertion there).
+    let path = tmp.join("h.kara");
+    std::fs::write(&path, "fn main() {\n    println(1);\n}\n").unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--enable-hot-swap",
+        ])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !stderr.contains("requires the llvm feature") {
+        assert!(!out.status.success());
+        assert!(
+            stderr.contains("--enable-hot-swap is incompatible with --target=wasm_browser"),
+            "expected the single-file hot-swap/wasm rejection, got: {stderr}",
+        );
+    }
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -11321,33 +11345,277 @@ fn main() {
 // Browser builds emit the same wasip1 module flavor as `wasm_wasi`
 // plus a `<stem>.js` ES-module glue file (host fn import plumbing
 // under the `kara_host` namespace + an inline WASI preview-1
-// polyfill). Same infrastructure skips as the wasi tests above.
+// polyfill) and `<stem>.d.ts` TypeScript declarations. Project mode
+// lands the same set as `dist/wasm/<pkg>.{wasm,js,d.ts}` with the
+// package name from `kara.toml` (the "WASM browser artifact emission"
+// entry). Same infrastructure skips as the wasi tests above.
 
-/// Project-mode `--target=wasm_browser` rejects with the single-file
-/// pointer, mirroring the `wasm_wasi` rejection (the dist/wasm layout
-/// belongs to the artifact-emission entries).
+/// Write a two-module wasm project fixture: the entry calls a host fn
+/// declared in a non-entry module, so the merged super-program (not
+/// just the entry file) must feed glue/declaration generation.
+fn write_wasm_project_fixture(tmp: &std::path::Path, pkg: &str) {
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        format!("[package]\nname = \"{pkg}\"\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("src/main.kara"),
+        "import metrics.emit_answer;\n\n\
+         fn main() {\n    emit_answer();\n    println(\"done\");\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("src/metrics.kara"),
+        "effect resource Reporter;\n\n\
+         host fn report(value: i64) -> i64 with writes(Reporter);\n\n\
+         pub fn emit_answer() with writes(Reporter) {\n    report(42);\n}\n",
+    )
+    .unwrap();
+}
+
+/// Project-mode `--target=wasm_browser` (phase-10 "WASM browser
+/// artifact emission"): super-program codegen + wasm-ld land the module
+/// in the `dist/wasm/<pkg>.wasm` layout — package name from
+/// `kara.toml`, not a source-file stem — plus the `<pkg>.js` glue and
+/// `<pkg>.d.ts` TypeScript declarations under the inferred browser
+/// bindings. The host fn lives in a non-entry module, pinning that the
+/// merged super-program drives glue + declaration generation.
 #[test]
-fn target_flag_wasm_browser_project_mode_rejected() {
-    let tmp = wasm_test_dir("bproj");
+fn wasm_browser_project_mode_emits_dist_artifacts() {
+    let tmp = wasm_test_dir("bprojart");
+    write_wasm_project_fixture(&tmp, "webapp");
+
     let out = karac_bin()
         .args(["build", "--target=wasm_browser"])
         .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success());
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_browser_project_mode_emits_dist_artifacts — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "project wasm build failed: {stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stderr.contains("single-file-only")
-            && stderr.contains("karac build <file.kara> --target=wasm_browser"),
-        "expected the project-mode wasm_browser rejection, got: {stderr}",
+        stdout.contains("webapp.wasm")
+            && stdout.contains("webapp.js")
+            && stdout.contains("webapp.d.ts"),
+        "Built line must name all three artifacts, got: {stdout}",
+    );
+    let dist = tmp.join("dist").join("wasm");
+    assert!(dist.join("webapp.wasm").exists(), "missing dist .wasm");
+    let glue = std::fs::read_to_string(dist.join("webapp.js")).expect("missing dist .js glue");
+    assert!(
+        glue.contains("const WASM_FILENAME = \"webapp.wasm\";"),
+        "glue must reference the sibling module by package name",
+    );
+    assert!(
+        glue.contains("const DECLARED_IMPORTS = [\"report\"];"),
+        "host fn from the non-entry module must reach the glue's import list",
+    );
+    let dts = std::fs::read_to_string(dist.join("webapp.d.ts")).expect("missing dist .d.ts");
+    assert!(
+        dts.contains("report(value: bigint, ctx: HostCtx): bigint;"),
+        "d.ts must type the host fn per the boundary contract (i64 ⇒ bigint), got:\n{dts}",
+    );
+    assert!(
+        dts.contains("hostImpls: HostImpls") && !dts.contains("hostImpls?: HostImpls"),
+        "declared host fns make the hostImpls parameter required",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// A `wasm_browser` build emits BOTH artifacts — `<stem>.wasm` and the
-/// `<stem>.js` glue — and the glue is generated even for a program
-/// declaring no host fns (empty `DECLARED_IMPORTS`; the WASI polyfill
-/// is what makes a plain wasip1 module run in a browser host at all).
+/// Project-mode browser E2E: the `dist/wasm/<pkg>.js` glue runs the
+/// sibling module under node — the glue resolves `WASM_FILENAME`
+/// against `import.meta.url`, so the `dist/wasm/` directory must be
+/// self-contained (importable from outside it without configuration).
+#[test]
+fn wasm_browser_project_mode_run_e2e() {
+    let tmp = wasm_test_dir("bproje2e");
+    write_wasm_project_fixture(&tmp, "webapp");
+
+    let out = karac_bin()
+        .args(["build", "--target=wasm_browser"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_browser_project_mode_run_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "project wasm build failed: {stderr}");
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./dist/wasm/webapp.js";
+const calls = [];
+await run({
+  report(x, ctx) {
+    if (typeof x !== "bigint") throw new Error("i64 must arrive as BigInt");
+    if (!ctx || typeof ctx.readString !== "function") throw new Error("ctx missing");
+    calls.push(x);
+    return x * 2n;
+  },
+});
+if (calls.length !== 1 || calls[0] !== 42n) {
+  throw new Error("bad call sequence: " + calls.map(String).join(","));
+}
+console.log("PROJ_E2E_OK");
+"#,
+    )
+    .unwrap();
+
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_browser_project_mode_run_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "project glue harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        node_stdout.contains("done\n") && node_stdout.contains("PROJ_E2E_OK"),
+        "harness assertions failed: stdout={node_stdout} stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Project-mode `--bindings=none` (phase-10 "WASM raw artifact
+/// emission"): only `dist/wasm/<pkg>.wasm` is emitted — no glue, no
+/// declarations — for users wrapping Kāra WASM with custom host
+/// integration.
+#[test]
+fn wasm_project_bindings_none_emits_raw_module_only() {
+    let tmp = wasm_test_dir("bprojraw");
+    write_wasm_project_fixture(&tmp, "rawpkg");
+
+    let out = karac_bin()
+        .args(["build", "--target=wasm_browser", "--bindings=none"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_project_bindings_none_emits_raw_module_only — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "project raw build failed: {stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("rawpkg.wasm")
+            && !stdout.contains("rawpkg.js")
+            && !stdout.contains("rawpkg.d.ts"),
+        "Built line must name only the .wasm, got: {stdout}",
+    );
+    let dist = tmp.join("dist").join("wasm");
+    assert!(dist.join("rawpkg.wasm").exists(), "missing dist .wasm");
+    assert!(
+        !dist.join("rawpkg.js").exists() && !dist.join("rawpkg.d.ts").exists(),
+        "--bindings=none must emit neither glue nor declarations",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Project-mode `--target=wasm_wasi` with the *inferred* component
+/// default: the C-ABI core module lands at `dist/wasm/<pkg>.wasm`, no
+/// glue, and no caveat note (the core-module-only note fires only on
+/// an explicit `--bindings=component`).
+#[test]
+fn wasm_project_wasi_emits_core_module_silently() {
+    let tmp = wasm_test_dir("bprojwasi");
+    write_wasm_project_fixture(&tmp, "wasipkg");
+
+    let out = karac_bin()
+        .args(["build", "--target=wasm_wasi"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_project_wasi_emits_core_module_silently — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "project wasi build failed: {stderr}");
+    assert!(
+        !stderr.contains("core module only"),
+        "inferred component default must stay silent, got: {stderr}",
+    );
+    let dist = tmp.join("dist").join("wasm");
+    assert!(dist.join("wasipkg.wasm").exists(), "missing dist .wasm");
+    assert!(
+        !dist.join("wasipkg.js").exists() && !dist.join("wasipkg.d.ts").exists(),
+        "component bindings must not emit browser glue",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Project-mode wasm gate: a program reaching a host resource the
+/// target can't provide (`FileSystem` on `wasm_browser`) fails the
+/// build at the effect phase — project builds treat effect errors as
+/// fatal — and no `dist/wasm/` artifacts appear.
+#[test]
+fn wasm_project_gate_violation_aborts() {
+    let tmp = wasm_test_dir("bprojgate");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("kara.toml"), "[package]\nname = \"gated\"\n").unwrap();
+    std::fs::write(
+        tmp.join("src/main.kara"),
+        "pub fn save() with writes(FileSystem) {\n    let _x = 1;\n}\n\n\
+         fn main() {\n    save();\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", "--target=wasm_browser"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("requires the llvm feature") {
+        eprintln!("skip: wasm_project_gate_violation_aborts — non-llvm karac");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(!out.status.success(), "gate violation must abort: {stderr}");
+    assert!(
+        stderr.contains("`wasm_browser` does not provide resource 'FileSystem'"),
+        "expected the target-gate diagnostic, got: {stderr}",
+    );
+    let dist = tmp.join("dist").join("wasm");
+    assert!(
+        !dist.join("gated.wasm").exists() && !dist.join("gated.js").exists(),
+        "no artifact may be produced on a gate violation",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A `wasm_browser` build emits all THREE artifacts — `<stem>.wasm`,
+/// the `<stem>.js` glue, and the `<stem>.d.ts` TypeScript declarations
+/// — even for a program declaring no host fns (empty
+/// `DECLARED_IMPORTS`; the WASI polyfill is what makes a plain wasip1
+/// module run in a browser host at all, and the d.ts declares the glue
+/// module's own surface with an optional `hostImpls`).
 #[test]
 fn wasm_browser_build_emits_wasm_and_js() {
     let tmp = wasm_test_dir("bemit");
@@ -11369,8 +11637,8 @@ fn wasm_browser_build_emits_wasm_and_js() {
     assert!(out.status.success(), "wasm_browser build failed: {stderr}");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("Built: plain.wasm + plain.js"),
-        "Built line must name both artifacts, got: {stdout}",
+        stdout.contains("Built: plain.wasm + plain.js + plain.d.ts"),
+        "Built line must name all three artifacts, got: {stdout}",
     );
     assert!(tmp.join("plain.wasm").exists(), "missing .wasm artifact");
     let glue = std::fs::read_to_string(tmp.join("plain.js")).expect("missing .js glue");
@@ -11381,6 +11649,11 @@ fn wasm_browser_build_emits_wasm_and_js() {
     assert!(
         glue.contains("wasi_snapshot_preview1"),
         "glue must carry the WASI polyfill",
+    );
+    let dts = std::fs::read_to_string(tmp.join("plain.d.ts")).expect("missing .d.ts");
+    assert!(
+        dts.contains("export function run(") && dts.contains("hostImpls?: HostImpls"),
+        "no-host-fn d.ts must declare the glue surface with optional hostImpls, got:\n{dts}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -11666,8 +11939,8 @@ fn bindings_none_suppresses_browser_glue() {
     );
     assert!(tmp.join("rawmod.wasm").exists(), "missing .wasm artifact");
     assert!(
-        !tmp.join("rawmod.js").exists(),
-        "--bindings=none must not emit JS glue",
+        !tmp.join("rawmod.js").exists() && !tmp.join("rawmod.d.ts").exists(),
+        "--bindings=none must emit neither glue nor declarations",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -11703,8 +11976,8 @@ fn bindings_browser_on_wasi_emits_glue() {
     assert!(out.status.success(), "build failed: {stderr}");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("Built: wglue.wasm + wglue.js"),
-        "Built line must name both artifacts, got: {stdout}",
+        stdout.contains("Built: wglue.wasm + wglue.js + wglue.d.ts"),
+        "Built line must name all three artifacts, got: {stdout}",
     );
     let glue = std::fs::read_to_string(tmp.join("wglue.js")).expect("missing .js glue");
     assert!(
@@ -11749,8 +12022,8 @@ fn bindings_explicit_component_notes_core_module_only() {
     );
     assert!(tmp.join("compmod.wasm").exists(), "missing .wasm artifact");
     assert!(
-        !tmp.join("compmod.js").exists(),
-        "component bindings must not emit browser glue",
+        !tmp.join("compmod.js").exists() && !tmp.join("compmod.d.ts").exists(),
+        "component bindings must not emit browser glue or declarations",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }

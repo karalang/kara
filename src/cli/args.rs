@@ -555,18 +555,17 @@ fn parse_build_command(args: &[String]) -> Command {
             // → `compile_to_object_with_hot_swap`), so it forwards rather than
             // being rejected. Composes with `KARAC_STRIP_CONTRACTS` (OR).
             //
-            // `bindings` is dropped here: project-mode WASM builds are
-            // rejected with the single-file pointer (`cmd_build_project`),
-            // so project mode is always a non-WASM build today — where
-            // the flag is ignored per the phase-10 `--bindings` entry.
-            // The `dist/wasm/` artifact-emission entries thread it
-            // through when project-mode WASM lands.
+            // `bindings` threads through to the project-mode WASM build
+            // (`dist/wasm/<pkg>.*` artifact emission — phase-10); on a
+            // non-WASM project build it stays accepted-but-inert, the
+            // single-file posture.
             Command::BuildProject {
                 output,
                 offline,
                 enable_hot_swap,
                 no_proxy,
                 target,
+                bindings,
                 target_cpu,
                 target_features,
                 release,
