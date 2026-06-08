@@ -1299,6 +1299,70 @@ impl<'ctx> super::Codegen<'ctx> {
         if program.drop_method_keys.contains_key("TaskGroup") {
             self.emit_taskgroup_drop_body();
         }
+
+        // `BoundedChannel.drop` hand-rolled body — loads `self.handle_id`
+        // (i64), casts to `*KaracBoundedChannel`, calls
+        // `karac_runtime_bounded_channel_drop` (free the queue + payloads).
+        // Single-owner (no refcount); the user-Drop dispatch is move-aware,
+        // so a moved-from `BoundedChannel` is not double-dropped. The stdlib
+        // declares `impl Drop for BoundedChannel` so `drop_method_keys`
+        // contains `"BoundedChannel"` when the prelude is in scope.
+        if program.drop_method_keys.contains_key("BoundedChannel") {
+            self.emit_bounded_channel_drop_body();
+        }
+    }
+
+    /// Hand-roll `@BoundedChannel.drop(ptr) -> void`. Mirrors
+    /// `emit_taskgroup_drop_body`: load the `{i64}` handle, `inttoptr`, free.
+    fn emit_bounded_channel_drop_body(&mut self) {
+        let fn_name = "BoundedChannel.drop";
+        if self.module.get_function(fn_name).is_some() {
+            return;
+        }
+        let free_fn = match self
+            .module
+            .get_function("karac_runtime_bounded_channel_drop")
+        {
+            Some(f) => f,
+            None => return,
+        };
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let void_ty = self.context.void_type();
+        let struct_ty = self.context.struct_type(&[i64_ty.into()], false);
+
+        let saved_bb = self.builder.get_insert_block();
+
+        let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self
+            .module
+            .add_function(fn_name, drop_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let self_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let handle_ptr = self
+            .builder
+            .build_struct_gep(struct_ty, self_ptr, 0, "handle_ptr")
+            .unwrap();
+        let handle = self
+            .builder
+            .build_load(i64_ty, handle_ptr, "handle")
+            .unwrap()
+            .into_int_value();
+        let ch_ptr = self
+            .builder
+            .build_int_to_ptr(handle, ptr_ty, "ch_ptr")
+            .unwrap();
+        self.builder
+            .build_call(free_fn, &[ch_ptr.into()], "")
+            .unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
     }
 
     /// Hand-roll `@TaskGroup.drop(ptr) -> void`. Body:

@@ -68,3 +68,28 @@ impl[T] BoundedChannel[T] {
         Option.None
     }
 }
+
+// Free-on-drop for `BoundedChannel`. The user-Drop dispatch chain emits a
+// call to `@BoundedChannel.drop` at the owning binding's scope exit; codegen
+// hand-rolls that body in `src/codegen/synth_drop.rs`
+// (`emit_bounded_channel_drop_body`, mirror of `@TaskGroup.drop`) to invoke
+// `karac_runtime_bounded_channel_drop(self.handle_id as ptr)` — freeing the
+// queue and any undrained payloads. Single-owner: `BoundedChannel` has no
+// `clone`, so there is no refcount; move semantics ensure exactly one drop.
+// The stub body below never executes — codegen replaces it.
+//
+// Drop-skip-sound: skipping this Drop leaks the runtime queue + its undrained
+// byte-blob payloads (a bounded amount — capacity is fixed) and nothing more.
+// No soundness invariant rests on it: `BoundedChannel` carries no cross-task
+// lifetime contract (it is not `ScopeLocal`), no other end observes the freed
+// memory (single owner, no Sender/Receiver split), and the payloads are
+// type-erased value copies, not borrows. Every v1 Drop-skip path
+// (double-panic, panic=abort, process.exit) terminates the process, so a
+// leaked queue is reclaimed by the OS. A future `forget`-style primitive may
+// skip it with the same leak-not-UB consequence. Per the phase-8
+// `drop_carries_soundness` audit, `BoundedChannel` is in the AUDITED set in
+// `src/prelude.rs`.
+impl[T] Drop for BoundedChannel[T] {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}

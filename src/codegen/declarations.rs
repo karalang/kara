@@ -3139,6 +3139,72 @@ impl<'ctx> super::Codegen<'ctx> {
             self.seeded_enum_names.insert("VarError".to_string());
         }
 
+        // `BoundedChannel[T]` companion enums (`runtime/stdlib/
+        // bounded_channel.kara`). Baked into `STDLIB_PROGRAMS` so the
+        // typechecker sees them, but `declare_enums` only walks the user's
+        // `program.items` (same rationale as `TcpError`/`VarError` below/
+        // above), so seed the layouts here. `ChannelError` is built by the
+        // `BoundedChannel.send` lowering's `Err(Full)` arm; `OnFull` is seeded
+        // so a `let f = OnFull.Block; BoundedChannel.new(.., f)` binding can
+        // construct the value (the inline `new` arg is not lowered — v1
+        // collapses both variants to fail-fast).
+        //
+        // `ChannelError` (1 i64 word — tag only):
+        //   Full (tag=0) — 0 payload words
+        if !self.enum_layouts.contains_key("ChannelError") {
+            let ty = self.context.struct_type(&[i64_t], false);
+            let mut tags = HashMap::new();
+            tags.insert("Full".to_string(), 0u64);
+            let mut field_counts = HashMap::new();
+            field_counts.insert("Full".to_string(), 0usize);
+            let mut field_word_offsets = HashMap::new();
+            field_word_offsets.insert("Full".to_string(), Vec::new());
+            let mut field_drop_kinds = HashMap::new();
+            field_drop_kinds.insert("Full".to_string(), Vec::new());
+            self.enum_layouts.insert(
+                "ChannelError".to_string(),
+                EnumLayout {
+                    llvm_type: ty,
+                    tags,
+                    field_counts,
+                    field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
+                },
+            );
+            self.seeded_enum_names.insert("ChannelError".to_string());
+        }
+
+        // `OnFull` (1 i64 word — tag only; both variants payload-free):
+        //   Block (tag=0), FailFast (tag=1)  — declaration order.
+        if !self.enum_layouts.contains_key("OnFull") {
+            let ty = self.context.struct_type(&[i64_t], false);
+            let mut tags = HashMap::new();
+            tags.insert("Block".to_string(), 0u64);
+            tags.insert("FailFast".to_string(), 1u64);
+            let mut field_counts = HashMap::new();
+            field_counts.insert("Block".to_string(), 0usize);
+            field_counts.insert("FailFast".to_string(), 0usize);
+            let mut field_word_offsets = HashMap::new();
+            field_word_offsets.insert("Block".to_string(), Vec::new());
+            field_word_offsets.insert("FailFast".to_string(), Vec::new());
+            let mut field_drop_kinds = HashMap::new();
+            field_drop_kinds.insert("Block".to_string(), Vec::new());
+            field_drop_kinds.insert("FailFast".to_string(), Vec::new());
+            self.enum_layouts.insert(
+                "OnFull".to_string(),
+                EnumLayout {
+                    llvm_type: ty,
+                    tags,
+                    field_counts,
+                    field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
+                },
+            );
+            self.seeded_enum_names.insert("OnFull".to_string());
+        }
+
         // Phase 6 line 17 slice 9b — stdlib `TcpError` enum. Baked
         // into `runtime/stdlib/tcp.kara` so the typechecker sees it
         // via `STDLIB_PROGRAMS`; codegen's `declare_enums` only walks

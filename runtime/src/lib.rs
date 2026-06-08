@@ -32,6 +32,7 @@
 //! 4. **Crash-report `parallel_context` field** — co-developed with these
 //!    globals, lands with `std.panic` (separate Phase 8 entry).
 
+mod bounded_channel;
 mod channel;
 mod clone;
 mod emutls;
@@ -127,6 +128,14 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         channel::karac_runtime_channel_send,
         channel::karac_runtime_channel_recv,
         channel::karac_runtime_channel_try_recv,
+    );
+    // Bounded-channel runtime (`runtime/src/bounded_channel.rs`). Backs
+    // `BoundedChannel.new` / `.send` / `.recv` + the `BoundedChannel` Drop.
+    keep!(
+        bounded_channel::karac_runtime_bounded_channel_new,
+        bounded_channel::karac_runtime_bounded_channel_send,
+        bounded_channel::karac_runtime_bounded_channel_recv,
+        bounded_channel::karac_runtime_bounded_channel_drop,
     );
     // String + comparison runtime (`runtime/src/clone.rs` + this file).
     keep!(

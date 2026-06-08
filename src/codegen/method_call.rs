@@ -387,6 +387,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 let return_ty = self.recover_task_handle_join_return_ty(call_span);
                 return self.lower_task_handle_join(self_val, return_ty);
             }
+            // `BoundedChannel.send` / `.recv` (`src/codegen/bounded_channel.rs`).
+            // Routed here off the `dispatch_key` the typechecker's
+            // `infer_bounded_channel_method` records — ahead of the unbounded
+            // `channel_elem_types` gate below, so a bounded `recv` (whose `T`
+            // also lives in `channel_elem_types`) is never misrouted to the
+            // unbounded `*mut KaracChannel` lowering.
+            if key == "BoundedChannel.send" && args.len() == 1 {
+                return self.compile_bounded_channel_send(object, args);
+            }
+            if key == "BoundedChannel.recv" && args.is_empty() {
+                return self.compile_bounded_channel_recv(object, call_span);
+            }
         }
 
         // Phase 6 line 26 slice 8g: method-call network-boundary intercept.

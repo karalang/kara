@@ -44,7 +44,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `karac_runtime_channel_*` `elem_size` parameter. Missing means the
     /// typechecker didn't record the site — a contract break worth surfacing
     /// loudly rather than silently sending zero bytes.
-    fn channel_elem_ty_and_size(
+    pub(super) fn channel_elem_ty_and_size(
         &mut self,
         call_span: &crate::token::Span,
     ) -> Result<(inkwell::types::BasicTypeEnum<'ctx>, u64), String> {

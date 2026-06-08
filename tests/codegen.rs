@@ -38119,4 +38119,93 @@ fn main() {
             assert_eq!(c.stdout.trim(), "60");
         }
     }
+
+    #[test]
+    fn e2e_bounded_channel_send_full_recv_fifo() {
+        // Phase 6 "BoundedChannel codegen": `BoundedChannel.new(capacity,
+        // on_full)` + `send -> Result[Unit, ChannelError]` + `recv ->
+        // Option[T]` through `karac_runtime_bounded_channel_*`. Mirrors the
+        // interpreter's collapsed v1 semantics: `send` past capacity returns
+        // `Err(Full)` (no parking), `recv` on empty returns `None`, draining
+        // frees a slot. `1` = Ok, `-1` = Err(Full), `-99` = None.
+        let out = run_program_capturing(
+            r#"
+fn main() {
+    let bc: BoundedChannel[i64] = BoundedChannel.new(2, OnFull.FailFast);
+    match bc.send(10) { Ok(_) => println(1), Err(_) => println(-1), }
+    match bc.send(20) { Ok(_) => println(1), Err(_) => println(-1), }
+    match bc.send(30) { Ok(_) => println(1), Err(_) => println(-1), }
+    match bc.recv() { Some(v) => println(v), None => println(-99), }
+    match bc.recv() { Some(v) => println(v), None => println(-99), }
+    match bc.recv() { Some(v) => println(v), None => println(-99), }
+    match bc.send(40) { Ok(_) => println(1), Err(_) => println(-1), }
+    match bc.recv() { Some(v) => println(v), None => println(-99), }
+}
+"#,
+        );
+        if let Some(c) = out {
+            assert_eq!(c.stdout.trim(), "1\n1\n-1\n10\n20\n-99\n1\n40");
+        }
+    }
+
+    #[test]
+    fn e2e_bounded_channel_string_element() {
+        // Multi-word (`String` = {ptr,len,cap}) element type round-trips
+        // through the type-erased byte-blob queue (elem_size carries the
+        // payload width per op). `Block` collapses to fail-fast in v1, so a
+        // full `send` still returns `Err`.
+        let out = run_program_capturing(
+            r#"
+fn main() {
+    let bc: BoundedChannel[String] = BoundedChannel.new(1, OnFull.Block);
+    match bc.send("hello bounded") { Ok(_) => println("sent"), Err(_) => println("full"), }
+    match bc.send("overflow") { Ok(_) => println("sent"), Err(_) => println("full"), }
+    match bc.recv() { Some(s) => println(s), None => println("empty"), }
+    match bc.recv() { Some(s) => println(s), None => println("empty"), }
+}
+"#,
+        );
+        if let Some(c) = out {
+            assert_eq!(c.stdout.trim(), "sent\nfull\nhello bounded\nempty");
+        }
+    }
+
+    #[test]
+    fn e2e_bounded_channel_zero_capacity_always_full() {
+        // A 0-capacity channel fails every `send` and never yields a value.
+        let out = run_program_capturing(
+            r#"
+fn main() {
+    let bc: BoundedChannel[i64] = BoundedChannel.new(0, OnFull.FailFast);
+    match bc.send(1) { Ok(_) => println(1), Err(_) => println(-1), }
+    match bc.recv() { Some(v) => println(v), None => println(-99), }
+}
+"#,
+        );
+        if let Some(c) = out {
+            assert_eq!(c.stdout.trim(), "-1\n-99");
+        }
+    }
+
+    #[test]
+    fn e2e_bounded_channel_onfull_bound_to_variable() {
+        // `OnFull` bound to a `let` (not inline at the `new` call) is compiled
+        // as an enum value — exercises the seeded `OnFull` layout in
+        // `seed_builtin_enum_layouts`. (The inline-arg form is not lowered:
+        // `new` ignores `on_full` in v1.) The bound policy is still
+        // v1-collapsed to fail-fast.
+        let out = run_program_capturing(
+            r#"
+fn main() {
+    let policy: OnFull = OnFull.Block;
+    let bc: BoundedChannel[i64] = BoundedChannel.new(2, policy);
+    match bc.send(7) { Ok(_) => println(1), Err(_) => println(-1), }
+    match bc.recv() { Some(v) => println(v), None => println(-99), }
+}
+"#,
+        );
+        if let Some(c) = out {
+            assert_eq!(c.stdout.trim(), "1\n7");
+        }
+    }
 }

@@ -5354,4 +5354,27 @@ fn main() {
             "channel_producer_consumer_close_single_free",
         );
     }
+
+    #[test]
+    fn asan_bounded_channel_scope_exit_single_free() {
+        // `BoundedChannel.new` allocates a runtime queue; the `BoundedChannel`
+        // Drop frees it (and any undrained payloads) exactly once at scope
+        // exit. String elements exercise the heap-payload copy path (the
+        // queue owns the byte blobs; the source String's own drop is
+        // independent). ASAN proves: no leak (queue + undrained "world" blob
+        // freed), no double-free (single-owner, no refcount).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let bc: BoundedChannel[String] = BoundedChannel.new(2, OnFull.FailFast);
+    match bc.send("hello") { Ok(_) => println(1), Err(_) => println(0), }
+    match bc.send("world") { Ok(_) => println(1), Err(_) => println(0), }
+    match bc.recv() { Some(s) => println(s), None => println("none"), }
+    // "world" left undrained — its blob is freed by the channel's Drop.
+}
+"#,
+            &["1", "1", "hello"],
+            "bounded_channel_scope_exit_single_free",
+        );
+    }
 }

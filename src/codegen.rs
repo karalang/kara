@@ -23,6 +23,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 mod assoc_call;
+mod bounded_channel;
 mod call_dispatch;
 mod calls;
 mod channel;
@@ -3652,6 +3653,49 @@ impl<'ctx> Codegen<'ctx> {
         module.add_function(
             "karac_runtime_channel_try_recv",
             channel_recv_ty,
+            Some(Linkage::External),
+        );
+
+        // Bounded-channel runtime (`runtime/src/bounded_channel.rs`), backing
+        // `BoundedChannel[T]` (also compiled into every archive — a bounded
+        // queue has no scheduler dependency). The opaque
+        // `*mut KaracBoundedChannel` round-trips through the `i64 handle_id`
+        // field of the `BoundedChannel { handle_id }` struct (ptrtoint at
+        // `new`, inttoptr at send/recv/drop). `elem_size` is `u64`, threaded
+        // per send/recv like the unbounded channel. No clone / Sender split:
+        // single-owner, freed by `_drop` at scope exit.
+        //
+        // `karac_runtime_bounded_channel_new(capacity: i64, on_full: u8) -> ptr`
+        // — fresh bounded queue (capacity clamped >= 0; `on_full` accepted for
+        // forward-compat but v1-collapsed to fail-fast).
+        let bch_new_ty = ptr_type.fn_type(&[i64_type.into(), context.i8_type().into()], false);
+        module.add_function(
+            "karac_runtime_bounded_channel_new",
+            bch_new_ty,
+            Some(Linkage::External),
+        );
+        // `_send(ch, val_ptr, elem_size) -> u8` (1 = buffered → `Ok(())`,
+        // 0 = full → `Err(ChannelError.Full)`) and `_recv(ch, out_ptr,
+        // elem_size) -> u8` (1 = `Some`, 0 = `None`); both non-blocking.
+        let bch_op_ty = context
+            .i8_type()
+            .fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_bounded_channel_send",
+            bch_op_ty,
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_runtime_bounded_channel_recv",
+            bch_op_ty,
+            Some(Linkage::External),
+        );
+        // `_drop(ch)` — single-owner free at scope exit (the `BoundedChannel`
+        // Drop lowering).
+        let bch_drop_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_bounded_channel_drop",
+            bch_drop_ty,
             Some(Linkage::External),
         );
 

@@ -39,7 +39,7 @@
 
 **Channels** (Mac-actionable — codegen):
 
-- [ ] **`BoundedChannel[T]` AOT codegen lowering** — interpreter-only; the unbounded half shipped (`ee148003` + blocking-recv `c0c57e92`).
+- [x] **`BoundedChannel[T]` AOT codegen lowering** — SHIPPED 2026-06-07. `BoundedChannel.new(capacity, on_full)` / `.send -> Result[Unit, ChannelError]` / `.recv -> Option[T]` lower under `karac build`, matching the interpreter's collapsed v1 semantics (capacity check → `Err(Full)` when full; `None` on empty; `Block`/`FailFast` both fail-fast — real parking lands with the event loop). Runtime: type-erased `karac_runtime_bounded_channel_{new,send,recv,drop}` (`runtime/src/bounded_channel.rs`, compiled into every archive like `channel.rs`; single-owner, no refcount/Condvar). Handle is the runtime `*mut` cast into the existing `BoundedChannel { handle_id: i64 }` field (ptrtoint at `new`, inttoptr at ops). Typechecker intercept (`infer_bounded_channel_method`) records the `dispatch_key` + recv element `T` (reusing `channel_elem_types`); codegen `send`/`recv` in `src/codegen/bounded_channel.rs` build the `Result`/`Option` envelopes (`build_nonshared_enum_value` / `build_option_some_via_phis`). `ChannelError`/`OnFull` enum layouts seeded in `seed_builtin_enum_layouts` (declare_enums walks user items only — TcpError/VarError precedent). `impl[T] Drop for BoundedChannel[T]` + hand-rolled `@BoundedChannel.drop` (synth_drop.rs, TaskGroup precedent) frees the queue once at scope exit; Drop-skip-sound comment + AUDITED gate entry. Tests: 3 codegen E2E (i64/String/0-cap) + 1 memory_sanitizer (ASAN-clean, single-free) + interp parity retained. The unbounded half shipped earlier (`ee148003` + blocking-recv `c0c57e92`).
 
 **Soundness & panic semantics** (Mac-actionable):
 

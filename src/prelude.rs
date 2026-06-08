@@ -2099,6 +2099,7 @@ mod tests {
         // Audited 2026-06-07. Per-type answers live in the
         // `Drop-skip-sound:` comment above each impl.
         const AUDITED: &[&str] = &[
+            "BoundedChannel",
             "PooledConnection",
             "TaskGroup",
             "TcpListener",

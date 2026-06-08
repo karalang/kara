@@ -361,6 +361,86 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Infer the return type of a method call on `Sender[T]` or `Receiver[T]`.
     /// `is_sender` distinguishes the two ends; `element` is the channel's `T`.
+    /// `BoundedChannel[T]` method dispatch — `send(value) -> Result[Unit,
+    /// ChannelError]` and `recv() -> Option[T]`. Caller gates on
+    /// `send`/`recv`; `new` is an associated call typed by the stdlib
+    /// signature.
+    ///
+    /// Mirrors `infer_channel_method`: intercepting here (before the
+    /// generic-impl method resolution) takes the concrete element `T`
+    /// straight from the receiver's `BoundedChannel[T]` type args — the
+    /// generic-impl path doesn't bind `T` from the receiver for the
+    /// `impl[T] Foo[T] { fn m() -> T }` shape (the same gap
+    /// `TaskHandle.join` works around).
+    ///
+    /// Records two codegen side-tables:
+    /// - `method_callee_types[span] = "BoundedChannel.{method}"` so codegen's
+    ///   `dispatch_key` routes to the bounded-channel lowering (the
+    ///   hardcoded-dispatch precedent — HTTP `Client`/`Response` do the same).
+    /// - `channel_elem_types[span] = T` for `recv` ONLY, so codegen recovers
+    ///   the out-slot shape + `elem_size` via the shared
+    ///   `channel_elem_ty_and_size` helper. `send` is deliberately NOT
+    ///   recorded there (codegen sizes `send` from its argument value) —
+    ///   keeping `send` out of `channel_elem_types` also keeps it clear of
+    ///   the unbounded-channel dispatch gate, which keys off that map.
+    pub(super) fn infer_bounded_channel_method(
+        &mut self,
+        element: &Type,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        self.method_callee_types.insert(
+            SpanKey::from_span(span),
+            format!("BoundedChannel.{}", method),
+        );
+        let elem = resolve_type_var_top(element, &self.env.substitutions);
+        match method {
+            "send" => {
+                if args.len() != 1 {
+                    self.type_error(
+                        "BoundedChannel.send expects exactly one argument".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&elem, &at, arg.value.span.clone());
+                }
+                // `Result[Unit, ChannelError]`.
+                Type::Named {
+                    name: "Result".to_string(),
+                    args: vec![
+                        Type::Unit,
+                        Type::Named {
+                            name: "ChannelError".to_string(),
+                            args: vec![],
+                        },
+                    ],
+                }
+            }
+            "recv" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "BoundedChannel.recv() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                // Record T so codegen's `recv` lowering sizes the out-slot
+                // and builds `Option[T]` (shared `channel_elem_ty_and_size`).
+                let te = Self::type_to_type_expr(&elem);
+                self.channel_elem_types.insert(SpanKey::from_span(span), te);
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![elem],
+                }
+            }
+            _ => unreachable!("infer_bounded_channel_method: caller gates on send/recv"),
+        }
+    }
+
     pub(super) fn infer_channel_method(
         &mut self,
         is_sender: bool,

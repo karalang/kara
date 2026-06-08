@@ -1691,6 +1691,23 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `BoundedChannel[T]` method dispatch — `send` / `recv`. Intercepted
+        // before the generic-impl resolution so the concrete element `T` is
+        // taken from the receiver's type args (the `impl[T] Foo[T] { fn m()
+        // -> T }` return-T binding gap). `new` is an associated call typed by
+        // the stdlib signature; other methods fall through to the normal
+        // (error) path.
+        if let Type::Named {
+            name,
+            args: type_args,
+        } = &obj_ty_for_named
+        {
+            if name == "BoundedChannel" && matches!(method, "send" | "recv") {
+                let element = type_args.first().cloned().unwrap_or(Type::Error);
+                return self.infer_bounded_channel_method(&element, method, args, span);
+            }
+        }
+
         // `Vec[T].sort_by` / `Vec[T].sorted_by` / `Vec[T].sort_by_key` /
         // `Vec[T].sorted_by_key` — closure-shape validation. Vec has no
         // stdlib impl block; without this intercept the call falls through

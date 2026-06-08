@@ -75,6 +75,48 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(result.into());
         }
 
+        // `BoundedChannel.new(capacity, on_full)` — allocate a runtime
+        // bounded queue via `karac_runtime_bounded_channel_new` and wrap the
+        // returned pointer (cast to i64) as `BoundedChannel { handle_id:
+        // <i64> }`. The stdlib stub body returns `BoundedChannel { handle_id:
+        // 0 }`; this intercept replaces it with the FFI so `.send`/`.recv`
+        // (and the `BoundedChannel` Drop) find a real queue at the pointer.
+        // `on_full` is v1-collapsed to fail-fast (both `Block` and `FailFast`
+        // fail a full send) — the runtime accepts the discriminant for
+        // forward-compat with parking-on-full but ignores it, so codegen
+        // passes a constant `0` rather than lowering the `OnFull` enum value.
+        if type_name == "BoundedChannel" && method == "new" && _args.len() == 2 {
+            let capacity = self.compile_expr(&_args[0].value)?.into_int_value();
+            let on_full = self.context.i8_type().const_zero();
+            let new_fn = self
+                .module
+                .get_function("karac_runtime_bounded_channel_new")
+                .expect("karac_runtime_bounded_channel_new declared in Codegen::new");
+            let ch_ptr = self
+                .builder
+                .build_call(
+                    new_fn,
+                    &[capacity.into(), on_full.into()],
+                    "__bounded_channel_new",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            let i64_ty = self.context.i64_type();
+            let handle = self
+                .builder
+                .build_ptr_to_int(ch_ptr, i64_ty, "bch.handle")
+                .unwrap();
+            let struct_ty = self.context.struct_type(&[i64_ty.into()], false);
+            let result = self
+                .builder
+                .build_insert_value(struct_ty.get_undef(), handle, 0, "bounded_channel")
+                .unwrap()
+                .into_struct_value();
+            return Ok(result.into());
+        }
+
         // Phase 6 "Channel AOT codegen lowering": `Channel.new()` — allocate
         // a runtime channel (refcount 2) and return it as the `(Sender[T],
         // Receiver[T])` tuple. Both ends carry the *same* opaque pointer
