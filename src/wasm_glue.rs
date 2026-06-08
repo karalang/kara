@@ -75,17 +75,7 @@ pub struct HostFnSig {
 /// widths are resolved against the program's own struct declarations:
 /// a single-field struct crosses at its field's scalar width.
 pub fn collect_host_fns(program: &Program) -> Vec<HostFnSig> {
-    // Single-primitive-field structs: name → the field's JS classification.
-    let handle_widths: HashMap<&str, JsScalar> = program
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            Item::StructDef(s) if s.fields.len() == 1 => {
-                Some((s.name.as_str(), js_scalar(&s.fields[0].ty, &HashMap::new())))
-            }
-            _ => None,
-        })
-        .collect();
+    let handle_widths = handle_width_map(program);
 
     program
         .items
@@ -93,6 +83,24 @@ pub fn collect_host_fns(program: &Program) -> Vec<HostFnSig> {
         .filter_map(|item| match item {
             Item::ExternFunction(ext) if ext.abi == "host" => {
                 Some(host_fn_sig(ext, &handle_widths))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Single-primitive-field structs in `program`, mapping each name to its
+/// field's JS-boundary classification — the opaque-handle width table
+/// shared by [`collect_host_fns`] and wasm-export discovery
+/// (`crate::wasm_exports`). A one-field struct crosses the boundary as
+/// its field's scalar.
+pub(crate) fn handle_width_map(program: &Program) -> HashMap<&str, JsScalar> {
+    program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::StructDef(s) if s.fields.len() == 1 => {
+                Some((s.name.as_str(), js_scalar(&s.fields[0].ty, &HashMap::new())))
             }
             _ => None,
         })
@@ -131,7 +139,7 @@ fn host_fn_sig(ext: &ExternFunction, handles: &HashMap<&str, JsScalar>) -> HostF
 /// addresses (i32 → number); single-field handle structs cross at
 /// their field's width. Anything unrecognized is documented as a
 /// number — the classification feeds doc comments, not codegen.
-fn js_scalar(ty: &TypeExpr, handles: &HashMap<&str, JsScalar>) -> JsScalar {
+pub(crate) fn js_scalar(ty: &TypeExpr, handles: &HashMap<&str, JsScalar>) -> JsScalar {
     match &ty.kind {
         TypeKind::Pointer { .. } => JsScalar::Number,
         TypeKind::Path(path) if path.segments.len() == 1 => {
@@ -148,7 +156,7 @@ fn js_scalar(ty: &TypeExpr, handles: &HashMap<&str, JsScalar>) -> JsScalar {
 /// Kāra-surface rendering of a `host fn`-legal type for the glue's doc
 /// comments. The boundary restriction keeps the shapes simple: paths,
 /// raw pointers, `()`.
-fn type_expr_display(ty: &TypeExpr) -> String {
+pub(crate) fn type_expr_display(ty: &TypeExpr) -> String {
     match &ty.kind {
         TypeKind::Path(path) => path.segments.join("."),
         TypeKind::Pointer { is_mut, inner } => {

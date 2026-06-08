@@ -23495,6 +23495,73 @@ fn main() {}
     );
 }
 
+// ── WASM entry-point discovery: export boundary (phase-10) ──────────
+//
+// A `pub fn` positively tagged `#[target(wasm_browser)]` /
+// `#[target(wasm_wasi)]` is a wasm export and carries the same
+// boundary-type restriction as a `host fn` (sub-slice A floor;
+// wasm_wasi widens to WIT-expressible types as the Canonical ABI
+// sub-slices land). The check keys off the function's own tag — these
+// tests run without target filtering, so both-target fns are present.
+
+#[test]
+fn wasm_export_boundary_accepts_primitives_copy_and_handles() {
+    typecheck_ok(
+        r#"
+pub struct ElementHandle { id: i64 }
+
+#[derive(Copy, Clone)]
+pub struct Point { x: f64, y: f64 }
+
+#[target(wasm_browser)]
+pub fn ok_prim(a: i32, b: i32) -> i32 { a + b }
+
+#[target(wasm_browser)]
+pub fn ok_handle(el: ElementHandle) -> ElementHandle { el }
+
+#[target(wasm_wasi)]
+pub fn ok_copy(p: Point) -> Point { p }
+
+fn main() {}
+"#,
+    );
+}
+
+#[test]
+fn wasm_export_boundary_rejects_owned_non_copy() {
+    let errs = typecheck_errors(
+        r#"
+#[target(wasm_browser)]
+pub fn bad_string(s: String) {}
+
+fn main() {}
+"#,
+    );
+    let msgs: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
+    assert!(
+        msgs.iter().any(|m| m.contains("wasm export 'bad_string'")
+            && m.contains("`String` cannot cross the host boundary")),
+        "{msgs:?}"
+    );
+}
+
+#[test]
+fn wasm_export_boundary_only_checks_tagged_pub_wasm_entries() {
+    // Untagged pub fns and fns tagged for a non-wasm target are not
+    // wasm exports, so their (otherwise illegal) `String` params are
+    // not boundary-checked.
+    typecheck_ok(
+        r#"
+#[target(native)]
+pub fn native_only(s: String) {}
+
+pub fn untagged(s: String) {}
+
+fn main() {}
+"#,
+    );
+}
+
 // ── Never-type inference (phase-6 line 487) ─────────────────────────
 //
 // `Never` (`!`) is the bottom type: `LUB(Never, T) = T` for branch joins,

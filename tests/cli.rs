@@ -11214,6 +11214,95 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// phase-10 "WASM entry-point discovery" (sub-slice A): a `pub fn`
+/// positively tagged `#[target(wasm_wasi)]` becomes a wasm module export
+/// (`--export=add`), callable from JS alongside `_start`. Built
+/// `--bindings=none` (raw core module) and instantiated under
+/// `node:wasi` WITHOUT running `_start`, then `instance.exports.add(2,3)`
+/// is called directly — proving the symbol is exported and callable.
+#[test]
+fn wasm_entry_point_export_callable_e2e() {
+    let tmp = wasm_test_dir("export-entry");
+    let path = tmp.join("exports_demo.kara");
+    std::fs::write(
+        &path,
+        r#"
+#[target(wasm_wasi)]
+pub fn add(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+fn main() {}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_entry_point_export_callable_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm build failed: {stderr}");
+    let wasm_path = tmp.join("exports_demo.wasm");
+    assert!(
+        wasm_path.exists(),
+        "expected exports_demo.wasm next to the build cwd"
+    );
+
+    // Instantiate under node:wasi but do NOT call wasi.start — invoke the
+    // discovered export directly. `add` is pure arithmetic, so it needs no
+    // WASI runtime state; its presence + correct result proves the export
+    // was surfaced by `--export=add`.
+    let runner = tmp.join("call_export.mjs");
+    std::fs::write(
+        &runner,
+        "import { readFile } from 'node:fs/promises';\n\
+         import { WASI } from 'node:wasi';\n\
+         import { argv } from 'node:process';\n\
+         const wasi = new WASI({ version: 'preview1', args: [], env: {} });\n\
+         const wasm = await WebAssembly.compile(await readFile(argv[2]));\n\
+         const instance = await WebAssembly.instantiate(wasm, wasi.getImportObject());\n\
+         if (typeof instance.exports.add !== 'function') {\n\
+         \x20 console.error('add not exported'); process.exit(2);\n\
+         }\n\
+         console.log(instance.exports.add(2, 3));\n",
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&runner)
+        .arg(&wasm_path)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_entry_point_export_callable_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "export call failed under node:wasi: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert_eq!(
+        node_stdout, "5\n",
+        "exports.add(2,3) must return 5; stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// phase-10 "WASM concurrency lowering — sequential default", explicit
 /// `par {}` leg: the block still lowers through `karac_par_run`
 /// (`tests/wasm_codegen.rs` pins the IR shape), and the wasm runtime

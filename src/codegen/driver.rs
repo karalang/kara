@@ -26,8 +26,21 @@ use inkwell::OptimizationLevel;
 ///
 /// See design.md § Runtime Distribution.
 pub fn link_executable(obj_path: &str, exe_path: &str) -> Result<(), String> {
+    link_executable_exports(obj_path, exe_path, &[])
+}
+
+/// As [`link_executable`], but surfacing the discovered WASM entry-point
+/// exports (phase-10 "WASM entry-point discovery") as `--export=<name>`
+/// wasm-ld arguments. `wasm_exports` is ignored on native targets (which
+/// have no module-export concept); the WASM build paths in `cli.rs` pass
+/// the [`crate::wasm_exports::collect_wasm_exports`] result here.
+pub fn link_executable_exports(
+    obj_path: &str,
+    exe_path: &str,
+    wasm_exports: &[String],
+) -> Result<(), String> {
     if crate::target::active_target_is_wasm() {
-        return link_wasm_executable(obj_path, exe_path);
+        return link_wasm_executable(obj_path, exe_path, wasm_exports);
     }
     link_executable_impl(obj_path, exe_path, &[])
 }
@@ -57,7 +70,11 @@ pub fn link_executable(obj_path: &str, exe_path: &str) -> Result<(), String> {
 /// default; wasm-ld's own 64 KiB default is tight for array-heavy Kāra
 /// frames), placed before globals (`--stack-first`) so overflow traps
 /// instead of silently corrupting the data section.
-fn link_wasm_executable(obj_path: &str, exe_path: &str) -> Result<(), String> {
+fn link_wasm_executable(
+    obj_path: &str,
+    exe_path: &str,
+    wasm_exports: &[String],
+) -> Result<(), String> {
     let (linker, flavor_args) = resolve_wasm_linker()?;
     let sysroot = resolve_wasi_self_contained_dir("wasm32-wasip1")?;
     let crt1 = sysroot.join("crt1-command.o");
@@ -80,7 +97,13 @@ fn link_wasm_executable(obj_path: &str, exe_path: &str) -> Result<(), String> {
     cmd.arg(obj_path);
     cmd.arg(&runtime_path);
     cmd.arg(&libc);
-    cmd.args(["-z", "stack-size=1048576", "--stack-first", "-o", exe_path]);
+    cmd.args(["-z", "stack-size=1048576", "--stack-first"]);
+    // Phase-10 WASM entry-point discovery: surface each `pub fn` tagged
+    // for this target as a wasm module export (`crate::wasm_exports`).
+    // `pub` already gives them external linkage; `--export=` keeps them
+    // through wasm-ld's default section GC and lists them as exports.
+    append_wasm_export_flags(&mut cmd, wasm_exports);
+    cmd.args(["-o", exe_path]);
 
     let output = cmd
         .output()
@@ -126,6 +149,7 @@ pub fn link_wasm_executable_threaded(
     obj_path: &str,
     exe_path: &str,
     max_memory_bytes: u64,
+    wasm_exports: &[String],
 ) -> Result<(), String> {
     let (linker, flavor_args) = resolve_wasm_linker()?;
     let sysroot = resolve_wasi_self_contained_dir("wasm32-wasip1-threads")?;
@@ -174,9 +198,11 @@ pub fn link_wasm_executable_threaded(
         // live frames. Both must be exported for the glue to reach them.
         "--export=__stack_pointer",
         "--export=karac_runtime_service_stack_top",
-        "-o",
-        exe_path,
     ]);
+    // Phase-10 WASM entry-point discovery — same per-target `pub fn`
+    // exports as the sequential path (see [`link_wasm_executable`]).
+    append_wasm_export_flags(&mut cmd, wasm_exports);
+    cmd.args(["-o", exe_path]);
 
     let output = cmd
         .output()
@@ -188,6 +214,18 @@ pub fn link_wasm_executable_threaded(
         ));
     }
     Ok(())
+}
+
+/// Append a `--export=<name>` wasm-ld argument for each discovered WASM
+/// export entry point (phase-10 "WASM entry-point discovery"). The
+/// symbols already have external linkage (they are `pub fn`s); `--export`
+/// both pins them through wasm-ld's default dead-section GC and lists
+/// them in the module's export section so JS / a component host can call
+/// them. No-op for programs with no tagged exports.
+fn append_wasm_export_flags(cmd: &mut std::process::Command, wasm_exports: &[String]) {
+    for name in wasm_exports {
+        cmd.arg(format!("--export={name}"));
+    }
 }
 
 /// Locate a wasm-capable linker. Resolution order:

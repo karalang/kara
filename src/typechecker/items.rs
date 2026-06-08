@@ -38,6 +38,7 @@ impl<'a> super::TypeChecker<'a> {
                         continue;
                     }
                     self.check_function(f, None, &[]);
+                    self.check_wasm_export_boundary(f);
                 }
                 Item::ImplBlock(imp) => self.check_impl_block(imp),
                 Item::TraitDef(t) => self.check_trait_def(t),
@@ -82,6 +83,59 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_host_fn_boundary(e);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    /// Enforce the binding-surface restriction on a discovered WASM
+    /// export (phase-10 "WASM entry-point discovery", design.md § Entry
+    /// point discovery): a `pub fn` positively tagged
+    /// `#[target(wasm_browser)]` / `#[target(wasm_wasi)]` may only take /
+    /// return types expressible across the chosen boundary.
+    ///
+    /// `#[target(wasm_browser)]` carries the **same** restriction as a
+    /// `host fn` — primitives, `Copy`-satisfying types, opaque-handle
+    /// newtypes — because the browser glue marshals the same scalar set.
+    /// `#[target(wasm_wasi)]` is destined to additionally permit the
+    /// WIT-expressible types (records / variants / `string` / `list` /
+    /// `option` / `result`); that surface is widened here as the
+    /// Canonical ABI sub-slices land its lowering. Until then both tags
+    /// share the host-boundary floor, so the diagnostic keys cleanly off
+    /// the function's own tag (independent of the build target — only the
+    /// matching-target fns survive `filter_inactive_items` anyway).
+    fn check_wasm_export_boundary(&mut self, f: &Function) {
+        let Some(spec) = crate::target::target_spec_of(&f.attributes) else {
+            return;
+        };
+        if spec.negated {
+            return;
+        }
+        let is_wasm_export = f.is_pub
+            && f.self_param.is_none()
+            && f.name != "main"
+            && spec
+                .names
+                .iter()
+                .any(|n| n == "wasm_browser" || n == "wasm_wasi");
+        if !is_wasm_export {
+            return;
+        }
+        for p in &f.params {
+            if let Some(msg) = self.host_boundary_violation(&p.ty, "parameter") {
+                self.type_error(
+                    format!("wasm export '{}': {msg}", f.name),
+                    p.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+        if let Some(ref rt) = f.return_type {
+            if let Some(msg) = self.host_boundary_violation(rt, "return") {
+                self.type_error(
+                    format!("wasm export '{}': {msg}", f.name),
+                    rt.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
             }
         }
     }

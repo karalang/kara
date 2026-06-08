@@ -4586,10 +4586,14 @@ fn emit_wasm_threads_artifact(
         process::exit(1);
     }
     let max_memory_pages = max_pages.unwrap_or(WASM_THREADS_DEFAULT_MAX_MEMORY_PAGES);
+    let wasm_export_names = crate::wasm_exports::export_names(
+        &crate::wasm_exports::collect_wasm_exports(program, crate::target::active_target()),
+    );
     let link_result = crate::codegen::link_wasm_executable_threaded(
         obj_path,
         threads_wasm_path.to_str().unwrap_or(threads_filename),
         u64::from(max_memory_pages) * 65536,
+        &wasm_export_names,
     );
     let _ = std::fs::remove_file(obj_path);
     if let Err(e) = link_result {
@@ -5267,7 +5271,12 @@ fn cmd_build(
         } else {
             exe_path.clone()
         };
-        match crate::codegen::link_executable(&obj_path, &link_out) {
+        let wasm_export_names =
+            crate::wasm_exports::export_names(&crate::wasm_exports::collect_wasm_exports(
+                &pipeline.parsed.program,
+                crate::target::active_target(),
+            ));
+        match crate::codegen::link_executable_exports(&obj_path, &link_out, &wasm_export_names) {
             Err(e) => {
                 eprintln!("error: link failed: {e}");
                 let _ = std::fs::remove_file(&obj_path);
@@ -6495,9 +6504,16 @@ fn run_multi_file_codegen(
     } else {
         exe_path.clone()
     };
-    if let Err(e) =
-        crate::codegen::link_executable(&obj_path.to_string_lossy(), &link_out.to_string_lossy())
-    {
+    let wasm_export_names =
+        crate::wasm_exports::export_names(&crate::wasm_exports::collect_wasm_exports(
+            &pipeline.parsed.program,
+            crate::target::active_target(),
+        ));
+    if let Err(e) = crate::codegen::link_executable_exports(
+        &obj_path.to_string_lossy(),
+        &link_out.to_string_lossy(),
+        &wasm_export_names,
+    ) {
         let _ = std::fs::remove_file(&obj_path);
         return BuildCodegenStatus::Failed {
             phase: "link".to_string(),
