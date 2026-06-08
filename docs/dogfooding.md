@@ -32,7 +32,7 @@ numbering used in `docs/roadmap.md` / `phase-6-runtime.md` ("Flagship Demo 1/2/3
 - [Demo planning](#demo-planning) — five pillars + practical filters
 - [Tier 1 — Must-Build](#tier-1--must-build-core-story-highest-impact) — Parallax, Mend, Slipstream
 - [Tier 2 — High-Value](#tier-2--high-value-compelling-story-focused-audience) — Cartographer, Husk, Weave, Chronicle
-- [Tier 3 — Domain-Specific](#tier-3--domain-specific-strong-for-specific-audiences) — Relay, Forge, Iris
+- [Tier 3 — Domain-Specific](#tier-3--domain-specific-strong-for-specific-audiences) — Relay, Forge, Iris, Plume, Fathom
 - [Build Sequence](#build-sequence)
 - [Reusable Scaffolding](#reusable-scaffolding)
 - [Adding a project](#adding-a-project) — the entry template
@@ -59,6 +59,8 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 | **Relay** | Effect-driven event-loop networking (no `async fn`) | ⬜ planned | Phase 6 v1.1 network event loop | 3 |
 | **Forge** | `embedded` profile firmware on a real MCU | ⬜ planned | v8 hardware gaps | 3 |
 | **Iris** | One source → native + WASM, no port | ⬜ planned | Phase 10 WASM target | 3 |
+| **Plume** | Parallel browser compute driven by event streams — no `async`/coloring | ⬜ planned | Phase 10 event-stream surface (`animation_frames` + event-data channels) + framebuffer-blit host fn | 3 |
+| **Fathom** | Browser × multi-core + SIMD pixel compute, one source | ⬜ planned | framebuffer-blit host fn (+ `animation_frames`; event-data channels only for the interactive cut) | 3 |
 
 ---
 
@@ -270,6 +272,16 @@ demo is unblocked after Phase 11 completes (auto-concurrency codegen lands in
 Phase 8 floor, but the full stdlib + FFI for SDL2 rendering need the long-tail
 in Phase 11). The GPU path requires Phase 10 but can be added later without
 changing the Kāra source — only the dispatch call changes.
+
+**Browser edition (cross-target capstone).** The same `simulate_tick` source
+also targets the browser: `--target=wasm_browser --features wasm-threads` runs
+the fluid kernel across a Web Worker pool, with `animation_frames()` driving the
+loop, the angle-of-attack slider arriving as an event-data channel, and a
+`canvas.put_pixels` blit replacing SDL2 — no Kāra-source change, only the
+render/input host layer swaps (the cross-target story **Iris** proves, applied
+to the flagship). This is the full continuous-loop browser demo; **Plume**
+(below) is its tractable precursor on the identical spine. Gated on the same
+Phase-10 event-stream surface as Plume/Fathom.
 
 ---
 
@@ -540,6 +552,86 @@ make the data flow visible.
 straightforward. The interesting engineering is the browser integration (JS
 glue, canvas rendering) and keeping the native / WASM comparison honest.
 
+> **Front-end browser track (Plume / Fathom below, + Slipstream's wasm edition).**
+> Iris is the *discrete* browser demo — load → apply filter → show — so it leans
+> on framebuffer-blit + parallel filters and barely touches the deferred
+> event-stream surface. The three entries below are *continuous-loop* browser
+> demos (a live render loop + live input), which is what drives the Phase-10
+> host-async event-stream APIs (`animation_frames`, event-data channels, DOM
+> event streams) tracked in `phase-10-targets.md` (the `std.web.time` /
+> event-stream wrappers entry). They are **not pre-launch-gating** — pickable
+> pre-v1 or immediately post-v1 as the front-end story firms up. All share one
+> spine: Kāra computes a pixel buffer into shared linear memory; one
+> `canvas.put_pixels(ptr, w, h)` host fn blits it (`ctx.putImageData`) — no
+> per-primitive Canvas drawing API; worker-pool parallelism + SIMD-128 already
+> ship on `--features wasm-threads`.
+
+---
+
+### Plume — Particle Flow Field (Browser)
+
+**Primary capability:** The wasm-threads front-end spine — a continuous render
+loop driven by *host event streams* (`animation_frames`, pointer/slider events)
+feeding channels, with the per-frame compute fanned out across a real Web Worker
+pool — all reading as plain blocking Kāra (no `async`/`await`, no callback
+coloring).
+
+**What it is:** An in-browser particle flow field — tens of thousands of tracer
+particles advected through a vector field, rendered to a canvas. The pointer (or
+a slider) perturbs the field and the flow responds in real time. Written
+entirely in Kāra, compiled to `--target=wasm_browser --features wasm-threads`.
+
+**What the demo shows:**
+1. Particles stream and swirl at 60fps; drag the pointer and the flow bends
+   around it — input arrives as `for ev in pointer_moves(canvas) { … }`.
+2. Overlay: `Workers: 18 | FPS: 60 | particles: 200k`. Toggle to one worker and
+   the framerate visibly collapses — real multi-core, in a browser tab.
+3. The render loop shown beside the window:
+   `for _tick in animation_frames() { par { advect(field, particles, …) } canvas.put_pixels(fb, W, H) }`
+   — a plain blocking loop. "Where's the `await`? There isn't one — the worker
+   parks in `recv` and the host wakes it."
+
+**Why it's compelling:** JavaScript can't do this ergonomically — Web Workers +
+SharedArrayBuffer are a manual, error-prone chore and the language has no clean
+blocking-recv. Kāra makes a multi-core browser app read like a single-threaded
+loop. It is the *front-end* half of the "auto-concurrency without coloring"
+thesis, in the one environment anyone can click and run — and the tractable
+precursor to Slipstream's browser edition (same spine, simpler kernel).
+
+**Effort:** Medium. Gated on the Phase-10 event-stream surface (`animation_frames`
+producer + event-data channels) + the `canvas.put_pixels` blit host fn;
+worker-pool parallelism + SIMD-128 already ship on wasm-threads.
+
+---
+
+### Fathom — Fractal Explorer (Browser)
+
+**Primary capability:** The same browser spine reduced to its essence —
+multi-core + SIMD pixel compute via framebuffer-blit, with zero domain code. The
+fastest path to a clickable "all your cores, in a browser tab, from one source"
+proof.
+
+**What it is:** An in-browser Mandelbrot/Julia explorer — pan and wheel-zoom into
+the fractal, each frame computed in parallel across the worker pool and blitted
+to a canvas. Pure compute: no physics, no simulation state.
+
+**What the demo shows:**
+1. Smooth 60fps zoom into unbounded fractal detail — wheel to dive, drag to pan.
+2. Overlay shows worker count and FPS; halving the pool halves the framerate —
+   the parallelism is real and measurable, not a loading-spinner illusion.
+3. The inner iteration vectorizes to `Vector[f64, 2]` → WASM SIMD-128, same
+   source, no flag.
+
+**Why it's compelling:** The smallest demo that still lands the headline — real
+multi-core + SIMD in the browser from one Kāra source — so it is the cheapest,
+fastest *shippable* proof of the front-end story. Weaker narrative than fluid
+(the "yet another Mandelbrot" risk), which is exactly why it is the fallback /
+warm-up, not the flagship.
+
+**Effort:** Small–Medium. A non-interactive cut needs only `animation_frames` +
+the blit host fn; the pan/zoom cut adds wheel/pointer event-data channels.
+Shares the entire spine with Plume.
+
 ---
 
 ## Build Sequence
@@ -563,6 +655,18 @@ cover the two core theses (auto-concurrency, AI-first) with achievable effort,
 and they're the earliest to land. Everything else layers on top within the same
 pre-launch runway; the roster is not exhaustive and grows as dogfooding surfaces
 new capabilities worth proving.
+
+**Front-end browser track (separate, pre- *or* immediately post-v1).** The
+continuous-loop browser demos — **Plume**, **Fathom**, and **Slipstream's wasm
+edition** — are deliberately *not* in the strict V1-ordered list above. They
+gate on the Phase-10 host-async event-stream surface (`animation_frames` +
+event-data channels + a framebuffer-blit host fn — tracked in
+`phase-10-targets.md`), and the WebAssembly front-end is a long-term (v1/v2)
+story, so they are pickable as that surface firms up. Build order *within* the
+track: **Fathom** (spine warm-up, zero domain code) → **Plume** (interactive,
+exercises event-data channels) → **Slipstream wasm edition** (the flagship, same
+spine + the full LBM kernel). Each forces the next slice of the event-stream
+surface, so the track doubles as the consumer that justifies building it.
 
 ---
 
