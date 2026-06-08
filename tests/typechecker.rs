@@ -21331,8 +21331,9 @@ fn scope_local_passing_task_handle_to_helper_accepted() {
 #[test]
 fn scope_local_other_types_not_rejected() {
     // Regression guard: the walker MUST fire only on
-    // ScopeLocal-marked types. Returning a plain Vec / String /
-    // Pool / TaskGroup (none of which impl ScopeLocal) stays clean.
+    // ScopeLocal-marked types. Returning a plain Vec / String / Pool
+    // stays clean. (TaskGroup and TaskHandle DO impl ScopeLocal — see
+    // the dedicated rejection tests above/below.)
     typecheck_ok(
         "fn make_vec() -> Vec[i64] { Vec.new() }
          fn make_string() -> String { String.new() }
@@ -21343,6 +21344,88 @@ fn scope_local_other_types_not_rejected() {
          fn main() {
              let h: Holder = Holder { v: make_vec(), s: make_string() };
          }",
+    );
+}
+
+// ── Phase 6: TaskGroup is ScopeLocal too (escape gap close, 2026-06-07) ──
+//
+// Surfaced by the phase-8 `drop_carries_soundness` audit: only
+// `TaskHandle[T]` carried `ScopeLocal`, so a `TaskGroup` could escape
+// its frame (return / field / channel-send) and join its ref-capturing
+// children too late — UAF by design rule (design.md § Structured
+// Concurrency Lifetime Guarantees). `impl ScopeLocal for TaskGroup {}`
+// (runtime/stdlib/task_group.kara) closes it via the same slice-2
+// machinery. These mirror the `TaskHandle` tests above.
+
+#[test]
+fn scope_local_task_group_local_bind_accepted() {
+    // Positive: the canonical accept-loop shape — a frame-local
+    // `let mut tg` that spawns and never escapes — stays first-class.
+    typecheck_ok(
+        "fn worker() -> i64 { 0 }
+         fn main() {
+             let mut tg: TaskGroup = TaskGroup.new();
+             tg.spawn(|| worker());
+             tg.spawn(|| worker());
+         }",
+    );
+}
+
+#[test]
+fn scope_local_returning_task_group_from_fn_rejected() {
+    let errors = typecheck_errors(
+        "fn make_group() -> TaskGroup {
+             TaskGroup.new()
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, karac::typechecker::TypeErrorKind::ScopeLocalEscape)),
+        "expected ScopeLocalEscape on fn-return-of-TaskGroup, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn scope_local_task_group_in_struct_field_rejected() {
+    // Field name is `grp`, not `group` — `group` is a lexer keyword
+    // (`Token::Group`, used by `effect group` / layout-block
+    // groupings), so a field named `group` would be a parse error, not
+    // the ScopeLocal rejection under test.
+    let errors = typecheck_errors(
+        "struct Holder {
+             grp: TaskGroup,
+         }
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, karac::typechecker::TypeErrorKind::ScopeLocalEscape)),
+        "expected ScopeLocalEscape on TaskGroup struct field, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn scope_local_task_group_through_channel_send_rejected() {
+    // A group sent across a channel escapes to an unknown receiving
+    // task — its children's join barrier can no longer fire before the
+    // spawning frame exits. The hardcoded ScopeLocal set at the
+    // `Sender.send` arm (`stdlib_io.rs`) covers `TaskGroup`.
+    let errors = typecheck_errors(
+        "fn leak(tx: Sender[TaskGroup]) {
+             let tg: TaskGroup = TaskGroup.new();
+             tx.send(tg);
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, karac::typechecker::TypeErrorKind::ScopeLocalEscape)),
+        "expected ScopeLocalEscape on Sender.send of TaskGroup, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
 }
 

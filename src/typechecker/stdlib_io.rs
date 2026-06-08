@@ -420,11 +420,14 @@ impl<'a> super::TypeChecker<'a> {
                     // the same rule for (a) function return and (b)
                     // struct/enum field positions.
                     //
-                    // v1 ships with a hardcoded `TaskHandle` entry.
+                    // v1's hardcoded set is `TaskHandle` + `TaskGroup`
+                    // (both `impl ScopeLocal` in task_group.kara — a
+                    // group escaping via a channel joins its children
+                    // too late, same UAF as a handle escaping).
                     // `ScopeLocal` is sealed (users cannot `impl
                     // ScopeLocal for MyType` per design.md), so the
                     // set is closed and known to the compiler — when
-                    // a second stdlib ScopeLocal type lands (RAII
+                    // a further stdlib ScopeLocal type lands (RAII
                     // critical-section guards, scope-bound
                     // iterators), it joins this match. The
                     // collect_scope_local_types walker in items.rs
@@ -432,7 +435,7 @@ impl<'a> super::TypeChecker<'a> {
                     // hardcoded match here is its v1 mirror at the
                     // call-site dispatch point.
                     if let Type::Named { name, .. } = &elem {
-                        let is_scope_local = matches!(name.as_str(), "TaskHandle");
+                        let is_scope_local = matches!(name.as_str(), "TaskHandle" | "TaskGroup");
                         if is_scope_local {
                             self.type_error(
                                 format!(

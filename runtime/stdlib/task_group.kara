@@ -210,12 +210,14 @@ impl[T] TaskHandle[T] {
 // scope-exit join — the barrier is a property of the scope, not of
 // this value's liveness. Skipping cleanup otherwise leaks the
 // scheduler's per-scope registry slot (and detaches children); no
-// UB. Caveat surfaced by the 2026-06-07 audit: the structural
-// escape rejection for `TaskGroup` *itself* (only `TaskHandle`
-// carries `ScopeLocal` today) is not yet implemented — tracked in
-// phase-6-runtime.md ("TaskGroup escape rejection" entry); today
-// escape shapes die at codegen (ICE / verifier error), which
-// prevents builds but is not a soundness mechanism.
+// UB. The structural escape rejection for `TaskGroup` *itself* is
+// now in place (`impl ScopeLocal for TaskGroup {}` below, 2026-06-07,
+// closing the caveat the 2026-06-07 `drop_carries_soundness` audit
+// surfaced): a group that escaped its frame would join too late and
+// its ref-capturing children would observe freed parent-frame
+// memory, so escape is a typecheck error — no longer relying on the
+// codegen ICE/verifier shields (bugs.md B-2026-06-07-1/2) that
+// merely prevented builds.
 impl Drop for TaskGroup {
     #[compiler_builtin]
     fn drop(mut ref self) {}
@@ -258,6 +260,14 @@ fn spawn[T](f: OnceFn() -> T) -> TaskHandle[T] {
 // functions within the same scope, and explicit `.join()` are still
 // first-class — the marker only blocks escape paths.
 //
+// **Both `TaskHandle[T]` AND `TaskGroup` are ScopeLocal** (impls
+// below). A `TaskHandle` joins the task it names; a `TaskGroup` joins
+// ALL its children at scope exit. Both invariants depend on the join
+// firing before the frame that the children ref-capture from exits —
+// so neither may escape that frame. The walker keys off the bare
+// target name (`TaskHandle` / `TaskGroup`), so every instantiation is
+// covered by one impl each.
+//
 // **Sealed in v1.** Users cannot `impl ScopeLocal for MyType` — the
 // trait is intended only for compiler-known scope-bound handles
 // (TaskHandle today; future RAII critical-section guards / scope-
@@ -283,3 +293,18 @@ pub marker trait ScopeLocal;
 // membership — any `TaskHandle[X]` for any X trips the same
 // rejection rule.
 impl[T] ScopeLocal for TaskHandle[T] {}
+
+// `TaskGroup` is ScopeLocal — cannot escape the frame that created
+// it. Spawned children ref-capture enclosing-frame bindings (design.md
+// § capture inference at spawn sites); their validity rests on the
+// group's join barrier firing before that frame exits. A group that
+// escaped (returned from a fn, stored in a field, sent on a channel)
+// would join too late, and its children would read freed parent-frame
+// memory — UAF by design rule. design.md § Structured Concurrency
+// Lifetime Guarantees + § Drop ("Destructors are NOT soundness
+// mechanisms") pin this on the structural marker, NOT on TaskGroup's
+// Drop firing. The slice-2 `ScopeLocalEscape` sites (return / field /
+// channel-send) cover it via this impl; the stdlib's own
+// `TaskGroup.new() -> TaskGroup` is exempt because the position
+// checks walk user `program.items` only, not the baked stdlib.
+impl ScopeLocal for TaskGroup {}
