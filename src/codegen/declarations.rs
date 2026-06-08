@@ -2741,6 +2741,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     field_counts.insert(v.name.clone(), fc);
                 }
 
+                // All-unit, non-shared enums render their Display as the bare
+                // variant name (selected on the tag) — record the variant
+                // names in tag order for `compile_unit_enum_display`. Payload
+                // variants / shared enums are excluded (Display codegen
+                // follow-on).
+                if !e.is_shared
+                    && !e.is_par
+                    && e.variants
+                        .iter()
+                        .all(|v| matches!(v.kind, VariantKind::Unit))
+                {
+                    self.enum_unit_variants.insert(
+                        e.name.clone(),
+                        e.variants.iter().map(|v| v.name.clone()).collect(),
+                    );
+                }
+
                 if e.is_shared || e.is_par {
                     // Shared / par enum: identical heap layout
                     // `{ i64 refcount, i64 tag, i64 w0, … }`. A `par enum`

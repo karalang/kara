@@ -3174,6 +3174,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into_int_value();
             return Ok((data, len));
         }
+        // All-unit enum interpolation part → variant-name (ptr, len) directly.
+        if let Some(ename) = self.expr_user_enum_name(e) {
+            return self.compile_unit_enum_display(e, &ename);
+        }
         let is_char = self.expr_is_char(e);
         let val = self.compile_expr(e)?;
         if is_char {

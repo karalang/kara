@@ -9090,6 +9090,59 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_enum_display_unit_variants() {
+        // All-unit `#[derive(Display)]` enum renders the bare variant name
+        // (selected on the tag) across println, to_string, and f-string.
+        if let Some(out) = run_program(
+            r#"
+#[derive(Display)]
+enum Color { Red, Green, Blue }
+fn main() {
+    let a = Color.Green;
+    println(a.to_string());
+    println(f"c={a}");
+    println(a);
+    let b = Color.Red;
+    println(b);
+    let c = Color.Blue;
+    println(c);
+}
+"#,
+        ) {
+            assert_eq!(out, "Green\nc=Green\nGreen\nRed\nBlue\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_enum_field_in_struct_display() {
+        // A struct whose field is an all-unit enum renders the enum field as
+        // its variant name (recursing through the struct Display path).
+        if let Some(out) = run_program(
+            r#"
+#[derive(Display)]
+enum Color { Red, Green, Blue }
+#[derive(Display)]
+struct Tagged { c: Color, n: i64 }
+fn main() {
+    let t = Tagged { c: Color.Blue, n: 9 };
+    println(t);
+    let t2 = Tagged { c: Color.Red, n: 1 };
+    println(t2.to_string());
+    let t3 = Tagged { c: Color.Green, n: 2 };
+    println(f"t={t3}");
+}
+"#,
+        ) {
+            assert_eq!(
+                out,
+                "Tagged { c: Blue, n: 9 }\n\
+                 Tagged { c: Red, n: 1 }\n\
+                 t=Tagged { c: Green, n: 2 }\n"
+            );
+        }
+    }
+
     // ── Arithmetic fault traps (design.md § Arithmetic Overflow) ───────
     // AOT parity with the interpreter's checked arithmetic
     // (src/interpreter/eval_ops.rs): + - * trap "integer overflow",

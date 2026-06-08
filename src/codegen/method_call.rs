@@ -929,6 +929,11 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(sname) = self.expr_user_struct_name(object) {
                 return self.compile_struct_display_string(object, &sname);
             }
+            // All-unit enum → owning String of the variant name.
+            if let Some(ename) = self.expr_user_enum_name(object) {
+                let (ptr, len) = self.compile_unit_enum_display(object, &ename)?;
+                return Ok(self.build_owned_string_from_parts(ptr, len));
+            }
         }
 
         // Type-receiver associated calls: `T.method(...)` where `T` is a

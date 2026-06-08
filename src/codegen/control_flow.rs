@@ -422,6 +422,33 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // All-unit enum arm — render the bare variant name (selected on the
+        // tag). Precedes the value-kind arms for the same reason as the struct
+        // arm below (an enum lowers to a tagged struct value).
+        if let Some(ename) = self.expr_user_enum_name(&args[0].value) {
+            let (data, len) = self.compile_unit_enum_display(&args[0].value, &ename)?;
+            let len_i32 = self
+                .builder
+                .build_int_truncate(len, self.context.i32_type(), "pe.len.i32")
+                .unwrap();
+            let fmt = self
+                .builder
+                .build_global_string_ptr(&format!("%.*s{nl}"), "pe.fmt")
+                .unwrap();
+            self.builder
+                .build_call(
+                    self.printf_fn,
+                    &[
+                        BasicMetadataValueEnum::from(fmt.as_pointer_value()),
+                        BasicMetadataValueEnum::from(len_i32),
+                        BasicMetadataValueEnum::from(data),
+                    ],
+                    "printf",
+                )
+                .unwrap();
+            return Ok(zero.into());
+        }
+
         // User-struct arm — `#[derive(Display)]` / `impl Display` structs
         // render as `TypeName { field: value, … }` in declaration order
         // (matching the interpreter). Render to an owning String via the

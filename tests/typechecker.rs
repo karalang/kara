@@ -11260,6 +11260,22 @@ fn test_to_string_on_string_and_display_struct_typecheck() {
 }
 
 #[test]
+fn test_to_string_on_all_unit_display_enum_typecheck() {
+    // `to_string()` on an all-unit `#[derive(Display)]` enum types as `String`
+    // (codegen renders the bare variant name). Payload enums can't derive
+    // Display at all, so the all-unit gate is the full surface.
+    typecheck_ok(
+        "#[derive(Display)]
+         enum Color { Red, Green, Blue }
+         fn main() {
+             let c = Color.Green;
+             let s: String = c.to_string();
+             let _ = s;
+         }",
+    );
+}
+
+#[test]
 fn test_known_method_on_user_struct_still_works() {
     // Regression: a method that *is* declared in an impl block continues
     // to typecheck. Confirms the tightening only fires on actually-missing

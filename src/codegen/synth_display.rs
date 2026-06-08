@@ -1093,8 +1093,9 @@ impl<'ctx> super::Codegen<'ctx> {
         None
     }
 
-    /// True when `te` is a primitive / String leaf the f-string lowering can
-    /// already format directly.
+    /// True when `te` is a leaf the f-string lowering can format directly: a
+    /// primitive / String, or an all-unit enum (whose interpolation part is
+    /// handled by `fstr_render_part` via `compile_unit_enum_display`).
     fn display_field_is_leaf(&self, te: &crate::ast::TypeExpr) -> bool {
         if let crate::ast::TypeKind::Path(p) = &te.kind {
             if let Some(seg) = p.segments.last() {
@@ -1113,7 +1114,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         | "bool"
                         | "char"
                         | "String"
-                );
+                ) || self.enum_unit_variants.contains_key(seg.as_str());
             }
         }
         false
@@ -1230,5 +1231,108 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => None,
         }
+    }
+
+    /// If `expr` statically denotes a value of a known all-unit user enum,
+    /// return that enum's name. Same place-expression coverage (identifier /
+    /// field access) as `expr_user_struct_name`.
+    pub(super) fn expr_user_enum_name(&self, expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Identifier(n) => self
+                .var_type_names
+                .get(n.as_str())
+                .filter(|tn| self.enum_unit_variants.contains_key(tn.as_str()))
+                .cloned(),
+            ExprKind::FieldAccess { object, field } => {
+                let outer = self.expr_user_struct_name(object)?;
+                let tes = self.struct_field_type_exprs.get(&outer)?;
+                let names = self.struct_field_names.get(&outer)?;
+                let idx = names.iter().position(|f| f == field)?;
+                if let crate::ast::TypeKind::Path(p) = &tes.get(idx)?.kind {
+                    if let Some(seg) = p.segments.last() {
+                        if self.enum_unit_variants.contains_key(seg) {
+                            return Some(seg.clone());
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Render an all-unit enum value to `(ptr, len)` of its variant name: load
+    /// the tag (field 0) and fold a select-chain over per-variant name globals.
+    /// The first variant is the default (its tag needs no select, since the
+    /// tag is always one of the exhaustive 0..N range).
+    pub(super) fn compile_unit_enum_display(
+        &mut self,
+        enum_expr: &Expr,
+        enum_name: &str,
+    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        let variants = self
+            .enum_unit_variants
+            .get(enum_name)
+            .cloned()
+            .ok_or_else(|| format!("Display: '{enum_name}' is not an all-unit enum"))?;
+        // A standalone all-unit enum value is a `{ i64 }` struct (tag at field
+        // 0); the same enum embedded as a struct field is stored as the bare
+        // `i64` tag (the single-word `{i64}` wrapper is collapsed). Accept
+        // both shapes.
+        let val = self.compile_expr(enum_expr)?;
+        let tag = match val {
+            BasicValueEnum::IntValue(iv) => iv,
+            BasicValueEnum::StructValue(sv) => self
+                .builder
+                .build_extract_value(sv, 0, "enum.tag")
+                .unwrap()
+                .into_int_value(),
+            other => {
+                return Err(format!(
+                    "Display: enum '{enum_name}' value has unexpected representation {other:?}"
+                ))
+            }
+        };
+        let i64_t = self.context.i64_type();
+        let mut acc: Option<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>)> = None;
+        for vname in &variants {
+            let tagval = *self
+                .enum_layouts
+                .get(enum_name)
+                .and_then(|l| l.tags.get(vname))
+                .ok_or_else(|| format!("Display: missing tag for {enum_name}.{vname}"))?;
+            let g = self
+                .builder
+                .build_global_string_ptr(vname, "enumv")
+                .unwrap()
+                .as_pointer_value();
+            let l = i64_t.const_int(vname.len() as u64, false);
+            acc = Some(match acc {
+                None => (g, l),
+                Some((ap, al)) => {
+                    let is_v = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            tag,
+                            i64_t.const_int(tagval, false),
+                            "enum.is",
+                        )
+                        .unwrap();
+                    let p = self
+                        .builder
+                        .build_select(is_v, g, ap, "enum.psel")
+                        .unwrap()
+                        .into_pointer_value();
+                    let len = self
+                        .builder
+                        .build_select(is_v, l, al, "enum.lsel")
+                        .unwrap()
+                        .into_int_value();
+                    (p, len)
+                }
+            });
+        }
+        acc.ok_or_else(|| format!("Display: enum '{enum_name}' has no variants"))
     }
 }

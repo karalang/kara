@@ -19,7 +19,7 @@ use super::env::{FunctionSig, ImplInfo};
 use super::inference::{resolve_type_var_top, substitute_type_params, unify_types};
 use super::types::{
     clone_self_type_for, iterator_item_type_for, method_callee_type_name,
-    receiver_for_method_lookup, type_display, ConstArg, IntSize, SubstValue, Type,
+    receiver_for_method_lookup, type_display, ConstArg, IntSize, SubstValue, Type, VariantTypeInfo,
 };
 use super::TypeErrorKind;
 
@@ -1896,30 +1896,44 @@ impl<'a> super::TypeChecker<'a> {
                 return Type::Str;
             }
         }
-        // `to_string()` on `String` (identity copy) and on any `#[derive(Display)]`
-        // (or hand-written `impl Display`) **struct** → `String`. The `Display`
-        // trait provides `to_string(ref self) -> String` (design.md § Display);
-        // this types the explicit call so it stops poisoning to `Type::Error`.
-        // Codegen renders structs in declaration order via `synth_display`.
-        // (Enums are not yet handled by the codegen renderer — typing their
-        // `to_string` here would turn a clean typecheck rejection into a
-        // codegen failure, so enum Display is left to its follow-on slice.)
+        // `to_string()` on `String` (identity copy), on any `#[derive(Display)]`
+        // / `impl Display` **struct**, and on an all-unit `#[derive(Display)]`
+        // **enum** → `String`. The `Display` trait provides
+        // `to_string(ref self) -> String` (design.md § Display); this types the
+        // explicit call so it stops poisoning to `Type::Error`. Codegen renders
+        // structs in declaration order and all-unit enums as the bare variant
+        // name (`synth_display`). Payload-bearing enums and `#[display_snake_case]`
+        // enums are excluded — their codegen renderer is a follow-on, so leaving
+        // `to_string` untyped keeps a clean typecheck rejection rather than a
+        // codegen failure (interp still renders them under `karac run`).
         if method == "to_string" && args.is_empty() {
             let is_display_named = match &receiver_for_lookup {
                 Type::Str => true,
                 Type::Named { name, .. } if name == "String" => true,
                 Type::Named { name, .. } => {
-                    let derived = self
+                    let struct_display = self
                         .env
                         .structs
                         .get(name)
                         .map(|s| s.derived_traits.contains("Display"))
+                        .unwrap_or(false)
+                        || (self.env.structs.contains_key(name)
+                            && self.env.impls.iter().any(|i| {
+                                i.target_type == *name && i.trait_name.as_deref() == Some("Display")
+                            }));
+                    let enum_display = self
+                        .env
+                        .enums
+                        .get(name)
+                        .map(|e| {
+                            e.derived_traits.contains("Display")
+                                && !self.display_snake_case_enums.contains(name)
+                                && e.variants
+                                    .iter()
+                                    .all(|(_, vt)| matches!(vt, VariantTypeInfo::Unit))
+                        })
                         .unwrap_or(false);
-                    let has_impl = self.env.structs.contains_key(name)
-                        && self.env.impls.iter().any(|i| {
-                            i.target_type == *name && i.trait_name.as_deref() == Some("Display")
-                        });
-                    derived || has_impl
+                    struct_display || enum_display
                 }
                 _ => false,
             };

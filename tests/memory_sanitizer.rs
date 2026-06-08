@@ -390,6 +390,30 @@ fn main() {
     }
 
     #[test]
+    fn asan_enum_display_to_string() {
+        // All-unit enum `to_string()` mallocs an owning String of the variant
+        // name; the enum-in-struct field path renders via the same lowering.
+        // ASAN guards the variant-name copy + nested render.
+        assert_clean_asan_run(
+            r#"
+#[derive(Display)]
+enum Color { Red, Green, Blue }
+#[derive(Display)]
+struct Tagged { c: Color, n: i64 }
+fn main() {
+    let a = Color.Green;
+    let s = a.to_string();
+    println(s);
+    let t = Tagged { c: Color.Blue, n: 9 };
+    println(t.to_string());
+}
+"#,
+            &["Green", "Tagged { c: Blue, n: 9 }"],
+            "enum_display_to_string",
+        );
+    }
+
+    #[test]
     fn asan_println_function_return_string_via_let_binding() {
         // Function returns owned heap String; bound to a local;
         // printed. This is the let-binding form the kata workaround

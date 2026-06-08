@@ -1188,6 +1188,11 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) union_field_types: HashMap<String, Vec<(String, BasicTypeEnum<'ctx>)>>,
     /// Enum layouts for tagged-union codegen (enum name → layout).
     pub(crate) enum_layouts: HashMap<String, EnumLayout<'ctx>>,
+    /// All-unit (no payload), non-shared user enums → variant names in tag
+    /// order. Drives codegen `Display` for enums (subtask 5): such an enum
+    /// renders as the bare variant name, selected on the tag. Payload-bearing
+    /// enums are absent (their Display codegen is a tracked follow-on).
+    pub(crate) enum_unit_variants: HashMap<String, Vec<String>>,
     /// Names of enums seeded by `seed_builtin_enum_layouts` (`Option`,
     /// `Result`, `Json`, `TcpError`, …) — used by the variant-name →
     /// enum-name disambiguation in `try_compile_enum_variant` /
@@ -4121,6 +4126,7 @@ impl<'ctx> Codegen<'ctx> {
             union_types: HashMap::new(),
             union_field_types: HashMap::new(),
             enum_layouts: HashMap::new(),
+            enum_unit_variants: HashMap::new(),
             seeded_enum_names: HashSet::new(),
             loop_stack: Vec::new(),
             generic_fns: HashMap::new(),

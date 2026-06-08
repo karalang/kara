@@ -64,6 +64,21 @@ fn test_struct_display_declaration_order() {
 }
 
 #[test]
+fn test_enum_display_unit_variants() {
+    // All-unit `#[derive(Display)]` enum renders the bare variant name across
+    // println, .to_string(), and f-string — matching codegen.
+    let src = "#[derive(Display)]
+        enum Color { Red, Green, Blue }
+        fn main() {
+            let a = Color.Green;
+            println(a.to_string());
+            println(f\"c={a}\");
+            println(a);
+        }";
+    assert_eq!(run_no_errors(src), "Green\nc=Green\nGreen\n");
+}
+
+#[test]
 fn test_struct_display_nested_in_container() {
     // A struct nested in a Vec still renders in declaration order (the
     // renderer recurses through containers).
