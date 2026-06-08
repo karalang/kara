@@ -103,12 +103,13 @@ fn link_wasm_executable(
     // `pub` already gives them external linkage; `--export=` keeps them
     // through wasm-ld's default section GC and lists them as exports.
     append_wasm_export_flags(&mut cmd, wasm_exports);
-    // Component builds with `string`/`list` exports need the canonical-ABI
-    // allocator surfaced so `wasm-tools component new` can lower
-    // host→guest variable-length data into our linear memory (sub-slice
-    // E). Harmless when unused; the symbol lives in the wasm runtime
+    // Rich-export builds (browser + component) need the canonical-ABI
+    // allocator surfaced so the host can lower variable-length data
+    // (strings/lists) into our linear memory — `wasm-tools component new`
+    // on the component path, the JS glue on the browser path (sub-slices
+    // D/E). Harmless when unused; the symbol lives in the wasm runtime
     // archive (`runtime/wasm_alloc.rs`).
-    if crate::target::wasm_component_host_package().is_some() {
+    if crate::target::wasm_export_marshalling() {
         cmd.arg("--export=cabi_realloc");
     }
     cmd.args(["-o", exe_path]);

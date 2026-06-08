@@ -321,8 +321,66 @@ pub fn imported_memory_limits(bytes: &[u8]) -> Option<(u32, u32)> {
 /// it against `import.meta.url`). `threads` is `Some` on a `--features
 /// wasm-threads` dual-artifact build — the glue then picks the threaded
 /// module at load time when SAB + cross-origin isolation are available.
+/// Emit the JS marshalling-descriptor literal for one export param/return
+/// type (phase-10 WASM entry-point discovery, sub-slice D.4). The static
+/// glue body's `karaLift`/`karaLowerParam` interpret it. Tags: 0 scalar,
+/// 1 record, 2 option, 3 result, 4 string, 5 list. Offsets are the
+/// canonical-ABI layout (shared `wasm_exports::scalar_size_align` /
+/// `variant_layout`), so they agree with the codegen trampoline.
+fn js_shape(ty: &crate::wasm_exports::ExportType) -> String {
+    use crate::wasm_exports::{scalar_size_align, variant_layout, VariantShape};
+    if let Some(fields) = &ty.record_fields {
+        // Natural-alignment record layout (matches the LLVM struct the
+        // trampoline writes for scalar fields).
+        let mut off = 0u64;
+        let mut max_align = 1u32;
+        let parts = fields
+            .iter()
+            .map(|f| {
+                let (sz, al) = scalar_size_align(&f.kara_ty);
+                off = off.next_multiple_of(al as u64);
+                let here = off;
+                off += sz;
+                max_align = max_align.max(al);
+                format!("{{ n: \"{}\", o: {here}, ty: \"{}\" }}", f.name, f.kara_ty)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _size = off.next_multiple_of(max_align as u64);
+        format!("{{ k: 1, f: [{parts}] }}")
+    } else if let Some(v) = &ty.variant {
+        match v {
+            VariantShape::Option(t) => {
+                let (sz, al) = scalar_size_align(&t.kara_ty);
+                let (po, _, _) = variant_layout(sz, al);
+                format!("{{ k: 2, po: {po}, p: {} }}", js_shape(t))
+            }
+            VariantShape::Result(t, e) => {
+                let (ts, ta) = scalar_size_align(&t.kara_ty);
+                let (es, ea) = scalar_size_align(&e.kara_ty);
+                let (po, _, _) = variant_layout(ts.max(es), ta.max(ea));
+                format!(
+                    "{{ k: 3, po: {po}, ok: {}, err: {} }}",
+                    js_shape(t),
+                    js_shape(e)
+                )
+            }
+        }
+    } else if ty.is_string() {
+        "{ k: 4 }".to_string()
+    } else if let Some(elem) = &ty.list_elem {
+        let (es, _) = scalar_size_align(&elem.kara_ty);
+        format!("{{ k: 5, es: {es}, e: {} }}", js_shape(elem))
+    } else {
+        // Scalar (primitive / opaque handle). `ty.kara_ty` is the Kāra
+        // scalar name the JS reader/writer keys off.
+        format!("{{ k: 0, ty: \"{}\" }}", ty.kara_ty)
+    }
+}
+
 pub fn render_glue(
     fns: &[HostFnSig],
+    exports: &[crate::wasm_exports::ExportSig],
     wasm_filename: &str,
     threads: Option<&WasmThreadsGlueConfig>,
 ) -> String {
@@ -480,6 +538,33 @@ pub fn render_glue(
         }
     }
 
+    // Per-export marshalling descriptors (phase-10 WASM entry-point
+    // discovery, sub-slice D.4). Only RICH exports (record / option /
+    // result / string / list params or returns — `needs_trampoline`)
+    // appear: they are exported as canonical-ABI trampolines, so the glue
+    // wraps them to marshal JS values ↔ the canonical layout
+    // (`karaBuildExports` in the static body). Scalar exports pass through
+    // `instance.exports` unwrapped. `[]` when there are none.
+    let export_descs = exports
+        .iter()
+        .filter(|e| e.component_lowerable() && e.needs_trampoline())
+        .map(|e| {
+            let params = e
+                .params
+                .iter()
+                .map(|p| js_shape(&p.ty))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let ret = match &e.ret {
+                Some(t) => js_shape(t),
+                None => "null".to_string(),
+            };
+            format!("{{ name: \"{}\", params: [{params}], ret: {ret} }}", e.name)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    out.push_str(&format!("const KARA_EXPORTS = [{export_descs}];\n"));
+
     // The static remainder: helpers, WASI polyfill, import-object
     // construction, default loader, threaded-path machinery, public
     // API. Kept as one literal so the emitted JS reads as a coherent
@@ -493,6 +578,40 @@ fn ts_type(js: JsScalar) -> &'static str {
     match js {
         JsScalar::Number => "number",
         JsScalar::BigInt => "bigint",
+    }
+}
+
+/// TypeScript type for an export param/return — the JS shape the glue
+/// marshaller (`karaLift`/`karaLowerParam`) produces/consumes: scalars
+/// are `number`/`bigint`; a record is an object type; `Option[T]` is
+/// `T | null`; `Result[T,E]` is `{ ok: T } | { err: E }`; `String` is
+/// `string`; `Vec[T]` is `T[]`.
+fn ts_export_type(ty: &crate::wasm_exports::ExportType) -> String {
+    use crate::wasm_exports::VariantShape;
+    if let Some(fields) = &ty.record_fields {
+        let body = fields
+            .iter()
+            .map(|f| format!("{}: {}", f.name, ts_type(f.js)))
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!("{{ {body} }}")
+    } else if let Some(v) = &ty.variant {
+        match v {
+            VariantShape::Option(t) => format!("{} | null", ts_export_type(t)),
+            VariantShape::Result(t, e) => {
+                format!(
+                    "{{ ok: {} }} | {{ err: {} }}",
+                    ts_export_type(t),
+                    ts_export_type(e)
+                )
+            }
+        }
+    } else if ty.is_string() {
+        "string".to_string()
+    } else if let Some(elem) = &ty.list_elem {
+        format!("{}[]", ts_export_type(elem))
+    } else {
+        ts_type(ty.js).to_string()
     }
 }
 
@@ -626,20 +745,21 @@ pub fn render_dts(
     }
 
     // Per-export typed surface (phase-10 WASM entry-point discovery).
-    // Only `all_scalar` exports are typed in sub-slice B; aggregate-typed
-    // exports are rejected earlier at build time (until the trampoline
-    // sub-slice lands), so none reach here under browser bindings.
+    // Every export the glue can marshal (`component_lowerable`) is typed:
+    // scalars cross as `number`/`bigint`; records as object types,
+    // `Option[T]` as `T | null`, `Result[T,E]` as `{ ok: T } | { err: E }`,
+    // `String` as `string`, `Vec[T]` as `T[]` — see [`ts_export_type`].
     out.push_str("export interface KaraExports {\n  _start(): void;\n");
-    for e in exports.iter().filter(|e| e.all_scalar()) {
+    for e in exports.iter().filter(|e| e.component_lowerable()) {
         let params = e
             .params
             .iter()
-            .map(|p| format!("{}: {}", p.name, ts_type(p.ty.js)))
+            .map(|p| format!("{}: {}", p.name, ts_export_type(&p.ty)))
             .collect::<Vec<_>>()
             .join(", ");
         let ret = match &e.ret {
-            Some(t) => ts_type(t.js),
-            None => "void",
+            Some(t) => ts_export_type(t),
+            None => "void".to_string(),
         };
         let _ = writeln!(out, "  {}({params}): {ret};", e.name);
     }
@@ -743,6 +863,130 @@ export function readString(memory, ptr, len) {
   return new TextDecoder("utf-8").decode(
     new Uint8Array(memory.buffer, Number(ptr), Number(len)),
   );
+}
+
+// ── Rich-export marshalling (phase-10 WASM entry-point discovery) ──────
+// KARA_EXPORTS (emitted above) describes each record/option/result/
+// string/list export; the entries are interpreted here to marshal JS
+// values across the canonical-ABI trampolines. Shape tags: 0 scalar,
+// 1 record, 2 option, 3 result, 4 string, 5 list.
+
+function karaScalarRead(dv, off, ty) {
+  switch (ty) {
+    case "i8": return dv.getInt8(off);
+    case "u8": case "bool": return dv.getUint8(off);
+    case "i16": return dv.getInt16(off, true);
+    case "u16": return dv.getUint16(off, true);
+    case "i32": case "char": return dv.getInt32(off, true);
+    case "u32": return dv.getUint32(off, true);
+    case "f32": return dv.getFloat32(off, true);
+    case "f64": return dv.getFloat64(off, true);
+    case "i64": case "isize": return dv.getBigInt64(off, true);
+    case "u64": case "usize": return dv.getBigUint64(off, true);
+    default: return dv.getInt32(off, true);
+  }
+}
+
+function karaScalarWrite(dv, off, ty, v) {
+  switch (ty) {
+    case "i8": dv.setInt8(off, v); break;
+    case "u8": case "bool": dv.setUint8(off, v); break;
+    case "i16": dv.setInt16(off, v, true); break;
+    case "u16": dv.setUint16(off, v, true); break;
+    case "i32": case "char": dv.setInt32(off, v, true); break;
+    case "u32": dv.setUint32(off, v, true); break;
+    case "f32": dv.setFloat32(off, v, true); break;
+    case "f64": dv.setFloat64(off, v, true); break;
+    case "i64": case "isize": dv.setBigInt64(off, BigInt(v), true); break;
+    case "u64": case "usize": dv.setBigUint64(off, BigInt(v), true); break;
+    default: dv.setInt32(off, v, true); break;
+  }
+}
+
+// Lift a canonical value at `ptr` (a return-area / inner pointer) into a
+// JS value per `shape`.
+function karaLift(memory, shape, ptr) {
+  const dv = new DataView(memory.buffer);
+  switch (shape.k) {
+    case 0: return karaScalarRead(dv, ptr, shape.ty);
+    case 1: {
+      const o = {};
+      for (const f of shape.f) o[f.n] = karaScalarRead(dv, ptr + f.o, f.ty);
+      return o;
+    }
+    case 2:
+      return dv.getUint8(ptr) === 1 ? karaLift(memory, shape.p, ptr + shape.po) : null;
+    case 3:
+      return dv.getUint8(ptr) === 0
+        ? { ok: karaLift(memory, shape.ok, ptr + shape.po) }
+        : { err: karaLift(memory, shape.err, ptr + shape.po) };
+    case 4: {
+      const sp = dv.getInt32(ptr, true), sl = dv.getInt32(ptr + 4, true);
+      return readString(memory, sp, sl);
+    }
+    case 5: {
+      const lp = dv.getInt32(ptr, true), lc = dv.getInt32(ptr + 4, true);
+      const out = [];
+      for (let i = 0; i < lc; i++) out.push(karaLift(memory, shape.e, lp + i * shape.es));
+      return out;
+    }
+  }
+}
+
+// Lower a JS value to the trampoline's canonical flat params, pushing
+// onto `flats`. `alloc(size, align)` reserves guest memory (cabi_realloc).
+function karaLowerParam(memory, alloc, shape, val, flats) {
+  switch (shape.k) {
+    case 0:
+      flats.push(val);
+      break;
+    case 1: // record → flattened field values, in declaration order
+      for (const f of shape.f) flats.push(val[f.n]);
+      break;
+    case 4: { // string → (ptr, len)
+      const bytes = new TextEncoder().encode(val);
+      const p = alloc(bytes.length, 1);
+      new Uint8Array(memory.buffer, p, bytes.length).set(bytes);
+      flats.push(p, bytes.length);
+      break;
+    }
+    case 5: { // list → (ptr, count)
+      const n = val.length;
+      const p = alloc(n * shape.es, shape.es);
+      const dv = new DataView(memory.buffer);
+      for (let i = 0; i < n; i++) karaScalarWrite(dv, p + i * shape.es, shape.e.ty, val[i]);
+      flats.push(p, n);
+      break;
+    }
+    default:
+      throw new Error("kara: unsupported export param shape " + shape.k);
+  }
+}
+
+// Build the handle's `exports`: rich exports (in KARA_EXPORTS) are wrapped
+// to marshal JS values; everything else passes through `instance.exports`.
+function karaBuildExports(instance) {
+  const raw = instance.exports;
+  const memory = raw.memory;
+  // `instance.exports` is frozen (its props are read-only), so copy into
+  // a writable object before overriding the rich exports with wrappers.
+  const wrapped = Object.assign({}, raw);
+  for (const sig of KARA_EXPORTS) {
+    const fn = raw[sig.name];
+    wrapped[sig.name] = (...args) => {
+      const flats = [];
+      const alloc = (sz, al) => raw.cabi_realloc(0, 0, al, sz);
+      for (let i = 0; i < sig.params.length; i++) {
+        karaLowerParam(memory, alloc, sig.params[i], args[i], flats);
+      }
+      const r = fn(...flats);
+      if (sig.ret == null) return undefined;
+      // A scalar return comes back by value; a record/option/result/
+      // string/list return comes back as a canonical return-area pointer.
+      return sig.ret.k === 0 ? r : karaLift(memory, sig.ret, r);
+    };
+  }
+  return wrapped;
 }
 
 /** Thrown by the WASI polyfill's proc_exit; run() swallows exit code 0. */
@@ -1338,7 +1582,7 @@ export async function instantiate(hostImpls = {}, opts = {}) {
     instance = await WebAssembly.instantiate(mod, imports);
   }
   memory = instance.exports.memory;
-  return { instance, exports: instance.exports, memory };
+  return { instance, exports: karaBuildExports(instance), memory };
 }
 
 /**
@@ -1435,6 +1679,93 @@ mod tests {
     }
 
     #[test]
+    fn dts_types_rich_exports() {
+        use crate::wasm_exports::{ExportField, ExportParam, ExportSig, ExportType, VariantShape};
+        let i32t = || ExportType {
+            kara_ty: "i32".to_string(),
+            js: JsScalar::Number,
+            scalar: true,
+            record_fields: None,
+            variant: None,
+            string: false,
+            list_elem: None,
+        };
+        let f64f = |n: &str| ExportField {
+            name: n.to_string(),
+            kara_ty: "f64".to_string(),
+            js: JsScalar::Number,
+        };
+        let rich = |kara: &str, record_fields, variant, string, list_elem| ExportType {
+            kara_ty: kara.to_string(),
+            js: JsScalar::Number,
+            scalar: false,
+            record_fields,
+            variant,
+            string,
+            list_elem,
+        };
+        let exports = vec![
+            // fn mk(...) -> Point  (record return)
+            ExportSig {
+                name: "mk".to_string(),
+                params: vec![],
+                ret: Some(rich(
+                    "Point",
+                    Some(vec![f64f("x"), f64f("y")]),
+                    None,
+                    false,
+                    None,
+                )),
+                target: "wasm_browser".to_string(),
+            },
+            // fn find(...) -> Option[i32]
+            ExportSig {
+                name: "find".to_string(),
+                params: vec![],
+                ret: Some(rich(
+                    "Option",
+                    None,
+                    Some(VariantShape::Option(Box::new(i32t()))),
+                    false,
+                    None,
+                )),
+                target: "wasm_browser".to_string(),
+            },
+            // fn run(...) -> Result[i32, i32]
+            ExportSig {
+                name: "run".to_string(),
+                params: vec![],
+                ret: Some(rich(
+                    "Result",
+                    None,
+                    Some(VariantShape::Result(Box::new(i32t()), Box::new(i32t()))),
+                    false,
+                    None,
+                )),
+                target: "wasm_browser".to_string(),
+            },
+            // fn nums(xs: Vec[i32]) -> String
+            ExportSig {
+                name: "nums".to_string(),
+                params: vec![ExportParam {
+                    name: "xs".to_string(),
+                    ty: rich("Vec", None, None, false, Some(Box::new(i32t()))),
+                }],
+                ret: Some(rich("String", None, None, true, None)),
+                target: "wasm_browser".to_string(),
+            },
+        ];
+        let dts = render_dts(&[], &exports, "app.wasm", false);
+        assert!(dts.contains("mk(): { x: number; y: number };"), "{dts}");
+        assert!(dts.contains("find(): number | null;"), "{dts}");
+        assert!(
+            dts.contains("run(): { ok: number } | { err: number };"),
+            "{dts}"
+        );
+        assert!(dts.contains("nums(xs: number[]): string;"), "{dts}");
+    }
+
+    #[test]
     fn dts_types_scalar_exports_on_handle() {
         use crate::wasm_exports::{ExportParam, ExportSig, ExportType};
         let scalar = |kara: &str, js| ExportType {
@@ -1521,7 +1852,7 @@ mod tests {
             mem_initial_pages: 18,
             mem_max_pages: 16384,
         };
-        let glue = render_glue(&[], "app.wasm", Some(&cfg));
+        let glue = render_glue(&[], &[], "app.wasm", Some(&cfg));
         for needle in [
             "const WASM_THREADS_FILENAME = \"app.threads.wasm\";",
             "const THREADS_NO_FALLBACK = false;",
@@ -1540,7 +1871,7 @@ mod tests {
         }
         // Sequential-only build renders the constants inert (the static
         // body references them unconditionally).
-        let seq = render_glue(&[], "app.wasm", None);
+        let seq = render_glue(&[], &[], "app.wasm", None);
         assert!(seq.contains("const WASM_THREADS_FILENAME = null;"));
         assert!(seq.contains("const THREADS_POOL_SIZE = null;"));
     }
@@ -1569,7 +1900,7 @@ mod tests {
                 None,
             ),
         ];
-        let glue = render_glue(&fns, "app.wasm", Some(&cfg));
+        let glue = render_glue(&fns, &[], "app.wasm", Some(&cfg));
         // Signature-driven marshalling table: per-fn arg/ret JS kinds. On a
         // threaded build the compiler-emitted `__kara_timer_after` builtin
         // is appended (it rides the same proxy machinery), but it is NOT a
@@ -1614,7 +1945,7 @@ mod tests {
     fn host_fn_sigs_table_is_empty_without_host_fns() {
         // The static body references HOST_FN_SIGS unconditionally, so it
         // must render even on a host-fn-free build — as an empty array.
-        let glue = render_glue(&[], "plain.wasm", None);
+        let glue = render_glue(&[], &[], "plain.wasm", None);
         assert!(glue.contains("const HOST_FN_SIGS = [];"));
     }
 

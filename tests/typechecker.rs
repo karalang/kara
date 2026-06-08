@@ -23528,19 +23528,46 @@ fn main() {}
 }
 
 #[test]
-fn wasm_export_boundary_rejects_owned_non_copy() {
-    let errs = typecheck_errors(
+fn wasm_export_boundary_accepts_owned_rich_types() {
+    // Owned records / Option / Result / String / Vec all cross the wasm
+    // export boundary (canonical ABI on wasm_wasi, glue marshalling on
+    // wasm_browser) — they are NOT rejected. (Whether codegen lowers a
+    // given shape yet is a separate non-fatal concern.)
+    typecheck_ok(
         r#"
 #[target(wasm_browser)]
-pub fn bad_string(s: String) {}
+pub fn shout(s: String) -> String { return s; }
+
+#[target(wasm_wasi)]
+pub fn pick(b: bool) -> Option[i32] { return Option.None; }
+
+#[target(wasm_wasi)]
+pub fn nums(xs: Vec[i32]) -> Vec[i32] { return xs; }
+
+fn main() {}
+"#,
+    );
+}
+
+#[test]
+fn wasm_export_boundary_rejects_borrows() {
+    // A borrow (`ref` / `mut ref`) has no by-value export form on either
+    // wasm binding — the one hard rejection.
+    let errs = typecheck_errors(
+        r#"
+#[derive(Copy, Clone)]
+pub struct Point { x: f64, y: f64 }
+
+#[target(wasm_browser)]
+pub fn bad(p: ref Point) {}
 
 fn main() {}
 "#,
     );
     let msgs: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
     assert!(
-        msgs.iter().any(|m| m.contains("wasm export 'bad_string'")
-            && m.contains("`String` cannot cross the host boundary")),
+        msgs.iter().any(|m| m.contains("wasm export 'bad'")
+            && m.contains("`ref` parameters cannot cross the wasm export boundary")),
         "{msgs:?}"
     );
 }

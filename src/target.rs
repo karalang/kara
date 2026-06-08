@@ -102,6 +102,29 @@ pub fn wasm_threads_enabled() -> bool {
     WASM_THREADS_ENABLED.load(Ordering::Relaxed)
 }
 
+/// Whether the active wasm build marshals rich entry-point exports
+/// (phase-10 "WASM entry-point discovery"): true for `--bindings browser`
+/// and `--bindings component` (both want idiomatic typed exports — the
+/// browser glue / the component canonical ABI), false for `--bindings
+/// none` (raw core exports, the user owns the ABI) and non-wasm builds.
+/// When true, `codegen::cabi` emits canonical-ABI export trampolines;
+/// `wasm_component_host_package().is_some()` additionally distinguishes
+/// the component (kebab-named, WIT) path from the browser (Kāra-named,
+/// JS-glue) path. Set at CLI startup alongside [`set_active_target`].
+static WASM_EXPORT_MARSHALLING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Record whether the active build marshals rich exports (browser /
+/// component bindings). See [`wasm_export_marshalling`].
+pub fn set_wasm_export_marshalling(enabled: bool) {
+    WASM_EXPORT_MARSHALLING.store(enabled, Ordering::Relaxed);
+}
+
+/// See [`set_wasm_export_marshalling`].
+pub fn wasm_export_marshalling() -> bool {
+    WASM_EXPORT_MARSHALLING.load(Ordering::Relaxed)
+}
+
 /// Is `name` one of the closed v1 target names? The `--target` flag's
 /// value space is shared with rustc-style triples (manifest
 /// `[target.<triple>.*]` overlay selection); this predicate is how the

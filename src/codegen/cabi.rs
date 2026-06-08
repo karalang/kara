@@ -1,10 +1,16 @@
 //! Component Model **Canonical ABI** export surface (phase-10 "WASM
-//! entry-point discovery", sub-slice D).
+//! entry-point discovery", sub-slice D). Emitted for any wasm build that
+//! marshals rich exports (`--bindings browser` or `component`, signalled
+//! by [`crate::target::wasm_export_marshalling`]); `--bindings none`
+//! keeps raw core exports.
 //!
-//! On a `--bindings component` build, each discovered WASM entry-point
-//! export must present a core export whose name + ABI match the embedded
-//! WIT world (`crate::wit::render_embed_wit`), so `wasm-tools component
-//! new` can lift it:
+//! Each discovered WASM entry-point export presents a core export whose
+//! name + ABI match the canonical layout. A **component** build names it
+//! by the kebab WIT name so `wasm-tools component new` lifts it from the
+//! embedded WIT world (`crate::wit::render_embed_wit`); a **browser**
+//! build keeps the bare Kāra name and the generated JS glue
+//! (`wasm_glue::karaBuildExports`) marshals JS objects against the *same*
+//! canonical layout. Either way:
 //!
 //!   - **Scalar exports** (primitives / opaque handles) lower 1:1 to the
 //!     canonical ABI, so we only fix the export *name*: attach a
@@ -41,32 +47,47 @@ use inkwell::values::BasicValue;
 use crate::ast::Program;
 
 impl<'ctx> super::Codegen<'ctx> {
-    /// Emit the component export surface (see module docs). No-op unless
-    /// this is a wasm **component** build (signalled by
-    /// [`crate::target::wasm_component_host_package`]).
+    /// Emit the WASM export surface (see module docs). No-op unless this
+    /// is a wasm build that marshals rich exports — `--bindings browser`
+    /// or `--bindings component` (signalled by
+    /// [`crate::target::wasm_export_marshalling`]); `--bindings none`
+    /// keeps raw core exports.
+    ///
+    /// The export *name* differs by binding: a **component** build
+    /// (`wasm_component_host_package().is_some()`) uses the kebab WIT name;
+    /// a **browser** build keeps the bare Kāra name (a valid JS identifier
+    /// the `.d.ts` / glue reference). Either way a record/variant/slice
+    /// export gets a canonical trampoline (the browser glue marshals JS
+    /// objects against the same canonical layout the component WIT
+    /// describes); a pure-scalar export is the real function directly
+    /// (renamed via attribute only when the component kebab differs).
     pub(super) fn emit_wasm_component_export_surface(
         &mut self,
         program: &Program,
     ) -> Result<(), String> {
-        if !crate::target::active_target_is_wasm()
-            || crate::target::wasm_component_host_package().is_none()
-        {
+        if !crate::target::active_target_is_wasm() || !crate::target::wasm_export_marshalling() {
             return Ok(());
         }
+        let component = crate::target::wasm_component_host_package().is_some();
         let target = crate::target::active_target();
         let exports = crate::wasm_exports::collect_wasm_exports(program, target);
         for e in exports.iter().filter(|e| e.component_lowerable()) {
-            let kebab = crate::wit::host_import_name(&e.name);
+            let export_name = if component {
+                crate::wit::host_import_name(&e.name)
+            } else {
+                e.name.clone()
+            };
             if e.needs_trampoline() {
-                self.emit_export_trampoline(e, &kebab)?;
-            } else if kebab != e.name {
-                // Pure-scalar export: rename the core export to the kebab
-                // WIT name (the real function IS the canonical export).
+                self.emit_export_trampoline(e, &export_name)?;
+            } else if export_name != e.name {
+                // Pure-scalar component export: rename the core export to
+                // the kebab WIT name (the real function IS the canonical
+                // export). Browser scalars keep their bare name (no-op).
                 if let Some(f) = self.module.get_function(&e.name) {
                     f.add_attribute(
                         AttributeLoc::Function,
                         self.context
-                            .create_string_attribute("wasm-export-name", &kebab),
+                            .create_string_attribute("wasm-export-name", &export_name),
                     );
                 }
             }
@@ -348,20 +369,18 @@ impl<'ctx> super::Codegen<'ctx> {
         shape: &crate::wasm_exports::VariantShape,
         kebab: &str,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
-        use crate::wasm_exports::VariantShape;
+        use crate::wasm_exports::{scalar_size_align, variant_layout, VariantShape};
         let (payload_bytes, payload_align) = match shape {
-            VariantShape::Option(t) => Self::scalar_size_align(&t.kara_ty),
+            VariantShape::Option(t) => scalar_size_align(&t.kara_ty),
             VariantShape::Result(t, e) => {
-                let (ts, ta) = Self::scalar_size_align(&t.kara_ty);
-                let (es, ea) = Self::scalar_size_align(&e.kara_ty);
+                let (ts, ta) = scalar_size_align(&t.kara_ty);
+                let (es, ea) = scalar_size_align(&e.kara_ty);
                 (ts.max(es), ta.max(ea))
             }
         };
         // Discriminant is one byte (≤256 cases); payload follows at its
         // own alignment; the area is sized/aligned to hold both.
-        let variant_align = payload_align.max(1);
-        let payload_off = 1u64.next_multiple_of(payload_align as u64);
-        let total = (payload_off + payload_bytes).next_multiple_of(variant_align as u64);
+        let (payload_off, total, variant_align) = variant_layout(payload_bytes, payload_align);
 
         let area_ty = self.context.i8_type().array_type(total as u32);
         let area = self
@@ -500,18 +519,5 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_ptr_to_int(area_ptr, i32_ty, "ret_addr")
             .map_err(|e| format!("wasm export trampoline str ret area ptrtoint: {e}"))
-    }
-
-    /// Byte size + alignment of a scalar Kāra type at the canonical-ABI /
-    /// wasm32 boundary. Only the scalar surface (variant payloads in
-    /// sub-slice D.3) reaches here.
-    fn scalar_size_align(kara_ty: &str) -> (u64, u32) {
-        match kara_ty {
-            "i8" | "u8" | "bool" => (1, 1),
-            "i16" | "u16" => (2, 2),
-            "i32" | "u32" | "f32" | "char" => (4, 4),
-            // i64/u64/isize/usize/f64 (Kāra keeps 64-bit usize on wasm32).
-            _ => (8, 8),
-        }
     }
 }

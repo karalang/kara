@@ -11374,6 +11374,125 @@ fn main() {}
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// phase-10 "WASM entry-point discovery" (sub-slice D.4): a
+/// `--bindings browser` build marshals RICH exports — structs → JS
+/// objects, `Option[T]` → `T | null`, `Result[T,E]` → `{ok}|{err}`,
+/// `String` → `string`, `Vec[T]` → `T[]` — through the generated glue
+/// (canonical-ABI trampolines + `cabi_realloc`). Imports the emitted ES
+/// glue under node, `instantiate()`s the sequential module, and asserts
+/// each wrapped export's JS value.
+#[test]
+fn wasm_browser_rich_exports_marshal_e2e() {
+    let tmp = wasm_test_dir("browser-rich");
+    let path = tmp.join("richlib.kara");
+    std::fs::write(
+        &path,
+        r#"
+#[derive(Copy, Clone)]
+pub struct Point { x: f64, y: f64 }
+
+#[target(wasm_browser)]
+pub fn mk(x: f64, y: f64) -> Point { return Point { x: x, y: y }; }
+
+#[target(wasm_browser)]
+pub fn area(p: Point) -> f64 { return p.x * p.y; }
+
+#[target(wasm_browser)]
+pub fn checked_div(a: i32, b: i32) -> Option[i32] {
+    if b == 0 { return Option.None; }
+    return Option.Some(a / b);
+}
+
+#[target(wasm_browser)]
+pub fn safe_div(a: i32, b: i32) -> Result[i32, i32] {
+    if b == 0 { return Result.Err(0 - 1); }
+    return Result.Ok(a / b);
+}
+
+#[target(wasm_browser)]
+pub fn shout(s: String) -> String { return s + "!"; }
+
+#[target(wasm_browser)]
+pub fn squares(n: i32) -> Vec[i32] {
+    let mut o: Vec[i32] = Vec.new();
+    let mut i = 0;
+    while i < n { o.push(i * i); i += 1; }
+    return o;
+}
+
+fn main() {}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_browser"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_browser_rich_exports_marshal_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm browser build failed: {stderr}");
+
+    // The .d.ts types the rich shapes.
+    let dts = std::fs::read_to_string(tmp.join("richlib.d.ts")).expect("d.ts emitted");
+    assert!(
+        dts.contains("mk(x: number, y: number): { x: number; y: number };"),
+        "{dts}"
+    );
+    assert!(
+        dts.contains("checked_div(a: number, b: number): number | null;"),
+        "{dts}"
+    );
+    assert!(
+        dts.contains("safe_div(a: number, b: number): { ok: number } | { err: number };"),
+        "{dts}"
+    );
+    assert!(dts.contains("shout(s: string): string;"), "{dts}");
+    assert!(dts.contains("squares(n: number): number[];"), "{dts}");
+
+    // Run the glue under node and assert the marshalled JS values.
+    let runner = tmp.join("run.mjs");
+    std::fs::write(
+        &runner,
+        "import { instantiate } from './richlib.js';\n\
+         const e = (await instantiate()).exports;\n\
+         const eq = (a, b) => { if (JSON.stringify(a) !== JSON.stringify(b)) {\n\
+         \x20 console.error('FAIL', JSON.stringify(a), '!=', JSON.stringify(b)); process.exit(3); } };\n\
+         eq(e.mk(2, 3), { x: 2, y: 3 });\n\
+         eq(e.area({ x: 4, y: 5 }), 20);\n\
+         eq(e.checked_div(10, 2), 5);\n\
+         eq(e.checked_div(10, 0), null);\n\
+         eq(e.safe_div(10, 2), { ok: 5 });\n\
+         eq(e.safe_div(10, 0), { err: -1 });\n\
+         eq(e.shout('hi'), 'hi!');\n\
+         eq(e.squares(5), [0, 1, 4, 9, 16]);\n\
+         console.log('OK');\n",
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&runner)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_browser_rich_exports_marshal_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let so = String::from_utf8_lossy(&node_out.stdout);
+    let se = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success() && so.contains("OK"),
+        "browser rich marshalling failed under node: stdout={so} stderr={se}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// phase-10 "WASM entry-point discovery" (sub-slice C): a
 /// `--bindings component` (wasm_wasi default) build lifts each scalar
 /// `pub fn` export into the embedded WIT world. The export name is

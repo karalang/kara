@@ -232,6 +232,33 @@ pub fn export_names(sigs: &[ExportSig]) -> Vec<String> {
     sigs.iter().map(|s| s.name.clone()).collect()
 }
 
+/// Byte `(size, align)` of a scalar Kāra type at the canonical-ABI /
+/// wasm32 boundary. The single source shared by the codegen trampoline
+/// (`codegen::cabi`) and the browser glue descriptor (`wasm_glue`), so
+/// their layouts agree. Non-scalars never reach here (the caller gates on
+/// the scalar surface); unknown names fall back to the 64-bit width.
+pub fn scalar_size_align(kara_ty: &str) -> (u64, u32) {
+    match kara_ty {
+        "i8" | "u8" | "bool" => (1, 1),
+        "i16" | "u16" => (2, 2),
+        "i32" | "u32" | "f32" | "char" => (4, 4),
+        // i64/u64/isize/usize/f64 (Kāra keeps 64-bit usize on wasm32).
+        _ => (8, 8),
+    }
+}
+
+/// Canonical `(payload_off, total_size, align)` of a `variant` whose
+/// payload spans `payload_bytes`/`payload_align` (the union of its cases'
+/// scalar payloads). The discriminant is one byte at offset 0; the
+/// payload follows at its own alignment. Shared by `codegen::cabi` and
+/// the glue descriptor.
+pub fn variant_layout(payload_bytes: u64, payload_align: u32) -> (u64, u64, u32) {
+    let align = payload_align.max(1);
+    let payload_off = 1u64.next_multiple_of(payload_align.max(1) as u64);
+    let total = (payload_off + payload_bytes).next_multiple_of(align as u64);
+    (payload_off, total, align)
+}
+
 /// The LLVM symbol name of the canonical-ABI trampoline codegen emits for
 /// a record-bearing component export. Distinct from the real function's
 /// symbol (which keeps the bare Kāra name) so the two never collide when
@@ -243,20 +270,25 @@ pub fn export_trampoline_symbol(fn_name: &str) -> String {
     format!("__kara_export_{}", crate::wit::host_import_name(fn_name))
 }
 
-/// The `--export=<symbol>` arguments for the wasm link, given the binding.
+/// The `--export=<symbol>` arguments for the wasm link.
 ///
-/// For a **component** build, a record-returning export is exported via
-/// the codegen trampoline, whose symbol is the kebab WIT name
-/// (`make_point` ⇒ `make-point`); `--export`-ing that keeps the
-/// trampoline through wasm-ld's GC and surfaces it as the canonical
-/// export. Every other export (scalars, and all exports on browser /
-/// `--bindings none` builds) is the real function, exported under its
-/// bare Kāra symbol name (a scalar component export is then renamed to
-/// kebab by codegen's `wasm-export-name` attribute).
-pub fn link_export_names(sigs: &[ExportSig], component: bool) -> Vec<String> {
+/// A record/variant/slice export (one that `needs_trampoline`) is
+/// surfaced via the codegen trampoline, whose symbol is
+/// [`export_trampoline_symbol`]; `--export`-ing that keeps the trampoline
+/// through wasm-ld's GC and the trampoline's `wasm-export-name` attribute
+/// surfaces it under the consumer-facing name (kebab WIT name on
+/// component builds, bare Kāra name on browser builds). Every other
+/// export (scalars) is the real function under its bare Kāra symbol name
+/// (a scalar *component* export is then renamed to kebab by codegen's
+/// `wasm-export-name` attribute). On `--bindings none` no trampolines are
+/// emitted, so every export here is the bare Kāra name.
+pub fn link_export_names(sigs: &[ExportSig]) -> Vec<String> {
     sigs.iter()
         .map(|s| {
-            if component && s.component_lowerable() && s.needs_trampoline() {
+            if crate::target::wasm_export_marshalling()
+                && s.component_lowerable()
+                && s.needs_trampoline()
+            {
                 export_trampoline_symbol(&s.name)
             } else {
                 s.name.clone()

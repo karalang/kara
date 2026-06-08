@@ -4610,7 +4610,6 @@ fn emit_wasm_threads_artifact(
     let max_memory_pages = max_pages.unwrap_or(WASM_THREADS_DEFAULT_MAX_MEMORY_PAGES);
     let wasm_export_names = crate::wasm_exports::link_export_names(
         &crate::wasm_exports::collect_wasm_exports(program, crate::target::active_target()),
-        crate::target::wasm_component_host_package().is_some(),
     );
     let link_result = crate::codegen::link_wasm_executable_threaded(
         obj_path,
@@ -5109,6 +5108,14 @@ fn cmd_build(
         // concern, not a v1 surface. Same reasoning rejects an explicit
         // `--bindings=component` on a wasm_browser threaded build.
         validate_wasm_threads_scope(wasm_threads, build_target, effective_bindings);
+        // Phase-10 WASM entry-point discovery: browser + component
+        // bindings marshal rich exports (canonical-ABI trampolines);
+        // `--bindings none` keeps raw core exports. Signal codegen before
+        // it runs.
+        crate::target::set_wasm_export_marshalling(matches!(
+            effective_bindings,
+            Some(BindingsMode::Browser) | Some(BindingsMode::Component)
+        ));
         // Derive the output stem early — embedded component bindings
         // need it as the WIT package name before codegen runs.
         let exe_name = std::path::Path::new(filename)
@@ -5294,13 +5301,11 @@ fn cmd_build(
         } else {
             exe_path.clone()
         };
-        let wasm_export_names = crate::wasm_exports::link_export_names(
-            &crate::wasm_exports::collect_wasm_exports(
+        let wasm_export_names =
+            crate::wasm_exports::link_export_names(&crate::wasm_exports::collect_wasm_exports(
                 &pipeline.parsed.program,
                 crate::target::active_target(),
-            ),
-            crate::target::wasm_component_host_package().is_some(),
-        );
+            ));
         match crate::codegen::link_executable_exports(&obj_path, &link_out, &wasm_export_names) {
             Err(e) => {
                 eprintln!("error: link failed: {e}");
@@ -5381,10 +5386,11 @@ fn cmd_build(
                         );
                         warn_unlowered_exports(
                             &wasm_exports,
-                            crate::wasm_exports::ExportSig::all_scalar,
+                            crate::wasm_exports::ExportSig::component_lowerable,
                         );
                         let glue = crate::wasm_glue::render_glue(
                             &host_fns,
+                            &wasm_exports,
                             &exe_path,
                             threads_glue_cfg.as_ref(),
                         );
@@ -5764,6 +5770,13 @@ fn cmd_build_project(
     // non-llvm build rejects the flag here rather than tripping the
     // manifest-not-found check below.
     validate_wasm_threads_scope(wasm_threads, build_target, effective_bindings);
+    // Phase-10 WASM entry-point discovery: browser + component bindings
+    // marshal rich exports (canonical-ABI trampolines); `--bindings none`
+    // keeps raw core exports. Signal codegen before it runs.
+    crate::target::set_wasm_export_marshalling(matches!(
+        effective_bindings,
+        Some(BindingsMode::Browser) | Some(BindingsMode::Component)
+    ));
     // `--target-cpu=help` / `--target-features=help` exit before
     // manifest discovery so the listing works from any directory — it
     // needs only the active target, not a project. Name validation for
@@ -6547,13 +6560,11 @@ fn run_multi_file_codegen(
     } else {
         exe_path.clone()
     };
-    let wasm_export_names = crate::wasm_exports::link_export_names(
-        &crate::wasm_exports::collect_wasm_exports(
+    let wasm_export_names =
+        crate::wasm_exports::link_export_names(&crate::wasm_exports::collect_wasm_exports(
             &pipeline.parsed.program,
             crate::target::active_target(),
-        ),
-        crate::target::wasm_component_host_package().is_some(),
-    );
+        ));
     if let Err(e) = crate::codegen::link_executable_exports(
         &obj_path.to_string_lossy(),
         &link_out.to_string_lossy(),
@@ -6642,12 +6653,20 @@ fn run_multi_file_codegen(
                 &pipeline.parsed.program,
                 crate::target::active_target(),
             );
-            warn_unlowered_exports(&wasm_exports, crate::wasm_exports::ExportSig::all_scalar);
+            warn_unlowered_exports(
+                &wasm_exports,
+                crate::wasm_exports::ExportSig::component_lowerable,
+            );
             let wasm_filename = format!("{}.wasm", mf.name);
             let js = exe_path.with_extension("js");
             if let Err(e) = std::fs::write(
                 &js,
-                crate::wasm_glue::render_glue(&host_fns, &wasm_filename, threads_glue_cfg.as_ref()),
+                crate::wasm_glue::render_glue(
+                    &host_fns,
+                    &wasm_exports,
+                    &wasm_filename,
+                    threads_glue_cfg.as_ref(),
+                ),
             ) {
                 return BuildCodegenStatus::Failed {
                     phase: "link".to_string(),
