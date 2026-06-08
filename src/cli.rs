@@ -4557,12 +4557,15 @@ const WASM_THREADS_DEFAULT_MAX_MEMORY_PAGES: u32 = 16384;
 /// the export trampoline + canonical-ABI sub-slice — so they are omitted
 /// from the typed `.d.ts` / WIT for now rather than silently mis-typed.
 #[cfg(feature = "llvm")]
-fn warn_non_scalar_exports(exports: &[crate::wasm_exports::ExportSig]) {
-    for e in exports.iter().filter(|e| !e.all_scalar()) {
+fn warn_unlowered_exports(
+    exports: &[crate::wasm_exports::ExportSig],
+    lowerable: fn(&crate::wasm_exports::ExportSig) -> bool,
+) {
+    for e in exports.iter().filter(|e| !lowerable(e)) {
         eprintln!(
-            "note: wasm export '{}' has non-scalar parameter/return types — omitted from the \
-             typed surface for now (rich-type marshalling lands with the phase-10 export \
-             trampoline); it remains a raw wasm export callable via instance.exports.",
+            "note: wasm export '{}' has parameter/return types not yet marshalled for this \
+             binding — omitted from the typed surface for now (richer types land with later \
+             phase-10 export-trampoline steps); it remains a raw wasm export.",
             e.name
         );
     }
@@ -4605,8 +4608,9 @@ fn emit_wasm_threads_artifact(
         process::exit(1);
     }
     let max_memory_pages = max_pages.unwrap_or(WASM_THREADS_DEFAULT_MAX_MEMORY_PAGES);
-    let wasm_export_names = crate::wasm_exports::export_names(
+    let wasm_export_names = crate::wasm_exports::link_export_names(
         &crate::wasm_exports::collect_wasm_exports(program, crate::target::active_target()),
+        crate::target::wasm_component_host_package().is_some(),
     );
     let link_result = crate::codegen::link_wasm_executable_threaded(
         obj_path,
@@ -5290,11 +5294,13 @@ fn cmd_build(
         } else {
             exe_path.clone()
         };
-        let wasm_export_names =
-            crate::wasm_exports::export_names(&crate::wasm_exports::collect_wasm_exports(
+        let wasm_export_names = crate::wasm_exports::link_export_names(
+            &crate::wasm_exports::collect_wasm_exports(
                 &pipeline.parsed.program,
                 crate::target::active_target(),
-            ));
+            ),
+            crate::target::wasm_component_host_package().is_some(),
+        );
         match crate::codegen::link_executable_exports(&obj_path, &link_out, &wasm_export_names) {
             Err(e) => {
                 eprintln!("error: link failed: {e}");
@@ -5309,7 +5315,10 @@ fn cmd_build(
                         &pipeline.parsed.program,
                         crate::target::active_target(),
                     );
-                    warn_non_scalar_exports(&wasm_exports);
+                    warn_unlowered_exports(
+                        &wasm_exports,
+                        crate::wasm_exports::ExportSig::component_lowerable,
+                    );
                     let result = crate::componentize::componentize(
                         tool,
                         std::path::Path::new(&link_out),
@@ -5370,7 +5379,10 @@ fn cmd_build(
                             &pipeline.parsed.program,
                             crate::target::active_target(),
                         );
-                        warn_non_scalar_exports(&wasm_exports);
+                        warn_unlowered_exports(
+                            &wasm_exports,
+                            crate::wasm_exports::ExportSig::all_scalar,
+                        );
                         let glue = crate::wasm_glue::render_glue(
                             &host_fns,
                             &exe_path,
@@ -6535,11 +6547,13 @@ fn run_multi_file_codegen(
     } else {
         exe_path.clone()
     };
-    let wasm_export_names =
-        crate::wasm_exports::export_names(&crate::wasm_exports::collect_wasm_exports(
+    let wasm_export_names = crate::wasm_exports::link_export_names(
+        &crate::wasm_exports::collect_wasm_exports(
             &pipeline.parsed.program,
             crate::target::active_target(),
-        ));
+        ),
+        crate::target::wasm_component_host_package().is_some(),
+    );
     if let Err(e) = crate::codegen::link_executable_exports(
         &obj_path.to_string_lossy(),
         &link_out.to_string_lossy(),
@@ -6558,7 +6572,10 @@ fn run_multi_file_codegen(
             &pipeline.parsed.program,
             crate::target::active_target(),
         );
-        warn_non_scalar_exports(&wasm_exports);
+        warn_unlowered_exports(
+            &wasm_exports,
+            crate::wasm_exports::ExportSig::component_lowerable,
+        );
         let result = crate::componentize::componentize(
             tool,
             &link_out,
@@ -6625,7 +6642,7 @@ fn run_multi_file_codegen(
                 &pipeline.parsed.program,
                 crate::target::active_target(),
             );
-            warn_non_scalar_exports(&wasm_exports);
+            warn_unlowered_exports(&wasm_exports, crate::wasm_exports::ExportSig::all_scalar);
             let wasm_filename = format!("{}.wasm", mf.name);
             let js = exe_path.with_extension("js");
             if let Err(e) = std::fs::write(

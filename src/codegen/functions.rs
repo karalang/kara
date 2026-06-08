@@ -30,37 +30,6 @@ fn returns_self_or_type(return_type: Option<&TypeExpr>, type_name: &str) -> bool
 }
 
 impl<'ctx> super::Codegen<'ctx> {
-    /// Phase-10 WASM entry-point discovery: on a **component** build
-    /// (`--bindings component`, signalled by
-    /// [`crate::target::wasm_component_host_package`]), attach the
-    /// canonical-ABI export name to a WASM entry-point export so the core
-    /// export matches the kebab-cased WIT function name `wasm-tools
-    /// component new` looks up (`add_two` ⇒ `add-two`). Browser / raw
-    /// (`--bindings none`) builds keep the bare Kāra symbol name — a valid
-    /// JS identifier the `.d.ts` types directly. No-op for non-exports,
-    /// non-component builds, and names whose kebab form is unchanged.
-    fn maybe_attach_wasm_export_name(
-        &self,
-        fn_val: FunctionValue<'ctx>,
-        func: &crate::ast::Function,
-    ) {
-        if crate::target::wasm_component_host_package().is_none() {
-            return;
-        }
-        if !crate::wasm_exports::is_export_entry(func, crate::target::active_target()) {
-            return;
-        }
-        let export_name = crate::wit::host_import_name(&func.name);
-        if export_name != func.name {
-            use inkwell::attributes::AttributeLoc;
-            fn_val.add_attribute(
-                AttributeLoc::Function,
-                self.context
-                    .create_string_attribute("wasm-export-name", &export_name),
-            );
-        }
-    }
-
     pub(super) fn apply_linker_attrs(&mut self, fn_val: FunctionValue<'ctx>, attrs: &[Attribute]) {
         for attr in attrs {
             // Linker attributes are bare-name only; namespaced paths
@@ -350,7 +319,6 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let fn_val = self.module.add_function(&func.name, fn_type, linkage);
         self.apply_linker_attrs(fn_val, &func.attributes);
-        self.maybe_attach_wasm_export_name(fn_val, func);
 
         // Phase-7 line 5 sub-item 1 — hot-swap slot registration.
         // When `--enable-hot-swap` is active, every user-defined `pub fn`

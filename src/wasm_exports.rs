@@ -27,6 +27,18 @@ use crate::target::target_spec_of;
 use crate::wasm_glue::{handle_width_map, js_scalar, type_expr_display, JsScalar};
 use std::collections::HashMap;
 
+/// One field of a record-typed export param/return — a user struct with
+/// all-scalar fields (sub-slice D). The Kāra struct layout (natural
+/// alignment, declaration order) coincides with the Component Model
+/// canonical record layout for scalar fields, so the trampoline can
+/// relay an `sret` buffer directly.
+#[derive(Debug, Clone)]
+pub struct ExportField {
+    pub name: String,
+    pub kara_ty: String,
+    pub js: JsScalar,
+}
+
 /// A param/return type of a discovered export, reduced to what the glue /
 /// WIT renderers need.
 #[derive(Debug, Clone)]
@@ -38,9 +50,28 @@ pub struct ExportType {
     /// `true` iff the type crosses the wasm boundary as a **bare scalar**
     /// (primitive, raw pointer, or single-field opaque-handle struct —
     /// confirmed by the empirical wasm ABI: small aggregates flatten /
-    /// return via sret, scalars stay scalar). Aggregates (`false`) need
-    /// the export trampoline + exported allocator (sub-slice D).
+    /// return via sret, scalars stay scalar).
     pub scalar: bool,
+    /// `Some(fields)` when this is a user struct of all-scalar fields — a
+    /// WIT `record` / JS object, marshalled via the export trampoline
+    /// (sub-slice D). `None` for scalars and for not-yet-supported
+    /// aggregates (`Option` / `Result` / `String` / `Vec` / nested).
+    pub record_fields: Option<Vec<ExportField>>,
+}
+
+impl ExportType {
+    /// A user struct of scalar fields — emittable as a WIT `record` and
+    /// marshallable to/from a JS object (sub-slice D).
+    pub fn is_record(&self) -> bool {
+        self.record_fields.is_some()
+    }
+
+    /// Surface this slice can render/marshal today: bare scalars and flat
+    /// records. (Option/Result/String/Vec/nested extend this as their
+    /// sub-slices land.)
+    pub fn is_marshallable(&self) -> bool {
+        self.scalar || self.is_record()
+    }
 }
 
 /// One parameter of a discovered wasm export.
@@ -71,6 +102,33 @@ impl ExportSig {
     pub fn all_scalar(&self) -> bool {
         self.params.iter().all(|p| p.ty.scalar) && self.ret.as_ref().is_none_or(|r| r.scalar)
     }
+
+    /// `true` iff every param and the return is either a scalar or a flat
+    /// record — the surface sub-slice D can lower. `all_scalar` exports
+    /// are a subset (they need no trampoline).
+    pub fn is_marshallable(&self) -> bool {
+        self.params.iter().all(|p| p.ty.is_marshallable())
+            && self.ret.as_ref().is_none_or(|r| r.is_marshallable())
+    }
+
+    /// `true` iff some param or the return is a flat record — i.e. this
+    /// export needs the sub-slice D trampoline (a pure-scalar export does
+    /// not). Only meaningful together with [`Self::is_marshallable`].
+    pub fn needs_trampoline(&self) -> bool {
+        self.params.iter().any(|p| p.ty.is_record())
+            || self.ret.as_ref().is_some_and(|r| r.is_record())
+    }
+
+    /// `true` iff the codegen export trampoline can lower this export for
+    /// a **component** build today: all params are scalars and the return
+    /// is a scalar or a flat record. (Record *params* — which need
+    /// canonical param-flattening + reconstruction — and `Option` /
+    /// `Result` / `String` / `Vec` extend this as their steps land.) A
+    /// record return needs the trampoline; a pure-scalar export does not.
+    pub fn component_lowerable(&self) -> bool {
+        self.params.iter().all(|p| p.ty.scalar)
+            && self.ret.as_ref().is_none_or(|r| r.scalar || r.is_record())
+    }
 }
 
 /// Collect the explicit wasm export entry points in `program` for
@@ -80,6 +138,7 @@ impl ExportSig {
 /// the result is correct regardless of call order.
 pub fn collect_wasm_exports(program: &Program, current_target: &str) -> Vec<ExportSig> {
     let handles = handle_width_map(program);
+    let structs = struct_field_map(program);
     program
         .items
         .iter()
@@ -94,12 +153,12 @@ pub fn collect_wasm_exports(program: &Program, current_target: &str) -> Vec<Expo
                             .name()
                             .map(str::to_string)
                             .unwrap_or_else(|| format!("arg{i}")),
-                        ty: export_type(&p.ty, &handles),
+                        ty: export_type(&p.ty, &handles, &structs),
                     })
                     .collect();
                 let ret = f.return_type.as_ref().and_then(|ty| match &ty.kind {
                     TypeKind::Tuple(elems) if elems.is_empty() => None,
-                    _ => Some(export_type(ty, &handles)),
+                    _ => Some(export_type(ty, &handles, &structs)),
                 });
                 Some(ExportSig {
                     name: f.name.clone(),
@@ -119,14 +178,88 @@ pub fn export_names(sigs: &[ExportSig]) -> Vec<String> {
     sigs.iter().map(|s| s.name.clone()).collect()
 }
 
-/// Build an [`ExportType`] from a param/return `TypeExpr`, classifying
-/// whether it crosses the wasm boundary as a bare scalar.
-fn export_type(ty: &TypeExpr, handles: &HashMap<&str, JsScalar>) -> ExportType {
+/// The `--export=<symbol>` arguments for the wasm link, given the binding.
+///
+/// For a **component** build, a record-returning export is exported via
+/// the codegen trampoline, whose symbol is the kebab WIT name
+/// (`make_point` ⇒ `make-point`); `--export`-ing that keeps the
+/// trampoline through wasm-ld's GC and surfaces it as the canonical
+/// export. Every other export (scalars, and all exports on browser /
+/// `--bindings none` builds) is the real function, exported under its
+/// bare Kāra symbol name (a scalar component export is then renamed to
+/// kebab by codegen's `wasm-export-name` attribute).
+pub fn link_export_names(sigs: &[ExportSig], component: bool) -> Vec<String> {
+    sigs.iter()
+        .map(|s| {
+            if component && s.component_lowerable() && s.needs_trampoline() {
+                crate::wit::host_import_name(&s.name)
+            } else {
+                s.name.clone()
+            }
+        })
+        .collect()
+}
+
+/// Map every user struct name to its fields — used to classify a Path
+/// type as a WIT `record` (multi-field, all-scalar) export type.
+fn struct_field_map(program: &Program) -> HashMap<&str, &[crate::ast::StructField]> {
+    program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::StructDef(s) => Some((s.name.as_str(), s.fields.as_slice())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Build an [`ExportType`] from a param/return `TypeExpr`, classifying it
+/// as a bare scalar, a flat record (multi-field user struct of scalar
+/// fields), or neither.
+fn export_type(
+    ty: &TypeExpr,
+    handles: &HashMap<&str, JsScalar>,
+    structs: &HashMap<&str, &[crate::ast::StructField]>,
+) -> ExportType {
+    let record_fields = record_fields_of(ty, handles, structs);
     ExportType {
         kara_ty: type_expr_display(ty),
         js: js_scalar(ty, handles),
         scalar: is_scalar_surface(ty, handles),
+        record_fields,
     }
+}
+
+/// `Some(fields)` when `ty` names a user struct with **more than one**
+/// field, all of which are scalar-surface (single-field structs are
+/// opaque handles — already scalar — and are not records). `None`
+/// otherwise. Nested aggregates (a struct field that is itself a record /
+/// `Vec` / `Option`) disqualify the record for this slice.
+fn record_fields_of(
+    ty: &TypeExpr,
+    handles: &HashMap<&str, JsScalar>,
+    structs: &HashMap<&str, &[crate::ast::StructField]>,
+) -> Option<Vec<ExportField>> {
+    let TypeKind::Path(p) = &ty.kind else {
+        return None;
+    };
+    if p.segments.len() != 1 || p.generic_args.is_some() {
+        return None;
+    }
+    let fields = structs.get(p.segments[0].as_str())?;
+    if fields.len() < 2 || !fields.iter().all(|f| is_scalar_surface(&f.ty, handles)) {
+        return None;
+    }
+    Some(
+        fields
+            .iter()
+            .map(|f| ExportField {
+                name: f.name.clone(),
+                kara_ty: type_expr_display(&f.ty),
+                js: js_scalar(&f.ty, handles),
+            })
+            .collect(),
+    )
 }
 
 /// Does `ty` cross the wasm boundary as a bare scalar (so it needs no
@@ -271,5 +404,51 @@ mod tests {
                 e.name
             );
         }
+    }
+
+    #[test]
+    fn multi_field_scalar_struct_classifies_as_record() {
+        let p = prog(
+            r#"
+            #[derive(Copy, Clone)] pub struct Point { x: f64, y: f64 }
+            pub struct Handle { id: i64 }
+            #[target(wasm_wasi)] pub fn make_point(x: f64, y: f64) -> Point { Point { x: x, y: y } }
+            #[target(wasm_wasi)] pub fn take_handle(h: Handle) -> i64 { 0 }
+            fn main() {}
+            "#,
+        );
+        let exports = collect_wasm_exports(&p, "wasm_wasi");
+        let mk = exports.iter().find(|e| e.name == "make_point").unwrap();
+        let ret = mk.ret.as_ref().unwrap();
+        assert!(ret.is_record(), "Point return is a record");
+        assert_eq!(ret.record_fields.as_ref().unwrap().len(), 2);
+        assert!(!ret.scalar);
+        // A record return with scalar params is component-lowerable and
+        // needs the trampoline.
+        assert!(mk.component_lowerable());
+        assert!(mk.needs_trampoline());
+        assert!(!mk.all_scalar());
+
+        // A single-field struct is an opaque handle (scalar), NOT a record.
+        let th = exports.iter().find(|e| e.name == "take_handle").unwrap();
+        assert!(!th.params[0].ty.is_record());
+        assert!(th.params[0].ty.scalar);
+        assert!(th.all_scalar());
+    }
+
+    #[test]
+    fn record_param_is_not_yet_component_lowerable() {
+        // A record PARAM needs canonical param-flattening (a later step),
+        // so it is not component_lowerable yet even though it is a record.
+        let p = prog(
+            r#"
+            #[derive(Copy, Clone)] pub struct Point { x: f64, y: f64 }
+            #[target(wasm_wasi)] pub fn sum(p: Point) -> f64 { p.x + p.y }
+            fn main() {}
+            "#,
+        );
+        let e = &collect_wasm_exports(&p, "wasm_wasi")[0];
+        assert!(e.params[0].ty.is_record());
+        assert!(!e.component_lowerable(), "record params not lowerable yet");
     }
 }

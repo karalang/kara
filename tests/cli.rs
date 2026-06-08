@@ -10985,6 +10985,19 @@ fn wasm_tools_on_path() -> Option<&'static str> {
     }
 }
 
+fn wasmtime_on_path() -> Option<&'static str> {
+    let ok = std::process::Command::new("wasmtime")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if ok {
+        Some("wasmtime")
+    } else {
+        None
+    }
+}
+
 /// `--target=gpu` is a recognized v1 name that is not standalone-
 /// buildable (kernels are dispatched from a host program) — it rejects
 /// loudly instead of silently emitting a native binary under a
@@ -11422,6 +11435,89 @@ fn main() {}
         assert!(
             wit.contains("export add-two: func(a: s32, b: s32) -> s32;"),
             "embedded WIT must export the (kebab-cased) entry point, got:\n{wit}",
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// phase-10 "WASM entry-point discovery" (sub-slice D): a component
+/// export returning a flat record (`fn make_point(x, y) -> Point`) lifts
+/// into the WIT world as a `record` + `func(...) -> <record>`, via a
+/// codegen canonical-ABI trampoline (the Kāra fn returns the aggregate by
+/// value → LLVM `sret`; the trampoline relays it into an aligned return
+/// area and returns the pointer the canonical ABI expects). `component
+/// new` validates canonical conformance, so a successful build already
+/// proves the lowering; when wasmtime is present we additionally invoke
+/// `make-point(2, 3)` and assert the lifted `{x: 2, y: 3}`.
+#[test]
+fn wasm_wasi_component_exports_record_return() {
+    let tmp = wasm_test_dir("component-record");
+    let path = tmp.join("reclib.kara");
+    std::fs::write(
+        &path,
+        r#"
+#[derive(Copy, Clone)]
+pub struct Point { x: f64, y: f64 }
+
+#[target(wasm_wasi)]
+pub fn make_point(x: f64, y: f64) -> Point {
+    return Point { x: x, y: y };
+}
+
+fn main() {}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_wasi_component_exports_record_return — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "component build failed: {stderr}");
+    let component = tmp.join("reclib.wasm");
+    assert_eq!(wasm_artifact_kind(&component), "component");
+    if let Some(tool) = wasm_tools_on_path() {
+        let wit = String::from_utf8_lossy(
+            &std::process::Command::new(tool)
+                .args(["component", "wit"])
+                .arg(&component)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .into_owned();
+        assert!(
+            wit.contains("record point") && wit.contains("x: f64") && wit.contains("y: f64"),
+            "embedded WIT must declare the record type, got:\n{wit}",
+        );
+        assert!(
+            wit.contains("export make-point: func(x: f64, y: f64) -> point;"),
+            "embedded WIT must export the record-returning func, got:\n{wit}",
+        );
+    }
+    if let Some(wt) = wasmtime_on_path() {
+        let run = std::process::Command::new(wt)
+            .args(["run", "--invoke", "make-point(2, 3)"])
+            .arg(&component)
+            .output()
+            .unwrap();
+        let so = String::from_utf8_lossy(&run.stdout);
+        let se = String::from_utf8_lossy(&run.stderr);
+        assert!(
+            run.status.success(),
+            "wasmtime invoke failed: stdout={so} stderr={se}",
+        );
+        assert!(
+            so.contains("x: 2") && so.contains("y: 3"),
+            "make-point(2,3) must lift to {{x: 2, y: 3}}, got stdout={so} stderr={se}",
         );
     }
     let _ = std::fs::remove_dir_all(&tmp);

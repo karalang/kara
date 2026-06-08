@@ -24,6 +24,7 @@ use crate::token::Span;
 
 mod assoc_call;
 mod bounded_channel;
+mod cabi;
 mod call_dispatch;
 mod calls;
 mod channel;
@@ -5393,6 +5394,11 @@ impl<'ctx> Codegen<'ctx> {
         // Defining `__main_void` ourselves keeps libc's member from being
         // extracted at all: the shim just tail-calls `main()`.
         self.emit_wasm_entry_shim()?;
+
+        // Phase-10 WASM entry-point discovery (sub-slice D): on a
+        // component build, rename scalar exports to their kebab WIT name
+        // and emit canonical-ABI trampolines for record-returning exports.
+        self.emit_wasm_component_export_surface(program)?;
 
         // Level 2 crash diagnostics — Part 2: finalize DWARF debug info BEFORE
         // verify. The verifier validates debug metadata, and unresolved

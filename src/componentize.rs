@@ -204,7 +204,7 @@ fn componentize_in(
     // the embed step entirely: `component new` infers an import-free
     // world from the module itself. The presence of either means we must
     // embed an explicit world so `component new` lifts the right surface.
-    let needs_embed = !host_fns.is_empty() || exports.iter().any(|e| e.all_scalar());
+    let needs_embed = !host_fns.is_empty() || exports.iter().any(|e| e.component_lowerable());
     let new_input = if !needs_embed {
         core_wasm.to_path_buf()
     } else {

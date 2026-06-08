@@ -1441,6 +1441,7 @@ mod tests {
             kara_ty: kara.to_string(),
             js,
             scalar: true,
+            record_fields: None,
         };
         let exports = vec![
             ExportSig {
@@ -1466,6 +1467,7 @@ mod tests {
                     kara_ty: "Point".to_string(),
                     js: JsScalar::Number,
                     scalar: false,
+                    record_fields: None,
                 }),
                 target: "wasm_browser".to_string(),
             },

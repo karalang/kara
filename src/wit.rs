@@ -243,33 +243,66 @@ fn push_host_interface(out: &mut String, fns: &[HostFnSig], doc_module: &str) {
     out.push_str("}\n\n");
 }
 
+/// The WIT type string for an export param/return: a scalar maps via
+/// [`wit_type`]; a flat record maps to its kebab-cased type name (the
+/// `record` declaration is emitted separately by
+/// [`push_record_type_decls`]).
+fn export_wit_type(ty: &crate::wasm_exports::ExportType) -> String {
+    if ty.is_record() {
+        wit_ident(&ty.kara_ty)
+    } else {
+        wit_type(&ty.kara_ty, ty.js).to_string()
+    }
+}
+
+/// Emit a `record <kebab> { field: type, ... }` declaration for every
+/// distinct flat-record type used by a marshallable export's params or
+/// return (phase-10 "WASM entry-point discovery", sub-slice D). Deduped
+/// by record name — a struct used by several exports is declared once.
+fn push_record_type_decls(out: &mut String, exports: &[ExportSig]) {
+    let mut seen = std::collections::HashSet::new();
+    let mut record_of = |out: &mut String, ty: &crate::wasm_exports::ExportType| {
+        if let Some(fields) = &ty.record_fields {
+            if seen.insert(ty.kara_ty.clone()) {
+                let body = fields
+                    .iter()
+                    .map(|f| format!("{}: {}", wit_ident(&f.name), wit_type(&f.kara_ty, f.js)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(out, "  record {} {{ {body} }}", wit_ident(&ty.kara_ty));
+            }
+        }
+    };
+    for e in exports.iter().filter(|e| e.component_lowerable()) {
+        for p in &e.params {
+            record_of(out, &p.ty);
+        }
+        if let Some(t) = &e.ret {
+            record_of(out, t);
+        }
+    }
+}
+
 /// Append `export <kebab-name>: func(...);` lines to the world for each
-/// discovered WASM entry-point export (phase-10 "WASM entry-point
-/// discovery"). Sub-slice C covers the **scalar** surface — primitives /
-/// single-field opaque handles, whose canonical-ABI lowering is identity
-/// (a `func(a: s32) -> s32` lowers to a core `(param i32) (result i32)`,
-/// exactly codegen's output). The WIT function name is kebab-cased; the
-/// core module must export under that same string, which codegen ensures
-/// with a `wasm-export-name` attribute (see `codegen` export-name
-/// attachment). Rich (`record`/`variant`/`string`/`list`) exports + the
-/// canonical-ABI trampoline they need are sub-slices D/E — non-scalar
-/// exports are skipped here (they remain raw core exports).
+/// marshallable WASM entry-point export (phase-10 "WASM entry-point
+/// discovery"). Scalars map via [`wit_type`]; flat records map to their
+/// kebab record name (declared by [`push_record_type_decls`]). The WIT
+/// function name is kebab-cased and the core module exports under that
+/// same string — a scalar-only export keeps its bare symbol renamed via
+/// codegen's `wasm-export-name` attribute, a record-bearing export is
+/// owned by the codegen trampoline emitted under the kebab name.
+/// Not-yet-marshallable exports (`Option`/`Result`/`String`/`Vec`/nested)
+/// are skipped (they remain raw core exports).
 fn push_world_exports(out: &mut String, exports: &[ExportSig]) {
-    for e in exports.iter().filter(|e| e.all_scalar()) {
+    for e in exports.iter().filter(|e| e.component_lowerable()) {
         let params = e
             .params
             .iter()
-            .map(|p| {
-                format!(
-                    "{}: {}",
-                    wit_ident(&p.name),
-                    wit_type(&p.ty.kara_ty, p.ty.js)
-                )
-            })
+            .map(|p| format!("{}: {}", wit_ident(&p.name), export_wit_type(&p.ty)))
             .collect::<Vec<_>>()
             .join(", ");
         let ret = match &e.ret {
-            Some(t) => format!(" -> {}", wit_type(&t.kara_ty, t.js)),
+            Some(t) => format!(" -> {}", export_wit_type(t)),
             None => String::new(),
         };
         let _ = writeln!(
@@ -317,7 +350,7 @@ pub fn render_embed_wit(
     let pkg = wit_ident(package);
     let world = world_name(&pkg);
     let module = host_import_module(package);
-    let has_exports = exports.iter().any(|e| e.all_scalar());
+    let has_exports = exports.iter().any(|e| e.component_lowerable());
 
     let mut out = String::with_capacity(1024);
     let _ = write!(
@@ -336,6 +369,7 @@ pub fn render_embed_wit(
         out.push_str("  import host;\n");
     }
     if has_exports {
+        push_record_type_decls(&mut out, exports);
         push_world_exports(&mut out, exports);
     }
     out.push_str("}\n");
@@ -427,6 +461,7 @@ mod tests {
             kara_ty: kara.to_string(),
             js,
             scalar: true,
+            record_fields: None,
         };
         let exports = vec![
             ExportSig {
@@ -452,6 +487,7 @@ mod tests {
                     kara_ty: "String".to_string(),
                     js: JsScalar::Number,
                     scalar: false,
+                    record_fields: None,
                 }),
                 target: "wasm_wasi".to_string(),
             },

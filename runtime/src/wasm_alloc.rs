@@ -29,6 +29,7 @@ extern "C" {
     fn malloc(size: usize) -> *mut c_void;
     fn calloc(nmemb: usize, size: usize) -> *mut c_void;
     fn aligned_alloc(alignment: usize, size: usize) -> *mut c_void;
+    fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void;
     fn free(ptr: *mut c_void);
 }
 
@@ -89,4 +90,61 @@ static GLOBAL: LibcAlloc = LibcAlloc;
 pub extern "C" fn __karac_malloc64(size: u64) -> *mut c_void {
     let size = usize::try_from(size).unwrap_or(usize::MAX);
     unsafe { malloc(size) }
+}
+
+/// Component Model **Canonical ABI** reallocation entry point (phase-10
+/// "WASM entry-point discovery", rich-type exports). `wasm-tools
+/// component new` wires the lifted component to call this exported
+/// symbol whenever it must place lowered values (strings, lists, spilled
+/// records) into *our* linear memory — both fresh allocations
+/// (`old_ptr == 0`) and growth. Signature is the canonical one:
+/// `cabi_realloc(old_ptr, old_size, align, new_size) -> ptr`. Backed by
+/// the same unified wasi-libc heap as everything else in this archive,
+/// so blocks it returns are `free`-compatible with Kāra-emitted IR.
+///
+/// `wasm-tools` only emits calls with `align` ≤ the natural alignment of
+/// the lowered type; for the v1 export surface (records / `option` /
+/// `result` / `string` / `list` over scalar and pointer-width fields)
+/// that is ≤ `MALLOC_ALIGN` (16), so `realloc`/`malloc` (16-byte
+/// guaranteed) satisfies it directly. Larger alignments route through
+/// `aligned_alloc` on the fresh path; an over-aligned *grow* (which the
+/// canonical ABI never emits for this surface) falls back to
+/// alloc-and-copy. `new_size == 0` returns the `align` value as a
+/// non-null aligned sentinel, per the canonical-ABI convention.
+#[no_mangle]
+pub extern "C" fn cabi_realloc(
+    old_ptr: *mut c_void,
+    old_size: usize,
+    align: usize,
+    new_size: usize,
+) -> *mut c_void {
+    if new_size == 0 {
+        return align as *mut c_void;
+    }
+    unsafe {
+        if old_ptr.is_null() {
+            if align <= MALLOC_ALIGN {
+                malloc(new_size)
+            } else {
+                let size = new_size.next_multiple_of(align);
+                aligned_alloc(align, size)
+            }
+        } else if align <= MALLOC_ALIGN {
+            realloc(old_ptr, new_size)
+        } else {
+            // Over-aligned grow: realloc can't preserve >malloc alignment,
+            // so allocate fresh, copy the old bytes, free the old block.
+            let size = new_size.next_multiple_of(align);
+            let fresh = aligned_alloc(align, size);
+            if !fresh.is_null() {
+                std::ptr::copy_nonoverlapping(
+                    old_ptr as *const u8,
+                    fresh as *mut u8,
+                    old_size.min(new_size),
+                );
+                free(old_ptr);
+            }
+            fresh
+        }
+    }
 }
