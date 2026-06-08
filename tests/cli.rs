@@ -11615,6 +11615,94 @@ fn main() {}
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// phase-10 "WASM entry-point discovery" (sub-slice D.3): component
+/// exports returning `Option[T]` / `Result[T, E]` over scalar inners lift
+/// into the WIT world as idiomatic `option<T>` / `result<T, E>`. The
+/// trampoline converts Kāra's `{i64 tag, i64 w0}` enum into the canonical
+/// variant return area: discriminant remapped (Kāra `Result` is seeded
+/// `Err=0,Ok=1` vs canonical `ok=0,err=1`; `Option` is identity) and the
+/// payload's raw low bytes copied (no per-case branch). Validated by
+/// wasmtime invoke across both arms of each.
+#[test]
+fn wasm_wasi_component_exports_option_result() {
+    let tmp = wasm_test_dir("component-variant");
+    let path = tmp.join("varlib.kara");
+    std::fs::write(
+        &path,
+        r#"
+#[target(wasm_wasi)]
+pub fn checked_div(a: i32, b: i32) -> Option[i32] {
+    if b == 0 { return Option.None; }
+    return Option.Some(a / b);
+}
+
+#[target(wasm_wasi)]
+pub fn safe_sqrt(x: f64) -> Result[f64, i32] {
+    if x < 0.0 { return Result.Err(1); }
+    return Result.Ok(x);
+}
+
+fn main() {}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_wasi_component_exports_option_result — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "component build failed: {stderr}");
+    let component = tmp.join("varlib.wasm");
+    assert_eq!(wasm_artifact_kind(&component), "component");
+    if let Some(tool) = wasm_tools_on_path() {
+        let wit = String::from_utf8_lossy(
+            &std::process::Command::new(tool)
+                .args(["component", "wit"])
+                .arg(&component)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .into_owned();
+        assert!(
+            wit.contains("export checked-div: func(a: s32, b: s32) -> option<s32>;"),
+            "option export must lift, got:\n{wit}",
+        );
+        assert!(
+            wit.contains("export safe-sqrt: func(x: f64) -> result<f64, s32>;"),
+            "result export must lift, got:\n{wit}",
+        );
+    }
+    if let Some(wt) = wasmtime_on_path() {
+        let invoke = |args: &str| -> String {
+            let o = std::process::Command::new(wt)
+                .args(["run", "--invoke", args])
+                .arg(&component)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "invoke {args} failed: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
+        };
+        assert_eq!(invoke("checked-div(10, 2)"), "some(5)");
+        assert_eq!(invoke("checked-div(10, 0)"), "none");
+        assert_eq!(invoke("safe-sqrt(4)"), "ok(4)");
+        assert_eq!(invoke("safe-sqrt(-1)"), "err(1)");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// phase-10 "WASM concurrency lowering — sequential default", explicit
 /// `par {}` leg: the block still lowers through `karac_par_run`
 /// (`tests/wasm_codegen.rs` pins the IR shape), and the wasm runtime

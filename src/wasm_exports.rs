@@ -39,6 +39,15 @@ pub struct ExportField {
     pub js: JsScalar,
 }
 
+/// A `variant`-shaped export type — `Option[T]` / `Result[T, E]` over
+/// scalar inner types (sub-slice D.3). The inner [`ExportType`]s carry
+/// the WIT/JS mapping for the payloads.
+#[derive(Debug, Clone)]
+pub enum VariantShape {
+    Option(Box<ExportType>),
+    Result(Box<ExportType>, Box<ExportType>),
+}
+
 /// A param/return type of a discovered export, reduced to what the glue /
 /// WIT renderers need.
 #[derive(Debug, Clone)]
@@ -54,9 +63,12 @@ pub struct ExportType {
     pub scalar: bool,
     /// `Some(fields)` when this is a user struct of all-scalar fields — a
     /// WIT `record` / JS object, marshalled via the export trampoline
-    /// (sub-slice D). `None` for scalars and for not-yet-supported
-    /// aggregates (`Option` / `Result` / `String` / `Vec` / nested).
+    /// (sub-slice D). `None` otherwise.
     pub record_fields: Option<Vec<ExportField>>,
+    /// `Some(shape)` when this is `Option[T]` / `Result[T, E]` over scalar
+    /// inners — a WIT `option`/`result`, marshalled via the trampoline's
+    /// variant layout conversion (sub-slice D.3). `None` otherwise.
+    pub variant: Option<VariantShape>,
 }
 
 impl ExportType {
@@ -66,11 +78,17 @@ impl ExportType {
         self.record_fields.is_some()
     }
 
-    /// Surface this slice can render/marshal today: bare scalars and flat
-    /// records. (Option/Result/String/Vec/nested extend this as their
-    /// sub-slices land.)
+    /// An `Option`/`Result` over scalar inners — a WIT `option`/`result`
+    /// (sub-slice D.3).
+    pub fn is_variant(&self) -> bool {
+        self.variant.is_some()
+    }
+
+    /// Surface this slice can render/marshal today: bare scalars, flat
+    /// records, and scalar-inner variants. (`String`/`Vec`/nested extend
+    /// this as their sub-slices land.)
     pub fn is_marshallable(&self) -> bool {
-        self.scalar || self.is_record()
+        self.scalar || self.is_record() || self.is_variant()
     }
 }
 
@@ -116,17 +134,24 @@ impl ExportSig {
     /// not). Only meaningful together with [`Self::is_marshallable`].
     pub fn needs_trampoline(&self) -> bool {
         self.params.iter().any(|p| p.ty.is_record())
-            || self.ret.as_ref().is_some_and(|r| r.is_record())
+            || self
+                .ret
+                .as_ref()
+                .is_some_and(|r| r.is_record() || r.is_variant())
     }
 
     /// `true` iff the codegen export trampoline can lower this export for
-    /// a **component** build today: every param and the return is a scalar
-    /// or a flat record. (`Option` / `Result` / `String` / `Vec` extend
-    /// this as their steps land.) Any record param/return needs the
-    /// trampoline; a pure-scalar export does not.
+    /// a **component** build today: every param is a scalar or flat
+    /// record, and the return is a scalar, flat record, or scalar-inner
+    /// variant (`Option`/`Result`). (`String`/`Vec`, and variant *params*,
+    /// extend this as their steps land.) Any record/variant in the
+    /// signature needs the trampoline; a pure-scalar export does not.
     pub fn component_lowerable(&self) -> bool {
         self.params.iter().all(|p| p.ty.scalar || p.ty.is_record())
-            && self.ret.as_ref().is_none_or(|r| r.scalar || r.is_record())
+            && self
+                .ret
+                .as_ref()
+                .is_none_or(|r| r.scalar || r.is_record() || r.is_variant())
     }
 }
 
@@ -231,12 +256,45 @@ fn export_type(
     handles: &HashMap<&str, JsScalar>,
     structs: &HashMap<&str, &[crate::ast::StructField]>,
 ) -> ExportType {
-    let record_fields = record_fields_of(ty, handles, structs);
     ExportType {
         kara_ty: type_expr_display(ty),
         js: js_scalar(ty, handles),
         scalar: is_scalar_surface(ty, handles),
-        record_fields,
+        record_fields: record_fields_of(ty, handles, structs),
+        variant: variant_shape_of(ty, handles, structs),
+    }
+}
+
+/// `Some(shape)` when `ty` is `Option[T]` / `Result[T, E]` whose inner
+/// type(s) are scalar-surface (the only variant payloads sub-slice D.3
+/// lowers). `None` otherwise — including nested aggregates inside the
+/// variant, which a later step handles.
+fn variant_shape_of(
+    ty: &TypeExpr,
+    handles: &HashMap<&str, JsScalar>,
+    structs: &HashMap<&str, &[crate::ast::StructField]>,
+) -> Option<VariantShape> {
+    let TypeKind::Path(p) = &ty.kind else {
+        return None;
+    };
+    if p.segments.len() != 1 {
+        return None;
+    }
+    let args = p.generic_args.as_ref()?;
+    let scalar_inner = |i: usize| -> Option<Box<ExportType>> {
+        match args.get(i)? {
+            crate::ast::GenericArg::Type(t) if is_scalar_surface(t, handles) => {
+                Some(Box::new(export_type(t, handles, structs)))
+            }
+            _ => None,
+        }
+    };
+    match p.segments[0].as_str() {
+        "Option" if args.len() == 1 => Some(VariantShape::Option(scalar_inner(0)?)),
+        "Result" if args.len() == 2 => {
+            Some(VariantShape::Result(scalar_inner(0)?, scalar_inner(1)?))
+        }
+        _ => None,
     }
 }
 
@@ -444,6 +502,45 @@ mod tests {
         assert!(!th.params[0].ty.is_record());
         assert!(th.params[0].ty.scalar);
         assert!(th.all_scalar());
+    }
+
+    #[test]
+    fn scalar_inner_option_and_result_classify_as_variant() {
+        let p = prog(
+            r#"
+            #[target(wasm_wasi)] pub fn find(n: i32) -> Option[i32] { Option.None }
+            #[target(wasm_wasi)] pub fn run(x: f64) -> Result[f64, i32] { Result.Ok(x) }
+            #[target(wasm_wasi)] pub fn nested() -> Option[Vec[i32]] { Option.None }
+            fn main() {}
+            "#,
+        );
+        let exports = collect_wasm_exports(&p, "wasm_wasi");
+        let find = exports.iter().find(|e| e.name == "find").unwrap();
+        assert!(find.ret.as_ref().unwrap().is_variant());
+        assert!(find.component_lowerable() && find.needs_trampoline());
+        let run = exports.iter().find(|e| e.name == "run").unwrap();
+        assert!(run.ret.as_ref().unwrap().is_variant());
+        assert!(run.component_lowerable());
+        // A variant over a non-scalar inner (`Option[Vec[i32]]`) is not a
+        // scalar-inner variant — not lowerable in this step.
+        let nested = exports.iter().find(|e| e.name == "nested").unwrap();
+        assert!(!nested.ret.as_ref().unwrap().is_variant());
+        assert!(!nested.component_lowerable());
+    }
+
+    #[test]
+    fn variant_param_is_not_yet_component_lowerable() {
+        // Variant RETURNS are lowerable; variant PARAMS (reverse
+        // canonical lift) are a later step.
+        let p = prog(
+            r#"
+            #[target(wasm_wasi)] pub fn unwrap_or(o: Option[i32], d: i32) -> i32 { d }
+            fn main() {}
+            "#,
+        );
+        let e = &collect_wasm_exports(&p, "wasm_wasi")[0];
+        assert!(e.params[0].ty.is_variant());
+        assert!(!e.component_lowerable(), "variant params not lowerable yet");
     }
 
     #[test]

@@ -11,21 +11,23 @@
 //!     `wasm-export-name` (kebab) attribute to the real function so the
 //!     core export matches the kebab WIT function name (`add_two` ⇒
 //!     `add-two`).
-//!   - **Record-returning exports** (a user struct of scalar fields) need
-//!     a tiny trampoline: the Kāra function returns the aggregate by
-//!     value (LLVM lowers that to an `sret` out-param on wasm), but the
-//!     canonical ABI for a flattened-result type returns a single `i32`
-//!     pointer to a return area. The trampoline calls the real function,
-//!     stores the result into a static return area, and returns its
-//!     address. The Kāra struct layout (natural alignment, declaration
-//!     order) coincides with the canonical `record` layout for scalar
-//!     fields, so no field-by-field repack is needed.
+//!   - **Record params/returns** (a user struct of scalar fields) need a
+//!     trampoline: a record param flattens to its scalar fields, which the
+//!     trampoline reconstructs into the struct the Kāra fn expects by
+//!     value; a record return is written to an alignment-correct static
+//!     return area whose `i32` pointer the trampoline returns (the Kāra
+//!     struct layout coincides with the canonical `record` layout for
+//!     scalar fields, so no field repack is needed).
+//!   - **`Option`/`Result` returns** over scalar inners lower to the
+//!     canonical `option`/`result` return area: discriminant remapped to
+//!     the canonical case order, payload bytes copied from the enum's
+//!     word 0 (see [`Self::emit_variant_return_area`]).
 //!
 //! Only the surface [`crate::wasm_exports::ExportSig::component_lowerable`]
-//! reports is handled here; record *params*, `option`/`result`,
-//! `string`/`list` are later steps (their WIT is likewise withheld until
-//! the matching lowering lands, so the WIT never names a core export
-//! that does not exist).
+//! reports is handled here; variant *params*, `string`/`list`, and nested
+//! aggregates are later steps (their WIT is likewise withheld until the
+//! matching lowering lands, so the WIT never names a core export that does
+//! not exist).
 
 use inkwell::attributes::AttributeLoc;
 use inkwell::module::Linkage;
@@ -122,11 +124,13 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // Canonical return: record ⇒ i32 (return-area pointer); scalar ⇒
-        // the real return type; unit ⇒ void.
+        // Canonical return: record / variant ⇒ i32 (return-area pointer);
+        // scalar ⇒ the real return type; unit ⇒ void.
         let ret_is_record = e.ret.as_ref().is_some_and(|r| r.is_record());
+        let ret_is_variant = e.ret.as_ref().is_some_and(|r| r.is_variant());
+        let ret_via_area = ret_is_record || ret_is_variant;
         let real_ret = real.get_type().get_return_type();
-        let fn_ty = if ret_is_record {
+        let fn_ty = if ret_via_area {
             i32_ty.fn_type(&canon_params, false)
         } else {
             match real_ret {
@@ -242,6 +246,16 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder
                 .build_return(Some(&addr.as_basic_value_enum()))
                 .map_err(|e| format!("wasm export trampoline ret: {e}"))?;
+        } else if ret_is_variant {
+            let shape = e.ret.as_ref().unwrap().variant.as_ref().unwrap();
+            let addr = self.emit_variant_return_area(
+                call.try_as_basic_value().unwrap_basic(),
+                shape,
+                kebab,
+            )?;
+            self.builder
+                .build_return(Some(&addr.as_basic_value_enum()))
+                .map_err(|e| format!("wasm export trampoline ret: {e}"))?;
         } else if real_ret.is_some() {
             let v = call.try_as_basic_value().unwrap_basic();
             self.builder
@@ -253,5 +267,127 @@ impl<'ctx> super::Codegen<'ctx> {
                 .map_err(|e| format!("wasm export trampoline ret: {e}"))?;
         }
         Ok(())
+    }
+
+    /// Lower a returned Kāra `Option`/`Result` enum value into the
+    /// canonical-ABI `option`/`result` return area, and return the area's
+    /// `i32` address.
+    ///
+    /// Kāra lays an enum out as `{ i64 tag, i64 w0, … }` with the scalar
+    /// payload's raw bits in word 0 (an `i32` in the low half, an `f64`
+    /// bit-cast to `i64`, etc.). The canonical variant lays the payload as
+    /// those same little-endian bytes, with the discriminant selecting how
+    /// the lifter reads them — so we can store `tag → u8 discriminant` and
+    /// `w0 → payload (truncated to the payload byte width)` with **no
+    /// per-case branch or bit-cast**; the low bytes are always the active
+    /// case's value, and the lifter ignores the rest.
+    fn emit_variant_return_area(
+        &mut self,
+        enum_val: inkwell::values::BasicValueEnum<'ctx>,
+        shape: &crate::wasm_exports::VariantShape,
+        kebab: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        use crate::wasm_exports::VariantShape;
+        let (payload_bytes, payload_align) = match shape {
+            VariantShape::Option(t) => Self::scalar_size_align(&t.kara_ty),
+            VariantShape::Result(t, e) => {
+                let (ts, ta) = Self::scalar_size_align(&t.kara_ty);
+                let (es, ea) = Self::scalar_size_align(&e.kara_ty);
+                (ts.max(es), ta.max(ea))
+            }
+        };
+        // Discriminant is one byte (≤256 cases); payload follows at its
+        // own alignment; the area is sized/aligned to hold both.
+        let variant_align = payload_align.max(1);
+        let payload_off = 1u64.next_multiple_of(payload_align as u64);
+        let total = (payload_off + payload_bytes).next_multiple_of(variant_align as u64);
+
+        let area_ty = self.context.i8_type().array_type(total as u32);
+        let area = self
+            .module
+            .add_global(area_ty, None, &format!("__kara_ret_{kebab}"));
+        area.set_linkage(Linkage::Internal);
+        area.set_initializer(&area_ty.const_zero());
+        area.set_alignment(variant_align);
+        let area_ptr = area.as_pointer_value();
+
+        let sv = enum_val.into_struct_value();
+        let tag = self
+            .builder
+            .build_extract_value(sv, 0, "tag")
+            .map_err(|e| format!("wasm export trampoline variant tag: {e}"))?
+            .into_int_value();
+        let w0 = self
+            .builder
+            .build_extract_value(sv, 1, "w0")
+            .map_err(|e| format!("wasm export trampoline variant payload: {e}"))?
+            .into_int_value();
+
+        // Map the Kāra discriminant onto the canonical variant
+        // discriminant. Kāra's `Option` is seeded `None=0, Some=1`, which
+        // already matches canonical `option` (`none=0, some=1`). Kāra's
+        // `Result` is seeded `Err=0, Ok=1` — the REVERSE of canonical
+        // `result` (`ok=0, err=1`) — so it remaps as `1 - tag`.
+        let canon_tag = match shape {
+            VariantShape::Option(_) => tag,
+            VariantShape::Result(_, _) => {
+                let one = self.context.i64_type().const_int(1, false);
+                self.builder
+                    .build_int_sub(one, tag, "canon_tag")
+                    .map_err(|e| format!("wasm export trampoline disc remap: {e}"))?
+            }
+        };
+        let disc = self
+            .builder
+            .build_int_truncate(canon_tag, self.context.i8_type(), "disc")
+            .map_err(|e| format!("wasm export trampoline disc: {e}"))?;
+        self.builder
+            .build_store(area_ptr, disc)
+            .map_err(|e| format!("wasm export trampoline disc store: {e}"))?;
+
+        // payload (raw low bytes) at payload_off
+        let payload_ty = match payload_bytes {
+            1 => self.context.i8_type(),
+            2 => self.context.i16_type(),
+            4 => self.context.i32_type(),
+            _ => self.context.i64_type(),
+        };
+        let payload = if payload_bytes >= 8 {
+            w0
+        } else {
+            self.builder
+                .build_int_truncate(w0, payload_ty, "payload")
+                .map_err(|e| format!("wasm export trampoline payload trunc: {e}"))?
+        };
+        let payload_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    self.context.i8_type(),
+                    area_ptr,
+                    &[self.context.i32_type().const_int(payload_off, false)],
+                    "payload_ptr",
+                )
+                .map_err(|e| format!("wasm export trampoline payload gep: {e}"))?
+        };
+        self.builder
+            .build_store(payload_ptr, payload)
+            .map_err(|e| format!("wasm export trampoline payload store: {e}"))?;
+
+        self.builder
+            .build_ptr_to_int(area_ptr, self.context.i32_type(), "ret_addr")
+            .map_err(|e| format!("wasm export trampoline variant ptrtoint: {e}"))
+    }
+
+    /// Byte size + alignment of a scalar Kāra type at the canonical-ABI /
+    /// wasm32 boundary. Only the scalar surface (variant payloads in
+    /// sub-slice D.3) reaches here.
+    fn scalar_size_align(kara_ty: &str) -> (u64, u32) {
+        match kara_ty {
+            "i8" | "u8" | "bool" => (1, 1),
+            "i16" | "u16" => (2, 2),
+            "i32" | "u32" | "f32" | "char" => (4, 4),
+            // i64/u64/isize/usize/f64 (Kāra keeps 64-bit usize on wasm32).
+            _ => (8, 8),
+        }
     }
 }

@@ -246,9 +246,18 @@ fn push_host_interface(out: &mut String, fns: &[HostFnSig], doc_module: &str) {
 /// The WIT type string for an export param/return: a scalar maps via
 /// [`wit_type`]; a flat record maps to its kebab-cased type name (the
 /// `record` declaration is emitted separately by
-/// [`push_record_type_decls`]).
+/// [`push_record_type_decls`]); an `Option`/`Result` maps to an inline
+/// `option<T>` / `result<T, E>`.
 fn export_wit_type(ty: &crate::wasm_exports::ExportType) -> String {
-    if ty.is_record() {
+    use crate::wasm_exports::VariantShape;
+    if let Some(v) = &ty.variant {
+        match v {
+            VariantShape::Option(t) => format!("option<{}>", export_wit_type(t)),
+            VariantShape::Result(t, e) => {
+                format!("result<{}, {}>", export_wit_type(t), export_wit_type(e))
+            }
+        }
+    } else if ty.is_record() {
         wit_ident(&ty.kara_ty)
     } else {
         wit_type(&ty.kara_ty, ty.js).to_string()
@@ -462,6 +471,7 @@ mod tests {
             js,
             scalar: true,
             record_fields: None,
+            variant: None,
         };
         let exports = vec![
             ExportSig {
@@ -488,6 +498,7 @@ mod tests {
                     js: JsScalar::Number,
                     scalar: false,
                     record_fields: None,
+                    variant: None,
                 }),
                 target: "wasm_wasi".to_string(),
             },

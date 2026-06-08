@@ -1442,6 +1442,7 @@ mod tests {
             js,
             scalar: true,
             record_fields: None,
+            variant: None,
         };
         let exports = vec![
             ExportSig {
@@ -1468,6 +1469,7 @@ mod tests {
                     js: JsScalar::Number,
                     scalar: false,
                     record_fields: None,
+                    variant: None,
                 }),
                 target: "wasm_browser".to_string(),
             },
