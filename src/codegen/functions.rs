@@ -207,10 +207,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // Borrow return (`-> ref T` / `-> mut ref T`): record the
             // inner `T` so the caller binds the call result as a ref-local
             // (deref on use) instead of as a raw value — caller half of
-            // B-2026-06-07-5.
+            // B-2026-06-07-5. A `ref BorrowedStruct` return is EXCLUDED: it
+            // is returned by value (see `llvm_return_type`), so the caller
+            // binds an ordinary struct value, not a ref-local.
             if let TypeKind::Ref(inner) | TypeKind::MutRef(inner) = &ret_ty.kind {
-                self.fn_ref_return_inner
-                    .insert(func.name.clone(), (**inner).clone());
+                if !self.type_expr_is_borrowed_struct(inner) {
+                    self.fn_ref_return_inner
+                        .insert(func.name.clone(), (**inner).clone());
+                }
             }
             if let TypeKind::Path(path) = &ret_ty.kind {
                 if let Some(seg) = path.segments.first() {
@@ -401,11 +405,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // Borrow-returning function (`-> ref T` / `-> mut ref T`): the
         // tail / explicit-`return` sites emit the borrow's ADDRESS via
         // `compile_ref_return_ptr` rather than its materialized value
-        // (B-2026-06-07-5).
+        // (B-2026-06-07-5). A `ref BorrowedStruct` return is EXCLUDED — it
+        // returns the struct BY VALUE (see `llvm_return_type`), so the tail
+        // expr flows through the ordinary value-return path; routing it
+        // through `compile_ref_return_ptr` would try to take the address of a
+        // struct-literal temporary (dangling) and mismatch the by-value
+        // signature.
         self.current_fn_returns_ref = matches!(
             func.return_type.as_ref().map(|t| &t.kind),
             Some(TypeKind::Ref(_) | TypeKind::MutRef(_))
-        );
+        ) && !self.return_type_is_borrowed_struct(&func.return_type);
 
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);

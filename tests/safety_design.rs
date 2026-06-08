@@ -302,13 +302,16 @@ fn accept_borrowed_struct_construction() {
 /// parameters. The compiler traces each `ref` field to its source parameter
 /// automatically — no annotation is needed on borrowed struct returns."
 ///
-/// Today the typechecker rejects `Parser { source: s, position: 0 }` as
-/// `ref Parser` — the borrowed-struct's owned construction site doesn't
-/// re-borrow into the declared return type. Spec-faithful test, ignored
-/// pending the borrowed-struct return-coercion landing.
+/// Borrowed-struct returns landed in B-2026-06-07-5: source-pinning (3a)
+/// traces every `ref` field's initializer to a `ref` parameter
+/// (`classify_borrow_return_struct`), and codegen returns the struct BY
+/// VALUE (`llvm_return_type` / `current_fn_returns_ref` /
+/// `fn_ref_return_inner` all exclude `ref BorrowedStruct`), with each `ref`
+/// field storing the forwarded borrow pointer (`compile_ref_field_borrow_ptr`,
+/// which also fixed the previously-vacuous `asan_borrowed_struct_construction`
+/// — construction never actually codegenned). Runtime parity +
+/// double-free-freedom pinned by `asan_borrowed_struct_return_and_field_read`.
 #[test]
-#[ignore = "borrowed-struct returns not yet implemented — B-2026-06-07-5 follow-on; \
-            E0509 reports it as a not-yet-supported borrow-return form"]
 fn spec_return_borrowed_struct() {
     assert_static_accept(
         "struct Parser {\n\
@@ -676,6 +679,31 @@ mod runtime_confirmation {
                  println(p.position);\n\
              }",
             "asan_borrowed_struct_construction",
+        );
+    }
+
+    // Borrowed-struct RETURN (`-> ref Parser`, design.md Feature 4 Part 3,
+    // B-2026-06-07-5). The struct is returned by value with its `ref` field
+    // holding a borrow of the caller's `s`. The double-free risk: the
+    // returned `p`'s drop must NOT free `source` (a borrow), and the source
+    // `s` frees its buffer exactly once at its own scope exit — `p` and `s`
+    // both drop at main's exit, exercising that path regardless of which
+    // field is read. (`asan_*` mirrors the now-un-ignored
+    // `spec_return_borrowed_struct`.) Reading the borrowed field itself is a
+    // separate codegen follow-on (see `test_e2e_borrow_return_borrowed_struct`).
+    #[test]
+    fn asan_borrowed_struct_return() {
+        assert_accepted_program_is_asan_clean(
+            "struct Parser { source: ref String, position: i64 }\n\
+             fn make_parser(s: ref String) -> ref Parser {\n\
+                 Parser { source: s, position: 0 }\n\
+             }\n\
+             fn main() {\n\
+                 let s = String.from(\"input data\");\n\
+                 let p = make_parser(s);\n\
+                 println(p.position);\n\
+             }",
+            "asan_borrowed_struct_return",
         );
     }
 

@@ -1103,6 +1103,38 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_borrow_return_borrowed_struct() {
+        // Borrowed-struct return (design.md Feature 4 Part 3, B-2026-06-07-5):
+        // `-> ref Parser` returns the struct BY VALUE with its `ref` field
+        // holding a forwarded borrow of the caller's `s`. This also exercises
+        // the construction path that was previously never codegenned (the
+        // `asan_borrowed_struct_construction` vacuum). Reads of the OWNED
+        // field (`position`) go through the returned value.
+        //
+        // NB: reading the BORROWED field in a value position
+        // (`println(p.source)`) — and a method on it (`p.source.len()`) — is a
+        // separate codegen follow-on: a `ref`-typed field access must
+        // deref-on-use through the stored borrow pointer, which the current
+        // field-access path doesn't do (it surfaces the raw pointer). The
+        // interpreter already handles it (see the interp parity test). Tracked
+        // under B-2026-06-07-5; not pinned here.
+        let out = run_program(
+            "struct Parser { source: ref String, position: i64 }\n\
+             fn make_parser(s: ref String) -> ref Parser {\n\
+             \x20   Parser { source: s, position: 7 }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let s = String.from(\"input data\");\n\
+             \x20   let p = make_parser(s);\n\
+             \x20   println(p.position);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7");
+        }
+    }
+
+    #[test]
     fn test_e2e_ambient_resource_clock_now_and_env_set() {
         // Ambient built-in resource methods lower to runtime FFIs
         // (`karac_runtime_env_set` / `karac_runtime_clock_now`) — the

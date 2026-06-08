@@ -1283,6 +1283,30 @@ impl<'ctx> super::Codegen<'ctx> {
 
     // ── Struct/tuple expressions ──────────────────────────────────
 
+    /// Compile a borrowed-struct `ref` field initializer to the borrow
+    /// POINTER stored in the field slot (which lowers to `ptr`). Mirrors
+    /// ref-parameter argument passing (`calls.rs`): an identifier forwards its
+    /// data pointer (a `ref` param's stored borrow, or an owned binding's
+    /// address); an indexed place yields the element pointer; any other rvalue
+    /// is materialized to a temporary whose address is taken. design.md
+    /// Feature 4 Part 3 (borrowed structs); B-2026-06-07-5.
+    fn compile_ref_field_borrow_ptr(
+        &mut self,
+        value: &Expr,
+        idx: usize,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if let ExprKind::Identifier(var_name) = &value.kind {
+            if let Some(ptr) = self.get_data_ptr(var_name) {
+                return Ok(ptr.into());
+            }
+        }
+        if let Some(elem_ptr) = self.ref_arg_index_borrow_ptr(value)? {
+            return Ok(elem_ptr.into());
+        }
+        let v = self.compile_expr(value)?;
+        Ok(self.materialize_rvalue_for_ref_arg(v, idx))
+    }
+
     pub(super) fn compile_struct_init(
         &mut self,
         name: &str,
@@ -1401,6 +1425,31 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(&st) = self.struct_types.get(name) {
             let mut agg = st.get_undef();
             for (idx, field_init) in fields.iter().enumerate() {
+                // Borrowed-struct `ref` field (design.md Feature 4 Part 3):
+                // the field slot lowers to `ptr` and stores the BORROW
+                // pointer, not the dereferenced value. `get_data_ptr`
+                // forwards a `ref` param's stored borrow and takes an owned
+                // binding's address — exactly ref-parameter argument passing.
+                // No move-suppression / defensive-copy: a borrow neither owns
+                // nor moves its source (the source keeps its drop; the field
+                // carries only a pointer). The field-init order is the
+                // declaration order (same assumption the `idx`-keyed insert
+                // below already relies on), so `idx` indexes the declared
+                // field types.
+                let is_ref_field = self
+                    .struct_field_type_exprs
+                    .get(name)
+                    .and_then(|tes| tes.get(idx))
+                    .is_some_and(|te| matches!(te.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)));
+                if is_ref_field {
+                    let ptr = self.compile_ref_field_borrow_ptr(&field_init.value, idx)?;
+                    agg = self
+                        .builder
+                        .build_insert_value(agg, ptr, idx as u32, "ref_field")
+                        .unwrap()
+                        .into_struct_value();
+                    continue;
+                }
                 let val = self.compile_expr(&field_init.value)?;
                 // Owned String/Vec PARAM captured into a field — deep-copy,
                 // same rationale as the shared-struct branch above.

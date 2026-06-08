@@ -15,10 +15,12 @@
 //!
 //! Accepted scope mirrors `compile_ref_return_ptr` exactly (lockstep): a
 //! returned borrow is accepted iff it is a `ref` parameter / `ref self` /
-//! ref-local identifier, a field reached through one, or an `if`/scalar-
-//! selector `match` selecting among such borrows. Other valid-per-spec
-//! forms (method-call chains, destructuring/guarded `match` arms) are
-//! reported as not-yet-supported rather than dangling.
+//! ref-local identifier, a field reached through one, an `if`/scalar-
+//! selector `match` selecting among such borrows, a chained borrow-returning
+//! free-fn call, or a *borrowed-struct* construction whose every `ref` field
+//! traces to a borrowable source (design.md Feature 4 Part 3). Other
+//! valid-per-spec forms (method-call chains, destructuring/guarded `match`
+//! arms) are reported as not-yet-supported rather than dangling.
 
 use std::collections::HashSet;
 
@@ -79,6 +81,15 @@ impl<'a> super::OwnershipChecker<'a> {
             // lockstep with codegen (which only lowers a top-level call tail).
             let shape = if matches!(&e.kind, ExprKind::Call { .. }) {
                 self.classify_borrow_return_call(e, &ref_params, &ref_locals)
+            } else if matches!(&e.kind, ExprKind::StructLiteral { .. }) {
+                // Borrowed-struct return (`Parser { source: s, position: 0 }`
+                // as `-> ref Parser`): pinned iff every `ref` field's
+                // initializer traces to a `ref` param. Top-level only (a
+                // struct literal nested in an `if`/`match` arm falls through to
+                // `classify_borrow_return`'s conservative `StructLiteral`
+                // arm) — in lockstep with codegen, which lowers a top-level
+                // borrowed-struct tail/return by value.
+                self.classify_borrow_return_struct(e, &ref_params, &ref_locals)
             } else {
                 classify_borrow_return(e, &ref_params, &ref_locals)
             };
@@ -101,9 +112,10 @@ impl<'a> super::OwnershipChecker<'a> {
                     "this borrow-return form is not yet supported".to_string(),
                     Some(
                         "supported today: returning a `ref` parameter (or `ref self`) directly, a \
-                         field reached through one, or an `if`/scalar-`match` selecting among such \
-                         borrows. Method-call chains and destructuring-`match` arms are tracked \
-                         follow-ons (B-2026-06-07-5)."
+                         field reached through one, an `if`/scalar-`match` selecting among such \
+                         borrows, a chained borrow-returning free-fn call, or a borrowed-struct \
+                         construction whose `ref` fields trace to parameters. Method-call chains \
+                         and destructuring-`match` arms are tracked follow-ons (B-2026-06-07-5)."
                             .to_string(),
                     ),
                 ),
@@ -153,6 +165,67 @@ impl<'a> super::OwnershipChecker<'a> {
                 worst = combine_borrow_shapes(
                     worst,
                     classify_borrow_return(&arg.value, ref_params, ref_locals),
+                );
+            }
+        }
+        worst
+    }
+
+    /// Source-pinning classification for a *borrowed-struct* construction
+    /// returned as `-> ref Struct` (design.md Feature 4 Part 3): "Returning a
+    /// borrowed struct follows the same rule as returning a `ref` value: the
+    /// borrowed struct's sources must all be parameters. The compiler traces
+    /// each `ref` field to its source parameter automatically." A borrowed
+    /// struct is one with at least one `ref` field; the struct is pinned iff
+    /// every `ref` field's initializer traces to a borrowable source (worst
+    /// shape dominates). Owned-field initializers carry no borrow and are
+    /// ignored. An owned struct (no `ref` fields) returned as `ref` is a
+    /// dangling borrow of a temporary (`DanglingSource`). A `..spread` base
+    /// could carry a borrow from an unknown source, so it is conservatively
+    /// `UnsupportedForm`. Returns `None` to accept.
+    fn classify_borrow_return_struct(
+        &self,
+        e: &Expr,
+        ref_params: &HashSet<String>,
+        ref_locals: &HashSet<String>,
+    ) -> Option<BorrowReturnShape> {
+        let ExprKind::StructLiteral {
+            path,
+            fields,
+            spread,
+        } = &e.kind
+        else {
+            return Some(BorrowReturnShape::UnsupportedForm);
+        };
+        if spread.is_some() {
+            return Some(BorrowReturnShape::UnsupportedForm);
+        }
+        let Some(struct_name) = path.first() else {
+            return Some(BorrowReturnShape::UnsupportedForm);
+        };
+        let Some(def) = self.program.items.iter().find_map(|it| match it {
+            Item::StructDef(s) if &s.name == struct_name => Some(s),
+            _ => None,
+        }) else {
+            return Some(BorrowReturnShape::DanglingSource);
+        };
+        let ref_field_names: HashSet<&str> = def
+            .fields
+            .iter()
+            .filter(|f| matches!(f.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
+            .map(|f| f.name.as_str())
+            .collect();
+        // Not a borrowed struct: returning an owned struct value as `ref`
+        // would hand back a pointer into a temporary dropped at return.
+        if ref_field_names.is_empty() {
+            return Some(BorrowReturnShape::DanglingSource);
+        }
+        let mut worst: Option<BorrowReturnShape> = None;
+        for fi in fields {
+            if ref_field_names.contains(fi.name.as_str()) {
+                worst = combine_borrow_shapes(
+                    worst,
+                    classify_borrow_return(&fi.value, ref_params, ref_locals),
                 );
             }
         }

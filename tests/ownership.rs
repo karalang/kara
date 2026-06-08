@@ -7476,6 +7476,43 @@ fn test_borrow_return_chained_call_on_owned_local_dangles() {
     )));
 }
 
+// ── Borrowed-struct returns (B-2026-06-07-5) ──
+
+#[test]
+fn test_borrow_return_borrowed_struct_ok() {
+    // A `-> ref Parser` returning a borrowed-struct construction whose `ref`
+    // field traces to a `ref` parameter is source-pinned and accepted
+    // (`classify_borrow_return_struct`). The owned `position` field carries
+    // no borrow and is ignored.
+    ownership_ok(
+        "struct Parser { source: ref String, position: i64 }\n\
+         fn make_parser(s: ref String) -> ref Parser {\n\
+        \x20   Parser { source: s, position: 0 }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_borrow_return_borrowed_struct_dangling_field_errors() {
+    // The borrowed struct's `ref` field is initialized from an owned local
+    // that drops at return — the struct's borrow would dangle. The ref-field
+    // initializer's shape (DanglingSource) propagates through the struct
+    // classifier; E0509, not a silent accept.
+    let errors = ownership_errors(
+        "struct Parser { source: ref String, position: i64 }\n\
+         fn bad() -> ref Parser {\n\
+        \x20   let local = String.from(\"temp\");\n\
+        \x20   Parser { source: local, position: 0 }\n\
+         }\n",
+    );
+    assert!(errors.iter().any(|e| matches!(
+        e.kind,
+        OwnershipErrorKind::BorrowReturnNotSourcePinned {
+            shape: BorrowReturnShape::DanglingSource
+        }
+    )));
+}
+
 // ── Tier 2: borrow returns from `if` of ref params (B-2026-06-07-5) ──
 
 #[test]

@@ -14822,3 +14822,21 @@ fn test_borrow_return_interp_direct_use() {
          }");
     assert_eq!(out, "hello\nhello\n5\n");
 }
+
+#[test]
+fn test_borrow_return_interp_borrowed_struct() {
+    // Borrowed-struct return parity (design.md Feature 4 Part 3): the
+    // interpreter constructs `Parser` with a borrow of `s`, returns it, and
+    // reads both the owned and borrowed fields. Mirrors the codegen E2E.
+    let out = run("struct Parser { source: ref String, position: i64 }\n\
+         fn make_parser(s: ref String) -> ref Parser {\n\
+             Parser { source: s, position: 7 }\n\
+         }\n\
+         fn main() {\n\
+             let s = String.from(\"input data\");\n\
+             let p = make_parser(s);\n\
+             println(p.position);\n\
+             println(p.source);\n\
+         }");
+    assert_eq!(out, "7\ninput data\n");
+}

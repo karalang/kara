@@ -1163,8 +1163,58 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(self.llvm_type_for_type_expr(te))
             }
             TypeKind::Tuple(elems) if elems.is_empty() => None,
+            // A `-> ref BorrowedStruct` return (a struct with `ref` fields,
+            // design.md Feature 4 Part 3) is returned BY VALUE — the `ref`
+            // marks the struct's borrow scope, not pointer indirection. The
+            // struct itself is a value whose `ref` fields are embedded
+            // pointers; returning it copies that value (the source still owns
+            // the borrowed storage). This differs from `-> ref String`, where
+            // `ref` means "return a pointer". Lower to the inner struct type
+            // so the body's normal value-return path matches the signature.
+            // `current_fn_returns_ref` / `fn_ref_return_inner` are likewise
+            // suppressed for these (see `declare_one_function` /
+            // `compile_function`), keeping the pointer-borrow ABI out of the
+            // borrowed-struct path entirely (B-2026-06-07-5).
+            TypeKind::Ref(inner) | TypeKind::MutRef(inner)
+                if self.type_expr_is_borrowed_struct(inner) =>
+            {
+                Some(self.llvm_type_for_type_expr(inner))
+            }
             _ => Some(self.llvm_type_for_type_expr(te)),
         }
+    }
+
+    /// Does this type expression name a *borrowed struct* — a user struct
+    /// with at least one `ref` / `mut ref` field (design.md Feature 4 Part
+    /// 3)? Such a struct is a value type whose lifetime is bounded by its
+    /// borrowed fields; `-> ref BorrowedStruct` returns it by value rather
+    /// than through the pointer-borrow ABI. Reads the per-struct field
+    /// TypeExprs `declare_structs` populated, so it is only accurate after
+    /// that pass (which runs before any function declaration).
+    pub(super) fn type_expr_is_borrowed_struct(&self, te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let Some(name) = p.segments.first() else {
+            return false;
+        };
+        self.struct_field_type_exprs
+            .get(name)
+            .is_some_and(|fields| {
+                fields
+                    .iter()
+                    .any(|f| matches!(f.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
+            })
+    }
+
+    /// True when a function's declared return type is `ref BorrowedStruct` /
+    /// `mut ref BorrowedStruct` — the by-value borrowed-struct return path.
+    pub(super) fn return_type_is_borrowed_struct(&self, ret: &Option<TypeExpr>) -> bool {
+        matches!(
+            ret.as_ref().map(|t| &t.kind),
+            Some(TypeKind::Ref(inner) | TypeKind::MutRef(inner))
+                if self.type_expr_is_borrowed_struct(inner)
+        )
     }
 
     pub(super) fn llvm_param_type(&self, param: &Param) -> BasicMetadataTypeEnum<'ctx> {
