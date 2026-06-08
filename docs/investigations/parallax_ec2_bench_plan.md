@@ -1,11 +1,12 @@
 # Parallax EC2 bench plan (2026-06-07)
 
 Execution plan for producing launch-grade Parallax throughput numbers
-now that the cohort is **six impls** (kara, rust, go, node, phoenix,
-java — the Java/Netty comparator shipped `cbf1579d`, phase-6 P1).
+now that the cohort includes the Java/Netty comparator (shipped
+`cbf1579d`, phase-6 P1).
 
-Tracks phase-6 entries: *P2 — Parallax x86 confirmation run* and
-*P2 — Parallax Graviton confirmation run* (new). Bench source:
+Tracks phase-6 entries: *P2 — Parallax Graviton confirmation run*
+(canonical/headline) and *P2 — Parallax x86 confirmation run*
+(cross-ISA). Bench source:
 [`examples/parallax/bench/`](../../examples/parallax/bench/).
 
 ---
@@ -44,18 +45,32 @@ stronger, not weaker — note this when presenting.
 
 ## The three runs
 
-| # | Where | ISA | Impls | Purpose | Feeds README? |
-|---|-------|-----|-------|---------|---------------|
-| 0 | Local Mac (M5 Pro, 18-core) | arm64 | all 6 | Correctness gate + relative-ordering sanity. Confirms every impl builds, serves correct JSON, and produces non-zero numbers before paying for EC2. | **No** (laptop, not reproducible) |
-| 1 | EC2 `c7i.4xlarge` (16 vCPU Intel) | x86-64 | all 6 (+ Kāra `AUTO_PAR=0` control) | Canonical comparison numbers — the launch artifact. | **Yes** — primary tables |
-| 2 | EC2 `c7g.4xlarge` (16 vCPU Graviton3) | arm64 | Kāra only (+ `AUTO_PAR=0` control) | Second-ISA data point for Kāra → supports an "ISA-invariant" framing mirroring `ws_idle_holder`. Comparators run x86-only; no need to reinstall 6 toolchains on ARM just to re-confirm relative ordering the x86 box already establishes. | **Yes** — Kāra row + note |
+| # | Where | ISA | Cohort | Purpose | Feeds README? |
+|---|-------|-----|--------|---------|---------------|
+| 0 | Local Mac (M5 Pro, 18-core) | arm64 | **all 6** (k,r,g,n,p,j) | Correctness gate + free full-picture directional read. Confirms every impl builds, serves correct JSON, produces non-zero numbers before paying for EC2. Keeps Node/Phoenix/Go data alive (they're dropped from the paid runs). | **No** (laptop — not reproducible/citable; supplementary at most) |
+| 1 | EC2 `c7g.4xlarge` (16 vCPU Graviton3) | arm64 | **K/R/J/G** (+ Kāra `AUTO_PAR=0` control) | **Canonical / headline** comparison numbers — the launch artifact. | **Yes** — primary tables |
+| 2 | EC2 `c7i.4xlarge` (16 vCPU Intel) | x86-64 | **K/R/J/G** (+ Kāra `AUTO_PAR=0` control) | **Cross-ISA confirmation** — same 4-way cohort so the Kāra-vs-Rust/Java/Go *ratio* is shown ISA-invariant, not just Kāra's number. | **Yes** — confirmation table |
 
-Why x86 is the *primary* and Graviton is *Kāra-only*: the dev/test box
-is already ARM (M5 Pro), so x86 is the missing ISA — the higher-info
-confirmation and the deployment most readers assume. Graviton adds the
-second Kāra data point cheaply (mirrors the dual-ISA story
-`ws_idle_holder` used to claim ISA-invariance). Running the full
-comparator cohort on *both* ISAs is possible but redundant for v1.
+**Cohort = Kāra + Rust + Java + Go (`--impls=k,r,j,g`) on both paid
+boxes.** Rust = perf ceiling / credibility; Java = enterprise-JVM
+commercial foil; Go = concurrency-first language baseline (and a trivial
+single-binary toolchain install). **Node and Phoenix are dropped from
+the paid runs** — Node is a predictable loser on CPU-bound fan-out
+(single event loop) and Phoenix carries the slowest runtime *and* the
+fragile Elixir/OTP install *and* the untuned Bandit `-c5000` asterisk
+(its own tracked tuning item). Both stay in the free Mac run so no data
+is silently lost.
+
+**Why Graviton is the *primary* and x86 is the *confirmation*:** ARM is
+the server-compute growth curve (Graviton's price/performance is exactly
+what the "saves money" commercial framing points at), and leading on
+Graviton makes one coherent "we benchmark on modern ARM server
+instances" story across both flagship demos (`ws_idle_holder` also led
+arm64). aarch64 codegen for JVM/Go/Rust/LLVM is fully mature, so the
+comparators are *not* handicapped on Graviton. x86 then proves the
+result isn't ARM-cherry-picked — and because both paid boxes run the
+*same* 4-way cohort, the cross-ISA claim covers the whole ratio, not
+just Kāra.
 
 ---
 
@@ -64,19 +79,22 @@ comparator cohort on *both* ISAs is possible but redundant for v1.
 | Decision | Proposed default | Notes |
 |---|---|---|
 | Region | `us-east-1` | Cheapest, widest AMI coverage. |
-| x86 instance | `c7i.4xlarge` (16 vCPU, Sapphire Rapids) | Matches the existing tracker entry. |
-| Graviton instance | `c7g.4xlarge` (16 vCPU, Graviton3) | Core-count-matched sibling so fan-out width is comparable. |
+| Primary instance (Graviton) | `c7g.4xlarge` (16 vCPU, Graviton3) | Headline / canonical box. |
+| Confirmation instance (x86) | `c7i.4xlarge` (16 vCPU, Sapphire Rapids) | Core-count-matched so fan-out width is comparable. |
 | OS / AMI | Ubuntu 24.04 LTS | Resolve AMI via the Canonical SSM public parameter, don't hardcode. Same family as the `ws_idle_holder` rig. |
-| Disk | 60 GB gp3 | LLVM-18 + 6 toolchains + cargo target tree are bulky; karac `--features llvm` build alone wants a few GB. |
+| Disk | 60 GB gp3 | LLVM-18 + toolchains + cargo target tree are bulky; karac `--features llvm` build alone wants a few GB. |
 | Access | Ephemeral keypair + SG locked to my egress IP | No `.pem` present locally. SSM Session Manager is the keyless alternative if preferred. |
 | Pricing | On-demand | Spot risks mid-build eviction; total cost is tiny (below) so on-demand is simpler. |
 | Teardown | Terminate both immediately after results pulled | Hard checklist item — see Teardown. |
 
-**Cost estimate (us-east-1 on-demand):** `c7i.4xlarge` ≈ $0.714/hr,
-`c7g.4xlarge` ≈ $0.58/hr. Dominant time cost is building karac from
-source (LLVM link) + toolchain installs (~30–45 min each), then the
-bench (~12 min full / ~3 min Kāra-only). Budget ~2 hr/box → **under
-$10 total.** No standing infra; both terminated same session.
+**Cost estimate (us-east-1 on-demand):** `c7g.4xlarge` ≈ $0.58/hr,
+`c7i.4xlarge` ≈ $0.714/hr. Dominant time cost is building karac from
+source (LLVM link) + the (now lighter) toolchain install — only
+rust/llvm + go + JDK/maven + wrk per box, **no Elixir/OTP, no Node**.
+Bench itself is ~8–10 min (4-way). Budget ~1.5 hr/box → **well under
+$10 total.** This whole bench is featherweight next to the
+`ws_idle_holder` 1M-idle-connection runs. No standing infra; both
+terminated same session.
 
 ---
 
@@ -92,79 +110,81 @@ impl). All six toolchains confirmed present locally
 ```sh
 export JAVA_HOME=/opt/homebrew/Cellar/openjdk/26.0.1/libexec/openjdk.jdk/Contents/Home
 export PATH="$JAVA_HOME/bin:$PATH"
-# correctness + first ordering read — 1 round is enough to gate
+# all 6 impls, correctness + first ordering read — 1 round is enough to gate
 sh examples/parallax/bench/bench.sh --runs=1 | tee /tmp/parallax_mac_$(date +%s).log
 ```
 
 Pass criteria: every impl prints real req/s (no `SKIP`/`BIND_FAIL`/
 `WRK_MISSING`), JSON bodies correct (the kara smoke test already
-asserts this). Numbers are **not** for the README — laptop, ARM,
-18-core, thermals. Relative ordering only.
+asserts this). Numbers are **not** the launch artifact — laptop, 18
+perf+efficiency cores, thermals. Relative ordering + dress-rehearsal for
+the exact EC2 cohort/commands.
 
-### Run 1 — x86 EC2 (canonical)
+### Run 1 — Graviton EC2 (canonical / headline)
 
-1. **Provision**: resolve Ubuntu 24.04 amd64 AMI via SSM param; launch
-   `c7i.4xlarge`, 60 GB gp3, keypair + SG (SSH from my IP).
-2. **Toolchains** (the heavy step): `apt update`; install build-essential,
-   `clang`, **`llvm-18 llvm-18-dev libpolly-18-dev`** (inkwell/llvm-sys
-   needs `llvm-config-18` on PATH — export `LLVM_SYS_181_PREFIX` if the
-   versioned config isn't auto-found), Rust via rustup, `golang`,
-   Node (NodeSource or nvm), Elixir+OTP (for phoenix), a JDK 11+ +
-   `maven` (for java), and `wrk` (`apt install wrk`, universe).
-3. **Source**: `git clone https://github.com/karalang/kara` (repo is
-   public — verified HTTP 200). Or rsync the local worktree if there
-   are unpushed commits the bench depends on (check `git log
-   origin/main..main` before relying on clone).
-4. **Light sysctl for -c5000 on localhost** (NOT the ws_idle_holder
-   2M-tuple setup — this bench is throughput, not idle density):
+1. **Provision**: resolve Ubuntu 24.04 **arm64** AMI via SSM param;
+   launch `c7g.4xlarge`, 60 GB gp3, keypair + SG (SSH from my IP).
+2. **Toolchains** (lighter now — K/R/J/G only): `apt update`; install
+   build-essential, `clang`, **`llvm-18 llvm-18-dev libpolly-18-dev`**
+   (inkwell/llvm-sys needs `llvm-config-18` on PATH — export
+   `LLVM_SYS_181_PREFIX` if the versioned config isn't auto-found), Rust
+   via rustup, `golang-go`, a JDK 11+ + `maven`, and `wrk` (`apt install
+   wrk`, universe). **No Node, no Elixir/OTP.**
+3. **Source**: `git clone https://github.com/karalang/kara` (repo
+   public — verified HTTP 200). If `main` has unpushed local commits the
+   bench needs (`git log origin/main..main` non-empty), rsync the
+   worktree instead.
+4. **Light sysctl for -c5000 on localhost** (NOT the `ws_idle_holder`
+   2M-tuple setup — this is throughput, not idle density):
    `net.core.somaxconn=65535`, `net.ipv4.tcp_max_syn_backlog=65535`,
-   raise `nofile` ulimit to ~1M. `-c5000` on loopback needs the listen
-   queue + fd headroom, nothing more.
+   raise `nofile` ulimit to ~1M.
 5. **Run**:
    ```sh
-   sh examples/parallax/bench/bench.sh | tee parallax_x86_$(date +%s).log
+   sh examples/parallax/bench/bench.sh --impls=k,r,j,g \
+     | tee parallax_graviton_$(date +%s).log
    ```
    Plus the auto-par control: build a Kāra binary with
-   `KARAC_AUTO_PAR=0` and bench it as a manual extra lane (bench.sh has
-   no built-in off-lane; build the binary, run wrk against it with the
-   same `-t4 -c100/1000/5000` shape, record alongside).
+   `KARAC_AUTO_PAR=0`, run wrk against it with the same
+   `-t4 -c100/1000/5000` shape, record alongside (bench.sh has no
+   built-in off-lane).
 6. **Pull** the log(s) back to the repo host (`scp`).
 7. **Terminate.**
 
-### Run 2 — Graviton EC2 (Kāra second-ISA point)
+### Run 2 — x86 EC2 (cross-ISA confirmation)
 
-Same as Run 1 but: `c7g.4xlarge` + arm64 AMI; install **only** the
-Kāra toolchain (Rust + LLVM-18 + clang) + `wrk` (skip go/node/
-elixir/java); run `bench.sh --impls=k` (+ the `AUTO_PAR=0` control
-lane). Pull log, terminate.
+Identical to Run 1 but: `c7i.4xlarge` + Ubuntu 24.04 **amd64** AMI;
+**same K/R/J/G toolchain set** (rust/llvm + go + JDK/maven + wrk); run
+`bench.sh --impls=k,r,j,g` (+ the `AUTO_PAR=0` control lane). Log named
+`parallax_x86_*`. Pull, terminate.
 
 ---
 
 ## Toolchain matrix
 
-| Tool | Mac (run 0) | x86 (run 1) | Graviton (run 2) |
+| Tool | Mac (run 0) | Graviton (run 1) | x86 (run 2) |
 |---|---|---|---|
-| Rust/cargo + **LLVM 18** (karac) | ✓ | ✓ | ✓ |
+| Rust/cargo + **LLVM 18** (karac + rust comparator) | ✓ | ✓ | ✓ |
 | wrk | ✓ | ✓ | ✓ |
-| go | ✓ | ✓ | — |
-| node | ✓ | ✓ | — |
-| elixir/OTP (phoenix) | ✓ | ✓ | — |
-| JDK 11+ / maven (java) | ✓ (via Homebrew JDK) | ✓ | — |
+| go | ✓ | ✓ | ✓ |
+| JDK 11+ / maven (java) | ✓ (Homebrew JDK) | ✓ | ✓ |
+| node | ✓ | — | — |
+| elixir/OTP (phoenix) | ✓ | — | — |
 
 The **LLVM 18** dependency is the trickiest install — inkwell links
 against it at karac build time. Ubuntu 24.04 ships it in apt
 (`llvm-18`, `llvm-18-dev`). `bench.sh` then self-builds karac with
-`--features llvm`.
+`--features llvm`. Dropping Node + Elixir from the paid boxes removes
+the slowest/most fragile installs.
 
 ---
 
 ## Lane discipline (per `feedback_bench_lane_discipline`)
 
 The usual rule — never headline auto-par Kāra against single-threaded
-comparators — is **satisfied by construction here**: every Parallax
+comparators — is **satisfied by construction here**: every paid-cohort
 comparator is an explicit *parallel* fan-out (`tokio::join!`,
-goroutines, `Promise.all`, `Task.async`, `CompletableFuture.allOf`), so
-the cross-impl comparison is multi-core-vs-multi-core, same lane. The
+goroutines+WaitGroup, `CompletableFuture.allOf`), so the cross-impl
+comparison is multi-core-vs-multi-core, same lane. The
 `KARAC_AUTO_PAR=0` control lane is the *within-Kāra* same-lane
 demonstration of the compiler's contribution. No cross-lane hazard as
 long as the writeup doesn't compare Kāra-auto-par to a hypothetical
@@ -179,17 +199,21 @@ the kata benches do (`feedback_bench_json_pipeline_canonical` is about
 katas, not this bench). `bench.sh` prints a stdout table only. So:
 
 - Capture each run's stdout to a timestamped log (`tee`).
-- Transcribe the **x86** table into the README's existing throughput
-  tables (cold-start + steady-state), adding the `java` rows and the
-  `kara (auto-par off)` control lane.
-- Add a short **Graviton** note (Kāra x86 vs Kāra arm64) supporting the
-  ISA-invariance framing.
-- Update the README's `_v7 (... five impls)_` provenance line to a v8
-  six-impl-on-x86 entry; keep the historical v7 line.
-- Per `feedback_bench_kata_rerun_regression_check` / `kata_readme_sweep`:
-  diff old→new for every metric that changed and classify
-  (noise/load/improvement/regression) in the writeup, even though this
-  is an impl *addition* not a karac change.
+- **Canonical table = Graviton K/R/J/G** (cold-start + steady-state),
+  including the `kara (auto-par off)` control lane. This supersedes the
+  current README tables (which are laptop-era, five-impl k/r/g/n/p).
+- **Confirmation table = x86 K/R/J/G** — present as "the ratio holds on
+  x86 too" (Kāra-vs-comparators on both ISAs, side by side).
+- Note the cohort change explicitly: Node + Phoenix are no longer in the
+  headline tables (kept only in the free Mac run); Java + Go are the
+  comparators alongside Rust.
+- Update the README provenance line (currently `_v7 (... five impls)_`)
+  to a v8 entry: K/R/J/G on Graviton (canonical) + x86 (confirmation);
+  keep the historical v7 line.
+- Per `feedback_bench_kata_rerun_regression_check` /
+  `kata_readme_sweep`: diff old→new for every metric that changed and
+  classify (noise/load/improvement/regression) in the writeup, even
+  though this is a cohort/host change, not a karac change.
 
 ---
 
@@ -217,5 +241,6 @@ katas, not this bench). `bench.sh` prints a stdout table only. So:
   design — F4 fairness control — so it's consistent across impls, just
   note absolute numbers are single-box).
 - **Cost leak**: forgetting teardown. The checklist above is the guard.
-- **Don't fabricate Java rows** into the README from the Mac run — only
-  x86 numbers are canonical.
+- **Canonical = EC2 only.** Don't promote Mac numbers into the headline
+  tables — laptop arm64 is supplementary/directional at most. Graviton
+  is the canonical arm64 number; x86 is the cross-ISA confirmation.
