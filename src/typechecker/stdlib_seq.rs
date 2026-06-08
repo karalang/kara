@@ -107,6 +107,19 @@ impl<'a> super::TypeChecker<'a> {
     /// Called from `infer_method_call` when the object type is `Type::Str`.
     pub(super) fn infer_str_method(&mut self, method: &str, args: &[CallArg], span: &Span) -> Type {
         match method {
+            // `String.to_string()` / `.clone()` → owning copy (`String`). The
+            // `Display` trait gives every type a `to_string`; on `String`
+            // itself it is the identity copy. Both take no arguments.
+            "to_string" | "clone" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("'{method}' takes no arguments"),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Str
+            }
             // Length / emptiness predicates — runtime ships these and the
             // interpreter dispatches them; the typechecker enumeration was
             // catching up per the source comment below. Surfaced 2026-05-22

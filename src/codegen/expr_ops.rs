@@ -1553,6 +1553,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 args,
                 ..
             } if method == "clone" && args.is_empty() => self.expr_is_char(object),
+            // `someStruct.charField` — a char-typed struct field. Needed so the
+            // synthetic-f-string struct Display (see synth_display.rs) renders
+            // char fields as glyphs, matching the interpreter.
+            ExprKind::FieldAccess { object, field } => {
+                let Some(outer) = self.expr_user_struct_name(object) else {
+                    return false;
+                };
+                let (Some(names), Some(tes)) = (
+                    self.struct_field_names.get(&outer),
+                    self.struct_field_type_exprs.get(&outer),
+                ) else {
+                    return false;
+                };
+                names
+                    .iter()
+                    .position(|f| f == field)
+                    .and_then(|idx| tes.get(idx))
+                    .map(|te| {
+                        matches!(&te.kind, TypeKind::Path(p)
+                            if p.segments.last().map(|s| s == "char").unwrap_or(false))
+                    })
+                    .unwrap_or(false)
+            }
             _ => false,
         }
     }

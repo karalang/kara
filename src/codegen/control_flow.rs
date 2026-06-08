@@ -422,6 +422,49 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // User-struct arm — `#[derive(Display)]` / `impl Display` structs
+        // render as `TypeName { field: value, … }` in declaration order
+        // (matching the interpreter). Render to an owning String via the
+        // synthetic-f-string path, then print it with `%.*s`. Must precede
+        // the value-kind arms below: a user struct lowers to a struct value
+        // that is NOT the 3-field String layout, so without this it would hit
+        // the String / raw-pointer arm and ICE / print an address.
+        if let Some(sname) = self.expr_user_struct_name(&args[0].value) {
+            let s = self
+                .compile_struct_display_string(&args[0].value, &sname)?
+                .into_struct_value();
+            let data = self
+                .builder
+                .build_extract_value(s, 0, "pd.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(s, 1, "pd.len")
+                .unwrap()
+                .into_int_value();
+            let len_i32 = self
+                .builder
+                .build_int_truncate(len, self.context.i32_type(), "pd.len.i32")
+                .unwrap();
+            let fmt = self
+                .builder
+                .build_global_string_ptr(&format!("%.*s{nl}"), "pd.fmt")
+                .unwrap();
+            self.builder
+                .build_call(
+                    self.printf_fn,
+                    &[
+                        BasicMetadataValueEnum::from(fmt.as_pointer_value()),
+                        BasicMetadataValueEnum::from(len_i32),
+                        BasicMetadataValueEnum::from(data),
+                    ],
+                    "printf",
+                )
+                .unwrap();
+            return Ok(zero.into());
+        }
+
         // Char arm — render as the UTF-8 glyph rather than the integer
         // codepoint. Must precede the generic int path because `char`
         // lowers to `i32` and would otherwise hit the `%lld` branch.
@@ -531,6 +574,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
             }
         } else if val.is_struct_value() {
+            // A user struct that reached here is a `println(StructLiteral{…})`
+            // / `println(make())` argument — the declaration-order struct
+            // Display arm above only fires for place-expression args
+            // (identifier / field access). Emit a clean error rather than
+            // mis-reading the struct as the String `{ptr,i64,i64}` layout
+            // below (which would extract a non-pointer field and ICE).
+            if !self.llvm_ty_is_vec_struct(val.into_struct_value().get_type().into()) {
+                return Err(
+                    "Display of a struct argument is supported when the argument is a \
+                     variable or field access (e.g. `let x = …; println(x)` / `x.to_string()`); \
+                     bind a struct literal or call result to a `let` first (user-struct \
+                     Display, subtask-5 follow-on)"
+                        .to_string(),
+                );
+            }
             // String struct `{ ptr, i64, i64 }` (data, len, cap). The
             // pre-fix path passed the data pointer to `%s` directly,
             // which puts/printf treats as a NUL-terminated C string —

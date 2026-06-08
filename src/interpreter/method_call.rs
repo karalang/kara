@@ -570,8 +570,10 @@ impl<'a> super::Interpreter<'a> {
                     return Value::String(s);
                 }
             }
-            // All other Display-able values: delegate to Value::fmt
-            return Value::String(format!("{}", obj));
+            // All other Display-able values: render via the user-facing
+            // renderer (declaration-order struct fields, recursing into
+            // containers) so `.to_string()` matches `println` and codegen.
+            return Value::String(self.display_render(&obj));
         }
 
         // Category dispatchers — each returns `Some(Value)` if `method`

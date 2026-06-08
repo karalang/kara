@@ -43,6 +43,43 @@ fn test_abs_signed_int() {
 }
 
 #[test]
+fn test_struct_display_declaration_order() {
+    // `#[derive(Display)]` structs render `Name { field: value, … }` in
+    // DECLARATION order (the `Value::Struct` HashMap had lost source order and
+    // rendered in random hash order before `display_render`). println,
+    // .to_string(), and f-string interpolation all agree.
+    let src = "#[derive(Display)]
+        struct Wrap { p: Point, name: String, ok: bool }
+        #[derive(Display)]
+        struct Point { x: i64, y: i64 }
+        fn main() {
+            let w = Wrap { p: Point { x: 1, y: 2 }, name: \"hi\", ok: true };
+            println(w);
+            println(w.to_string());
+            println(f\"w={w}\");
+        }";
+    let expected = "Wrap { p: Point { x: 1, y: 2 }, name: hi, ok: true }\n".repeat(2)
+        + "w=Wrap { p: Point { x: 1, y: 2 }, name: hi, ok: true }\n";
+    assert_eq!(run_no_errors(src), expected);
+}
+
+#[test]
+fn test_struct_display_nested_in_container() {
+    // A struct nested in a Vec still renders in declaration order (the
+    // renderer recurses through containers).
+    let src = "#[derive(Display)]
+        struct Point { x: i64, y: i64 }
+        fn main() {
+            let v: Vec[Point] = [Point { x: 9, y: 8 }, Point { x: 7, y: 6 }];
+            println(f\"list={v}\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "list=[Point { x: 9, y: 8 }, Point { x: 7, y: 6 }]\n"
+    );
+}
+
+#[test]
 fn test_abs_float() {
     assert_eq!(run("fn main() { println((-2.5f64).abs()); }"), "2.5\n");
     assert_eq!(run("fn main() { println((2.5f64).abs()); }"), "2.5\n");

@@ -46,7 +46,7 @@ impl<'a> super::Interpreter<'a> {
                         crate::ast::ParsedInterpolationPart::Text(t) => result.push_str(t),
                         crate::ast::ParsedInterpolationPart::Expr(e) => {
                             let val = self.eval_expr_inner(e);
-                            result.push_str(&format!("{}", val));
+                            result.push_str(&self.display_render(&val));
                         }
                     }
                 }

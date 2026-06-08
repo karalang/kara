@@ -3147,6 +3147,56 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(len_ptr, new_len).unwrap();
     }
 
+    /// Render one f-string interpolation part to `(ptr, len)`. A part whose
+    /// static type is a user `Display` struct is rendered via its
+    /// declaration-order Display (`compile_struct_display_string`); the
+    /// resulting String's buffer is already registered for scope-exit cleanup
+    /// by the inner interpolation, so extracting its `(data, len)` is safe.
+    /// `char` parts render as a glyph; everything else uses the primitive /
+    /// String path.
+    pub(super) fn fstr_render_part(
+        &mut self,
+        e: &Expr,
+    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        if let Some(sname) = self.expr_user_struct_name(e) {
+            let s = self
+                .compile_struct_display_string(e, &sname)?
+                .into_struct_value();
+            let data = self
+                .builder
+                .build_extract_value(s, 0, "fstr.s.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(s, 1, "fstr.s.len")
+                .unwrap()
+                .into_int_value();
+            return Ok((data, len));
+        }
+        let is_char = self.expr_is_char(e);
+        let val = self.compile_expr(e)?;
+        if is_char {
+            return Ok(self.emit_codepoint_to_utf8(val.into_int_value()));
+        }
+        // A struct value that isn't the String `{ptr,i64,i64}` layout is a
+        // user struct in a non-place interpolation position (`f"{make()}"`);
+        // the place-expr struct path above didn't catch it. `compile_fstr_part_to_cstr`
+        // would mis-read it as a String and ICE — emit a clean error instead.
+        if val.is_struct_value()
+            && !self.llvm_ty_is_vec_struct(val.into_struct_value().get_type().into())
+        {
+            return Err(
+                "Display of a struct in an f-string is supported when the interpolated \
+                 expression is a variable or field access (e.g. `f\"{x}\"`); bind a struct \
+                 literal or call result to a `let` first (user-struct Display, subtask-5 \
+                 follow-on)"
+                    .to_string(),
+            );
+        }
+        Ok(self.compile_fstr_part_to_cstr(val, e))
+    }
+
     /// Convert a compiled value to `(raw_ptr, byte_len)` for f-string interpolation.
     /// Dispatches on the LLVM type so callers don't need to track the Kāra type name.
     ///

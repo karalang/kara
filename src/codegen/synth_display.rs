@@ -23,7 +23,7 @@ use crate::ast::*;
 
 use inkwell::module::Linkage;
 use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::{FunctionValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -274,9 +274,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
             }
             other => {
-                // Set_*, user structs not yet supported.
-                // Subtask 5 of the Display canonical bullet
-                // (phase-7-codegen.md § Phase 7.2) extends this match for Set.
+                // User STRUCTS are rendered via `compile_struct_display_string`
+                // (the synthetic-f-string path below), not this printf-based
+                // synthesizer, so they never reach here. User ENUMS and any
+                // remaining compound shapes are the open part of subtask 5 of
+                // the Display canonical bullet (phase-8-stdlib-floor.md).
                 panic!("emit_display_fn_for_type: type_name '{other}' not yet supported");
             }
         }
@@ -1062,5 +1064,171 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
         display_fn
+    }
+
+    // ── User-struct Display (subtask 5) ────────────────────────────────
+    //
+    // `#[derive(Display)]` / `impl Display` structs render as
+    // `TypeName { field: value, … }` in DECLARATION order, matching the
+    // interpreter's `display_render`. Rather than synthesize a bespoke
+    // recursive printf/buffer Display fn, we lower a struct render to the
+    // equivalent **f-string AST** and reuse the existing interpolation
+    // codegen (which already owns primitive / String formatting, buffer
+    // growth, and scope-exit cleanup). Nested Display-struct fields are
+    // inlined recursively so the synthetic f-string never carries a
+    // struct-typed interpolation part (those would be mis-rendered as
+    // String). Fields of other compound types (Vec / Map / Set / enum /
+    // tuple) are not yet supported here and surface a clean codegen error.
+
+    /// If `te` is a path to a user struct we know how to render, return its
+    /// name. Used to decide recursion vs. leaf-interpolation per field.
+    fn display_field_struct_name(&self, te: &crate::ast::TypeExpr) -> Option<String> {
+        if let crate::ast::TypeKind::Path(p) = &te.kind {
+            if let Some(seg) = p.segments.last() {
+                if self.struct_field_names.contains_key(seg) {
+                    return Some(seg.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// True when `te` is a primitive / String leaf the f-string lowering can
+    /// already format directly.
+    fn display_field_is_leaf(&self, te: &crate::ast::TypeExpr) -> bool {
+        if let crate::ast::TypeKind::Path(p) = &te.kind {
+            if let Some(seg) = p.segments.last() {
+                return matches!(
+                    seg.as_str(),
+                    "i8" | "i16"
+                        | "i32"
+                        | "i64"
+                        | "u8"
+                        | "u16"
+                        | "u32"
+                        | "u64"
+                        | "usize"
+                        | "f32"
+                        | "f64"
+                        | "bool"
+                        | "char"
+                        | "String"
+                );
+            }
+        }
+        false
+    }
+
+    /// Build the f-string parts for `base : type_name` — `TypeName { f: v, … }`
+    /// in declaration order. Recurses for nested Display-struct fields.
+    fn build_struct_display_parts(
+        &self,
+        base: &Expr,
+        type_name: &str,
+    ) -> Result<Vec<crate::ast::ParsedInterpolationPart>, String> {
+        use crate::ast::ParsedInterpolationPart as P;
+        let field_names = self
+            .struct_field_names
+            .get(type_name)
+            .cloned()
+            .ok_or_else(|| format!("Display: unknown struct '{type_name}'"))?;
+        let field_tes = self
+            .struct_field_type_exprs
+            .get(type_name)
+            .cloned()
+            .unwrap_or_default();
+        let mut parts: Vec<P> = vec![P::Text(format!("{type_name} {{ "))];
+        for (i, fname) in field_names.iter().enumerate() {
+            if i > 0 {
+                parts.push(P::Text(", ".to_string()));
+            }
+            parts.push(P::Text(format!("{fname}: ")));
+            let field_expr = Expr {
+                kind: ExprKind::FieldAccess {
+                    object: Box::new(base.clone()),
+                    field: fname.clone(),
+                },
+                span: base.span.clone(),
+            };
+            let te = field_tes.get(i);
+            match te.and_then(|t| self.display_field_struct_name(t)) {
+                Some(nested) => {
+                    parts.extend(self.build_struct_display_parts(&field_expr, &nested)?);
+                }
+                None => {
+                    if te.map(|t| self.display_field_is_leaf(t)).unwrap_or(false) {
+                        parts.push(P::Expr(Box::new(field_expr)));
+                    } else {
+                        let tdesc = te
+                            .map(|t| format!("{:?}", t.kind))
+                            .unwrap_or_else(|| "<unknown>".to_string());
+                        return Err(format!(
+                            "Display codegen for struct '{type_name}': field '{fname}' has a \
+                             type ({tdesc}) whose Display is not yet supported under `karac build` \
+                             (only primitives, String, and nested Display structs are supported; \
+                             Vec/Map/Set/enum/tuple fields are tracked as subtask 5 follow-on)"
+                        ));
+                    }
+                }
+            }
+        }
+        parts.push(P::Text(" }".to_string()));
+        Ok(parts)
+    }
+
+    /// Render a user-struct expression to an owning `String` value by
+    /// compiling the synthetic f-string built from its fields.
+    pub(super) fn compile_struct_display_string(
+        &mut self,
+        base: &Expr,
+        type_name: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let parts = self.build_struct_display_parts(base, type_name)?;
+        let lit = Expr {
+            kind: ExprKind::InterpolatedStringLit(parts),
+            span: base.span.clone(),
+        };
+        self.compile_expr(&lit)
+    }
+
+    /// True when `value` as a let/assign RHS produces a String whose buffer is
+    /// the staged `last_fstr_acc` — a direct f-string, or a user-struct
+    /// `.to_string()` (which lowers via the synthetic f-string). The binding
+    /// site must then consume `last_fstr_acc` so the accumulator's cleanup
+    /// transfers to the new binding rather than double-freeing the buffer.
+    pub(super) fn rhs_stages_fstr_acc(&self, value: &Expr) -> bool {
+        match &value.kind {
+            ExprKind::InterpolatedStringLit(_) => true,
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if method == "to_string" && args.is_empty() => {
+                self.expr_user_struct_name(object).is_some()
+            }
+            _ => false,
+        }
+    }
+
+    /// If `expr` statically denotes a value of a known user struct type,
+    /// return that struct's name. Covers the identifier and field-access
+    /// receiver forms used at the `to_string` / f-string / println sites.
+    pub(super) fn expr_user_struct_name(&self, expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Identifier(n) => self
+                .var_type_names
+                .get(n.as_str())
+                .filter(|tn| self.struct_field_names.contains_key(tn.as_str()))
+                .cloned(),
+            ExprKind::FieldAccess { object, field } => {
+                let outer = self.expr_user_struct_name(object)?;
+                let tes = self.struct_field_type_exprs.get(&outer)?;
+                let names = self.struct_field_names.get(&outer)?;
+                let idx = names.iter().position(|f| f == field)?;
+                self.display_field_struct_name(tes.get(idx)?)
+            }
+            _ => None,
+        }
     }
 }

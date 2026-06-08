@@ -362,6 +362,34 @@ fn main() {
     }
 
     #[test]
+    fn asan_struct_display_to_string() {
+        // User-struct Display renders via the synthetic-f-string path, which
+        // mallocs an owning String (and, for nested structs, intermediate
+        // Strings registered for scope cleanup). Exercise println + a bound
+        // to_string of a nested struct so ASAN catches over-read / leak /
+        // double-free in the struct Display lowering.
+        assert_clean_asan_run(
+            r#"
+#[derive(Display)]
+struct Point { x: i64, y: i64 }
+#[derive(Display)]
+struct Wrap { p: Point, name: String, ok: bool }
+fn main() {
+    let w = Wrap { p: Point { x: 1, y: 2 }, name: "hi", ok: true };
+    println(w);
+    let s = w.to_string();
+    println(s);
+}
+"#,
+            &[
+                "Wrap { p: Point { x: 1, y: 2 }, name: hi, ok: true }",
+                "Wrap { p: Point { x: 1, y: 2 }, name: hi, ok: true }",
+            ],
+            "struct_display_to_string",
+        );
+    }
+
+    #[test]
     fn asan_println_function_return_string_via_let_binding() {
         // Function returns owned heap String; bound to a local;
         // printed. This is the let-binding form the kata workaround

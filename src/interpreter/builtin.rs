@@ -50,6 +50,84 @@ impl<'a> super::Interpreter<'a> {
         self.record_runtime_error(full_msg, span)
     }
 
+    /// User-facing Display rendering. Differs from `Value`'s context-free
+    /// `std::fmt::Display` only in that **struct fields render in declaration
+    /// order** — the `Value::Struct` payload is a `HashMap` that has lost
+    /// source order, so its bare `Display` iterates in (random) hash order.
+    /// Declaration order is recovered from `typecheck_result.struct_info`.
+    /// Recurses through the container shapes so a struct nested inside a
+    /// `Vec` / tuple / map / slice is ordered too; every other value
+    /// (scalars, String, enums, …) delegates to the unchanged `Display`.
+    /// Routed through the user-facing surfaces — `print`/`println`,
+    /// `.to_string()`, and f-string interpolation — while `Display` itself
+    /// stays for debug / diagnostic contexts. Codegen renders structs in the
+    /// same declaration order (see `synth_display.rs`), so the two backends
+    /// agree.
+    pub(crate) fn display_render(&self, v: &Value) -> String {
+        match v {
+            Value::Struct { name, fields } => {
+                let order: Vec<String> = self
+                    .typecheck_result
+                    .struct_info
+                    .get(name)
+                    .map(|si| si.fields.iter().map(|(n, _, _)| n.clone()).collect())
+                    .unwrap_or_else(|| fields.keys().cloned().collect());
+                let body = order
+                    .iter()
+                    .filter_map(|fname| {
+                        fields
+                            .get(fname)
+                            .map(|fv| format!("{}: {}", fname, self.display_render(fv)))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{} {{ {} }}", name, body)
+            }
+            Value::Tuple(vals) => {
+                let body = vals
+                    .iter()
+                    .map(|x| self.display_render(x))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({})", body)
+            }
+            Value::Array(rc) => {
+                let vals = rc.read().unwrap();
+                let body = vals
+                    .iter()
+                    .map(|x| self.display_render(x))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{}]", body)
+            }
+            Value::Slice {
+                storage,
+                start,
+                len,
+                ..
+            } => {
+                let vals = storage.read().unwrap();
+                let body = vals[*start..*start + *len]
+                    .iter()
+                    .map(|x| self.display_render(x))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{}]", body)
+            }
+            Value::Map(entries) => {
+                let body = entries
+                    .iter()
+                    .map(|(k, val)| {
+                        format!("{}: {}", self.display_render(k), self.display_render(val))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{{}}}", body)
+            }
+            other => format!("{}", other),
+        }
+    }
+
     pub(crate) fn eval_builtin_print(
         &mut self,
         name: &str,
@@ -63,7 +141,8 @@ impl<'a> super::Interpreter<'a> {
         // the BuiltinDefault arm writes through `write_stdout` /
         // `write_stderr` (honoring `captured_output` for the test harness).
         let val = if let Some(arg) = args.first() {
-            format!("{}", self.eval_expr_inner(&arg.value))
+            let v = self.eval_expr_inner(&arg.value);
+            self.display_render(&v)
         } else {
             String::new()
         };

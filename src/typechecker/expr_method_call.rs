@@ -1896,6 +1896,37 @@ impl<'a> super::TypeChecker<'a> {
                 return Type::Str;
             }
         }
+        // `to_string()` on `String` (identity copy) and on any `#[derive(Display)]`
+        // (or hand-written `impl Display`) **struct** → `String`. The `Display`
+        // trait provides `to_string(ref self) -> String` (design.md § Display);
+        // this types the explicit call so it stops poisoning to `Type::Error`.
+        // Codegen renders structs in declaration order via `synth_display`.
+        // (Enums are not yet handled by the codegen renderer — typing their
+        // `to_string` here would turn a clean typecheck rejection into a
+        // codegen failure, so enum Display is left to its follow-on slice.)
+        if method == "to_string" && args.is_empty() {
+            let is_display_named = match &receiver_for_lookup {
+                Type::Str => true,
+                Type::Named { name, .. } if name == "String" => true,
+                Type::Named { name, .. } => {
+                    let derived = self
+                        .env
+                        .structs
+                        .get(name)
+                        .map(|s| s.derived_traits.contains("Display"))
+                        .unwrap_or(false);
+                    let has_impl = self.env.structs.contains_key(name)
+                        && self.env.impls.iter().any(|i| {
+                            i.target_type == *name && i.trait_name.as_deref() == Some("Display")
+                        });
+                    derived || has_impl
+                }
+                _ => false,
+            };
+            if is_display_named {
+                return Type::Str;
+            }
+        }
         let (type_name, type_args) = match &receiver_for_lookup {
             Type::Named { name, args } => (name.clone(), args.clone()),
             // A refinement receiver that survived the base-deref above

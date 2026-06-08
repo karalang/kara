@@ -9002,6 +9002,70 @@ fn main() {
         }
     }
 
+    // ── User-struct Display (subtask 5) ────────────────────────────────
+    // `#[derive(Display)]` structs render `Name { field: value, … }` in
+    // declaration order via the synthetic-f-string path, for place-expression
+    // args (identifier / field access). Codegen matches the interpreter.
+
+    #[test]
+    fn test_e2e_struct_display_print_and_to_string() {
+        if let Some(out) = run_program(
+            r#"
+#[derive(Display)]
+struct Cell { tag: char, n: u32, f: f64 }
+fn main() {
+    let c = Cell { tag: 'Z', n: 42, f: 1.5 };
+    println(c);
+    println(c.to_string());
+    println(f"c={c}");
+}
+"#,
+        ) {
+            assert_eq!(
+                out,
+                "Cell { tag: Z, n: 42, f: 1.5 }\n\
+                 Cell { tag: Z, n: 42, f: 1.5 }\n\
+                 c=Cell { tag: Z, n: 42, f: 1.5 }\n"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_struct_display_nested() {
+        if let Some(out) = run_program(
+            r#"
+#[derive(Display)]
+struct Point { x: i64, y: i64 }
+#[derive(Display)]
+struct Wrap { p: Point, name: String, ok: bool }
+fn main() {
+    let w = Wrap { p: Point { x: 1, y: 2 }, name: "hi", ok: true };
+    println(w);
+    println(w.to_string());
+}
+"#,
+        ) {
+            let line = "Wrap { p: Point { x: 1, y: 2 }, name: hi, ok: true }\n";
+            assert_eq!(out, format!("{line}{line}"));
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_to_string_owning() {
+        // `String.to_string()` on identifier and literal receivers — owning copy.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let s: String = "abc".to_string();
+    println(s.to_string());
+    println("lit".to_string());
+}
+"#,
+        ) {
+            assert_eq!(out, "abc\nlit\n");
+        }
+    }
+
     // ── Arithmetic fault traps (design.md § Arithmetic Overflow) ───────
     // AOT parity with the interpreter's checked arithmetic
     // (src/interpreter/eval_ops.rs): + - * trap "integer overflow",

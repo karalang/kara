@@ -1468,7 +1468,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // fresh-ref source. Plain `Call` / `MethodCall` /
                 // `StructLiteral` match the base case directly.
                 let is_fresh_construction = self.rhs_yields_fresh_ref(value);
-                let rhs_is_fstring = matches!(&value.kind, ExprKind::InterpolatedStringLit(_));
+                let rhs_is_fstring = self.rhs_stages_fstr_acc(value);
                 // Thread the binding's Vec element type through to
                 // `Vec.with_capacity(n)` in the RHS — the zero-arg
                 // constructor can't recover `T` from arguments, but
@@ -2512,7 +2512,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `x = if cond { make_a() } else { make_b() };` and the
                 // `Match` / `IfLet` / `Block` equivalents.
                 let rhs_is_fresh = self.rhs_yields_fresh_ref(value);
-                let rhs_is_fstring = matches!(&value.kind, ExprKind::InterpolatedStringLit(_));
+                let rhs_is_fstring = self.rhs_stages_fstr_acc(value);
                 let val = self.compile_expr(value)?;
                 // Owned String/Vec PARAM moved into an existing binding
                 // (`work = lists;` where `lists` is a bare by-value

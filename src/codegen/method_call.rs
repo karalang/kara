@@ -895,6 +895,42 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(self.build_owned_string_from_parts(src_ptr, src_len));
         }
 
+        // `String.to_string()` — an owning copy. The receiver's static type is
+        // `String` when `dispatch_key`'s receiver segment is "String". Compile
+        // the receiver to its `{data,len,cap}` value and copy the bytes into a
+        // fresh heap String, so it works for any receiver form (identifier,
+        // literal, expression) and the result owns its buffer.
+        if method == "to_string"
+            && args.is_empty()
+            && dispatch_key
+                .as_deref()
+                .and_then(|k| k.rsplit_once('.'))
+                .map(|(t, _)| t == "String")
+                .unwrap_or(false)
+        {
+            let v = self.compile_expr(object)?.into_struct_value();
+            let data = self
+                .builder
+                .build_extract_value(v, 0, "ts.s.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(v, 1, "ts.s.len")
+                .unwrap()
+                .into_int_value();
+            return Ok(self.build_owned_string_from_parts(data, len));
+        }
+
+        // `myStruct.to_string()` for a `#[derive(Display)]` / `impl Display`
+        // struct → render to an owning `String` in declaration order (matches
+        // the interpreter). See `synth_display.rs`.
+        if method == "to_string" && args.is_empty() {
+            if let Some(sname) = self.expr_user_struct_name(object) {
+                return self.compile_struct_display_string(object, &sname);
+            }
+        }
+
         // Type-receiver associated calls: `T.method(...)` where `T` is a
         // primitive type name. Receiver `T` is an identifier naming a type,
         // not a variable, so the normal receiver pipeline would fail. Handle

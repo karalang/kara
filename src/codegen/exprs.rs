@@ -202,13 +202,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                             ParsedInterpolationPart::Expr(e) => {
-                                let is_char = self.expr_is_char(e);
-                                let val = self.compile_expr(e)?;
-                                let pair = if is_char {
-                                    self.emit_codepoint_to_utf8(val.into_int_value())
-                                } else {
-                                    self.compile_fstr_part_to_cstr(val, e)
-                                };
+                                let pair = self.fstr_render_part(e)?;
                                 rendered.push(pair);
                             }
                         }
@@ -275,19 +269,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                             ParsedInterpolationPart::Expr(e) => {
-                                // Char arm — render as glyph (the codepoint
-                                // value would otherwise hit the generic
-                                // `%lld` integer path inside
-                                // `compile_fstr_part_to_cstr`, since `char`
-                                // lowers to `i32`). Detection mirrors
-                                // `compile_print`'s char arm.
-                                let is_char = self.expr_is_char(e);
-                                let val = self.compile_expr(e)?;
-                                let (src_ptr, src_len) = if is_char {
-                                    self.emit_codepoint_to_utf8(val.into_int_value())
-                                } else {
-                                    self.compile_fstr_part_to_cstr(val, e)
-                                };
+                                let (src_ptr, src_len) = self.fstr_render_part(e)?;
                                 self.emit_string_append_raw(acc, src_ptr, src_len);
                             }
                         }

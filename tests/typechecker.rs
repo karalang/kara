@@ -11241,6 +11241,25 @@ fn test_to_string_and_clone_on_primitives_typecheck() {
 }
 
 #[test]
+fn test_to_string_on_string_and_display_struct_typecheck() {
+    // `String.to_string()` (identity copy) and `to_string()` on a
+    // `#[derive(Display)]` struct both type as `String` — previously they
+    // poisoned to `Type::Error` ("no method" warning) and only worked under
+    // the typecheck-bypassing interpreter.
+    typecheck_ok(
+        "#[derive(Display)]
+         struct Point { x: i64, y: i64 }
+         fn main() {
+             let s: String = \"hi\".to_string();
+             let s2: String = s.to_string();
+             let p = Point { x: 1, y: 2 };
+             let ps: String = p.to_string();
+             let _ = (s2, ps);
+         }",
+    );
+}
+
+#[test]
 fn test_known_method_on_user_struct_still_works() {
     // Regression: a method that *is* declared in an impl block continues
     // to typecheck. Confirms the tightening only fires on actually-missing
