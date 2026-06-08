@@ -507,10 +507,14 @@ fn ts_type(js: JsScalar) -> &'static str {
 /// at instantiation on a missing implementation, so the declarations
 /// surface that contract at compile time.
 ///
-/// Per-export signatures beyond `_start` (including `Result`/`Option`
-/// shapes and exported structs) extend this generator when the
-/// phase-10 "WASM entry-point discovery" entry lands — today the only
-/// wasm-exported user entry point is `main` via `_start`.
+/// Discovered WASM entry-point exports (phase-10 "WASM entry-point
+/// discovery") are typed on the handle's `exports` via a `KaraExports`
+/// interface — `instantiate()` returns a handle whose `exports.<name>(…)`
+/// carries the per-export signature. Sub-slice B covers the **scalar**
+/// surface (primitives / single-field opaque handles cross as bare
+/// `number`/`bigint`); rich shapes (`Result`/`Option`/structs via the
+/// export trampoline) extend `ts_export_type` when sub-slice D lands, so
+/// only `all_scalar` exports are typed here today.
 ///
 /// `threaded` mirrors [`render_glue`]'s `threads.is_some()`: a
 /// wasm-threads build's declarations additionally carry
@@ -518,7 +522,12 @@ fn ts_type(js: JsScalar) -> &'static str {
 /// module was picked — the instance lives in the primary worker, so
 /// only the shared memory crosses back) and the widened `run()` return
 /// type; a sequential-only build's declarations are unchanged.
-pub fn render_dts(fns: &[HostFnSig], wasm_filename: &str, threaded: bool) -> String {
+pub fn render_dts(
+    fns: &[HostFnSig],
+    exports: &[crate::wasm_exports::ExportSig],
+    wasm_filename: &str,
+    threaded: bool,
+) -> String {
     use std::fmt::Write;
     let mut out = String::with_capacity(4 * 1024);
 
@@ -616,10 +625,30 @@ pub fn render_dts(fns: &[HostFnSig], wasm_filename: &str, threaded: bool) -> Str
         );
     }
 
+    // Per-export typed surface (phase-10 WASM entry-point discovery).
+    // Only `all_scalar` exports are typed in sub-slice B; aggregate-typed
+    // exports are rejected earlier at build time (until the trampoline
+    // sub-slice lands), so none reach here under browser bindings.
+    out.push_str("export interface KaraExports {\n  _start(): void;\n");
+    for e in exports.iter().filter(|e| e.all_scalar()) {
+        let params = e
+            .params
+            .iter()
+            .map(|p| format!("{}: {}", p.name, ts_type(p.ty.js)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ret = match &e.ret {
+            Some(t) => ts_type(t.js),
+            None => "void",
+        };
+        let _ = writeln!(out, "  {}({params}): {ret};", e.name);
+    }
+    out.push_str("}\n\n");
+
     out.push_str(
         "export interface KaraHandle {\n\
          \x20 instance: WebAssembly.Instance;\n\
-         \x20 exports: WebAssembly.Exports & { _start(): void };\n\
+         \x20 exports: WebAssembly.Exports & KaraExports;\n\
          \x20 memory: WebAssembly.Memory;\n\
          }\n\n",
     );
@@ -1393,7 +1422,7 @@ mod tests {
                 None,
             ),
         ];
-        let dts = render_dts(&fns, "app.wasm", false);
+        let dts = render_dts(&fns, &[], "app.wasm", false);
         // i64 params/returns are bigint; pointers are numbers; unit
         // returns are void; every impl takes the trailing HostCtx.
         assert!(dts.contains("report(value: bigint, ctx: HostCtx): bigint;"));
@@ -1406,8 +1435,56 @@ mod tests {
     }
 
     #[test]
+    fn dts_types_scalar_exports_on_handle() {
+        use crate::wasm_exports::{ExportParam, ExportSig, ExportType};
+        let scalar = |kara: &str, js| ExportType {
+            kara_ty: kara.to_string(),
+            js,
+            scalar: true,
+        };
+        let exports = vec![
+            ExportSig {
+                name: "add".to_string(),
+                params: vec![
+                    ExportParam {
+                        name: "a".to_string(),
+                        ty: scalar("i32", JsScalar::Number),
+                    },
+                    ExportParam {
+                        name: "b".to_string(),
+                        ty: scalar("i32", JsScalar::Number),
+                    },
+                ],
+                ret: Some(scalar("i32", JsScalar::Number)),
+                target: "wasm_browser".to_string(),
+            },
+            // Aggregate export: omitted from the typed surface in sub-slice B.
+            ExportSig {
+                name: "mk_point".to_string(),
+                params: vec![],
+                ret: Some(ExportType {
+                    kara_ty: "Point".to_string(),
+                    js: JsScalar::Number,
+                    scalar: false,
+                }),
+                target: "wasm_browser".to_string(),
+            },
+        ];
+        let dts = render_dts(&[], &exports, "app.wasm", false);
+        assert!(dts.contains("export interface KaraExports {"));
+        assert!(dts.contains("_start(): void;"));
+        assert!(dts.contains("add(a: number, b: number): number;"));
+        assert!(dts.contains("exports: WebAssembly.Exports & KaraExports;"));
+        // The non-scalar export is not typed yet (export trampoline pending).
+        assert!(
+            !dts.contains("mk_point("),
+            "aggregate export must be omitted"
+        );
+    }
+
+    #[test]
     fn dts_with_no_host_fns_makes_host_impls_optional() {
-        let dts = render_dts(&[], "plain.wasm", false);
+        let dts = render_dts(&[], &[], "plain.wasm", false);
         assert!(dts.contains("export interface HostImpls {}"));
         assert!(dts.contains("hostImpls?: HostImpls"));
         // The glue module's own surface is always declared.
@@ -1518,7 +1595,7 @@ mod tests {
         // The dead build-time rejection in runThreaded is gone.
         assert!(!glue.contains("host fns are not supported with wasm-threads"));
         // The builtin must NOT leak into the user-facing TypeScript surface.
-        let dts = render_dts(&fns, "app.wasm", true);
+        let dts = render_dts(&fns, &[], "app.wasm", true);
         assert!(
             !dts.contains("__kara_timer_after"),
             "builtin leaked into d.ts"
@@ -1535,7 +1612,7 @@ mod tests {
 
     #[test]
     fn threaded_dts_declares_threaded_surface() {
-        let dts = render_dts(&[], "app.wasm", true);
+        let dts = render_dts(&[], &[], "app.wasm", true);
         assert!(dts.contains("export interface KaraThreadedHandle"));
         assert!(dts.contains("forceSequential?: boolean;"));
         assert!(dts.contains("Promise<KaraHandle | KaraThreadedHandle>"));

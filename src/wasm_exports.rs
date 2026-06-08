@@ -22,18 +22,32 @@
 //! link flags), the browser glue (`wasm_glue`), and the WIT renderer
 //! (`wit`) each consume.
 
-use crate::ast::{Item, Program};
+use crate::ast::{Item, Program, TypeExpr, TypeKind};
 use crate::target::target_spec_of;
 use crate::wasm_glue::{handle_width_map, js_scalar, type_expr_display, JsScalar};
+use std::collections::HashMap;
 
-/// One parameter of a discovered wasm export, reduced to what the glue /
-/// WIT renderers need — mirrors `wasm_glue::HostParam`.
+/// A param/return type of a discovered export, reduced to what the glue /
+/// WIT renderers need.
+#[derive(Debug, Clone)]
+pub struct ExportType {
+    /// Kāra-surface type rendering (`i32`, `Point`, `Option`, `*const u8`).
+    pub kara_ty: String,
+    /// JS-boundary scalar classification (meaningful only when `scalar`).
+    pub js: JsScalar,
+    /// `true` iff the type crosses the wasm boundary as a **bare scalar**
+    /// (primitive, raw pointer, or single-field opaque-handle struct —
+    /// confirmed by the empirical wasm ABI: small aggregates flatten /
+    /// return via sret, scalars stay scalar). Aggregates (`false`) need
+    /// the export trampoline + exported allocator (sub-slice D).
+    pub scalar: bool,
+}
+
+/// One parameter of a discovered wasm export.
 #[derive(Debug, Clone)]
 pub struct ExportParam {
     pub name: String,
-    /// Kāra-surface type rendering (`i32`, `Point`, `*const u8`).
-    pub kara_ty: String,
-    pub js: JsScalar,
+    pub ty: ExportType,
 }
 
 /// One discovered wasm export.
@@ -43,13 +57,20 @@ pub struct ExportSig {
     /// unmangled — see `codegen::functions`).
     pub name: String,
     pub params: Vec<ExportParam>,
-    /// `None` for unit returns; otherwise the Kāra type rendering and its
-    /// JS-boundary classification.
-    pub ret: Option<(String, JsScalar)>,
+    /// `None` for unit returns; otherwise the return type.
+    pub ret: Option<ExportType>,
     /// The wasm target this entry is tagged for (`wasm_browser` /
     /// `wasm_wasi`) — drives the binding-surface restriction and, later,
     /// the marshalling strategy.
     pub target: String,
+}
+
+impl ExportSig {
+    /// `true` iff every param and the return cross as bare scalars — the
+    /// surface renderable without the export trampoline (sub-slice B).
+    pub fn all_scalar(&self) -> bool {
+        self.params.iter().all(|p| p.ty.scalar) && self.ret.as_ref().is_none_or(|r| r.scalar)
+    }
 }
 
 /// Collect the explicit wasm export entry points in `program` for
@@ -73,13 +94,12 @@ pub fn collect_wasm_exports(program: &Program, current_target: &str) -> Vec<Expo
                             .name()
                             .map(str::to_string)
                             .unwrap_or_else(|| format!("arg{i}")),
-                        kara_ty: type_expr_display(&p.ty),
-                        js: js_scalar(&p.ty, &handles),
+                        ty: export_type(&p.ty, &handles),
                     })
                     .collect();
                 let ret = f.return_type.as_ref().and_then(|ty| match &ty.kind {
-                    crate::ast::TypeKind::Tuple(elems) if elems.is_empty() => None,
-                    _ => Some((type_expr_display(ty), js_scalar(ty, &handles))),
+                    TypeKind::Tuple(elems) if elems.is_empty() => None,
+                    _ => Some(export_type(ty, &handles)),
                 });
                 Some(ExportSig {
                     name: f.name.clone(),
@@ -97,6 +117,53 @@ pub fn collect_wasm_exports(program: &Program, current_target: &str) -> Vec<Expo
 /// codegen's wasm link step needs.
 pub fn export_names(sigs: &[ExportSig]) -> Vec<String> {
     sigs.iter().map(|s| s.name.clone()).collect()
+}
+
+/// Build an [`ExportType`] from a param/return `TypeExpr`, classifying
+/// whether it crosses the wasm boundary as a bare scalar.
+fn export_type(ty: &TypeExpr, handles: &HashMap<&str, JsScalar>) -> ExportType {
+    ExportType {
+        kara_ty: type_expr_display(ty),
+        js: js_scalar(ty, handles),
+        scalar: is_scalar_surface(ty, handles),
+    }
+}
+
+/// Does `ty` cross the wasm boundary as a bare scalar (so it needs no
+/// export trampoline)? True for primitives, raw pointers, and
+/// single-field opaque-handle structs (in `handles`); false for
+/// multi-field structs, generic types (`Option[T]` / `Result[T,E]` /
+/// `Vec[T]`), `String`, tuples, slices, and borrows.
+fn is_scalar_surface(ty: &TypeExpr, handles: &HashMap<&str, JsScalar>) -> bool {
+    match &ty.kind {
+        TypeKind::Pointer { .. } => true,
+        TypeKind::Path(p) if p.segments.len() == 1 && p.generic_args.is_none() => {
+            let name = p.segments[0].as_str();
+            is_primitive_scalar(name) || handles.contains_key(name)
+        }
+        _ => false,
+    }
+}
+
+/// The built-in numeric / `bool` / `char` primitives that cross as a
+/// single wasm scalar.
+fn is_primitive_scalar(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "isize"
+            | "usize"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "char"
+    )
 }
 
 /// Is `f` an explicit wasm export entry for `current_target`?
@@ -162,5 +229,43 @@ mod tests {
         let exports = collect_wasm_exports(&p, "wasm_browser");
         assert_eq!(exports.len(), 1);
         assert!(exports[0].ret.is_none());
+    }
+
+    #[test]
+    fn scalars_and_handles_classify_as_scalar_surface() {
+        let p = prog(
+            r#"
+            pub struct Handle { id: i64 }
+            #[target(wasm_browser)] pub fn f(a: i32, b: f64, h: Handle) -> bool { true }
+            fn main() {}
+            "#,
+        );
+        let exports = collect_wasm_exports(&p, "wasm_browser");
+        assert_eq!(exports.len(), 1);
+        assert!(
+            exports[0].all_scalar(),
+            "primitives + single-field handle are scalar surface"
+        );
+    }
+
+    #[test]
+    fn aggregates_classify_as_non_scalar() {
+        let p = prog(
+            r#"
+            #[derive(Copy, Clone)] pub struct Point { x: f64, y: f64 }
+            #[target(wasm_browser)] pub fn a(p: Point) {}
+            #[target(wasm_browser)] pub fn b() -> Option[i32] { Option.None }
+            #[target(wasm_browser)] pub fn c(s: String) {}
+            fn main() {}
+            "#,
+        );
+        let exports = collect_wasm_exports(&p, "wasm_browser");
+        for e in &exports {
+            assert!(
+                !e.all_scalar(),
+                "{} should be non-scalar (aggregate)",
+                e.name
+            );
+        }
     }
 }

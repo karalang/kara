@@ -11303,6 +11303,64 @@ fn main() {}
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// phase-10 "WASM entry-point discovery" (sub-slice B): a
+/// `--bindings browser` build types each scalar `pub fn` export on the
+/// handle's `exports` in the generated `.d.ts` (a `KaraExports`
+/// interface). Build-only assertion (no node) — reads the emitted
+/// `<stem>.d.ts` and checks the per-export signature + the handle wiring.
+#[test]
+fn wasm_browser_dts_types_scalar_exports() {
+    let tmp = wasm_test_dir("dts-exports");
+    let path = tmp.join("lib_demo.kara");
+    std::fs::write(
+        &path,
+        r#"
+#[target(wasm_browser)]
+pub fn add(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+#[target(wasm_browser)]
+pub fn tick(n: i64) {}
+
+fn main() {}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_browser"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_browser_dts_types_scalar_exports — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm browser build failed: {stderr}");
+    let dts = std::fs::read_to_string(tmp.join("lib_demo.d.ts")).expect("d.ts must be emitted");
+    assert!(
+        dts.contains("export interface KaraExports {"),
+        "d.ts must declare KaraExports; got:\n{dts}"
+    );
+    assert!(
+        dts.contains("add(a: number, b: number): number;"),
+        "d.ts must type the `add` export; got:\n{dts}"
+    );
+    assert!(
+        dts.contains("tick(n: bigint): void;"),
+        "d.ts must type `tick` (i64 -> bigint, unit -> void); got:\n{dts}"
+    );
+    assert!(
+        dts.contains("exports: WebAssembly.Exports & KaraExports;"),
+        "handle.exports must be typed with KaraExports; got:\n{dts}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// phase-10 "WASM concurrency lowering — sequential default", explicit
 /// `par {}` leg: the block still lowers through `karac_par_run`
 /// (`tests/wasm_codegen.rs` pins the IR shape), and the wasm runtime

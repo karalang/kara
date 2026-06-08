@@ -4549,6 +4549,25 @@ fn manifest_wasm_knobs_for(
 #[cfg(feature = "llvm")]
 const WASM_THREADS_DEFAULT_MAX_MEMORY_PAGES: u32 = 16384;
 
+/// Phase-10 WASM entry-point discovery (sub-slice B): emit a
+/// non-blocking note for each discovered export whose param/return types
+/// are not bare scalars. Such exports are still raw wasm exports
+/// (callable via `instance.exports`), but their idiomatic typed/marshalled
+/// surface (struct / `Option` / `Result` JS shapes; rich WIT) lands with
+/// the export trampoline + canonical-ABI sub-slice — so they are omitted
+/// from the typed `.d.ts` / WIT for now rather than silently mis-typed.
+#[cfg(feature = "llvm")]
+fn warn_non_scalar_exports(exports: &[crate::wasm_exports::ExportSig]) {
+    for e in exports.iter().filter(|e| !e.all_scalar()) {
+        eprintln!(
+            "note: wasm export '{}' has non-scalar parameter/return types — omitted from the \
+             typed surface for now (rich-type marshalling lands with the phase-10 export \
+             trampoline); it remains a raw wasm export callable via instance.exports.",
+            e.name
+        );
+    }
+}
+
 /// Run the threaded pass of a `--features wasm-threads` build (phase-10
 /// wasm-threads entry): codegen the SAME front-end output again with
 /// auto-par re-enabled on the wasip1-threads machine, link it
@@ -5341,6 +5360,11 @@ fn cmd_build(
                 match effective_bindings {
                     Some(BindingsMode::Browser) => {
                         let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
+                        let wasm_exports = crate::wasm_exports::collect_wasm_exports(
+                            &pipeline.parsed.program,
+                            crate::target::active_target(),
+                        );
+                        warn_non_scalar_exports(&wasm_exports);
                         let glue = crate::wasm_glue::render_glue(
                             &host_fns,
                             &exe_path,
@@ -5354,6 +5378,7 @@ fn cmd_build(
                         companions.push(("glue", js_path));
                         let dts = crate::wasm_glue::render_dts(
                             &host_fns,
+                            &wasm_exports,
                             &exe_path,
                             threads_glue_cfg.is_some(),
                         );
@@ -6579,6 +6604,11 @@ fn run_multi_file_codegen(
     match effective_bindings {
         Some(BindingsMode::Browser) => {
             let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
+            let wasm_exports = crate::wasm_exports::collect_wasm_exports(
+                &pipeline.parsed.program,
+                crate::target::active_target(),
+            );
+            warn_non_scalar_exports(&wasm_exports);
             let wasm_filename = format!("{}.wasm", mf.name);
             let js = exe_path.with_extension("js");
             if let Err(e) = std::fs::write(
@@ -6594,7 +6624,12 @@ fn run_multi_file_codegen(
             let dts = exe_path.with_extension("d.ts");
             if let Err(e) = std::fs::write(
                 &dts,
-                crate::wasm_glue::render_dts(&host_fns, &wasm_filename, threads_glue_cfg.is_some()),
+                crate::wasm_glue::render_dts(
+                    &host_fns,
+                    &wasm_exports,
+                    &wasm_filename,
+                    threads_glue_cfg.is_some(),
+                ),
             ) {
                 return BuildCodegenStatus::Failed {
                     phase: "link".to_string(),
