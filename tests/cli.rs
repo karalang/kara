@@ -13782,8 +13782,11 @@ console.log("TIMER_OK elapsed=" + elapsed.toFixed(1) + "ms");
 /// The sequential-target gate: the same host-async producer built WITHOUT
 /// `--features wasm-threads` is a hard compile error (codegen, pre-link),
 /// pointing at the flag — never a silent zero-value `recv`. Fires during
-/// IR emission, so it needs no runtime archive / linker / node (always
-/// reachable under `--features llvm`).
+/// IR emission (no runtime archive / linker / node needed) but DOES need
+/// codegen: under a no-`llvm` build `karac build` falls back to a type
+/// check, which the gate (a codegen-time check) never reaches and which
+/// passes cleanly — so this test skips on that config via
+/// `wasm_build_skip_reason` (mirroring `wasm_browser_build_aborts_on_target_gate_violation`).
 #[test]
 fn wasm_time_after_sequential_target_rejected() {
     let tmp = wasm_test_dir("wttimergate");
@@ -13808,6 +13811,14 @@ fn wasm_time_after_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // No-`llvm` build: `karac build` warns "requires the llvm feature" and
+    // falls back to a type check that never reaches the codegen gate — skip
+    // rather than mis-assert a build failure.
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_time_after_sequential_target_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
     assert!(
         !out.status.success(),
         "sequential wasm host-async producer must be rejected, but build succeeded: {stderr}"
