@@ -29,8 +29,11 @@
 //!     comments carry the core import name);
 //!   - the program entry point is the core module's `_start` (WASI
 //!     command) — surfaced as the adapter-synthesized `wasi:cli/run`
-//!     in the embedded component — the only exported user entry until
-//!     the phase-10 "WASM entry-point discovery" entry lands;
+//!     in the embedded component;
+//!   - discovered WASM entry-point exports (phase-10 "WASM entry-point
+//!     discovery") add per-export `func` lines to the world via
+//!     [`render_embed_wit`] — `record`/`option`/`result`/`string`/
+//!     `list<T>` over the canonical ABI (`codegen::cabi` trampolines);
 //!   - types map from the Kāra surface: `i8`..`i64`/`isize` ⇒
 //!     `s8`..`s64`, `u8`..`u64`/`usize` ⇒ `u8`..`u64` (Kāra keeps
 //!     64-bit `usize` semantics on wasm32), `f32`/`f64`, `bool`,
