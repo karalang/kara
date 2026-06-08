@@ -5305,10 +5305,16 @@ fn cmd_build(
                 let _ = std::fs::remove_file(&obj_path);
                 if let Some(tool) = &wasm_tools {
                     let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
+                    let wasm_exports = crate::wasm_exports::collect_wasm_exports(
+                        &pipeline.parsed.program,
+                        crate::target::active_target(),
+                    );
+                    warn_non_scalar_exports(&wasm_exports);
                     let result = crate::componentize::componentize(
                         tool,
                         std::path::Path::new(&link_out),
                         &host_fns,
+                        &wasm_exports,
                         exe_name,
                         std::path::Path::new(&exe_path),
                     );
@@ -6548,8 +6554,19 @@ fn run_multi_file_codegen(
     let _ = std::fs::remove_file(&obj_path);
     if let Some(tool) = wasm_tools {
         let host_fns = crate::wasm_glue::collect_host_fns(&pipeline.parsed.program);
-        let result =
-            crate::componentize::componentize(tool, &link_out, &host_fns, &mf.name, &exe_path);
+        let wasm_exports = crate::wasm_exports::collect_wasm_exports(
+            &pipeline.parsed.program,
+            crate::target::active_target(),
+        );
+        warn_non_scalar_exports(&wasm_exports);
+        let result = crate::componentize::componentize(
+            tool,
+            &link_out,
+            &host_fns,
+            &wasm_exports,
+            &mf.name,
+            &exe_path,
+        );
         let _ = std::fs::remove_file(&link_out);
         if let Err(e) = result {
             return BuildCodegenStatus::Failed {

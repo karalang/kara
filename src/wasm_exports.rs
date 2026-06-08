@@ -170,7 +170,11 @@ fn is_primitive_scalar(name: &str) -> bool {
 /// `pub`, not `main`, no receiver, and *positively* tagged for this
 /// target. A negated spec (`#[target(!native)]`) is an exclusion, not an
 /// export intent — such fns reach wasm only via reachability/DCE.
-fn is_export_entry(f: &crate::ast::Function, current_target: &str) -> bool {
+///
+/// Exposed for codegen, which attaches the canonical-ABI `wasm-export-name`
+/// (kebab) attribute to these functions on component builds so the core
+/// export name matches the embedded WIT.
+pub fn is_export_entry(f: &crate::ast::Function, current_target: &str) -> bool {
     if !f.is_pub || f.self_param.is_some() || f.name == "main" {
         return false;
     }

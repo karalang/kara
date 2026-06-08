@@ -31,6 +31,7 @@
 //! (codegen containment — CLAUDE.md § Architecture): it consumes the
 //! plain [`HostFnSig`] surface and drives child processes.
 
+use crate::wasm_exports::ExportSig;
 use crate::wasm_glue::HostFnSig;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -174,19 +175,24 @@ pub fn componentize(
     tool: &WasmTools,
     core_wasm: &Path,
     host_fns: &[HostFnSig],
+    exports: &[ExportSig],
     package: &str,
     out_path: &Path,
 ) -> Result<(), String> {
     let scratch = scratch_dir()?;
-    let result = componentize_in(tool, core_wasm, host_fns, package, out_path, &scratch);
+    let result = componentize_in(
+        tool, core_wasm, host_fns, exports, package, out_path, &scratch,
+    );
     let _ = std::fs::remove_dir_all(&scratch);
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn componentize_in(
     tool: &WasmTools,
     core_wasm: &Path,
     host_fns: &[HostFnSig],
+    exports: &[ExportSig],
     package: &str,
     out_path: &Path,
     scratch: &Path,
@@ -194,12 +200,15 @@ fn componentize_in(
     let adapter = adapter_path(scratch)?;
     let adapt_arg = format!("wasi_snapshot_preview1={}", adapter.display());
 
-    // Host-fn-free modules skip the embed step entirely: `component
-    // new` infers an import-free world from the module itself.
-    let new_input = if host_fns.is_empty() {
+    // Modules with neither host-fn imports nor entry-point exports skip
+    // the embed step entirely: `component new` infers an import-free
+    // world from the module itself. The presence of either means we must
+    // embed an explicit world so `component new` lifts the right surface.
+    let needs_embed = !host_fns.is_empty() || exports.iter().any(|e| e.all_scalar());
+    let new_input = if !needs_embed {
         core_wasm.to_path_buf()
     } else {
-        let (wit, world) = crate::wit::render_embed_wit(host_fns, package);
+        let (wit, world) = crate::wit::render_embed_wit(host_fns, exports, package);
         let wit_path = scratch.join("embed.wit");
         std::fs::write(&wit_path, wit)
             .map_err(|e| format!("failed to write {}: {e}", wit_path.display()))?;

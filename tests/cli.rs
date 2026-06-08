@@ -11361,6 +11361,72 @@ fn main() {}
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// phase-10 "WASM entry-point discovery" (sub-slice C): a
+/// `--bindings component` (wasm_wasi default) build lifts each scalar
+/// `pub fn` export into the embedded WIT world. The export name is
+/// kebab-cased (`add_two` ⇒ `add-two`); codegen's `wasm-export-name`
+/// attribute renames the core export to match so `wasm-tools component
+/// new` can find it (a mismatch fails the build outright — so a
+/// successful component build already proves the lift). Asserts the
+/// artifact is a component and (when wasm-tools is present) the WIT
+/// carries the kebab export.
+#[test]
+fn wasm_wasi_component_exports_scalar_entry_point() {
+    let tmp = wasm_test_dir("component-export");
+    let path = tmp.join("complib.kara");
+    std::fs::write(
+        &path,
+        r#"
+#[target(wasm_wasi)]
+pub fn add_two(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+fn main() {}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_wasi_component_exports_scalar_entry_point — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "component build failed: {stderr}");
+    let component = tmp.join("complib.wasm");
+    assert!(component.exists(), "missing complib.wasm");
+    assert_eq!(
+        wasm_artifact_kind(&component),
+        "component",
+        "the wasm_wasi default must emit a Component Model component",
+    );
+    if let Some(tool) = wasm_tools_on_path() {
+        let wit_dump = std::process::Command::new(tool)
+            .args(["component", "wit"])
+            .arg(&component)
+            .output()
+            .unwrap();
+        assert!(
+            wit_dump.status.success(),
+            "wasm-tools component wit must round-trip: {}",
+            String::from_utf8_lossy(&wit_dump.stderr)
+        );
+        let wit = String::from_utf8_lossy(&wit_dump.stdout);
+        assert!(
+            wit.contains("export add-two: func(a: s32, b: s32) -> s32;"),
+            "embedded WIT must export the (kebab-cased) entry point, got:\n{wit}",
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// phase-10 "WASM concurrency lowering — sequential default", explicit
 /// `par {}` leg: the block still lowers through `karac_par_run`
 /// (`tests/wasm_codegen.rs` pins the IR shape), and the wasm runtime

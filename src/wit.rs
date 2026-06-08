@@ -42,6 +42,7 @@
 //! (codegen containment — CLAUDE.md § Architecture): it consumes the
 //! plain [`HostFnSig`] surface and emits strings.
 
+use crate::wasm_exports::ExportSig;
 use crate::wasm_glue::{HostFnSig, JsScalar};
 use std::fmt::Write;
 
@@ -242,21 +243,81 @@ fn push_host_interface(out: &mut String, fns: &[HostFnSig], doc_module: &str) {
     out.push_str("}\n\n");
 }
 
+/// Append `export <kebab-name>: func(...);` lines to the world for each
+/// discovered WASM entry-point export (phase-10 "WASM entry-point
+/// discovery"). Sub-slice C covers the **scalar** surface — primitives /
+/// single-field opaque handles, whose canonical-ABI lowering is identity
+/// (a `func(a: s32) -> s32` lowers to a core `(param i32) (result i32)`,
+/// exactly codegen's output). The WIT function name is kebab-cased; the
+/// core module must export under that same string, which codegen ensures
+/// with a `wasm-export-name` attribute (see `codegen` export-name
+/// attachment). Rich (`record`/`variant`/`string`/`list`) exports + the
+/// canonical-ABI trampoline they need are sub-slices D/E — non-scalar
+/// exports are skipped here (they remain raw core exports).
+fn push_world_exports(out: &mut String, exports: &[ExportSig]) {
+    for e in exports.iter().filter(|e| e.all_scalar()) {
+        let params = e
+            .params
+            .iter()
+            .map(|p| {
+                format!(
+                    "{}: {}",
+                    wit_ident(&p.name),
+                    wit_type(&p.ty.kara_ty, p.ty.js)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ret = match &e.ret {
+            Some(t) => format!(" -> {}", wit_type(&t.kara_ty, t.js)),
+            None => String::new(),
+        };
+        let _ = writeln!(
+            out,
+            "  /// `{}` — core export `{}`",
+            kara_export_signature(e),
+            host_import_name(&e.name)
+        );
+        let _ = writeln!(out, "  export {}: func({params}){ret};", wit_ident(&e.name));
+    }
+}
+
+/// Kāra-surface signature doc line for an export, mirroring
+/// [`kara_signature`]'s convention for host fns.
+fn kara_export_signature(e: &ExportSig) -> String {
+    let params = e
+        .params
+        .iter()
+        .map(|p| format!("{}: {}", p.name, p.ty.kara_ty))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let ret = match &e.ret {
+        Some(t) => format!(" -> {}", t.kara_ty),
+        None => String::new(),
+    };
+    format!("fn {}({params}){ret}", e.name)
+}
+
 /// Render the WIT world `wasm-tools component embed` bakes into the
 /// core module on the embedded component path (`--bindings component`).
 /// Returns `(wit_text, world_name)` — the world name is what
 /// `componentize` passes as `--world`.
 ///
-/// The world only **imports** `host` (when host fns exist): the
-/// preview1 command adapter synthesizes `export wasi:cli/run` from the
-/// module's `_start` at `component new` time, so declaring a custom
-/// `run` export here would demand a core export that doesn't exist.
-/// Core import naming must match what codegen attached —
+/// The world **imports** `host` (when host fns exist) and **exports**
+/// each scalar WASM entry point (phase-10 "WASM entry-point discovery").
+/// The preview1 command adapter additionally synthesizes `export
+/// wasi:cli/run` from the module's `_start` at `component new` time.
+/// Core import/export naming must match what codegen attached —
 /// [`host_import_module`] / [`host_import_name`].
-pub fn render_embed_wit(fns: &[HostFnSig], package: &str) -> (String, String) {
+pub fn render_embed_wit(
+    fns: &[HostFnSig],
+    exports: &[ExportSig],
+    package: &str,
+) -> (String, String) {
     let pkg = wit_ident(package);
     let world = world_name(&pkg);
     let module = host_import_module(package);
+    let has_exports = exports.iter().any(|e| e.all_scalar());
 
     let mut out = String::with_capacity(1024);
     let _ = write!(
@@ -273,6 +334,9 @@ pub fn render_embed_wit(fns: &[HostFnSig], package: &str) -> (String, String) {
     let _ = writeln!(out, "world {world} {{");
     if !fns.is_empty() {
         out.push_str("  import host;\n");
+    }
+    if has_exports {
+        push_world_exports(&mut out, exports);
     }
     out.push_str("}\n");
     (out, world)
@@ -316,7 +380,7 @@ mod tests {
                 None,
             ),
         ];
-        let (wit, _) = render_embed_wit(&fns, "webapp");
+        let (wit, _) = render_embed_wit(&fns, &[], "webapp");
         assert!(wit.contains("package kara:webapp;"));
         // 64-bit ints are s64/u64; pointers are wasm32 addresses (u32);
         // snake_case kebab-cases; unit returns drop the arrow.
@@ -342,7 +406,7 @@ mod tests {
             ],
             None,
         )];
-        let (wit, world) = render_embed_wit(&fns, "webapp");
+        let (wit, world) = render_embed_wit(&fns, &[], "webapp");
         assert_eq!(world, "webapp");
         assert!(wit.contains("package kara:webapp;"));
         assert!(wit.contains("interface host {"));
@@ -357,11 +421,58 @@ mod tests {
     }
 
     #[test]
+    fn embed_wit_renders_scalar_entry_point_exports() {
+        use crate::wasm_exports::{ExportParam, ExportSig, ExportType};
+        let scalar = |kara: &str, js| ExportType {
+            kara_ty: kara.to_string(),
+            js,
+            scalar: true,
+        };
+        let exports = vec![
+            ExportSig {
+                name: "add_two".to_string(),
+                params: vec![
+                    ExportParam {
+                        name: "a".to_string(),
+                        ty: scalar("i32", JsScalar::Number),
+                    },
+                    ExportParam {
+                        name: "b".to_string(),
+                        ty: scalar("i32", JsScalar::Number),
+                    },
+                ],
+                ret: Some(scalar("i32", JsScalar::Number)),
+                target: "wasm_wasi".to_string(),
+            },
+            // Non-scalar export: skipped until the canonical-ABI sub-slice.
+            ExportSig {
+                name: "render".to_string(),
+                params: vec![],
+                ret: Some(ExportType {
+                    kara_ty: "String".to_string(),
+                    js: JsScalar::Number,
+                    scalar: false,
+                }),
+                target: "wasm_wasi".to_string(),
+            },
+        ];
+        let (wit, _) = render_embed_wit(&[], &exports, "webapp");
+        // The export name is kebab-cased (WIT identifiers forbid `_`); the
+        // core module exports under the same kebab via `wasm-export-name`.
+        assert!(wit.contains("export add-two: func(a: s32, b: s32) -> s32;"));
+        assert!(wit.contains("`fn add_two(a: i32, b: i32) -> i32` — core export `add-two`"));
+        // Non-scalar export is not declared (canonical ABI pending).
+        assert!(!wit.contains("render"));
+        // A world with no host fns but with exports needs no `import host`.
+        assert!(!wit.contains("import host;"));
+    }
+
+    #[test]
     fn embed_wit_without_host_fns_is_an_empty_world() {
         // The CLI skips the embed step entirely for host-fn-free
         // programs (`component new` direct), but the renderer stays
         // total: empty world, no host interface.
-        let (wit, world) = render_embed_wit(&[], "plain");
+        let (wit, world) = render_embed_wit(&[], &[], "plain");
         assert_eq!(world, "plain");
         assert!(!wit.contains("interface host"));
         assert!(!wit.contains("import host;"));
@@ -378,7 +489,7 @@ mod tests {
         // therefore the core import string) is bare.
         assert_eq!(host_import_module("record"), "kara:record/host");
         assert_eq!(host_import_name("record"), "record");
-        let (wit, _) = render_embed_wit(&[sig("record", vec![], None)], "record");
+        let (wit, _) = render_embed_wit(&[sig("record", vec![], None)], &[], "record");
         assert!(wit.contains("package kara:%record;"));
         assert!(wit.contains("%record: func();"));
     }
@@ -387,7 +498,7 @@ mod tests {
     fn wit_identifiers_escape_keywords_and_normalize_kebab() {
         // Keyword collision: a host fn named `record` must %-escape.
         let fns = vec![sig("record", vec![], None)];
-        let (wit, world) = render_embed_wit(&fns, "My_App");
+        let (wit, world) = render_embed_wit(&fns, &[], "My_App");
         assert!(wit.contains("%record: func();"));
         // Package/world names kebab-case (lowercase, `_` ⇒ `-`).
         assert!(wit.contains("package kara:my-app;"));
@@ -398,7 +509,7 @@ mod tests {
         assert_eq!(kebab_ident("2048"), "p2048");
         // A package named exactly `host` must not collide with the
         // world file's own `host` interface.
-        let (hosted, hosted_world) = render_embed_wit(&fns, "host");
+        let (hosted, hosted_world) = render_embed_wit(&fns, &[], "host");
         assert!(hosted.contains("world host-world {"));
         assert_eq!(hosted_world, "host-world");
     }
