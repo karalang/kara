@@ -212,6 +212,14 @@ the data feed and chart generator versioned alongside the code. Full
 chart set and methodology: **[BENCHMARKS.md](https://github.com/karalang/kara-katas/blob/main/BENCHMARKS.md)**;
 raw numbers: **[bench-results.json](https://github.com/karalang/kara-katas/blob/main/bench-results.json)**.
 
+These benchmarks are validation, not a value proposition: the bar is
+**parity** — that Kāra's safety, ownership, and effect abstractions land
+production-class workloads within a few percent of Rust/C, with no
+performance cliff. The corpus is also a correctness exercise — 30+
+algorithm kernels spanning control flow, generics, collections, pattern
+matching, ownership, and codegen, where small programs surface a
+disproportionate share of compiler bugs.
+
 **Sequential lane** (`KARAC_AUTO_PAR=0`) — the headline, apples-to-apples
 against single-threaded Rust/C/Go. Each dot is one program; lower is
 faster; everything relative to **Rust = 1.0**.
