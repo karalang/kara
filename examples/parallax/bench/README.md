@@ -1,16 +1,19 @@
-# Parallax three-language benchmark
+# Parallax multi-language benchmark
 
 Side-by-side `GET /dashboard/<user_id>` throughput across **Kāra**,
-**Rust**, **Go**, and **Node.js** — the recordable artifact for Parallax
+**Rust**, **Go**, **Node.js**, **Phoenix/Elixir**, and **Java/Netty** —
+the recordable artifact for Parallax
 ([`docs/dogfooding.md § Parallax`](../../../docs/dogfooding.md)).
 
 Each impl serves the same canonical fan-out + join workload: four
 provider "fetches" per request, each carrying `reads(R_i)` on a
 disjoint resource, joined into a `Dashboard` aggregate. The Kāra impl
 gets that fan-out from the compiler — straight-line sequential code,
-the auto-par codegen runs the four reads concurrently. The other three
+the auto-par codegen runs the four reads concurrently. The other five
 write the fan-out by hand (Rust `tokio::join!`, Go goroutines + WaitGroup,
-Node `Promise.all`) and serve as the reference perf cohort.
+Node `Promise.all`, Phoenix `Task.async` + `Task.await_many`, Java/Netty
+`CompletableFuture.allOf` on a fixed pool) and serve as the reference
+perf cohort.
 
 ## What this measures
 
@@ -59,12 +62,13 @@ to stderr, the bench continues with the rest).
 | go    | `go`               | go 1.21+   |
 | node  | `node`             | Node 18+   |
 | phoenix | `elixir` + `mix` | Elixir 1.19 + OTP 29 |
+| java  | `java` + `mvn`     | JDK 11+ (Netty 4.1) |
 | wrk   | `wrk`              | wrk 4.x    |
 
 ### Run
 
 ```sh
-# default — all five impls, 0s warmup + 10s measurement × 3 rounds per (impl, conn)
+# default — all six impls, 0s warmup + 10s measurement × 3 rounds per (impl, conn)
 sh examples/parallax/bench/bench.sh
 
 # dry-run (no servers spawned, no wrk; checked into CI via
@@ -80,7 +84,8 @@ sh examples/parallax/bench/bench.sh --warmup=5 --measure=15
 
 `bench.sh` builds each impl on the fly (Kāra via `karac build`, Rust
 via `cargo build --release`, Go via `go build`, Node served directly
-from `server.js`), launches it, awaits the conventional
+from `server.js`, Phoenix via `mix compile`, Java via `mvn package`
+into a shaded `java -jar` fat-jar), launches it, awaits the conventional
 `BOUND_PORT=<n>` stdout line, runs `wrk -t4 -c100 -dWARMUP+MEASURE`,
 parses `Requests/sec` + `99% <lat>`, and kills the server.
 
@@ -398,7 +403,7 @@ the design lock specifies:
 
 ## Source comparison
 
-Five impls, five idioms for the same problem.
+Six impls, six idioms for the same problem.
 
 - **[`kara/server.kara`](kara/server.kara)** — fan-out is implicit.
   `get_dashboard` is straight-line sequential code; the four
@@ -448,6 +453,19 @@ Five impls, five idioms for the same problem.
   against GenServer/`Task` fan-out, not just Rust's `tokio::join!`.
   At `-c5000` Bandit's default acceptor pool caps ingestion (NA
   latencies) — a tracked tuning follow-on, not a fundamental limit.
+
+- **[`java/`](java/)** — Netty 4.1 (`netty-codec-http`) +
+  `CompletableFuture` fan-out on the JVM. `channelRead0` submits the
+  four providers as `CompletableFuture.supplyAsync` tasks on a fixed
+  `ExecutorService` sized to `availableProcessors()` (the JVM analog of
+  Go's `WaitGroup` / tokio's worker pool), joins via
+  `CompletableFuture.allOf`, and writes the JSON response from the
+  completion callback — the Netty event-loop thread never busy-loops.
+  The JVM-tier foil: the auto-par reframe lands against `CompletableFuture`
+  orchestration + JIT-warmed throughput, the dominant enterprise backend
+  stack. Built by `mvn -q -DskipTests package` into a shaded
+  `java -jar`-runnable fat-jar; F4 footnote (busy-loop substitute)
+  applies identically.
 
 ## Out of scope (deferred to follow-ups)
 

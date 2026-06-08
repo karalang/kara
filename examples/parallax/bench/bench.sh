@@ -4,17 +4,19 @@
 # rounds per (impl, conn) pair, and report a richer percentile spectrum.
 # Updated 2026-05-30 to add the Phoenix/Elixir reference impl as the
 # fifth comparator (commercial-tier foil for the auto-par claim).
+# Updated 2026-06-07 to add the Java/Netty reference impl as the sixth
+# comparator (JVM-tier foil; phase-6 P1).
 #
-# Builds + runs the five reference impls (kara, rust, go, node, phoenix)
-# and probes each with `wrk` for throughput + latency-distribution.
+# Builds + runs the six reference impls (kara, rust, go, node, phoenix,
+# java) and probes each with `wrk` for throughput + latency-distribution.
 # Sequential per-impl runs on the same machine — F4 fairness control.
 #
 # Usage:
-#   bench.sh                          # full bench, all five impls
+#   bench.sh                          # full bench, all six impls
 #   bench.sh --dry-run                # print what would run; touch nothing
 #   bench.sh --impls=k,r              # comma-separated subset
 #                                     # (k=kara, r=rust, g=go, n=node,
-#                                     #  p=phoenix)
+#                                     #  p=phoenix, j=java)
 #   bench.sh --connections=100,1000   # connection-count sweep (default
 #                                     # 100,1000,5000). One row per
 #                                     # (impl, conn) pair in the output.
@@ -30,10 +32,10 @@
 #                                     # round (default 10s).
 #
 # **Toolchain probing.** Each impl checks for its required toolchain
-# (cargo for kara + rust; go for go; node for node; wrk always
-# required for measurements). Missing toolchain → `skip: <lang> not
-# installed` to stderr; the impl is skipped, the bench continues for
-# the others.
+# (cargo for kara + rust; go for go; node for node; elixir/mix for
+# phoenix; java + mvn for java; wrk always required for measurements).
+# Missing toolchain → `skip: <lang> not installed` to stderr; the impl
+# is skipped, the bench continues for the others.
 #
 # **Output format.** wrk's `--latency` produces fixed percentiles
 # (p50/p75/p90/p99) plus a `Latency ... Max` line. We parse all five
@@ -58,7 +60,7 @@ REPO_ROOT=$(CDPATH= cd -- "$BENCH_DIR/../../.." && pwd)
 
 # ── Defaults ───────────────────────────────────────────────────────
 DRY_RUN=0
-IMPLS_FILTER="k,r,g,n,p"
+IMPLS_FILTER="k,r,g,n,p,j"
 # Default warmup = 0 (no warmup). With $RUNS=3 measure rounds and
 # median-of-runs aggregation, the first-round JIT/cold-start outlier
 # is naturally excluded — warmup adds time without improving the
@@ -227,6 +229,27 @@ prepare_phoenix() {
   }
   [ -x "$BENCH_DIR/phoenix/bin/server" ] || {
     echo "skip: phoenix launcher missing at $BENCH_DIR/phoenix/bin/server" >&2
+    return 1
+  }
+  return 0
+}
+
+prepare_java() {
+  if ! have java || ! have mvn; then
+    echo "skip: java not installed (needs java + mvn)" >&2
+    return 1
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] java: would mvn -q -DskipTests package in bench/java/" >&2
+    return 0
+  fi
+  JAVA_JAR="$BENCH_DIR/java/target/parallax-bench-java.jar"
+  (cd "$BENCH_DIR/java" && mvn -q -DskipTests package >/dev/null 2>&1) || {
+    echo "skip: java build failed (mvn -q -DskipTests package)" >&2
+    return 1
+  }
+  [ -f "$JAVA_JAR" ] || {
+    echo "skip: java jar missing at $JAVA_JAR" >&2
     return 1
   }
   return 0
@@ -498,7 +521,7 @@ run_impl() {
 }
 
 # ── Main ────────────────────────────────────────────────────────────
-echo "Parallax bench harness — kara, rust, go, node, phoenix"
+echo "Parallax bench harness — kara, rust, go, node, phoenix, java"
 echo "  bench dir: $BENCH_DIR"
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "  mode: DRY RUN (no servers spawned, no wrk)"
@@ -536,6 +559,11 @@ $out"
 
 PHOENIX_CMD_HOLDER="$BENCH_DIR/phoenix/bin/server"
 out=$(run_impl "p" "phoenix" prepare_phoenix "$PHOENIX_CMD_HOLDER")
+results="$results
+$out"
+
+JAVA_CMD_HOLDER="java -jar $BENCH_DIR/java/target/parallax-bench-java.jar"
+out=$(run_impl "j" "java" prepare_java "$JAVA_CMD_HOLDER")
 results="$results
 $out"
 
