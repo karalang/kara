@@ -250,7 +250,11 @@ fn push_host_interface(out: &mut String, fns: &[HostFnSig], doc_module: &str) {
 /// `option<T>` / `result<T, E>`.
 fn export_wit_type(ty: &crate::wasm_exports::ExportType) -> String {
     use crate::wasm_exports::VariantShape;
-    if let Some(v) = &ty.variant {
+    if ty.is_string() {
+        "string".to_string()
+    } else if let Some(elem) = &ty.list_elem {
+        format!("list<{}>", export_wit_type(elem))
+    } else if let Some(v) = &ty.variant {
         match v {
             VariantShape::Option(t) => format!("option<{}>", export_wit_type(t)),
             VariantShape::Result(t, e) => {
@@ -472,6 +476,8 @@ mod tests {
             scalar: true,
             record_fields: None,
             variant: None,
+            string: false,
+            list_elem: None,
         };
         let exports = vec![
             ExportSig {
@@ -499,6 +505,8 @@ mod tests {
                     scalar: false,
                     record_fields: None,
                     variant: None,
+                    string: false,
+                    list_elem: None,
                 }),
                 target: "wasm_wasi".to_string(),
             },

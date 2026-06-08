@@ -11703,6 +11703,94 @@ fn main() {}
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// phase-10 "WASM entry-point discovery" (sub-slice E): component exports
+/// over `String` and scalar-element `Vec[T]` lift into the WIT world as
+/// `string` / `list<T>`. The trampoline lifts a canonical `(ptr, len)`
+/// slice into the Kāra `{ptr, len, cap}` value (the guest owns the
+/// host-allocated bytes via `cabi_realloc`) and lowers the returned value
+/// back to a `(ptr, len)` return area. Validated by wasmtime invoke.
+#[test]
+fn wasm_wasi_component_exports_string_and_list() {
+    let tmp = wasm_test_dir("component-string-list");
+    let path = tmp.join("slib.kara");
+    std::fs::write(
+        &path,
+        r#"
+#[target(wasm_wasi)]
+pub fn shout(s: String) -> String {
+    return s + "!";
+}
+
+#[target(wasm_wasi)]
+pub fn make_range(n: i32) -> Vec[i32] {
+    let mut out: Vec[i32] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        out.push(i);
+        i += 1;
+    }
+    return out;
+}
+
+fn main() {}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_wasi_component_exports_string_and_list — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "component build failed: {stderr}");
+    let component = tmp.join("slib.wasm");
+    assert_eq!(wasm_artifact_kind(&component), "component");
+    if let Some(tool) = wasm_tools_on_path() {
+        let wit = String::from_utf8_lossy(
+            &std::process::Command::new(tool)
+                .args(["component", "wit"])
+                .arg(&component)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .into_owned();
+        assert!(
+            wit.contains("export shout: func(s: string) -> string;"),
+            "string export must lift, got:\n{wit}",
+        );
+        assert!(
+            wit.contains("export make-range: func(n: s32) -> list<s32>;"),
+            "list export must lift, got:\n{wit}",
+        );
+    }
+    if let Some(wt) = wasmtime_on_path() {
+        let invoke = |args: &str| -> String {
+            let o = std::process::Command::new(wt)
+                .args(["run", "--invoke", args])
+                .arg(&component)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "invoke {args} failed: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
+        };
+        assert_eq!(invoke("shout(\"hi\")"), "\"hi!\"");
+        assert_eq!(invoke("make-range(4)"), "[0, 1, 2, 3]");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// phase-10 "WASM concurrency lowering — sequential default", explicit
 /// `par {}` leg: the block still lowers through `karac_par_run`
 /// (`tests/wasm_codegen.rs` pins the IR shape), and the wasm runtime

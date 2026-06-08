@@ -69,6 +69,15 @@ pub struct ExportType {
     /// inners — a WIT `option`/`result`, marshalled via the trampoline's
     /// variant layout conversion (sub-slice D.3). `None` otherwise.
     pub variant: Option<VariantShape>,
+    /// `true` iff this is `String` — a WIT `string`, marshalled via the
+    /// trampoline's `(ptr, len)` canonical lift/lower over the
+    /// `cabi_realloc`-managed shared linear memory (sub-slice E).
+    pub string: bool,
+    /// `Some(elem)` when this is `Vec[T]` over a scalar element — a WIT
+    /// `list<T>`. Shares the `{ptr, len, cap}` repr and `(ptr, len=count)`
+    /// canonical ABI with `String`, so it reuses the same trampoline path
+    /// (sub-slice E).
+    pub list_elem: Option<Box<ExportType>>,
 }
 
 impl ExportType {
@@ -84,11 +93,27 @@ impl ExportType {
         self.variant.is_some()
     }
 
+    /// `String` — a WIT `string` (sub-slice E).
+    pub fn is_string(&self) -> bool {
+        self.string
+    }
+
+    /// `Vec[T]` over a scalar element — a WIT `list<T>` (sub-slice E).
+    pub fn is_list(&self) -> bool {
+        self.list_elem.is_some()
+    }
+
+    /// `String` or `Vec[T]` — both cross as a `{ptr, len}` slice via the
+    /// same trampoline path.
+    pub fn is_slice_like(&self) -> bool {
+        self.is_string() || self.is_list()
+    }
+
     /// Surface this slice can render/marshal today: bare scalars, flat
-    /// records, and scalar-inner variants. (`String`/`Vec`/nested extend
-    /// this as their sub-slices land.)
+    /// records, scalar-inner variants, `String`, and scalar-element
+    /// `Vec`. (Nested aggregates extend this as their sub-slices land.)
     pub fn is_marshallable(&self) -> bool {
-        self.scalar || self.is_record() || self.is_variant()
+        self.scalar || self.is_record() || self.is_variant() || self.is_slice_like()
     }
 }
 
@@ -133,25 +158,30 @@ impl ExportSig {
     /// export needs the sub-slice D trampoline (a pure-scalar export does
     /// not). Only meaningful together with [`Self::is_marshallable`].
     pub fn needs_trampoline(&self) -> bool {
-        self.params.iter().any(|p| p.ty.is_record())
+        self.params
+            .iter()
+            .any(|p| p.ty.is_record() || p.ty.is_slice_like())
             || self
                 .ret
                 .as_ref()
-                .is_some_and(|r| r.is_record() || r.is_variant())
+                .is_some_and(|r| r.is_record() || r.is_variant() || r.is_slice_like())
     }
 
     /// `true` iff the codegen export trampoline can lower this export for
-    /// a **component** build today: every param is a scalar or flat
-    /// record, and the return is a scalar, flat record, or scalar-inner
-    /// variant (`Option`/`Result`). (`String`/`Vec`, and variant *params*,
-    /// extend this as their steps land.) Any record/variant in the
-    /// signature needs the trampoline; a pure-scalar export does not.
+    /// a **component** build today: every param is a scalar, flat record,
+    /// or `String`, and the return is a scalar, flat record, scalar-inner
+    /// variant (`Option`/`Result`), or `String`. (`Vec`, variant *params*,
+    /// and nested aggregates extend this as their steps land.) Any
+    /// record/variant/string in the signature needs the trampoline; a
+    /// pure-scalar export does not.
     pub fn component_lowerable(&self) -> bool {
-        self.params.iter().all(|p| p.ty.scalar || p.ty.is_record())
+        self.params
+            .iter()
+            .all(|p| p.ty.scalar || p.ty.is_record() || p.ty.is_slice_like())
             && self
                 .ret
                 .as_ref()
-                .is_none_or(|r| r.scalar || r.is_record() || r.is_variant())
+                .is_none_or(|r| r.scalar || r.is_record() || r.is_variant() || r.is_slice_like())
     }
 }
 
@@ -262,6 +292,37 @@ fn export_type(
         scalar: is_scalar_surface(ty, handles),
         record_fields: record_fields_of(ty, handles, structs),
         variant: variant_shape_of(ty, handles, structs),
+        string: is_string_type(ty),
+        list_elem: list_elem_of(ty, handles, structs),
+    }
+}
+
+/// Is `ty` the `String` type? (A single-segment `String` path with no
+/// generic args.)
+fn is_string_type(ty: &TypeExpr) -> bool {
+    matches!(&ty.kind, TypeKind::Path(p)
+        if p.segments.len() == 1 && p.generic_args.is_none() && p.segments[0] == "String")
+}
+
+/// `Some(elem)` when `ty` is `Vec[T]` over a scalar-surface element — a
+/// WIT `list<T>`. `None` otherwise (incl. `Vec` of a non-scalar element,
+/// a later step).
+fn list_elem_of(
+    ty: &TypeExpr,
+    handles: &HashMap<&str, JsScalar>,
+    structs: &HashMap<&str, &[crate::ast::StructField]>,
+) -> Option<Box<ExportType>> {
+    let TypeKind::Path(p) = &ty.kind else {
+        return None;
+    };
+    if p.segments.len() != 1 || p.segments[0] != "Vec" {
+        return None;
+    }
+    match p.generic_args.as_ref()?.as_slice() {
+        [crate::ast::GenericArg::Type(t)] if is_scalar_surface(t, handles) => {
+            Some(Box::new(export_type(t, handles, structs)))
+        }
+        _ => None,
     }
 }
 
@@ -541,6 +602,34 @@ mod tests {
         let e = &collect_wasm_exports(&p, "wasm_wasi")[0];
         assert!(e.params[0].ty.is_variant());
         assert!(!e.component_lowerable(), "variant params not lowerable yet");
+    }
+
+    #[test]
+    fn string_and_scalar_vec_classify_and_are_lowerable() {
+        let p = prog(
+            r#"
+            #[target(wasm_wasi)] pub fn shout(s: String) -> String { s }
+            #[target(wasm_wasi)] pub fn doubled(xs: Vec[i32]) -> Vec[i32] { xs }
+            #[derive(Copy, Clone)] pub struct Point { x: f64, y: f64 }
+            #[target(wasm_wasi)] pub fn pts() -> Vec[Point] { Vec.new() }
+            fn main() {}
+            "#,
+        );
+        let exports = collect_wasm_exports(&p, "wasm_wasi");
+        let shout = exports.iter().find(|e| e.name == "shout").unwrap();
+        assert!(shout.params[0].ty.is_string() && shout.params[0].ty.is_slice_like());
+        assert!(shout.ret.as_ref().unwrap().is_string());
+        assert!(shout.component_lowerable() && shout.needs_trampoline());
+
+        let doubled = exports.iter().find(|e| e.name == "doubled").unwrap();
+        assert!(doubled.params[0].ty.is_list() && doubled.params[0].ty.is_slice_like());
+        assert!(doubled.component_lowerable());
+
+        // `Vec[Point]` — a non-scalar element — is not a scalar-element
+        // list, so not lowerable in this step.
+        let pts = exports.iter().find(|e| e.name == "pts").unwrap();
+        assert!(!pts.ret.as_ref().unwrap().is_list());
+        assert!(!pts.component_lowerable());
     }
 
     #[test]

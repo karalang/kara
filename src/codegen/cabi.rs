@@ -22,12 +22,17 @@
 //!     canonical `option`/`result` return area: discriminant remapped to
 //!     the canonical case order, payload bytes copied from the enum's
 //!     word 0 (see [`Self::emit_variant_return_area`]).
+//!   - **`String` / `Vec[T]` params/returns** share the Kāra
+//!     `{ptr, len, cap}` repr and the canonical `(ptr, len)` slice ABI: a
+//!     param lifts the host-allocated `(ptr, len)` into the owned Kāra
+//!     value, a return lowers it back to a `(ptr, len)` return area (see
+//!     [`Self::emit_string_return_area`]). The host allocates param bytes
+//!     through the exported `cabi_realloc` (`runtime/wasm_alloc.rs`).
 //!
 //! Only the surface [`crate::wasm_exports::ExportSig::component_lowerable`]
-//! reports is handled here; variant *params*, `string`/`list`, and nested
-//! aggregates are later steps (their WIT is likewise withheld until the
-//! matching lowering lands, so the WIT never names a core export that does
-//! not exist).
+//! reports is handled here; variant *params* and nested aggregates are
+//! later steps (their WIT is likewise withheld until the matching lowering
+//! lands, so the WIT never names a core export that does not exist).
 
 use inkwell::attributes::AttributeLoc;
 use inkwell::module::Linkage;
@@ -102,6 +107,11 @@ impl<'ctx> super::Codegen<'ctx> {
         enum Plan<'c> {
             Scalar,
             Record(inkwell::types::StructType<'c>, usize),
+            /// `String` param: canonical `(ptr i32, len i32)` flats are
+            /// reconstructed into the Kāra `{ptr, len, cap}` struct (the
+            /// real fn's param type); the guest owns the host-allocated
+            /// bytes (`cap = len`).
+            StringArg(inkwell::types::StructType<'c>),
         }
         let mut canon_params: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = Vec::new();
         let mut plans: Vec<Plan<'ctx>> = Vec::new();
@@ -118,17 +128,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     canon_params.push(st.get_field_type_at_index(fi as u32).unwrap().into());
                 }
                 plans.push(Plan::Record(st, n));
+            } else if p.ty.is_slice_like() {
+                // Kāra `String` / `Vec[T]` is passed by value as
+                // `{ptr, len, cap}` — the real fn's param type here. Both
+                // lower from a canonical `(ptr i32, len i32)` slice.
+                let st = real_params[i].into_struct_type();
+                canon_params.push(i32_ty.into()); // ptr
+                canon_params.push(i32_ty.into()); // len (elem count)
+                plans.push(Plan::StringArg(st));
             } else {
                 canon_params.push(real_params[i]);
                 plans.push(Plan::Scalar);
             }
         }
 
-        // Canonical return: record / variant ⇒ i32 (return-area pointer);
-        // scalar ⇒ the real return type; unit ⇒ void.
+        // Canonical return: record / variant / string ⇒ i32 (return-area
+        // pointer); scalar ⇒ the real return type; unit ⇒ void.
         let ret_is_record = e.ret.as_ref().is_some_and(|r| r.is_record());
         let ret_is_variant = e.ret.as_ref().is_some_and(|r| r.is_variant());
-        let ret_via_area = ret_is_record || ret_is_variant;
+        let ret_is_slice = e.ret.as_ref().is_some_and(|r| r.is_slice_like());
+        let ret_via_area = ret_is_record || ret_is_variant || ret_is_slice;
         let real_ret = real.get_type().get_return_type();
         let fn_ty = if ret_via_area {
             i32_ty.fn_type(&canon_params, false)
@@ -197,6 +216,40 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     args.push(agg.into());
                 }
+                Plan::StringArg(st) => {
+                    let ptr_i32 = next().into_int_value();
+                    let len_i32 = next().into_int_value();
+                    let ptr = self
+                        .builder
+                        .build_int_to_ptr(
+                            ptr_i32,
+                            self.context.ptr_type(inkwell::AddressSpace::default()),
+                            "str_ptr",
+                        )
+                        .map_err(|e| format!("wasm export trampoline str ptr: {e}"))?;
+                    let len64 = self
+                        .builder
+                        .build_int_z_extend(len_i32, self.context.i64_type(), "str_len")
+                        .map_err(|e| format!("wasm export trampoline str len: {e}"))?;
+                    // Kāra String `{ ptr, len, cap }`; the guest takes
+                    // ownership of the host-allocated buffer, cap = len.
+                    let mut agg = st.get_undef();
+                    for (idx, v) in [
+                        ptr.as_basic_value_enum(),
+                        len64.as_basic_value_enum(),
+                        len64.as_basic_value_enum(),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        agg = self
+                            .builder
+                            .build_insert_value(agg, v, idx as u32, "strfld")
+                            .map_err(|e| format!("wasm export trampoline str insert: {e}"))?
+                            .into_struct_value();
+                    }
+                    args.push(agg.into());
+                }
             }
         }
 
@@ -253,6 +306,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 shape,
                 kebab,
             )?;
+            self.builder
+                .build_return(Some(&addr.as_basic_value_enum()))
+                .map_err(|e| format!("wasm export trampoline ret: {e}"))?;
+        } else if ret_is_slice {
+            // `String` / `Vec[T]` share the `{ptr, len, cap}` repr; both
+            // lower to a canonical `(ptr, len)` return area.
+            let addr =
+                self.emit_string_return_area(call.try_as_basic_value().unwrap_basic(), kebab)?;
             self.builder
                 .build_return(Some(&addr.as_basic_value_enum()))
                 .map_err(|e| format!("wasm export trampoline ret: {e}"))?;
@@ -376,6 +437,69 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_ptr_to_int(area_ptr, self.context.i32_type(), "ret_addr")
             .map_err(|e| format!("wasm export trampoline variant ptrtoint: {e}"))
+    }
+
+    /// Lower a returned Kāra `String` (`{ ptr, len, cap }`) into the
+    /// canonical-ABI `string` return area `{ i32 ptr, i32 len }` and
+    /// return the area's `i32` address. The string bytes already live in
+    /// the guest's linear memory (the `String`'s heap buffer), which the
+    /// component lifter reads at `ptr`. (`cap` is dropped; a `cabi_post_*`
+    /// free hook is a follow-up — a WASI command reads the result once and
+    /// exits, so the buffer is reclaimed at instance teardown.)
+    fn emit_string_return_area(
+        &mut self,
+        string_val: inkwell::values::BasicValueEnum<'ctx>,
+        kebab: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let i32_ty = self.context.i32_type();
+        let sv = string_val.into_struct_value();
+        let ptr = self
+            .builder
+            .build_extract_value(sv, 0, "str_ptr")
+            .map_err(|e| format!("wasm export trampoline str ret ptr: {e}"))?
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_extract_value(sv, 1, "str_len")
+            .map_err(|e| format!("wasm export trampoline str ret len: {e}"))?
+            .into_int_value();
+        let ptr_i32 = self
+            .builder
+            .build_ptr_to_int(ptr, i32_ty, "str_ptr_i32")
+            .map_err(|e| format!("wasm export trampoline str ret ptrtoint: {e}"))?;
+        let len_i32 = self
+            .builder
+            .build_int_truncate(len, i32_ty, "str_len_i32")
+            .map_err(|e| format!("wasm export trampoline str ret len trunc: {e}"))?;
+
+        // Return area `{ i32 ptr, i32 len }` — 8 bytes, align 4.
+        let area_ty = self.context.i8_type().array_type(8);
+        let area = self
+            .module
+            .add_global(area_ty, None, &format!("__kara_ret_{kebab}"));
+        area.set_linkage(Linkage::Internal);
+        area.set_initializer(&area_ty.const_zero());
+        area.set_alignment(4);
+        let area_ptr = area.as_pointer_value();
+        self.builder
+            .build_store(area_ptr, ptr_i32)
+            .map_err(|e| format!("wasm export trampoline str ret store ptr: {e}"))?;
+        let len_slot = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    self.context.i8_type(),
+                    area_ptr,
+                    &[i32_ty.const_int(4, false)],
+                    "len_slot",
+                )
+                .map_err(|e| format!("wasm export trampoline str ret gep: {e}"))?
+        };
+        self.builder
+            .build_store(len_slot, len_i32)
+            .map_err(|e| format!("wasm export trampoline str ret store len: {e}"))?;
+        self.builder
+            .build_ptr_to_int(area_ptr, i32_ty, "ret_addr")
+            .map_err(|e| format!("wasm export trampoline str ret area ptrtoint: {e}"))
     }
 
     /// Byte size + alignment of a scalar Kāra type at the canonical-ABI /

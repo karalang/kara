@@ -1443,6 +1443,8 @@ mod tests {
             scalar: true,
             record_fields: None,
             variant: None,
+            string: false,
+            list_elem: None,
         };
         let exports = vec![
             ExportSig {
@@ -1470,6 +1472,8 @@ mod tests {
                     scalar: false,
                     record_fields: None,
                     variant: None,
+                    string: false,
+                    list_elem: None,
                 }),
                 target: "wasm_browser".to_string(),
             },

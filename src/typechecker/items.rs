@@ -95,14 +95,15 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// `#[target(wasm_browser)]` carries the **same** restriction as a
     /// `host fn` — primitives, `Copy`-satisfying types, opaque-handle
-    /// newtypes — because the browser glue marshals the same scalar set.
-    /// `#[target(wasm_wasi)]` is destined to additionally permit the
-    /// WIT-expressible types (records / variants / `string` / `list` /
-    /// `option` / `result`); that surface is widened here as the
-    /// Canonical ABI sub-slices land its lowering. Until then both tags
-    /// share the host-boundary floor, so the diagnostic keys cleanly off
-    /// the function's own tag (independent of the build target — only the
-    /// matching-target fns survive `filter_inactive_items` anyway).
+    /// newtypes — because the browser glue marshals the same scalar set
+    /// (rich browser JS shapes are a later sub-slice). `#[target(wasm_wasi)]`
+    /// targets the Component Model canonical ABI, which expresses the
+    /// richer owned types (records / `option` / `result` / `string` /
+    /// `list`), so it only rejects what genuinely cannot cross — borrows
+    /// (`ref` / `mut ref`), which have no canonical-export representation.
+    /// Owned types the codegen trampoline does not yet lower are not hard
+    /// errors: they are omitted from the embedded WIT with a build-time
+    /// note (`cli::warn_unlowered_exports`) and remain raw core exports.
     fn check_wasm_export_boundary(&mut self, f: &Function) {
         let Some(spec) = crate::target::target_spec_of(&f.attributes) else {
             return;
@@ -110,18 +111,25 @@ impl<'a> super::TypeChecker<'a> {
         if spec.negated {
             return;
         }
-        let is_wasm_export = f.is_pub
-            && f.self_param.is_none()
-            && f.name != "main"
-            && spec
-                .names
-                .iter()
-                .any(|n| n == "wasm_browser" || n == "wasm_wasi");
-        if !is_wasm_export {
+        if !f.is_pub || f.self_param.is_some() || f.name == "main" {
             return;
         }
+        let browser = spec.names.iter().any(|n| n == "wasm_browser");
+        let wasi = spec.names.iter().any(|n| n == "wasm_wasi");
+        if !browser && !wasi {
+            return;
+        }
+        // Browser uses the strict host-fn (scalar) floor; wasi (canonical
+        // ABI) only rejects borrows.
+        let check = |s: &mut Self, ty: &TypeExpr, pos: &str| -> Option<String> {
+            if browser {
+                s.host_boundary_violation(ty, pos)
+            } else {
+                Self::wasi_export_boundary_violation(ty, pos)
+            }
+        };
         for p in &f.params {
-            if let Some(msg) = self.host_boundary_violation(&p.ty, "parameter") {
+            if let Some(msg) = check(self, &p.ty, "parameter") {
                 self.type_error(
                     format!("wasm export '{}': {msg}", f.name),
                     p.span.clone(),
@@ -130,13 +138,33 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         if let Some(ref rt) = f.return_type {
-            if let Some(msg) = self.host_boundary_violation(rt, "return") {
+            if let Some(msg) = check(self, rt, "return") {
                 self.type_error(
                     format!("wasm export '{}': {msg}", f.name),
                     rt.span.clone(),
                     TypeErrorKind::TypeMismatch,
                 );
             }
+        }
+    }
+
+    /// `#[target(wasm_wasi)]` export boundary: the Component Model
+    /// canonical ABI expresses owned records / variants / `string` /
+    /// `list`, so the only hard rejection is a borrow (`ref` / `mut ref`),
+    /// which has no canonical-export form. Everything else is accepted
+    /// here; whether codegen can lower it yet is a separate, non-fatal
+    /// concern (omitted-from-WIT-with-a-note, see `check_wasm_export_boundary`).
+    fn wasi_export_boundary_violation(ty: &TypeExpr, position: &str) -> Option<String> {
+        match &ty.kind {
+            TypeKind::Ref(_) => Some(format!(
+                "`ref` {position}s cannot cross the component boundary — pass an owned value \
+                 (the Component Model canonical ABI has no borrow form for exported functions)",
+            )),
+            TypeKind::MutRef(_) => Some(format!(
+                "`mut ref` {position}s cannot cross the component boundary — pass an owned value \
+                 (the Component Model canonical ABI has no borrow form for exported functions)",
+            )),
+            _ => None,
         }
     }
 
