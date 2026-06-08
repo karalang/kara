@@ -120,13 +120,12 @@ impl ExportSig {
     }
 
     /// `true` iff the codegen export trampoline can lower this export for
-    /// a **component** build today: all params are scalars and the return
-    /// is a scalar or a flat record. (Record *params* — which need
-    /// canonical param-flattening + reconstruction — and `Option` /
-    /// `Result` / `String` / `Vec` extend this as their steps land.) A
-    /// record return needs the trampoline; a pure-scalar export does not.
+    /// a **component** build today: every param and the return is a scalar
+    /// or a flat record. (`Option` / `Result` / `String` / `Vec` extend
+    /// this as their steps land.) Any record param/return needs the
+    /// trampoline; a pure-scalar export does not.
     pub fn component_lowerable(&self) -> bool {
-        self.params.iter().all(|p| p.ty.scalar)
+        self.params.iter().all(|p| p.ty.scalar || p.ty.is_record())
             && self.ret.as_ref().is_none_or(|r| r.scalar || r.is_record())
     }
 }
@@ -178,6 +177,17 @@ pub fn export_names(sigs: &[ExportSig]) -> Vec<String> {
     sigs.iter().map(|s| s.name.clone()).collect()
 }
 
+/// The LLVM symbol name of the canonical-ABI trampoline codegen emits for
+/// a record-bearing component export. Distinct from the real function's
+/// symbol (which keeps the bare Kāra name) so the two never collide when
+/// a name equals its kebab form (`area` ⇒ `area`); the trampoline is then
+/// surfaced under the kebab WIT name via a `wasm-export-name` attribute.
+/// Single source shared by codegen (`codegen::cabi`) and the link step
+/// ([`link_export_names`]).
+pub fn export_trampoline_symbol(fn_name: &str) -> String {
+    format!("__kara_export_{}", crate::wit::host_import_name(fn_name))
+}
+
 /// The `--export=<symbol>` arguments for the wasm link, given the binding.
 ///
 /// For a **component** build, a record-returning export is exported via
@@ -192,7 +202,7 @@ pub fn link_export_names(sigs: &[ExportSig], component: bool) -> Vec<String> {
     sigs.iter()
         .map(|s| {
             if component && s.component_lowerable() && s.needs_trampoline() {
-                crate::wit::host_import_name(&s.name)
+                export_trampoline_symbol(&s.name)
             } else {
                 s.name.clone()
             }
@@ -437,9 +447,9 @@ mod tests {
     }
 
     #[test]
-    fn record_param_is_not_yet_component_lowerable() {
-        // A record PARAM needs canonical param-flattening (a later step),
-        // so it is not component_lowerable yet even though it is a record.
+    fn record_param_is_component_lowerable() {
+        // A record PARAM (canonical param-flattening + reconstruction in
+        // the trampoline) is component-lowerable and needs the trampoline.
         let p = prog(
             r#"
             #[derive(Copy, Clone)] pub struct Point { x: f64, y: f64 }
@@ -449,6 +459,7 @@ mod tests {
         );
         let e = &collect_wasm_exports(&p, "wasm_wasi")[0];
         assert!(e.params[0].ty.is_record());
-        assert!(!e.component_lowerable(), "record params not lowerable yet");
+        assert!(e.component_lowerable());
+        assert!(e.needs_trampoline());
     }
 }

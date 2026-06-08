@@ -11523,6 +11523,98 @@ fn main() {}
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// phase-10 "WASM entry-point discovery" (sub-slice D.2): a component
+/// export taking a flat-record PARAM (`fn area(p: Point) -> f64`,
+/// `fn translate(p: Point, dx, dy) -> Point`) lowers via the canonical
+/// trampoline — the record param flattens to its scalar fields, which the
+/// trampoline reconstructs into the struct the Kāra fn expects. Validated
+/// by `component new` + (when present) wasmtime invoke.
+#[test]
+fn wasm_wasi_component_exports_record_param() {
+    let tmp = wasm_test_dir("component-recparam");
+    let path = tmp.join("rplib.kara");
+    std::fs::write(
+        &path,
+        r#"
+#[derive(Copy, Clone)]
+pub struct Point { x: f64, y: f64 }
+
+#[target(wasm_wasi)]
+pub fn area(p: Point) -> f64 {
+    return p.x * p.y;
+}
+
+#[target(wasm_wasi)]
+pub fn translate(p: Point, dx: f64, dy: f64) -> Point {
+    return Point { x: p.x + dx, y: p.y + dy };
+}
+
+fn main() {}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_wasi_component_exports_record_param — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "component build failed: {stderr}");
+    let component = tmp.join("rplib.wasm");
+    assert_eq!(wasm_artifact_kind(&component), "component");
+    if let Some(tool) = wasm_tools_on_path() {
+        let wit = String::from_utf8_lossy(
+            &std::process::Command::new(tool)
+                .args(["component", "wit"])
+                .arg(&component)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .into_owned();
+        assert!(
+            wit.contains("export area: func(p: point) -> f64;"),
+            "record-param export must lift, got:\n{wit}",
+        );
+        assert!(
+            wit.contains("export translate: func(p: point, dx: f64, dy: f64) -> point;"),
+            "record-param-and-return export must lift, got:\n{wit}",
+        );
+    }
+    if let Some(wt) = wasmtime_on_path() {
+        let run = std::process::Command::new(wt)
+            .args(["run", "--invoke", "area({x: 2, y: 3})"])
+            .arg(&component)
+            .output()
+            .unwrap();
+        let so = String::from_utf8_lossy(&run.stdout);
+        assert!(
+            run.status.success() && so.contains('6'),
+            "area({{2,3}}) must be 6, got stdout={so} stderr={}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        let run2 = std::process::Command::new(wt)
+            .args(["run", "--invoke", "translate({x: 2, y: 3}, 10, 20)"])
+            .arg(&component)
+            .output()
+            .unwrap();
+        let so2 = String::from_utf8_lossy(&run2.stdout);
+        assert!(
+            run2.status.success() && so2.contains("x: 12") && so2.contains("y: 23"),
+            "translate must be {{x:12,y:23}}, got stdout={so2} stderr={}",
+            String::from_utf8_lossy(&run2.stderr),
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// phase-10 "WASM concurrency lowering — sequential default", explicit
 /// `par {}` leg: the block still lowers through `karac_par_run`
 /// (`tests/wasm_codegen.rs` pins the IR shape), and the wasm runtime
