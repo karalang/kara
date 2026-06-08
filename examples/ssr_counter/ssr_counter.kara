@@ -1,0 +1,93 @@
+// ssr_counter — the Kāra SSR / isomorphic-rendering pattern.
+//
+// ONE source file compiles to two targets:
+//   * `native`        — a server that renders the component to HTML
+//                       (printed to stdout, ready to embed in a page).
+//   * `wasm_browser`   — a client that *hydrates* the server-rendered
+//                       page, updating the live DOM in the browser.
+//
+// The point of the pattern: the component is an ORDINARY, target-agnostic
+// function. It carries NO `#[target(...)]` attribute. Where the server and
+// the client differ — how a render call becomes bytes vs. DOM mutations —
+// is expressed by binding a different *provider* for the same resource on
+// each target. The `#[target(...)]` attributes live only on the two entry
+// points (`main` and `hydrate`), which is exactly what the attribute is
+// for: irreducible per-target forks, never the component body.
+//
+// See design.md § Cross-target Compilation and the book chapter
+// "Server-Side Rendering" (docs/book/src/ch17-ssr.md).
+
+// `Sink` is the abstract render target the component writes to. It is a
+// user-defined resource, so it has no intrinsic target affinity — it
+// exists wherever a provider for it is bound. `Dom` is the host
+// capability the *browser* provider reaches through its host fns.
+effect resource Sink;
+effect resource Dom;
+
+// ── The shared component ────────────────────────────────────────────
+//
+// Target-agnostic: no `#[target(...)]`, no `#[cfg]`, no knowledge of
+// whether it is producing HTML on a server or mutating a live DOM. It
+// just issues semantic render calls against the ambient `Sink`. Both
+// targets compile this exact function.
+pub fn render_counter(count: i64) with writes(Sink) {
+    Sink.heading("Kāra SSR Counter");
+    Sink.count(count);
+    Sink.parity(count % 2);
+}
+
+// ── Server provider: render to an HTML string ───────────────────────
+//
+// On `native`, `Sink` is realized by `StringSink`, whose methods emit
+// HTML to stdout. A real server would write these bytes to the HTTP
+// response; here stdout *is* the rendered page body.
+struct StringSink {}
+impl StringSink {
+    fn heading(mut ref self, title: String) { print(f"<h1>{title}</h1>"); }
+    fn count(mut ref self, n: i64) { print(f"<output id=\"count\">{n}</output>"); }
+    fn parity(mut ref self, p: i64) {
+        if p == 0 {
+            println("<span id=\"parity\">even</span>");
+        } else {
+            println("<span id=\"parity\">odd</span>");
+        }
+    }
+}
+
+// Server entry point. Compiled ONLY for native. Binds the HTML provider
+// and renders the component once.
+#[target(native)]
+fn main() {
+    with_provider[Sink](StringSink {}, || {
+        render_counter(42);
+    });
+}
+
+// ── Client provider: mutate the live DOM ────────────────────────────
+//
+// On `wasm_browser`, `Sink` is realized by `DomSink`. The static chrome
+// (the heading) is already present in the page the server rendered, so
+// hydration leaves it untouched — `heading` is a deliberate no-op. Only
+// the dynamic values cross the host boundary, as plain `i64`s, to the JS
+// host fns that perform the actual DOM mutation.
+host fn dom_set_count(value: i64) with writes(Dom);
+host fn dom_set_parity(value: i64) with writes(Dom);
+
+struct DomSink {}
+impl DomSink {
+    fn heading(mut ref self, title: String) {} // already in the SSR'd DOM
+    fn count(mut ref self, n: i64) with writes(Dom) { dom_set_count(n); }
+    fn parity(mut ref self, p: i64) with writes(Dom) { dom_set_parity(p); }
+}
+
+// Client entry point. Compiled ONLY for wasm_browser, and exported to JS
+// (`pub` + a matching `#[target(...)]`). Binds the DOM provider and runs
+// the SAME component the server ran. Returns the rendered count so the
+// host can confirm the round-trip.
+#[target(wasm_browser)]
+pub fn hydrate(count: i64) -> i64 with writes(Dom) {
+    with_provider[Sink](DomSink {}, || {
+        render_counter(count);
+    });
+    count
+}

@@ -30,6 +30,7 @@
 - [Concurrency](./ch14-concurrency.md)
 - [Data Layout](./ch15-data-layout.md)
 - [Testing](./ch16-testing.md)
+- [Server-Side Rendering](./ch17-ssr.md)
 
 # Appendices
 

@@ -1,0 +1,57 @@
+<!doctype html>
+<!--
+  index.html — the browser leg of the ssr_counter example.
+
+  The markup inside <div id="app"> is exactly what the *server* build
+  emits (`karac build ssr_counter.kara && ./ssr_counter`). In a real app
+  the server would inline its stdout here as it streams the page. The
+  client then HYDRATES: it loads the wasm_browser build and re-runs the
+  same Kāra component (`hydrate`) through the DOM provider, so the same
+  rendering logic now drives live DOM mutations.
+
+  Serve this directory over http (module scripts + wasm need a real
+  origin) after building the wasm_browser artifacts next to this file:
+
+      karac build ssr_counter.kara --target=wasm_browser
+      python3 -m http.server      # then open http://localhost:8000/
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kāra SSR Counter</title>
+  </head>
+  <body>
+    <!-- Server-rendered markup (the bytes `./ssr_counter` prints). -->
+    <div id="app">
+      <h1>Kāra SSR Counter</h1>
+      <output id="count">42</output>
+      <span id="parity">even</span>
+    </div>
+
+    <button id="inc">increment</button>
+
+    <script type="module">
+      import { instantiate } from "./ssr_counter.js";
+
+      // Real DOM host fns: the client provider (`DomSink`) calls these.
+      const handle = await instantiate({
+        dom_set_count(value /* bigint */) {
+          document.getElementById("count").textContent = String(value);
+        },
+        dom_set_parity(value /* bigint */) {
+          document.getElementById("parity").textContent =
+            Number(value) === 0 ? "even" : "odd";
+        },
+      });
+
+      // Hydrate to the current value, then make it interactive. Each click
+      // re-runs the same shared component through the DOM provider.
+      let count = 42n;
+      handle.exports.hydrate(count);
+      document.getElementById("inc").addEventListener("click", () => {
+        count += 1n;
+        handle.exports.hydrate(count);
+      });
+    </script>
+  </body>
+</html>

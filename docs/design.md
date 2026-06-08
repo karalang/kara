@@ -10099,6 +10099,8 @@ pub fn hydrate(user_id: UserId) -> Result[(), AppError] {
 
 The component `user_profile` has one implementation. Each target binds the providers its platform can satisfy. This keeps shared code annotation-free and gives the programmer type-safe I/O routing per target — no `#[cfg]` chains in the component body.
 
+**Worked, runnable example.** [`examples/ssr_counter`](../examples/ssr_counter) ships this pattern end-to-end — one shared component rendered to HTML on `native` and to the live DOM on `wasm_browser`, with `#[target(...)]` only on the two entry points — and is walked through in the book chapter [Server-Side Rendering](book/src/ch17-ssr.md). Two spellings above are forward-looking: the multi-binding `providers { } in { }` block ([its own subsection](#providers---in---block-multi-provider-bootstrapping), a tracked sugar) and the `std.web` `Display` provider (host-call lowering is staged in phase-10). The runnable example uses the implemented spellings — nested `with_provider[R](provider, || { ... })`, a user-defined render-sink resource accessed as `Sink.method()`, and DOM mutation through `host fn`s — so it compiles and runs against the current compiler while teaching the identical pattern.
+
 #### `#[target(...)]` — Escape Hatch for Target-Exclusive Items
 
 The `#[target(...)]` attribute marks an item as compiled **only** when the current target matches. It is reserved for items that genuinely cannot exist on all targets — typically entry points (as above), platform-exclusive setup code, and the rare case where the same symbol needs two fundamentally different implementations that providers cannot bridge.

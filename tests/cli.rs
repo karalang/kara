@@ -13212,6 +13212,109 @@ console.log("E2E_OK");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The `examples/ssr_counter` SSR example, driven end-to-end on BOTH
+/// targets from the one shipped source file — the worked example for
+/// design.md § Cross-target Compilation's provider-injection pattern
+/// (phase-10-targets.md "SSR provider-injection pattern"). Building the
+/// shipped file (not an inline fixture) makes this a bit-rot guard: if
+/// the example stops compiling or its output drifts, this test fails.
+///
+/// Asserts, in one harness run:
+///   - the `native` leg builds and the server renders the component to
+///     the exact HTML body on stdout (the static heading + the dynamic
+///     count/parity, count=42 ⇒ even);
+///   - the `wasm_browser` leg builds (.wasm + .js + .d.ts), and the d.ts
+///     types the export (`hydrate`) and the DOM host fns
+///     (`dom_set_count` / `dom_set_parity`);
+///   - the shipped `run_browser.mjs` hydrates under node against a mock
+///     DOM — the SHARED component, run through the `DomSink` provider,
+///     drives the host fns that mutate the mock (load-immune: the mock
+///     ends at count=10/even after a re-render).
+#[test]
+fn ssr_counter_example_dual_target_e2e() {
+    let example_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/ssr_counter");
+    let tmp = wasm_test_dir("ssr-counter");
+    for f in ["ssr_counter.kara", "run_browser.mjs"] {
+        std::fs::copy(example_dir.join(f), tmp.join(f)).unwrap_or_else(|e| panic!("copy {f}: {e}"));
+    }
+    let src = tmp.join("ssr_counter.kara");
+
+    // ── Server leg (native): render the component to HTML on stdout ──
+    let nat = karac_bin()
+        .args(["build", src.to_str().unwrap()])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let nat_err = String::from_utf8_lossy(&nat.stderr);
+    if !nat.status.success()
+        && (nat_err.contains("link failed") || nat_err.contains("codegen failed"))
+    {
+        // No native runtime archive in this environment — same soft-skip
+        // as the other native-build E2Es.
+        eprintln!("skip: ssr_counter_example_dual_target_e2e — native link unavailable");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(nat.status.success(), "native build failed: {nat_err}");
+    let server = std::process::Command::new(tmp.join("ssr_counter"))
+        .current_dir(&tmp)
+        .output()
+        .expect("run server binary");
+    let rendered = String::from_utf8_lossy(&server.stdout);
+    assert_eq!(
+        rendered,
+        "<h1>Kāra SSR Counter</h1><output id=\"count\">42</output><span id=\"parity\">even</span>\n",
+        "server must render the component to the expected HTML body",
+    );
+
+    // ── Client leg (wasm_browser): build + d.ts shape ───────────────
+    let web = karac_bin()
+        .args(["build", src.to_str().unwrap(), "--target=wasm_browser"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let web_err = String::from_utf8_lossy(&web.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&web_err) {
+        eprintln!("skip: ssr_counter_example_dual_target_e2e (client leg) — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(web.status.success(), "wasm_browser build failed: {web_err}");
+    for art in ["ssr_counter.wasm", "ssr_counter.js", "ssr_counter.d.ts"] {
+        assert!(tmp.join(art).exists(), "missing artifact: {art}");
+    }
+    let dts = std::fs::read_to_string(tmp.join("ssr_counter.d.ts")).unwrap();
+    assert!(
+        dts.contains("hydrate(count: bigint): bigint;"),
+        "d.ts must type the exported entry point, got:\n{dts}",
+    );
+    assert!(
+        dts.contains("dom_set_count(value: bigint, ctx: HostCtx): void;")
+            && dts.contains("dom_set_parity(value: bigint, ctx: HostCtx): void;"),
+        "d.ts must type the DOM host fns, got:\n{dts}",
+    );
+
+    // ── Client leg under node: hydrate a mock DOM ───────────────────
+    let node = std::process::Command::new("node")
+        .arg("run_browser.mjs")
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: ssr_counter_example_dual_target_e2e (node leg) — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let so = String::from_utf8_lossy(&node_out.stdout);
+    let se = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success() && so.contains("HYDRATED {\"count\":10,\"parity\":\"even\"}"),
+        "hydration harness failed under node: stdout={so} stderr={se}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 // ── Phase-10: `karac build --bindings` flag ─────────────────────────
 //
 // WASM output-shape selector (design.md § Target Build Artifacts).
