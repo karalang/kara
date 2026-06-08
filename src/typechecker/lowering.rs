@@ -1100,6 +1100,23 @@ impl<'a> super::TypeChecker<'a> {
     /// so the rest of the type checker can proceed without a hard error.
     pub(super) fn element_type_of(&self, ty: &Type) -> Type {
         match ty {
+            // Borrowed collections (`for w in (ref Vec[T])` / `mut ref`):
+            // iterating a borrow yields *borrowed* elements (design.md's
+            // iteration table: `Vec[T].iter()` Item is `ref T`). Recurse to
+            // the collection's element type, then re-wrap in the same borrow
+            // form so the loop variable is `ref T` / `mut ref T`, not owned
+            // `T`. Two failures this prevents:
+            //   * Mistyping: without unwrapping, `for w in words` over a
+            //     `ref Vec[String]` param binds `w` to the whole
+            //     `ref Vec<String>`, so element-as-String uses (`map.get(w)`,
+            //     `w.clone()`) fail (warning under `karac run`, hard error
+            //     under `karac build`).
+            //   * Unsoundness: unwrapping to owned `T` would let `out.push(w)`
+            //     move an element *out of a borrowed collection*. Keeping the
+            //     borrow form rejects the move (and forces an explicit
+            //     `.clone()`), matching the move-out-of-borrow rule.
+            Type::Ref(inner) => Type::Ref(Box::new(self.element_type_of(inner))),
+            Type::MutRef(inner) => Type::MutRef(Box::new(self.element_type_of(inner))),
             // Primitive borrowed views — element type is the inner type.
             Type::Array { element, .. } | Type::Slice { element, .. } => *element.clone(),
             Type::Named { name, args } => {

@@ -25122,3 +25122,76 @@ fn test_non_generic_alias_unaffected() {
          }",
     );
 }
+
+// ── `for` over a borrowed collection binds the *element* type ──────
+//
+// Regression for `element_type_of`: iterating a `ref Vec[T]` / `mut ref
+// Vec[T]` must bind the loop variable to the element type (in borrow
+// form `ref T`), not to the whole `ref Vec[T]` wrapper. Before the fix
+// the loop var was typed as the container, so any element-level use
+// mistyped (a warning under `karac run`, a hard error under `karac
+// build`). Surfaced writing leetcode kata #30 (word-count map over a
+// borrowed word list).
+
+#[test]
+fn test_for_over_ref_vec_binds_element_not_container() {
+    // `.bytes()` exists on `String` but not on `Vec` — so this only
+    // typechecks if `w` is the `String` element, not `ref Vec[String]`.
+    typecheck_ok(
+        "fn total_bytes(words: ref Vec[String]) -> i64 {
+             let mut n = 0i64;
+             for w in words {
+                 n = n + w.bytes().len();
+             }
+             n
+         }
+         fn main() {
+             let v: Vec[String] = [\"foo\", \"bar\"];
+             let _ = total_bytes(v);
+         }",
+    );
+}
+
+#[test]
+fn test_for_over_mut_ref_vec_binds_element_not_container() {
+    typecheck_ok(
+        "fn total_bytes(words: mut ref Vec[String]) -> i64 {
+             let mut n = 0i64;
+             for w in words {
+                 n = n + w.bytes().len();
+             }
+             n
+         }
+         fn main() {
+             let mut v: Vec[String] = [\"foo\", \"bar\"];
+             let _ = total_bytes(mut v);
+         }",
+    );
+}
+
+#[test]
+fn test_for_over_ref_vec_element_is_borrow_rejects_move_out() {
+    // Iterating a borrowed `Vec` yields *borrowed* elements (`ref T`),
+    // so moving an element out (`out.push(w)`) is a move-out-of-borrow
+    // and must be rejected — the element type is `ref String`, which the
+    // owned-`String` param of `Vec.push` will not accept. Unwrapping to
+    // an owned `String` element here would be unsound.
+    let errors = typecheck_errors(
+        "fn steal(words: ref Vec[String]) -> Vec[String] {
+             let mut out: Vec[String] = Vec.new();
+             for w in words {
+                 out.push(w);
+             }
+             out
+         }
+         fn main() {
+             let v: Vec[String] = [\"foo\", \"bar\"];
+             let _ = steal(v);
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.to_string().contains("ref String")),
+        "expected a 'ref String' element-type mismatch on the move-out, got: {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
