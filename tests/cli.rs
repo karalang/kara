@@ -13678,6 +13678,147 @@ console.log("PROXY_OK");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Headline E2E for host-async channel producers (phase-10 thin vertical
+/// slice — `std.web.time.after`): `after(Duration.ms(40)).recv()` parks
+/// the primary worker in a blocking `recv`, and a MAIN-THREAD `setTimeout`
+/// callback feeds the channel ~40ms later through a SECOND "service" wasm
+/// instance over the shared memory, waking the worker.
+///
+/// Load-immune: `run()` resolves only after the primary worker's `_start`
+/// returns, which includes the `recv`. A non-blocking `recv` (the
+/// sequential-wasm floor) would return immediately and the program would
+/// finish in ~0ms; an elapsed ≳ the timer delay is positive evidence the
+/// worker actually parked AND was woken cross-instance — the whole spine
+/// (sender clone survives `after`'s return, host owns + drops it, the
+/// service instance's `channel_send`/`atomic.notify` reaches the parked
+/// futex, on a dedicated stack that never clobbers the worker's frames).
+#[test]
+fn wasm_threads_timer_after_recv_e2e() {
+    let tmp = wasm_test_dir("wttimer");
+    let path = tmp.join("timer.kara");
+    std::fs::write(
+        &path,
+        "import std.web.time.{after, Duration};\n\n\
+         fn main() {\n    \
+             println(\"before\");\n    \
+             let rx = after(Duration.ms(40));\n    \
+             rx.recv();\n    \
+             println(\"after\");\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_timer_after_recv_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "timer wasm-threads build failed: {stderr}"
+    );
+    assert!(tmp.join("timer.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./timer.js";
+const t0 = performance.now();
+const h = await run({});
+const elapsed = performance.now() - t0;
+if (h.threaded !== true) { console.error("FAIL: expected threaded pick"); process.exit(1); }
+// The guest's own stdout ("before"/"after") comes from the worker thread's
+// fd_write — it lands in this process's combined stdout, which the outer
+// test inspects. Here we only assert the main-thread timing evidence.
+if (elapsed < 30) {
+  console.error("FAIL: recv did not block (~40ms expected), elapsed=" + elapsed.toFixed(1) + "ms");
+  process.exit(1);
+}
+console.log("TIMER_OK elapsed=" + elapsed.toFixed(1) + "ms");
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_threads_timer_after_recv_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "timer harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        node_stdout.contains("TIMER_OK"),
+        "missing TIMER_OK (recv blocked then woke): stdout={node_stdout} stderr={node_stderr}",
+    );
+    // The guest ran to completion: recv unblocked AFTER the host fed the
+    // channel — `before` strictly precedes `after`.
+    let before = node_stdout.find("before");
+    let after = node_stdout.find("after");
+    assert!(
+        matches!((before, after), (Some(b), Some(a)) if b < a),
+        "guest must print before→after (recv woke): stdout={node_stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The sequential-target gate: the same host-async producer built WITHOUT
+/// `--features wasm-threads` is a hard compile error (codegen, pre-link),
+/// pointing at the flag — never a silent zero-value `recv`. Fires during
+/// IR emission, so it needs no runtime archive / linker / node (always
+/// reachable under `--features llvm`).
+#[test]
+fn wasm_time_after_sequential_target_rejected() {
+    let tmp = wasm_test_dir("wttimergate");
+    let path = tmp.join("timer.kara");
+    std::fs::write(
+        &path,
+        "import std.web.time.{after, Duration};\n\n\
+         fn main() {\n    \
+             let rx = after(Duration.ms(40));\n    \
+             rx.recv();\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "sequential wasm host-async producer must be rejected, but build succeeded: {stderr}"
+    );
+    assert!(
+        stderr.contains("requires `--features wasm-threads`"),
+        "gate must name the flag: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Project-mode artifact set: a wasm-threads build emits BOTH modules
 /// plus the glue + declarations, and the glue carries the load-time
 /// pick machinery with the manifest's `[wasm]` knobs baked in.

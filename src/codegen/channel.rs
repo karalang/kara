@@ -32,7 +32,8 @@ impl<'ctx> super::Codegen<'ctx> {
             "recv" => self.compile_channel_recv(object, call_span),
             "try_recv" => self.compile_channel_try_recv(object, call_span),
             "clone" => self.compile_channel_clone(object),
-            // The dispatch gate in `compile_method_call` only routes the four
+            "__schedule_after" => self.compile_channel_schedule_after(object, args),
+            // The dispatch gate in `compile_method_call` only routes the
             // methods above here.
             _ => unreachable!("compile_channel_method: unexpected method `{method}`"),
         }
@@ -197,6 +198,111 @@ impl<'ctx> super::Codegen<'ctx> {
         let agg =
             self.build_option_some_via_phis(&some_words, some_end_bb, none_bb, "chan.tryrecv");
         Ok(agg)
+    }
+
+    /// `tx.__schedule_after(ms)` — the compiler builtin backing
+    /// `std.web.time.after` (phase-10 host-async timer producers). Registers
+    /// a host `setTimeout` that will send `()` on the channel after `ms`,
+    /// then close it. To keep the channel open across `after`'s return (the
+    /// local `tx` is dropped at scope exit), it **clones** the channel
+    /// reference and hands the clone to the host via the `kara_host`
+    /// `__kara_timer_after(ch: i64, ms: i64)` import; the host owns that
+    /// reference and drops it (after sending) by calling
+    /// `karac_runtime_channel_drop_sender`. The channel pointer crosses the
+    /// host boundary as an `i64` handle (the `__karac_malloc64` size_t
+    /// discipline — i64 for every target). Returns Unit.
+    ///
+    /// Only reachable on `wasm_browser --features wasm-threads`: `after`
+    /// declares `writes(Timer)` (target-gated to `wasm_browser`), and the
+    /// sequential default is rejected pre-codegen by the host-async gate.
+    fn compile_channel_schedule_after(
+        &mut self,
+        object: &Expr,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err("Sender.__schedule_after expects exactly one argument".to_string());
+        }
+        // Host-async producer gate (phase-10): a host `setTimeout` callback
+        // can only wake a *blocked* `recv` on a target with a thread to
+        // block off the main event loop — `--features wasm-threads`. On the
+        // sequential default the channel could never be fed (a single thread
+        // cannot both park in `recv` and run the host event loop), so reject
+        // it here with a clear pointer rather than emit an unsatisfiable
+        // `__kara_timer_after` import that fails opaquely at instantiate.
+        // Build-time only (codegen) so `karac check` — which has no
+        // `--features` flag and never reaches codegen — does not
+        // false-reject a program destined for a threaded build.
+        if crate::target::active_target_is_wasm() && !crate::target::wasm_threads_enabled() {
+            return Err(
+                "std.web.time.after (host-async timer) requires `--features wasm-threads` on \
+                 this target: a sequential WASM build has no thread to block in `recv` while \
+                 the host event loop runs the timer, so the channel could never be fed. \
+                 Rebuild with `--target=wasm_browser --features wasm-threads` (design.md \
+                 § Scheduler contract on WASM — Realization status)."
+                    .to_string(),
+            );
+        }
+        let ch = self.compile_expr(object)?.into_pointer_value();
+        let ms = self.compile_expr(&args[0].value)?.into_int_value();
+
+        // Clone first — the surviving reference is what keeps the channel
+        // open until the host fires + drops it.
+        let clone_fn = self
+            .module
+            .get_function("karac_runtime_channel_clone")
+            .expect("karac_runtime_channel_clone declared in Codegen::new");
+        let cloned = self
+            .builder
+            .build_call(clone_fn, &[ch.into()], "timer.chan.clone")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let i64_ty = self.context.i64_type();
+        let ch_i64 = self
+            .builder
+            .build_ptr_to_int(cloned, i64_ty, "timer.chan.i64")
+            .unwrap();
+
+        let host_fn = self.get_or_declare_timer_after_import();
+        self.builder
+            .build_call(host_fn, &[ch_i64.into(), ms.into()], "timer.after")
+            .unwrap();
+        // Unit return (the i64-zero unit value).
+        Ok(self.context.i64_type().const_zero().into())
+    }
+
+    /// Get-or-declare the `kara_host.__kara_timer_after(i64, i64) -> ()` wasm
+    /// import. Compiler-emitted (no source `host fn` item), so the import
+    /// attributes are attached here rather than via
+    /// `declare_one_extern_function`. The browser/`none` C-ABI `kara_host`
+    /// module is used unconditionally: `after` is `writes(Timer)` and Timer
+    /// is provided only on `wasm_browser`, where `--features wasm-threads`
+    /// (the only target that can run this) forbids `--bindings=component` —
+    /// so the WIT host-package path is never reachable here.
+    fn get_or_declare_timer_after_import(&self) -> inkwell::values::FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("__kara_timer_after") {
+            return f;
+        }
+        use inkwell::attributes::AttributeLoc;
+        let i64_ty = self.context.i64_type();
+        let fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[i64_ty.into(), i64_ty.into()], false);
+        let f = self.module.add_function("__kara_timer_after", fn_ty, None);
+        f.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("wasm-import-module", "kara_host"),
+        );
+        f.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("wasm-import-name", "__kara_timer_after"),
+        );
+        f
     }
 
     /// `tx.clone()` → a second handle to the same channel

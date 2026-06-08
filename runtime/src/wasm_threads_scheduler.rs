@@ -478,6 +478,45 @@ mod exports {
     pub unsafe extern "C" fn karac_runtime_taskgroup_cancel(group: *mut WasmTaskGroupHandle) {
         wt_taskgroup_cancel(group)
     }
+
+    /// 16-aligned scratch shadow stack for the JS glue's main-thread
+    /// "service" instance (phase-10 host-async producers — `std.web.time`).
+    ///
+    /// On `--features wasm-threads` the program's `_start` runs in a
+    /// *primary worker*; a host timer/event callback that must
+    /// `karac_runtime_channel_send` into a parked `recv` runs on the main
+    /// thread, through a SECOND wasm instance over the same shared memory
+    /// (the only agent that can `WebAssembly.Memory`-share *and* mutate the
+    /// channel under its lock). That service instance is never
+    /// thread-started, so its `__stack_pointer` global still points at the
+    /// linker-reserved stack — the SAME region the primary worker's
+    /// `_start` is actively using. The glue retargets the service
+    /// instance's exported `__stack_pointer` at the top of this dedicated
+    /// buffer right after instantiation so its `channel_send` frames can
+    /// never clobber the parked worker's live frames. 64 KiB is ample: the
+    /// only chain that runs on it is `channel_send`/`drop_sender` →
+    /// futex/dlmalloc, a few hundred bytes deep. Lives in BSS (zeroed,
+    /// counted in the module's initial memory), so its address is a
+    /// link-time constant valid the moment memory exists.
+    // Only the buffer's *address* is ever used (as the service instance's
+    // shadow-stack region); its bytes are written/read by wasm stack
+    // traffic, never by Rust — hence `dead_code` on the field.
+    #[repr(align(16))]
+    struct ServiceStack(#[allow(dead_code)] [u8; 65536]);
+    static mut KARAC_SERVICE_STACK: ServiceStack = ServiceStack([0u8; 65536]);
+
+    /// Top (high address) of [`KARAC_SERVICE_STACK`] — the value the glue
+    /// stores into the service instance's exported `__stack_pointer` (the
+    /// shadow stack grows downward). A link-time-constant address: this fn
+    /// reads no memory and, as a constant-returning leaf, uses no shadow
+    /// stack itself, so the glue may call it while still on the shared
+    /// default stack without risking the very collision it sets up to
+    /// avoid. `u32` (wasm32 address); JS reads it as a number.
+    #[no_mangle]
+    pub extern "C" fn karac_runtime_service_stack_top() -> u32 {
+        let base = (&raw const KARAC_SERVICE_STACK) as *const u8 as usize;
+        ((base + 65536) & !15) as u32
+    }
 }
 
 #[cfg(test)]

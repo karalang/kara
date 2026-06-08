@@ -386,7 +386,10 @@ impl<'a> super::TypeChecker<'a> {
         // The element `T` is statically known here (the typed
         // `Sender[T]`/`Receiver[T]` receiver) but NOT at `Channel.new()`,
         // so it travels per call site.
-        if matches!(method, "send" | "recv" | "try_recv" | "clone") {
+        if matches!(
+            method,
+            "send" | "recv" | "try_recv" | "clone" | "__schedule_after"
+        ) {
             let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
             let te = Self::type_to_type_expr(&resolved);
             self.channel_elem_types.insert(SpanKey::from_span(span), te);
@@ -477,6 +480,34 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     }
                     sender_elem
+                }
+                // Internal compiler builtin backing `std.web.time.after`
+                // (phase-10 host-async timer producers). Borrows `self`,
+                // takes the delay in milliseconds, returns Unit. Codegen
+                // (`src/codegen/channel.rs`) clones the sender's channel
+                // reference and hands it to the host `setTimeout`
+                // registration; the surviving cloned reference keeps the
+                // channel open after `after` returns. Not part of the
+                // user-facing channel surface — the `__` prefix + the
+                // `writes(Timer)` gating on `after` keep it out of reach of
+                // ordinary code.
+                "__schedule_after" => {
+                    if args.len() != 1 {
+                        self.type_error(
+                            "Sender.__schedule_after expects exactly one argument (delay in ms)"
+                                .to_string(),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    } else {
+                        let at = self.infer_expr(&args[0].value);
+                        self.check_assignable(
+                            &Type::Int(IntSize::I64),
+                            &at,
+                            args[0].value.span.clone(),
+                        );
+                    }
+                    Type::Unit
                 }
                 _ => self.require_known_method("Sender", method, &["clone", "send"], args, span),
             }

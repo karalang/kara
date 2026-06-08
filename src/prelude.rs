@@ -782,6 +782,10 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
         include_str!("../runtime/stdlib/web_net.kara"),
     ),
     (
+        &["std", "web", "time"],
+        include_str!("../runtime/stdlib/web_time.kara"),
+    ),
+    (
         &["std", "wasi"],
         include_str!("../runtime/stdlib/wasi.kara"),
     ),
@@ -974,6 +978,10 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
         .iter()
         .find(|(p, _)| p.as_slice() == path)?;
     let mut out = Vec::new();
+    // Original (pre-alias) names of struct/enum items spliced un-aliased,
+    // so their `impl` blocks can be auto-spliced below.
+    let mut spliced_type_names: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     for ii in items {
         let found = program.items.iter().find(|item| match item {
             Item::Function(f) => f.name == ii.name,
@@ -984,6 +992,17 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
             _ => false,
         });
         let Some(found) = found else { continue };
+        if ii.alias.is_none() {
+            match found {
+                Item::StructDef(s) => {
+                    spliced_type_names.insert(s.name.clone());
+                }
+                Item::EnumDef(e) => {
+                    spliced_type_names.insert(e.name.clone());
+                }
+                _ => {}
+            }
+        }
         let mut cloned = found.clone();
         let bound = ii.alias.as_ref().unwrap_or(&ii.name);
         match &mut cloned {
@@ -1017,6 +1036,81 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
         }
         out.push(cloned);
     }
+
+    // Auto-splice `impl` blocks for the struct/enum types spliced above.
+    // A gated module's type (`std.web.time.Duration`) carries its methods
+    // in an `impl Duration { ... }` block, which is not itself a
+    // brace-listable name — without this, `Duration.ms(..)` / `.as_ms()`
+    // resolve to "no associated function". Only un-aliased types are
+    // covered (an `import ... as Alias` would need the impl's target
+    // rewritten too — out of scope; no gated aliased-type-with-impl exists
+    // at v1). Matches on the impl target's last path segment, mirroring
+    // `codegen::helpers::impl_target_name`.
+    if !spliced_type_names.is_empty() {
+        for item in &program.items {
+            if let Item::ImplBlock(imp) = item {
+                let target = match &imp.target_type.kind {
+                    crate::ast::TypeKind::Path(p) => p.segments.last().cloned(),
+                    _ => None,
+                };
+                if target
+                    .as_deref()
+                    .is_some_and(|t| spliced_type_names.contains(t))
+                {
+                    out.push(item.clone());
+                }
+            }
+        }
+    }
+
+    // Auto-splice the gated module's OWN effect-resource declarations that
+    // the spliced functions reference. A gated stdlib producer like
+    // `std.web.time.after` declares `with writes(Timer)`, but a user who
+    // writes `import std.web.time.{after};` does not (and should not have
+    // to) also import `Timer` — yet `after`'s effect clause must still
+    // resolve. Pulling the referenced resource in from the same module
+    // keeps it gated (a program importing nothing from this module never
+    // sees it) while making the producer self-contained. Only *referenced*
+    // resources are spliced — sibling resources (e.g. `Storage`/`Console`
+    // when only a `Timer` producer is imported) stay out of scope, so the
+    // gating test in `tests/module_graph.rs` is unaffected. Cross-import
+    // duplicates (the resource imported explicitly *and* via a producer)
+    // are deduped by the callers (`expand_gated_stdlib_imports` /
+    // project-mode concatenation), which key on the resource name.
+    let mut present: std::collections::HashSet<String> = out
+        .iter()
+        .filter_map(|it| match it {
+            Item::EffectResource(r) => Some(r.name.clone()),
+            _ => None,
+        })
+        .collect();
+    let referenced: Vec<String> = out
+        .iter()
+        .filter_map(|it| match it {
+            Item::Function(f) => f.effects.as_ref(),
+            _ => None,
+        })
+        .flat_map(|effects| effects.items.iter())
+        .filter_map(|ei| match ei {
+            crate::ast::EffectItem::Verb(v) => Some(v),
+            _ => None,
+        })
+        .flat_map(|v| v.resources.iter())
+        .filter_map(|res| res.path.last().cloned())
+        .collect();
+    for name in referenced {
+        if !present.insert(name.clone()) {
+            continue;
+        }
+        if let Some(decl) = program
+            .items
+            .iter()
+            .find(|it| matches!(it, Item::EffectResource(r) if r.name == name))
+        {
+            out.push(decl.clone());
+        }
+    }
+
     Some(out)
 }
 
@@ -1055,6 +1149,16 @@ pub fn expand_gated_stdlib_imports(program: &mut Program) {
     // remove them entirely.
     program.items.retain(|item| match item {
         Item::Import(imp) => !imp.items.is_empty(),
+        _ => true,
+    });
+    // Dedup auto-spliced effect resources by name: a resource can arrive
+    // both explicitly (`import std.web.Timer`) and via a producer's
+    // referenced-resource auto-splice (`import std.web.time.after`); a
+    // second `effect resource Timer;` in the program would be a duplicate
+    // definition (`collect_effect_resource` errors). Keep the first.
+    let mut seen_resources: std::collections::HashSet<String> = std::collections::HashSet::new();
+    appended.retain(|item| match item {
+        Item::EffectResource(r) => seen_resources.insert(r.name.clone()),
         _ => true,
     });
     program.items.extend(appended);

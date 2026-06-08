@@ -1,0 +1,72 @@
+// `std.web.time` — callback-driven host timers as channel producers
+// (phase-10 "`std.web.time.after` and event-stream wrappers", thin
+// vertical slice).
+//
+// GATED MODULE — like `std.web` / `std.web.net`, this file is NOT in the
+// prelude (`GATED_STDLIB_SOURCES` in `src/prelude.rs`). It enters scope
+// only via an explicit `import std.web.time.{after, Duration};`.
+//
+// `after(d)` turns a one-shot host timer (`setTimeout`) into a channel
+// producer: it returns the receiving half of a `Channel[()]` and arranges
+// for `()` to be sent on it after `d` elapses. The waiting side writes the
+// ordinary blocking `after(d).recv()` — no `await`, no callback ceremony
+// (design.md § Async Host APIs on WASM).
+//
+// **Target reality (design.md § Scheduler contract on WASM, Realization
+// status).** The producer's channel is fed by a host event-loop callback,
+// which can only wake a *blocked* `recv` on a target that has a thread to
+// block: `--features wasm-threads`. On the sequential default the channel
+// could never be fed (a single thread cannot both block in `recv` and run
+// the event loop), so calling a host-async producer there is a hard
+// compile error pointing at `--features wasm-threads` (rather than a
+// silent zero-value `recv`). `writes(Timer)` additionally target-gates the
+// whole module off native / `wasm_wasi` (only `wasm_browser` provides the
+// `Timer` resource — `src/target.rs`).
+
+// Scheduled-callback capability. Same resource the `std.web` header
+// documents; declared here too so this module is self-contained for an
+// `import std.web.time.{...};` that does not also pull in `std.web`. Both
+// declarations name the canonical string "Timer", so the target-provided
+// resource table (`src/target.rs`) gates either spelling identically.
+effect resource Timer;
+
+// A span of wall-clock time. Transparent millisecond struct — ordinary
+// Kāra methods (real bodies, compiled like any stdlib type), no compiler
+// magic. Constructors keep call sites readable (`Duration.ms(500)`).
+pub struct Duration {
+    ms: i64,
+}
+
+impl Duration {
+    fn ms(ms: i64) -> Duration {
+        Duration { ms: ms }
+    }
+
+    fn secs(secs: i64) -> Duration {
+        Duration { ms: secs * 1000 }
+    }
+
+    fn as_ms(ref self) -> i64 {
+        self.ms
+    }
+}
+
+// Send `()` on a fresh channel after `duration` elapses; return the
+// receiving half. `recv()` on the result blocks until the timer fires
+// (on `--features wasm-threads`).
+//
+// Mechanism: `Sender.__schedule_after` (a compiler builtin) clones the
+// sender's channel reference and hands it to the host's `setTimeout`
+// registration — so the channel stays open after `after` returns (the
+// local `tx` dropping here only releases its own reference), and the host
+// owns the surviving sender, dropping it once it has fired the `()`.
+pub fn after(duration: Duration) -> Receiver[()] with writes(Timer) {
+    // Annotate the destructure so the channel element type is `()`. `after`
+    // never performs a `send`/`recv` itself (the host fires the send), so
+    // there is no downstream channel op to infer the element from — and an
+    // unannotated `Channel.new()` only type-checks under the interpreter,
+    // not `karac build` (typechecker exprs.rs check-mode path).
+    let (tx, rx): (Sender[()], Receiver[()]) = Channel.new();
+    tx.__schedule_after(duration.as_ms());
+    rx
+}

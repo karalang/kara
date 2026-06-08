@@ -60,6 +60,9 @@ impl<'a> super::EffectChecker<'a> {
                             if self.is_transparent_verb(&te.effect.verb) {
                                 continue;
                             }
+                            if self.is_default_permitted_effect(&te.effect) {
+                                continue;
+                            }
                             // Synthetic per-binding resources (slice 6 / §1322)
                             // cannot appear in a user-written `with ...` clause
                             // — they're project-internal identifiers. The
@@ -120,6 +123,9 @@ impl<'a> super::EffectChecker<'a> {
                             if self.is_transparent_verb(&te.effect.verb) {
                                 continue;
                             }
+                            if self.is_default_permitted_effect(&te.effect) {
+                                continue;
+                            }
                             // Synthetic modbind resources are owned by
                             // slice 8's dedicated rejection — skip here so
                             // we don't double-fire missing-declaration.
@@ -166,6 +172,9 @@ impl<'a> super::EffectChecker<'a> {
                         for effect in &inferred_effects {
                             // Skip transparent effects
                             if self.is_transparent_verb(&effect.verb) {
+                                continue;
+                            }
+                            if self.is_default_permitted_effect(effect) {
                                 continue;
                             }
                             // Synthetic modbind resources are owned by

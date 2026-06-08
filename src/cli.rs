@@ -4968,6 +4968,11 @@ fn validate_wasm_threads_scope(
     build_target: &str,
     effective_bindings: Option<BindingsMode>,
 ) {
+    // Record the threads opt-in for checker/codegen passes (the host-async
+    // timer gate in `codegen/channel.rs` keys on it). Called in both build
+    // paths before codegen; `karac check` never reaches here, so it stays
+    // at its default (false) and the codegen-only gate never fires there.
+    crate::target::set_wasm_threads(wasm_threads);
     if !wasm_threads {
         return;
     }

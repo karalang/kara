@@ -1283,6 +1283,24 @@ impl<'a> EffectChecker<'a> {
         self.transparent_effects.contains(&verb_str)
     }
 
+    /// `allocates(Heap)` is the v1 substrate effect: default-permitted under
+    /// the standard (Default) profile, so a public function need not declare
+    /// it even when it allocates (design.md § Effect Substrate — "the
+    /// substrate set in v1 is exactly `{allocates(Heap)}`" / "default-permitted
+    /// and need not be declared on public functions under the standard
+    /// profile"). It is also not *writable* in a source effect clause — the
+    /// resolver has no `Heap` resource symbol — so a public function that
+    /// allocates through a stdlib constructor (e.g. `Channel.new` /`Vec.new`)
+    /// while carrying any explicit `with` clause could otherwise never
+    /// satisfy the declared-vs-performed check. The `embedded` / `kernel`
+    /// profiles forbid `allocates(Heap)` outright; that rejection is owned by
+    /// [`check_profile_compat`], so this permit is Default-profile-only.
+    fn is_default_permitted_effect(&self, effect: &Effect) -> bool {
+        matches!(self.profile, CompileProfile::Default)
+            && effect.verb == EffectVerbKind::Allocates
+            && effect.resource == "Heap"
+    }
+
     /// Resolve an `EffectList` from a function-type parameter annotation to a set of Effects.
     /// Used by the call-site subtyping check to get the slot's declared effect set (B).
     ///

@@ -401,9 +401,39 @@ pub fn render_glue(
             };
             format!("{{ name: \"{}\", params: [{params}], ret: {ret} }}", s.name)
         })
+        .collect::<Vec<_>>();
+    // Compiler-emitted builtin host fns (phase-10 host-async producers).
+    // These are NOT user `host fn`s — they never appear in DECLARED_IMPORTS
+    // (the user contract / missing-impl check) or the `HostImpls` d.ts; the
+    // glue supplies their implementation itself. They DO ride the same
+    // worker→main proxy machinery (a producer call originates in the
+    // primary worker), so they are appended to HOST_FN_SIGS — the proxy and
+    // service loop key off this array. Only emitted on threaded builds: a
+    // sequential WASM target can't host them (the codegen gate rejects the
+    // producer pre-link), and a native/sequential build never wires a
+    // service instance. `__kara_timer_after(chPtr: i64, ms: i64) -> ()`
+    // backs `std.web.time.after`.
+    let builtin_sigs: &[&str] = if threads.is_some() {
+        &["{ name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }"]
+    } else {
+        &[]
+    };
+    let builtin_names: &[&str] = if threads.is_some() {
+        &["\"__kara_timer_after\""]
+    } else {
+        &[]
+    };
+    let all_sigs = sigs
+        .iter()
+        .map(String::as_str)
+        .chain(builtin_sigs.iter().copied())
         .collect::<Vec<_>>()
         .join(", ");
-    out.push_str(&format!("const HOST_FN_SIGS = [{sigs}];\n"));
+    out.push_str(&format!("const HOST_FN_SIGS = [{all_sigs}];\n"));
+    out.push_str(&format!(
+        "const BUILTIN_HOST_FNS = [{}];\n",
+        builtin_names.join(", ")
+    ));
     // Threaded-build constants — rendered as inert nulls/zeros on a
     // sequential-only build so the static body references them
     // unconditionally.
@@ -1139,13 +1169,67 @@ async function runThreaded(hostImpls = {}) {
   });
   const tidCounter = new SharedArrayBuffer(4);
   new Int32Array(tidCounter)[0] = 1;
-  // host fns: stand up the worker→main proxy (shared control block +
-  // the main-thread service loop). Null when the program declares none.
+  // Builtin (compiler-emitted) host fns — phase-10 host-async producers
+  // (`std.web.time.after`). These run on the main thread like user host
+  // fns, but their implementation is supplied here, not by the caller, and
+  // they operate over the shared linear memory through a SECOND "service"
+  // instance of the same module. The service instance never runs
+  // `_start`/`wasi_thread_start`; its only job is to call the channel
+  // externs from a host event callback so a worker parked in `recv` wakes.
+  let serviceInstance = null;
+  const builtinHostImpls = {};
+  if (BUILTIN_HOST_FNS.length > 0) {
+    const serviceImports = {
+      env: { memory },
+      wasi: {
+        "thread-spawn": () => {
+          throw new Error("kara: service instance must not spawn threads");
+        },
+      },
+      wasi_snapshot_preview1: makeWasiPolyfill(() => memory),
+      // The service never executes program code, so it never calls a host
+      // fn — but instantiation must still satisfy every kara_host import.
+      kara_host: Object.fromEntries(
+        HOST_FN_SIGS.map((s) => [
+          s.name,
+          () => {
+            throw new Error("kara: service instance host fn unreachable: " + s.name);
+          },
+        ]),
+      ),
+    };
+    serviceInstance = await WebAssembly.instantiate(module, serviceImports);
+    // Retarget the service instance's shadow stack onto a dedicated buffer
+    // so its channel_send frames can't clobber the primary worker's live
+    // (parked-in-recv) frames — both default to the same linker stack.
+    serviceInstance.exports.__stack_pointer.value =
+      serviceInstance.exports.karac_runtime_service_stack_top();
+    // __kara_timer_after(chPtr: i64 [BigInt], ms: i64 [BigInt]) -> (): the
+    // channel pointer is a wasm32 address (fits a JS number); channel_send
+    // takes (i32 ptr, i32 val_ptr, i64 elem_size) — a unit channel sends 0
+    // bytes, so val_ptr=0, elem_size=0n. After the send we drop the sender
+    // ref the producer cloned for us, closing the channel.
+    builtinHostImpls["__kara_timer_after"] = (chPtr, ms) => {
+      const ptr = Number(chPtr);
+      setTimeout(() => {
+        serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);
+        serviceInstance.exports.karac_runtime_channel_drop_sender(ptr);
+      }, Number(ms));
+    };
+  }
+  // host fns: stand up the worker→main proxy (shared control block + the
+  // main-thread service loop). Needed when the program declares user host
+  // fns OR a builtin producer is wired. The service loop dispatches both
+  // (user impls + builtinHostImpls), but only user impls are contract-
+  // checked above.
   let hostCtl = null;
   let hostService = null;
-  if (DECLARED_IMPORTS.length > 0) {
+  if (DECLARED_IMPORTS.length > 0 || BUILTIN_HOST_FNS.length > 0) {
     hostCtl = new SharedArrayBuffer(HOST_CTL_BYTES);
-    hostService = startHostService(hostCtl, memory, hostImpls);
+    hostService = startHostService(hostCtl, memory, {
+      ...hostImpls,
+      ...builtinHostImpls,
+    });
   }
   const poolSize =
     THREADS_POOL_SIZE ??
@@ -1393,11 +1477,20 @@ mod tests {
             ),
         ];
         let glue = render_glue(&fns, "app.wasm", Some(&cfg));
-        // Signature-driven marshalling table: per-fn arg/ret JS kinds.
+        // Signature-driven marshalling table: per-fn arg/ret JS kinds. On a
+        // threaded build the compiler-emitted `__kara_timer_after` builtin
+        // is appended (it rides the same proxy machinery), but it is NOT a
+        // user-facing import.
         assert!(glue.contains(
             "const HOST_FN_SIGS = [{ name: \"report\", params: [\"bigint\"], ret: \"bigint\" }, \
-             { name: \"log_str\", params: [\"number\", \"bigint\"], ret: \"void\" }];"
+             { name: \"log_str\", params: [\"number\", \"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }];"
         ));
+        // The builtin is registered as a builtin, and excluded from the
+        // user contract (DECLARED_IMPORTS drives the missing-impl check and
+        // the d.ts).
+        assert!(glue.contains("const BUILTIN_HOST_FNS = [\"__kara_timer_after\"];"));
+        assert!(glue.contains("const DECLARED_IMPORTS = [\"report\", \"log_str\"];"));
         // Both halves of the proxy plus the worker-side wiring.
         for needle in [
             "function makeHostProxy(hostCtl)",
@@ -1405,13 +1498,23 @@ mod tests {
             "imports.kara_host = makeHostProxy(hostCtl);",
             "Atomics.waitAsync",
             "Atomics.compareExchange(c, HC_LOCK",
-            "hostService = startHostService(hostCtl, memory, hostImpls);",
             "return await runThreaded(hostImpls);",
+            // Host-async service instance + builtin timer impl.
+            "serviceInstance = await WebAssembly.instantiate(module, serviceImports);",
+            "serviceInstance.exports.karac_runtime_service_stack_top()",
+            "builtinHostImpls[\"__kara_timer_after\"] = (chPtr, ms) =>",
+            "serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);",
         ] {
             assert!(glue.contains(needle), "missing proxy machinery: {needle}");
         }
         // The dead build-time rejection in runThreaded is gone.
         assert!(!glue.contains("host fns are not supported with wasm-threads"));
+        // The builtin must NOT leak into the user-facing TypeScript surface.
+        let dts = render_dts(&fns, "app.wasm", true);
+        assert!(
+            !dts.contains("__kara_timer_after"),
+            "builtin leaked into d.ts"
+        );
     }
 
     #[test]

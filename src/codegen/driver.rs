@@ -157,6 +157,23 @@ pub fn link_wasm_executable_threaded(
         "--export-memory",
         "--shared-memory",
         &format!("--max-memory={max_memory_bytes}"),
+        // Host-async channel producers (phase-10 `std.web.time.*`): the glue
+        // stands up a second main-thread "service" instance over the shared
+        // memory whose only job is to send into a channel from a host event
+        // callback (`setTimeout` etc.) and wake the worker parked in `recv`.
+        // These two externs are otherwise internal (not user-callable wasm
+        // exports), so surface them explicitly. Harmless for programs that
+        // never use timers — the symbols are already linked from the archive.
+        "--export=karac_runtime_channel_send",
+        "--export=karac_runtime_channel_drop_sender",
+        // The service instance never runs `_start`/`wasi_thread_start`, so
+        // its `__stack_pointer` still aliases the primary worker's stack.
+        // The glue retargets it to a dedicated scratch buffer (top from
+        // `karac_runtime_service_stack_top`) right after instantiation, so
+        // a timer-callback `channel_send` can't clobber the parked worker's
+        // live frames. Both must be exported for the glue to reach them.
+        "--export=__stack_pointer",
+        "--export=karac_runtime_service_stack_top",
         "-o",
         exe_path,
     ]);

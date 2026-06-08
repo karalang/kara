@@ -79,6 +79,29 @@ pub fn active_target_is_wasm() -> bool {
     matches!(active_target(), "wasm_wasi" | "wasm_browser")
 }
 
+/// Whether this build has `--features wasm-threads` enabled. Unlike the
+/// target name, the threads opt-in is a build *flag*, not a `V1_TARGETS`
+/// entry — but checker-phase passes (the host-async target gate in
+/// `effectchecker::target_gate`) need to know it to decide whether a
+/// host-async producer (`std.web.time.after`) can be honored: on a
+/// sequential wasm build it cannot (a single thread cannot both block in
+/// `recv` and run the host event loop), so it is a hard error. Set once at
+/// CLI startup alongside [`set_active_target`], before any pipeline pass.
+static WASM_THREADS_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Record whether `--features wasm-threads` is active for this build.
+pub fn set_wasm_threads(enabled: bool) {
+    WASM_THREADS_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// True when the active build is `wasm_browser --features wasm-threads`
+/// (the only configuration with a worker pool that can run a blocking
+/// `recv` off the main thread). See [`set_wasm_threads`].
+pub fn wasm_threads_enabled() -> bool {
+    WASM_THREADS_ENABLED.load(Ordering::Relaxed)
+}
+
 /// Is `name` one of the closed v1 target names? The `--target` flag's
 /// value space is shared with rustc-style triples (manifest
 /// `[target.<triple>.*]` overlay selection); this predicate is how the
