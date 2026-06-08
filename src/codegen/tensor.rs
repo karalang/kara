@@ -43,6 +43,7 @@ use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate};
 
 use crate::ast::{CallArg, Expr, ExprKind, GenericArg, ShapeDim, TypeExpr, TypeKind};
+use crate::token::Span;
 
 use super::state::TensorVarInfo;
 
@@ -597,6 +598,915 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_struct_value();
         Ok(agg.into())
+    }
+
+    // ── Shape-transform family ──────────────────────────────────
+    //
+    // `reshape` / `permute` / `slice` / `squeeze` each produce a FRESH
+    // tensor (a copy — tensors are value types). The receiver is
+    // borrowed, never consumed: a `let r = t.reshape(...)` RHS is a
+    // `MethodCall`, not a bare identifier, so the let-binding's
+    // `suppress_source_vec_cleanup_for_arg` no-ops and the receiver
+    // keeps its own `FreeTensor`; the result is registered + tracked by
+    // the existing let-binding machinery from the lowering side-table at
+    // the call span (the call's result type survives the
+    // MethodCall-shares-receiver-span collision because it is the last
+    // write at that key). Static receiver dims are never needed here:
+    // rank and dims are read from the runtime header, which is always
+    // authoritative; only the element type comes from static info (the
+    // result side-table entry — element type is invariant across all
+    // four transforms). Every compile-time check the typechecker makes
+    // is re-emitted as a runtime guard, because `karac run`'s
+    // `run_program` path doesn't gate on typecheck errors and a bypassed
+    // typecheck must trap rather than corrupt memory. The interpreter
+    // twins live in `src/interpreter/method_call_tensor.rs`.
+
+    /// Dispatch the shape-transform family. Returns `Ok(None)` when
+    /// `method` isn't one of the four transforms or the receiver isn't a
+    /// statically-ranked tensor (caller falls through). Handles both an
+    /// identifier receiver (`t.reshape(...)`, pointer from the binding
+    /// slot) and a chained / value receiver (`t.permute(..).reshape(..)`
+    /// or `make().reshape(..)`, pointer from compiling the object). The
+    /// chained gate is: the call's *result* is tensor-typed (recorded in
+    /// the lowering side-table at the call span) — these four method
+    /// names only yield a tensor when the receiver is a tensor, so a
+    /// side-table hit proves a tensor receiver without re-deriving its
+    /// type.
+    pub(super) fn try_compile_tensor_transform(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        call_span: &Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        if !matches!(method, "reshape" | "permute" | "slice" | "squeeze") {
+            return Ok(None);
+        }
+        // A receiver that is itself a shape-transform call (`a.permute(..)
+        // .reshape(..)`) is a fresh owned temporary: the inner call
+        // malloc'd it, the current call copies out of it, and nothing
+        // else owns it. Free it after the copy so chained transforms
+        // don't leak the intermediates. An identifier / field / index
+        // receiver is borrowed and must NOT be freed here (it keeps its
+        // own scope cleanup); a function-return receiver (`make()
+        // .reshape(..)`) is also a fresh temporary but isn't freed yet —
+        // a benign leak, never a corruption (tracked with iter_axis).
+        let receiver_is_fresh_temp = matches!(
+            &object.kind,
+            ExprKind::MethodCall { method: m, .. }
+                if matches!(m.as_str(), "reshape" | "permute" | "slice" | "squeeze")
+        );
+        let t_ptr = match &object.kind {
+            ExprKind::Identifier(name) if self.tensor_var_infos.contains_key(name.as_str()) => {
+                self.tensor_ptr_for_var(name)?
+            }
+            _ if self
+                .tensor_typed_exprs
+                .contains_key(&(call_span.offset, call_span.length)) =>
+            {
+                self.compile_expr(object)?.into_pointer_value()
+            }
+            _ => return Ok(None),
+        };
+        let v = match method {
+            "reshape" => self.compile_tensor_reshape(t_ptr, args, call_span)?,
+            "permute" => self.compile_tensor_permute(t_ptr, args, call_span)?,
+            "slice" => self.compile_tensor_slice(t_ptr, args, call_span)?,
+            "squeeze" => self.compile_tensor_squeeze(t_ptr, args, call_span)?,
+            _ => unreachable!(),
+        };
+        if receiver_is_fresh_temp {
+            self.builder
+                .build_call(self.free_fn, &[t_ptr.into()], "")
+                .unwrap();
+        }
+        Ok(Some(v))
+    }
+
+    /// Element LLVM type of a transform's *result* tensor, read from the
+    /// lowering side-table keyed by the call span. The result of every
+    /// transform here is itself a `Tensor[T, …]`, so the entry exists;
+    /// element type is invariant across the transforms, so this is also
+    /// the receiver's element type (used for element GEPs and the byte
+    /// size of the data copy).
+    fn tensor_transform_elem(&self, call_span: &Span) -> Result<BasicTypeEnum<'ctx>, String> {
+        let key = (call_span.offset, call_span.length);
+        let ti = self.tensor_typed_exprs.get(&key).ok_or_else(|| {
+            "tensor shape-transform result type is not statically known \
+             (missing lowering side-table entry)"
+                .to_string()
+        })?;
+        Ok(self.llvm_type_for_type_expr(&ti.elem.clone()))
+    }
+
+    /// Load the rank from header slot 0.
+    fn tensor_load_rank(&self, t_ptr: PointerValue<'ctx>) -> IntValue<'ctx> {
+        self.builder
+            .build_load(self.context.i64_type(), t_ptr, "t.rank")
+            .unwrap()
+            .into_int_value()
+    }
+
+    /// Pointer to dim slot `i` for a runtime `i`: `gep i64, t_ptr,
+    /// [1 + i]` (slot 0 is rank, dims start at slot 1).
+    fn tensor_dim_slot_dyn(
+        &self,
+        t_ptr: PointerValue<'ctx>,
+        i_val: IntValue<'ctx>,
+        name: &str,
+    ) -> PointerValue<'ctx> {
+        let i64_t = self.context.i64_type();
+        let off = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "t.dimoff")
+            .unwrap();
+        unsafe { self.builder.build_gep(i64_t, t_ptr, &[off], name).unwrap() }
+    }
+
+    /// Data pointer for a runtime rank: `gep i64, t_ptr, [1 + rank]`.
+    fn tensor_data_ptr_dyn(
+        &self,
+        t_ptr: PointerValue<'ctx>,
+        rank_val: IntValue<'ctx>,
+        name: &str,
+    ) -> PointerValue<'ctx> {
+        let i64_t = self.context.i64_type();
+        let off = self
+            .builder
+            .build_int_add(rank_val, i64_t.const_int(1, false), "t.dataoff")
+            .unwrap();
+        unsafe { self.builder.build_gep(i64_t, t_ptr, &[off], name).unwrap() }
+    }
+
+    /// `acc = 1; for i in 0..rank { acc *= dim[i] }` — element count read
+    /// from the header (works for any runtime rank / dim mix).
+    fn tensor_count_runtime(
+        &mut self,
+        t_ptr: PointerValue<'ctx>,
+        rank_val: IntValue<'ctx>,
+    ) -> IntValue<'ctx> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let acc = self.create_entry_alloca(fn_val, "t.cnt", i64_t.into());
+        self.builder
+            .build_store(acc, i64_t.const_int(1, false))
+            .unwrap();
+        let iv = self.create_entry_alloca(fn_val, "t.cnt.i", i64_t.into());
+        self.builder
+            .build_store(iv, i64_t.const_int(0, false))
+            .unwrap();
+        let head = self.context.append_basic_block(fn_val, "t.cnt.head");
+        let body = self.context.append_basic_block(fn_val, "t.cnt.body");
+        let exit = self.context.append_basic_block(fn_val, "t.cnt.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, iv, "t.cnt.iv")
+            .unwrap()
+            .into_int_value();
+        let cont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, rank_val, "t.cnt.cont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cont, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let slot = self.tensor_dim_slot_dyn(t_ptr, i, "t.cnt.dp");
+        let d = self
+            .builder
+            .build_load(i64_t, slot, "t.cnt.d")
+            .unwrap()
+            .into_int_value();
+        let a = self
+            .builder
+            .build_load(i64_t, acc, "t.cnt.a")
+            .unwrap()
+            .into_int_value();
+        let m = self.builder.build_int_mul(a, d, "t.cnt.m").unwrap();
+        self.builder.build_store(acc, m).unwrap();
+        let ni = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "t.cnt.ni")
+            .unwrap();
+        self.builder.build_store(iv, ni).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(exit);
+        self.builder
+            .build_load(i64_t, acc, "t.cnt.v")
+            .unwrap()
+            .into_int_value()
+    }
+
+    /// Allocate a result tensor block for a runtime `rank_val` and
+    /// `count`, write the rank into slot 0, and return `(t_ptr,
+    /// data_ptr)`. The caller writes the per-dim header slots and the
+    /// data. `bytes = 8*(1+rank) + count*elem_size`.
+    fn tensor_alloc_runtime(
+        &mut self,
+        rank_val: IntValue<'ctx>,
+        count: IntValue<'ctx>,
+        elem_size: u64,
+    ) -> (PointerValue<'ctx>, PointerValue<'ctx>) {
+        let i64_t = self.context.i64_type();
+        let rank_p1 = self
+            .builder
+            .build_int_add(rank_val, i64_t.const_int(1, false), "t.rankp1")
+            .unwrap();
+        let header_bytes = self
+            .builder
+            .build_int_mul(rank_p1, i64_t.const_int(8, false), "t.hbytes")
+            .unwrap();
+        let data_bytes = self
+            .builder
+            .build_int_mul(count, i64_t.const_int(elem_size, false), "t.dbytes")
+            .unwrap();
+        let total = self
+            .builder
+            .build_int_add(header_bytes, data_bytes, "t.bytes")
+            .unwrap();
+        let t_ptr = self
+            .builder
+            .build_call(self.malloc_fn, &[total.into()], "t.alloc")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder.build_store(t_ptr, rank_val).unwrap();
+        let data = self.tensor_data_ptr_dyn(t_ptr, rank_val, "t.res.data");
+        (t_ptr, data)
+    }
+
+    /// `t.reshape([d0, d1, ...])` — same elements, new dims, C-order
+    /// preserved (a copy). The dims argument is an array literal (the
+    /// typechecker's rule; the result's static rank is its length).
+    /// Integer-literal entries are folded; runtime entries get a
+    /// non-negative guard. The element-count product is asserted equal to
+    /// the receiver's at runtime.
+    pub(super) fn compile_tensor_reshape(
+        &mut self,
+        t_ptr: PointerValue<'ctx>,
+        args: &[CallArg],
+        call_span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let elem = self.tensor_transform_elem(call_span)?;
+        let elem_size = self.tensor_elem_size(elem)?;
+        let i64_t = self.context.i64_type();
+        let entries = match args.first().map(|a| &a.value.kind) {
+            Some(ExprKind::ArrayLiteral(e)) if !e.is_empty() => e.clone(),
+            _ => return Err("reshape requires a non-empty array-literal dims argument".to_string()),
+        };
+        let result_rank = entries.len();
+        let mut new_dims: Vec<IntValue<'ctx>> = Vec::with_capacity(result_rank);
+        for entry in &entries {
+            let is_literal = matches!(entry.kind, ExprKind::Integer(_, _));
+            let dv = self.compile_expr(entry)?.into_int_value();
+            if !is_literal {
+                let neg = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, dv, i64_t.const_zero(), "t.rsh.neg")
+                    .unwrap();
+                let ok = self.builder.build_not(neg, "t.rsh.nn").unwrap();
+                self.emit_tensor_guard(ok, "reshape dim must be non-negative")?;
+            }
+            new_dims.push(dv);
+        }
+        let mut new_count = i64_t.const_int(1, false);
+        for dv in &new_dims {
+            new_count = self
+                .builder
+                .build_int_mul(new_count, *dv, "t.rsh.cnt")
+                .unwrap();
+        }
+        let rank_val = self.tensor_load_rank(t_ptr);
+        let old_count = self.tensor_count_runtime(t_ptr, rank_val);
+        let eq = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, old_count, new_count, "t.rsh.eq")
+            .unwrap();
+        self.emit_tensor_guard(eq, "reshape element counts must match")?;
+        let src_data = self.tensor_data_ptr_dyn(t_ptr, rank_val, "t.rsh.src");
+        let result_rank_val = i64_t.const_int(result_rank as u64, false);
+        let (res, res_data) = self.tensor_alloc_runtime(result_rank_val, new_count, elem_size);
+        for (k, dv) in new_dims.iter().enumerate() {
+            let slot = self.tensor_header_slot(res, 1 + k as u64, &format!("t.rsh.d{}.p", k));
+            self.builder.build_store(slot, *dv).unwrap();
+        }
+        let bytes = self
+            .builder
+            .build_int_mul(new_count, i64_t.const_int(elem_size, false), "t.rsh.bytes")
+            .unwrap();
+        self.builder
+            .build_memcpy(res_data, 8, src_data, 8, bytes)
+            .map_err(|e| format!("reshape data copy failed: {:?}", e))?;
+        Ok(res.into())
+    }
+
+    /// `t.permute([1, 0, 2])` — reorder the axes; result dim `i` is the
+    /// receiver's dim `perm[i]`. `perm` is an array literal of integer
+    /// literals forming an exact permutation of `0..rank` (typechecker
+    /// rule). Data is reordered into a fresh C-order buffer: each output
+    /// flat index decomposes into output coords, and the source flat
+    /// index is the dot product of those coords with the *source*
+    /// strides of the permuted-from axes.
+    pub(super) fn compile_tensor_permute(
+        &mut self,
+        t_ptr: PointerValue<'ctx>,
+        args: &[CallArg],
+        call_span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let elem = self.tensor_transform_elem(call_span)?;
+        let elem_size = self.tensor_elem_size(elem)?;
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+        let entries = match args.first().map(|a| &a.value.kind) {
+            Some(ExprKind::ArrayLiteral(e)) if !e.is_empty() => e.clone(),
+            _ => return Err("permute requires a non-empty literal axis-list".to_string()),
+        };
+        let rank = entries.len();
+        let mut perm: Vec<usize> = Vec::with_capacity(rank);
+        for entry in &entries {
+            match &entry.kind {
+                ExprKind::Integer(v, _) if *v >= 0 && (*v as usize) < rank => {
+                    perm.push(*v as usize)
+                }
+                _ => {
+                    return Err(
+                        "permute requires integer-literal axes forming a permutation of \
+                                 0..rank"
+                            .to_string(),
+                    )
+                }
+            }
+        }
+        // Receiver dims (rank is static = perm length).
+        let rdims: Vec<IntValue<'ctx>> =
+            (0..rank).map(|i| self.tensor_load_dim(t_ptr, i)).collect();
+        // Source C-order strides: stride[rank-1] = 1, stride[k] =
+        // stride[k+1] * rdims[k+1].
+        let mut strides = vec![i64_t.const_int(1, false); rank];
+        for k in (0..rank.saturating_sub(1)).rev() {
+            strides[k] = self
+                .builder
+                .build_int_mul(strides[k + 1], rdims[k + 1], "t.prm.st")
+                .unwrap();
+        }
+        let new_dims: Vec<IntValue<'ctx>> = perm.iter().map(|&p| rdims[p]).collect();
+        let mut total = i64_t.const_int(1, false);
+        for d in &rdims {
+            total = self.builder.build_int_mul(total, *d, "t.prm.tot").unwrap();
+        }
+        let rank_val = i64_t.const_int(rank as u64, false);
+        let src_data = self.tensor_data_ptr_dyn(t_ptr, rank_val, "t.prm.src");
+        let (res, res_data) = self.tensor_alloc_runtime(rank_val, total, elem_size);
+        for (i, dv) in new_dims.iter().enumerate() {
+            let slot = self.tensor_header_slot(res, 1 + i as u64, &format!("t.prm.d{}.p", i));
+            self.builder.build_store(slot, *dv).unwrap();
+        }
+        // Reorder loop: for f in 0..total.
+        let fv = self.create_entry_alloca(fn_val, "t.prm.f", i64_t.into());
+        self.builder
+            .build_store(fv, i64_t.const_int(0, false))
+            .unwrap();
+        let head = self.context.append_basic_block(fn_val, "t.prm.head");
+        let body = self.context.append_basic_block(fn_val, "t.prm.body");
+        let exit = self.context.append_basic_block(fn_val, "t.prm.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let f = self
+            .builder
+            .build_load(i64_t, fv, "t.prm.fv")
+            .unwrap()
+            .into_int_value();
+        let cont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, f, total, "t.prm.cont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cont, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        // Decompose f into output coords (C-order over new_dims),
+        // accumulating the source flat index. Output coord i indexes
+        // source axis perm[i]; rank is static so this unrolls.
+        let mut rem = f;
+        let mut src = i64_t.const_int(0, false);
+        for i in (0..rank).rev() {
+            let nd = new_dims[i];
+            let coord = self
+                .builder
+                .build_int_unsigned_rem(rem, nd, "t.prm.coord")
+                .unwrap();
+            rem = self
+                .builder
+                .build_int_unsigned_div(rem, nd, "t.prm.rem")
+                .unwrap();
+            let contrib = self
+                .builder
+                .build_int_mul(coord, strides[perm[i]], "t.prm.contrib")
+                .unwrap();
+            src = self
+                .builder
+                .build_int_add(src, contrib, "t.prm.srcacc")
+                .unwrap();
+        }
+        let src_slot = unsafe {
+            self.builder
+                .build_gep(elem, src_data, &[src], "t.prm.srcp")
+                .unwrap()
+        };
+        let v = self.builder.build_load(elem, src_slot, "t.prm.v").unwrap();
+        let dst_slot = unsafe {
+            self.builder
+                .build_gep(elem, res_data, &[f], "t.prm.dstp")
+                .unwrap()
+        };
+        self.builder.build_store(dst_slot, v).unwrap();
+        let nf = self
+            .builder
+            .build_int_add(f, i64_t.const_int(1, false), "t.prm.nf")
+            .unwrap();
+        self.builder.build_store(fv, nf).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(exit);
+        Ok(res.into())
+    }
+
+    /// `t.slice(axis, start, end)` — contiguous `[start, end)` band along
+    /// one axis, other axes untouched (a copy). The receiver is walked as
+    /// `outer × axis_len × inner` (outer = product of dims left of the
+    /// axis, inner = product right of it); each outer block keeps its
+    /// `[start, end)` middle band. Axis/start/end may be runtime; all
+    /// bounds are checked at runtime.
+    pub(super) fn compile_tensor_slice(
+        &mut self,
+        t_ptr: PointerValue<'ctx>,
+        args: &[CallArg],
+        call_span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 3 {
+            return Err(format!(
+                "slice takes exactly 3 arguments (axis, start, end), found {}",
+                args.len()
+            ));
+        }
+        let elem = self.tensor_transform_elem(call_span)?;
+        let elem_size = self.tensor_elem_size(elem)?;
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+        let axis = self.compile_expr(&args[0].value)?.into_int_value();
+        let start = self.compile_expr(&args[1].value)?.into_int_value();
+        let end = self.compile_expr(&args[2].value)?.into_int_value();
+        let rank_val = self.tensor_load_rank(t_ptr);
+        // axis in [0, rank) — unsigned compare also rejects negatives.
+        let axis_oob = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, axis, rank_val, "t.slc.aoob")
+            .unwrap();
+        let axis_ok = self.builder.build_not(axis_oob, "t.slc.aok").unwrap();
+        self.emit_tensor_guard(axis_ok, "slice axis out of bounds")?;
+        // Single pass over the dims: outer (i<axis), axis_len (i==axis),
+        // inner (i>axis).
+        let outer_s = self.create_entry_alloca(fn_val, "t.slc.outer", i64_t.into());
+        let inner_s = self.create_entry_alloca(fn_val, "t.slc.inner", i64_t.into());
+        let axislen_s = self.create_entry_alloca(fn_val, "t.slc.axlen", i64_t.into());
+        self.builder
+            .build_store(outer_s, i64_t.const_int(1, false))
+            .unwrap();
+        self.builder
+            .build_store(inner_s, i64_t.const_int(1, false))
+            .unwrap();
+        self.builder
+            .build_store(axislen_s, i64_t.const_int(1, false))
+            .unwrap();
+        let iv = self.create_entry_alloca(fn_val, "t.slc.i", i64_t.into());
+        self.builder
+            .build_store(iv, i64_t.const_int(0, false))
+            .unwrap();
+        let head = self.context.append_basic_block(fn_val, "t.slc.dh");
+        let dbody = self.context.append_basic_block(fn_val, "t.slc.db");
+        let dexit = self.context.append_basic_block(fn_val, "t.slc.de");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, iv, "t.slc.iv")
+            .unwrap()
+            .into_int_value();
+        let cont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, rank_val, "t.slc.cont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cont, dbody, dexit)
+            .unwrap();
+        self.builder.position_at_end(dbody);
+        let dslot = self.tensor_dim_slot_dyn(t_ptr, i, "t.slc.dp");
+        let d = self
+            .builder
+            .build_load(i64_t, dslot, "t.slc.d")
+            .unwrap()
+            .into_int_value();
+        let lt = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, axis, "t.slc.lt")
+            .unwrap();
+        let eq = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, i, axis, "t.slc.eq")
+            .unwrap();
+        let gt = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, i, axis, "t.slc.gt")
+            .unwrap();
+        let outer = self
+            .builder
+            .build_load(i64_t, outer_s, "t.slc.outv")
+            .unwrap()
+            .into_int_value();
+        let outer_m = self.builder.build_int_mul(outer, d, "t.slc.outm").unwrap();
+        let outer_n = self
+            .builder
+            .build_select(lt, outer_m, outer, "t.slc.outn")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(outer_s, outer_n).unwrap();
+        let axlen = self
+            .builder
+            .build_load(i64_t, axislen_s, "t.slc.alv")
+            .unwrap()
+            .into_int_value();
+        let axlen_n = self
+            .builder
+            .build_select(eq, d, axlen, "t.slc.aln")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(axislen_s, axlen_n).unwrap();
+        let inner = self
+            .builder
+            .build_load(i64_t, inner_s, "t.slc.innv")
+            .unwrap()
+            .into_int_value();
+        let inner_m = self.builder.build_int_mul(inner, d, "t.slc.innm").unwrap();
+        let inner_n = self
+            .builder
+            .build_select(gt, inner_m, inner, "t.slc.innn")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(inner_s, inner_n).unwrap();
+        let ni = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "t.slc.ni")
+            .unwrap();
+        self.builder.build_store(iv, ni).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(dexit);
+        let outer = self
+            .builder
+            .build_load(i64_t, outer_s, "t.slc.outer.f")
+            .unwrap()
+            .into_int_value();
+        let inner = self
+            .builder
+            .build_load(i64_t, inner_s, "t.slc.inner.f")
+            .unwrap()
+            .into_int_value();
+        let axis_len = self
+            .builder
+            .build_load(i64_t, axislen_s, "t.slc.axlen.f")
+            .unwrap()
+            .into_int_value();
+        // Bounds: 0 <= start <= end <= axis_len.
+        let start_neg = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, start, i64_t.const_zero(), "t.slc.sneg")
+            .unwrap();
+        let start_ok = self.builder.build_not(start_neg, "t.slc.snn").unwrap();
+        self.emit_tensor_guard(start_ok, "slice start must be non-negative")?;
+        let end_lt_start = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, end, start, "t.slc.els")
+            .unwrap();
+        let order_ok = self.builder.build_not(end_lt_start, "t.slc.ord").unwrap();
+        self.emit_tensor_guard(order_ok, "slice end is before start")?;
+        let end_oob = self
+            .builder
+            .build_int_compare(IntPredicate::SGT, end, axis_len, "t.slc.eoob")
+            .unwrap();
+        let end_ok = self.builder.build_not(end_oob, "t.slc.eok").unwrap();
+        self.emit_tensor_guard(end_ok, "slice end out of bounds for the axis")?;
+        let band = self
+            .builder
+            .build_int_sub(end, start, "t.slc.band")
+            .unwrap();
+        // new_count = outer * band * inner.
+        let ob = self.builder.build_int_mul(outer, band, "t.slc.ob").unwrap();
+        let new_count = self.builder.build_int_mul(ob, inner, "t.slc.nc").unwrap();
+        let src_data = self.tensor_data_ptr_dyn(t_ptr, rank_val, "t.slc.srcd");
+        let (res, res_data) = self.tensor_alloc_runtime(rank_val, new_count, elem_size);
+        // Header: copy dims, replacing the axis slot with `band`.
+        let jv = self.create_entry_alloca(fn_val, "t.slc.j", i64_t.into());
+        self.builder
+            .build_store(jv, i64_t.const_int(0, false))
+            .unwrap();
+        let hh = self.context.append_basic_block(fn_val, "t.slc.hh");
+        let hb = self.context.append_basic_block(fn_val, "t.slc.hb");
+        let he = self.context.append_basic_block(fn_val, "t.slc.he");
+        self.builder.build_unconditional_branch(hh).unwrap();
+        self.builder.position_at_end(hh);
+        let j = self
+            .builder
+            .build_load(i64_t, jv, "t.slc.jv")
+            .unwrap()
+            .into_int_value();
+        let hcont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, j, rank_val, "t.slc.hcont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(hcont, hb, he)
+            .unwrap();
+        self.builder.position_at_end(hb);
+        let dslot = self.tensor_dim_slot_dyn(t_ptr, j, "t.slc.hdp");
+        let dj = self
+            .builder
+            .build_load(i64_t, dslot, "t.slc.hd")
+            .unwrap()
+            .into_int_value();
+        let is_axis = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, j, axis, "t.slc.isax")
+            .unwrap();
+        let written = self
+            .builder
+            .build_select(is_axis, band, dj, "t.slc.hw")
+            .unwrap()
+            .into_int_value();
+        let rslot = self.tensor_dim_slot_dyn(res, j, "t.slc.rdp");
+        self.builder.build_store(rslot, written).unwrap();
+        let nj = self
+            .builder
+            .build_int_add(j, i64_t.const_int(1, false), "t.slc.nj")
+            .unwrap();
+        self.builder.build_store(jv, nj).unwrap();
+        self.builder.build_unconditional_branch(hh).unwrap();
+        self.builder.position_at_end(he);
+        // Copy: for o in 0..outer, memcpy band*inner elements from
+        // src[o*axis_len*inner + start*inner] to dst[o*band*inner].
+        let band_inner = self.builder.build_int_mul(band, inner, "t.slc.bi").unwrap();
+        let copy_bytes = self
+            .builder
+            .build_int_mul(band_inner, i64_t.const_int(elem_size, false), "t.slc.cb")
+            .unwrap();
+        let ov = self.create_entry_alloca(fn_val, "t.slc.o", i64_t.into());
+        self.builder
+            .build_store(ov, i64_t.const_int(0, false))
+            .unwrap();
+        let ch = self.context.append_basic_block(fn_val, "t.slc.ch");
+        let cb = self.context.append_basic_block(fn_val, "t.slc.cb2");
+        let ce = self.context.append_basic_block(fn_val, "t.slc.ce");
+        self.builder.build_unconditional_branch(ch).unwrap();
+        self.builder.position_at_end(ch);
+        let o = self
+            .builder
+            .build_load(i64_t, ov, "t.slc.ov")
+            .unwrap()
+            .into_int_value();
+        let ccont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, o, outer, "t.slc.ccont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(ccont, cb, ce)
+            .unwrap();
+        self.builder.position_at_end(cb);
+        let ali = self
+            .builder
+            .build_int_mul(axis_len, inner, "t.slc.ali")
+            .unwrap();
+        let block = self.builder.build_int_mul(o, ali, "t.slc.blk").unwrap();
+        let start_inner = self
+            .builder
+            .build_int_mul(start, inner, "t.slc.si")
+            .unwrap();
+        let src_off = self
+            .builder
+            .build_int_add(block, start_inner, "t.slc.soff")
+            .unwrap();
+        let dst_off = self
+            .builder
+            .build_int_mul(o, band_inner, "t.slc.doff")
+            .unwrap();
+        let src_p = unsafe {
+            self.builder
+                .build_gep(elem, src_data, &[src_off], "t.slc.sp")
+                .unwrap()
+        };
+        let dst_p = unsafe {
+            self.builder
+                .build_gep(elem, res_data, &[dst_off], "t.slc.dp2")
+                .unwrap()
+        };
+        self.builder
+            .build_memcpy(dst_p, 8, src_p, 8, copy_bytes)
+            .map_err(|e| format!("slice data copy failed: {:?}", e))?;
+        let no = self
+            .builder
+            .build_int_add(o, i64_t.const_int(1, false), "t.slc.no")
+            .unwrap();
+        self.builder.build_store(ov, no).unwrap();
+        self.builder.build_unconditional_branch(ch).unwrap();
+        self.builder.position_at_end(ce);
+        Ok(res.into())
+    }
+
+    /// `t.squeeze()` / `t.squeeze(n)` — drop size-1 axes. Data is
+    /// unchanged (element count + C-order identical); only the header
+    /// shrinks. `squeeze(n)` drops slot `n` (runtime checked == 1);
+    /// `squeeze()` drops every size-1 dim. Both build a runtime-rank
+    /// result header from the receiver's, then memcpy the data block.
+    pub(super) fn compile_tensor_squeeze(
+        &mut self,
+        t_ptr: PointerValue<'ctx>,
+        args: &[CallArg],
+        call_span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let elem = self.tensor_transform_elem(call_span)?;
+        let elem_size = self.tensor_elem_size(elem)?;
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+        let rank_val = self.tensor_load_rank(t_ptr);
+        let count = self.tensor_count_runtime(t_ptr, rank_val);
+        let one = i64_t.const_int(1, false);
+
+        // Decide which slots to keep, and the kept count, with a single
+        // pass that writes nothing (just counts); then a second pass
+        // writes the kept dims into the freshly-allocated header. `drop_n`
+        // (Some axis) for `squeeze(n)`, None for `squeeze()` (drop all
+        // size-1).
+        let drop_n: Option<IntValue<'ctx>> = match args.len() {
+            0 => None,
+            1 => {
+                let n = self.compile_expr(&args[0].value)?.into_int_value();
+                // n in [0, rank) and dims[n] == 1.
+                let oob = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGE, n, rank_val, "t.sqz.oob")
+                    .unwrap();
+                let in_ok = self.builder.build_not(oob, "t.sqz.in").unwrap();
+                self.emit_tensor_guard(in_ok, "squeeze axis out of bounds")?;
+                let nslot = self.tensor_dim_slot_dyn(t_ptr, n, "t.sqz.np");
+                let nd = self
+                    .builder
+                    .build_load(i64_t, nslot, "t.sqz.nd")
+                    .unwrap()
+                    .into_int_value();
+                let is_one = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, nd, one, "t.sqz.is1")
+                    .unwrap();
+                self.emit_tensor_guard(is_one, "cannot squeeze an axis whose size is not 1")?;
+                Some(n)
+            }
+            _ => return Err("squeeze takes 0 or 1 arguments".to_string()),
+        };
+
+        // Kept-count: for squeeze(n) it's rank-1; for squeeze() count the
+        // non-1 dims.
+        let kept_count = match drop_n {
+            Some(_) => self
+                .builder
+                .build_int_sub(rank_val, one, "t.sqz.kc")
+                .unwrap(),
+            None => {
+                let kc = self.create_entry_alloca(fn_val, "t.sqz.kc", i64_t.into());
+                self.builder.build_store(kc, i64_t.const_zero()).unwrap();
+                let iv = self.create_entry_alloca(fn_val, "t.sqz.ci", i64_t.into());
+                self.builder.build_store(iv, i64_t.const_zero()).unwrap();
+                let h = self.context.append_basic_block(fn_val, "t.sqz.cnt.h");
+                let b = self.context.append_basic_block(fn_val, "t.sqz.cnt.b");
+                let e = self.context.append_basic_block(fn_val, "t.sqz.cnt.e");
+                self.builder.build_unconditional_branch(h).unwrap();
+                self.builder.position_at_end(h);
+                let i = self
+                    .builder
+                    .build_load(i64_t, iv, "t.sqz.cv")
+                    .unwrap()
+                    .into_int_value();
+                let cont = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, i, rank_val, "t.sqz.ccont")
+                    .unwrap();
+                self.builder.build_conditional_branch(cont, b, e).unwrap();
+                self.builder.position_at_end(b);
+                let dslot = self.tensor_dim_slot_dyn(t_ptr, i, "t.sqz.cdp");
+                let d = self
+                    .builder
+                    .build_load(i64_t, dslot, "t.sqz.cd")
+                    .unwrap()
+                    .into_int_value();
+                let keep = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, d, one, "t.sqz.keep")
+                    .unwrap();
+                let cur = self
+                    .builder
+                    .build_load(i64_t, kc, "t.sqz.kcv")
+                    .unwrap()
+                    .into_int_value();
+                let inc = self.builder.build_int_add(cur, one, "t.sqz.kinc").unwrap();
+                let next = self
+                    .builder
+                    .build_select(keep, inc, cur, "t.sqz.ksel")
+                    .unwrap()
+                    .into_int_value();
+                self.builder.build_store(kc, next).unwrap();
+                let ni = self.builder.build_int_add(i, one, "t.sqz.cni").unwrap();
+                self.builder.build_store(iv, ni).unwrap();
+                self.builder.build_unconditional_branch(h).unwrap();
+                self.builder.position_at_end(e);
+                self.builder
+                    .build_load(i64_t, kc, "t.sqz.kc.f")
+                    .unwrap()
+                    .into_int_value()
+            }
+        };
+
+        let src_data = self.tensor_data_ptr_dyn(t_ptr, rank_val, "t.sqz.src");
+        let (res, res_data) = self.tensor_alloc_runtime(kept_count, count, elem_size);
+
+        // Write kept dims: walk receiver dims, append each kept dim to a
+        // running output cursor. `keep(j)` = (drop_n is None ? dims[j]!=1
+        // : j != drop_n).
+        let outc = self.create_entry_alloca(fn_val, "t.sqz.out", i64_t.into());
+        self.builder.build_store(outc, i64_t.const_zero()).unwrap();
+        let jv = self.create_entry_alloca(fn_val, "t.sqz.j", i64_t.into());
+        self.builder.build_store(jv, i64_t.const_zero()).unwrap();
+        let wh = self.context.append_basic_block(fn_val, "t.sqz.wh");
+        let wb = self.context.append_basic_block(fn_val, "t.sqz.wb");
+        let wkeep = self.context.append_basic_block(fn_val, "t.sqz.wkeep");
+        let wskip = self.context.append_basic_block(fn_val, "t.sqz.wskip");
+        let we = self.context.append_basic_block(fn_val, "t.sqz.we");
+        self.builder.build_unconditional_branch(wh).unwrap();
+        self.builder.position_at_end(wh);
+        let j = self
+            .builder
+            .build_load(i64_t, jv, "t.sqz.wjv")
+            .unwrap()
+            .into_int_value();
+        let wcont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, j, rank_val, "t.sqz.wcont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(wcont, wb, we)
+            .unwrap();
+        self.builder.position_at_end(wb);
+        let dslot = self.tensor_dim_slot_dyn(t_ptr, j, "t.sqz.wdp");
+        let dj = self
+            .builder
+            .build_load(i64_t, dslot, "t.sqz.wd")
+            .unwrap()
+            .into_int_value();
+        let keep = match drop_n {
+            Some(n) => self
+                .builder
+                .build_int_compare(IntPredicate::NE, j, n, "t.sqz.wkeepc")
+                .unwrap(),
+            None => self
+                .builder
+                .build_int_compare(IntPredicate::NE, dj, one, "t.sqz.wkeepc")
+                .unwrap(),
+        };
+        self.builder
+            .build_conditional_branch(keep, wkeep, wskip)
+            .unwrap();
+        self.builder.position_at_end(wkeep);
+        let cur = self
+            .builder
+            .build_load(i64_t, outc, "t.sqz.outv")
+            .unwrap()
+            .into_int_value();
+        let rslot = self.tensor_dim_slot_dyn(res, cur, "t.sqz.wrp");
+        self.builder.build_store(rslot, dj).unwrap();
+        let nout = self.builder.build_int_add(cur, one, "t.sqz.nout").unwrap();
+        self.builder.build_store(outc, nout).unwrap();
+        self.builder.build_unconditional_branch(wskip).unwrap();
+        self.builder.position_at_end(wskip);
+        let nj = self.builder.build_int_add(j, one, "t.sqz.wnj").unwrap();
+        self.builder.build_store(jv, nj).unwrap();
+        self.builder.build_unconditional_branch(wh).unwrap();
+        self.builder.position_at_end(we);
+        // Copy data unchanged.
+        let bytes = self
+            .builder
+            .build_int_mul(count, i64_t.const_int(elem_size, false), "t.sqz.bytes")
+            .unwrap();
+        self.builder
+            .build_memcpy(res_data, 8, src_data, 8, bytes)
+            .map_err(|e| format!("squeeze data copy failed: {:?}", e))?;
+        Ok(res.into())
     }
 
     // ── Shared emission helpers ─────────────────────────────────

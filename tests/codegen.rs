@@ -37631,6 +37631,203 @@ fn main() {
         }
     }
 
+    // ── Tensor shape-transform family codegen (phase-11, 2026-06-08) ──
+    // `reshape` / `permute` / `slice` / `squeeze`: each produces a fresh
+    // copy; rank/dims read from the runtime header, element type from
+    // the result side-table. See `src/codegen/tensor.rs §
+    // Shape-transform family` and the interpreter twins in
+    // `src/interpreter/method_call_tensor.rs`.
+
+    #[test]
+    fn test_tensor_reshape_emits_data_copy() {
+        // reshape reads the receiver's element count from the header
+        // (the `t.cnt.*` loop) and copies the data block with a memcpy
+        // into a fresh allocation.
+        let ir = ir_for(
+            "fn main() {\n\
+                 let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let r = a.reshape([3, 2]);\n\
+                 println(r[2, 1]);\n\
+             }\n",
+        );
+        assert!(
+            ir.contains("t.cnt.head"),
+            "reshape must read the receiver element count from the header:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("llvm.memcpy"),
+            "reshape must copy the data block (memcpy) — tensors are value types:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_tensor_permute_emits_reorder_loop() {
+        // permute reorders elements one-by-one through a div/rem
+        // decomposition of the output flat index (`t.prm.coord`).
+        let ir = ir_for(
+            "fn main() {\n\
+                 let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let p = a.permute([1, 0]);\n\
+                 println(p[2, 1]);\n\
+             }\n",
+        );
+        assert!(
+            ir.contains("t.prm.head") && ir.contains("t.prm.coord"),
+            "permute must emit the per-element reorder loop:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_e2e_tensor_shape_transforms() {
+        // All four transforms in one program — AOT output is verified
+        // byte-identical to `karac run` (the interpreter twins). Covers
+        // reshape (C-order preserved), permute (transpose reordering),
+        // slice (contiguous band along an axis), and both squeeze forms.
+        let out = run_program(
+            "fn main() {\n\
+                 let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let r = a.reshape([3, 2]);\n\
+                 println(r.rank());\n\
+                 let rs = r.shape();\n\
+                 println(rs[0]); println(rs[1]);\n\
+                 println(r[0,0]); println(r[0,1]); println(r[2,1]);\n\
+                 let p = a.permute([1, 0]);\n\
+                 let ps = p.shape();\n\
+                 println(ps[0]); println(ps[1]);\n\
+                 println(p[0,0]); println(p[0,1]); println(p[2,1]);\n\
+                 let sl = a.slice(1, 1, 3);\n\
+                 let sls = sl.shape();\n\
+                 println(sls[0]); println(sls[1]);\n\
+                 println(sl[0,0]); println(sl[1,1]);\n\
+                 let b = Tensor.from([[[7], [8], [9]]]);\n\
+                 let sq = b.squeeze();\n\
+                 println(sq.rank()); println(sq[0]); println(sq[2]);\n\
+                 let c = Tensor.from([[[1, 2]], [[3, 4]]]);\n\
+                 let sq1 = c.squeeze(1);\n\
+                 println(sq1.rank()); println(sq1[0,0]); println(sq1[1,1]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "2\n3\n2\n1\n2\n6\n3\n2\n1\n4\n6\n2\n2\n2\n6\n1\n7\n9\n2\n1\n4\n",
+                "shape-transform AOT output must match the interpreter twins",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_shape_transform_chained() {
+        // Chained transforms (`a.permute(..).reshape(..)`): the inner
+        // call's result pointer feeds the outer call via `compile_expr`;
+        // the receiver pointer comes from the value, not a binding slot.
+        let out = run_program(
+            "fn main() {\n\
+                 let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let r = a.permute([1, 0]).reshape([6]);\n\
+                 println(r[0]); println(r[1]); println(r[5]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "1\n4\n6\n",
+                "chained transpose→reshape must reorder then flatten"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_slice_runtime_axis() {
+        // Runtime-valued slice bounds degrade the sliced dim to `?` in
+        // the type but codegen reads everything from the header, so the
+        // band is computed correctly at runtime.
+        let out = run_program(
+            "fn main() {\n\
+                 let a = Tensor.from([[1, 2, 3, 4], [5, 6, 7, 8]]);\n\
+                 let s = 1;\n\
+                 let e = 3;\n\
+                 let sl = a.slice(1, s, e);\n\
+                 let sh = sl.shape();\n\
+                 println(sh[0]); println(sh[1]);\n\
+                 println(sl[0,0]); println(sl[0,1]); println(sl[1,1]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "2\n2\n2\n3\n7\n",
+                "runtime-axis slice band must be correct"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_reshape_count_mismatch_panics() {
+        // The element-count product is asserted equal to the receiver's
+        // at runtime (re-emitted from the typechecker's compile-time
+        // check, since `run_program` doesn't gate on typecheck).
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let n = 4;\n\
+                 let bad = a.reshape([n]);\n\
+                 println(bad[0]);\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("reshape element counts must match"),
+                "expected the reshape count-mismatch trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_slice_oob_panics() {
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let e = 9;\n\
+                 let sl = a.slice(1, 0, e);\n\
+                 println(sl[0,0]);\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("slice end out of bounds for the axis"),
+                "expected the slice bounds trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_squeeze_nonunit_panics() {
+        // `squeeze(n)` on a `?`/runtime-axis non-1 dim is checked at
+        // runtime (the typechecker can't prove the size statically).
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let c = Tensor.from([[[1, 2]], [[3, 4]]]);\n\
+                 let n = 0;\n\
+                 let sq = c.squeeze(n);\n\
+                 println(sq[0,0]);\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout
+                    .contains("cannot squeeze an axis whose size is not 1"),
+                "expected the squeeze size-1 trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
     // ── Owned String/Vec parameter retention (kata-22 family, 2026-06-06) ──
     //
     // The call ABI passes owned String/Vec headers by value while the

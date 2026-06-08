@@ -4984,6 +4984,55 @@ fn main() {
         );
     }
 
+    /// Tensor shape-transform heap lifecycle (phase-11 follow-on slice):
+    /// reshape / permute / slice / squeeze each malloc a fresh result
+    /// block and copy the data; the receiver is borrowed (keeps its own
+    /// `FreeTensor`). A chained `permute(..).reshape(..)` additionally
+    /// exercises the fresh-temporary free of the intermediate (the
+    /// `receiver_is_fresh_temp` path) — a missing free leaks (Linux
+    /// detect_leaks), a wrong free double-frees (caught everywhere).
+    #[test]
+    fn asan_tensor_shape_transform_lifecycle_clean() {
+        let label = "tensor_shape_transform_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    let r = a.reshape([3, 2]);
+    println(r[2, 1]);
+    let p = a.permute([1, 0]);
+    println(p[2, 1]);
+    let sl = a.slice(1, 1, 3);
+    println(sl[1, 1]);
+    let b = Tensor.from([[[7], [8], [9]]]);
+    let sq = b.squeeze();
+    println(sq[2]);
+    let chained = a.permute([1, 0]).reshape([6]);
+    println(chained[5]);
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check the fresh-result free and the chained-intermediate free",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["6", "6", "6", "9", "6"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     // ── Owned Vec/String param moved into a local (kata-23, 2026-06-07) ──
     //
     // `let mut work = lists;` where `lists` is a bare by-value Vec/String

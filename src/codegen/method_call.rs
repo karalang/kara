@@ -107,6 +107,18 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_expr(object);
         }
 
+        // Tensor shape-transform family (`reshape` / `permute` / `slice`
+        // / `squeeze`, phase-11 numerical stdlib — `src/codegen/tensor.rs`).
+        // Handled here (before the rest of dispatch) so both identifier
+        // and chained / value receivers route uniformly; returns `None`
+        // when the method isn't a transform or the receiver isn't a
+        // statically-ranked tensor. `iter_axis` is a separate follow-on
+        // slice and is NOT handled here (it errors in the identifier
+        // block below).
+        if let Some(v) = self.try_compile_tensor_transform(object, method, args, call_span)? {
+            return Ok(v);
+        }
+
         // SIMD static constructor — `Vector[T, N].splat(x)` (design.md
         // § Portable SIMD). The receiver is the bare vector type-path, not a
         // value, so intercept before the receiver is compiled as an
@@ -1185,22 +1197,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 // Tensor instance methods — shape()/rank() read the
                 // `[rank][dims][data]` header (`src/codegen/tensor.rs`).
-                // The shape-transform family (iter_axis/reshape/...) is
-                // a follow-on codegen slice; reaching one of those here
-                // errors loudly rather than falling through to the
-                // silent-0 default.
+                // The reshape/permute/slice/squeeze family is handled by
+                // `try_compile_tensor_transform` at the top of this fn
+                // (covers identifier + chained receivers); only `iter_axis`
+                // remains a follow-on codegen slice and errors loudly here
+                // rather than falling through to the silent-0 default.
                 if self.tensor_var_infos.contains_key(name.as_str()) {
                     match method {
                         "shape" | "rank" => {
                             let t_ptr = self.tensor_ptr_for_var(name)?;
                             return self.compile_tensor_shape_method(t_ptr, method);
                         }
-                        "iter_axis" | "reshape" | "permute" | "slice" | "squeeze" => {
-                            return Err(format!(
-                                "Tensor.{} is not lowered to native code yet (phase-11 \
-                                 follow-on slice) — run under `karac run` for now",
-                                method
-                            ));
+                        "iter_axis" => {
+                            return Err(
+                                "Tensor.iter_axis is not lowered to native code yet (phase-11 \
+                                 follow-on slice — Vec[Tensor] result needs Vec-of-pointer \
+                                 element drop glue) — run under `karac run` for now"
+                                    .to_string(),
+                            );
                         }
                         _ => {}
                     }
