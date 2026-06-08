@@ -162,6 +162,63 @@ pub unsafe extern "C" fn karac_string_slice(
     new_data
 }
 
+/// Borrowed (non-allocating) sibling of `karac_string_slice`: validates the
+/// `start..end` range against `(data, len)` with the *identical* bounds and
+/// UTF-8 char-boundary checks (same fatal `exit(1)` messages), then returns a
+/// pointer **into the source buffer** (`data + start`) without copying.
+///
+/// Codegen builds a borrowed `String` view `{ptr: <this>, len: end - start,
+/// cap: 0}` from the result. `cap == 0` is the existing static/borrowed marker
+/// the scope-exit and `Map`/`Vec`-free `cap > 0` guards already skip, so the
+/// view is never freed by the caller. The view is only ever handed to map
+/// lookup methods (`get`/`contains_key`/`remove`/`get_or`), which hash and
+/// compare the `{ptr, len}` bytes and never retain the key, and to
+/// `karac_map_insert_borrowed_str_old`, which deep-copies the bytes on a fresh
+/// insertion — so the borrowed pointer never outlives the source string.
+///
+/// Returns null for an empty slice (`start == end`), matching
+/// `karac_string_slice`; the `len == 0` view's pointer is never dereferenced.
+///
+/// # Safety
+/// Same contract as `karac_string_slice`: `data` must point to a readable
+/// buffer of at least `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_slice_borrow(
+    data: *const u8,
+    len: i64,
+    start: i64,
+    end: i64,
+) -> *const u8 {
+    if start < 0 || end < start || end > len {
+        eprintln!(
+            "runtime error: string slice bounds {}..{} out of range (len {})",
+            start, end, len
+        );
+        std::process::exit(1);
+    }
+    let len_us = len as usize;
+    let start_us = start as usize;
+    let end_us = end as usize;
+    let bytes: &[u8] = if len_us == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(data, len_us)
+    };
+    let is_boundary = |i: usize| i == 0 || i == len_us || (bytes[i] & 0xC0) != 0x80;
+    if !is_boundary(start_us) || !is_boundary(end_us) {
+        eprintln!(
+            "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range \
+             {}..{} does not fall on UTF-8 char boundaries",
+            start, end
+        );
+        std::process::exit(1);
+    }
+    if end_us == start_us {
+        return ptr::null();
+    }
+    data.add(start_us)
+}
+
 /// Decode the next UTF-8 character starting at `byte_offset` in the byte
 /// slice `(data, len)`. Writes the Unicode scalar value (codepoint) through
 /// `out_codepoint` and returns the byte offset after the decoded character.

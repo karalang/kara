@@ -106,6 +106,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         map::karac_map_free_with_drop_vec,
         map::karac_map_insert,
         map::karac_map_insert_old,
+        map::karac_map_insert_borrowed_str_old,
         map::karac_map_get,
         map::karac_map_remove,
         map::karac_map_remove_old,
@@ -149,6 +150,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     keep!(
         clone::karac_string_clone,
         clone::karac_string_slice,
+        clone::karac_string_slice_borrow,
         clone::karac_string_decode_char,
         clone::karac_string_encode_char,
         karac_string_cmp,

@@ -1106,6 +1106,132 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(out.into())
     }
 
+    /// Borrowed (non-allocating) sibling of `compile_string_slice`: builds a
+    /// `{ptr, len, cap = 0}` String view that points *into* the source string
+    /// rather than into a freshly-allocated buffer. `cap = 0` is the existing
+    /// static/borrowed marker every `cap > 0` free guard skips, so the view is
+    /// never freed.
+    ///
+    /// Sound only where the key is **not retained**: map lookup methods
+    /// (`get`/`contains_key`/`remove`/`get_or`) hash+compare and discard it,
+    /// and `Map.insert` over the borrowed-str path (`karac_map_insert_borrowed_str_old`)
+    /// deep-copies the bytes on a fresh insertion — so the borrowed pointer
+    /// never outlives the source. Used only via `try_compile_borrowed_string_key`.
+    pub(super) fn compile_string_slice_borrowed(
+        &mut self,
+        object: &Expr,
+        start: &Option<Box<Expr>>,
+        end: &Option<Box<Expr>>,
+        inclusive: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let agg = self.compile_expr(object)?.into_struct_value();
+        let data_ptr = self
+            .builder
+            .build_extract_value(agg, 0, "bs.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let str_len = self
+            .builder
+            .build_extract_value(agg, 1, "bs.len")
+            .unwrap()
+            .into_int_value();
+
+        let start_i = match start {
+            Some(e) => {
+                let v = self.compile_expr(e)?;
+                self.coerce_scalar_to_type(v, i64_t.into()).into_int_value()
+            }
+            None => i64_t.const_int(0, false),
+        };
+        let raw_end = match end {
+            Some(e) => {
+                let v = self.compile_expr(e)?;
+                self.coerce_scalar_to_type(v, i64_t.into()).into_int_value()
+            }
+            None => str_len,
+        };
+        let end_i = if inclusive {
+            self.builder
+                .build_int_add(raw_end, i64_t.const_int(1, false), "bs.end.incl")
+                .unwrap()
+        } else {
+            raw_end
+        };
+
+        // karac_string_slice_borrow(data, len, start, end) -> ptr into source
+        // (validates bounds + char boundaries; no allocation).
+        let view_ptr = self
+            .builder
+            .build_call(
+                self.karac_string_slice_borrow_fn,
+                &[
+                    data_ptr.into(),
+                    str_len.into(),
+                    start_i.into(),
+                    end_i.into(),
+                ],
+                "str.slice.borrow",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let view_len = self
+            .builder
+            .build_int_sub(end_i, start_i, "bs.view.len")
+            .unwrap();
+
+        // {ptr, len, cap = 0} — cap 0 marks a non-owned view (never freed).
+        let str_ty = self.vec_struct_type();
+        let mut out = str_ty.get_undef();
+        out = self
+            .builder
+            .build_insert_value(out, view_ptr, 0, "bs.out.ptr")
+            .unwrap()
+            .into_struct_value();
+        out = self
+            .builder
+            .build_insert_value(out, view_len, 1, "bs.out.len")
+            .unwrap()
+            .into_struct_value();
+        out = self
+            .builder
+            .build_insert_value(out, i64_t.const_zero(), 2, "bs.out.cap")
+            .unwrap()
+            .into_struct_value();
+        Ok(out.into())
+    }
+
+    /// If `arg` is a String range-index expression (`s[a..b]` / `s[a..=b]`),
+    /// compile it as a borrowed view (no allocation) and return it; otherwise
+    /// `Ok(None)`. The String-ness of the sliced object is the typechecker's
+    /// per-expression `string_typed_exprs` flag (same gate `compile_index`
+    /// uses to route String slicing). Drives the allocation-free map-key path.
+    pub(super) fn try_compile_borrowed_string_key(
+        &mut self,
+        arg: &Expr,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        if let ExprKind::Index { object, index } = &arg.kind {
+            if let ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } = &index.kind
+            {
+                if self
+                    .string_typed_exprs
+                    .contains(&(object.span.offset, object.span.length))
+                {
+                    return Ok(Some(
+                        self.compile_string_slice_borrowed(object, start, end, *inclusive)?,
+                    ));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Index into a `Vec[T]` variable: `v[i]`. Handles both owned Vec values
     /// (slot is the `{ptr,len,cap}` struct) and `ref Vec[T]` parameters
     /// (slot is a `ptr` to the caller's struct) by routing the struct-base

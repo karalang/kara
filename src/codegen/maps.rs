@@ -724,7 +724,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 if args.len() < 2 {
                     return Err("Map.insert requires key and value arguments".to_string());
                 }
-                let key_val = self.compile_expr(&args[0].value)?;
+                // Allocation-free String-slice key fast path: when the key is
+                // a slice expression (`m.insert(s[a..b], v)`), pass a borrowed
+                // `{ptr,len,cap=0}` view and let the runtime deep-copy it only
+                // on a *fresh* insertion — existing keys cost zero allocation
+                // (the common case in counter/window maps). Sound because the
+                // map owns its copy; the borrowed pointer is never stored. The
+                // slice is a temporary, so there is no key source to suppress.
+                let borrowed_key = self.try_compile_borrowed_string_key(&args[0].value)?;
+                // Preserve key-before-val compile order on the owned path
+                // (the borrowed path already compiled the sliced object above).
+                let key_val = if borrowed_key.is_none() {
+                    Some(self.compile_expr(&args[0].value)?)
+                } else {
+                    None
+                };
                 let val_val = self.compile_expr(&args[1].value)?;
                 // Move semantics — same shape as `Vec.push`. When the
                 // key OR value argument is a tracked Vec/String binding,
@@ -732,63 +746,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `karac_map_free_with_drop_vec` cleanup would
                 // double-free the buffer against the source binding's
                 // own scope-exit `FreeVecBuffer`. Suppress the source's
-                // cleanup on both sides so the Map becomes the unique
-                // owner. Slice α/β (2026-05-14): key suppression added
-                // alongside the new key-side drop in the runtime helper.
-                self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                // cleanup so the Map becomes the unique owner. (Skip the
+                // key side on the borrowed path — nothing is moved in.)
+                if borrowed_key.is_none() {
+                    self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                }
                 self.suppress_source_vec_cleanup_for_arg(&args[1].value);
                 let fn_val = self.current_fn.unwrap();
                 let old_slot = self.create_entry_alloca(fn_val, "map.insert.old", val_ty);
-                // Slice 1b.2a — Map[i64, i64] inserts route through
-                // the mono `karac_map_i64_i64_insert_old` symbol (value
-                // calling convention: i64 key + i64 val rather than
-                // pointer args). The mono body does the stack-alloca
-                // forwarding to the erased runtime today; Slice 1b.2b
-                // adds the inline fast path.
-                //
-                // Gate the *compiled value types* against the side-
-                // table-derived `key_ty` / `val_ty`. They must
-                // agree before routing to mono — the mono fn's
-                // calling convention is value-pass per K/V, so a
-                // mismatch is an LLVM verifier error. The erased
-                // path uses pointers so it tolerates side-table
-                // shape drift; mono doesn't. Also catches the
-                // pre-existing `ExprKind::CharLit → 0_i64` gap
-                // where literal chars compile to i64 zero in
-                // `compile_expr` (per Slice 1b notes); the
-                // resulting i64 key won't match an i32 key_ty
-                // and falls through to erased — same behavior as
-                // pre-mono.
-                let key_val_matches = key_val.get_type() == key_ty;
-                let val_val_matches = val_val.get_type() == val_ty;
-                let existed = if self.should_use_mono_map_for(key_ty, val_ty)
-                    && key_val_matches
-                    && val_val_matches
-                {
-                    let mono = self.get_or_emit_map_mono_methods(key_ty, val_ty);
-                    self.builder
-                        .build_call(
-                            mono.insert_old_fn,
-                            &[
-                                map_handle.into(),
-                                key_val.into(),
-                                val_val.into(),
-                                old_slot.into(),
-                            ],
-                            "map.insert.existed",
-                        )
-                        .unwrap()
-                        .try_as_basic_value()
-                        .unwrap_basic()
-                        .into_int_value()
-                } else {
-                    let key_slot = self.create_entry_alloca(fn_val, "map.insert.key", key_ty);
-                    let val_slot = self.create_entry_alloca(fn_val, "map.insert.val", val_ty);
-                    self.builder.build_store(key_slot, key_val).unwrap();
+                let existed = if let Some(view) = borrowed_key {
+                    let key_slot = self.create_entry_alloca(fn_val, "map.insert.bkey", key_ty);
+                    let val_slot = self.create_entry_alloca(fn_val, "map.insert.bval", val_ty);
+                    self.builder.build_store(key_slot, view).unwrap();
                     self.builder.build_store(val_slot, val_val).unwrap();
                     self.builder
                         .build_call(
-                            self.karac_map_insert_old_fn,
+                            self.karac_map_insert_borrowed_str_old_fn,
                             &[
                                 map_handle.into(),
                                 key_slot.into(),
@@ -801,6 +774,59 @@ impl<'ctx> super::Codegen<'ctx> {
                         .try_as_basic_value()
                         .unwrap_basic()
                         .into_int_value()
+                } else {
+                    let key_val = key_val.unwrap();
+                    // Slice 1b.2a — Map[i64, i64] inserts route through
+                    // the mono `karac_map_i64_i64_insert_old` symbol (value
+                    // calling convention: i64 key + i64 val rather than
+                    // pointer args). Gate the *compiled value types* against
+                    // the side-table-derived `key_ty` / `val_ty`; mono's
+                    // value-pass convention is an LLVM verifier error on a
+                    // mismatch, while the erased pointer path tolerates shape
+                    // drift.
+                    let key_val_matches = key_val.get_type() == key_ty;
+                    let val_val_matches = val_val.get_type() == val_ty;
+                    if self.should_use_mono_map_for(key_ty, val_ty)
+                        && key_val_matches
+                        && val_val_matches
+                    {
+                        let mono = self.get_or_emit_map_mono_methods(key_ty, val_ty);
+                        self.builder
+                            .build_call(
+                                mono.insert_old_fn,
+                                &[
+                                    map_handle.into(),
+                                    key_val.into(),
+                                    val_val.into(),
+                                    old_slot.into(),
+                                ],
+                                "map.insert.existed",
+                            )
+                            .unwrap()
+                            .try_as_basic_value()
+                            .unwrap_basic()
+                            .into_int_value()
+                    } else {
+                        let key_slot = self.create_entry_alloca(fn_val, "map.insert.key", key_ty);
+                        let val_slot = self.create_entry_alloca(fn_val, "map.insert.val", val_ty);
+                        self.builder.build_store(key_slot, key_val).unwrap();
+                        self.builder.build_store(val_slot, val_val).unwrap();
+                        self.builder
+                            .build_call(
+                                self.karac_map_insert_old_fn,
+                                &[
+                                    map_handle.into(),
+                                    key_slot.into(),
+                                    val_slot.into(),
+                                    old_slot.into(),
+                                ],
+                                "map.insert.existed",
+                            )
+                            .unwrap()
+                            .try_as_basic_value()
+                            .unwrap_basic()
+                            .into_int_value()
+                    }
                 };
                 // Build Option[V]: Some(old) if existed, None if fresh insert.
                 let some_bb = self.context.append_basic_block(fn_val, "map.ins.some");
@@ -860,7 +886,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 if args.is_empty() {
                     return Err("Map.get requires a key argument".to_string());
                 }
-                let key_val = self.compile_expr(&args[0].value)?;
+                // Allocation-free String-slice key: a borrowed `{ptr,len,cap=0}`
+                // view into the source. `get` only hashes/compares and never
+                // retains the key, so the borrow is sound.
+                let key_val = match self.try_compile_borrowed_string_key(&args[0].value)? {
+                    Some(v) => v,
+                    None => self.compile_expr(&args[0].value)?,
+                };
                 let fn_val = self.current_fn.unwrap();
                 // Slice 1b.3 — Map[i64, i64].get routes through the
                 // mono `karac_map_i64_i64_get` symbol (value calling
@@ -977,7 +1009,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 if args.is_empty() {
                     return Err("Map.remove requires a key argument".to_string());
                 }
-                let key_val = self.compile_expr(&args[0].value)?;
+                // Borrowed String-slice key (lookup-only, no retain — sound).
+                let key_val = match self.try_compile_borrowed_string_key(&args[0].value)? {
+                    Some(v) => v,
+                    None => self.compile_expr(&args[0].value)?,
+                };
                 let fn_val = self.current_fn.unwrap();
                 let key_slot = self.create_entry_alloca(fn_val, "map.remove.key", key_ty);
                 let old_slot = self.create_entry_alloca(fn_val, "map.remove.old", val_ty);
@@ -1025,7 +1061,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 if args.is_empty() {
                     return Err("Map.contains_key requires a key argument".to_string());
                 }
-                let key_val = self.compile_expr(&args[0].value)?;
+                // Borrowed String-slice key (lookup-only, no retain — sound).
+                let key_val = match self.try_compile_borrowed_string_key(&args[0].value)? {
+                    Some(v) => v,
+                    None => self.compile_expr(&args[0].value)?,
+                };
                 let fn_val = self.current_fn.unwrap();
                 let key_slot = self.create_entry_alloca(fn_val, "map.contains.key", key_ty);
                 self.builder.build_store(key_slot, key_val).unwrap();

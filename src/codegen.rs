@@ -2119,6 +2119,10 @@ pub(super) struct Codegen<'ctx> {
     /// `karac_map_free` for zero overhead.
     pub(crate) karac_map_free_with_drop_vec_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_insert_old_fn: FunctionValue<'ctx>,
+    /// Borrowed-String-key insert: deep-copies the key only on a fresh
+    /// insertion, so a slice-into-source key (`m.insert(s[a..b], v)`)
+    /// allocates once per distinct key instead of once per call.
+    pub(crate) karac_map_insert_borrowed_str_old_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_get_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_remove_old_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_contains_fn: FunctionValue<'ctx>,
@@ -2156,6 +2160,10 @@ pub(super) struct Codegen<'ctx> {
     /// a heap-owned copy so scope-exit cleanup fires; source untouched.
     pub(crate) karac_string_clone_fn: FunctionValue<'ctx>,
     pub(crate) karac_string_slice_fn: FunctionValue<'ctx>,
+    /// `karac_string_slice_borrow(data, len, start, end) -> ptr` — validating,
+    /// non-allocating slice; returns `data + start`. Backs borrowed
+    /// `{ptr, len, cap=0}` String views used as non-retained map keys.
+    pub(crate) karac_string_slice_borrow_fn: FunctionValue<'ctx>,
     /// Per-type clone function cache. Keyed on the canonical mangled type
     /// name (`display_mangle_te`). Each emitted fn has signature
     /// `void karac_clone_<typename>(*const T src, *mut T dst)` — caller
@@ -3975,6 +3983,15 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // karac_map_insert_borrowed_str_old(map, key, val, out_old_val) -> i1
+        // Same signature as insert_old; deep-copies a borrowed String key on a
+        // fresh insertion (zero-alloc on an existing key).
+        let karac_map_insert_borrowed_str_old_fn = module.add_function(
+            "karac_map_insert_borrowed_str_old",
+            map_insert_old_ty,
+            Some(Linkage::External),
+        );
+
         // karac_map_get(map: ptr, key: ptr, out_val: ptr) -> i1
         let map_get_ty = context
             .bool_type()
@@ -4095,6 +4112,17 @@ impl<'ctx> Codegen<'ctx> {
         let string_slice_ty = ptr_type.fn_type(&[ptr_md, i64_ty, i64_ty, i64_ty], false);
         let karac_string_slice_fn = module.add_function(
             "karac_string_slice",
+            string_slice_ty,
+            Some(Linkage::External),
+        );
+
+        // karac_string_slice_borrow(data, len, start, end) -> ptr
+        // Validates identically to karac_string_slice but returns a pointer
+        // *into* the source (`data + start`) without allocating — backs a
+        // borrowed `{ptr, len, cap=0}` String view used as a non-retained map
+        // key. See `runtime/src/clone.rs`.
+        let karac_string_slice_borrow_fn = module.add_function(
+            "karac_string_slice_borrow",
             string_slice_ty,
             Some(Linkage::External),
         );
@@ -4327,6 +4355,7 @@ impl<'ctx> Codegen<'ctx> {
             karac_map_free_fn,
             karac_map_free_with_drop_vec_fn,
             karac_map_insert_old_fn,
+            karac_map_insert_borrowed_str_old_fn,
             karac_map_get_fn,
             karac_map_remove_old_fn,
             karac_map_contains_fn,
@@ -4341,6 +4370,7 @@ impl<'ctx> Codegen<'ctx> {
             karac_map_lookup_slot_fn,
             karac_string_clone_fn,
             karac_string_slice_fn,
+            karac_string_slice_borrow_fn,
             clone_fn_cache: HashMap::new(),
             drop_fn_cache: HashMap::new(),
             map_mono_methods: HashMap::new(),

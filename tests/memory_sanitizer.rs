@@ -5452,4 +5452,41 @@ fn main() {
             "bounded_channel_scope_exit_single_free",
         );
     }
+
+    // ── Borrowed String-slice map keys (allocation-free lookups) ──────
+    //
+    // `m.get(s[a..b])` / `m.insert(s[a..b], v)` pass a borrowed
+    // `{ptr, len, cap=0}` view into `s` instead of a freshly-allocated
+    // owned `String`. Lookups never retain the key; `insert` deep-copies it
+    // only on a *fresh* insertion (`karac_map_insert_borrowed_str_old`). This
+    // test proves the deep-copy happens: the source heap string is freed
+    // (reassigned) and the allocator churned *before* the map is read, so a
+    // borrowed key that was wrongly stored verbatim would be a use-after-free
+    // ASAN catches. Also exercises the empty-slice key (`s[0..0]` → null ptr,
+    // len 0) and scope-exit free of the deep-copied keys.
+    #[test]
+    fn asan_borrowed_string_slice_map_keys_deep_copy() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut s = String.new();
+    s.push_str("foo");
+    s.push_str("bar");        // heap buffer "foobar"
+    m.insert(s[0..3], 1);     // borrowed slice -> deep-copied into the map
+    m.insert(s[3..6], 2);
+    s = String.new();         // frees the old "foobar" buffer
+    let mut junk = String.new();
+    let mut i = 0i64;
+    while i < 2000 { junk.push_str("zzzz"); i = i + 1; }
+    match m.get("foo") { Some(v) => println(v), None => println(-1) }
+    match m.get("bar") { Some(v) => println(v), None => println(-1) }
+    m.insert(s[0..0], 9);     // empty borrowed key (null ptr, len 0)
+    println(m.len())
+}
+"#,
+            &["1", "2", "3"],
+            "borrowed_string_slice_map_keys_deep_copy",
+        );
+    }
 }

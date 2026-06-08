@@ -387,6 +387,82 @@ pub unsafe extern "C" fn karac_map_insert_old(
     exists
 }
 
+/// Borrowed-key insert for **String-keyed** maps (`key_size == 24`, the
+/// `{ptr, i64 len, i64 cap}` layout). `key` points to a *borrowed* String view
+/// whose `data` pointer aliases memory the caller owns (e.g. a slice into
+/// another String, built by `karac_string_slice_borrow` with `cap == 0`). The
+/// map MUST NOT retain that pointer.
+///
+/// On a fresh insertion the borrowed `{data, len}` is **deep-copied** into a
+/// freshly-allocated owned buffer (`alloc(len + 1)`, copy, NUL-terminate,
+/// stored as `{owned_ptr, len, cap = len}`) — the same buffer contract as
+/// `karac_string_clone` / `karac_string_slice`, so the stored key owns its
+/// bytes and is released by `karac_map_free_with_drop_vec`'s `cap > 0`
+/// key-drop. On an existing key only the value is overwritten (and the old
+/// value copied to `out_old_val`); the borrowed key is discarded with **zero
+/// allocation**. Return value mirrors `karac_map_insert_old` (`true` + old
+/// value when the key already existed).
+///
+/// This is the allocation-free counter/lookup-map fast path: callers pass a
+/// borrowed slice view instead of a freshly-`malloc`'d owned `String`, so the
+/// only allocation across a long run is one per *distinct* key.
+#[no_mangle]
+pub unsafe extern "C" fn karac_map_insert_borrowed_str_old(
+    map: *mut c_void,
+    key: *const c_void,
+    val: *const c_void,
+    out_old_val: *mut c_void,
+) -> bool {
+    let m = &mut *(map as *mut KaracMap);
+    debug_assert_eq!(m.key_size, 24, "borrowed-str insert requires a String key");
+    if (m.len + m.tombstones + 1) * 4 > m.capacity * 3 {
+        m.resize();
+    }
+    // hash_fn / eq_fn read the borrowed view's {ptr, len} — identical to an
+    // owned String key — so probing works unchanged.
+    let (slot, exists) = m.find_insert_slot(key);
+    let was_tombstone = *m.status.add(slot) == BUCKET_TOMBSTONE;
+    let kv_offset = slot * (m.key_size + m.val_size);
+    if exists {
+        ptr::copy_nonoverlapping(
+            m.kv.add(kv_offset + m.key_size),
+            out_old_val as *mut u8,
+            m.val_size,
+        );
+    } else {
+        // Deep-copy the borrowed bytes into an owned, NUL-terminated buffer so
+        // the stored key never aliases the caller's source string.
+        let src_data = ptr::read_unaligned(key as *const *const u8);
+        let src_len = ptr::read_unaligned((key as *const u8).add(8) as *const i64);
+        let n = src_len as usize;
+        let owned_ptr: *mut u8 = if n == 0 {
+            ptr::null_mut()
+        } else {
+            let layout = Layout::array::<u8>(n + 1).unwrap();
+            let p = alloc(layout);
+            ptr::copy_nonoverlapping(src_data, p, n);
+            *p.add(n) = 0;
+            p
+        };
+        let kslot = m.kv.add(kv_offset);
+        ptr::write_unaligned(kslot as *mut *mut u8, owned_ptr);
+        ptr::write_unaligned(kslot.add(8) as *mut i64, src_len);
+        // cap == len marks an owned buffer the free path will release.
+        ptr::write_unaligned(kslot.add(16) as *mut i64, src_len);
+        m.len += 1;
+        if was_tombstone {
+            m.tombstones -= 1;
+        }
+    }
+    ptr::copy_nonoverlapping(
+        val as *const u8,
+        m.kv.add(kv_offset + m.key_size),
+        m.val_size,
+    );
+    *m.status.add(slot) = BUCKET_OCCUPIED;
+    exists
+}
+
 /// Returns `true` and copies the value into `out_val` if the key exists.
 /// Returns `false` and leaves `out_val` untouched otherwise.
 #[no_mangle]

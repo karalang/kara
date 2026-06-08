@@ -169,6 +169,60 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_borrowed_string_slice_map_key_counts() {
+        // A counter over length-2 windows of `s`, keyed on `s[i..i+2]` slices.
+        // The get reads a borrowed `{ptr,len,cap=0}` view and the insert routes
+        // to the borrowed-key deep-copy path — results must match owned-key
+        // map semantics exactly.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s = \"abcababc\";\n\
+                 let mut m: Map[String, i64] = Map.new();\n\
+                 let n = s.len();\n\
+                 let mut i = 0i64;\n\
+                 while i + 2 <= n {\n\
+                     let c = match m.get(s[i..i+2]) { Some(v) => v, None => 0i64 };\n\
+                     m.insert(s[i..i+2], c + 1);\n\
+                     i = i + 1;\n\
+                 }\n\
+                 println(m.len());\n\
+                 match m.get(\"ab\") { Some(v) => println(v), None => println(-1) }\n\
+                 match m.get(\"bc\") { Some(v) => println(v), None => println(-1) }\n\
+                 match m.get(\"zz\") { Some(v) => println(v), None => println(-1) }\n\
+             }",
+        ) {
+            // windows: ab,bc,ca,ab,ba,ab,bc → ab×3, bc×2, ca×1, ba×1 (4 distinct)
+            assert_eq!(out, "4\n3\n2\n-1\n");
+        }
+    }
+
+    #[test]
+    fn ir_borrowed_string_slice_map_key_uses_borrow_externs() {
+        // Regression guard that the allocation-free path actually fires: a
+        // String-slice key in get/insert must lower to the non-allocating
+        // `karac_string_slice_borrow` view and (for insert) the borrowed-key
+        // `karac_map_insert_borrowed_str_old`, not the allocating
+        // `karac_string_slice` + owning `karac_map_insert_old`.
+        let ir = ir_for(
+            "fn main() {\n\
+                 let s = \"abcd\";\n\
+                 let mut m: Map[String, i64] = Map.new();\n\
+                 match m.get(s[0..2]) { Some(_v) => {}, None => {} }\n\
+                 m.insert(s[2..4], 1);\n\
+                 println(m.len());\n\
+             }",
+        );
+        assert!(
+            ir.contains("karac_string_slice_borrow"),
+            "String-slice map key should build a borrowed view; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("karac_map_insert_borrowed_str_old"),
+            "String-slice insert key should route to the borrowed-key insert; IR:\n{ir}"
+        );
+    }
+
+    #[test]
     fn e2e_string_slice_non_char_boundary_panics() {
         // `é` is two bytes at offsets 1..3, so byte 2 is mid-char: the
         // runtime helper must exit(1) with E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY
