@@ -14734,3 +14734,76 @@ fn test_ref_at_binding_over_option_payload() {
     );
     assert_eq!(out, "hello\nhello\n");
 }
+
+// ── Returned borrows (`-> ref T`) — interpreter parity ──────────────
+// Mirrors the codegen E2E shapes in tests/codegen.rs (B-2026-06-07-5) so
+// `karac run` and `karac build` agree on every accepted borrow-return form:
+// let-bound caller, conditional (`if`/`match`) selectors, method accessors,
+// chained free-fn calls, and direct (unbound) use. The static-acceptance of
+// these is pinned in tests/ownership.rs / tests/safety_design.rs; here we
+// pin runtime output.
+
+#[test]
+fn test_borrow_return_interp_let_bound_caller() {
+    let out = run("fn name_of(u: ref String) -> ref String { u }\n\
+         fn main() {\n\
+             let s = String.from(\"hello\");\n\
+             let n = name_of(s);\n\
+             println(n);\n\
+         }");
+    assert_eq!(out, "hello\n");
+}
+
+#[test]
+fn test_borrow_return_interp_longer_if() {
+    let out = run("fn longer(a: ref String, b: ref String) -> ref String {\n\
+             if a.len() > b.len() { a } else { b }\n\
+         }\n\
+         fn main() {\n\
+             let x = String.from(\"short\");\n\
+             let y = String.from(\"a longer string\");\n\
+             let z = longer(x, y);\n\
+             println(z);\n\
+         }");
+    assert_eq!(out, "a longer string\n");
+}
+
+#[test]
+fn test_borrow_return_interp_method_accessor() {
+    let out = run("struct User { name: String, age: i64 }\n\
+         impl User { fn name(ref self) -> ref String { self.name } }\n\
+         fn main() {\n\
+             let u = User { name: String.from(\"ada\"), age: 36 };\n\
+             let n = u.name();\n\
+             println(n);\n\
+         }");
+    assert_eq!(out, "ada\n");
+}
+
+#[test]
+fn test_borrow_return_interp_chained_call() {
+    let out = run("fn echo(s: ref String) -> ref String { s }\n\
+         fn echo_twice(s: ref String) -> ref String {\n\
+             let t = echo(s);\n\
+             echo(t)\n\
+         }\n\
+         fn main() {\n\
+             let s = String.from(\"world\");\n\
+             let r = echo_twice(s);\n\
+             println(r);\n\
+         }");
+    assert_eq!(out, "world\n");
+}
+
+#[test]
+fn test_borrow_return_interp_direct_use() {
+    let out = run("fn name_of(u: ref String) -> ref String { u }\n\
+         fn shout(x: ref String) { println(x); }\n\
+         fn main() {\n\
+             let s = String.from(\"hello\");\n\
+             println(name_of(s));\n\
+             shout(name_of(s));\n\
+             println(name_of(s).len());\n\
+         }");
+    assert_eq!(out, "hello\nhello\n5\n");
+}
