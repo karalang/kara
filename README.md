@@ -103,27 +103,62 @@ fn load_dashboard(user_id: i64) -> Dashboard
 
 No `async fn`. No colored functions. No `Promise.all`. The compiler handles concurrency because it understands effects and data dependencies.
 
+And it's **deterministic by contract**: the same source + compiler + target always yields the same parallelization, and any two operations the analysis can't prove independent keep their source-order, user-visible effects. So auto-parallelism never makes output order a coin flip — what runs concurrently is decided at compile time, not by the scheduler. ([Determinism contract](docs/design.md).)
+
 ### Tiered Ownership — No Lifetime Annotations
 
-Rust's ownership model without `'a` noise:
+Modes are declared at the signature — bare `T` is owned, `ref T` / `mut ref T`
+are explicit borrows. There are no lifetime parameters (`'a`); the compiler
+infers where a returned borrow comes from by **source pinning**.
 
 ```
-// Parameter modes are declared at the signature: bare T is owned,
-// ref T / mut ref T are explicit borrows. No lifetimes required.
-fn process(data: Data, config: ref Config) -> Summary {
-    let result = transform(data, config.threshold);
-    //                     ^^^^ consumed (owned)
-    //                           ^^^^^^ read through borrow
-    result.summarize()
+struct User { name: String, age: i64 }
+
+// Returning a borrow: the compiler infers it borrows from `u` — no `'a`.
+fn name_of(u: ref User) -> ref String { u.name }
+
+// The canonical accessor (`ref self`).
+impl User {
+    fn name(ref self) -> ref String { self.name }
 }
 
-// Zero-copy returns borrow from a parameter — no 'a annotation needed.
-fn first_word(s: ref String) -> ref String {
-    s.split(' ').first()
+// Two ref params: the return is inferred to borrow from *both* (and may
+// outlive neither). Still no annotation — Rust needs `<'a>` here.
+fn longer(a: ref String, b: ref String) -> ref String {
+    if a.len() > b.len() { a } else { b }
 }
 ```
 
-Escalation path: owned → `ref` → RC. Each step is an explicit choice, not a compiler surprise.
+**What replaces lifetime parameters** is the source-pinning rule: every
+returned `ref` must trace to a `ref` parameter — one ref parameter → inferred,
+several → the conservative union of all. Borrowing past the source's lifetime
+is a compile error, caught statically, not at runtime:
+
+```
+// fn bad(u: User) -> ref String { u.name }   — u is owned, dropped at return
+error[ownership]: returned borrow does not originate from a `ref` parameter;
+  its source is dropped when the function returns, leaving a dangling
+  reference   [E0509]
+
+// let n = name_of(u); consume(u);   — moving u while n still borrows it
+error[ownership]: cannot move `u` while a borrow into it (a returned
+  reference still points at it) is still live
+```
+
+That second diagnostic is the no-`'a` equivalent of Rust's "cannot move out
+of `u` because it is borrowed" — reached through ownership + borrow analysis,
+with no lifetime syntax in the source. The compiler also shows what it
+inferred (every analysis is queryable as JSON, like the effects above):
+
+```
+$ karac query ownership user.kara.name_of
+{"function":"name_of","parameters":[{"name":"u","mode":"ref","representation":"ref (borrow)"}],"rc_values":[],"closures":[]}
+```
+
+Escalation path: owned → `ref` → RC. Reference counting is inserted only when
+a value's use-sites can't be ordered by control flow — and every insertion
+emits a note, never a silent surprise. Full model:
+**[design.md § Feature 4](docs/design.md)**.
 
 ### Data Layout Separation
 
@@ -149,7 +184,7 @@ What v1 ships with, what the numbers look like, and what the toolchain gives you
 
 ### Concurrency Runtime
 
-- Target: **1M+ idle connections per process.**
+- **2M idle WebSocket-over-TLS connections per process — measured, not a target** (r8g.4xlarge, 16 vCPU; 0 failures, handler executing). Every number below is reproducible: **[methodology + cost model + caveats](examples/ws_idle_holder/bench/REPORT.md)**, [reproduction harness](examples/ws_idle_holder/bench).
 - Blocking-style I/O syntax; effect-driven scheduling moves blocking work off the par-runtime threads.
 - **Demo 1 verified on r8g.4xlarge (Linux, 16 vCPU) at 1M and 2M, head-to-head with a Rust (tokio + rustls) reference on the same box** — with the per-connection handler **executing** (recv/send over the coroutine network-async transform; the recv buffer + coroutine frame are held, not freed): both impls hold **2 000 000 idle WebSocket-over-TLS connections, 0 failures**. **Kāra at ~12.1 KB/conn** server-side RSS vs **Rust at ~27.9 KB/conn** — **2.30× runtime-density advantage**, scale-invariant 1M↔2M (Kāra −0.03 % drift). In production-cost terms, counting the kernel socket buffer both stacks pay equally, total server-side memory is **15.0 KB vs 30.4 KB/conn (2.03×)** — so at a realistic 250K conns/box Kāra fits an 8 GiB `m7g.large` where Rust needs a 16 GiB `m7g.xlarge`, ≈**50 % lower infra cost** (~$473 vs ~$946/yr per 250K unit on a 1-yr reserved instance). Connect-phase latency at `--concurrency 64` (1M): Kāra **mean 82 ms, p50 46 ms, p99 255 ms**; Rust keeps a ~3 ms p50 (tighter handshake hop) but a wider tail. Source: [`examples/ws_idle_holder`](examples/ws_idle_holder); full methodology + cost model + caveats in [`examples/ws_idle_holder/bench/REPORT.md`](examples/ws_idle_holder/bench/REPORT.md); reproduction harness in [`examples/ws_idle_holder/bench`](examples/ws_idle_holder/bench). _Note: an earlier 7.8 KB/conn / 3.55× figure was measured before the handler executed and is superseded._
 - **Densest of every production runtime measured.** Beyond the Rust reference, the same harness benchmarked five commercial WebSocket stacks at 250K idle conns/box (in-process TLS, apples-to-apples). Per-connection server RSS, densest first: **Kāra 12.1 KB** · Java/Netty 14.4 KB\* · Rust 27.9 KB · Node.js 40.4 KB · Go 43.4 KB · .NET/Kestrel (Linux) 52.9 KB · Phoenix Channels 102.8 KB. Kāra leads the field on deployed density — **3.4× lighter than Node, 3.7× than Go, 4.5× than .NET, 8.7× than Phoenix**. _\*Netty's RSS is a JVM `-Xmx` dial: 14.4 KB is its balanced-heap deployment point (marginal slope ~12.8 KB, live set ~8–10 KB); every other stack here, Kāra included, reports a fixed live footprint._ Per-comparator tables, GC-dial analysis, and the per-runtime cost reframes are in [`examples/ws_idle_holder/bench/REPORT.md`](examples/ws_idle_holder/bench/REPORT.md).
