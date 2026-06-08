@@ -2038,6 +2038,18 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         self.env.type_aliases.insert(t.name.clone(), ty);
+        // Record the alias's generic parameters so use sites can substitute
+        // the supplied args into the body, arity-check, and enforce the
+        // declared bounds (design.md § Type Aliases). Only generic aliases
+        // get an entry — a non-generic `type UserId = i64` keeps the
+        // transparent-resolution fast path in `lower_path_type`.
+        if let Some(gp) = &t.generic_params {
+            if !gp.params.is_empty() {
+                self.env
+                    .type_alias_params
+                    .insert(t.name.clone(), gp.clone());
+            }
+        }
     }
 
     fn env_add_distinct_type(&mut self, d: &crate::ast::DistinctTypeDef) {

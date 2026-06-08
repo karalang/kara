@@ -268,6 +268,16 @@ pub struct TypeEnv {
     pub functions: HashMap<String, FunctionSig>,
     pub constants: HashMap<String, Type>,
     pub type_aliases: HashMap<String, Type>,
+    /// Generic parameter lists for generic type aliases, keyed by alias
+    /// name. Populated by `env_add_type_alias` whenever the alias declares
+    /// `[T: Bound, ...]`. `lower_path_type` consults this at every alias
+    /// use site to (a) substitute the supplied generic args into the
+    /// alias body — without this the body's `TypeParam`s leak unsubstituted
+    /// and silently unify with anything — (b) arity-check, and (c) enforce
+    /// each parameter's declared bounds (`E_TYPE_ALIAS_BOUND_NOT_SATISFIED`,
+    /// design.md § Type Aliases / v60 item 50). Non-generic aliases never
+    /// have an entry here and keep the transparent-resolution fast path.
+    pub type_alias_params: HashMap<String, GenericParams>,
     /// Validated refinement predicates, keyed by the refinement type's
     /// name. Populated by `env_add_type_alias` when a `type Name = Base
     /// where <pred>` alias passes grammar validation; the matching
@@ -358,6 +368,7 @@ impl TypeEnv {
             functions: HashMap::new(),
             constants: HashMap::new(),
             type_aliases: HashMap::new(),
+            type_alias_params: HashMap::new(),
             refinement_predicates: HashMap::new(),
             traits: HashMap::new(),
             trait_aliases: HashSet::new(),

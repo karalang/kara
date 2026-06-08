@@ -373,7 +373,18 @@ impl<'a> super::TypeChecker<'a> {
             // as `i64` regardless of source order.
             if self.env.type_aliases.contains_key(name) {
                 let mut visited: HashSet<String> = HashSet::new();
-                return self.resolve_alias_deep(name.clone(), &mut visited);
+                let body = self.resolve_alias_deep(name.clone(), &mut visited);
+                // Generic alias (`type Pair[T] = Vec[T]`): substitute the
+                // use-site args into the body, arity-check, and enforce each
+                // parameter's declared bounds. Without the substitution the
+                // body's `TypeParam`s would leak unsubstituted and silently
+                // unify with anything. Non-generic aliases have no
+                // `type_alias_params` entry and fall straight through to the
+                // transparent body.
+                if let Some(params) = self.env.type_alias_params.get(name).cloned() {
+                    return self.instantiate_alias(name, &params, body, path, generic_scope);
+                }
+                return body;
             }
             // Named type (struct/enum/import)
             let args = self.lower_generic_args_named(&path.generic_args, generic_scope, Some(name));
@@ -773,6 +784,71 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         ty.clone()
+    }
+
+    /// Instantiate a generic type alias at a use site: substitute the
+    /// supplied generic args into the already-resolved `body`, arity-check
+    /// the argument count against the alias's declared parameters, and
+    /// enforce each parameter's trait bounds against the corresponding
+    /// argument (design.md § Type Aliases / v60 item 50).
+    ///
+    /// Bounds on an argument that is itself a generic type parameter in
+    /// scope are deferred — they re-check at monomorphization once the
+    /// parameter is concrete, mirroring `lower_vector_type`'s `Numeric`
+    /// rule. Substitution is what makes `Pair[i64]` actually carry `i64`:
+    /// without it the body keeps `TypeParam("T")`, which unifies with
+    /// anything and silently swallows real type errors.
+    fn instantiate_alias(
+        &mut self,
+        alias_name: &str,
+        params: &GenericParams,
+        body: Type,
+        path: &PathExpr,
+        generic_scope: &[String],
+    ) -> Type {
+        let supplied =
+            self.lower_generic_args_named(&path.generic_args, generic_scope, Some(alias_name));
+        let expected = params.params.len();
+        if supplied.len() != expected {
+            self.type_error(
+                format!(
+                    "type alias '{}' expects {} type argument{}, but {} {} supplied",
+                    alias_name,
+                    expected,
+                    if expected == 1 { "" } else { "s" },
+                    supplied.len(),
+                    if supplied.len() == 1 { "was" } else { "were" },
+                ),
+                path.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+        }
+        let mut subs: HashMap<String, SubstValue> = HashMap::new();
+        for (param, arg) in params.params.iter().zip(supplied.iter()) {
+            if !matches!(arg, Type::TypeParam(_)) {
+                for bound in &param.bounds {
+                    let Some(trait_name) = bound.path.last() else {
+                        continue;
+                    };
+                    if !self.type_satisfies_bound(arg, trait_name) {
+                        self.type_error(
+                            format!(
+                                "'{}' does not satisfy '{}' required by type alias \
+                                 '{}' parameter '{}'",
+                                type_display(arg),
+                                trait_name,
+                                alias_name,
+                                param.name,
+                            ),
+                            path.span.clone(),
+                            TypeErrorKind::TypeAliasBoundNotSatisfied,
+                        );
+                    }
+                }
+            }
+            subs.insert(param.name.clone(), SubstValue::Type(arg.clone()));
+        }
+        substitute_type_params(&body, &subs)
     }
 
     /// Lower `Slice[T]` to `Type::Slice { element, mutable: false }`.

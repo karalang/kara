@@ -24972,3 +24972,141 @@ fn variance_user_explicit_invariant_marker_accepted() {
          fn main() { }",
     );
 }
+
+// ── Generic type-alias argument substitution + use-site bounds ──────
+// design.md § Type Aliases (v60 item 50). Before this work generic
+// aliases ignored their use-site args entirely — the body kept a
+// dangling `TypeParam` that unified with anything — so type errors
+// through an alias were silently swallowed and declared bounds were
+// never enforced.
+
+#[test]
+fn test_generic_alias_substitutes_and_catches_wrong_type() {
+    // `Pair[i64]` must actually carry `i64`: pushing a `String` is a
+    // type error. Pre-fix this was silently accepted.
+    let errors = typecheck_errors(
+        "type Pair[T] = Vec[T];
+         fn main() {
+             let p: Pair[i64] = Vec.new();
+             p.push(\"a string\");
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::TypeMismatch)),
+        "expected a TypeMismatch from the substituted alias body, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_generic_alias_accepts_correct_type() {
+    typecheck_ok(
+        "type Pair[T] = Vec[T];
+         fn main() {
+             let p: Pair[i64] = Vec.new();
+             p.push(42);
+         }",
+    );
+}
+
+#[test]
+fn test_type_alias_bound_satisfied_accepts() {
+    // `i64` satisfies `Ord`.
+    typecheck_ok(
+        "type Sorted[T: Ord] = Vec[T];
+         fn main() {
+             let s: Sorted[i64] = Vec.new();
+             s.push(3);
+         }",
+    );
+}
+
+#[test]
+fn test_type_alias_bound_not_satisfied_rejects() {
+    // A bare user struct is not `Ord`.
+    let errors = typecheck_errors(
+        "struct NoOrd { x: i64 }
+         type Sorted[T: Ord] = Vec[T];
+         fn main() {
+             let s: Sorted[NoOrd] = Vec.new();
+         }",
+    );
+    let bound_err = errors
+        .iter()
+        .find(|e| matches!(e.kind, TypeErrorKind::TypeAliasBoundNotSatisfied))
+        .expect("expected E_TYPE_ALIAS_BOUND_NOT_SATISFIED");
+    assert!(
+        bound_err.message.contains("Ord")
+            && bound_err.message.contains("Sorted")
+            && bound_err.message.contains("NoOrd"),
+        "diagnostic should name the trait, alias, and arg: {}",
+        bound_err.message
+    );
+}
+
+#[test]
+fn test_type_alias_bound_deferred_for_generic_param_arg() {
+    // The argument is itself a generic parameter `T` in scope, already
+    // bounded `T: Ord` at the enclosing fn — the alias bound re-checks at
+    // monomorphization, not here. Must accept.
+    typecheck_ok(
+        "type Sorted[T: Ord] = Vec[T];
+         fn wrap[T: Ord](x: T) {
+             let s: Sorted[T] = Vec.new();
+             s.push(x);
+         }
+         fn main() { wrap(3); }",
+    );
+}
+
+#[test]
+fn test_type_alias_multi_bound_partial_failure_rejects() {
+    // `Eq + Hash` declared; a struct that is neither must report the
+    // unsatisfied bound(s) for the alias parameter.
+    let errors = typecheck_errors(
+        "struct K { x: i64 }
+         type Idx[T: Eq + Hash] = Vec[T];
+         fn main() {
+             let v: Idx[K] = Vec.new();
+         }",
+    );
+    assert!(
+        errors.iter().any(
+            |e| matches!(e.kind, TypeErrorKind::TypeAliasBoundNotSatisfied)
+                && e.message.contains("Hash")
+        ),
+        "expected an unsatisfied-Hash alias-bound error: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_type_alias_arity_mismatch_rejected() {
+    let errors = typecheck_errors(
+        "type Pair[T] = Vec[T];
+         fn main() {
+             let p: Pair[i64, String] = Vec.new();
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("type alias 'Pair' expects 1 type argument")),
+        "expected an arity diagnostic: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_non_generic_alias_unaffected() {
+    // A non-generic alias keeps the transparent-resolution fast path.
+    typecheck_ok(
+        "type UserId = i64;
+         fn main() {
+             let u: UserId = 5;
+             let _ = u + 1;
+         }",
+    );
+}

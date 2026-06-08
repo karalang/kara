@@ -390,6 +390,13 @@ pub enum TypeErrorKind {
     /// See design.md § @ Bindings, "Owned scrutinee". (Phase 8 `@`
     /// binding semantics, slice 4.)
     AtBindingDoubleConsume,
+    /// A generic type alias's use-site argument does not satisfy a trait
+    /// bound declared on the corresponding alias parameter — e.g.
+    /// `type Index[T: Eq + Hash] = HashMap[T, usize]` used as
+    /// `Index[Vec[i32]]` where `Vec[i32]` is not `Hash`. Emitted by
+    /// `lower_path_type` when resolving the alias. See design.md
+    /// § Type Aliases (v60 item 50).
+    TypeAliasBoundNotSatisfied,
     /// A `mut` field of a `par struct` / `par enum` is declared with a type
     /// other than `Atomic[T]` or `Mutex[T]`. `par struct` enforces concurrent
     /// safety structurally at the definition site: immutable fields are freely
@@ -654,9 +661,9 @@ pub(crate) fn class_for_type_error_kind(
         TypeErrorKind::InvalidUnaryOp
         | TypeErrorKind::InvalidBinaryOp
         | TypeErrorKind::InvalidPipePlaceholder => Some(DC::InvalidUnaryOp),
-        TypeErrorKind::TraitBoundNotSatisfied | TypeErrorKind::MissingSupertrait => {
-            Some(DC::TraitBoundNotSatisfied)
-        }
+        TypeErrorKind::TraitBoundNotSatisfied
+        | TypeErrorKind::MissingSupertrait
+        | TypeErrorKind::TypeAliasBoundNotSatisfied => Some(DC::TraitBoundNotSatisfied),
         TypeErrorKind::RefutablePattern => Some(DC::RefutablePattern),
         TypeErrorKind::CannotInferTypeParam => Some(DC::CannotInferTypeParam),
         TypeErrorKind::MissingMutMarker

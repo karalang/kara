@@ -2835,6 +2835,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // non-Copy ownership of overlapping content (design.md
                 // § @ Bindings > Owned scrutinee).
                 crate::typechecker::TypeErrorKind::AtBindingDoubleConsume => "E0261",
+                // Type Aliases (v60 item 50) — a generic alias use-site arg
+                // fails a trait bound declared on the alias parameter.
+                crate::typechecker::TypeErrorKind::TypeAliasBoundNotSatisfied => "E0262",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
