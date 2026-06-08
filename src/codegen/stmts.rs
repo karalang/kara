@@ -75,6 +75,19 @@ impl<'ctx> super::Codegen<'ctx> {
         expr: &Expr,
         tail_inner: Option<StructType<'ctx>>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Chained borrow return (`-> ref T` fn whose tail is `echo(t)`): admit
+        // the borrow-returning call as the one sanctioned site (bypass the
+        // direct-use gate in `compile_call`). The result is the borrow `ptr`,
+        // which `compile_function` returns directly via `is_borrow_returning_
+        // call_expr`. A `-> ref T` fn never carries an `Option[shared]`
+        // tail-inner, so this precedes (and is disjoint from) the inc logic.
+        if self.current_fn_returns_ref && self.is_borrow_returning_call_expr(expr) {
+            let prev = self.compiling_ref_return_let_rhs;
+            self.compiling_ref_return_let_rhs = true;
+            let v = self.compile_expr(expr);
+            self.compiling_ref_return_let_rhs = prev;
+            return v;
+        }
         let Some(inner) = tail_inner else {
             return self.compile_expr(expr);
         };
@@ -951,6 +964,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `ref_return_inner_types` table the lowering pass derived from the
     /// typechecker. Method-call chains (`s.split(' ').first()`) remain a
     /// tracked follow-on.
+    /// True when `e` is a borrow-returning **free-function** call
+    /// (`echo(t)` where `echo -> ref T`). Used to admit such a call in
+    /// tail/return position of a `-> ref T` function (chained borrow
+    /// returns, B-2026-06-07-5): the call lowers to a `ptr` (the borrow
+    /// ABI), so the compiled value IS the borrow address and is returned
+    /// directly — no `compile_ref_return_ptr` address re-derivation, which
+    /// for a call would emit it twice. Method-call chains stay out of scope
+    /// (kept in lockstep with `classify_borrow_return_call` on the ownership
+    /// side, which also admits free-fn calls only).
+    pub(super) fn is_borrow_returning_call_expr(&self, e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::Call { callee, .. }
+            if matches!(&callee.kind, ExprKind::Identifier(n)
+                if self.fn_ref_return_inner.contains_key(n)))
+    }
+
     fn ref_return_inner_for_call(&self, value: &Expr) -> Option<TypeExpr> {
         match &value.kind {
             ExprKind::Call { callee, .. } => {

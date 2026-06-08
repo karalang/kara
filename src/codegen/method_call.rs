@@ -1592,7 +1592,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // alloca + synthesize a name + register elem_ty from the typed
         // AST. Today's narrow scope: just `len` and `is_empty`, which
         // are element-type-agnostic.
-        if !matches!(&object.kind, ExprKind::Identifier(_)) && matches!(method, "len" | "is_empty")
+        // Read-only `len` / `is_empty` on a borrow-LOCAL receiver — a
+        // `let n = name_of(u);` / chained borrow result (B-2026-06-07-5).
+        // Such a binding is registered in `ref_params` (the let-RHS path
+        // stores it as a `ptr` and derefs on use), so `compile_expr(n)`
+        // yields the same `{ptr,len,cap}` struct a temp receiver does, and
+        // the field-extraction below services it. A ref *parameter* receiver
+        // (`s: ref String`) is dispatched by an earlier String arm and never
+        // reaches here, so this only rescues the let-bound borrows that
+        // otherwise fell through to the dispatch-fail error below. Owned
+        // String/Vec locals are likewise handled earlier (via the
+        // string/var-type paths); the `== vec_ty` struct guard makes a
+        // non-`{ptr,len,cap}` borrow (`ref i64`) fall through safely.
+        let borrow_local_recv =
+            matches!(&object.kind, ExprKind::Identifier(n) if self.ref_params.contains_key(n));
+        if (!matches!(&object.kind, ExprKind::Identifier(_)) || borrow_local_recv)
+            && matches!(method, "len" | "is_empty")
         {
             let recv_val = self.compile_expr(object)?;
             if let BasicValueEnum::StructValue(sv) = recv_val {

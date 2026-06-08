@@ -931,13 +931,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 // would be `ret {ptr,i64,i64}/ptr` etc. — B-2026-06-07-5).
                 // The already-compiled `val` is a pure, dead load for the
                 // admitted shapes (ref-param identifier / field-of-ref-param).
-                let ref_ret_ptr = if self.current_fn_returns_ref {
+                //
+                // Chained borrow return (tail `echo(t)`): `val` IS already the
+                // borrow `ptr` — `compile_tail_final_expr` compiled the call
+                // once with the direct-use gate bypassed. Return it directly;
+                // re-deriving via `compile_ref_return_ptr` would emit the call
+                // a second time (wrong for any effectful callee).
+                let tail_is_borrow_call = self.current_fn_returns_ref
+                    && func
+                        .body
+                        .final_expr
+                        .as_deref()
+                        .is_some_and(|e| self.is_borrow_returning_call_expr(e));
+                let ref_ret_ptr = if !self.current_fn_returns_ref {
+                    None
+                } else if tail_is_borrow_call {
+                    Some(val.into_pointer_value())
+                } else {
                     func.body
                         .final_expr
                         .as_deref()
                         .and_then(|e| self.compile_ref_return_ptr(e))
-                } else {
-                    None
                 };
                 if fn_returns_void {
                     self.builder.build_return(None).unwrap();

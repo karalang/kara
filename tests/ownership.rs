@@ -7441,6 +7441,41 @@ fn test_borrow_return_no_move_ok() {
     );
 }
 
+#[test]
+fn test_borrow_return_chained_call_ok() {
+    // Chained borrow return (B-2026-06-07-5): returning a borrow-returning
+    // free-fn call whose ref-position arg is itself a borrowable source
+    // (a ref-local here) is source-pinned and accepted.
+    ownership_ok(
+        "fn echo(s: ref String) -> ref String { s }\n\
+         fn echo_twice(s: ref String) -> ref String {\n\
+        \x20   let t = echo(s);\n\
+        \x20   echo(t)\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_borrow_return_chained_call_on_owned_local_dangles() {
+    // The chained call's ref-position arg traces to an owned local that
+    // drops at return — the returned borrow would dangle. Source-pinning
+    // must report E0509 dangling (the arg's shape propagates through the
+    // call classifier), not silently accept.
+    let errors = ownership_errors(
+        "fn echo(s: ref String) -> ref String { s }\n\
+         fn bad() -> ref String {\n\
+        \x20   let local = String.from(\"temp\");\n\
+        \x20   echo(local)\n\
+         }\n",
+    );
+    assert!(errors.iter().any(|e| matches!(
+        e.kind,
+        OwnershipErrorKind::BorrowReturnNotSourcePinned {
+            shape: BorrowReturnShape::DanglingSource
+        }
+    )));
+}
+
 // ── Tier 2: borrow returns from `if` of ref params (B-2026-06-07-5) ──
 
 #[test]

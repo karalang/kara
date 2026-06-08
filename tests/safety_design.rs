@@ -371,10 +371,12 @@ fn accept_closure_borrow_capture_no_escape() {
 /// owned binding; Kāra must trace through call boundaries without
 /// annotation help. Uses passthrough-only bodies to avoid the field-
 /// projection impl gap.
+///
+/// Shipped 2026-06-07 (B-2026-06-07-5 chained tier): a borrow-returning
+/// free-fn call in tail/return position is source-pinned by tracing its
+/// ref-position args (`classify_borrow_return_call`) and lowered to the
+/// borrow `ptr` directly (`is_borrow_returning_call_expr`).
 #[test]
-#[ignore = "chained borrow returns (returning a ref-returning call result) not yet \
-            implemented — B-2026-06-07-5 follow-on; E0509 reports the call-tail form as \
-            not-yet-supported"]
 fn accept_chained_borrow_returns() {
     assert_static_accept(
         "fn echo(s: ref String) -> ref String { s }\n\

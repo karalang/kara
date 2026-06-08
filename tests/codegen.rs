@@ -1050,6 +1050,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_borrow_return_chained_call() {
+        // Chained borrow return (B-2026-06-07-5): a borrow-returning free-fn
+        // call in tail position (`echo(t)`) and at an explicit `return`. The
+        // call lowers to the borrow `ptr` directly (compiled once, gate
+        // bypassed); the let-bound result derefs correctly, and `.len()` on
+        // the borrow goes through the ref-local read-only len path.
+        let out = run_program(
+            "fn echo(s: ref String) -> ref String { s }\n\
+             fn echo_twice(s: ref String) -> ref String {\n\
+             \x20   let t = echo(s);\n\
+             \x20   echo(t)\n\
+             }\n\
+             fn echo_thrice(s: ref String) -> ref String {\n\
+             \x20   let t = echo(s);\n\
+             \x20   return echo_twice(t);\n\
+             }\n\
+             fn main() {\n\
+             \x20   let s = String.from(\"chained\");\n\
+             \x20   let r = echo_twice(s); println(r); println(r.len());\n\
+             \x20   let q = String.from(\"again\");\n\
+             \x20   let w = echo_thrice(q); println(w);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "chained\n7\nagain");
+        }
+    }
+
+    #[test]
     fn test_e2e_ambient_resource_clock_now_and_env_set() {
         // Ambient built-in resource methods lower to runtime FFIs
         // (`karac_runtime_env_set` / `karac_runtime_clock_now`) — the

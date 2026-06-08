@@ -508,8 +508,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     // repros, 2026-06-05 — pre-existing, surfaced by the
                     // niche-ABI slice's convergence tests; tail-position
                     // siblings were fixed by 426b8dc3/fca1e3ea).
+                    // Chained borrow return at an explicit `return echo(t);`:
+                    // admit the borrow-returning call (bypass the direct-use
+                    // gate) — `v` is then the borrow `ptr`, returned directly
+                    // below via the `returns_borrow_call` branch. Mirrors the
+                    // tail-position handling in `compile_tail_final_expr`.
+                    let returns_borrow_call =
+                        self.current_fn_returns_ref && self.is_borrow_returning_call_expr(e);
                     let ret_opt_inner = self.current_fn_ret_option_inner_heap();
-                    let v = if ret_opt_inner.is_some() {
+                    let v = if returns_borrow_call {
+                        let prev = self.compiling_ref_return_let_rhs;
+                        self.compiling_ref_return_let_rhs = true;
+                        let v = self.compile_expr(e);
+                        self.compiling_ref_return_let_rhs = prev;
+                        v?
+                    } else if ret_opt_inner.is_some() {
                         let v = self.compile_tail_final_expr(e, ret_opt_inner)?;
                         self.share_option_shared_field_ref_for_arg(e, v);
                         v
@@ -607,10 +620,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // after the scope-cleanup walk above — the source is a
                     // `ref` param (or a field through one), never a freed
                     // local, so its address is valid here.
-                    let ref_ret_ptr = if self.current_fn_returns_ref {
-                        self.compile_ref_return_ptr(e)
-                    } else {
+                    let ref_ret_ptr = if !self.current_fn_returns_ref {
                         None
+                    } else if returns_borrow_call {
+                        // `v` is already the borrow ptr (compiled with the gate
+                        // bypassed above); return it directly. Re-deriving via
+                        // `compile_ref_return_ptr` would emit the call twice.
+                        Some(v.into_pointer_value())
+                    } else {
+                        self.compile_ref_return_ptr(e)
                     };
                     if let Some(ctx) = self.coro_ctx {
                         self.builder

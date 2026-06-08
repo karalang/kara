@@ -70,7 +70,19 @@ impl<'a> super::OwnershipChecker<'a> {
         }
 
         for e in returns {
-            let Some(shape) = classify_borrow_return(e, &ref_params, &ref_locals) else {
+            // Chained borrow return (`echo(t)` in return position): a
+            // borrow-returning **free-fn** call dispatches to the call
+            // classifier, which traces every ref-position argument back to a
+            // `ref` param / ref-local. Handled only at the top level — a call
+            // nested in an `if`/`match` arm still falls through to
+            // `classify_borrow_return` (→ `UnsupportedForm`), keeping 3a in
+            // lockstep with codegen (which only lowers a top-level call tail).
+            let shape = if matches!(&e.kind, ExprKind::Call { .. }) {
+                self.classify_borrow_return_call(e, &ref_params, &ref_locals)
+            } else {
+                classify_borrow_return(e, &ref_params, &ref_locals)
+            };
+            let Some(shape) = shape else {
                 continue;
             };
             let (message, suggestion) = match shape {
@@ -105,6 +117,46 @@ impl<'a> super::OwnershipChecker<'a> {
                 consume_span: None,
             });
         }
+    }
+
+    /// Source-pinning classification for a borrow-returning **free-function**
+    /// call in return position (`echo(t)` — chained borrow returns,
+    /// B-2026-06-07-5). The call's result borrows from its `ref`-position
+    /// arguments (the callee's own source-pinning guarantees that); so it is
+    /// pinned to *this* function's `ref` params iff every `ref`-position
+    /// argument is itself a borrowable source. A non-`ref`-returning callee,
+    /// or a non-identifier callee, is `UnsupportedForm` (method-call chains
+    /// included — kept in lockstep with codegen's free-fn-only
+    /// `is_borrow_returning_call_expr`). Returns `None` to accept.
+    fn classify_borrow_return_call(
+        &self,
+        e: &Expr,
+        ref_params: &HashSet<String>,
+        ref_locals: &HashSet<String>,
+    ) -> Option<BorrowReturnShape> {
+        let ExprKind::Call { callee, args } = &e.kind else {
+            return Some(BorrowReturnShape::UnsupportedForm);
+        };
+        let ExprKind::Identifier(fname) = &callee.kind else {
+            return Some(BorrowReturnShape::UnsupportedForm);
+        };
+        if !self.ref_returning_fn_names().contains(fname) {
+            return Some(BorrowReturnShape::UnsupportedForm);
+        }
+        // Each ref-position arg must trace to a borrowable source; the worst
+        // shape across them dominates (a dangling arg → E0509, an
+        // unsupported arg → not-yet-supported). Owned (by-value) args carry
+        // no borrow into the result, so they are not checked.
+        let mut worst: Option<BorrowReturnShape> = None;
+        for (i, arg) in args.iter().enumerate() {
+            if self.arg_is_borrow_position(callee, i) {
+                worst = combine_borrow_shapes(
+                    worst,
+                    classify_borrow_return(&arg.value, ref_params, ref_locals),
+                );
+            }
+        }
+        worst
     }
 
     /// Caller-side borrow registration (check 3b). When `value` is a call
