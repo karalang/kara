@@ -20,6 +20,46 @@
   - [ ] **Windows IOCP cancel-sweep** — the fd-registration FFIs (incl. `register_fd_cancel`) are `#[cfg(unix)]`; IOCP is a separate completion-model slice (blocked on Windows CI, per Slice 10).
   - [x] **No-dispatcher (standalone-poller) path does not sweep — N/A by construction (verified 2026-06-06).** `request_cancel_sweep` no-ops without a dispatcher, but a *cancellable parked coroutine* cannot exist without the dispatcher running, so the no-op is never on a path that needs sweeping. Both — and the only two — production register-and-park sites call `karac_runtime_scheduler_start_dispatcher()` (idempotent) **before** arming the fd: the A2 coroutine park (`emit_coro_park_suspend`, `src/codegen/coro.rs:876`) and the degenerate state-machine park (`emit_park_on_fd_poll_body`, `src/codegen/declarations.rs:1620`, whose own comment notes the dispatcher "MUST be running before any fd is registered"). The `register_fd` at `coro.rs:670` is a `__demo_register_fd` test fixture, not production. The spawn-races-cancel window is closed by 5c-1's register-time guard (`register_fd_cancel` requests a sweep when registering an already-cancelled fd), which also runs post-`start_dispatcher`. So implementing a standalone-poller sweep would be dead, untestable, race-prone code (a second driver racing the resume path) for an unreachable state. **Reopen trigger:** a custom-scheduler embedding that drives `take_wakeups` itself and deliberately bypasses the dispatcher (the only plausible source is the `karac-kernel` direction). Design the sweep hook *alongside* that embedding, not before it — there is no way to exercise it until such a driver exists.
 
+**Scale milestone, Demo 1 & CI gate** — mostly Windows/rig-gated; the CI gate itself is Mac-actionable:
+
+- [ ] **P0 — Concurrency target staging — 100K → 250K → 1M+** / **M3 — 1M+ stable idle connections, cross-platform parity** — count target done + exceeded (1M & 2M); open on the Windows parity clause only.
+- [ ] **P0 — Flagship Demo 1: minimal HTTP+WebSocket server** — built + verified; parent open on Slice 6 parity + the CI gate below.
+- [ ] **CI benchmark gate on flagship demo** / **Slice 7 — CI benchmark gate wiring** (P0) — wire P50/P95/P99/P99.9 + establishment-cost regression gate into CI against the `ws_idle_holder` harness. **Mac-actionable** (CI YAML + thresholds + baseline; decide the in-CI load tier — can't run 1M in CI).
+
+**Async-scheduler (A2 track) — remaining** (complements the cooperative-cancellation work above):
+
+- [~] **P0 — Effect-routed task parking** — `sends`/`receives(Network)` call lowering to register-fd + park. Mac-actionable (codegen).
+- [~] **Async-sched slice 5 — `spawn` dispatcher integration** — 5a/5b/5c done; the EC2 per-conn density re-measure (slice 6, user-run) remains.
+- [~] **Async-sched slice 6 — scale e2e** — local N≤10k done; 100K+ on a tuned rig pending (gated, not Mac-local).
+
+**Concurrency primitives** (Mac-actionable — codegen + typecheck):
+
+- [~] **Concurrency-primitive construction + usability** (`Atomic.new` / `Mutex.new` / `lock` blocks / atomic RMW / `MemoryOrdering`) — Mutex slices 1–2 shipped; more slices remain.
+- [ ] **Ownership: `Mutex[T]` / `Atomic[T]` exempt from `E_CONCURRENT_PLAIN_STRUCT`** (standalone concurrent use) + par-capture of a `mut`-borrowed local.
+
+**Channels** (Mac-actionable — codegen):
+
+- [ ] **`BoundedChannel[T]` AOT codegen lowering** — interpreter-only; the unbounded half shipped (`ee148003` + blocking-recv `c0c57e92`).
+
+**Soundness & panic semantics** (Mac-actionable):
+
+- [ ] **TaskGroup escape rejection** — OPEN structural-soundness gap (bugs.md B-2026-06-07-1/2); land `ScopeLocal`-on-TaskGroup first. Ownership/typecheck.
+- [ ] **Panic semantics at the FFI boundary** — `extern "C"` auto-abort + `extern "C-unwind"` propagation (spec'd, design.md). Codegen.
+- [ ] **`catch_panic[T]` panic-absorption primitive** (spec'd, design.md). Typecheck + codegen.
+- [~] **Pattern-arm unbound heap-field drop** (if-let / while-let / let-else / match) — landed for enum-variant payloads; remainder open.
+
+**Language features** (Mac-actionable):
+
+- [ ] **`collect_all { }` language syntax** — gather-all-errors `par {}` variant → `Vec[Result[T, E]]`.
+- [ ] **`if let` / `while let` / `let...else` scrutinee temporary scope** — lowering landed 2026-06-06; remaining scope-extension bits.
+- [ ] **Cost-model specification** (v1.x) — replaces the degenerate "parallelize whenever distinctness allows" model.
+
+**Parallax demo (bench / comparators)** (bench authoring — no compiler collision):
+
+- [ ] **P1 — Parallax Java/Netty comparator** — `examples/parallax/bench/java/`. Mac-actionable.
+- [ ] **P2 — Parallax x86 confirmation run** (`c7i.4xlarge` or equivalent) — rig.
+- [ ] **P2 — Parallax Phoenix Bandit acceptor pool tuning** — Bandit acceptor defaults starve at `-c5000`.
+
 ### Detailed entries (single source of truth)
 
 - [x] **P0 architectural commit — Pre-implementation design audit shipped 2026-05-17.** All six subsections landed under design.md § Network Event Loop and State-Machine Transform: {State-Machine Transform — Network-Boundary Functions, RAII Across Yield Points, Panic During Suspend, Debugger Contract Extension for Parked Tasks, FFI Across Yield Points, RC-Drop Ordering Across Yield Points}. The pre-implementation design surface that runtime engineering on the network event loop / state-machine transform must build against is now fully specified.
