@@ -188,6 +188,54 @@ fn accept_multi_source_borrow_return() {
     );
 }
 
+/// design.md Feature 4 Part 3, multi-source overapproximation via `match`:
+/// the `match` sibling of `accept_multi_source_borrow_return`'s `if` form.
+/// A scalar selector returns a borrow from whichever arm runs; the source
+/// is the conservative union of every arm's `ref`-param source.
+#[test]
+fn accept_match_multi_source_borrow_return() {
+    assert_static_accept(
+        "fn pick(a: ref String, b: ref String, which: i64) -> ref String {\n\
+             match which {\n\
+                 0 => a,\n\
+                 _ => b,\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let x = String.from(\"left\");\n\
+             let y = String.from(\"right\");\n\
+             let z = pick(x, y, 0);\n\
+             println(z.len());\n\
+         }",
+        "accept_match_multi_source_borrow_return",
+    );
+}
+
+/// Source-pinning (E0509) must still fire when *one* `match` arm returns a
+/// non-`ref`-param source: the dangling branch dominates the multi-arm
+/// combination, exactly as it does for the `if` form. Guards against a
+/// `match` arm silently escaping the source-pinning check.
+#[test]
+fn reject_match_arm_dangling_source() {
+    assert_ownership_error_kind(
+        "fn bad(a: ref String, which: i64) -> ref String {\n\
+             match which {\n\
+                 0 => a,\n\
+                 _ => \"local\",\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let x = String.from(\"x\");\n\
+             let r = bad(x, 0);\n\
+             println(r.len());\n\
+         }",
+        OwnershipErrorKind::BorrowReturnNotSourcePinned {
+            shape: karac::ownership::BorrowReturnShape::DanglingSource,
+        },
+        "reject_match_arm_dangling_source",
+    );
+}
+
 /// design.md Feature 4 Part 3, ref inside generic wrappers:
 /// "`ref T` is a first-class type ... and may appear inside generic type
 /// arguments in a return type: `Option[ref T]`, `Result[ref T, E]`,

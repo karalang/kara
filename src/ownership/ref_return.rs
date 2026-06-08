@@ -13,11 +13,12 @@
 //! dangling source already fails at module verification — this check
 //! upgrades that raw LLVM error into a clean, spanned diagnostic.
 //!
-//! Tier-1 scope mirrors `compile_ref_return_ptr` exactly: a returned
-//! borrow is accepted iff it is a `ref` parameter / ref-local identifier,
-//! or a field reached through one. Other valid-per-spec forms (`if`/`match`
-//! of multiple `ref` params, method-call chains) are reported as
-//! not-yet-supported rather than dangling.
+//! Accepted scope mirrors `compile_ref_return_ptr` exactly (lockstep): a
+//! returned borrow is accepted iff it is a `ref` parameter / `ref self` /
+//! ref-local identifier, a field reached through one, or an `if`/scalar-
+//! selector `match` selecting among such borrows. Other valid-per-spec
+//! forms (method-call chains, destructuring/guarded `match` arms) are
+//! reported as not-yet-supported rather than dangling.
 
 use std::collections::HashSet;
 
@@ -87,9 +88,10 @@ impl<'a> super::OwnershipChecker<'a> {
                 BorrowReturnShape::UnsupportedForm => (
                     "this borrow-return form is not yet supported".to_string(),
                     Some(
-                        "supported today: returning a `ref` parameter directly, or a field \
-                         reached through one. `if`/`match` over several `ref` parameters and \
-                         method-call chains are tracked follow-ons (B-2026-06-07-5)."
+                        "supported today: returning a `ref` parameter (or `ref self`) directly, a \
+                         field reached through one, or an `if`/scalar-`match` selecting among such \
+                         borrows. Method-call chains and destructuring-`match` arms are tracked \
+                         follow-ons (B-2026-06-07-5)."
                             .to_string(),
                     ),
                 ),
@@ -228,8 +230,24 @@ fn classify_borrow_return(
             )
         }
         ExprKind::Block(b) => classify_borrow_return_block(b, ref_params, ref_locals),
+        // Conditional borrow return via `match` (sibling of the `if` arm):
+        // every arm body must itself be a borrowable shape, combined across
+        // arms. Bounded — in lockstep with codegen's
+        // `compile_ref_return_ptr` `Match` arm — to guard-free arms whose
+        // patterns are scalar literals (`Integer`/`Char`/`Bool`) or `_`.
+        // Destructuring patterns, guards, and non-scalar scrutinees are
+        // tracked follow-ons; they report `UnsupportedForm` (clean error).
+        ExprKind::Match { arms, .. } => {
+            if arms.is_empty() || !arms.iter().all(match_arm_borrowable_shape) {
+                return Some(BorrowReturnShape::UnsupportedForm);
+            }
+            arms.iter()
+                .map(|a| classify_borrow_return(&a.body, ref_params, ref_locals))
+                .reduce(combine_borrow_shapes)
+                .unwrap_or(Some(BorrowReturnShape::UnsupportedForm))
+        }
         // Literals and temporaries are unambiguously dangling; the rest
-        // (`match`/`Call`/`MethodCall`/…) are valid-but-unsupported.
+        // (`Call`/`MethodCall`/…) are valid-but-unsupported.
         ExprKind::Integer(..)
         | ExprKind::Float(..)
         | ExprKind::Bool(..)
@@ -257,6 +275,24 @@ fn classify_borrow_return_block(
         Some(e) => classify_borrow_return(e, ref_params, ref_locals),
         None => Some(BorrowReturnShape::UnsupportedForm),
     }
+}
+
+/// A `match` arm is in-scope for borrow-return classification only when it
+/// has no guard and its pattern is a scalar literal (`Integer`/`Char`/`Bool`)
+/// or `_`. Kept identical to codegen's
+/// `expr_ops.rs::ref_return_match_arm_ok` so the source-pinning check and the
+/// lowering accept the same set (lockstep — see that fn's note).
+fn match_arm_borrowable_shape(arm: &MatchArm) -> bool {
+    arm.guard.is_none()
+        && matches!(
+            arm.pattern.kind,
+            PatternKind::Wildcard
+                | PatternKind::Literal(
+                    LiteralPattern::Integer(..)
+                        | LiteralPattern::Char(..)
+                        | LiteralPattern::Bool(..)
+                )
+        )
 }
 
 /// Merge two branch classifications. `None` is OK; a genuinely dangling

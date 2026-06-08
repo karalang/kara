@@ -7371,13 +7371,26 @@ fn test_borrow_return_dangling_local_errors() {
 }
 
 #[test]
-fn test_borrow_return_unsupported_form_errors() {
-    // `match` of ref params is valid per spec but still a codegen
-    // follow-on — reported as not-yet-supported, not dangling. (`if` of
-    // ref params is supported as of Tier 2; see the `_if_` tests.)
-    let errors = ownership_errors(
+fn test_borrow_return_scalar_match_ok() {
+    // Scalar-selector `match` of ref params is supported (sibling of the
+    // `if` tier): every arm forwards a `ref` param, so source-pinning
+    // accepts it with no error. (`if` of ref params: see the `_if_` tests.)
+    ownership_ok(
         "fn pick(a: ref String, b: ref String, flag: bool) -> ref String {\n\
         \x20   match flag { true => a, false => b }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_borrow_return_unsupported_form_errors() {
+    // A destructuring `match` arm is valid per spec but still a codegen
+    // follow-on — reported as not-yet-supported, not dangling. (Scalar
+    // literal/wildcard arms ARE supported; see
+    // `test_borrow_return_scalar_match_ok`.)
+    let errors = ownership_errors(
+        "fn pick(a: ref String, b: ref String, o: Option[i64]) -> ref String {\n\
+        \x20   match o { Some(n) => a, None => b }\n\
          }\n",
     );
     assert!(errors.iter().any(|e| matches!(

@@ -1001,6 +1001,55 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_borrow_return_match_multi_source() {
+        // Tier sibling of the `if` arm (B-2026-06-07-5): a `match` over a
+        // scalar selector returns a borrow from whichever arm runs — per-arm
+        // pointer phi'd at the merge, deref'd correctly at the let-bound
+        // caller. Exercises literal arms + the wildcard catch-all.
+        let out = run_program(
+            "fn pick(a: ref String, b: ref String, c: ref String, which: i32) -> ref String {\n\
+             \x20   match which {\n\
+             \x20       0 => a,\n\
+             \x20       1 => b,\n\
+             \x20       _ => c,\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let x = \"alpha\"; let y = \"beta\"; let z = \"gamma\";\n\
+             \x20   let p0 = pick(x, y, z, 0); println(p0);\n\
+             \x20   let p1 = pick(x, y, z, 1); println(p1);\n\
+             \x20   let p2 = pick(x, y, z, 2); println(p2);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "alpha\nbeta\ngamma");
+        }
+    }
+
+    #[test]
+    fn test_e2e_borrow_return_match_field_of_ref() {
+        // `match` arms returning a field reached through a `ref` param —
+        // the per-arm borrow pointer is a struct-GEP, not a forwarded param.
+        let out = run_program(
+            "struct Pair { first: String, second: String }\n\
+             fn choose(p: ref Pair, which: i32) -> ref String {\n\
+             \x20   match which {\n\
+             \x20       0 => p.first,\n\
+             \x20       _ => p.second,\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let pr = Pair { first: \"L\", second: \"R\" };\n\
+             \x20   let a = choose(pr, 0); println(a);\n\
+             \x20   let b = choose(pr, 9); println(b);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "L\nR");
+        }
+    }
+
+    #[test]
     fn test_e2e_ambient_resource_clock_now_and_env_set() {
         // Ambient built-in resource methods lower to runtime FFIs
         // (`karac_runtime_env_set` / `karac_runtime_clock_now`) — the

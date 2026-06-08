@@ -539,9 +539,11 @@ pub enum BorrowReturnShape {
     /// temporary, or literal — it is dropped at function exit, so the
     /// returned reference would dangle. Permanent source-pinning error.
     DanglingSource,
-    /// The return form (e.g. `if`/`match` of `ref` params, a method-call
-    /// chain) is valid per the spec but not yet supported by the code
-    /// generator (B-2026-06-07-5 Tiers 2/3). Temporary limitation.
+    /// The return form (e.g. a method-call chain, or a destructuring /
+    /// guarded `match` arm) is valid per the spec but not yet supported by
+    /// the code generator (B-2026-06-07-5 follow-on tiers). `if` and
+    /// scalar-selector `match` over `ref` params are supported. Temporary
+    /// limitation.
     UnsupportedForm,
 }
 

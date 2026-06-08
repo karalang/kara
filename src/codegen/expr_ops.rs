@@ -158,6 +158,78 @@ impl<'ctx> super::Codegen<'ctx> {
                 ]);
                 Some(phi.as_basic_value().into_pointer_value())
             }
+            // Borrow returned from a `match` (sibling of the `if` arm):
+            // lower the scalar selector, branch per arm, compile each arm
+            // body to a borrow pointer, and phi them at the merge. Covers
+            // `match which { 0 => a, 1 => b, _ => c }` selecting among `ref`
+            // params/fields. Gated — in lockstep with `classify_borrow_return`
+            // (src/ownership/ref_return.rs) — to guard-free arms whose
+            // patterns are integer/char/bool literals or `_`, over a scalar
+            // (int) scrutinee. That keeps the scrutinee free of heap/drop
+            // obligations (no String/enum destructure), so no per-arm scope
+            // frame is needed. Any shape this rejects (returns `None` before
+            // emitting IR) is reported upstream as `UnsupportedForm` — never
+            // miscompiled. Destructuring patterns, guards, and non-scalar
+            // scrutinees are tracked follow-ons (B-2026-06-07-5).
+            ExprKind::Match { scrutinee, arms } => {
+                if arms.is_empty() || !arms.iter().all(Self::ref_return_match_arm_ok) {
+                    return None;
+                }
+                let fn_val = self.current_fn?;
+                let scrut = self.compile_expr(scrutinee).ok()?;
+                if !scrut.is_int_value() {
+                    return None;
+                }
+                let merge_bb = self
+                    .context
+                    .append_basic_block(fn_val, "refret.match.merge");
+                let mut incoming: Vec<(
+                    PointerValue<'ctx>,
+                    inkwell::basic_block::BasicBlock<'ctx>,
+                )> = Vec::new();
+                let mut next_bb = self.context.append_basic_block(fn_val, "refret.match.arm0");
+                self.builder.build_unconditional_branch(next_bb).ok()?;
+                for (i, arm) in arms.iter().enumerate() {
+                    let arm_bb = next_bb;
+                    let is_last = i + 1 == arms.len();
+                    let fail_bb = if is_last {
+                        self.context
+                            .append_basic_block(fn_val, "refret.match.nofall")
+                    } else {
+                        self.context
+                            .append_basic_block(fn_val, &format!("refret.match.arm{}", i + 1))
+                    };
+                    next_bb = fail_bb;
+                    self.builder.position_at_end(arm_bb);
+                    let cond = self.compile_pattern_condition(&arm.pattern, scrut).ok()?;
+                    let body_bb = self
+                        .context
+                        .append_basic_block(fn_val, &format!("refret.match.body{}", i));
+                    self.builder
+                        .build_conditional_branch(cond.into_int_value(), body_bb, fail_bb)
+                        .ok()?;
+                    self.builder.position_at_end(body_bb);
+                    let ptr = self.compile_ref_return_ptr(&arm.body)?;
+                    let end = self.builder.get_insert_block()?;
+                    self.builder.build_unconditional_branch(merge_bb).ok()?;
+                    incoming.push((ptr, end));
+                }
+                // The trailing fail block is unreachable for an exhaustive
+                // match (the wildcard / final arm always matches); give it a
+                // terminator so the function verifies.
+                self.builder.position_at_end(next_bb);
+                self.builder.build_unreachable().ok()?;
+                self.builder.position_at_end(merge_bb);
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let phi = self.builder.build_phi(ptr_ty, "refret.match.phi").ok()?;
+                let incoming_dyn: Vec<(&dyn BasicValue, inkwell::basic_block::BasicBlock<'ctx>)> =
+                    incoming
+                        .iter()
+                        .map(|(p, b)| (p as &dyn BasicValue, *b))
+                        .collect();
+                phi.add_incoming(&incoming_dyn);
+                Some(phi.as_basic_value().into_pointer_value())
+            }
             // A block in borrow-return position (an `if`/`else` arm, or a
             // bare `{ ... }`): only a statement-free borrow tail is
             // supported today.
@@ -177,6 +249,25 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let tail = b.final_expr.as_deref()?;
         self.compile_ref_return_ptr(tail)
+    }
+
+    /// A `match` arm is lowerable in borrow-return position only when it has
+    /// no guard and its pattern is a scalar literal (`Integer`/`Char`/`Bool`)
+    /// or `_`. Kept identical to the classify-side gate in
+    /// `src/ownership/ref_return.rs::match_arm_borrowable_shape` so the two
+    /// stay in lockstep (codegen accepting more than classify would
+    /// miscompile; classify accepting more would dangle).
+    fn ref_return_match_arm_ok(arm: &MatchArm) -> bool {
+        arm.guard.is_none()
+            && matches!(
+                arm.pattern.kind,
+                PatternKind::Wildcard
+                    | PatternKind::Literal(
+                        LiteralPattern::Integer(..)
+                            | LiteralPattern::Char(..)
+                            | LiteralPattern::Bool(..)
+                    )
+            )
     }
 
     pub(super) fn compile_field_access(
