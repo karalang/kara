@@ -13247,12 +13247,18 @@ fn ssr_counter_example_dual_target_e2e() {
         .output()
         .unwrap();
     let nat_err = String::from_utf8_lossy(&nat.stderr);
-    if !nat.status.success()
-        && (nat_err.contains("link failed") || nat_err.contains("codegen failed"))
+    // Soft-skip like the other native-build E2Es. Two no-binary cases:
+    //  - no native runtime archive in this environment (link/codegen failed);
+    //  - karac built WITHOUT the llvm feature (plain `cargo test`), which
+    //    type-checks and emits NO executable ("requires the llvm feature") yet
+    //    exits 0 — so guard on the binary's existence, mirroring the
+    //    `requires the llvm feature || !exe.exists()` pattern used elsewhere.
+    if (!nat.status.success()
+        && (nat_err.contains("link failed") || nat_err.contains("codegen failed")))
+        || nat_err.contains("requires the llvm feature")
+        || !tmp.join("ssr_counter").exists()
     {
-        // No native runtime archive in this environment — same soft-skip
-        // as the other native-build E2Es.
-        eprintln!("skip: ssr_counter_example_dual_target_e2e — native link unavailable");
+        eprintln!("skip: ssr_counter_example_dual_target_e2e — no native binary (llvm/runtime unavailable)");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
     }
