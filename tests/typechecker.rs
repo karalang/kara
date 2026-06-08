@@ -19552,6 +19552,7 @@ fn drop_method_keys_empty_when_no_drop_impl() {
         "TlsListener",
         "TlsStream",
         "PooledConnection",
+        "BoundedChannel",
     ];
     let user_keys: Vec<&String> = result
         .drop_method_keys
