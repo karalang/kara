@@ -3294,6 +3294,55 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Build an owning `String` value (`{ data, len, cap }`) holding a fresh
+    /// heap copy of `src_len` bytes at `src_ptr`. Mirrors the single-part
+    /// f-string lowering: `malloc(max(len, 1))` (cap > 0 keeps the scope-exit
+    /// free armed even for an empty string), `memcpy`, then pack the struct.
+    /// Used by primitive `x.to_string()`, whose rendered `(ptr, len)` from
+    /// `compile_fstr_part_to_cstr` points at a transient stack buffer.
+    pub(super) fn build_owned_string_from_parts(
+        &mut self,
+        src_ptr: PointerValue<'ctx>,
+        src_len: inkwell::values::IntValue<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let i64_t = self.context.i64_type();
+        let one = i64_t.const_int(1, false);
+        let is_zero = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, src_len, one, "ts.tot.zero")
+            .unwrap();
+        let alloc_bytes = self
+            .builder
+            .build_select(is_zero, one, src_len, "ts.alloc")
+            .unwrap()
+            .into_int_value();
+        let buf = self
+            .builder
+            .build_call(self.malloc_fn, &[alloc_bytes.into()], "ts.buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder
+            .build_memcpy(buf, 1, src_ptr, 1, src_len)
+            .unwrap();
+        let vec_ty = self.vec_struct_type();
+        let agg = vec_ty.get_undef();
+        let agg = self
+            .builder
+            .build_insert_value(agg, buf, 0, "ts.data")
+            .unwrap();
+        let agg = self
+            .builder
+            .build_insert_value(agg, src_len, 1, "ts.len")
+            .unwrap();
+        let agg = self
+            .builder
+            .build_insert_value(agg, alloc_bytes, 2, "ts.cap")
+            .unwrap();
+        agg.into_struct_value().into()
+    }
+
     /// Encode an i32 codepoint as 1–4 UTF-8 bytes in a 4-byte stack alloca;
     /// return `(buf_ptr, byte_len_i64)`. Used by the print and f-string
     /// char-arms to render a `char` as the glyph rather than the integer

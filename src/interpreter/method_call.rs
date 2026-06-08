@@ -702,6 +702,20 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Built-in `clone` on scalar `Copy` primitives (typed in
+        // expr_method_call.rs) — identity. (`to_string` on primitives already
+        // works through the `Display` fallback arm above.) String/struct
+        // clone is handled by the impl-block path below / its own dispatch.
+        if method == "clone"
+            && args.is_empty()
+            && matches!(
+                &obj,
+                Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Char(_)
+            )
+        {
+            return obj;
+        }
+
         // Try to find method via impl block
         let type_name = self.value_type_name(&obj);
         let method_key = format!("{}.{}", type_name, method);

@@ -8855,6 +8855,75 @@ fn main() {
         }
     }
 
+    // ── Built-in `to_string` / `clone` on scalar primitives ────────────
+    // Both used to build-fail (typecheck poison + no codegen handler). Now
+    // `to_string` builds an owning String via the f-string renderer and
+    // `clone` is scalar identity.
+
+    #[test]
+    fn test_e2e_to_string_on_primitives() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let i = -42i64;
+    println(i.to_string());
+    let f = 3.5f64;
+    println(f.to_string());
+    let b = true;
+    println(b.to_string());
+    let c = 'Z';
+    println(c.to_string());
+    let u = 99u64;
+    println(u.to_string());
+    println((-7i64).to_string());
+}
+"#,
+        ) {
+            assert_eq!(out, "-42\n3.5\ntrue\nZ\n99\n-7\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_to_string_result_is_owning_string() {
+        // The result must be a real owning String: usable in interpolation
+        // and concatenation, freed cleanly at scope exit.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let n = 7i64;
+    let s = n.to_string();
+    println(f"value={s}!");
+    println(n.to_string() + "x");
+}
+"#,
+        ) {
+            assert_eq!(out, "value=7!\n7x\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_clone_on_primitives() {
+        // Both identifier and literal/expr receivers — the type-based gate
+        // in `compile_method_call` handles any receiver form.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let i = 7i64;
+    println(i.clone());
+    let f = 2.5f64;
+    println(f.clone());
+    println((-3i64).clone());
+    println(true.clone());
+    println('q'.clone());
+    let u = 99u64;
+    println(u.clone());
+}
+"#,
+        ) {
+            assert_eq!(out, "7\n2.5\n-3\ntrue\nq\n99\n");
+        }
+    }
+
     // ── Arithmetic fault traps (design.md § Arithmetic Overflow) ───────
     // AOT parity with the interpreter's checked arithmetic
     // (src/interpreter/eval_ops.rs): + - * trap "integer overflow",

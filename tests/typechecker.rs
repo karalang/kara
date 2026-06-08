@@ -11218,6 +11218,29 @@ fn test_abs_on_unsigned_rejected() {
 }
 
 #[test]
+fn test_to_string_and_clone_on_primitives_typecheck() {
+    // `to_string -> String` and `clone -> Self` are built-in value-receiver
+    // methods on the scalar numeric + bool + char primitives. They must
+    // typecheck with the right result types and NOT trip the numeric
+    // `NoMethodFound` tightening.
+    typecheck_ok(
+        "fn main() {
+             let s1: String = (5i64).to_string();
+             let s2: String = (5u32).to_string();
+             let s3: String = (2.5f64).to_string();
+             let s4: String = true.to_string();
+             let s5: String = 'x'.to_string();
+             let c1: i64 = (5i64).clone();
+             let c2: u32 = (5u32).clone();
+             let c3: f64 = (2.5f64).clone();
+             let c4: bool = false.clone();
+             let c5: char = 'y'.clone();
+             let _ = (s1, s2, s3, s4, s5, c1, c2, c3, c4, c5);
+         }",
+    );
+}
+
+#[test]
 fn test_known_method_on_user_struct_still_works() {
     // Regression: a method that *is* declared in an impl block continues
     // to typecheck. Confirms the tightening only fires on actually-missing

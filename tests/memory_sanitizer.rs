@@ -341,6 +341,27 @@ fn main() {
     }
 
     #[test]
+    fn asan_primitive_to_string_owning() {
+        // `x.to_string()` mallocs an owning String (same shape as the f-string
+        // builder). Exercise the let-bound, printed-temp, and concatenated
+        // forms so ASAN catches any over-read / double-free / leak in the new
+        // primitive `to_string` lowering.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let n = -42i64;
+    let s = n.to_string();
+    println(s);
+    println(n.to_string());
+    println(n.to_string() + "!");
+}
+"#,
+            &["-42", "-42", "-42!"],
+            "primitive_to_string_owning",
+        );
+    }
+
+    #[test]
     fn asan_println_function_return_string_via_let_binding() {
         // Function returns owned heap String; bound to a local;
         // printed. This is the let-binding form the kata workaround

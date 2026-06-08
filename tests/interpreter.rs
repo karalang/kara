@@ -79,6 +79,23 @@ fn test_unknown_primitive_method_is_runtime_error_not_ice() {
 }
 
 #[test]
+fn test_to_string_on_primitives() {
+    assert_eq!(run("fn main() { println((-42i64).to_string()); }"), "-42\n");
+    assert_eq!(run("fn main() { println((3.5f64).to_string()); }"), "3.5\n");
+    assert_eq!(run("fn main() { println(true.to_string()); }"), "true\n");
+    assert_eq!(run("fn main() { println('Z'.to_string()); }"), "Z\n");
+}
+
+#[test]
+fn test_clone_on_primitives() {
+    // `clone` on a Copy primitive is identity — used to ICE (no dispatch arm).
+    assert_eq!(run("fn main() { println((7i64).clone()); }"), "7\n");
+    assert_eq!(run("fn main() { println((2.5f64).clone()); }"), "2.5\n");
+    assert_eq!(run("fn main() { println(true.clone()); }"), "true\n");
+    assert_eq!(run("fn main() { println('q'.clone()); }"), "q\n");
+}
+
+#[test]
 fn test_integer_subtraction() {
     assert_eq!(run("fn main() { println(10 - 3); }"), "7\n");
 }

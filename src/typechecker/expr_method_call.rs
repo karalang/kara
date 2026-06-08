@@ -1874,6 +1874,28 @@ impl<'a> super::TypeChecker<'a> {
         {
             return receiver_for_lookup.clone();
         }
+        // Built-in `clone` / `to_string` on the scalar numeric + bool + char
+        // primitives (all `Copy`). `clone` is identity → `Self`; `to_string`
+        // renders the value → `String` (`Type::Str`). Like `abs`, these are
+        // dedicated value-receiver methods (the registered builtin impls model
+        // the type-receiver/operator form). Backends: interpreter clones the
+        // `Value` / formats via `Display`; codegen returns the scalar
+        // unchanged / builds an owning `String` from the f-string renderer.
+        // `String`/struct receivers are left to their existing paths (not
+        // matched here — `Type::Str` and `Type::Named` are excluded).
+        if args.is_empty()
+            && matches!(
+                &receiver_for_lookup,
+                Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+            )
+        {
+            if method == "clone" {
+                return receiver_for_lookup.clone();
+            }
+            if method == "to_string" {
+                return Type::Str;
+            }
+        }
         let (type_name, type_args) = match &receiver_for_lookup {
             Type::Named { name, args } => (name.clone(), args.clone()),
             // A refinement receiver that survived the base-deref above
@@ -1961,23 +1983,14 @@ impl<'a> super::TypeChecker<'a> {
                 ) {
                     if let Some(prim) = method_callee_type_name(&receiver_for_lookup) {
                         // Value-receiver methods that work today via dedicated
-                        // backend arms / Display fallback rather than the impl
-                        // table — keep poisoning so those paths still handle
-                        // them. (`abs` is handled above for Int/Float and so
-                        // never reaches here; for `u*` it is correctly absent
-                        // and falls through to the error.)
-                        const PRIMITIVE_VALUE_METHODS: &[&str] = &[
-                            "cmp",
-                            "eq",
-                            "ne",
-                            "lt",
-                            "le",
-                            "gt",
-                            "ge",
-                            "to_string",
-                            "clone",
-                            "cast",
-                        ];
+                        // backend arms rather than the impl table — keep
+                        // poisoning so those paths still handle them. (`abs`,
+                        // `clone`, and `to_string` are handled in the early
+                        // intercept above for these numeric types and so never
+                        // reach here; for `u*`, `abs` is correctly absent and
+                        // falls through to the error.)
+                        const PRIMITIVE_VALUE_METHODS: &[&str] =
+                            &["cmp", "eq", "ne", "lt", "le", "gt", "ge", "cast"];
                         let known = PRIMITIVE_VALUE_METHODS.contains(&method)
                             || !self
                                 .env

@@ -839,10 +839,60 @@ impl<'ctx> super::Codegen<'ctx> {
         // when the receiver is an identifier-bound collection variable;
         // otherwise the regular dispatch below runs (so user `impl X { fn
         // clone(...) }` continues to resolve through the impl-block path).
+        // Is this call's receiver a scalar `Copy` primitive (int / float /
+        // bool / char)? Read it from the static receiver type the typechecker
+        // recorded for this call span (`dispatch_key` = "<Type>.<method>"),
+        // NOT from the compiled value's LLVM kind — so we can gate `clone` /
+        // `to_string` below WITHOUT pre-compiling the receiver, which keeps a
+        // single evaluation for any receiver form (literal, `(expr)`, field,
+        // call) and never double-evaluates a side-effecting receiver.
+        let recv_is_scalar_primitive = dispatch_key
+            .as_deref()
+            .and_then(|k| k.rsplit_once('.'))
+            .map(|(t, _)| {
+                matches!(
+                    t,
+                    "i8" | "i16"
+                        | "i32"
+                        | "i64"
+                        | "u8"
+                        | "u16"
+                        | "u32"
+                        | "u64"
+                        | "usize"
+                        | "f32"
+                        | "f64"
+                        | "bool"
+                        | "char"
+                )
+            })
+            .unwrap_or(false);
+
         if method == "clone" && args.is_empty() {
             if let Some(value) = self.try_compile_clone(object)? {
                 return Ok(value);
             }
+            // Scalar `Copy` primitive — clone is identity.
+            if recv_is_scalar_primitive {
+                return self.compile_expr(object);
+            }
+        }
+
+        // Scalar-primitive `x.to_string() -> String` (typed in
+        // expr_method_call.rs). Render the value via the same path f-strings
+        // use, then copy the bytes into an owning `String`. `char` lowers to
+        // i32, so render it as a glyph rather than the integer codepoint.
+        // String/struct receivers (whose explicit `.to_string()` is a
+        // separate, unimplemented codegen path) are not scalar primitives and
+        // fall through unchanged.
+        if method == "to_string" && args.is_empty() && recv_is_scalar_primitive {
+            let v = self.compile_expr(object)?;
+            let (src_ptr, src_len) = if self.expr_is_char(object) {
+                self.emit_codepoint_to_utf8(v.into_int_value())
+            } else {
+                self.compile_fstr_part_to_cstr(v, object)
+            };
+            return Ok(self.build_owned_string_from_parts(src_ptr, src_len));
         }
 
         // Type-receiver associated calls: `T.method(...)` where `T` is a

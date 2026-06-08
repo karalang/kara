@@ -1453,6 +1453,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 false
             }
+            // `<char>.clone()` returns a char — recurse on the receiver so the
+            // result is still rendered as a glyph by print / f-string lowering
+            // (clone is scalar identity for primitives; see compile_method_call).
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if method == "clone" && args.is_empty() => self.expr_is_char(object),
             _ => false,
         }
     }
