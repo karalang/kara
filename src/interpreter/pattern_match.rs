@@ -151,7 +151,7 @@ impl<'a> super::Interpreter<'a> {
                 start,
                 end,
                 inclusive,
-            } => Self::value_in_range_pattern(value, start.as_ref(), end.as_ref(), *inclusive),
+            } => self.value_in_range_pattern(value, start.as_ref(), end.as_ref(), *inclusive),
             PatternKind::AtBinding { pattern, .. } => self.try_match_pattern(pattern, value),
             PatternKind::Slice {
                 prefix,
@@ -301,9 +301,10 @@ impl<'a> super::Interpreter<'a> {
     /// bounded-inclusive (`lo..=hi`), and the half-open inclusive form
     /// (`..=hi`) all share the same comparison.
     fn value_in_range_pattern(
+        &self,
         value: &Value,
-        start: Option<&LiteralPattern>,
-        end: Option<&LiteralPattern>,
+        start: Option<&RangeBound>,
+        end: Option<&RangeBound>,
         inclusive: bool,
     ) -> bool {
         // Project the scrutinee value into a sortable scalar key (i128 to
@@ -313,11 +314,23 @@ impl<'a> super::Interpreter<'a> {
             Value::Char(c) => (*c as u32) as i128,
             _ => return false,
         };
-        let bound_key = |lit: &LiteralPattern| -> Option<i128> {
-            match lit {
-                LiteralPattern::Integer(n, _) => Some(*n as i128),
-                LiteralPattern::Char(c) => Some((*c as u32) as i128),
-                _ => None,
+        // Resolve a bound to its scalar key. A `Path` bound names a
+        // module-level int/char const, bound in `env` at program start;
+        // the typechecker already rejected non-const / non-scalar paths,
+        // so a `None` here only arises in an already-erroring program.
+        let bound_key = |b: &RangeBound| -> Option<i128> {
+            match b {
+                RangeBound::Literal(LiteralPattern::Integer(n, _)) => Some(*n as i128),
+                RangeBound::Literal(LiteralPattern::Char(c)) => Some((*c as u32) as i128),
+                RangeBound::Literal(_) => None,
+                RangeBound::Path { segments, .. } if segments.len() == 1 => {
+                    match self.env.get(&segments[0]) {
+                        Some(Value::Int(n)) => Some(n as i128),
+                        Some(Value::Char(c)) => Some((c as u32) as i128),
+                        _ => None,
+                    }
+                }
+                RangeBound::Path { .. } => None,
             }
         };
         if let Some(lo) = start {

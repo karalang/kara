@@ -2761,6 +2761,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_match_range_const_bounds() {
+        // Const-named range bounds (design.md § Range Patterns) lower by
+        // re-compiling the named const's initializer at the bound site.
+        let out = run_program(
+            r#"
+const LO: i64 = 10;
+const HI: i64 = 20;
+fn classify(n: i64) -> i64 {
+    match n {
+        ..LO => 1,
+        LO..=HI => 2,
+        _ => 3,
+    }
+}
+fn main() {
+    println(classify(5));    // below LO → 1
+    println(classify(10));   // lower bound → 2
+    println(classify(20));   // upper bound (inclusive) → 2
+    println(classify(25));   // above → 3
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["1", "2", "2", "3"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_match_at_binding_range() {
         // `@` bindings had no codegen arm: `bind_pattern_values` fell
         // through to `_ => Ok(())` (alias never stored) and

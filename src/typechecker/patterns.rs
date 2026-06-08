@@ -42,6 +42,45 @@ fn narrow_int_surface_name(ty: &Type) -> Option<String> {
     }
 }
 
+/// Map an integer-literal suffix to its concrete `Type` for range-bound
+/// type-matching. `None` (no suffix) returns `None` so the bound's width
+/// defers to the other bound / scrutinee.
+fn int_suffix_to_type(sfx: &Option<crate::token::IntSuffix>) -> Option<Type> {
+    use crate::token::IntSuffix as S;
+    Some(match sfx.as_ref()? {
+        S::I8 => Type::Int(IntSize::I8),
+        S::I16 => Type::Int(IntSize::I16),
+        S::I32 => Type::Int(IntSize::I32),
+        S::I64 => Type::Int(IntSize::I64),
+        S::I128 => Type::Int(IntSize::I128),
+        S::U8 => Type::UInt(UIntSize::U8),
+        S::U16 => Type::UInt(UIntSize::U16),
+        S::U32 => Type::UInt(UIntSize::U32),
+        S::U64 => Type::UInt(UIntSize::U64),
+        S::U128 => Type::UInt(UIntSize::U128),
+    })
+}
+
+/// True when two resolved range bounds have incompatible types: a
+/// char-vs-integer family mismatch, or two *explicitly*-typed integer
+/// bounds of differing width. A suffix-less integer literal
+/// (`explicit == false`) adopts the other bound's width and never
+/// conflicts. Each tuple is `(value, type, explicit_width)` as produced
+/// by `resolve_range_bound_value`.
+fn range_bounds_type_conflict(a: &(i128, Type, bool), b: &(i128, Type, bool)) -> bool {
+    let a_char = matches!(a.1, Type::Char);
+    let b_char = matches!(b.1, Type::Char);
+    if a_char != b_char {
+        return true; // char vs integer
+    }
+    if a_char {
+        return false; // both char
+    }
+    // Both integer: conflict only when both carry an explicit width and
+    // those widths differ.
+    a.2 && b.2 && a.1 != b.1
+}
+
 impl<'a> super::TypeChecker<'a> {
     /// Check-mode form of `if`. Threads `expected` into both branches so
     /// closures and other check-sensitive shapes inside arms see the
@@ -647,8 +686,22 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
             }
-            PatternKind::RangePattern { .. } => {
-                // Nothing to bind for range patterns
+            PatternKind::RangePattern {
+                start,
+                end,
+                inclusive,
+            } => {
+                // No bindings, but resolve any const-named bounds and run
+                // the const-resolution / bound-ordering / type-matching
+                // checks (design.md § Range Patterns, v60 item 51 slices
+                // 3–5).
+                self.check_range_pattern_bounds(
+                    start.as_ref(),
+                    end.as_ref(),
+                    *inclusive,
+                    expected,
+                    &pattern.span,
+                );
             }
             PatternKind::AtBinding {
                 name,
@@ -731,6 +784,124 @@ impl<'a> super::TypeChecker<'a> {
                         (m, ty) => m.wrap_binding_ty(ty),
                     };
                     self.local_scope.insert(name.clone(), binding_ty);
+                }
+            }
+        }
+    }
+
+    /// Resolve + validate a range pattern's bounds (design.md § Range
+    /// Patterns, v60 item 51 slices 3–5). Const-named bounds resolve via
+    /// `eval_const_expr`; failures emit `E_RANGE_PATTERN_BOUND_NOT_CONST`.
+    /// Once both bounds resolve, enforce type-matching (same int width or
+    /// both `char`) and bound-ordering (lower must not exceed upper).
+    fn check_range_pattern_bounds(
+        &mut self,
+        start: Option<&RangeBound>,
+        end: Option<&RangeBound>,
+        inclusive: bool,
+        scrut_ty: &Type,
+        span: &Span,
+    ) {
+        let lo = start.and_then(|b| self.resolve_range_bound_value(b, scrut_ty));
+        let hi = end.and_then(|b| self.resolve_range_bound_value(b, scrut_ty));
+
+        if let (Some(lo), Some(hi)) = (&lo, &hi) {
+            // Type-matching (slice 5): char-vs-int family mismatch, or two
+            // explicitly-typed integer bounds of differing width, are
+            // rejected. A width-agnostic literal (`0`, no suffix) adopts
+            // the other bound's width and never conflicts.
+            if range_bounds_type_conflict(lo, hi) {
+                self.type_error(
+                    format!(
+                        "range pattern bounds must have the same type; got '{}' and '{}'",
+                        type_display(&lo.1),
+                        type_display(&hi.1),
+                    ),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+            // Bound-ordering (slice 4): lower bound must not exceed upper.
+            if lo.0 > hi.0 {
+                self.type_error(
+                    format!(
+                        "range pattern lower bound ({}) must not exceed its upper bound ({})",
+                        lo.0, hi.0,
+                    ),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            } else if !inclusive && lo.0 == hi.0 {
+                self.type_error(
+                    format!(
+                        "exclusive range pattern is empty: lower bound ({}) equals upper bound \
+                         ({}); use '..=' for an inclusive range or widen the bounds",
+                        lo.0, hi.0,
+                    ),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+    }
+
+    /// Resolve one range bound to `(scalar key, type, explicit_width)`.
+    /// `explicit_width` is `false` only for a suffix-less integer literal,
+    /// whose width defers to the other bound / scrutinee. A `Path` bound
+    /// must name a module-level integer or char const; otherwise emit
+    /// `E_RANGE_PATTERN_BOUND_NOT_CONST` and return `None`.
+    fn resolve_range_bound_value(
+        &mut self,
+        bound: &RangeBound,
+        scrut_ty: &Type,
+    ) -> Option<(i128, Type, bool)> {
+        match bound {
+            RangeBound::Literal(LiteralPattern::Integer(n, sfx)) => {
+                let (ty, explicit) = match int_suffix_to_type(sfx) {
+                    Some(t) => (t, true),
+                    None => (Type::Int(IntSize::I64), false),
+                };
+                Some((*n as i128, ty, explicit))
+            }
+            RangeBound::Literal(LiteralPattern::Char(c)) => Some((*c as i128, Type::Char, true)),
+            // The parser only admits integer / char / byte literals in
+            // range-bound position, so other literal kinds are unreachable;
+            // be defensive rather than panic.
+            RangeBound::Literal(_) => None,
+            RangeBound::Path { segments, span } => {
+                let expr = Expr {
+                    kind: if segments.len() == 1 {
+                        ExprKind::Identifier(segments[0].clone())
+                    } else {
+                        ExprKind::Path {
+                            segments: segments.clone(),
+                            generic_args: None,
+                        }
+                    },
+                    span: span.clone(),
+                };
+                let resolved = self
+                    .eval_const_expr(&expr, scrut_ty)
+                    .ok()
+                    .and_then(|cv| {
+                        let ty = super::const_eval::const_value_type(&cv);
+                        super::const_eval::const_value_to_i128(&cv).map(|v| (v, ty))
+                    })
+                    .filter(|(_, ty)| matches!(ty, Type::Int(_) | Type::UInt(_) | Type::Char));
+                match resolved {
+                    Some((v, ty)) => Some((v, ty, true)),
+                    None => {
+                        self.type_error(
+                            format!(
+                                "range pattern bound '{}' must resolve to a module-level \
+                                 integer or char const",
+                                segments.join("."),
+                            ),
+                            span.clone(),
+                            TypeErrorKind::RangePatternBoundNotConst,
+                        );
+                        None
+                    }
                 }
             }
         }

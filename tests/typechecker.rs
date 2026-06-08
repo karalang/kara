@@ -25195,3 +25195,95 @@ fn test_for_over_ref_vec_element_is_borrow_rejects_move_out() {
         errors.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
     );
 }
+
+// ── Range-pattern const-expression bounds (design.md § Range Patterns) ──
+// Slices 3 (const resolution), 4 (bound ordering), 5 (type matching).
+
+#[test]
+fn test_range_pattern_const_bounds_resolve_ok() {
+    typecheck_ok(
+        "const LO: i64 = 0;
+         const HI: i64 = 9;
+         fn main() {
+             let x = 5;
+             match x { LO..=HI => print(1), _ => print(2) }
+         }",
+    );
+}
+
+#[test]
+fn test_range_pattern_mixed_literal_and_const_ok() {
+    typecheck_ok(
+        "const HI: i64 = 100;
+         fn main() {
+             let x = 5;
+             match x { 0..=HI => print(1), _ => print(2) }
+         }",
+    );
+}
+
+#[test]
+fn test_range_pattern_non_const_path_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {
+             let lo = 0;
+             let x = 5;
+             match x { lo..=9 => print(1), _ => print(2) }
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::RangePatternBoundNotConst)),
+        "expected E_RANGE_PATTERN_BOUND_NOT_CONST, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_range_pattern_reversed_const_bounds_rejected() {
+    let errors = typecheck_errors(
+        "const LO: i64 = 9;
+         const HI: i64 = 0;
+         fn main() {
+             let x = 5;
+             match x { LO..=HI => print(1), _ => print(2) }
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("must not exceed")),
+        "expected a bound-ordering diagnostic, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_range_pattern_char_vs_int_bound_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {
+             let x = 5;
+             match x { 'a'..=9 => print(1), _ => print(2) }
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("same type")),
+        "expected a same-type diagnostic for char-vs-int bounds, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_range_pattern_mixed_width_int_bounds_rejected() {
+    let errors = typecheck_errors(
+        "const HI: i64 = 9;
+         fn main() {
+             let x = 5;
+             match x { 0i32..=HI => print(1), _ => print(2) }
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("same type")),
+        "expected a same-type diagnostic for i32-vs-i64 bounds, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

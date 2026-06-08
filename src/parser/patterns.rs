@@ -85,7 +85,7 @@ impl super::Parser {
             // Bare `..` is not a valid pattern (use `_` for wildcard).
             Token::DotDot => {
                 self.advance();
-                let end = self.parse_literal_pattern()?;
+                let end = self.parse_range_bound()?;
                 Some(Pattern {
                     kind: PatternKind::RangePattern {
                         start: None,
@@ -97,7 +97,7 @@ impl super::Parser {
             }
             Token::DotDotEq => {
                 self.advance();
-                let end = self.parse_literal_pattern()?;
+                let end = self.parse_range_bound()?;
                 Some(Pattern {
                     kind: PatternKind::RangePattern {
                         start: None,
@@ -126,10 +126,10 @@ impl super::Parser {
                 let lit = LiteralPattern::Integer(n, sfx);
                 // Check for range pattern: `1..=10` or `1..`
                 if self.eat(&Token::DotDotEq) {
-                    let end = self.parse_literal_pattern()?;
+                    let end = self.parse_range_bound()?;
                     return Some(Pattern {
                         kind: PatternKind::RangePattern {
-                            start: Some(lit),
+                            start: Some(RangeBound::Literal(lit)),
                             end: Some(end),
                             inclusive: true,
                         },
@@ -138,15 +138,15 @@ impl super::Parser {
                 }
                 if self.eat(&Token::DotDot) {
                     // `lo..hi` (bounded exclusive) when the next token is
-                    // a literal; `lo..` (half-open) otherwise.
-                    let end = if Self::starts_literal_pattern(&self.peek_token()) {
-                        Some(self.parse_literal_pattern()?)
+                    // a literal or const path; `lo..` (half-open) otherwise.
+                    let end = if Self::starts_range_bound(&self.peek_token()) {
+                        Some(self.parse_range_bound()?)
                     } else {
                         None
                     };
                     return Some(Pattern {
                         kind: PatternKind::RangePattern {
-                            start: Some(lit),
+                            start: Some(RangeBound::Literal(lit)),
                             end,
                             inclusive: false,
                         },
@@ -168,10 +168,10 @@ impl super::Parser {
                 let lit = LiteralPattern::Integer(b as i64, Some(IntSuffix::U8));
                 // Range pattern: `b'a'..=b'z'` or `b'a'..`
                 if self.eat(&Token::DotDotEq) {
-                    let end = self.parse_literal_pattern()?;
+                    let end = self.parse_range_bound()?;
                     return Some(Pattern {
                         kind: PatternKind::RangePattern {
-                            start: Some(lit),
+                            start: Some(RangeBound::Literal(lit)),
                             end: Some(end),
                             inclusive: true,
                         },
@@ -179,14 +179,14 @@ impl super::Parser {
                     });
                 }
                 if self.eat(&Token::DotDot) {
-                    let end = if Self::starts_literal_pattern(&self.peek_token()) {
-                        Some(self.parse_literal_pattern()?)
+                    let end = if Self::starts_range_bound(&self.peek_token()) {
+                        Some(self.parse_range_bound()?)
                     } else {
                         None
                     };
                     return Some(Pattern {
                         kind: PatternKind::RangePattern {
-                            start: Some(lit),
+                            start: Some(RangeBound::Literal(lit)),
                             end,
                             inclusive: false,
                         },
@@ -218,10 +218,10 @@ impl super::Parser {
                 let lit = LiteralPattern::Char(c);
                 // Check for range pattern: `'a'..='z'` or `'a'..`
                 if self.eat(&Token::DotDotEq) {
-                    let end = self.parse_literal_pattern()?;
+                    let end = self.parse_range_bound()?;
                     return Some(Pattern {
                         kind: PatternKind::RangePattern {
-                            start: Some(lit),
+                            start: Some(RangeBound::Literal(lit)),
                             end: Some(end),
                             inclusive: true,
                         },
@@ -230,15 +230,15 @@ impl super::Parser {
                 }
                 if self.eat(&Token::DotDot) {
                     // `'a'..'z'` (bounded exclusive) when the next token
-                    // is a literal; `'a'..` (half-open) otherwise.
-                    let end = if Self::starts_literal_pattern(&self.peek_token()) {
-                        Some(self.parse_literal_pattern()?)
+                    // is a literal or const path; `'a'..` (half-open) otherwise.
+                    let end = if Self::starts_range_bound(&self.peek_token()) {
+                        Some(self.parse_range_bound()?)
                     } else {
                         None
                     };
                     return Some(Pattern {
                         kind: PatternKind::RangePattern {
-                            start: Some(lit),
+                            start: Some(RangeBound::Literal(lit)),
                             end,
                             inclusive: false,
                         },
@@ -343,6 +343,33 @@ impl super::Parser {
                     });
                 }
 
+                // Range pattern with a const-path START bound:
+                // `MAX_AGE..`, `MIN..=MAX`, `LO..hi`. A bare identifier
+                // followed by `..`/`..=` is only ever a range start.
+                if matches!(self.peek_token(), Token::DotDot | Token::DotDotEq) {
+                    let name_span = self.span_from(&start);
+                    let inclusive = matches!(self.peek_token(), Token::DotDotEq);
+                    self.advance();
+                    let start_bound = RangeBound::Path {
+                        segments: vec![name],
+                        span: name_span,
+                    };
+                    // `..=` requires an end; `..` accepts an optional end.
+                    let end = if inclusive || Self::starts_range_bound(&self.peek_token()) {
+                        Some(self.parse_range_bound()?)
+                    } else {
+                        None
+                    };
+                    return Some(Pattern {
+                        kind: PatternKind::RangePattern {
+                            start: Some(start_bound),
+                            end,
+                            inclusive,
+                        },
+                        span: self.span_from(&start),
+                    });
+                }
+
                 // Check for struct destructure: Name { ... }
                 if self.check(&Token::LeftBrace) {
                     self.advance();
@@ -383,6 +410,30 @@ impl super::Parser {
                     let mut path = vec![name];
                     while self.eat(&Token::Dot) {
                         path.push(self.expect_identifier()?);
+                    }
+                    // Range pattern with a qualified const-path START bound:
+                    // `Limits.HIGH..=other`.
+                    if matches!(self.peek_token(), Token::DotDot | Token::DotDotEq) {
+                        let path_span = self.span_from(&start);
+                        let inclusive = matches!(self.peek_token(), Token::DotDotEq);
+                        self.advance();
+                        let start_bound = RangeBound::Path {
+                            segments: path,
+                            span: path_span,
+                        };
+                        let end = if inclusive || Self::starts_range_bound(&self.peek_token()) {
+                            Some(self.parse_range_bound()?)
+                        } else {
+                            None
+                        };
+                        return Some(Pattern {
+                            kind: PatternKind::RangePattern {
+                                start: Some(start_bound),
+                                end,
+                                inclusive,
+                            },
+                            span: self.span_from(&start),
+                        });
                     }
                     // Check for struct or tuple variant
                     if self.check(&Token::LeftBrace) {
@@ -446,6 +497,47 @@ impl super::Parser {
             tok,
             Token::Integer(..) | Token::CharLiteral(_) | Token::ByteLiteral(_)
         )
+    }
+
+    /// True when `tok` can begin a range-pattern bound — a literal (above)
+    /// or an identifier rooting a const path (`MAX_AGE`, `Limits.HIGH`).
+    /// Used to disambiguate the half-open form `lo..` from the bounded
+    /// form `lo..hi` when `hi` may be a const path, not just a literal.
+    fn starts_range_bound(tok: &Token) -> bool {
+        Self::starts_literal_pattern(tok) || matches!(tok, Token::Identifier { .. })
+    }
+
+    /// Parse one range-pattern bound: a literal or a path to a
+    /// module-level const (`MIN_AGE`, `Limits.HIGH`). Anything else is
+    /// rejected with `E_RANGE_PATTERN_BOUND_NOT_SIMPLE` (slice 7 — the
+    /// grammar limits the shape upfront; const resolution + ordering /
+    /// type checks happen at typecheck). The path's const-ness is NOT
+    /// verified here — a non-const path resolves to
+    /// `E_RANGE_PATTERN_BOUND_NOT_CONST` at typecheck.
+    fn parse_range_bound(&mut self) -> Option<RangeBound> {
+        let bound_start = self.current_span();
+        if let Token::Identifier { .. } = self.peek_token() {
+            let name = self.expect_identifier()?;
+            let mut segments = vec![name];
+            while self.eat(&Token::Dot) {
+                segments.push(self.expect_identifier()?);
+            }
+            return Some(RangeBound::Path {
+                segments,
+                span: self.span_from(&bound_start),
+            });
+        }
+        if Self::starts_literal_pattern(&self.peek_token()) {
+            return Some(RangeBound::Literal(self.parse_literal_pattern()?));
+        }
+        self.errors.push(ParseError {
+            message: "error[E_RANGE_PATTERN_BOUND_NOT_SIMPLE]: range pattern bound must be \
+                      a literal or a path to a module-level const; arbitrary expressions are \
+                      not accepted at pattern position"
+                .to_string(),
+            span: bound_start,
+        });
+        None
     }
 
     /// Parse the field list of a struct pattern between `{` and `}`.

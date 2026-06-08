@@ -62,6 +62,31 @@ fn const_value_to_i64(cv: &ConstValue) -> Option<i64> {
     }
 }
 
+/// Coerce a `ConstValue` to the i128 key space used for range-pattern
+/// bound comparison (wide enough to hold every integer width plus a
+/// char codepoint in one ordered space). Float / string variants return
+/// None, as do u128 values that overflow i128.
+pub(crate) fn const_value_to_i128(cv: &ConstValue) -> Option<i128> {
+    use ConstValue::*;
+    match cv {
+        I8(v) => Some(*v as i128),
+        I16(v) => Some(*v as i128),
+        I32(v) => Some(*v as i128),
+        I64(v) => Some(*v as i128),
+        I128(v) => Some(*v),
+        U8(v) => Some(*v as i128),
+        U16(v) => Some(*v as i128),
+        U32(v) => Some(*v as i128),
+        U64(v) => Some(*v as i128),
+        U128(v) => i128::try_from(*v).ok(),
+        Usize(v) => Some(*v as i128),
+        Bool(b) => Some(*b as i128),
+        Char(c) => Some(*c as i128),
+        EnumVariant { discriminant, .. } => Some(*discriminant as i128),
+        F32(_) | F64(_) => None,
+    }
+}
+
 // ── Const-expression evaluator ──────────────────────────────────
 //
 // Const generics slice 2 (2026-05-11). `eval_const_expr` evaluates a

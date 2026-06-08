@@ -14883,3 +14883,48 @@ fn test_borrow_return_interp_borrowed_struct() {
          }");
     assert_eq!(out, "7\ninput data\n");
 }
+
+#[test]
+fn test_range_pattern_const_bounds_int() {
+    // Const-named range bounds (design.md § Range Patterns) match the same
+    // as the literal forms once resolved.
+    let output = run_no_errors(
+        r#"
+const LO: i64 = 10;
+const HI: i64 = 20;
+fn classify(n: i64) -> i64 {
+    match n {
+        ..LO => 1,
+        LO..=HI => 2,
+        _ => 3,
+    }
+}
+fn main() {
+    println(classify(5));
+    println(classify(10));
+    println(classify(15));
+    println(classify(20));
+    println(classify(25));
+}
+"#,
+    );
+    assert_eq!(output, "1\n2\n2\n2\n3\n");
+}
+
+#[test]
+fn test_range_pattern_const_bounds_char() {
+    let output = run_no_errors(
+        r#"
+const LOWER_A: char = 'a';
+const LOWER_Z: char = 'z';
+fn is_lower(c: char) -> i64 {
+    match c { LOWER_A..=LOWER_Z => 1, _ => 0 }
+}
+fn main() {
+    println(is_lower('m'));
+    println(is_lower('M'));
+}
+"#,
+    );
+    assert_eq!(output, "1\n0\n");
+}

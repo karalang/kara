@@ -2837,6 +2837,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // Type Aliases (v60 item 50) — a generic alias use-site arg
                 // fails a trait bound declared on the alias parameter.
                 crate::typechecker::TypeErrorKind::TypeAliasBoundNotSatisfied => "E0262",
+                // Range Patterns (v60 item 51) — a const-named range bound
+                // does not resolve to a module-level int/char const.
+                crate::typechecker::TypeErrorKind::RangePatternBoundNotConst => "E0263",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),

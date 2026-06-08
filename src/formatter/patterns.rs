@@ -17,7 +17,7 @@ impl super::Formatter {
                 inclusive,
             } => {
                 if let Some(s) = start {
-                    self.format_literal_pattern(s);
+                    self.format_range_bound(s);
                 }
                 if *inclusive {
                     self.write_str("..=");
@@ -25,7 +25,7 @@ impl super::Formatter {
                     self.write_str("..");
                 }
                 if let Some(e) = end {
-                    self.format_literal_pattern(e);
+                    self.format_range_bound(e);
                 }
             }
             PatternKind::AtBinding {
@@ -154,6 +154,14 @@ impl super::Formatter {
                 self.write_str("\"");
             }
             LiteralPattern::Bool(b) => self.write_str(if *b { "true" } else { "false" }),
+        }
+    }
+
+    /// Render a range-pattern bound: a literal or a dotted const path.
+    pub(super) fn format_range_bound(&mut self, bound: &RangeBound) {
+        match bound {
+            RangeBound::Literal(lit) => self.format_literal_pattern(lit),
+            RangeBound::Path { segments, .. } => self.write_path(segments),
         }
     }
 }

@@ -51,7 +51,7 @@
 //! behaviour; float literal patterns still lower to `Pat::Wildcard`
 //! (awaiting an Eq/Hash story for `f64`).
 
-use crate::ast::{LiteralPattern, MatchArm, Pattern, PatternKind, RestPattern};
+use crate::ast::{LiteralPattern, MatchArm, Pattern, PatternKind, RangeBound, RestPattern};
 use crate::typechecker::{IntSize, Type, TypeEnv, UIntSize, VariantTypeInfo};
 
 /// Inclusive integer/`char` domain `[min, max]` for a scrutinee type, in
@@ -90,6 +90,25 @@ fn lit_to_i128(l: &LiteralPattern) -> Option<i128> {
         LiteralPattern::Integer(n, _) => Some(*n as i128),
         LiteralPattern::Char(c) => Some(*c as i128),
         _ => None,
+    }
+}
+
+/// Integer / `char` value of a range-pattern bound, in the `i128` space.
+/// A `Path` bound (`MAX_AGE..=…`) resolves through the const it names —
+/// single-segment via `env.const_values`, recorded by the typechecker
+/// after env build. Returns `None` for an unresolved bound; the caller
+/// then falls back to the scrutinee-type domain edge. That fallback is
+/// only reachable in already-erroring programs — a valid const bound is
+/// resolved and recorded before exhaustiveness runs, so a const range
+/// never silently widens to a catch-all here.
+fn range_bound_to_i128(b: &RangeBound, env: &TypeEnv) -> Option<i128> {
+    match b {
+        RangeBound::Literal(l) => lit_to_i128(l),
+        RangeBound::Path { segments, .. } if segments.len() == 1 => env
+            .const_values
+            .get(&segments[0])
+            .and_then(crate::typechecker::const_value_to_i128),
+        RangeBound::Path { .. } => None,
     }
 }
 
@@ -341,9 +360,12 @@ fn lower_pattern(p: &Pattern, scrut_type: &Type, env: &TypeEnv) -> Pat {
             inclusive,
         } => {
             let (dmin, dmax) = int_domain(scrut_type).unwrap_or((i128::MIN, i128::MAX));
-            let lo = start.as_ref().and_then(lit_to_i128).unwrap_or(dmin);
+            let lo = start
+                .as_ref()
+                .and_then(|b| range_bound_to_i128(b, env))
+                .unwrap_or(dmin);
             let hi = match end.as_ref() {
-                Some(h) => lit_to_i128(h)
+                Some(h) => range_bound_to_i128(h, env)
                     .map(|v| if *inclusive { v } else { v - 1 })
                     .unwrap_or(dmax),
                 None => dmax,

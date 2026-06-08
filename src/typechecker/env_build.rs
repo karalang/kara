@@ -139,6 +139,22 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Resolve module-const values for downstream consumers that lack the
+        // `eval_const_expr` driver. Exhaustiveness checking reads
+        // `env.const_values` to fold a const-named range-pattern bound
+        // (`MIN_AGE..=MAX_AGE`) into a concrete interval. Runs after the item
+        // loop so an enum-variant-valued const sees a fully-populated
+        // `env.enums`. Failures are silent here — a non-const initializer is
+        // reported by the const decl's own check elsewhere.
+        for item in &items {
+            if let Item::ConstDecl(c) = item {
+                let ty = self.lower_type_expr(&c.ty, &[]);
+                if let Ok(cv) = self.eval_const_expr(&c.value, &ty) {
+                    self.env.const_values.insert(c.name.clone(), cv);
+                }
+            }
+        }
+
         // Resolve a representative override type for every trait-less
         // user resource so `resolve_path_type` can type `R.method(...)`
         // dispatch sites from the override's inherent impl (the trait-ful

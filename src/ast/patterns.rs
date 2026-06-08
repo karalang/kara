@@ -178,9 +178,11 @@ pub enum PatternKind {
     // `..=b`  → start=None, end=Some
     // `a..`   → start=Some, end=None
     // bare `..` is rejected (not a valid pattern; use `_`)
+    // Bounds are `RangeBound` so a const-named bound (`MIN_AGE..=MAX_AGE`,
+    // design.md § Range Patterns) can sit alongside a literal one.
     RangePattern {
-        start: Option<LiteralPattern>,
-        end: Option<LiteralPattern>,
+        start: Option<RangeBound>,
+        end: Option<RangeBound>,
         inclusive: bool,
     },
     AtBinding {
@@ -240,6 +242,23 @@ pub enum LiteralPattern {
     Char(char),
     String(String),
     Bool(bool),
+}
+
+/// A bound on a [`PatternKind::RangePattern`] — either a literal or a
+/// path to a module-level integer/char `const`
+/// (design.md § Range Patterns, "const-expression bounds"; v60 item 51).
+///
+/// The `Path` form is resolved to a concrete value at typecheck via the
+/// const-evaluation machinery (`E_RANGE_PATTERN_BOUND_NOT_CONST` on
+/// failure); each backend then resolves it through its own const
+/// mechanism at the use site (interpreter env, codegen `consts` map,
+/// `TypeEnv::const_values` for exhaustiveness). The parser admits only
+/// literals and paths in bound position; anything else is rejected with
+/// `E_RANGE_PATTERN_BOUND_NOT_SIMPLE`.
+#[derive(Debug, Clone)]
+pub enum RangeBound {
+    Literal(LiteralPattern),
+    Path { segments: Vec<String>, span: Span },
 }
 
 #[derive(Debug, Clone)]

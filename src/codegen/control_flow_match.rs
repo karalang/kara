@@ -407,38 +407,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 inclusive,
             } => {
                 // Unsigned comparison only when a bound carries an
-                // unsigned int suffix (e.g. the `b'a'..=b'z'` desugar →
-                // U8). Keeps byte ranges correct for values ≥ 128; signed
-                // for plain int / char ranges.
+                // unsigned int type (e.g. the `b'a'..=b'z'` desugar → U8,
+                // or a const named `MAX: u8`). Keeps byte ranges correct
+                // for values ≥ 128; signed for plain int / char ranges.
                 let unsigned = [start.as_ref(), end.as_ref()]
                     .into_iter()
                     .flatten()
-                    .any(|l| {
-                        matches!(
-                            l,
-                            LiteralPattern::Integer(
-                                _,
-                                Some(
-                                    crate::token::IntSuffix::U8
-                                        | crate::token::IntSuffix::U16
-                                        | crate::token::IntSuffix::U32
-                                        | crate::token::IntSuffix::U64
-                                        | crate::token::IntSuffix::U128
-                                )
-                            )
-                        )
-                    });
+                    .any(|b| self.range_bound_unsigned(b));
 
                 let mut cond: Option<inkwell::values::IntValue<'ctx>> = None;
                 if let Some(lo) = start {
-                    let lo_val = self.range_bound_const(lo);
+                    let lo_val = self.compile_range_bound(lo)?;
                     let ge = self
                         .compile_binop_typed(&BinOp::GtEq, scrut, lo_val, unsigned)?
                         .into_int_value();
                     cond = Some(ge);
                 }
                 if let Some(hi) = end {
-                    let hi_val = self.range_bound_const(hi);
+                    let hi_val = self.compile_range_bound(hi)?;
                     let op = if *inclusive { BinOp::LtEq } else { BinOp::Lt };
                     let cmp = self
                         .compile_binop_typed(&op, scrut, hi_val, unsigned)?
@@ -532,6 +518,70 @@ impl<'ctx> super::Codegen<'ctx> {
             LiteralPattern::Char(c) => self.context.i32_type().const_int(*c as u64, false).into(),
             _ => self.context.i64_type().const_int(0, false).into(),
         }
+    }
+
+    /// Compile a range-pattern bound to an `IntValue` for the comparison.
+    /// A `Path` bound names a module-level const; reuse the const-identifier
+    /// compile path (`consts` map → re-compile the stored initializer, which
+    /// LLVM folds), so const-referencing-const initializers work too.
+    fn compile_range_bound(&mut self, bound: &RangeBound) -> Result<BasicValueEnum<'ctx>, String> {
+        match bound {
+            RangeBound::Literal(lit) => Ok(self.range_bound_const(lit)),
+            RangeBound::Path { segments, span } => {
+                let expr = Expr {
+                    kind: if segments.len() == 1 {
+                        ExprKind::Identifier(segments[0].clone())
+                    } else {
+                        ExprKind::Path {
+                            segments: segments.clone(),
+                            generic_args: None,
+                        }
+                    },
+                    span: span.clone(),
+                };
+                self.compile_expr(&expr)
+            }
+        }
+    }
+
+    /// Whether a range bound's type is unsigned — drives signed-vs-unsigned
+    /// comparison. Literal bounds inspect the int suffix; a const-path bound
+    /// resolves the named const's literal initializer type.
+    fn range_bound_unsigned(&self, bound: &RangeBound) -> bool {
+        use crate::prelude::ConstValue;
+        let cv = match bound {
+            RangeBound::Literal(lit) => {
+                return matches!(
+                    lit,
+                    LiteralPattern::Integer(
+                        _,
+                        Some(
+                            crate::token::IntSuffix::U8
+                                | crate::token::IntSuffix::U16
+                                | crate::token::IntSuffix::U32
+                                | crate::token::IntSuffix::U64
+                                | crate::token::IntSuffix::U128
+                        )
+                    )
+                );
+            }
+            RangeBound::Path { segments, .. } if segments.len() == 1 => self
+                .consts
+                .get(&segments[0])
+                .and_then(crate::codegen::helpers::const_value_from_literal_expr),
+            RangeBound::Path { .. } => None,
+        };
+        matches!(
+            cv,
+            Some(
+                ConstValue::U8(_)
+                    | ConstValue::U16(_)
+                    | ConstValue::U32(_)
+                    | ConstValue::U64(_)
+                    | ConstValue::U128(_)
+                    | ConstValue::Usize(_)
+            )
+        )
     }
 
     /// Extract the tag integer from an enum scrutinee.

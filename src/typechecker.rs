@@ -46,6 +46,7 @@ mod tests;
 pub mod types;
 mod variance;
 
+pub(crate) use const_eval::const_value_to_i128;
 pub use const_eval::ConstEvalError;
 use const_eval::{binop_glyph, const_value_type, format_const_value, unaryop_glyph};
 pub use env::{EnumInfo, FunctionSig, ImplInfo, StructInfo, TraitInfo, TypeEnv, UnionInfo};
@@ -397,6 +398,11 @@ pub enum TypeErrorKind {
     /// `lower_path_type` when resolving the alias. See design.md
     /// § Type Aliases (v60 item 50).
     TypeAliasBoundNotSatisfied,
+    /// A range-pattern bound named by a path (`MIN_AGE..=MAX_AGE`) does not
+    /// resolve to a module-level integer or char const — the path is
+    /// unknown, names a non-const, or evaluates to a non-integer/char
+    /// value. See design.md § Range Patterns (v60 item 51).
+    RangePatternBoundNotConst,
     /// A `mut` field of a `par struct` / `par enum` is declared with a type
     /// other than `Atomic[T]` or `Mutex[T]`. `par struct` enforces concurrent
     /// safety structurally at the definition site: immutable fields are freely
@@ -694,6 +700,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ParMutSelfReceiver
         | TypeErrorKind::LockTargetNotMutex
         | TypeErrorKind::InvalidRefinementPredicate
+        | TypeErrorKind::RangePatternBoundNotConst
         | TypeErrorKind::CrossTaskUnsafeCapture => None,
     }
 }

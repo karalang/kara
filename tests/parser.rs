@@ -6556,8 +6556,14 @@ fn test_range_pattern_char() {
                     inclusive,
                 } = &arms[0].pattern.kind
                 {
-                    assert!(matches!(start, Some(LiteralPattern::Char('a'))));
-                    assert!(matches!(end, Some(LiteralPattern::Char('z'))));
+                    assert!(matches!(
+                        start,
+                        Some(RangeBound::Literal(LiteralPattern::Char('a')))
+                    ));
+                    assert!(matches!(
+                        end,
+                        Some(RangeBound::Literal(LiteralPattern::Char('z')))
+                    ));
                     assert!(*inclusive);
                 } else {
                     panic!("Expected RangePattern");
@@ -6602,11 +6608,17 @@ fn test_range_pattern_byte() {
                 {
                     assert!(matches!(
                         start,
-                        Some(LiteralPattern::Integer(48, Some(IntSuffix::U8)))
+                        Some(RangeBound::Literal(LiteralPattern::Integer(
+                            48,
+                            Some(IntSuffix::U8)
+                        )))
                     ));
                     assert!(matches!(
                         end,
-                        Some(LiteralPattern::Integer(57, Some(IntSuffix::U8)))
+                        Some(RangeBound::Literal(LiteralPattern::Integer(
+                            57,
+                            Some(IntSuffix::U8)
+                        )))
                     ));
                     assert!(*inclusive);
                 } else {
@@ -7990,8 +8002,14 @@ fn test_range_pattern_both_bounds_inclusive_still_works() {
                     inclusive,
                 } = &arms[0].pattern.kind
                 {
-                    assert!(matches!(start, Some(LiteralPattern::Char('a'))));
-                    assert!(matches!(end, Some(LiteralPattern::Char('z'))));
+                    assert!(matches!(
+                        start,
+                        Some(RangeBound::Literal(LiteralPattern::Char('a')))
+                    ));
+                    assert!(matches!(
+                        end,
+                        Some(RangeBound::Literal(LiteralPattern::Char('z')))
+                    ));
                     assert!(*inclusive);
                 } else {
                     panic!("Expected RangePattern");
@@ -10867,5 +10885,117 @@ fn bare_extern_import_block_still_rejected_at_module_scope() {
         errors.iter().any(|e| e.message.contains("bare `extern")),
         "expected the bare-extern diagnostic, got: {:?}",
         errors
+    );
+}
+
+// ── Range-pattern const-expression bounds (design.md § Range Patterns) ──
+
+/// Pull the first match arm's pattern out of a parsed single-function
+/// program, for range-bound shape assertions.
+fn first_arm_pattern(prog: &Program) -> PatternKind {
+    if let Item::Function(f) = &prog.items[0] {
+        if let Some(expr) = &f.body.final_expr {
+            if let ExprKind::Match { arms, .. } = &expr.kind {
+                return arms[0].pattern.kind.clone();
+            }
+        }
+    }
+    panic!("expected a match expression with at least one arm");
+}
+
+#[test]
+fn test_range_pattern_const_path_both_bounds() {
+    let prog = parse_ok("fn main() { match n { MIN..=MAX => a, _ => b, } }");
+    match first_arm_pattern(&prog) {
+        PatternKind::RangePattern {
+            start,
+            end,
+            inclusive,
+        } => {
+            assert!(inclusive);
+            assert!(
+                matches!(start, Some(RangeBound::Path { segments, .. }) if segments == ["MIN"])
+            );
+            assert!(matches!(end, Some(RangeBound::Path { segments, .. }) if segments == ["MAX"]));
+        }
+        other => panic!("expected RangePattern, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_range_pattern_const_path_mixed_literal_start() {
+    // Literal start, const-path end: `0..=MAX`.
+    let prog = parse_ok("fn main() { match n { 0..=MAX => a, _ => b, } }");
+    match first_arm_pattern(&prog) {
+        PatternKind::RangePattern { start, end, .. } => {
+            assert!(matches!(
+                start,
+                Some(RangeBound::Literal(LiteralPattern::Integer(0, _)))
+            ));
+            assert!(matches!(end, Some(RangeBound::Path { segments, .. }) if segments == ["MAX"]));
+        }
+        other => panic!("expected RangePattern, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_range_pattern_const_path_half_open_start() {
+    // `MIN..` — const-path start, open end.
+    let prog = parse_ok("fn main() { match n { MIN.. => a, _ => b, } }");
+    match first_arm_pattern(&prog) {
+        PatternKind::RangePattern { start, end, .. } => {
+            assert!(
+                matches!(start, Some(RangeBound::Path { segments, .. }) if segments == ["MIN"])
+            );
+            assert!(end.is_none());
+        }
+        other => panic!("expected RangePattern, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_range_pattern_const_path_open_start_to_const() {
+    // `..MAX` — open start, const-path exclusive end.
+    let prog = parse_ok("fn main() { match n { ..MAX => a, _ => b, } }");
+    match first_arm_pattern(&prog) {
+        PatternKind::RangePattern {
+            start,
+            end,
+            inclusive,
+        } => {
+            assert!(start.is_none());
+            assert!(!inclusive);
+            assert!(matches!(end, Some(RangeBound::Path { segments, .. }) if segments == ["MAX"]));
+        }
+        other => panic!("expected RangePattern, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_range_pattern_qualified_const_path() {
+    // Qualified const path as a bound: `Limits.HIGH..=Limits.LOW`.
+    let prog = parse_ok("fn main() { match n { Limits.HIGH..=Limits.LOW => a, _ => b, } }");
+    match first_arm_pattern(&prog) {
+        PatternKind::RangePattern { start, end, .. } => {
+            assert!(
+                matches!(start, Some(RangeBound::Path { segments, .. }) if segments == ["Limits", "HIGH"])
+            );
+            assert!(
+                matches!(end, Some(RangeBound::Path { segments, .. }) if segments == ["Limits", "LOW"])
+            );
+        }
+        other => panic!("expected RangePattern, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_range_pattern_bound_not_simple_rejected() {
+    // An arbitrary expression in bound position is rejected at parse with
+    // E_RANGE_PATTERN_BOUND_NOT_SIMPLE (slice 7).
+    let (_, errs) = parse_with_errors("fn main() { match n { 0..=(1 + 2) => a, _ => b, } }");
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("E_RANGE_PATTERN_BOUND_NOT_SIMPLE")),
+        "expected E_RANGE_PATTERN_BOUND_NOT_SIMPLE, got: {errs:?}"
     );
 }

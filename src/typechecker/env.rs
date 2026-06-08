@@ -267,6 +267,13 @@ pub struct TypeEnv {
     pub opaque_foreign_types: HashSet<String>,
     pub functions: HashMap<String, FunctionSig>,
     pub constants: HashMap<String, Type>,
+    /// Resolved compile-time values of module-level consts, keyed by name.
+    /// Populated after env build by evaluating each `const`'s initializer.
+    /// Consumed by downstream passes that lack the `eval_const_expr`
+    /// driver — notably exhaustiveness checking, which reads it to fold a
+    /// const-named range-pattern bound (`MIN_AGE..=MAX_AGE`) into a
+    /// concrete interval (design.md § Range Patterns; v60 item 51).
+    pub const_values: HashMap<String, crate::prelude::ConstValue>,
     pub type_aliases: HashMap<String, Type>,
     /// Generic parameter lists for generic type aliases, keyed by alias
     /// name. Populated by `env_add_type_alias` whenever the alias declares
@@ -369,6 +376,7 @@ impl TypeEnv {
             constants: HashMap::new(),
             type_aliases: HashMap::new(),
             type_alias_params: HashMap::new(),
+            const_values: HashMap::new(),
             refinement_predicates: HashMap::new(),
             traits: HashMap::new(),
             trait_aliases: HashSet::new(),
