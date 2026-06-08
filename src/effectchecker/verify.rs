@@ -297,6 +297,95 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
+    /// Enforce design.md § Panic Semantics at the FFI Boundary, case 2:
+    /// an exported `extern "C-unwind" fn` whose body may panic **must**
+    /// declare `panics` in its `with` clause
+    /// (`E_EXTERN_C_UNWIND_REQUIRES_PANICS`, surfaced as E0413).
+    ///
+    /// This is deliberately separate from `verify_declarations`, which
+    /// only governs `pub` functions and honours the `public_effects`
+    /// policy. The C-unwind rule fires for the export regardless of
+    /// visibility or policy: the `"C-unwind"` ABI selection is itself
+    /// the assertion that a panic may cross the boundary as a C++
+    /// exception, so the signature must say so. (`extern "C"` exports
+    /// carry no such requirement — case 1 auto-aborts a body panic at
+    /// the boundary, so the panic never escapes into C.)
+    pub(crate) fn verify_extern_export_panics(&mut self) {
+        // Collect offenders first so the immutable borrows of
+        // `function_bodies` / `inferred_effects` / group tables are
+        // released before we mutate `self.errors`.
+        let mut offenders: Vec<(String, Span)> = Vec::new();
+        let names: Vec<String> = self.function_bodies.keys().cloned().collect();
+        for name in &names {
+            let func = match self.function_bodies.get(name) {
+                Some(f) if f.abi.as_deref() == Some("C-unwind") => f.clone(),
+                _ => continue,
+            };
+
+            // The rule only bites when the body can actually panic.
+            let body_panics = self.inferred_effects.get(name).is_some_and(|set| {
+                set.effects
+                    .iter()
+                    .any(|te| matches!(te.effect.verb, EffectVerbKind::Panics))
+            });
+            if !body_panics {
+                continue;
+            }
+
+            // ...and the declaration must omit `panics`. `panics` is a
+            // resourceless execution verb, so we scan the `with` clause's
+            // items directly for it rather than going through
+            // `resolve_effect_list_to_set` (which only materialises
+            // *resourced* effects and would silently drop `panics`). A
+            // `with SomeGroup` whose expansion mentions `panics` also
+            // counts; a bare `with _` (Polymorphic) does NOT spell
+            // `panics` out, which is the intended strictness.
+            let declares_panics = func
+                .effects
+                .as_ref()
+                .is_some_and(|list| self.effect_list_declares_panics(list));
+            if declares_panics {
+                continue;
+            }
+
+            offenders.push((name.clone(), func.span.clone()));
+        }
+
+        for (name, span) in offenders {
+            self.errors.push(EffectError {
+                message: format!(
+                    "exported `extern \"C-unwind\" fn '{name}'` may panic but does not \
+                     declare `panics`; the \"C-unwind\" ABI propagates an unwinding panic \
+                     across the FFI boundary, so the signature must say so. Add `with panics` \
+                     (or, if a C-shaped error is wanted instead, switch to `extern \"C\"` and \
+                     wrap the body in `catch_panic`). \
+                     See design.md § Panic Semantics at the FFI Boundary."
+                ),
+                span,
+                kind: EffectErrorKind::ExternCUnwindRequiresPanics,
+                subtype_trace: None,
+                replacement: None,
+            });
+        }
+    }
+
+    /// True iff a `with` clause spells out the resourceless `panics`
+    /// verb, directly or via a referenced effect group. Used by the
+    /// C-unwind export rule; kept separate from the resource-oriented
+    /// `resolve_effect_list_to_set` because that helper materialises
+    /// only resourced effects and would drop `panics` entirely.
+    fn effect_list_declares_panics(&self, list: &EffectList) -> bool {
+        list.items.iter().any(|item| match item {
+            EffectItem::Verb(v) => matches!(v.kind, EffectVerbKind::Panics),
+            EffectItem::Group(name) => self.expanded_groups.get(name).is_some_and(|g| {
+                g.effects
+                    .iter()
+                    .any(|te| matches!(te.effect.verb, EffectVerbKind::Panics))
+            }),
+            EffectItem::Polymorphic | EffectItem::Variable(_) => false,
+        })
+    }
+
     /// For every `impl Trait for Type` block, verify that each impl method's
     /// inferred effect set is a subset of the trait method's declared ceiling.
     ///

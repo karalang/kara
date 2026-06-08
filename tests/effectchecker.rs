@@ -8058,3 +8058,56 @@ fn main() {
         "{errs:?}",
     );
 }
+
+// ── FFI export panic semantics (design.md § Panic Semantics at the FFI
+//    Boundary, case 2: E_EXTERN_C_UNWIND_REQUIRES_PANICS / E0413) ──────
+
+#[test]
+fn extern_c_unwind_panicking_body_requires_panics_declaration() {
+    let errors = effectcheck_errors(
+        "extern \"C-unwind\" fn f() -> i32 { unreachable() } \
+         fn main() { let _ = f(); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::ExternCUnwindRequiresPanics),
+        "expected ExternCUnwindRequiresPanics, got: {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn extern_c_unwind_with_panics_declaration_ok() {
+    effectcheck_ok(
+        "extern \"C-unwind\" fn f() -> i32 with panics { unreachable() } \
+         fn main() { let _ = f(); }",
+    );
+}
+
+#[test]
+fn extern_c_unwind_non_panicking_body_ok() {
+    // No panic in the body → the C-unwind rule does not bite.
+    effectcheck_ok(
+        "extern \"C-unwind\" fn f(x: i32) -> i32 { x + 1 } \
+         fn main() { let _ = f(1); }",
+    );
+}
+
+#[test]
+fn extern_c_export_panicking_body_has_no_panics_requirement() {
+    // Case 1 (`extern "C"`) auto-aborts a body panic at the boundary, so
+    // no `with panics` is required — the C-unwind rule must NOT fire here.
+    let result = effectcheck_all(
+        "extern \"C\" fn f() -> i32 { unreachable() } \
+         fn main() { let _ = f(); }",
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::ExternCUnwindRequiresPanics),
+        "extern \"C\" export must not require a panics declaration, got: {:?}",
+        result.errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}

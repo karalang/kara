@@ -10786,3 +10786,86 @@ fn test_variance_marker_formatter_roundtrip() {
     assert!(params[2].variance_span.is_some());
     assert!(params[3].variance_span.is_none());
 }
+
+// ── FFI export definitions (`[pub] extern "ABI" fn name(...) { body }`) ──
+// design.md § Panic Semantics at the FFI Boundary. The *export* dual of
+// foreign imports (which live in `unsafe extern { ... }` blocks).
+
+#[test]
+fn extern_c_export_fn_parses_with_abi() {
+    let prog = parse_ok("extern \"C\" fn add_one(x: i32) -> i32 { x + 1 }");
+    if let Item::Function(f) = &prog.items[0] {
+        assert_eq!(f.abi.as_deref(), Some("C"));
+        assert_eq!(f.name, "add_one");
+        assert!(!f.is_pub);
+    } else {
+        panic!("expected a Function item, got {:?}", prog.items[0]);
+    }
+}
+
+#[test]
+fn extern_c_export_fn_parses_with_pub() {
+    let prog = parse_ok("pub extern \"C\" fn add_one(x: i32) -> i32 { x + 1 }");
+    if let Item::Function(f) = &prog.items[0] {
+        assert_eq!(f.abi.as_deref(), Some("C"));
+        assert!(f.is_pub);
+    } else {
+        panic!("expected a Function item");
+    }
+}
+
+#[test]
+fn extern_c_unwind_export_fn_parses_with_abi() {
+    let prog = parse_ok("extern \"C-unwind\" fn f() -> i32 with panics { unreachable() }");
+    if let Item::Function(f) = &prog.items[0] {
+        assert_eq!(f.abi.as_deref(), Some("C-unwind"));
+    } else {
+        panic!("expected a Function item");
+    }
+}
+
+#[test]
+fn plain_fn_has_no_abi() {
+    let prog = parse_ok("fn add_one(x: i32) -> i32 { x + 1 }");
+    if let Item::Function(f) = &prog.items[0] {
+        assert_eq!(f.abi, None);
+    } else {
+        panic!("expected a Function item");
+    }
+}
+
+#[test]
+fn extern_export_fn_rejects_unsupported_abi() {
+    let (_, errors) = parse_with_errors("extern \"Rust\" fn f() {}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("unsupported FFI export ABI")),
+        "expected an unsupported-ABI diagnostic, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn extern_export_fn_rejects_host_abi() {
+    let (_, errors) = parse_with_errors("extern \"host\" fn f() {}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("not an FFI export ABI")),
+        "expected a host-ABI diagnostic, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn bare_extern_import_block_still_rejected_at_module_scope() {
+    // `extern "C" { ... }` (no `unsafe`, no `fn`) is a bare foreign-import
+    // block — still rejected; imports need `unsafe extern { ... }`.
+    let (_, errors) = parse_with_errors("extern \"C\" { fn write(fd: i32); }");
+    assert!(
+        errors.iter().any(|e| e.message.contains("bare `extern")),
+        "expected the bare-extern diagnostic, got: {:?}",
+        errors
+    );
+}

@@ -252,6 +252,19 @@ pub enum EffectErrorKind {
     /// Fires at the trait method definition (the root cause) with a
     /// machine-applicable `ref self` receiver rewrite.
     ResourceReceiverContradiction,
+    /// An exported `extern "C-unwind" fn` definition whose body's
+    /// inferred effects include `panics`, but whose signature omits a
+    /// `panics` effect in its `with` clause. The `"C-unwind"` ABI's
+    /// whole purpose is to admit an unwinding panic across the FFI
+    /// boundary into the C++ caller; silently absorbing a body panic
+    /// would defeat it, so the declaration must be honest. This rule
+    /// fires regardless of the `public_effects` policy — even under
+    /// the `Inferred` policy (where a plain `pub fn` may omit its
+    /// effect declaration), a C-unwind export must spell `panics`
+    /// out, because the declaration *is* the public ABI contract.
+    /// design.md § Panic Semantics at the FFI Boundary, case 2
+    /// (`E_EXTERN_C_UNWIND_REQUIRES_PANICS`).
+    ExternCUnwindRequiresPanics,
 }
 
 impl std::fmt::Display for EffectError {
@@ -856,6 +869,7 @@ impl<'a> EffectChecker<'a> {
         self.infer_private_trait_ceilings();
         self.check_contract_purity();
         self.verify_declarations();
+        self.verify_extern_export_panics();
         self.verify_pub_fn_no_synthetic_resource();
         self.verify_impl_trait_ceilings();
         self.verify_trait_default_bodies();
@@ -1269,6 +1283,7 @@ impl<'a> EffectChecker<'a> {
                             is_track_caller: false,
                             lint_overrides: Vec::new(),
                             profile_compat: Vec::new(),
+                            abi: None,
                         };
                         self.method_bodies.insert(key, stub);
                     }

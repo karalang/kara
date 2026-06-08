@@ -138,6 +138,7 @@ impl<'a> FnSpec<'a> {
             is_track_caller: false,
             lint_overrides: Vec::new(),
             profile_compat: Vec::new(),
+            abi: None,
         }
     }
 }

@@ -246,6 +246,21 @@ pub struct Function {
     /// integration) consults the list to intersect constraints
     /// against the function's effect set.
     pub profile_compat: Vec<String>,
+    /// FFI export ABI for a *definition* exposed to C —
+    /// `[pub] extern "C" fn name(...) { body }` →
+    /// `Some("C")`, `extern "C-unwind" fn ...` → `Some("C-unwind")`.
+    /// `None` for an ordinary Kāra function. This is the *export*
+    /// side of the FFI boundary (a Kāra body callable from C), the
+    /// dual of foreign *imports* which live as [`ExternFunction`]
+    /// inside `unsafe extern { ... }` blocks. The marker drives two
+    /// codegen decisions: the symbol is given External linkage so C
+    /// can resolve it (Kāra fn names are already un-mangled), and
+    /// `"C-unwind"` exports are gated until the unwind substrate
+    /// lands (see design.md § Panic Semantics at the FFI Boundary,
+    /// cases 1 & 2). Under the current abort-only panic model a body
+    /// panic already aborts the process, which *is* the case-1
+    /// auto-abort contract — so no catch trampoline is emitted yet.
+    pub abi: Option<String>,
 }
 
 #[derive(Debug, Clone)]

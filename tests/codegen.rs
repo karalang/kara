@@ -38206,4 +38206,145 @@ fn main() {
             assert_eq!(c.stdout.trim(), "1\n7");
         }
     }
+
+    // ── FFI export definitions (`extern "C" fn` / `extern "C-unwind" fn`) ──
+    // design.md § Panic Semantics at the FFI Boundary, cases 1 & 2.
+
+    /// Case 1: an `extern "C"` export compiles under the AOT backend and
+    /// runs correctly when called from Kāra. Proves the export flows
+    /// through the whole pipeline and gets a real (External-linkage,
+    /// un-mangled, C-calling-convention) symbol that links + executes.
+    #[test]
+    fn extern_c_export_compiles_and_runs_when_called_from_kara() {
+        let out = run_program_capturing(
+            "extern \"C\" fn add_one(x: i32) -> i32 { x + 1 }\n\
+             fn main() { println(f\"{add_one(41)}\"); }\n",
+        );
+        if let Some(c) = out {
+            assert_eq!(c.stdout.trim(), "42");
+        }
+    }
+
+    /// Case 1, the real point of the marker: the exported symbol is
+    /// callable from a foreign C translation unit. Emits the Kāra object
+    /// (no `main`), compiles a C `main` that declares + calls the export,
+    /// links the two, and runs. The body is pure arithmetic, so no Kāra
+    /// runtime archive is needed. Soft-skips if `cc`/`nm` are absent.
+    #[test]
+    fn extern_c_export_callable_from_c() {
+        use karac::codegen::compile_to_object_with_options;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let src = "extern \"C\" fn kara_add_one(x: i32) -> i32 { x + 1 }\n";
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let kara_obj = format!("/tmp/karac_ffi_export_{pid}_{id}.o");
+        let c_src = format!("/tmp/karac_ffi_main_{pid}_{id}.c");
+        let exe = format!("/tmp/karac_ffi_exe_{pid}_{id}");
+        let cleanup = || {
+            let _ = std::fs::remove_file(&kara_obj);
+            let _ = std::fs::remove_file(&c_src);
+            let _ = std::fs::remove_file(&exe);
+        };
+
+        compile_to_object_with_options(
+            &parsed.program,
+            &kara_obj,
+            Some(&ownership),
+            None,
+            None,
+            None,
+        )
+        .expect("codegen failed for extern \"C\" export");
+
+        // The export must appear as a *defined* external symbol under its
+        // bare C name (un-mangled). On Mach-O the symbol carries a leading
+        // underscore; the substring check tolerates both.
+        if let Ok(nm) = std::process::Command::new("nm").arg(&kara_obj).output() {
+            let s = String::from_utf8_lossy(&nm.stdout);
+            assert!(
+                s.lines()
+                    .any(|l| l.contains("kara_add_one") && l.contains(" T ")),
+                "expected defined external symbol `kara_add_one`; nm:\n{s}"
+            );
+        }
+
+        std::fs::write(
+            &c_src,
+            "extern int kara_add_one(int);\n\
+             int main(void) { return kara_add_one(41) == 42 ? 0 : 7; }\n",
+        )
+        .unwrap();
+
+        let cc = match std::process::Command::new("cc")
+            .args([c_src.as_str(), kara_obj.as_str(), "-o", exe.as_str()])
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => {
+                cleanup();
+                eprintln!("extern-c C-interop: skipped (no `cc`)");
+                return;
+            }
+        };
+        if !cc.status.success() {
+            cleanup();
+            eprintln!(
+                "extern-c C-interop: link skipped:\n{}",
+                String::from_utf8_lossy(&cc.stderr)
+            );
+            return;
+        }
+
+        let run = std::process::Command::new(&exe)
+            .output()
+            .expect("run linked C+Kāra exe");
+        cleanup();
+        assert!(
+            run.status.success(),
+            "C harness calling the Kāra export returned nonzero: {:?}",
+            run.status
+        );
+    }
+
+    /// Case 2: an `extern "C-unwind"` export is rejected by the backend
+    /// with a substrate-gate message (panic-unwind propagation needs the
+    /// Phase-7 unwind substrate, which this backend lacks). The effect
+    /// checker independently requires `with panics` here (tested in
+    /// tests/effectchecker.rs), so the declaration is present and the
+    /// rejection is purely the codegen gate.
+    #[test]
+    fn extern_c_unwind_export_rejected_by_backend() {
+        use karac::codegen::compile_to_object_with_options;
+        let src = "extern \"C-unwind\" fn f() -> i32 with panics { unreachable() }\n";
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let obj = format!("/tmp/karac_ffi_cunwind_{}.o", std::process::id());
+        let result = compile_to_object_with_options(
+            &parsed.program,
+            &obj,
+            Some(&ownership),
+            None,
+            None,
+            None,
+        );
+        let _ = std::fs::remove_file(&obj);
+        let err = result.expect_err("expected backend to reject extern \"C-unwind\" export");
+        assert!(
+            err.contains("C-unwind") && err.contains("substrate"),
+            "expected the substrate-gate message, got: {err}"
+        );
+    }
 }

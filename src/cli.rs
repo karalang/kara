@@ -2922,6 +2922,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::effectchecker::EffectErrorKind::ResourceReceiverContradiction => {
                     ("E0412", "error")
                 }
+                crate::effectchecker::EffectErrorKind::ExternCUnwindRequiresPanics => {
+                    ("E0413", "error")
+                }
             };
             let subtype_json = err.subtype_trace.as_ref().map(|t| {
                 let slot = json_string_list(&t.slot_effects);
@@ -9231,6 +9234,7 @@ fn lower_test_case_to_function(tc: &crate::ast::TestCase, mangled_name: String) 
         is_track_caller: false,
         lint_overrides: Vec::new(),
         profile_compat: Vec::new(),
+        abi: None,
     }
 }
 

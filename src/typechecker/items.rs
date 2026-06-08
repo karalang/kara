@@ -256,6 +256,7 @@ impl<'a> super::TypeChecker<'a> {
                         is_track_caller: false,
                         lint_overrides: Vec::new(),
                         profile_compat: Vec::new(),
+                        abi: None,
                     };
                     self.check_function(&synthesized, Some(&self_type), &enclosing);
                 }

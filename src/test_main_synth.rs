@@ -307,5 +307,6 @@ fn synth_main_function(body: Block) -> Function {
         is_track_caller: false,
         lint_overrides: Vec::new(),
         profile_compat: Vec::new(),
+        abi: None,
     }
 }

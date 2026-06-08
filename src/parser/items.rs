@@ -195,16 +195,34 @@ impl super::Parser {
                 }
             }
             Token::Extern => {
-                // Bare module-scope `extern "C" fn name(...);` and `extern "C"
-                // { ... }` are no longer accepted — foreign imports must live
-                // inside an `unsafe extern "ABI" { ... }` block (the trust
-                // boundary the programmer asserts at). Definitions with a
-                // body (`pub extern "C" fn name() { ... }`) are a separate
-                // form and keep their own parsing path (not yet implemented
-                // in v1; tracked at design.md § FFI > "Definitions are not
-                // affected").
-                self.error_bare_extern_at_module_scope();
-                None
+                // Two module-scope `extern` shapes are distinguished by
+                // lookahead past the ABI string:
+                //
+                //   extern "ABI" fn name(...) { body }  → an *export*
+                //     definition (a Kāra body callable from C). This IS
+                //     a definition — the compiler owns the body, so no
+                //     `unsafe` trust boundary is required (the dual of a
+                //     foreign *import*, which does need `unsafe extern`).
+                //     See design.md § Panic Semantics at the FFI Boundary.
+                //
+                //   extern "ABI" { ... }  /  extern "ABI" fn name(...);
+                //     → a bare foreign *import* — no longer accepted at
+                //     module scope; imports must live inside an
+                //     `unsafe extern "ABI" { ... }` block (the trust
+                //     boundary the programmer asserts at).
+                if matches!(self.peek_token_at(1), Token::StringLiteral(_))
+                    && matches!(self.peek_token_at(2), Token::Fn)
+                    && self.extern_fn_has_body()
+                {
+                    self.parse_extern_export_fn(attributes, is_pub, is_private)
+                        .map(Item::Function)
+                } else {
+                    // `extern "ABI" fn name(...);` (semicolon, no body) is a
+                    // bare foreign *import* declaration — still rejected;
+                    // imports must live inside `unsafe extern { ... }`.
+                    self.error_bare_extern_at_module_scope();
+                    None
+                }
             }
             // `host fn name(...) [-> T] with ...;` — target-neutral
             // host-function declaration, phase-10 per `syntax.md § 3.16`.
@@ -352,7 +370,95 @@ impl super::Parser {
             is_track_caller,
             lint_overrides,
             profile_compat,
+            // FFI export ABI is attached by the module-scope `extern
+            // "ABI" fn` parse path after this constructor returns;
+            // every other call (plain fn, `unsafe fn`, methods) leaves
+            // it `None`.
+            abi: None,
         })
+    }
+
+    /// Decide, by lookahead from the current `extern` token, whether an
+    /// `extern "ABI" fn ...` is an *export definition* (`{ body }`, the
+    /// form this parser path handles) or a bare foreign-import
+    /// *declaration* (`;`-terminated, rejected). Scans forward to the
+    /// first top-level `{` (→ definition) or `;` (→ declaration), tracking
+    /// paren/bracket depth so the param list, a `-> Type[..]` return, and
+    /// a `with reads(R)` clause don't trip the scan. Returns `false` on
+    /// EOF (treated as a malformed declaration → the bare-import error).
+    fn extern_fn_has_body(&self) -> bool {
+        let mut i = 0;
+        let mut paren = 0i32;
+        let mut bracket = 0i32;
+        loop {
+            match self.peek_token_at(i) {
+                Token::EOF => return false,
+                Token::LeftParen => paren += 1,
+                Token::RightParen => paren -= 1,
+                Token::LeftBracket => bracket += 1,
+                Token::RightBracket => bracket -= 1,
+                Token::LeftBrace if paren == 0 && bracket == 0 => return true,
+                Token::Semicolon if paren == 0 && bracket == 0 => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+
+    /// Parse an FFI *export* definition — `[pub] extern "ABI" fn name(...)
+    /// { body }`, a Kāra body exposed to C. The caller has already
+    /// confirmed (by lookahead) that the next three tokens are
+    /// `extern STRING fn`. Only `"C"` and `"C-unwind"` are valid export
+    /// ABIs; `"host"` has its own `host fn` form, and any other ABI is a
+    /// focused diagnostic. The parsed [`Function`] carries the ABI in its
+    /// `abi` field so the effect checker and codegen can apply the
+    /// boundary rules (design.md § Panic Semantics at the FFI Boundary).
+    fn parse_extern_export_fn(
+        &mut self,
+        attributes: Vec<Attribute>,
+        is_pub: bool,
+        is_private: bool,
+    ) -> Option<Function> {
+        self.expect(&Token::Extern)?;
+        let abi_span = self.current_span();
+        let abi = match self.peek_token() {
+            Token::StringLiteral(s) => {
+                let s = s.clone();
+                self.advance();
+                s
+            }
+            // Unreachable given the caller's lookahead, but keep a
+            // defensive diagnostic rather than panicking.
+            _ => {
+                self.error("expected ABI string (e.g., \"C\") after `extern`");
+                return None;
+            }
+        };
+        match abi.as_str() {
+            "C" | "C-unwind" => {}
+            "host" => {
+                self.error_at(
+                    "`\"host\"` is not an FFI export ABI — use a `host fn` \
+                     definition for target-neutral host bindings \
+                     (`host fn name(...) with ...;`, see syntax.md § 3.16).",
+                    abi_span,
+                );
+            }
+            other => {
+                self.error_at(
+                    &format!(
+                        "unsupported FFI export ABI \"{other}\" — only \"C\" \
+                         and \"C-unwind\" may be used on a `extern \"ABI\" fn` \
+                         definition. See design.md § Panic Semantics at the \
+                         FFI Boundary."
+                    ),
+                    abi_span,
+                );
+            }
+        }
+        let mut func = self.parse_function(attributes, is_pub, is_private, false)?;
+        func.abi = Some(abi);
+        Some(func)
     }
 
     /// Scan `attributes` for `#[track_caller]`. Sets the flag when

@@ -73,6 +73,32 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         func: &Function,
     ) -> Result<FunctionValue<'ctx>, String> {
+        // FFI export Case 2 (design.md § Panic Semantics at the FFI
+        // Boundary): an `extern "C-unwind" fn` export must let a body
+        // panic propagate across the boundary as a C++-shaped unwind.
+        // That requires the panic-unwind substrate (LLVM invoke /
+        // landingpad / personality + `panic = "unwind"`), which this
+        // backend does not yet have — panics currently lower to a print
+        // + `exit(1)` (abort-style). Rather than silently miscompile a
+        // C-unwind export into an abort (which would defeat the ABI's
+        // whole purpose), reject it with a pointer to the working
+        // alternative. `extern "C"` (Case 1) needs no substrate: a body
+        // panic already aborts the process, which IS the case-1
+        // defined-abort contract.
+        if func.abi.as_deref() == Some("C-unwind") {
+            return Err(format!(
+                "exported `extern \"C-unwind\" fn '{}'` cannot be compiled: propagating an \
+                 unwinding panic across the FFI boundary requires the panic-unwind substrate \
+                 (LLVM invoke/landingpad + `panic = \"unwind\"`), which is not implemented in \
+                 this backend (panics currently lower to abort). Use `extern \"C\"` instead — a \
+                 body panic auto-aborts at the boundary (design.md § Panic Semantics at the FFI \
+                 Boundary, case 1) — or wrap the body in `catch_panic` to return a C-shaped \
+                 error code. Tracked at docs/implementation_checklist/phase-6-runtime.md \
+                 § \"Panic semantics at the FFI boundary\".",
+                func.name
+            ));
+        }
+
         if func.name == "main" {
             let main_type = self.context.i32_type().fn_type(&[], false);
             // Slice c-repl.B.4: under the REPL JIT path the entry
@@ -273,11 +299,20 @@ impl<'ctx> super::Codegen<'ctx> {
         let linkage = if self.main_symbol_override.is_some()
             || self.force_external_linkage
             || func.is_pub
+            || func.abi.is_some()
             || func
                 .attributes
                 .iter()
                 .any(|a| a.is_bare("no_mangle") || a.is_bare("used"))
         {
+            // `func.abi.is_some()` — an FFI export (`extern "C" fn`). The
+            // symbol must have External linkage so a C caller can resolve
+            // it; Kāra fn names are already un-mangled (`add_function`
+            // uses the bare name), so no name change is needed. This is
+            // the codegen half of FFI export Case 1 (the auto-abort half
+            // is free: a body panic already aborts the process). A
+            // non-`pub` `extern "C" fn` is still exported — C-callability
+            // is the point of the marker, independent of Kāra visibility.
             Some(Linkage::External)
         } else {
             Some(Linkage::Internal)

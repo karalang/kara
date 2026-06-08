@@ -380,6 +380,7 @@ impl<'a> super::EffectChecker<'a> {
                                 is_track_caller: false,
                                 lint_overrides: Vec::new(),
                                 profile_compat: Vec::new(),
+                                abi: None,
                             };
                             let by_var = scan(&stub);
                             if !by_var.is_empty() {

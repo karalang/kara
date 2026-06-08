@@ -481,6 +481,16 @@ impl Parser {
         });
     }
 
+    /// Like [`error`], but anchors the diagnostic at an explicit `span`
+    /// rather than the current token — for cases where the offending
+    /// construct was already consumed (e.g. a bad `extern "ABI"` string).
+    fn error_at(&mut self, message: &str, span: Span) {
+        self.errors.push(ParseError {
+            message: message.to_string(),
+            span,
+        });
+    }
+
     /// Emit a non-fatal diagnostic if `name` does not have the expected
     /// `IdentClass`. The `context` string is the declaration kind (e.g.
     /// `"struct"`, `"fn"`, `"const"`). The diagnostic includes a rename
