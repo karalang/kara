@@ -1079,6 +1079,30 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_borrow_return_direct_use() {
+        // Direct use of a borrow-returning call result (Tier-1.5,
+        // B-2026-06-07-5) — consumed in place, not bound to a `let`. Three
+        // accepted positions, each lowered correctly:
+        //   • value position: `println(name_of(s))` loads the pointee.
+        //   • ref-parameter argument: `shout(name_of(s))` forwards the borrow
+        //     pointer into another `ref String` param (no value copy/free).
+        //   • method-on-result: `name_of(s).len()` reads through the borrow.
+        let out = run_program(
+            "fn name_of(u: ref String) -> ref String { u }\n\
+             fn shout(x: ref String) { println(x); }\n\
+             fn main() {\n\
+             \x20   let s = String.from(\"hello\");\n\
+             \x20   println(name_of(s));\n\
+             \x20   shout(name_of(s));\n\
+             \x20   println(name_of(s).len());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "hello\nhello\n5");
+        }
+    }
+
+    #[test]
     fn test_e2e_ambient_resource_clock_now_and_env_set() {
         // Ambient built-in resource methods lower to runtime FFIs
         // (`karac_runtime_env_set` / `karac_runtime_clock_now`) — the

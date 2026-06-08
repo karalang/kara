@@ -74,6 +74,36 @@ impl<'ctx> super::Codegen<'ctx> {
         args: &[CallArg],
         call_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Direct use of a borrow-returning call result in a *value* position
+        // (`println(name_of(s))`, `name_of(s).len()`, an operand). The callee
+        // lowers to the `ptr` borrow ABI; emit it once with the bind-directly
+        // gate bypassed (`compiling_ref_return_let_rhs`), then load the pointee
+        // so the consuming context sees the borrowed value. Sound because the
+        // front-end only accepts direct use where a `ref T` is legal — the
+        // typechecker rejects moving a borrow into an owned parameter
+        // (`expected 'T', found 'ref T'`), so the loaded value is always
+        // read-only at the use site (no ownership transfer, no drop
+        // obligation). A borrow-call in a *ref-parameter argument* position is
+        // intercepted earlier in the arg-passing loop — it needs the ptr
+        // passed through directly (materializing a loaded value there would
+        // queue a `track_vec_var` free and double-free the source), so it
+        // never reaches here. Caller half of B-2026-06-07-5 (Tier-1.5).
+        if !self.compiling_ref_return_let_rhs {
+            if let ExprKind::Identifier(n) = &callee.kind {
+                if let Some(inner_te) = self.fn_ref_return_inner.get(n).cloned() {
+                    let inner = self.llvm_type_for_type_expr(&inner_te);
+                    self.compiling_ref_return_let_rhs = true;
+                    let ptr_res = self.compile_call(callee, args, call_span);
+                    self.compiling_ref_return_let_rhs = false;
+                    let ptr = ptr_res?.into_pointer_value();
+                    return Ok(self
+                        .builder
+                        .build_load(inner, ptr, "ref.direct.use")
+                        .unwrap());
+                }
+            }
+        }
+
         // Cooperative cancel check before each call inside a par-branch.
         // No-op when not inside a par branch. Narrowed against the
         // `callee_effectful` side-table when the callee name is statically
@@ -88,24 +118,6 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => None,
         };
         self.emit_branch_cancel_check("call", callee_key.as_deref());
-
-        // Borrow-returning call used outside a `let <name> = ...` binding.
-        // The result is a `ptr` (the borrow's address); any other context
-        // (print arg, operand, nested call) would mishandle it as a value.
-        // The let arm sets `compiling_ref_return_let_rhs` for the one
-        // sanctioned site; reject everywhere else rather than miscompile.
-        // Direct use is a tracked Tier-1.5 follow-on (B-2026-06-07-5).
-        if !self.compiling_ref_return_let_rhs {
-            if let ExprKind::Identifier(n) = &callee.kind {
-                if self.fn_ref_return_inner.contains_key(n) {
-                    return Err(format!(
-                        "borrow-returning call `{n}(...)` must be bound directly with \
-                         `let x = {n}(...)` before use; direct use of a `-> ref T` result \
-                         is not yet supported (B-2026-06-07-5)"
-                    ));
-                }
-            }
-        }
 
         // `old(expr)` inside an `ensures` postcondition reads the pre-state
         // snapshot captured at function entry (design.md § Contracts rule 4),

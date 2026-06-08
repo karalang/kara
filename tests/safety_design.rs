@@ -707,4 +707,70 @@ mod runtime_confirmation {
             "asan_chained_borrow_returns",
         );
     }
+
+    // Direct use of a borrow-returning call result (Tier-1.5,
+    // B-2026-06-07-5) — the result is consumed in place rather than bound to
+    // a `let`. The codegen gate that required direct binding now loads the
+    // pointee for value positions. The soundness risk is the
+    // *ref-parameter-argument* position: passing `name_of(s)` to another
+    // `ref String` param must forward the borrow pointer, NOT a materialized
+    // value copy (which would queue a `track_vec_var` free and double-free
+    // the source `s`'s buffer). ASAN is the load-bearing check here.
+
+    #[test]
+    fn asan_direct_use_in_print_arg() {
+        assert_accepted_program_is_asan_clean(
+            "fn name_of(u: ref String) -> ref String { u }\n\
+             fn main() {\n\
+                 let s = String.from(\"hello\");\n\
+                 println(name_of(s));\n\
+             }",
+            "asan_direct_use_in_print_arg",
+        );
+    }
+
+    #[test]
+    fn asan_direct_use_in_ref_param_arg() {
+        assert_accepted_program_is_asan_clean(
+            "fn name_of(u: ref String) -> ref String { u }\n\
+             fn shout(x: ref String) { println(x); }\n\
+             fn main() {\n\
+                 let s = String.from(\"hello\");\n\
+                 shout(name_of(s));\n\
+             }",
+            "asan_direct_use_in_ref_param_arg",
+        );
+    }
+
+    #[test]
+    fn asan_direct_use_method_on_result() {
+        assert_accepted_program_is_asan_clean(
+            "fn name_of(u: ref String) -> ref String { u }\n\
+             fn main() {\n\
+                 let s = String.from(\"hello\");\n\
+                 println(name_of(s).len());\n\
+             }",
+            "asan_direct_use_method_on_result",
+        );
+    }
+
+    // Vec borrow forwarded straight into another `ref Vec` parameter — the
+    // strictest double-free path (heap buffer, `cap > 0`). If the
+    // materialization at the ref-arg site freed the forwarded copy, the
+    // source `v`'s drop would double-free. ASAN confirms the borrow pointer
+    // is forwarded, not copied-and-freed.
+    #[test]
+    fn asan_direct_use_vec_into_ref_param() {
+        assert_accepted_program_is_asan_clean(
+            "fn pick(v: ref Vec[i64]) -> ref Vec[i64] { v }\n\
+             fn first(v: ref Vec[i64]) -> i64 { v[0] }\n\
+             fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(10);\n\
+                 v.push(20);\n\
+                 println(first(pick(v)));\n\
+             }",
+            "asan_direct_use_vec_into_ref_param",
+        );
+    }
 }
