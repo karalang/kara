@@ -98,10 +98,9 @@ fn stmt_has_early_exit(stmt: &Stmt) -> bool {
 }
 
 /// True when `block` contains a `return` / `break` / `continue` that would
-/// transfer control out of it. Reused by the `lock`-block typechecker to reject
-/// early exits from a lock body (Slice 1 emits the lock release only on the
-/// straight-line path, so an early exit would leak the lock).
-pub(crate) fn block_has_early_exit(block: &Block) -> bool {
+/// transfer control out of it. Used (via `stmt_has_early_exit`) by
+/// `find_parallel_groups` to keep such statements out of par groups.
+fn block_has_early_exit(block: &Block) -> bool {
     block.stmts.iter().any(stmt_has_early_exit)
         || block
             .final_expr

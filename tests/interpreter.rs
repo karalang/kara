@@ -3445,6 +3445,49 @@ fn test_interpreter_labeled_block_tail_expression() {
 }
 
 #[test]
+fn test_interpreter_lock_break_releases_then_reacquire() {
+    // Parity with codegen `test_e2e_lock_break_releases_then_reacquire`:
+    // a `break` out of a lock body persists the mutations made before it
+    // and releases the lock (the interpreter drops the guard before
+    // propagating the control flow), so the post-loop re-acquire succeeds.
+    // 3 pre-break increments, then the re-read prints 3.
+    assert_eq!(
+        run("fn main() {\n\
+             let m = Mutex.new(0);\n\
+             let mut i = 0;\n\
+             loop {\n\
+                 lock m x {\n\
+                     if i >= 3 { break; }\n\
+                     x = x + 1;\n\
+                 }\n\
+                 i = i + 1;\n\
+             }\n\
+             lock m v { println(v); }\n\
+         }"),
+        "3\n"
+    );
+}
+
+#[test]
+fn test_interpreter_lock_return_releases_then_reacquire() {
+    // Parity with codegen `test_e2e_lock_return_releases_then_reacquire`:
+    // an early `return` out of a lock body releases the lock, so the
+    // caller can re-acquire the same mutex. 7 (returned) + 7 (re-read).
+    assert_eq!(
+        run("fn take(m: mut ref Mutex[i64]) -> i64 {\n\
+             lock m x { return x; }\n\
+             0\n\
+         }\n\
+         fn main() {\n\
+             let mut m = Mutex.new(7);\n\
+             let a = take(mut m);\n\
+             lock m v { println(a + v); }\n\
+         }"),
+        "14\n"
+    );
+}
+
+#[test]
 fn test_interpreter_nested_labeled_break_outer() {
     // Mirror of codegen latent-bug regression gate: `outer: while {
     // inner: while { break outer; } }` exits the outer loop. Pre-slice

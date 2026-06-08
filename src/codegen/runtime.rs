@@ -2714,6 +2714,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     "CleanupAction::UserErrDefer must be dispatched via emit_cleanup_action_at on an error-exit path"
                 );
             }
+            CleanupAction::ReleaseMutex { flag_ptr } => {
+                // Mirror the acquire's atomic discipline (`compile_lock_block`):
+                // a SeqCst, 8-byte-aligned store of 0 clears the TAS flag. This
+                // is the same IR the old inline release emitted; routing it
+                // through the cleanup frame is what makes it fire on early-exit
+                // paths too.
+                let release = self
+                    .builder
+                    .build_store(*flag_ptr, i64_t.const_zero())
+                    .unwrap();
+                release
+                    .set_atomic_ordering(AtomicOrdering::SequentiallyConsistent)
+                    .expect("lock release: set_atomic_ordering");
+                release
+                    .set_alignment(8)
+                    .expect("lock release: set_alignment");
+            }
         }
     }
 

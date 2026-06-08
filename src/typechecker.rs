@@ -413,13 +413,6 @@ pub enum TypeErrorKind {
     /// `lock` blocks on `Mutex[T]` fields. See design.md § Part 5b > `ref self`
     /// receivers only. (Phase 6 `par struct` slice A.)
     ParMutSelfReceiver,
-    /// A `lock` block body contains a `return` / `break` / `continue` that would
-    /// transfer control out of the block. Slice 1 of `Mutex` / `lock` emits the
-    /// lock release only on the straight-line fall-through path, so an early exit
-    /// would leak the held lock (the next acquirer deadlocks). Release-on-all-
-    /// paths is a tracked follow-on; until then a lock body must be straight-line.
-    /// See design.md § Part 5: Shared Types > `lock` blocks. (Phase 6 `Mutex`.)
-    LockEarlyExit,
     /// The target of a `lock IDENT [IDENT] { … }` is not a `Mutex[T]` binding.
     /// `lock` requires a `Mutex[T]` value (design.md § Standalone `Mutex[T]`
     /// values). (Phase 6 `Mutex`.)
@@ -699,7 +692,6 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ScopeLocalEscape
         | TypeErrorKind::ParFieldNotConcurrent
         | TypeErrorKind::ParMutSelfReceiver
-        | TypeErrorKind::LockEarlyExit
         | TypeErrorKind::LockTargetNotMutex
         | TypeErrorKind::InvalidRefinementPredicate
         | TypeErrorKind::CrossTaskUnsafeCapture => None,

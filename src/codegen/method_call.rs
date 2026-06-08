@@ -3042,8 +3042,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 },
             );
         }
+        // Seed a cleanup frame whose bottom action is the lock release, so the
+        // release rides the normal scope-cleanup machinery and fires on EVERY
+        // exit path — not just the straight-line fall-through. The body's own
+        // scope cleanups (Vec frees, RC-decs, drops, user `defer`s) stack ABOVE
+        // the release on this frame, so a drain runs them first and releases
+        // last (reverse-construction RAII: drop body resources under the lock,
+        // then unlock). `flag_ptr` was GEP'd in the lock's entry block, so it
+        // dominates every body BB and the re-emitted store at a break/continue/
+        // return site is well-formed. This is what retires the `LockEarlyExit`
+        // (`E0259`) typechecker rejection — early exits from a lock body are now
+        // legal and release the lock on the way out.
+        self.scope_cleanup_actions
+            .push(vec![super::state::CleanupAction::ReleaseMutex { flag_ptr }]);
+
         let body_val = self.compile_block(body)?;
-        // Restore the shadowed binding (mutex name) / drop the alias.
+        // Restore the shadowed binding (mutex name) / drop the alias. This is
+        // compile-time `self.variables` bookkeeping and is correct on the
+        // early-exit path too (the IR has already branched away; only the
+        // symbol table is restored for the code that follows the lock).
         if let Some(ref name) = bind_name {
             match saved {
                 Some(s) => {
@@ -3055,20 +3072,26 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // Release — atomically clear the flag. Only reached on the straight-line
-        // path (early exits are rejected by the typechecker), so the body block
-        // is guaranteed to fall through here with no terminator.
-        let release = self
+        // Drain the release frame. On straight-line fall-through the body block
+        // has no terminator, so emit the body cleanups + release here and branch
+        // to `after_bb`. On an early exit the body block is already terminated
+        // (break/continue ran `emit_scope_cleanup_from`, return ran
+        // `emit_scope_cleanup` — both walked this frame and emitted the release
+        // before branching), so just pop the now-drained frame. `after_bb` is
+        // then dead-but-filled by trailing code / the function epilogue, exactly
+        // as `compile_loop`'s exit block is for a no-break loop.
+        let body_terminated = self
             .builder
-            .build_store(flag_ptr, i64_t.const_zero())
-            .unwrap();
-        release
-            .set_atomic_ordering(AtomicOrdering::SequentiallyConsistent)
-            .map_err(|e| format!("codegen: lock release set_atomic_ordering failed: {:?}", e))?;
-        release
-            .set_alignment(8)
-            .map_err(|e| format!("codegen: lock release set_alignment failed: {:?}", e))?;
-        self.builder.build_unconditional_branch(after_bb).unwrap();
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_some();
+        if !body_terminated {
+            self.drain_top_frame_with_emit();
+            self.builder.build_unconditional_branch(after_bb).unwrap();
+        } else {
+            self.scope_cleanup_actions.pop();
+        }
         self.builder.position_at_end(after_bb);
 
         Ok(body_val.unwrap_or_else(|| i64_t.const_int(0, false).into()))

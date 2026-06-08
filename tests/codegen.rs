@@ -35191,6 +35191,59 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_lock_break_releases_then_reacquire() {
+        // Release-on-all-paths: a `break` out of a lock body must still release
+        // the lock (codegen seeds `CleanupAction::ReleaseMutex` on the body's
+        // cleanup frame, drained by `emit_scope_cleanup_from` on the break
+        // path). If the break leaked the lock, the post-loop re-acquire would
+        // spin forever (deadlock → test hang). Reaching the println proves the
+        // release fired; the value 3 proves the three pre-break increments ran.
+        let out = run_program(
+            r#"
+fn main() {
+    let m = Mutex.new(0);
+    let mut i = 0;
+    loop {
+        lock m x {
+            if i >= 3 { break; }
+            x = x + 1;
+        }
+        i = i + 1;
+    }
+    lock m v { println(v); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3");
+        }
+    }
+
+    #[test]
+    fn test_e2e_lock_return_releases_then_reacquire() {
+        // Release-on-all-paths, `return` arm: an early `return` out of a lock
+        // body releases the lock via `emit_scope_cleanup` (whole-stack drain
+        // walks the release frame). The caller then re-acquires the same mutex
+        // — a leaked lock would deadlock. 7 (returned) + 7 (re-read) = 14.
+        let out = run_program(
+            r#"
+fn take(m: mut ref Mutex[i64]) -> i64 {
+    lock m x { return x; }
+    0
+}
+fn main() {
+    let mut m = Mutex.new(7);
+    let a = take(mut m);
+    lock m v { println(a + v); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "14");
+        }
+    }
+
+    #[test]
     fn test_e2e_concurrent_atomic_counter_no_lost_updates() {
         // The headline lock-free-counter shape: two sibling `par {}` branches
         // each fetch_add 50_000 times on the SAME par struct's Atomic field.

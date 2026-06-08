@@ -2600,20 +2600,13 @@ impl<'a> super::TypeChecker<'a> {
                         None
                     }
                 };
-                // The lock release is emitted only on the straight-line
-                // fall-through, so an early `return` / `break` / `continue` out
-                // of the body would leak the held lock.
-                if crate::concurrency::block_has_early_exit(body) {
-                    self.type_error(
-                        "a `lock` block body cannot contain `return`, `break`, or `continue` \
-                         (the lock release is emitted only on normal block exit; \
-                         release-on-all-paths is a tracked follow-on). Restructure so the \
-                         lock body is straight-line."
-                            .to_string(),
-                        expr.span.clone(),
-                        TypeErrorKind::LockEarlyExit,
-                    );
-                }
+                // Early exits (`return` / `break` / `continue`) out of a lock
+                // body are legal: codegen seeds the lock release as a
+                // `CleanupAction::ReleaseMutex` on the body's scope-cleanup
+                // frame, so every exit path (fall-through, break/continue,
+                // return) releases the lock on the way out. (The old
+                // `LockEarlyExit` / `E0259` rejection was retired with that
+                // codegen change.)
                 // Bind the inner-value name to `T` so `name = v` / `name.f = v` /
                 // `name += 1` typecheck against `T`. The binding lives only for
                 // the body's scope.

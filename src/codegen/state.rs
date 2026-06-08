@@ -630,6 +630,24 @@ pub(crate) enum CleanupAction<'ctx> {
         binding: Option<String>,
         body: Block,
     },
+    /// Release a `lock`-block's TAS spinlock: atomically store `0` into
+    /// the mutex's lock-flag word. Seeded at the BOTTOM of the lock
+    /// body's cleanup frame (pushed before the body compiles), so it
+    /// drains LAST — after the body's own bindings — preserving reverse-
+    /// construction RAII order (drop body resources under the lock, then
+    /// release). Because it rides the normal cleanup-frame machinery, the
+    /// release fires on EVERY exit path: straight-line fall-through
+    /// (`drain_top_frame_with_emit`), `break` / `continue`
+    /// (`emit_scope_cleanup_from` at the loop boundary), and `return`
+    /// (`emit_scope_cleanup`). `flag_ptr` is GEP'd in the lock's entry
+    /// block (before the acquire spin), so it dominates every body basic
+    /// block — re-emitting the store at an early-exit site is well-formed
+    /// without the reload-by-name guard the binding-keyed actions use.
+    ReleaseMutex {
+        /// Pointer to the mutex's lock-flag word (`{ i64 lockflag, T value }`
+        /// field 0).
+        flag_ptr: PointerValue<'ctx>,
+    },
 }
 
 /// One let-binding hoisted out of an auto-par group via the slice-A return-

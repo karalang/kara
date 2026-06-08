@@ -23043,19 +23043,31 @@ fn lock_block_no_alias_shadows_mutex_name() {
 }
 
 #[test]
-fn lock_block_early_return_rejected() {
-    let errors = typecheck_errors(
+fn lock_block_early_exits_accepted() {
+    // Early exits from a lock body are legal now: codegen seeds the release
+    // as a `CleanupAction::ReleaseMutex` on the body's cleanup frame, so it
+    // fires on the return / break / continue path too (the `LockEarlyExit` /
+    // `E0259` rejection was retired). `return` from a fn-level lock:
+    typecheck_ok(
         "fn f() -> i64 {
              let m = Mutex.new(0);
              lock m x { return x; }
              0
          }",
     );
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.kind == TypeErrorKind::LockEarlyExit),
-        "early `return` inside a lock body must be rejected; got: {errors:?}"
+    // `break` and `continue` from a lock body inside a loop:
+    typecheck_ok(
+        "fn g() -> i64 {
+             let m = Mutex.new(0);
+             loop {
+                 lock m x {
+                     if x > 10 { break; }
+                     if x < 0 { continue; }
+                     x = x + 1;
+                 }
+             }
+             0
+         }",
     );
 }
 
