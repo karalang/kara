@@ -35044,7 +35044,7 @@ fn main() {
     // ── Mutex + lock blocks (slice 1: spinlock, standalone) ──────
 
     #[test]
-    fn test_ir_lock_block_emits_spinlock_atomicrmw_and_release() {
+    fn test_ir_lock_block_emits_futex_cmpxchg_and_conditional_wake() {
         let ir = ir_for(
             r#"
 fn main() {
@@ -35053,14 +35053,25 @@ fn main() {
 }
 "#,
         );
-        // Acquire spins via atomicrmw xchg; release is an atomic store.
+        // Acquire fast path: cmpxchg(0 -> 1) — uncontended locking stays inline.
+        assert!(
+            ir.contains("cmpxchg"),
+            "lock acquire must emit a `cmpxchg` fast path; got IR:\n{ir}"
+        );
+        // Contended path calls the runtime to block instead of spinning.
+        assert!(
+            ir.contains("@karac_runtime_mutex_lock"),
+            "lock contended path must call `karac_runtime_mutex_lock`; got IR:\n{ir}"
+        );
+        // Release: atomic xchg(-> 0) reading the prior state, then a *conditional*
+        // wake call (only when the prior state was 2 = contended).
         assert!(
             ir.contains("atomicrmw xchg"),
-            "lock acquire must emit `atomicrmw xchg`; got IR:\n{ir}"
+            "lock release must emit `atomicrmw xchg` to read the prior state; got IR:\n{ir}"
         );
         assert!(
-            ir.contains("store atomic"),
-            "lock release must emit an atomic store; got IR:\n{ir}"
+            ir.contains("@karac_runtime_mutex_unlock_wake"),
+            "lock release must conditionally call `karac_runtime_mutex_unlock_wake`; got IR:\n{ir}"
         );
     }
 

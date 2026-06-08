@@ -3701,6 +3701,24 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // Blocking-mutex slow path (`runtime/src/mutex.rs`). Both take the
+        // `*mut i64` lock-flag word (field 0 of the `{ i64 lockflag, T value }`
+        // Mutex aggregate). `_mutex_lock` blocks until it acquires (called only
+        // when `compile_lock_block`'s inline `cmpxchg(0->1)` fast path failed);
+        // `_mutex_unlock_wake` wakes a parked waiter (called by the
+        // `ReleaseMutex` cleanup action only when its `xchg(->0)` saw state 2).
+        let mutex_op_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_mutex_lock",
+            mutex_op_ty,
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_runtime_mutex_unlock_wake",
+            mutex_op_ty,
+            Some(Linkage::External),
+        );
+
         // `karac_runtime_ws_send_text(fd: i32, msg_ptr: *const u8,
         // msg_len: i64) -> i64` — backs the encode + write step
         // inside `WebSocket.send_text`'s codegen lowering. Caller

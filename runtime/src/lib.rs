@@ -40,6 +40,7 @@ mod emutls;
 pub mod event_loop;
 mod file;
 mod map;
+mod mutex;
 #[cfg(feature = "net")]
 pub mod scheduler;
 // Sequential spawn/TaskGroup scheduler — the WASM-default concurrency
@@ -136,6 +137,13 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         bounded_channel::karac_runtime_bounded_channel_send,
         bounded_channel::karac_runtime_bounded_channel_recv,
         bounded_channel::karac_runtime_bounded_channel_drop,
+    );
+    // Blocking-mutex slow path (`runtime/src/mutex.rs`). Backs the contended
+    // branch of a `lock` block's futex acquire + the wake on its release;
+    // the uncontended fast path is inline codegen and never calls these.
+    keep!(
+        mutex::karac_runtime_mutex_lock,
+        mutex::karac_runtime_mutex_unlock_wake,
     );
     // String + comparison runtime (`runtime/src/clone.rs` + this file).
     keep!(

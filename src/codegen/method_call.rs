@@ -2990,33 +2990,53 @@ impl<'ctx> super::Codegen<'ctx> {
         let value_ty = mutex_struct.get_field_type_at_index(1).unwrap();
 
         let i64_t = self.context.i64_type();
-        let one = i64_t.const_int(1, false);
         let current_fn = self.current_fn.unwrap();
-        let spin_bb = self.context.append_basic_block(current_fn, "lock.spin");
+        let contended_bb = self
+            .context
+            .append_basic_block(current_fn, "lock.contended");
         let held_bb = self.context.append_basic_block(current_fn, "lock.held");
         let after_bb = self.context.append_basic_block(current_fn, "lock.after");
 
-        // Acquire — TAS spin: swap the flag to 1; if the old value was 0 we now
-        // hold the lock, otherwise someone else does (the swap is a harmless
-        // 1→1 no-op) so spin and retry.
-        self.builder.build_unconditional_branch(spin_bb).unwrap();
-        self.builder.position_at_end(spin_bb);
-        let prev = self
+        // Acquire — futex 3-state fast path (0 = free, 1 = locked-uncontended,
+        // 2 = locked-contended). `cmpxchg(0 -> 1)`: on success we hold the lock
+        // with NO runtime call — the uncontended path stays fully inline, at
+        // roughly the old spinlock's cost, so this is a pure no-regression win
+        // for the common case. On failure (someone else holds it) branch to the
+        // contended path, which blocks in the runtime parking lot (marking the
+        // flag `2`) instead of burning CPU spinning. Release lives in
+        // `CleanupAction::ReleaseMutex` (`runtime.rs`): `xchg(-> 0)` + wake iff
+        // the prior state was `2`.
+        let cas = self
             .builder
-            .build_atomicrmw(
-                AtomicRMWBinOp::Xchg,
+            .build_cmpxchg(
                 flag_ptr,
-                one,
+                i64_t.const_zero(),
+                i64_t.const_int(1, false),
+                AtomicOrdering::SequentiallyConsistent,
                 AtomicOrdering::SequentiallyConsistent,
             )
-            .map_err(|e| format!("codegen: lock acquire atomicrmw failed: {:?}", e))?;
+            .map_err(|e| format!("codegen: lock acquire cmpxchg failed: {:?}", e))?;
         let acquired = self
             .builder
-            .build_int_compare(IntPredicate::EQ, prev, i64_t.const_zero(), "lock.acquired")
-            .unwrap();
+            .build_extract_value(cas, 1, "lock.acquired")
+            .unwrap()
+            .into_int_value();
         self.builder
-            .build_conditional_branch(acquired, held_bb, spin_bb)
+            .build_conditional_branch(acquired, held_bb, contended_bb)
             .unwrap();
+
+        // Contended — block in the runtime until we hold the lock. The fast
+        // cmpxchg already failed; `karac_runtime_mutex_lock` re-tries under a
+        // bucketed condvar (Drepper's protocol) and returns holding the lock.
+        self.builder.position_at_end(contended_bb);
+        let lock_fn = self
+            .module
+            .get_function("karac_runtime_mutex_lock")
+            .expect("karac_runtime_mutex_lock declared in Codegen::new");
+        self.builder
+            .build_call(lock_fn, &[flag_ptr.into()], "lock.wait")
+            .unwrap();
+        self.builder.build_unconditional_branch(held_bb).unwrap();
 
         // Critical section.
         self.builder.position_at_end(held_bb);

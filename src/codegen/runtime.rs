@@ -2715,21 +2715,48 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
             }
             CleanupAction::ReleaseMutex { flag_ptr } => {
-                // Mirror the acquire's atomic discipline (`compile_lock_block`):
-                // a SeqCst, 8-byte-aligned store of 0 clears the TAS flag. This
-                // is the same IR the old inline release emitted; routing it
-                // through the cleanup frame is what makes it fire on early-exit
-                // paths too.
-                let release = self
+                // Futex 3-state release (mirrors `compile_lock_block`'s acquire):
+                // atomically swap the flag to 0 and read the prior state.
+                //   1 = locked-uncontended → no parked waiter → inline-only, no
+                //       runtime call (the fast path stays call-free).
+                //   2 = locked-contended   → a waiter is parked → wake it via
+                //       `karac_runtime_mutex_unlock_wake`.
+                // Routing this through the cleanup frame is what makes the
+                // release (and the conditional wake) fire on early-exit paths
+                // too — break/continue/return all drain this action.
+                let prev = self
                     .builder
-                    .build_store(*flag_ptr, i64_t.const_zero())
+                    .build_atomicrmw(
+                        AtomicRMWBinOp::Xchg,
+                        *flag_ptr,
+                        i64_t.const_zero(),
+                        AtomicOrdering::SequentiallyConsistent,
+                    )
+                    .expect("lock release: build_atomicrmw");
+                let was_contended = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        prev,
+                        i64_t.const_int(2, false),
+                        "lock.was_contended",
+                    )
                     .unwrap();
-                release
-                    .set_atomic_ordering(AtomicOrdering::SequentiallyConsistent)
-                    .expect("lock release: set_atomic_ordering");
-                release
-                    .set_alignment(8)
-                    .expect("lock release: set_alignment");
+                let wake_bb = self.context.append_basic_block(fn_val, "lock.wake");
+                let done_bb = self.context.append_basic_block(fn_val, "lock.release.done");
+                self.builder
+                    .build_conditional_branch(was_contended, wake_bb, done_bb)
+                    .unwrap();
+                self.builder.position_at_end(wake_bb);
+                let wake_fn = self
+                    .module
+                    .get_function("karac_runtime_mutex_unlock_wake")
+                    .expect("karac_runtime_mutex_unlock_wake declared in Codegen::new");
+                self.builder
+                    .build_call(wake_fn, &[(*flag_ptr).into()], "lock.wake.call")
+                    .unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+                self.builder.position_at_end(done_bb);
             }
         }
     }
