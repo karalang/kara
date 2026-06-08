@@ -23,7 +23,7 @@ use crate::ast::*;
 
 use inkwell::module::Linkage;
 use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -48,6 +48,61 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `dead_code` is allowed because subtasks 1+2 of the Display canonical
     /// bullet ship the machinery + primitive Display fns ahead of subtasks
     /// 3-7 which add the callers. Remove the allow when subtask 7 lands.
+    /// Append a static string literal to the String accumulator `acc`. Used by
+    /// the buffer-form Display fns. `self.current_fn` must be the Display fn
+    /// being emitted so any buffer-grow blocks land in it (see
+    /// `emit_string_append_raw`).
+    pub(super) fn disp_append_lit(&mut self, acc: PointerValue<'ctx>, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        let g = self.builder.build_global_string_ptr(s, "dlit").unwrap();
+        let len = self.context.i64_type().const_int(s.len() as u64, false);
+        self.emit_string_append_raw(acc, g.as_pointer_value(), len);
+    }
+
+    /// Render a scalar via `snprintf` into a 64-byte stack buffer and append it
+    /// to `acc`. `self.current_fn` must be the Display fn being emitted.
+    pub(super) fn disp_append_snprintf(
+        &mut self,
+        acc: PointerValue<'ctx>,
+        fmt: &str,
+        arg: BasicMetadataValueEnum<'ctx>,
+    ) {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+        let buf =
+            self.create_entry_alloca(fn_val, "dbuf", self.context.i8_type().array_type(64).into());
+        let buf_ptr = self
+            .builder
+            .build_pointer_cast(buf, ptr_ty, "dbufp")
+            .unwrap();
+        let size = i64_t.const_int(64, false);
+        let fmt_g = self.builder.build_global_string_ptr(fmt, "dfmt").unwrap();
+        let written = self
+            .builder
+            .build_call(
+                self.snprintf_fn,
+                &[
+                    buf_ptr.into(),
+                    size.into(),
+                    fmt_g.as_pointer_value().into(),
+                    arg,
+                ],
+                "dwr",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let len = self
+            .builder
+            .build_int_z_extend(written, i64_t, "dwr64")
+            .unwrap();
+        self.emit_string_append_raw(acc, buf_ptr, len);
+    }
+
     #[allow(dead_code)]
     pub(super) fn emit_display_fn_for_type(
         &mut self,
@@ -64,13 +119,16 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let i32_t = self.context.i32_type();
         let i64_t = self.context.i64_type();
         let f64_t = self.context.f64_type();
 
         let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
 
-        let display_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
@@ -79,59 +137,37 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
         let val_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
 
         match type_name {
             "i8" | "i16" | "i32" | "i64" | "isize" => {
-                // Sign-extend to i64, printf "%lld".
                 let v = self
                     .builder
                     .build_load(ty, val_ptr, "v")
                     .unwrap()
                     .into_int_value();
                 let v64 = self.builder.build_int_s_extend(v, i64_t, "v64").unwrap();
-                let fmt = self.builder.build_global_string_ptr("%lld", "fi").unwrap();
-                self.builder
-                    .build_call(
-                        self.printf_fn,
-                        &[fmt.as_pointer_value().into(), v64.into()],
-                        "p",
-                    )
-                    .unwrap();
+                self.disp_append_snprintf(acc, "%lld", v64.into());
             }
             "u8" | "u16" | "u32" | "u64" | "usize" => {
-                // Zero-extend to i64, printf "%llu".
                 let v = self
                     .builder
                     .build_load(ty, val_ptr, "v")
                     .unwrap()
                     .into_int_value();
                 let v64 = self.builder.build_int_z_extend(v, i64_t, "v64").unwrap();
-                let fmt = self.builder.build_global_string_ptr("%llu", "fu").unwrap();
-                self.builder
-                    .build_call(
-                        self.printf_fn,
-                        &[fmt.as_pointer_value().into(), v64.into()],
-                        "p",
-                    )
-                    .unwrap();
+                self.disp_append_snprintf(acc, "%llu", v64.into());
             }
             "f32" => {
-                // Widen to f64, printf "%g".
                 let v = self
                     .builder
                     .build_load(ty, val_ptr, "v")
                     .unwrap()
                     .into_float_value();
                 let v64 = self.builder.build_float_ext(v, f64_t, "v64").unwrap();
-                let fmt = self.builder.build_global_string_ptr("%g", "ff").unwrap();
-                self.builder
-                    .build_call(
-                        self.printf_fn,
-                        &[fmt.as_pointer_value().into(), v64.into()],
-                        "p",
-                    )
-                    .unwrap();
+                self.disp_append_snprintf(acc, "%g", v64.into());
             }
             "f64" => {
                 let v = self
@@ -139,17 +175,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(ty, val_ptr, "v")
                     .unwrap()
                     .into_float_value();
-                let fmt = self.builder.build_global_string_ptr("%g", "ff").unwrap();
-                self.builder
-                    .build_call(
-                        self.printf_fn,
-                        &[fmt.as_pointer_value().into(), v.into()],
-                        "p",
-                    )
-                    .unwrap();
+                self.disp_append_snprintf(acc, "%g", v.into());
             }
             "bool" => {
-                // Select between "true" / "false" static strings.
+                // Select "true"/"false" pointer AND length, then append.
                 let v = self
                     .builder
                     .build_load(ty, val_ptr, "v")
@@ -165,37 +194,30 @@ impl<'ctx> super::Codegen<'ctx> {
                         false_s.as_pointer_value(),
                         "bsel",
                     )
-                    .unwrap();
-                let fmt = self.builder.build_global_string_ptr("%s", "fs").unwrap();
-                self.builder
-                    .build_call(
-                        self.printf_fn,
-                        &[fmt.as_pointer_value().into(), sel.into()],
-                        "p",
-                    )
-                    .unwrap();
+                    .unwrap()
+                    .into_pointer_value();
+                let four = i64_t.const_int(4, false);
+                let five = i64_t.const_int(5, false);
+                let len = self
+                    .builder
+                    .build_select(v, four, five, "blen")
+                    .unwrap()
+                    .into_int_value();
+                self.emit_string_append_raw(acc, sel, len);
             }
             "char" => {
-                // Char is a Unicode scalar (i32). For ASCII (the common case)
-                // %c prints correctly. Non-ASCII codepoints get truncated to
-                // i32 by printf — UTF-8 encoding refinement is a follow-up.
+                // i32 codepoint → UTF-8 glyph bytes (better than the old
+                // printf "%c" ASCII-only path).
                 let v = self
                     .builder
                     .build_load(ty, val_ptr, "v")
                     .unwrap()
                     .into_int_value();
-                let fmt = self.builder.build_global_string_ptr("%c", "fc").unwrap();
-                self.builder
-                    .build_call(
-                        self.printf_fn,
-                        &[fmt.as_pointer_value().into(), v.into()],
-                        "p",
-                    )
-                    .unwrap();
+                let (p, l) = self.emit_codepoint_to_utf8(v);
+                self.emit_string_append_raw(acc, p, l);
             }
             "String" | "str" => {
-                // 24-byte struct {data, len, cap}. Use %.*s to bound by len —
-                // String values are NOT NUL-terminated.
+                // 24-byte struct {data, len, cap} — append the `len` bytes.
                 let str_ty = self.vec_struct_type();
                 let data_pp = self
                     .builder
@@ -215,18 +237,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, len_p, "s.len")
                     .unwrap()
                     .into_int_value();
-                let len32 = self
-                    .builder
-                    .build_int_truncate(len, i32_t, "len32")
-                    .unwrap();
-                let fmt = self.builder.build_global_string_ptr("%.*s", "fs").unwrap();
-                self.builder
-                    .build_call(
-                        self.printf_fn,
-                        &[fmt.as_pointer_value().into(), len32.into(), data.into()],
-                        "p",
-                    )
-                    .unwrap();
+                self.emit_string_append_raw(acc, data, len);
             }
             other if other.starts_with("Vec_") => {
                 // Vec[T]'s element TypeExpr can't be unambiguously recovered
@@ -285,6 +296,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.build_return(None).unwrap();
 
+        self.current_fn = saved_fn;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -308,6 +320,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         display_fn: FunctionValue<'ctx>,
         val_ptr: PointerValue<'ctx>,
+        acc: PointerValue<'ctx>,
         elem_te: &TypeExpr,
     ) {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -322,11 +335,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // dispatcher saves/restores so the caller's position is preserved.
         let elem_disp = self.emit_display_fn_for_type_expr(elem_te);
 
-        // Print "[".
-        let lb = self.builder.build_global_string_ptr("[", "vd.lb").unwrap();
-        self.builder
-            .build_call(self.printf_fn, &[lb.as_pointer_value().into()], "p")
-            .unwrap();
+        self.disp_append_lit(acc, "[");
 
         // Load data (i8*) and len (i64) from the Vec struct.
         let data_pp = self
@@ -392,18 +401,12 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(is_first, elem_bb, sep_bb)
             .unwrap();
 
-        // sep: print ", ", then fall to elem.
+        // sep: append ", ", then fall to elem.
         self.builder.position_at_end(sep_bb);
-        let sep = self
-            .builder
-            .build_global_string_ptr(", ", "vd.sep")
-            .unwrap();
-        self.builder
-            .build_call(self.printf_fn, &[sep.as_pointer_value().into()], "p")
-            .unwrap();
+        self.disp_append_lit(acc, ", ");
         self.builder.build_unconditional_branch(elem_bb).unwrap();
 
-        // elem: GEP to data + i * elem_size, call element Display fn.
+        // elem: GEP to data + i * elem_size, call element Display fn (acc).
         self.builder.position_at_end(elem_bb);
         let offset = self.builder.build_int_mul(i_val, elem_size, "off").unwrap();
         let elem_ptr = unsafe {
@@ -412,21 +415,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap()
         };
         self.builder
-            .build_call(elem_disp, &[elem_ptr.into()], "ed")
+            .build_call(elem_disp, &[elem_ptr.into(), acc.into()], "ed")
             .unwrap();
         let i_next = self
             .builder
             .build_int_add(i_val, i64_t.const_int(1, false), "vec.i1")
             .unwrap();
-        i_phi.add_incoming(&[(&i_next, elem_bb)]);
+        // `i_next` may be produced in a continuation block if an append split
+        // the elem block — read the current block for the phi incoming.
+        let elem_end_bb = self.builder.get_insert_block().unwrap();
+        i_phi.add_incoming(&[(&i_next, elem_end_bb)]);
         self.builder.build_unconditional_branch(hdr_bb).unwrap();
 
-        // exit: print "]".
+        // exit: append "]".
         self.builder.position_at_end(exit_bb);
-        let rb = self.builder.build_global_string_ptr("]", "vd.rb").unwrap();
-        self.builder
-            .build_call(self.printf_fn, &[rb.as_pointer_value().into()], "p")
-            .unwrap();
+        self.disp_append_lit(acc, "]");
     }
 
     /// Emit (or reuse) a Display function for `Map[K, V]`. Typed entry point —
@@ -467,8 +470,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
         let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
 
-        let display_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
@@ -476,12 +483,15 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
         let slot_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
 
-        self.emit_map_display_body(display_fn, slot_ptr, key_te, val_te);
+        self.emit_map_display_body(display_fn, slot_ptr, acc, key_te, val_te);
 
         self.builder.build_return(None).unwrap();
 
+        self.current_fn = saved_fn;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -505,6 +515,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         display_fn: FunctionValue<'ctx>,
         slot_ptr: PointerValue<'ctx>,
+        acc: PointerValue<'ctx>,
         key_te: &TypeExpr,
         val_te: &TypeExpr,
     ) {
@@ -513,11 +524,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let key_ty = self.llvm_type_for_type_expr(key_te);
         let val_ty = self.llvm_type_for_type_expr(val_te);
 
-        // Print "{".
-        let lb = self.builder.build_global_string_ptr("{", "md.lb").unwrap();
-        self.builder
-            .build_call(self.printf_fn, &[lb.as_pointer_value().into()], "p")
-            .unwrap();
+        self.disp_append_lit(acc, "{");
 
         // Load the opaque map handle from slot_ptr.
         let map_handle = self
@@ -593,39 +600,27 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(f, pair_bb, sep_bb)
             .unwrap();
 
-        // sep: print ", " then fall through to pair.
+        // sep: append ", " then fall through to pair.
         self.builder.position_at_end(sep_bb);
-        let sep = self
-            .builder
-            .build_global_string_ptr(", ", "md.sep")
-            .unwrap();
-        self.builder
-            .build_call(self.printf_fn, &[sep.as_pointer_value().into()], "p")
-            .unwrap();
+        self.disp_append_lit(acc, ", ");
         self.builder.build_unconditional_branch(pair_bb).unwrap();
 
-        // pair: clear is_first (idempotent on second+ iters), print key, ": ",
+        // pair: clear is_first (idempotent on second+ iters), append key, ": ",
         // value, then loop back to hdr.
         self.builder.position_at_end(pair_bb);
         self.builder
             .build_store(first_slot, bool_t.const_int(0, false))
             .unwrap();
         self.builder
-            .build_call(key_disp, &[out_key.into()], "md.kd")
+            .build_call(key_disp, &[out_key.into(), acc.into()], "md.kd")
             .unwrap();
-        let colon = self
-            .builder
-            .build_global_string_ptr(": ", "md.col")
-            .unwrap();
+        self.disp_append_lit(acc, ": ");
         self.builder
-            .build_call(self.printf_fn, &[colon.as_pointer_value().into()], "p")
-            .unwrap();
-        self.builder
-            .build_call(val_disp, &[out_val.into()], "md.vd")
+            .build_call(val_disp, &[out_val.into(), acc.into()], "md.vd")
             .unwrap();
         self.builder.build_unconditional_branch(hdr_bb).unwrap();
 
-        // exit: free iterator, print "}".
+        // exit: free iterator, append "}".
         self.builder.position_at_end(exit_bb);
         let iter_final = self
             .builder
@@ -635,10 +630,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(self.karac_map_iter_free_fn, &[iter_final.into()], "")
             .unwrap();
-        let rb = self.builder.build_global_string_ptr("}", "md.rb").unwrap();
-        self.builder
-            .build_call(self.printf_fn, &[rb.as_pointer_value().into()], "p")
-            .unwrap();
+        self.disp_append_lit(acc, "}");
     }
 
     /// Emit (or reuse) a Display function for `Set[T]`. Typed entry point —
@@ -666,8 +658,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
         let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
 
-        let display_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
@@ -675,12 +671,15 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
         let slot_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
 
-        self.emit_set_display_body(display_fn, slot_ptr, elem_te);
+        self.emit_set_display_body(display_fn, slot_ptr, acc, elem_te);
 
         self.builder.build_return(None).unwrap();
 
+        self.current_fn = saved_fn;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -697,6 +696,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         display_fn: FunctionValue<'ctx>,
         slot_ptr: PointerValue<'ctx>,
+        acc: PointerValue<'ctx>,
         elem_te: &TypeExpr,
     ) {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -704,15 +704,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let i8_t = self.context.i8_type();
         let elem_ty = self.llvm_type_for_type_expr(elem_te);
 
-        // Print "Set{" — literal prefix matches the interpreter format at
+        // "Set{" — literal prefix matches the interpreter format at
         // `src/interpreter.rs:292`.
-        let lb = self
-            .builder
-            .build_global_string_ptr("Set{", "sd.lb")
-            .unwrap();
-        self.builder
-            .build_call(self.printf_fn, &[lb.as_pointer_value().into()], "p")
-            .unwrap();
+        self.disp_append_lit(acc, "Set{");
 
         // Load the opaque set/map handle from slot_ptr.
         let set_handle = self
@@ -782,13 +776,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(sep_bb);
-        let sep = self
-            .builder
-            .build_global_string_ptr(", ", "sd.sep")
-            .unwrap();
-        self.builder
-            .build_call(self.printf_fn, &[sep.as_pointer_value().into()], "p")
-            .unwrap();
+        self.disp_append_lit(acc, ", ");
         self.builder.build_unconditional_branch(elem_bb).unwrap();
 
         self.builder.position_at_end(elem_bb);
@@ -796,7 +784,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_store(first_slot, bool_t.const_int(0, false))
             .unwrap();
         self.builder
-            .build_call(elem_disp, &[out_elem.into()], "sd.ed")
+            .build_call(elem_disp, &[out_elem.into(), acc.into()], "sd.ed")
             .unwrap();
         self.builder.build_unconditional_branch(hdr_bb).unwrap();
 
@@ -809,10 +797,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(self.karac_map_iter_free_fn, &[iter_final.into()], "")
             .unwrap();
-        let rb = self.builder.build_global_string_ptr("}", "sd.rb").unwrap();
-        self.builder
-            .build_call(self.printf_fn, &[rb.as_pointer_value().into()], "p")
-            .unwrap();
+        self.disp_append_lit(acc, "}");
     }
 
     /// Deeply mangled type name suitable for Display cache keys. Unlike
@@ -939,8 +924,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
         let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
 
-        let display_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
@@ -948,12 +937,15 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
         let val_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
 
-        self.emit_vec_display_body(display_fn, val_ptr, elem_te);
+        self.emit_vec_display_body(display_fn, val_ptr, acc, elem_te);
 
         self.builder.build_return(None).unwrap();
 
+        self.current_fn = saved_fn;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -1017,7 +1009,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
         let saved_bb = self.builder.get_insert_block();
-        let display_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let saved_fn = self.current_fn;
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
@@ -1025,41 +1021,30 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
         let val_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
 
-        // Print "(".
-        let lp = self.builder.build_global_string_ptr("(", "td.lp").unwrap();
-        self.builder
-            .build_call(self.printf_fn, &[lp.as_pointer_value().into()], "p")
-            .unwrap();
+        self.disp_append_lit(acc, "(");
 
         for (i, fd) in field_disps.iter().enumerate() {
             if i > 0 {
-                let sep = self
-                    .builder
-                    .build_global_string_ptr(", ", "td.sep")
-                    .unwrap();
-                self.builder
-                    .build_call(self.printf_fn, &[sep.as_pointer_value().into()], "p")
-                    .unwrap();
+                self.disp_append_lit(acc, ", ");
             }
             let field_ptr = self
                 .builder
                 .build_struct_gep(tuple_ty, val_ptr, i as u32, &format!("t.f{i}.p"))
                 .unwrap();
             self.builder
-                .build_call(*fd, &[field_ptr.into()], &format!("t.f{i}.d"))
+                .build_call(*fd, &[field_ptr.into(), acc.into()], &format!("t.f{i}.d"))
                 .unwrap();
         }
 
-        // Print ")".
-        let rp = self.builder.build_global_string_ptr(")", "td.rp").unwrap();
-        self.builder
-            .build_call(self.printf_fn, &[rp.as_pointer_value().into()], "p")
-            .unwrap();
+        self.disp_append_lit(acc, ")");
 
         self.builder.build_return(None).unwrap();
 
+        self.current_fn = saved_fn;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -1334,5 +1319,82 @@ impl<'ctx> super::Codegen<'ctx> {
             });
         }
         acc.ok_or_else(|| format!("Display: enum '{enum_name}' has no variants"))
+    }
+
+    /// Render `value_ptr` via the append-form display fn `disp` into a fresh
+    /// String accumulator; return `(acc_alloca, loaded String value)`. The
+    /// caller owns the heap buffer — free it inline (println) or `track_vec_var`
+    /// the alloca (f-string) / let the binding own it (to_string).
+    pub(super) fn render_via_display_fn(
+        &mut self,
+        disp: FunctionValue<'ctx>,
+        value_ptr: PointerValue<'ctx>,
+    ) -> (PointerValue<'ctx>, BasicValueEnum<'ctx>) {
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+        let acc = self.create_entry_alloca(fn_val, "cd.acc", vec_ty.into());
+        // Init {null, 0, 0} at the use site (the alloca lives in the entry
+        // block; re-init each time this point executes — loop-safe).
+        let dpp = self
+            .builder
+            .build_struct_gep(vec_ty, acc, 0, "cd.dpp")
+            .unwrap();
+        let lp = self
+            .builder
+            .build_struct_gep(vec_ty, acc, 1, "cd.lp")
+            .unwrap();
+        let cp = self
+            .builder
+            .build_struct_gep(vec_ty, acc, 2, "cd.cp")
+            .unwrap();
+        self.builder.build_store(dpp, ptr_ty.const_null()).unwrap();
+        self.builder.build_store(lp, i64_t.const_zero()).unwrap();
+        self.builder.build_store(cp, i64_t.const_zero()).unwrap();
+        self.builder
+            .build_call(disp, &[value_ptr.into(), acc.into()], "cd.call")
+            .unwrap();
+        let val = self.builder.build_load(vec_ty, acc, "cd.val").unwrap();
+        (acc, val)
+    }
+
+    /// If `expr` is an identifier bound to a `Vec`/`Map`/`Set`, render it via
+    /// its append-form Display fn and return `(acc_alloca, String value)`.
+    /// Detection mirrors `compile_print`'s collection arms. `None` for any
+    /// other expression (caller falls back). Used by collection f-string
+    /// interpolation and `to_string`.
+    pub(super) fn try_compile_collection_display(
+        &mut self,
+        expr: &Expr,
+    ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
+        let ExprKind::Identifier(name) = &expr.kind else {
+            return Ok(None);
+        };
+        let name = name.clone();
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
+            return Ok(None);
+        };
+        // Vec[T] — `vec_elem_types` + `var_elem_type_exprs` (String sets only
+        // the former). Checked before Map since Map lacks `vec_elem_types`.
+        if self.vec_elem_types.contains_key(&name) && self.var_elem_type_exprs.contains_key(&name) {
+            let elem_te = self.var_elem_type_exprs[&name].clone();
+            let disp = self.emit_vec_display_fn_te(&elem_te);
+            return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+        }
+        if self.map_key_type_exprs.contains_key(&name)
+            && self.var_elem_type_exprs.contains_key(&name)
+        {
+            let k = self.map_key_type_exprs[&name].clone();
+            let v = self.var_elem_type_exprs[&name].clone();
+            let disp = self.emit_map_display_fn(&k, &v);
+            return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+        }
+        if self.set_elem_type_exprs.contains_key(&name) {
+            let elem_te = self.set_elem_type_exprs[&name].clone();
+            let disp = self.emit_set_display_fn(&elem_te);
+            return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+        }
+        Ok(None)
     }
 }

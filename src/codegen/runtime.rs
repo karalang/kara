@@ -3178,6 +3178,28 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(ename) = self.expr_user_enum_name(e) {
             return self.compile_unit_enum_display(e, &ename);
         }
+        // Collection (Vec/Map/Set) interpolation part → render via its Display
+        // fn. Must precede the compile_fstr_part_to_cstr fallback: a Vec value
+        // shares String's `{ptr,len,cap}` layout, so the fallback would
+        // mis-read it as a String (the silent-empty `f"{vec}"` defect). The
+        // rendered buffer is scope-tracked so it survives the outer f-string's
+        // memcpy and is freed once at scope exit.
+        if let Some((acc, sval)) = self.try_compile_collection_display(e)? {
+            let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
+            self.track_vec_var(acc, Some(u8_ty));
+            let s = sval.into_struct_value();
+            let data = self
+                .builder
+                .build_extract_value(s, 0, "fstr.c.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(s, 1, "fstr.c.len")
+                .unwrap()
+                .into_int_value();
+            return Ok((data, len));
+        }
         let is_char = self.expr_is_char(e);
         let val = self.compile_expr(e)?;
         if is_char {

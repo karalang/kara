@@ -321,6 +321,46 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
+    /// Print a String value (`{data,len,cap}`) with `%.*s` + the newline `nl`,
+    /// then free its heap buffer. Used by the collection-Display print arms,
+    /// which render into a throwaway accumulator and must release it inline
+    /// (no scope-tracking — avoids per-call buffer accumulation in loops).
+    fn emit_print_and_free_string(&mut self, sval: BasicValueEnum<'ctx>, nl: &str) {
+        let sv = sval.into_struct_value();
+        let data = self
+            .builder
+            .build_extract_value(sv, 0, "ps.data")
+            .unwrap()
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_extract_value(sv, 1, "ps.len")
+            .unwrap()
+            .into_int_value();
+        let len32 = self
+            .builder
+            .build_int_truncate(len, self.context.i32_type(), "ps.len32")
+            .unwrap();
+        let fmt = self
+            .builder
+            .build_global_string_ptr(&format!("%.*s{nl}"), "ps.fmt")
+            .unwrap();
+        self.builder
+            .build_call(
+                self.printf_fn,
+                &[
+                    BasicMetadataValueEnum::from(fmt.as_pointer_value()),
+                    BasicMetadataValueEnum::from(len32),
+                    BasicMetadataValueEnum::from(data),
+                ],
+                "p",
+            )
+            .unwrap();
+        self.builder
+            .build_call(self.free_fn, &[data.into()], "")
+            .unwrap();
+    }
+
     pub(super) fn compile_print(
         &mut self,
         name: &str,
@@ -366,15 +406,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .copied()
                     .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
                 let display_fn = self.emit_vec_display_fn_te(&elem_te);
-                self.builder
-                    .build_call(display_fn, &[slot.ptr.into()], "vd")
-                    .unwrap();
-                if !nl.is_empty() {
-                    let nl_str = self.builder.build_global_string_ptr("\n", "vd.nl").unwrap();
-                    self.builder
-                        .build_call(self.printf_fn, &[nl_str.as_pointer_value().into()], "p")
-                        .unwrap();
-                }
+                let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
+                self.emit_print_and_free_string(sval, nl);
                 return Ok(zero.into());
             }
             // Map[K, V]: side-tables hold both K and V `TypeExpr`s.
@@ -389,15 +422,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .copied()
                     .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
                 let display_fn = self.emit_map_display_fn(&k_te, &v_te);
-                self.builder
-                    .build_call(display_fn, &[slot.ptr.into()], "md")
-                    .unwrap();
-                if !nl.is_empty() {
-                    let nl_str = self.builder.build_global_string_ptr("\n", "md.nl").unwrap();
-                    self.builder
-                        .build_call(self.printf_fn, &[nl_str.as_pointer_value().into()], "p")
-                        .unwrap();
-                }
+                let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
+                self.emit_print_and_free_string(sval, nl);
                 return Ok(zero.into());
             }
             // Set[T]: side-table holds the element `TypeExpr`.
@@ -409,15 +435,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .copied()
                     .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
                 let display_fn = self.emit_set_display_fn(&elem_te);
-                self.builder
-                    .build_call(display_fn, &[slot.ptr.into()], "sd")
-                    .unwrap();
-                if !nl.is_empty() {
-                    let nl_str = self.builder.build_global_string_ptr("\n", "sd.nl").unwrap();
-                    self.builder
-                        .build_call(self.printf_fn, &[nl_str.as_pointer_value().into()], "p")
-                        .unwrap();
-                }
+                let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
+                self.emit_print_and_free_string(sval, nl);
                 return Ok(zero.into());
             }
         }

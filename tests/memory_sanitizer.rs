@@ -414,6 +414,32 @@ fn main() {
     }
 
     #[test]
+    fn asan_collection_display_buffer() {
+        // The unified buffer-render path mallocs/grows an accumulator for
+        // collection println (freed inline), f-string interpolation (scope-
+        // tracked), and `.to_string()` (binding-owned). Exercise all three so
+        // ASAN catches over-read / leak / double-free across the paths.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    println(v);
+    println(f"v={v}");
+    let s = v.to_string();
+    println(s);
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("k", 9);
+    println(m.to_string());
+}
+"#,
+            &["[1, 2]", "v=[1, 2]", "[1, 2]", "{k: 9}"],
+            "collection_display_buffer",
+        );
+    }
+
+    #[test]
     fn asan_println_function_return_string_via_let_binding() {
         // Function returns owned heap String; bound to a local;
         // printed. This is the let-binding form the kata workaround

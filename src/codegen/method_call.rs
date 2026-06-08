@@ -946,6 +946,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 let (ptr, len) = self.compile_unit_enum_display(object, &ename)?;
                 return Ok(self.build_owned_string_from_parts(ptr, len));
             }
+            // Collection (Vec/Map/Set) → owning String via its Display fn. The
+            // returned value owns the rendered buffer (the binding frees it);
+            // the throwaway acc alloca is not separately tracked.
+            if let Some((_acc, sval)) = self.try_compile_collection_display(object)? {
+                return Ok(sval);
+            }
         }
 
         // Type-receiver associated calls: `T.method(...)` where `T` is a

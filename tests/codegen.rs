@@ -17433,6 +17433,38 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_display_collection_fstring_and_to_string() {
+        // Buffer-render path (unified with println): f-string interpolation of
+        // a collection used to render EMPTY; `.to_string()` used to build-fail.
+        // Both now work for Vec/Map/Set, including nesting.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    println(f"v={v}");
+    println(v.to_string());
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("k", 9);
+    println(f"m={m}");
+    println(m.to_string());
+    let mut s: Set[i64] = Set.new();
+    s.insert(7);
+    println(s.to_string());
+    let nested: Vec[Vec[i64]] = [[1], [2, 3]];
+    println(f"n={nested}");
+}
+"#,
+        ) {
+            assert_eq!(
+                out,
+                "v=[1, 2]\n[1, 2]\nm={k: 9}\n{k: 9}\nSet{7}\nn=[[1], [2, 3]]\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_display_vec_empty() {
         let out = run_program(
             r#"

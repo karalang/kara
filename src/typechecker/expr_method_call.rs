@@ -1582,6 +1582,22 @@ impl<'a> super::TypeChecker<'a> {
             return self.infer_str_method(method, args, span);
         }
 
+        // `to_string()` on a Display-able collection (`Vec`/`VecDeque`/`Map`/
+        // `Set`) → `String`. Must precede the per-collection method dispatch
+        // below: those (`infer_map_method` / `infer_set_method`) return
+        // unconditionally, so an unrecognized `to_string` would surface as
+        // `NoMethodFound` rather than falling through to the Display-method
+        // intercept. Codegen renders via `try_compile_collection_display`.
+        if method == "to_string" && args.is_empty() {
+            if let Type::Named { name, .. } = &obj_ty_for_named {
+                if matches!(name.as_str(), "Vec" | "VecDeque" | "Map" | "Set")
+                    && self.type_supports_display(&obj_ty_for_named)
+                {
+                    return Type::Str;
+                }
+            }
+        }
+
         // `Map[K, V]` method dispatch. K and V thread through return types.
         if let Type::Named {
             name,
@@ -1927,6 +1943,13 @@ impl<'a> super::TypeChecker<'a> {
             let is_display_named = match &receiver_for_lookup {
                 Type::Str => true,
                 Type::Named { name, .. } if name == "String" => true,
+                // Collections render in codegen (`try_compile_collection_display`)
+                // when their element/key/value types are `Display`.
+                Type::Named { name, .. }
+                    if matches!(name.as_str(), "Vec" | "VecDeque" | "Map" | "Set") =>
+                {
+                    self.type_supports_display(&receiver_for_lookup)
+                }
                 Type::Named { name, .. } => {
                     let struct_display = self
                         .env
