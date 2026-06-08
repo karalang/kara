@@ -87,6 +87,10 @@ Semantics in `../design.md § Numerical Types` and `§ Numeric Semantics > Liter
 
 **Fallback plan:** if Phase 11 schedule slips, `regex` and `http` are the most at-risk items (real network + state-machine work); pushable to v1.1. Tensor / Column / DataFrame / stats / script mode are cheap enough to keep as v1 non-negotiables. *(Note predates the v64 lift — `regex`/`http` are now Phase 8 floor and `std.regex` has shipped, so the at-risk half is historical; the "cheap enough to keep" commitment on the numerical spine stands. Script mode is Phase 8 floor.)*
 
+### General-purpose collections
+
+- [ ] **`TreeMap[K: Ord, V]` / `TreeSet[T: Ord]` — ordered (sorted-by-key) map and set.** Long-tail companions to the floor `Map`/`Set` (hash-based, unordered). Balanced-tree (or B-tree) backing with ordered iteration, range queries (`range(lo..hi)`), and `first`/`last`/`floor`/`ceil` lookups; `K: Ord` is the structural requirement (the property that makes the type sortable). Stdlib surface mirrors `Map`/`Set` where applicable (`new`/`insert`/`get`/`remove`/`contains`/`len`/`iter`) plus the ordered-only methods. **No tracker entry existed before 2026-06-08** — surfaced as the unbuilt dependency of `phase-8-stdlib-floor.md`'s type-alias-bounds **slice 3** (redundant-bound lint), whose motivating example `type SortedKeyMap[T: Ord] = TreeMap[T, i32]` cannot be written or tested until this type exists. Slice 3 is blocked on this entry; this entry is the prerequisite. Post-v1 long-tail (the floor `Map`/`Set` cover v1 needs); build when a workload needs ordered iteration / range queries, at which point slice 3 unblocks.
+
 ### Security (`std.secret`)
 
 - [ ] **`std.secret` module — `Secret[T]` wrapper.** Spec is in `design.md § Secret Type (Secret[T])`. Stdlib + compiler work split:
