@@ -1108,16 +1108,12 @@ fn main() {
         // `-> ref Parser` returns the struct BY VALUE with its `ref` field
         // holding a forwarded borrow of the caller's `s`. This also exercises
         // the construction path that was previously never codegenned (the
-        // `asan_borrowed_struct_construction` vacuum). Reads of the OWNED
-        // field (`position`) go through the returned value.
-        //
-        // NB: reading the BORROWED field in a value position
-        // (`println(p.source)`) — and a method on it (`p.source.len()`) — is a
-        // separate codegen follow-on: a `ref`-typed field access must
-        // deref-on-use through the stored borrow pointer, which the current
-        // field-access path doesn't do (it surfaces the raw pointer). The
-        // interpreter already handles it (see the interp parity test). Tracked
-        // under B-2026-06-07-5; not pinned here.
+        // `asan_borrowed_struct_construction` vacuum). Reads go through the
+        // returned value for the OWNED field (`position`) AND the BORROWED
+        // field (`source`): a `ref`-typed field access deref's-on-use through
+        // the stored borrow pointer in a value position (`println(p.source)`),
+        // and read-only `.len()`/`.is_empty()` on it route through the value
+        // receiver. (Non-`len` methods on a borrowed field remain a follow-on.)
         let out = run_program(
             "struct Parser { source: ref String, position: i64 }\n\
              fn make_parser(s: ref String) -> ref Parser {\n\
@@ -1127,10 +1123,12 @@ fn main() {
              \x20   let s = String.from(\"input data\");\n\
              \x20   let p = make_parser(s);\n\
              \x20   println(p.position);\n\
+             \x20   println(p.source);\n\
+             \x20   println(p.source.len());\n\
              }\n",
         );
         if let Some(out) = out {
-            assert_eq!(out.trim(), "7");
+            assert_eq!(out.trim(), "7\ninput data\n10");
         }
     }
 

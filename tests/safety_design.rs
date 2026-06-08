@@ -707,6 +707,78 @@ mod runtime_confirmation {
         );
     }
 
+    // Reading a BORROWED field of a returned/constructed borrowed struct
+    // (B-2026-06-07-5 follow-on). A `ref`-typed field access deref's-on-use in
+    // value positions; the double-free hazard is the let-bind and ref-param
+    // argument positions — a deref'd value copy there would queue a free of
+    // the borrowed buffer (which the source `s` also frees). These must NOT
+    // double-free; the borrow is forwarded, not copied-and-freed.
+    #[test]
+    fn asan_borrowed_field_value_read() {
+        assert_accepted_program_is_asan_clean(
+            "struct Parser { source: ref String, position: i64 }\n\
+             fn make_parser(s: ref String) -> ref Parser {\n\
+                 Parser { source: s, position: 0 }\n\
+             }\n\
+             fn main() {\n\
+                 let s = String.from(\"input data\");\n\
+                 let p = make_parser(s);\n\
+                 println(p.source);\n\
+             }",
+            "asan_borrowed_field_value_read",
+        );
+    }
+
+    #[test]
+    fn asan_borrowed_field_let_bound() {
+        assert_accepted_program_is_asan_clean(
+            "struct Parser { source: ref String, position: i64 }\n\
+             fn make_parser(s: ref String) -> ref Parser {\n\
+                 Parser { source: s, position: 0 }\n\
+             }\n\
+             fn main() {\n\
+                 let s = String.from(\"input data\");\n\
+                 let p = make_parser(s);\n\
+                 let x = p.source;\n\
+                 println(x);\n\
+             }",
+            "asan_borrowed_field_let_bound",
+        );
+    }
+
+    #[test]
+    fn asan_borrowed_field_into_ref_param() {
+        assert_accepted_program_is_asan_clean(
+            "struct Parser { source: ref String, position: i64 }\n\
+             fn make_parser(s: ref String) -> ref Parser {\n\
+                 Parser { source: s, position: 0 }\n\
+             }\n\
+             fn shout(x: ref String) { println(x); }\n\
+             fn main() {\n\
+                 let s = String.from(\"input data\");\n\
+                 let p = make_parser(s);\n\
+                 shout(p.source);\n\
+             }",
+            "asan_borrowed_field_into_ref_param",
+        );
+    }
+
+    #[test]
+    fn asan_borrowed_field_len_method() {
+        assert_accepted_program_is_asan_clean(
+            "struct Parser { source: ref String, position: i64 }\n\
+             fn make_parser(s: ref String) -> ref Parser {\n\
+                 Parser { source: s, position: 0 }\n\
+             }\n\
+             fn main() {\n\
+                 let s = String.from(\"input data\");\n\
+                 let p = make_parser(s);\n\
+                 println(p.source.len());\n\
+             }",
+            "asan_borrowed_field_len_method",
+        );
+    }
+
     #[test]
     fn asan_closure_borrow_capture_no_escape() {
         assert_accepted_program_is_asan_clean(

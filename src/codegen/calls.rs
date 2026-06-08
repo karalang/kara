@@ -421,6 +421,18 @@ impl<'ctx> super::Codegen<'ctx> {
         args: &[CallArg],
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // A borrowed (`ref T`) field method receiver (`p.source.len()` where
+        // `source: ref String`): the field slot holds a borrow POINTER, not
+        // an inline value, so the synth-field-pointer path below (built for
+        // inline struct / Vec / Atomic fields) doesn't apply. Fall through to
+        // the value-receiver path — `compile_field_access` deref's the borrow
+        // to the `T` value, which the read-only `len`/`is_empty` extract
+        // services. Non-`len`/`is_empty` methods on a borrowed field are a
+        // follow-on (same scope as non-`len` methods on borrow-locals).
+        // B-2026-06-07-5.
+        if self.field_access_ref_inner(inner, field).is_some() {
+            return Ok(None);
+        }
         let Some((field_ptr, field_ll_ty, field_te)) =
             self.lower_field_access_ptr(inner, field, &format!("method '{method}'"))?
         else {

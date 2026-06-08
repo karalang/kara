@@ -596,7 +596,27 @@ impl<'ctx> super::Codegen<'ctx> {
             // Look up field index from struct type name in object's identifier
             let field_idx = self.field_index_for(object, field);
             if let Some(idx) = field_idx {
-                return Ok(self.builder.build_extract_value(sv, idx, field).unwrap());
+                let extracted = self.builder.build_extract_value(sv, idx, field).unwrap();
+                // Borrowed (`ref`) field: the extract yields the stored borrow
+                // POINTER. In this generic value-read position (`println(p.f)`,
+                // an operand, a by-value method receiver), deref-on-use so the
+                // consumer sees the borrowed `T` — mirroring how a `ref` param
+                // identifier deref's when read. The pointer-forwarding
+                // positions (`let x = p.f` ref-local bind, a `ref`-param
+                // argument) intercept earlier via `compile_ref_field_access_ptr`
+                // and never reach here. design.md Feature 4 Part 3.
+                if let Some(inner_te) = self.field_access_ref_inner(object, field) {
+                    let inner_ty = self.llvm_type_for_type_expr(&inner_te);
+                    return Ok(self
+                        .builder
+                        .build_load(
+                            inner_ty,
+                            extracted.into_pointer_value(),
+                            &format!("{}.ref.deref", field),
+                        )
+                        .unwrap());
+                }
+                return Ok(extracted);
             }
         }
         Ok(self.context.i64_type().const_int(0, false).into())
@@ -1454,6 +1474,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap());
         }
         Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// If `object.field` reads a borrowed (`ref T` / `mut ref T`) struct
+    /// field, return the inner `T` type expression; otherwise `None`. The
+    /// field slot lowers to `ptr` and holds the borrow pointer
+    /// (`compile_struct_init`); callers use this to decide deref-on-use
+    /// (value position) vs. forward-the-pointer (let-bind as ref-local,
+    /// ref-param argument). design.md Feature 4 Part 3; B-2026-06-07-5.
+    pub(super) fn field_access_ref_inner(&self, object: &Expr, field: &str) -> Option<TypeExpr> {
+        let struct_name = self.type_name_of_expr(object)?;
+        let names = self.struct_field_names.get(struct_name.as_str())?;
+        let idx = names.iter().position(|n| n == field)?;
+        let te = self
+            .struct_field_type_exprs
+            .get(struct_name.as_str())?
+            .get(idx)?;
+        match &te.kind {
+            TypeKind::Ref(inner) | TypeKind::MutRef(inner) => Some((**inner).clone()),
+            _ => None,
+        }
     }
 
     pub(super) fn field_index_for(&self, object: &Expr, field: &str) -> Option<u32> {
