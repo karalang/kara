@@ -1083,9 +1083,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(found.into())
             }
             "clear" => {
-                self.builder
-                    .build_call(self.karac_map_clear_fn, &[map_handle.into()], "")
-                    .unwrap();
+                // Free heap key/value buffers before resetting: plain
+                // `karac_map_clear` only zeroes the status bytes, leaking any
+                // `{ptr,len,cap}` String/Vec keys or values (the eventual
+                // map-free frees only occupied slots, and a clear leaves
+                // none). Shared-typed halves get a refcount-dec walk first,
+                // mirroring the scope-exit `FreeMapHandle` cleanup.
+                let key_is_vec = self.llvm_ty_is_vec_struct(key_ty);
+                let val_is_vec = self.llvm_ty_is_vec_struct(val_ty);
+                if let Some(heap_ty) = self.map_val_shared_heap_type_for(var_name) {
+                    self.emit_map_shared_half_rc_dec_walk(map_handle, heap_ty, true);
+                }
+                if let Some(heap_ty) = self.map_key_shared_heap_type_for(var_name) {
+                    self.emit_map_shared_half_rc_dec_walk(map_handle, heap_ty, false);
+                }
+                if key_is_vec || val_is_vec {
+                    let i32_t = self.context.i32_type();
+                    let key_flag = i32_t.const_int(if key_is_vec { 1 } else { 0 }, false);
+                    let val_flag = i32_t.const_int(if val_is_vec { 1 } else { 0 }, false);
+                    self.builder
+                        .build_call(
+                            self.karac_map_clear_with_drop_vec_fn,
+                            &[map_handle.into(), key_flag.into(), val_flag.into()],
+                            "",
+                        )
+                        .unwrap();
+                } else {
+                    self.builder
+                        .build_call(self.karac_map_clear_fn, &[map_handle.into()], "")
+                        .unwrap();
+                }
                 // Map.clear returns Unit — codegen represents Unit as i64 0.
                 Ok(i64_t.const_int(0, false).into())
             }

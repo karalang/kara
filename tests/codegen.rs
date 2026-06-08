@@ -212,13 +212,56 @@ mod codegen_tests {
                  println(m.len());\n\
              }",
         );
+        // Every runtime extern is *declared* in the module, so a bare
+        // `contains` would pass vacuously. Count occurrences: the declaration
+        // is one, an actual call adds at least one more.
         assert!(
-            ir.contains("karac_string_slice_borrow"),
-            "String-slice map key should build a borrowed view; IR:\n{ir}"
+            ir.matches("@karac_string_slice_borrow").count() >= 2,
+            "String-slice map key should *call* the borrowed-view helper; IR:\n{ir}"
         );
         assert!(
-            ir.contains("karac_map_insert_borrowed_str_old"),
-            "String-slice insert key should route to the borrowed-key insert; IR:\n{ir}"
+            ir.matches("@karac_map_insert_borrowed_str_old").count() >= 2,
+            "String-slice insert key should *call* the borrowed-key insert; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn ir_map_string_key_clear_uses_drop_variant() {
+        // `Map[String, _].clear()` must free heap key buffers via the drop
+        // variant, not leak them through plain `karac_map_clear`. (Count > 1
+        // = declared *and* called; a bare `contains` matches the declaration
+        // alone.)
+        let ir = ir_for(
+            "fn main() {\n\
+                 let mut m: Map[String, i64] = Map.new();\n\
+                 m.insert(\"a\", 1);\n\
+                 m.clear();\n\
+                 println(m.len());\n\
+             }",
+        );
+        assert!(
+            ir.matches("@karac_map_clear_with_drop_vec").count() >= 2,
+            "String-keyed clear should *call* the drop variant; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn ir_map_scalar_clear_uses_plain_variant() {
+        // A scalar-keyed/valued map owns no heap per entry, so clear must stay
+        // on the cheap plain `karac_map_clear` — the drop variant appears only
+        // as its (uncalled) declaration, so its occurrence count is exactly 1.
+        let ir = ir_for(
+            "fn main() {\n\
+                 let mut m: Map[i64, i64] = Map.new();\n\
+                 m.insert(1, 2);\n\
+                 m.clear();\n\
+                 println(m.len());\n\
+             }",
+        );
+        assert_eq!(
+            ir.matches("@karac_map_clear_with_drop_vec").count(),
+            1,
+            "scalar-keyed clear should use plain karac_map_clear (drop variant declared but not called); IR:\n{ir}"
         );
     }
 

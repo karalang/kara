@@ -590,6 +590,58 @@ pub unsafe extern "C" fn karac_map_clear(map: *mut c_void) {
     m.tombstones = 0;
 }
 
+/// `karac_map_clear` variant that releases per-entry `Vec`/`String` heap
+/// buffers before resetting the table — the in-place sibling of
+/// `karac_map_free_with_drop_vec` (same `cap > 0` key/value `{ptr,len,cap}`
+/// free, but the bucket storage is *kept* and reset to empty rather than
+/// deallocated). Selected by codegen's `Map.clear` arm whenever the key or
+/// value type follows the heap-owning `{ptr,len,cap}` layout.
+///
+/// Without this, `Map[String, V].clear()` (and `Map[K, Vec[T]]`, etc.) leaked
+/// every live entry's heap buffer: plain `karac_map_clear` only zeroes the
+/// status bytes, so the buffers become unreachable (the eventual map-free
+/// frees only *occupied* slots, and after a clear there are none). Shared-half
+/// refcounts are decremented codegen-side before this call, mirroring the
+/// free path.
+#[no_mangle]
+pub unsafe extern "C" fn karac_map_clear_with_drop_vec(
+    map: *mut c_void,
+    drop_key: i32,
+    drop_val: i32,
+) {
+    if map.is_null() {
+        return;
+    }
+    let m = &mut *(map as *mut KaracMap);
+    if drop_key != 0 || drop_val != 0 {
+        let entry_stride = m.key_size + m.val_size;
+        for slot in 0..m.capacity {
+            if *m.status.add(slot) != BUCKET_OCCUPIED {
+                continue;
+            }
+            if drop_key != 0 {
+                let key_base = m.kv.add(slot * entry_stride);
+                let data_ptr = ptr::read_unaligned(key_base as *const *mut u8);
+                let cap = ptr::read_unaligned(key_base.add(16) as *const i64);
+                if cap > 0 && !data_ptr.is_null() {
+                    free(data_ptr as *mut c_void);
+                }
+            }
+            if drop_val != 0 {
+                let val_base = m.kv.add(slot * entry_stride + m.key_size);
+                let data_ptr = ptr::read_unaligned(val_base as *const *mut u8);
+                let cap = ptr::read_unaligned(val_base.add(16) as *const i64);
+                if cap > 0 && !data_ptr.is_null() {
+                    free(data_ptr as *mut c_void);
+                }
+            }
+        }
+    }
+    ptr::write_bytes(m.status, BUCKET_EMPTY, m.capacity);
+    m.len = 0;
+    m.tombstones = 0;
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_iter_new(map: *const c_void) -> *mut c_void {
     let iter = Box::new(KaracMapIter {

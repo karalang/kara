@@ -5489,4 +5489,33 @@ fn main() {
             "borrowed_string_slice_map_keys_deep_copy",
         );
     }
+
+    // ── `Map[String, _].clear()` frees heap key buffers ───────────────
+    //
+    // Plain `karac_map_clear` only zeroed the bucket status bytes, leaking
+    // every live String key's heap buffer (the map-free frees only occupied
+    // slots, and a clear leaves none). With many insert→clear rounds this
+    // leaks unboundedly. The fix routes heap-keyed/valued maps through
+    // `karac_map_clear_with_drop_vec`. LeakSanitizer fails this test pre-fix.
+    #[test]
+    fn asan_map_string_key_clear_frees_heap_keys() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let base = "abcdefghij";
+    let mut m: Map[String, i64] = Map.new();
+    let mut round = 0i64;
+    while round < 50 {
+        let mut v = 0i64;
+        while v < 5 { m.insert(base[v*2 .. v*2+2], v); v = v + 1; }
+        m.clear();
+        round = round + 1;
+    }
+    println(m.len());
+}
+"#,
+            &["0"],
+            "map_string_key_clear_frees_heap_keys",
+        );
+    }
 }

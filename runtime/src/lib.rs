@@ -113,6 +113,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         map::karac_map_contains,
         map::karac_map_len,
         map::karac_map_clear,
+        map::karac_map_clear_with_drop_vec,
         map::karac_map_iter_new,
         map::karac_map_iter_next,
         map::karac_map_iter_free,
