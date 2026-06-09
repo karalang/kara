@@ -1200,6 +1200,161 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(self.build_vec_value(slots_ptr, n, n))
     }
 
+    /// Lower `collect_all(|| a, || b, …)` (phase-6) — the heterogeneous
+    /// fixed-arity (2..=8) gather. Each `arg` is an inline closure
+    /// `Fn() -> Result[Ai, Ei]`; runs them all in parallel and returns the
+    /// tuple `(Result[A1,E1], …, Result[An,En])`, position-bound.
+    ///
+    /// Static-N sibling of `compile_collect_all_vec`: it reuses the very
+    /// same `__collect_all_vec_branch` trampoline + `karac_par_run`
+    /// gather (the `Result` LLVM layout is type-erased, so a tuple of
+    /// heterogeneous `Result`s is just a struct of uniform `Result`
+    /// structs), but the N branches are known at compile time, so the
+    /// slot / ctx / branch arrays are stack allocas (no malloc/free, no
+    /// input Vec to free), and the result is assembled into a tuple
+    /// aggregate rather than a Vec. The closures' env allocas live in this
+    /// frame and stay valid across the synchronous `karac_par_run` join.
+    pub(super) fn compile_collect_all(
+        &mut self,
+        args: &[CallArg],
+        call_span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let outer_fn = self
+            .current_fn
+            .ok_or_else(|| "collect_all outside a function".to_string())?;
+        let n = args.len();
+
+        let result_ty = self
+            .enum_layouts
+            .get("Result")
+            .ok_or_else(|| "collect_all: Result enum layout missing".to_string())?
+            .llvm_type;
+        let ctx_ty = self
+            .context
+            .struct_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let trampoline = self.emit_collect_all_vec_trampoline(result_ty, ctx_ty)?;
+
+        // Fixed-size stack arrays (N known at compile time).
+        let slots_arr_ty = result_ty.array_type(n as u32);
+        let ctxs_arr_ty = ctx_ty.array_type(n as u32);
+        let branches_arr_ty = self.karac_branch_ty.array_type(n as u32);
+        let slots = self.create_entry_alloca(outer_fn, "ca.slots", slots_arr_ty.into());
+        let ctxs = self.create_entry_alloca(outer_fn, "ca.ctxs", ctxs_arr_ty.into());
+        let branches = self.create_entry_alloca(outer_fn, "ca.branches", branches_arr_ty.into());
+
+        // Per branch: compile the inline closure to a `{fn_ptr, env_ptr}`
+        // fat-pointer, then fill ctx[i] = {fn_ptr, env_ptr, &slots[i]} and
+        // branches[i] = {trampoline, &ctx[i]}.
+        let tramp_ptr = trampoline.as_global_value().as_pointer_value();
+        for (i, arg) in args.iter().enumerate() {
+            let closure_val = self.compile_expr(&arg.value)?.into_struct_value();
+            let fn_ptr = self
+                .builder
+                .build_extract_value(closure_val, 0, "ca.fn")
+                .unwrap();
+            let env_ptr = self
+                .builder
+                .build_extract_value(closure_val, 1, "ca.env")
+                .unwrap();
+            let idx = [i64_t.const_zero(), i64_t.const_int(i as u64, false)];
+            let slot_ep = unsafe {
+                self.builder
+                    .build_in_bounds_gep(slots_arr_ty, slots, &idx, "ca.slot.ep")
+                    .unwrap()
+            };
+            let ctx_ep = unsafe {
+                self.builder
+                    .build_in_bounds_gep(ctxs_arr_ty, ctxs, &idx, "ca.ctx.ep")
+                    .unwrap()
+            };
+            let cf0 = self
+                .builder
+                .build_struct_gep(ctx_ty, ctx_ep, 0, "ca.ctx.fn")
+                .unwrap();
+            self.builder.build_store(cf0, fn_ptr).unwrap();
+            let cf1 = self
+                .builder
+                .build_struct_gep(ctx_ty, ctx_ep, 1, "ca.ctx.env")
+                .unwrap();
+            self.builder.build_store(cf1, env_ptr).unwrap();
+            let cf2 = self
+                .builder
+                .build_struct_gep(ctx_ty, ctx_ep, 2, "ca.ctx.slot")
+                .unwrap();
+            self.builder.build_store(cf2, slot_ep).unwrap();
+            let branch_ep = unsafe {
+                self.builder
+                    .build_in_bounds_gep(branches_arr_ty, branches, &idx, "ca.branch.ep")
+                    .unwrap()
+            };
+            let bf0 = self
+                .builder
+                .build_struct_gep(self.karac_branch_ty, branch_ep, 0, "ca.branch.fn")
+                .unwrap();
+            self.builder.build_store(bf0, tramp_ptr).unwrap();
+            let bf1 = self
+                .builder
+                .build_struct_gep(self.karac_branch_ty, branch_ep, 1, "ca.branch.ctx")
+                .unwrap();
+            self.builder.build_store(bf1, ctx_ep).unwrap();
+        }
+
+        // karac_par_run(&branches[0], N, par_id, parent_cancel).
+        let branches_base = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    branches_arr_ty,
+                    branches,
+                    &[i64_t.const_zero(), i64_t.const_zero()],
+                    "ca.branches.base",
+                )
+                .unwrap()
+        };
+        let par_id = self.record_spawn_site(call_span, Some(n as u32));
+        let par_id_val = self.context.i32_type().const_int(par_id as u64, false);
+        let parent_cancel = match self.branch_cancel_ptr {
+            Some(p) => p,
+            None => ptr_ty.const_null(),
+        };
+        self.builder
+            .build_call(
+                self.karac_par_run_fn,
+                &[
+                    branches_base.into(),
+                    i64_t.const_int(n as u64, false).into(),
+                    par_id_val.into(),
+                    parent_cancel.into(),
+                ],
+                "ca.par_run",
+            )
+            .unwrap();
+
+        // Assemble the tuple `(Result, …, Result)` from the slots (each
+        // slot is a fully-written `Result` by the time the join returns).
+        let tuple_ty = self.context.struct_type(&vec![result_ty.into(); n], false);
+        let mut agg = tuple_ty.get_undef();
+        for i in 0..n {
+            let idx = [i64_t.const_zero(), i64_t.const_int(i as u64, false)];
+            let slot_ep = unsafe {
+                self.builder
+                    .build_in_bounds_gep(slots_arr_ty, slots, &idx, "ca.read.ep")
+                    .unwrap()
+            };
+            let slot_val = self
+                .builder
+                .build_load(result_ty, slot_ep, "ca.read")
+                .unwrap();
+            agg = self
+                .builder
+                .build_insert_value(agg, slot_val, i as u32, "ca.elem")
+                .unwrap()
+                .into_struct_value();
+        }
+        Ok(agg.into())
+    }
+
     /// Emit the shared `collect_all_vec` branch trampoline (once per
     /// module): `void __collect_all_vec_branch(ptr ctx, ptr cancel)`.
     /// `ctx` is `{ fn_ptr, env_ptr, slot_ptr }`; it invokes the closure

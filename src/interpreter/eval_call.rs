@@ -921,6 +921,9 @@ impl<'a> super::Interpreter<'a> {
                 "collect_all_vec" => {
                     return self.eval_collect_all_vec(args, span);
                 }
+                "collect_all" => {
+                    return self.eval_collect_all(args, span);
+                }
                 _ => {}
             }
         }
@@ -1605,6 +1608,35 @@ impl<'a> super::Interpreter<'a> {
     /// absent shared mutation — which the interpreter models with real OS
     /// threads only for explicit `par {}` (see `eval_par_block`). Codegen
     /// (phase-6 slice 1b) provides the actually-parallel lowering.
+    /// `collect_all(|| a, || b, …)` — the heterogeneous fixed-arity gather.
+    /// Each argument is a closure; invoke every one to completion and gather
+    /// the results into a position-bound tuple `(Result[A1,E1], …)`. Same
+    /// gather semantics as `collect_all_vec` (no fail-fast on `Err`; a
+    /// panicking branch dominates via `pending_cf`), but heterogeneous and
+    /// returning a `Value::Tuple` rather than a `Value::Array`. The
+    /// interpreter runs the branches sequentially in source order
+    /// (observably correct: position-bound, every branch runs).
+    pub(crate) fn eval_collect_all(&mut self, args: &[CallArg], _span: &Span) -> Value {
+        // Arity (2..=8) and the closure-`Result` branch shapes are
+        // guaranteed by the typechecker's `infer_collect_all`.
+        let mut results: Vec<Value> = Vec::with_capacity(args.len());
+        for arg in args {
+            let closure = self.eval_expr_inner(&arg.value);
+            if self.pending_cf.is_some() {
+                return Value::Tuple(results);
+            }
+            let r = self.invoke_function_value(closure, Vec::new());
+            // A panicking / diverging branch dominates: stop and let the
+            // pending control-flow signal propagate (the partial tuple is
+            // never observed).
+            if self.pending_cf.is_some() {
+                return Value::Tuple(results);
+            }
+            results.push(r);
+        }
+        Value::Tuple(results)
+    }
+
     pub(crate) fn eval_collect_all_vec(&mut self, args: &[CallArg], _span: &Span) -> Value {
         // Arity (exactly one `Vec[Fn() -> Result[T, E]]`) is guaranteed by
         // the typechecker against the stdlib `#[compiler_builtin]` signature.

@@ -185,6 +185,43 @@ mod par_codegen_tests {
         );
     }
 
+    #[test]
+    fn collect_all_tuple_lowers_to_par_run_gather() {
+        // Phase 6 — `collect_all(|| a, || b, || c)` lowers to the same
+        // `karac_par_run` + `__collect_all_vec_branch` trampoline gather as
+        // `collect_all_vec`, but static-N with a tuple result. The
+        // heterogeneous tuple is a struct of three type-erased `{i64×6}`
+        // Result structs.
+        let src = "fn fa(n: i64) -> Result[i64, String] { Result.Ok(n) }\n\
+                   fn fb(s: String) -> Result[String, i64] { Result.Err(1) }\n\
+                   fn main() {\n\
+                       let a: i64 = 1;\n\
+                       let t: (Result[i64, String], Result[String, i64]) =\n\
+                           collect_all(|| fa(a), || fb(\"x\"));\n\
+                       let _0: Result[i64, String] = t.0;\n\
+                   }";
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let ir = compile_to_ir(&parsed.program, Some(&ownership), None)
+            .expect("collect_all must lower under karac build");
+        assert!(
+            ir.contains("__collect_all_vec_branch"),
+            "expected the shared gather trampoline in the IR"
+        );
+        assert!(
+            ir.contains("karac_par_run"),
+            "expected the karac_par_run dispatch in the IR"
+        );
+    }
+
     /// Compile, link with the runtime, and run the program. Returns stdout
     /// on success, None if link/exec fails (legitimate soft-skip when the
     /// runtime archive is missing). Parse and codegen failures panic — those

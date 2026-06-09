@@ -393,6 +393,38 @@ fn main() {
         );
     }
 
+    // ── `collect_all` heterogeneous tuple gather (phase-6) ────────
+    //
+    // Static-N sibling of collect_all_vec: each inline closure runs via
+    // karac_par_run into a stack Result slot, then the slots are assembled
+    // into a tuple. Captured args (`base`) live in stack env allocas read
+    // by worker threads across the synchronous join, and the f-string
+    // `Err` payloads (`f"a{n}"`) flow closure → slot → tuple → match →
+    // print → drop. A use-after-free of an env / slot, or a double-free of
+    // an Err String, would trip ASAN here.
+
+    #[test]
+    fn asan_collect_all_heterogeneous_tuple_no_uaf() {
+        assert_clean_asan_run(
+            r#"
+fn fa(n: i64) -> Result[i64, String] {
+    if n > 0 { Result.Ok(n * 10) } else { Result.Err(f"a{n}") }
+}
+fn fb(s: String) -> Result[String, i64] { Result.Err(7) }
+fn main() {
+    let base: i64 = 3;
+    let t: (Result[i64, String], Result[String, i64], Result[i64, String]) =
+        collect_all(|| fa(-5), || fb("x"), || fa(base));
+    match t.0 { Result.Ok(v) => { println(f"0 ok {v}"); } Result.Err(e) => { println(f"0 err {e}"); } }
+    match t.1 { Result.Ok(v) => { println(f"1 ok {v}"); } Result.Err(e) => { println(f"1 err {e}"); } }
+    match t.2 { Result.Ok(v) => { println(f"2 ok {v}"); } Result.Err(e) => { println(f"2 err {e}"); } }
+}
+"#,
+            &["0 err a-5", "1 err 7", "2 ok 30"],
+            "collect_all_heterogeneous_tuple",
+        );
+    }
+
     // ── `println(String)` — `%.*s` length-bounded format ──────────
     //
     // Pre-fix `compile_print`'s struct-value arm passed the String's

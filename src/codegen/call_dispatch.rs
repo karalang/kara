@@ -399,6 +399,16 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_collect_all_vec(&args[0].value, call_span);
         }
 
+        // Phase 6 — `collect_all(|| a, || b, …)`, the heterogeneous
+        // fixed-arity gather. Intercepted before the generic-fn path (it
+        // has no stdlib decl); the typechecker's `infer_collect_all` has
+        // already validated 2..=8 closure-`Result` branches. Lowers to the
+        // same `karac_par_run` gather as `collect_all_vec` but with static
+        // inline closures + a tuple result.
+        if name == "collect_all" && (2..=8).contains(&args.len()) {
+            return self.compile_collect_all(args, call_span);
+        }
+
         // Layout-introspection intrinsics. Intercepted before the
         // generic-call lookup so the `{ 0 }` placeholder body in
         // `runtime/stdlib/intrinsics.kara` is never lowered. The

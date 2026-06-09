@@ -196,6 +196,81 @@ impl<'a> super::TypeChecker<'a> {
         usize_ty
     }
 
+    /// Type `collect_all(|| a, || b, …)` — the heterogeneous fixed-arity
+    /// (2..=8) parallel gather. Each branch is a zero-arg closure
+    /// `Fn() -> Result[Ai, Ei]` (explicit `|| …` for now — auto-thunking
+    /// of bare expressions is a follow-up); the result is the tuple
+    /// `(Result[A1,E1], …, Result[An,En])`, preserving each branch's own
+    /// success/error types. `Type::Error` branches degrade to an `Error`
+    /// tuple element so a single bad branch doesn't cascade.
+    fn infer_collect_all(&mut self, args: &[CallArg], span: &Span) -> Type {
+        if !(2..=8).contains(&args.len()) {
+            self.type_error(
+                format!(
+                    "collect_all takes 2 to 8 branches, found {} (for a single \
+                     homogeneous Vec of branches use collect_all_vec)",
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+        let mut elem_types: Vec<Type> = Vec::with_capacity(args.len());
+        for (i, arg) in args.iter().enumerate() {
+            let arg_ty = self.infer_expr(&arg.value);
+            // Each branch must be a zero-arg closure.
+            let ret = match &arg_ty {
+                Type::Function {
+                    params,
+                    return_type,
+                }
+                | Type::OnceFunction {
+                    params,
+                    return_type,
+                } if params.is_empty() => (**return_type).clone(),
+                Type::Error => Type::Error,
+                _ => {
+                    self.type_error(
+                        format!(
+                            "collect_all branch {} must be a zero-argument closure \
+                             returning Result[T, E], found '{}'",
+                            i + 1,
+                            type_display(&arg_ty)
+                        ),
+                        arg.value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    Type::Error
+                }
+            };
+            // …whose return type is a Result[A, E].
+            let elem = match &ret {
+                Type::Named { name, args: targs } if name == "Result" && targs.len() == 2 => {
+                    ret.clone()
+                }
+                Type::Error => Type::Error,
+                _ => {
+                    self.type_error(
+                        format!(
+                            "collect_all branch {} must return Result[T, E], found '{}'",
+                            i + 1,
+                            type_display(&ret)
+                        ),
+                        arg.value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    Type::Error
+                }
+            };
+            elem_types.push(elem);
+        }
+        Type::Tuple(elem_types)
+    }
+
     pub(super) fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
         // Phase 6 line 170 slice 3a — cross-task-safe boundary check at
         // `spawn(closure)` call sites. Fires before any other dispatch so
@@ -496,6 +571,21 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 return Type::Never;
+            }
+        }
+
+        // Built-in variadic gather: `collect_all(|| a, || b, …)` — the
+        // heterogeneous fixed-arity (2..=8) sibling of `collect_all_vec`.
+        // Each argument is a closure `Fn() -> Result[Ai, Ei]`; the result
+        // is the tuple `(Result[A1,E1], Result[A2,E2], …)`, preserving
+        // each branch's own success/error types (design.md § Concurrency
+        // Semantics > `collect_all`). Resolved here rather than via a
+        // stdlib declaration because the arity — and thus the return tuple
+        // shape — varies per call site, which no single generic signature
+        // can express.
+        if let ExprKind::Identifier(name) = &callee.kind {
+            if name == "collect_all" {
+                return self.infer_collect_all(args, span);
             }
         }
 

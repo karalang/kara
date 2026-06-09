@@ -1267,6 +1267,13 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // interpreter (`eval_collect_all_vec`) and codegen rather than
     // running its `#[compiler_builtin]` placeholder body.
     "collect_all_vec",
+    // Phase 6 — `collect_all(|| a, || b, …)`: the heterogeneous
+    // fixed-arity (2..=8) gather. No stdlib decl (the return tuple shape
+    // varies per arity); the typechecker synthesizes the tuple type
+    // (`infer_collect_all`) and the interpreter / codegen intercept the
+    // call shape. Registering the name here makes the resolver accept the
+    // bare identifier.
+    "collect_all",
     // Phase 8 line 153 (active-span propagation) — `std.tracing`.
     // `with_span(span, || body)` installs an ambient active span for the
     // body; the interpreter and codegen intercept the call shape (see

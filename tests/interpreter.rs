@@ -3236,6 +3236,29 @@ fn collect_all_vec_panic_in_branch_dominates() {
     );
 }
 
+#[test]
+fn collect_all_gathers_heterogeneous_tuple() {
+    // Phase 6 — `collect_all(|| a, || b, || c)` runs every branch and
+    // gathers a position-bound HETEROGENEOUS tuple. Branch error types
+    // differ (String at .0, i64 at .1); no fail-fast (the `Err` at .0/.1
+    // does not stop .2 from producing `Ok`).
+    assert_eq!(
+        run("fn fa(n: i64) -> Result[i64, String] {\n\
+                 if n > 0 { Result.Ok(n * 10) } else { Result.Err(f\"a{n}\") }\n\
+             }\n\
+             fn fb(s: String) -> Result[String, i64] { Result.Err(7) }\n\
+             fn fc(n: i64) -> Result[i64, String] { Result.Ok(n + 100) }\n\
+             fn main() {\n\
+                 let t: (Result[i64, String], Result[String, i64], Result[i64, String]) =\n\
+                     collect_all(|| fa(-5), || fb(\"x\"), || fc(3));\n\
+                 match t.0 { Result.Ok(v) => { println(f\"0 ok {v}\"); } Result.Err(e) => { println(f\"0 err {e}\"); } }\n\
+                 match t.1 { Result.Ok(v) => { println(f\"1 ok {v}\"); } Result.Err(e) => { println(f\"1 err {e}\"); } }\n\
+                 match t.2 { Result.Ok(v) => { println(f\"2 ok {v}\"); } Result.Err(e) => { println(f\"2 err {e}\"); } }\n\
+             }"),
+        "0 err a-5\n1 err 7\n2 ok 103\n"
+    );
+}
+
 // ── `mut ref |...|` capture-mutation propagation (round 12.48) ──
 //
 // Mutations made by a `mut ref` closure to a captured outer binding

@@ -21287,6 +21287,60 @@ fn collect_all_vec_typechecks_to_vec_of_results() {
     );
 }
 
+#[test]
+fn collect_all_typechecks_to_heterogeneous_tuple() {
+    // Phase 6 — `collect_all(|| a, || b)` synthesizes the HETEROGENEOUS
+    // tuple `(Result[A,E1], Result[B,E2])` via the typechecker's
+    // variadic `infer_collect_all` intercept (no stdlib decl; the arity
+    // and return shape vary per call). Distinct success AND error types
+    // per branch are preserved — `String` error in branch 1, `i64` error
+    // in branch 2.
+    typecheck_ok(
+        "fn fa(n: i64) -> Result[i64, String] {
+             if n > 0 { Result.Ok(n) } else { Result.Err(\"a\") }
+         }
+         fn fb(s: String) -> Result[String, i64] { Result.Ok(s) }
+         fn main() {
+             let t: (Result[i64, String], Result[String, i64]) =
+                 collect_all(|| fa(1), || fb(\"x\"));
+             let _0: Result[i64, String] = t.0;
+             let _1: Result[String, i64] = t.1;
+         }",
+    );
+}
+
+#[test]
+fn collect_all_rejects_bad_arity_and_non_result_branches() {
+    // Arity gate (2..=8) + the branch-shape checks: a single branch points
+    // at collect_all_vec; a non-closure arg and a closure not returning
+    // Result are each rejected.
+    let errs = typecheck_errors(
+        "fn fa() -> Result[i64, String] { Result.Ok(1) }
+         fn main() {
+             let a = collect_all(|| fa());
+             let b = collect_all(|| fa(), 42);
+             let c = collect_all(|| fa(), || 99);
+         }",
+    );
+    let joined: String = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        joined.contains("collect_all takes 2 to 8 branches"),
+        "expected arity error; got: {joined}"
+    );
+    assert!(
+        joined.contains("must be a zero-argument closure"),
+        "expected non-closure-branch error; got: {joined}"
+    );
+    assert!(
+        joined.contains("must return Result[T, E]"),
+        "expected non-Result-branch error; got: {joined}"
+    );
+}
+
 // ── Phase 6 line 218 slice 2: ScopeLocal marker + enforcement ────────
 //
 // design.md § ScopeLocal — `TaskHandle[T]` (and any other future
