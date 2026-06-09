@@ -1907,6 +1907,45 @@ impl<'a> super::TypeChecker<'a> {
         {
             return receiver_for_lookup.clone();
         }
+        // Float→int conversion families (phase-8 § "Saturating float→int",
+        // slice 2): `f.{saturating,wrapping,checked,trunc}_to_<intN>()` on
+        // `f32`/`f64`. `checked_*` returns `Option[intN]` (None on
+        // NaN/out-of-range); the others return `intN`. `trunc_*` additionally
+        // carries `panics` (seeded in effectchecker). Method-name → family +
+        // target shared with the interpreter / effectchecker via
+        // `crate::numeric_conv`. Backends: interpreter `method_call.rs`
+        // computes via `numeric_conv::convert_float_to_int`; the bit-exact
+        // `fptosi.sat`/`fptoui.sat` codegen is slice 4 (interpreter-only until
+        // then — `karac build` errors loudly rather than miscompiling).
+        if args.is_empty() && matches!(&receiver_for_lookup, Type::Float(_)) {
+            if let Some((family, target, _, _)) = crate::numeric_conv::parse_float_to_int(method) {
+                if let Some(int_ty) = self.primitive_type(target) {
+                    return match family {
+                        crate::numeric_conv::FloatToIntFamily::Checked => Type::Named {
+                            name: "Option".to_string(),
+                            args: vec![int_ty],
+                        },
+                        _ => int_ty,
+                    };
+                }
+            }
+        }
+        // Int→float conversions (same slice): `n.to_f32()` / `n.to_f64()` on
+        // every signed/unsigned integer. The implicit-widening cases already
+        // work without `as`; these method forms ship for code-style
+        // consistency with the float→int families above. Effect-free.
+        if args.is_empty() && matches!(&receiver_for_lookup, Type::Int(_) | Type::UInt(_)) {
+            if method == "to_f32" {
+                if let Some(t) = self.primitive_type("f32") {
+                    return t;
+                }
+            }
+            if method == "to_f64" {
+                if let Some(t) = self.primitive_type("f64") {
+                    return t;
+                }
+            }
+        }
         // Built-in `clone` / `to_string` on the scalar numeric + bool + char
         // primitives (all `Copy`). `clone` is identity → `Self`; `to_string`
         // renders the value → `String` (`Type::Str`). Like `abs`, these are

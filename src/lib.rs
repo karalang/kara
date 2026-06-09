@@ -61,6 +61,7 @@ pub mod cross_task_safe;
 pub mod module;
 pub mod monomorphization;
 pub mod must_use_lint;
+pub mod numeric_conv;
 pub mod ownership;
 pub mod parser;
 pub mod prelude;

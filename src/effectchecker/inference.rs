@@ -851,6 +851,17 @@ impl<'a> super::EffectChecker<'a> {
                         calls.push((qualified.to_string(), expr.span.clone()));
                     }
                 }
+                // `f.trunc_to_<intN>()` carries `panics` (the trapping float→int
+                // form — phase-8 cast slice 2). Matched by name prefix: no
+                // non-float type carries a `trunc_to_*` method, so a
+                // receiver-type check is unnecessary (and conservative
+                // over-approximation is acceptable here anyway). Routed to the
+                // `float.trunc_to_int` key seeded in `seed_builtin_effects`.
+                if let Some(suffix) = method.as_str().strip_prefix("trunc_to_") {
+                    if crate::numeric_conv::is_int_target(suffix) {
+                        calls.push(("float.trunc_to_int".to_string(), expr.span.clone()));
+                    }
+                }
                 // Function-reference argument propagation, mirror of the
                 // `Call` branch above. When the resolved `Type.method` callee
                 // is `with _`-polymorphic (or transitively calls a `with _`

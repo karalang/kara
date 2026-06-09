@@ -704,6 +704,59 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Float→int conversion families (phase-8 § "Saturating float→int",
+        // slice 2; typed in expr_method_call.rs):
+        // `f.{saturating,wrapping,checked,trunc}_to_<intN>()`. Semantics live in
+        // `crate::numeric_conv` (shared with the typechecker / effectchecker).
+        // `checked_*` yields `Option[intN]`; `trunc_*` raises a runtime panic on
+        // NaN / out-of-range (the `panics`-effect form). Results widen through
+        // `i128` and store into the `i64` `Value::Int`, so `u64`/`u128`/`i128`
+        // magnitudes beyond `i64` are truncated here — the interpreter's
+        // existing wide-int limitation; codegen (slice 4) is bit-exact.
+        if args.is_empty() {
+            if let Value::Float(f) = &obj {
+                if let Some((family, _target, bits, signed)) =
+                    crate::numeric_conv::parse_float_to_int(method)
+                {
+                    use crate::numeric_conv::{ConvOutcome, FloatToIntFamily};
+                    let outcome =
+                        crate::numeric_conv::convert_float_to_int(*f, family, bits, signed);
+                    let make_none = || Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "None".to_string(),
+                        data: EnumData::Unit,
+                    };
+                    return match (family, outcome) {
+                        (FloatToIntFamily::Checked, ConvOutcome::Value(v)) => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "Some".to_string(),
+                            data: EnumData::Tuple(vec![Value::Int(v as i64)]),
+                        },
+                        (FloatToIntFamily::Checked, ConvOutcome::None) => make_none(),
+                        (_, ConvOutcome::Value(v)) => Value::Int(v as i64),
+                        (_, ConvOutcome::Panic) => {
+                            self.record_runtime_error("float-to-int out of range".to_string(), span)
+                        }
+                        // Only `Checked` yields `None`; only `Trunc` yields
+                        // `Panic` (see `convert_float_to_int`). This arm is a
+                        // defensive fallback and is not reached in practice.
+                        (_, ConvOutcome::None) => make_none(),
+                    };
+                }
+            }
+            // Int→float conversions (same slice): `n.to_f32()` / `n.to_f64()`.
+            // `to_f32` rounds through `f32` then widens for the `f64`-backed
+            // `Value::Float`; `to_f64` is the direct widening.
+            if let Value::Int(n) = &obj {
+                if method == "to_f32" {
+                    return Value::Float((*n as f32) as f64);
+                }
+                if method == "to_f64" {
+                    return Value::Float(*n as f64);
+                }
+            }
+        }
+
         // Built-in `clone` on scalar `Copy` primitives (typed in
         // expr_method_call.rs) — identity. (`to_string` on primitives already
         // works through the `Display` fallback arm above.) String/struct

@@ -1847,6 +1847,29 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Float→int / int→float conversion methods (phase-8 § "Saturating
+        // float→int", slice 2) are typed by the typechecker and run under
+        // `karac run` (interpreter), but their bit-exact `fptosi.sat` /
+        // `fptoui.sat` lowering is slice 4 and not yet wired. Reaching the
+        // fall-through means no impl/user method claimed the call, so a
+        // conversion-named method here is the deferred form — emit a clear
+        // interpreter-only error instead of the generic "this is a codegen
+        // bug". (A user-defined `to_f32`/`to_f64` on a struct dispatches via
+        // the impl-block path above and never reaches here.)
+        if args.is_empty()
+            && (crate::numeric_conv::parse_float_to_int(method).is_some()
+                || method == "to_f32"
+                || method == "to_f64")
+        {
+            return Err(format!(
+                "codegen: `{method}` (the float↔int conversion method family) is not yet \
+                 lowered under `karac build` — it currently works only under `karac run` \
+                 (the interpreter). The bit-exact `fptosi.sat`/`fptoui.sat` codegen is \
+                 phase-8 cast slice 4; tracked in \
+                 docs/implementation_checklist/phase-8-stdlib-floor.md."
+            ));
+        }
+
         let receiver_desc = match &object.kind {
             ExprKind::Identifier(name) => format!("variable '{}'", name),
             _ => "non-identifier receiver".to_string(),

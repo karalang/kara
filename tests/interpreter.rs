@@ -116,6 +116,96 @@ fn test_abs_int_min_traps() {
 }
 
 #[test]
+fn test_float_to_int_saturating() {
+    // phase-8 cast slice 2: saturating clamps to the target's MIN/MAX and
+    // truncates toward zero in range.
+    assert_eq!(
+        run("fn main() { println((3.7f64).saturating_to_i32()); }"),
+        "3\n"
+    );
+    assert_eq!(
+        run("fn main() { println((-3.7f64).saturating_to_i32()); }"),
+        "-3\n"
+    );
+    assert_eq!(
+        run("fn main() { println((1e30f64).saturating_to_i32()); }"),
+        "2147483647\n"
+    );
+    assert_eq!(
+        run("fn main() { println((-1e30f64).saturating_to_i32()); }"),
+        "-2147483648\n"
+    );
+    assert_eq!(
+        run("fn main() { println((1e30f64).saturating_to_u8()); }"),
+        "255\n"
+    );
+    assert_eq!(
+        run("fn main() { println((-1.0f64).saturating_to_u8()); }"),
+        "0\n"
+    );
+}
+
+#[test]
+fn test_float_to_int_wrapping() {
+    // Modular truncation: 300 → 44 in i8, 256 → 0 / 257 → 1 in u8.
+    assert_eq!(
+        run("fn main() { println((300.0f64).wrapping_to_i8()); }"),
+        "44\n"
+    );
+    assert_eq!(
+        run("fn main() { println((256.0f64).wrapping_to_u8()); }"),
+        "0\n"
+    );
+    assert_eq!(
+        run("fn main() { println((257.9f64).wrapping_to_u8()); }"),
+        "1\n"
+    );
+}
+
+#[test]
+fn test_float_to_int_checked() {
+    // `checked_*` → `Some(trunc)` in range, `None` on NaN / out-of-range.
+    assert_eq!(
+        run("fn main() { match (1.5f64).checked_to_i32() { Some(v) => println(v), None => println(-1) }; }"),
+        "1\n"
+    );
+    assert_eq!(
+        run("fn main() { match (1e30f64).checked_to_i32() { Some(v) => println(v), None => println(-1) }; }"),
+        "-1\n"
+    );
+    assert_eq!(
+        run("fn main() { match (f64.NAN).checked_to_i32() { Some(v) => println(v), None => println(-1) }; }"),
+        "-1\n"
+    );
+}
+
+#[test]
+fn test_float_to_int_trunc_traps_out_of_range() {
+    // `trunc_*` is the trapping form — out-of-range / NaN records a structured
+    // "float-to-int out of range" runtime error (not a panic/ICE).
+    let errors = runtime_errors("fn main() { println((1e30f64).trunc_to_i32()); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("float-to-int out of range")),
+        "expected out-of-range trap, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    // In-range `trunc_*` returns the truncated value.
+    assert_eq!(
+        run("fn main() { println((42.9f64).trunc_to_i32()); }"),
+        "42\n"
+    );
+}
+
+#[test]
+fn test_int_to_float_methods() {
+    // Symmetric `to_f32` / `to_f64` widen an integer to a float.
+    assert_eq!(run("fn main() { println((42i64).to_f64()); }"), "42\n");
+    assert_eq!(run("fn main() { println((42i32).to_f32()); }"), "42\n");
+}
+
+#[test]
 fn test_unknown_primitive_method_is_runtime_error_not_ice() {
     // `karac run` bypasses typecheck enforcement, so an unknown method on a
     // primitive reaches the interpreter. It used to hit `unreachable!` and

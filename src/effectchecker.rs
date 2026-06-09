@@ -561,6 +561,23 @@ impl<'a> EffectChecker<'a> {
             self.inferred_effects.insert(builtin.to_string(), set);
         }
 
+        // `f.trunc_to_<intN>()` traps (panics) on NaN / out-of-range — the
+        // trapping float→int conversion form (phase-8 § "Saturating float→int",
+        // slice 2; design.md § Numeric Semantics > as-cast semantics). Unlike
+        // the arithmetic-overflow traps above (e.g. `abs` on `iN::MIN`, which is
+        // deliberately outside the effect system), this one carries `panics` by
+        // spec, so callers inherit it. Every `trunc_to_<target>` method name is
+        // routed to this single key in `effectchecker/inference.rs`.
+        {
+            let mut set = EffectSet::new();
+            set.add(
+                panics_effect.clone(),
+                EffectOrigin::Direct(builtin_span.clone()),
+            );
+            self.inferred_effects
+                .insert("float.trunc_to_int".to_string(), set);
+        }
+
         // Seed effects for stdlib heap-allocating constructors and methods.
         // These are builtins — no AST body to infer from — so we seed
         // inferred_effects directly. Callers accumulate these effects through

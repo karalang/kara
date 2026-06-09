@@ -874,7 +874,7 @@ impl<'a> super::TypeChecker<'a> {
         })
     }
 
-    fn primitive_type(&self, name: &str) -> Option<Type> {
+    pub(super) fn primitive_type(&self, name: &str) -> Option<Type> {
         match name {
             "i8" => Some(Type::Int(IntSize::I8)),
             "i16" => Some(Type::Int(IntSize::I16)),

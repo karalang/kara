@@ -11276,6 +11276,73 @@ fn test_to_string_on_all_unit_display_enum_typecheck() {
 }
 
 #[test]
+fn test_float_to_int_conversion_methods_typecheck() {
+    // phase-8 cast slice 2: the four float→int families type to the named
+    // integer target — `checked_*` → `Option[target]`, the others → `target`
+    // — on both `f32` and `f64`, for every representable integer target.
+    typecheck_ok(
+        "fn main() {
+             let a: i32 = (3.7f64).saturating_to_i32();
+             let b: u8 = (3.7f64).wrapping_to_u8();
+             let c: i64 = (3.7f64).trunc_to_i64();
+             let d: Option[i32] = (3.7f64).checked_to_i32();
+             let e: i16 = (3.7f32).saturating_to_i16();
+             let f: u128 = (3.7f64).saturating_to_u128();
+             let g: usize = (3.7f64).saturating_to_usize();
+             let h: i128 = (3.7f32).trunc_to_i128();
+             let _ = (a, b, c, d, e, f, g, h);
+         }",
+    );
+}
+
+#[test]
+fn test_int_to_float_conversion_methods_typecheck() {
+    // Symmetric `to_f32` / `to_f64` on every signed/unsigned integer.
+    typecheck_ok(
+        "fn main() {
+             let a: f64 = (42i64).to_f64();
+             let b: f32 = (42i32).to_f32();
+             let c: f64 = (42u8).to_f64();
+             let n: usize = 42;
+             let d: f32 = n.to_f32();
+             let _ = (a, b, c, d);
+         }",
+    );
+}
+
+#[test]
+fn test_float_to_int_return_type_is_real_not_error() {
+    // Assigning the `i32` result to a `String` must conflict — proving the
+    // method is typed to a real numeric target, not silently to `Type::Error`
+    // (which would unify with anything). The exact `i32` / `Option[i32]` types
+    // are pinned by the positive test above; a same-family width mismatch
+    // (i32→i64) would NOT error, since integer widening is legal in Kāra.
+    let errors =
+        typecheck_errors("fn main() { let x: String = (3.7f64).saturating_to_i32(); let _ = x; }");
+    assert!(!errors.is_empty(), "expected an i32-vs-String mismatch");
+}
+
+#[test]
+fn test_float_to_int_isize_target_rejected() {
+    // `isize` is not a Kāra type, so `trunc_to_isize` is not a recognized
+    // conversion method and falls through to the numeric NoMethodFound
+    // tightening.
+    let errors = typecheck_errors("fn main() { let _ = (3.7f64).trunc_to_isize(); }");
+    assert!(!errors.is_empty(), "expected trunc_to_isize to be rejected");
+}
+
+#[test]
+fn test_float_to_int_methods_not_on_int_receiver() {
+    // The float→int families are float-receiver methods; calling one on an
+    // integer receiver is rejected.
+    let errors = typecheck_errors("fn main() { let _ = (5i64).saturating_to_i32(); }");
+    assert!(
+        !errors.is_empty(),
+        "expected saturating_to_i32 on an int receiver to be rejected"
+    );
+}
+
+#[test]
 fn test_known_method_on_user_struct_still_works() {
     // Regression: a method that *is* declared in an impl block continues
     // to typecheck. Confirms the tightening only fires on actually-missing

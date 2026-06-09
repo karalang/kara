@@ -192,6 +192,42 @@ fn test_extern_c_unwind_gets_blocks_and_panics() {
 }
 
 #[test]
+fn test_trunc_to_int_infers_panics() {
+    // phase-8 cast slice 2: `f.trunc_to_<intN>()` is the trapping float→int
+    // form and carries `panics`, so a (private) caller inherits the effect.
+    let result = effectcheck_ok(
+        "fn convert(x: f64) -> i32 { x.trunc_to_i32() }
+         fn main() { let _ = convert(3.0); }",
+    );
+    let inferred = result.inferred_effects.get("convert").unwrap();
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Panics),
+        "trunc_to_i32 should make 'convert' inherit panics"
+    );
+}
+
+#[test]
+fn test_saturating_to_int_is_effect_free() {
+    // The non-trapping float→int families (saturating/wrapping/checked) carry
+    // no effect — a caller stays pure.
+    let result = effectcheck_ok(
+        "fn convert(x: f64) -> i32 { x.saturating_to_i32() }
+         fn main() { let _ = convert(3.0); }",
+    );
+    let inferred = result.inferred_effects.get("convert").unwrap();
+    assert!(
+        !inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Panics),
+        "saturating_to_i32 must not introduce panics"
+    );
+}
+
+#[test]
 fn test_noblock_removes_blocks_from_extern_c() {
     // @noblock on extern "C" removes the blocks default
     let result = effectcheck_ok("unsafe extern \"C\" { @noblock fn cpu_work() -> i32; }");
