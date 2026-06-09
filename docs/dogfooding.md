@@ -31,7 +31,7 @@ numbering used in `docs/roadmap.md` / `phase-6-runtime.md` ("Flagship Demo 1/2/3
 - [Roster](#roster) — the at-a-glance status table (single bookkeeping surface)
 - [Demo planning](#demo-planning) — five pillars + practical filters
 - [Tier 1 — Must-Build](#tier-1--must-build-core-story-highest-impact) — Parallax, Mend, Slipstream
-- [Tier 2 — High-Value](#tier-2--high-value-compelling-story-focused-audience) — Cartographer, Husk, Weave, Chronicle
+- [Tier 2 — High-Value](#tier-2--high-value-compelling-story-focused-audience) — Cartographer, Husk, Weave, Tangle, Chronicle
 - [Tier 3 — Domain-Specific](#tier-3--domain-specific-strong-for-specific-audiences) — Relay, Forge, Iris, Plume, Fathom
 - [Build Sequence](#build-sequence)
 - [Reusable Scaffolding](#reusable-scaffolding)
@@ -55,7 +55,8 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 | **Cartographer** | Effect graph as a live architecture artifact | ⬜ planned | `karac query` effect/concurrency surface | 2 |
 | **Husk** | `kernel` profile — no heap/panic/std, MMIO, ISRs | ⬜ planned | v8 hardware gaps (`#[repr]`, `#[interrupt]`, asm) | 2 |
 | **Weave** | Refinement types + contracts + effects together | ⬜ planned | refinement+contracts (CSV) · `Pool[T]`+TLS+tracing (service) | 2 |
-| **Chronicle** | Self-hosting; Kāra's own tooling explains Kāra | ⬜ planned | Phase 10/12 self-hosting | 2 |
+| **Tangle** | No `'a` at the cases that force `Rc<RefCell>`/arenas elsewhere — graphs, back-pointers, undo/redo; every RC escalation surfaced | ⬜ planned | ownership + `karac query ownership` (done) | 2 |
+| **Chronicle** | Self-hosting; Kāra's own tooling explains Kāra — *and* the ownership model holds across the whole compiler, zero lifetime annotations | ⬜ planned | Phase 10/12 self-hosting | 2 |
 | **Relay** | Effect-driven event-loop networking (no `async fn`) | ⬜ planned | Phase 6 v1.1 network event loop | 3 |
 | **Forge** | `embedded` profile firmware on a real MCU | ⬜ planned | v8 hardware gaps | 3 |
 | **Iris** | One source → native + WASM, no port | ⬜ planned | Phase 10 WASM target | 3 |
@@ -473,8 +474,68 @@ in language design. But more than that — using Kāra's own tooling to explain
 Kāra's own architecture is the meta-level demonstration of the AI-first thesis.
 The compiler's architecture is expressed in its effect signatures.
 
+**Also the largest *organic* probe of the ownership model.** A compiler is tens
+of thousands of lines of exactly the borrow-heavy code — ASTs, symbol tables,
+shared intermediate structures — that stresses a borrow checker hardest. Writing
+it in Kāra with **zero lifetime annotations**, every RC fallback surfaced by
+`karac query ownership`, is the standing receipt behind the README's
+"no lifetime annotations" claim — not an asserted equivalence but a working
+artifact. This is the *organic* leg (it didn't bite on a real codebase);
+**Tangle** below is the *targeted-hard-shape* leg (the cases that classically
+force annotations), and the adversarial soundness corpus in
+[`phase-9-verification.md`](../implementation_checklist/phase-9-verification.md)
+is the *adversarial* leg (programs that deliberately try to smuggle a dangling
+reference past the checker). The three together are what back the safety claim.
+
 **Effort:** Small (Phase 10 already delivers this). The work is curating the
 right query examples and building a good presentation layer.
+
+---
+
+### Tangle — The Borrow Checker's Hard Cases
+
+**Primary capability:** Ownership inference at the shapes that classically force
+lifetime annotations (or `Rc<RefCell>` / arenas / `unsafe`) in Rust — handled in
+Kāra with no `'a` syntax, and every RC escalation made visible, not silent.
+
+**What it is:** A small but real program built entirely from the data structures
+that torture borrow checkers — a mutable graph with cross-edges, a tree with
+parent back-pointers, an intrusive/doubly-linked list, an undo/redo history over
+shared state, and a tiny tree-walking interpreter with a shared environment. Not
+a contrived test: a usable artifact (e.g. a dependency-graph analyzer or a small
+in-memory document model with undo) whose *internals* happen to be exactly the
+aliasing-heavy shapes. It pairs the two soundness legs: **Chronicle** is the
+organic at-scale probe; Tangle is the *targeted* one — it goes straight at the
+cases the model is most likely to get wrong.
+
+**What the demo shows:**
+1. The graph/back-pointer/undo code as-written — no lifetime parameters anywhere,
+   the source-pinning rule and ownership inference carrying what Rust needs `<'a>`
+   (often several) to express.
+2. `karac query ownership` on each hot structure: where the model stayed in the
+   owned/`ref` tiers, and — at the genuinely cyclic/shared cases — exactly where
+   it **escalated to RC**, with the trigger line. The escalation is *surfaced*,
+   never silent — the honest-conservatism story made concrete.
+3. A side-by-side with the Rust shape of one structure (the doubly-linked list or
+   the parent-pointer tree): the `Rc<RefCell<…>>` / explicit-lifetime version next
+   to the Kāra version. Same capability, no annotation tax.
+4. Built under ASAN (codegen path): the whole thing runs leak- and
+   use-after-free–clean, so "accepted by the checker" is shown to mean "safe at
+   runtime," not just "compiled."
+
+**Why it's compelling:** Every Rust programmer has fought the borrow checker over
+exactly these shapes — a graph, a back-pointer, an undo stack. Showing them
+compile with no lifetime syntax, with the one real cost (RC at true cycles) made
+explicit rather than hidden, is the most direct possible answer to "Rust-level
+safety without lifetime annotations — prove it." It proves the *expressiveness*
+half (the hard shapes work); the adversarial corpus
+([`phase-9-verification.md`](../implementation_checklist/phase-9-verification.md))
+proves the *soundness* half (the checker can't be tricked).
+
+**Effort:** Small–Medium. Pure Kāra — no FFI, no GPU, no special tooling; gated
+only on ownership inference + `karac query ownership`, both shipped. The work is
+choosing structures that are genuinely borrow-hostile without being contrived,
+and curating the Rust side-by-side honestly.
 
 ---
 
@@ -645,10 +706,11 @@ the "Ready when" column notes the compiler capability each is gated on.
 | 1 | **Mend** | Now (structured JSON output exists) | Cheapest to build. Makes the AI-first thesis real. Sets the tone. |
 | 2 | **Parallax** | Auto-par codegen + HTTP FFI (done) | Broadest appeal. Every backend engineer relates to fan-out + join. |
 | 3 | **Cartographer** | `karac query` effect/concurrency surface | Teaches the effect system visually. Reduces onboarding friction for new users. |
-| 4 | **Weave** | Refinement types + contracts (CSV cut); `Pool[T]` + TLS + tracing (service cut) | Correctness story for data engineers. Complements the concurrency story. |
-| 5 | **Chronicle** | Self-hosting (Phase 10/12) | Self-hosting milestone. Marks Kāra as "a real language." |
-| 6 | **Slipstream** | CPU path after Phase 11 (long-tail stdlib + FFI); GPU path added later with no Kāra-source change | Visually striking, instantly explainable. |
-| 7 | **Husk** | Hardware gaps from v8 (`#[repr]`, `#[interrupt]`, inline asm, `no_std`) | Systems credibility. Validates the `kernel` profile. |
+| 4 | **Tangle** | Now (ownership inference + `karac query ownership` exist) | Proves the no-`'a` safety claim at the hard shapes. Cheap, pure Kāra, backs the README ownership section directly. |
+| 5 | **Weave** | Refinement types + contracts (CSV cut); `Pool[T]` + TLS + tracing (service cut) | Correctness story for data engineers. Complements the concurrency story. |
+| 6 | **Chronicle** | Self-hosting (Phase 10/12) | Self-hosting milestone. Marks Kāra as "a real language." |
+| 7 | **Slipstream** | CPU path after Phase 11 (long-tail stdlib + FFI); GPU path added later with no Kāra-source change | Visually striking, instantly explainable. |
+| 8 | **Husk** | Hardware gaps from v8 (`#[repr]`, `#[interrupt]`, inline asm, `no_std`) | Systems credibility. Validates the `kernel` profile. |
 
 **Parallax** and **Mend** together are the minimum viable showcase — they
 cover the two core theses (auto-concurrency, AI-first) with achievable effort,
