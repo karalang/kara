@@ -104,36 +104,43 @@ impl<'a> super::Interpreter<'a> {
                 Value::Vector(lanes)
             }
 
-            // Arithmetic (Int)
-            (BinOp::Add, Value::Int(a), Value::Int(b)) => Value::Int(match a.checked_add(b) {
-                Some(v) => v,
-                None => return self.record_integer_overflow(span),
-            }),
-            (BinOp::Sub, Value::Int(a), Value::Int(b)) => Value::Int(match a.checked_sub(b) {
-                Some(v) => v,
-                None => return self.record_integer_overflow(span),
-            }),
-            (BinOp::Mul, Value::Int(a), Value::Int(b)) => Value::Int(match a.checked_mul(b) {
-                Some(v) => v,
-                None => return self.record_integer_overflow(span),
-            }),
+            // Arithmetic (Int). Computed at i64; when the typechecker types
+            // the operation as a *narrow* integer (`u8`..`u32`/`i8`..`i32`),
+            // the result is range-checked against that width and traps
+            // `integer overflow` if it does not fit (design.md § Integer
+            // overflow — real fixed-width types). `narrow_oob` is a no-op for
+            // i64/u64/usize/isize and non-narrow result types, preserving the
+            // existing i64-overflow behavior. Codegen mirrors this in
+            // `compile_narrow_int_binop`.
+            (BinOp::Add, Value::Int(a), Value::Int(b)) => match a.checked_add(b) {
+                Some(v) if !self.narrow_oob(v, span) => Value::Int(v),
+                _ => self.record_integer_overflow(span),
+            },
+            (BinOp::Sub, Value::Int(a), Value::Int(b)) => match a.checked_sub(b) {
+                Some(v) if !self.narrow_oob(v, span) => Value::Int(v),
+                _ => self.record_integer_overflow(span),
+            },
+            (BinOp::Mul, Value::Int(a), Value::Int(b)) => match a.checked_mul(b) {
+                Some(v) if !self.narrow_oob(v, span) => Value::Int(v),
+                _ => self.record_integer_overflow(span),
+            },
             (BinOp::Div, Value::Int(a), Value::Int(b)) => {
                 if b == 0 {
                     return self.record_runtime_error("division by zero", span);
                 }
-                Value::Int(match a.checked_div(b) {
-                    Some(v) => v,
-                    None => return self.record_integer_overflow(span),
-                })
+                match a.checked_div(b) {
+                    Some(v) if !self.narrow_oob(v, span) => Value::Int(v),
+                    _ => self.record_integer_overflow(span),
+                }
             }
             (BinOp::Mod, Value::Int(a), Value::Int(b)) => {
                 if b == 0 {
                     return self.record_runtime_error("division by zero", span);
                 }
-                Value::Int(match a.checked_rem(b) {
-                    Some(v) => v,
-                    None => return self.record_integer_overflow(span),
-                })
+                match a.checked_rem(b) {
+                    Some(v) if !self.narrow_oob(v, span) => Value::Int(v),
+                    _ => self.record_integer_overflow(span),
+                }
             }
 
             // Arithmetic (Float)
@@ -300,6 +307,29 @@ impl<'a> super::Interpreter<'a> {
                 right.span.line, right.span.column
             ),
         }
+    }
+
+    /// True when the i64 result `v` does not fit the *narrow* integer type
+    /// the typechecker assigned to the expression at `span` (`u8`..`u32` /
+    /// `i8`..`i32`). A no-op (false) for `i64`/`u64`/`usize`/`isize`, non-
+    /// narrow, and untyped spans — so only genuinely narrow-typed arithmetic
+    /// is range-checked. Codegen mirrors this in `compile_narrow_int_binop`.
+    fn narrow_oob(&self, v: i64, span: &Span) -> bool {
+        use crate::typechecker::types::{IntSize, Type, UIntSize};
+        let key = crate::resolver::SpanKey::from_span(span);
+        let Some(ty) = self.typecheck_result.expr_types.get(&key) else {
+            return false;
+        };
+        let (lo, hi): (i64, i64) = match ty {
+            Type::Int(IntSize::I8) => (-128, 127),
+            Type::Int(IntSize::I16) => (-32768, 32767),
+            Type::Int(IntSize::I32) => (-2_147_483_648, 2_147_483_647),
+            Type::UInt(UIntSize::U8) => (0, 255),
+            Type::UInt(UIntSize::U16) => (0, 65_535),
+            Type::UInt(UIntSize::U32) => (0, 4_294_967_295),
+            _ => return false,
+        };
+        v < lo || v > hi
     }
 
     fn record_integer_overflow(&mut self, span: &Span) -> Value {

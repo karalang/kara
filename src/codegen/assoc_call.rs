@@ -332,6 +332,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     let rhs = self.compile_expr(&_args[1].value)?;
                     let is_unsigned =
                         matches!(type_name, "u8" | "u16" | "u32" | "u64" | "u128" | "usize");
+                    // Narrow integers (8/16/32-bit) are real fixed-width types
+                    // (design.md § Integer overflow): normalize both operands
+                    // to i64 (matching the interpreter, which evaluates all
+                    // integer arithmetic at i64 — so an i64-canonical local and
+                    // an i8 buffer element of the same type compute together)
+                    // and, for arithmetic, trap if the result leaves the
+                    // declared width. `type_name` gives the exact width here.
+                    let narrow_bits = match type_name {
+                        "u8" | "i8" => Some(8u32),
+                        "u16" | "i16" => Some(16),
+                        "u32" | "i32" => Some(32),
+                        _ => None,
+                    };
+                    if let Some(bits) = narrow_bits {
+                        return self.compile_narrow_int_binop(&op, lhs, rhs, bits, is_unsigned);
+                    }
                     return self.compile_binop_typed(&op, lhs, rhs, is_unsigned);
                 }
             }

@@ -9192,6 +9192,51 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_narrow_int_width_semantics() {
+        // Narrow ints (u8/i8/u16/i16/u32/i32) are real fixed-width types:
+        // arithmetic computes at i64 (so a u8 buffer element and a u8 local
+        // agree with the interpreter) but the result is bound to the declared
+        // width. B-2026-06-08-1 slice 2.
+        // (a) A u8-element sum that FITS the width prints the true value —
+        //     pre-fix this wrapped at i8 and printed -61.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s = \"ab\";\n\
+                 let b = s.bytes();\n\
+                 println(b[0] + b[1]);\n\
+             }",
+        ) {
+            assert_eq!(out, "195\n"); // 97 + 98, fits u8
+        }
+        // (b) A `mut i32` accumulated across an assignment inside a function
+        //     returns correctly — pre-fix the i64 result stored into the i32
+        //     slot read back as 0.
+        if let Some(out) = run_program(
+            "fn build() -> i32 { let mut r: i32 = 0i32; r = r + 21i32; r }\n\
+             fn main() { println(build()); }",
+        ) {
+            assert_eq!(out, "21\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_narrow_int_overflow_traps() {
+        // `u8 200 + u8 100 = 300` overflows the width and traps `integer
+        // overflow` (design.md § Integer overflow), matching the interpreter.
+        // Vars (not literals) so it isn't const-folded.
+        let captured = run_program_capturing(
+            "fn main() { let a: u8 = 200; let b: u8 = 100; println(a + b); }",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("integer overflow"),
+                "expected u8-overflow trap, got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_abs_int_min_traps() {
         // `iN::MIN.abs()` is the one input with no representable result —
         // it must trap as integer overflow, matching the interpreter.

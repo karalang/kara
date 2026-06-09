@@ -2581,6 +2581,112 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(result.into())
     }
 
+    /// Widen a narrow integer value to i64 for canonical computation —
+    /// zero-extend for unsigned source types, sign-extend for signed. Already-
+    /// i64 (or wider) values pass through. Used by `compile_narrow_int_binop`
+    /// to normalize operands that arrive at mixed LLVM widths (an i64-canonical
+    /// local vs an i8 buffer element of the same Kāra type).
+    fn widen_int_to_i64(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        is_unsigned: bool,
+    ) -> inkwell::values::IntValue<'ctx> {
+        let iv = val.into_int_value();
+        let i64_t = self.context.i64_type();
+        if iv.get_type().get_bit_width() >= 64 {
+            return iv;
+        }
+        if is_unsigned {
+            self.builder.build_int_z_extend(iv, i64_t, "ni.zx").unwrap()
+        } else {
+            self.builder.build_int_s_extend(iv, i64_t, "ni.sx").unwrap()
+        }
+    }
+
+    /// Narrow-integer (`i8`/`i16`/`i32`/`u8`/`u16`/`u32`) binary op. Both
+    /// operands are normalized to i64 so the computation matches the
+    /// interpreter (which evaluates all integer arithmetic at i64); for
+    /// arithmetic (`+ - * / %`) the i64 result is then range-checked against
+    /// the declared narrow width `[lo, hi]` and traps `integer overflow` if
+    /// out of range — design.md § Integer overflow ("traps … at the declared
+    /// width"). Bitwise / shift narrow ops compute at i64 with no width trap
+    /// (parity with the interpreter). Dispatched from `compile_assoc_call`'s
+    /// lowered-operator path, which has the operand `type_name` (hence the
+    /// exact width + signedness) directly. Without this, narrow arithmetic
+    /// computed at the operand's true LLVM width and wrapped or truncated the
+    /// wider operand (B-2026-06-08-1).
+    pub(super) fn compile_narrow_int_binop(
+        &mut self,
+        op: &BinOp,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+        bits: u32,
+        is_unsigned: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let l = self.widen_int_to_i64(lhs, is_unsigned);
+        let r = self.widen_int_to_i64(rhs, is_unsigned);
+        let result = self.compile_binop_typed(op, l.into(), r.into(), is_unsigned)?;
+        // Comparisons / logical ops produce an `i1`, not a narrow integer —
+        // return as-is (no range-check, no truncate-back).
+        if matches!(
+            op,
+            BinOp::Eq
+                | BinOp::NotEq
+                | BinOp::Lt
+                | BinOp::LtEq
+                | BinOp::Gt
+                | BinOp::GtEq
+                | BinOp::And
+                | BinOp::Or
+        ) {
+            return Ok(result);
+        }
+        let i64_t = self.context.i64_type();
+        let rv = result.into_int_value();
+        // Arithmetic: range-check the i64 result against the declared narrow
+        // width and trap on overflow. Bitwise / shift results always fit the
+        // width (the operands do), so they skip the check.
+        if matches!(
+            op,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+        ) {
+            let (lo, hi) = if is_unsigned {
+                (0i64, ((1u64 << bits) - 1) as i64)
+            } else {
+                (-(1i64 << (bits - 1)), (1i64 << (bits - 1)) - 1)
+            };
+            let lo_c = i64_t.const_int(lo as u64, true);
+            let hi_c = i64_t.const_int(hi as u64, true);
+            let below = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLT, rv, lo_c, "ni.lo")
+                .unwrap();
+            let above = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SGT, rv, hi_c, "ni.hi")
+                .unwrap();
+            let oob = self.builder.build_or(below, above, "ni.oob").unwrap();
+            let fn_val = self.current_fn.unwrap();
+            let trap_bb = self.context.append_basic_block(fn_val, "ni.ovf.trap");
+            let ok_bb = self.context.append_basic_block(fn_val, "ni.ovf.ok");
+            self.builder
+                .build_conditional_branch(oob, trap_bb, ok_bb)
+                .unwrap();
+            self.builder.position_at_end(trap_bb);
+            self.emit_panic("integer overflow");
+            self.builder.build_unreachable().unwrap();
+            self.builder.position_at_end(ok_bb);
+        }
+        // The result stays i64 (the value matches the interpreter's i64 and
+        // prints / compares correctly). Consumers that need it at the narrow
+        // width — e.g. a store into an `iN` slot — coerce it there (the let /
+        // assign / arg / return / field-store boundaries all call
+        // `coerce_scalar_to_type`); the `_ = bits` keeps the width available
+        // for any future representation change without an unused-arg warning.
+        let _ = bits;
+        Ok(result)
+    }
+
     /// Checked integer `+` / `-` / `*` via the
     /// `llvm.{s,u}{add,sub,mul}.with.overflow.iN` intrinsic family,
     /// branching to an outlined panic site on the overflow flag.

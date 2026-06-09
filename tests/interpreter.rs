@@ -116,6 +116,31 @@ fn test_abs_int_min_traps() {
 }
 
 #[test]
+fn test_narrow_int_overflow_traps() {
+    // Narrow integers are real fixed-width types (design.md § Integer
+    // overflow): `u8 200 + u8 100 = 300` overflows the width and traps,
+    // rather than silently widening to i64. Codegen mirrors this.
+    let errors = runtime_errors("fn main() { let a: u8 = 200; let b: u8 = 100; println(a + b); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("integer overflow")),
+        "expected u8-overflow trap, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_narrow_int_in_range_does_not_trap() {
+    // A narrow-int sum that fits the width is the value, no trap: `u8 97 + u8
+    // 98 = 195` (≤ 255).
+    assert_eq!(
+        run("fn main() { let a: u8 = 97; let b: u8 = 98; println(a + b); }"),
+        "195\n"
+    );
+}
+
+#[test]
 fn test_float_to_int_saturating() {
     // phase-8 cast slice 2: saturating clamps to the target's MIN/MAX and
     // truncates toward zero in range.

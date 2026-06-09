@@ -2892,7 +2892,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                     if let Some(slot) = self.variables.get(name).copied() {
-                        self.builder.build_store(slot.ptr, val).unwrap();
+                        // Coerce a scalar RHS to the slot's width before
+                        // storing — narrow-int arithmetic computes at i64
+                        // (`compile_narrow_int_binop`), so `r = r + 1` on an
+                        // `i32`/`u8` local yields an i64 that must be truncated
+                        // to the `iN` slot (lossless: the op already
+                        // range-checked). No-op when widths match or the value
+                        // is non-scalar. Mirrors the let-binding boundary.
+                        let cval = self.coerce_scalar_to_type(val, slot.ty);
+                        self.builder.build_store(slot.ptr, cval).unwrap();
                     }
                     // Move-aware suppression for `outer = inner;` when
                     // the LHS is a tracked Vec / String and the RHS is
