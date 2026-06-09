@@ -200,6 +200,26 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_subst = std::mem::take(&mut self.type_subst);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
         let saved_pct = self.pending_closure_fn_type.take();
+        // Isolate the f-string accumulator staging slot. A closure body
+        // may stage an `fstr.acc` alloca (e.g. an f-string moved into
+        // `Result.Err(f"…")`); that alloca lives in the *closure* fn, so
+        // if `last_fstr_acc` leaks back to the outer scope the outer
+        // function's cleanup path emits GEPs into it and LLVM rejects them
+        // ("Instruction does not dominate all uses"). The closure owns its
+        // own staged f-string (moved into the returned value or drained by
+        // its scope cleanup), so the outer slot is saved and restored intact.
+        let saved_fstr_acc = self.last_fstr_acc.take();
+        // Isolate the scope-cleanup frame (mirrors `emit_par_branch_fn`).
+        // The closure body's cleanup actions — e.g. an f-string
+        // accumulator's free — must be registered AND emitted inside the
+        // closure fn, where their allocas dominate, and drained before the
+        // closure returns. Without isolation they land in the OUTER
+        // function's frame and the outer drain emits GEPs into closure-fn
+        // allocas, which LLVM rejects ("Instruction does not dominate all
+        // uses" on `fstr.acc`). The body push below gives `track_*`/cleanup
+        // registration a frame of its own.
+        let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
+        self.scope_cleanup_actions.push(Vec::new());
 
         // 7. Build the closure body.
         self.current_fn = Some(closure_fn);
@@ -343,6 +363,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .get_terminator()
             .is_none()
         {
+            // Move-aware drain (mirrors `compile_function`): if the body is
+            // a block whose tail returns a tracked heap binding
+            // (Vec/String/Map/user-`Drop`), suppress that binding's cleanup
+            // so the drain doesn't free a value the closure is handing back
+            // to its caller. Non-block bodies that move an f-string into the
+            // return (e.g. `Result.Err(f"…")`) already had their accumulator
+            // cap zeroed by `suppress_fstr_acc_if_moved_out`, so their
+            // drained free is a runtime no-op.
+            if let ExprKind::Block(block) = &body.kind {
+                self.suppress_cleanup_for_tail_return(block);
+            }
+            // Drain the closure's own cleanup frame before returning, so its
+            // f-string / heap-local cleanups are emitted in THIS fn
+            // (alloca-dominated) rather than leaking into the outer frame.
+            self.emit_scope_cleanup();
             self.builder.build_return(Some(&result)).unwrap();
         }
 
@@ -354,6 +389,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_fn = saved_fn;
         self.closure_fn_types = saved_cfn;
         self.pending_closure_fn_type = saved_pct;
+        self.last_fstr_acc = saved_fstr_acc;
+        self.scope_cleanup_actions = saved_cleanup;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -573,6 +610,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     if segments.len() == 2 {
                         let target = segments[0].as_str();
                         let method = segments[1].as_str();
+                        // Enum-variant construction: `Enum.Variant(args)`
+                        // (Result.Ok/Err, Option.Some, user enums) returns
+                        // the enum's type-erased LLVM layout, NOT the
+                        // payload type. Guard on the variant actually
+                        // existing (`tags`) so a static method like
+                        // `Enum.from(..)` doesn't get mis-typed. Without
+                        // this the closure fn's declared return type
+                        // collapses to the i64 fallback below while the
+                        // compiled body produces the full enum struct —
+                        // LLVM verifier: "return type does not match
+                        // operand type of return inst".
+                        if let Some(layout) = self.enum_layouts.get(target) {
+                            if layout.tags.contains_key(method) {
+                                return BasicTypeEnum::StructType(layout.llvm_type);
+                            }
+                        }
                         // Eq/Ord methods return bool regardless of operand type.
                         if matches!(method, "eq" | "ne" | "lt" | "le" | "gt" | "ge") {
                             return self.context.bool_type().into();
@@ -608,6 +661,18 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             };
                         }
+                    }
+                }
+                self.context.i64_type().into()
+            }
+            // Bare enum-variant path expression: a unit variant used as a
+            // value, e.g. `Option.None` / `Result`-less user unit variants
+            // (no call args). Same type-erased-layout rule as the
+            // `Enum.Variant(args)` call form above.
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                if let Some(layout) = self.enum_layouts.get(segments[0].as_str()) {
+                    if layout.tags.contains_key(segments[1].as_str()) {
+                        return BasicTypeEnum::StructType(layout.llvm_type);
                     }
                 }
                 self.context.i64_type().into()

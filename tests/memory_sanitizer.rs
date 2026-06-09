@@ -356,6 +356,43 @@ fn main() {
         );
     }
 
+    // ── First-class closure-value codegen (closure-value-codegen-fixes) ──
+    //
+    // Three pre-existing gaps that `collect_all_vec` surfaced, fixed in
+    // `src/codegen/closures.rs`: (1) a closure body that inline-constructs
+    // an enum variant (`|| Result.Ok(x)`) — return-type inference returned
+    // the payload type, not the enum, so the closure fn `ret`'d a mismatched
+    // type; (2) an f-string inside a closure body (`|| Result.Err(f"…")`) —
+    // the accumulator's cleanup leaked into the outer fn's frame
+    // (dominance verifier error); (3) direct closure-value call + match,
+    // a downstream symptom of (1). The cleanup-frame isolation that fixes
+    // (2) is the ASAN-sensitive change: an f-string moved into the
+    // returned `Result` must be freed exactly once (by the consumer's
+    // drop, NOT the closure), so this run guards against a double-free.
+
+    #[test]
+    fn asan_closure_inline_result_and_fstring_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let base: i64 = 100;
+    let ok: Fn() -> Result[i64, String] = || Result.Ok(base + 1);
+    let err: Fn() -> Result[i64, String] = || Result.Err(f"bad{base}");
+    match ok() {
+        Result.Ok(v) => { println(f"ok {v}"); }
+        Result.Err(e) => { println(f"err {e}"); }
+    }
+    match err() {
+        Result.Ok(v) => { println(f"ok {v}"); }
+        Result.Err(e) => { println(f"err {e}"); }
+    }
+}
+"#,
+            &["ok 101", "err bad100"],
+            "closure_inline_result_and_fstring",
+        );
+    }
+
     // ── `println(String)` — `%.*s` length-bounded format ──────────
     //
     // Pre-fix `compile_print`'s struct-value arm passed the String's

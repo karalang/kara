@@ -144,6 +144,47 @@ mod par_codegen_tests {
         );
     }
 
+    #[test]
+    fn closure_value_inline_result_and_fstring_codegen_ok() {
+        // closure-value-codegen-fixes — a closure VALUE whose body
+        // inline-constructs an enum variant (`|| Result.Ok(x)`) and one
+        // that builds an f-string (`|| Result.Err(f"…")`) must lower to
+        // valid IR. Pre-fix two distinct LLVM-verifier failures (each its
+        // own bug surfaced by collect_all_vec): (1) closure return-type
+        // inference returned the payload type, so the closure fn `ret`'d a
+        // `{i64×6}` Result where the signature said `i64` ("return type
+        // does not match operand type of return inst"); (2) the f-string
+        // accumulator's cleanup leaked into the OUTER fn's frame, emitting
+        // a GEP into a closure-fn alloca ("Instruction does not dominate
+        // all uses"). `compile_to_ir` runs the module verifier, so a
+        // regression on either re-surfaces here as an `Err`.
+        let src = "fn main() {\n\
+                       let base: i64 = 100;\n\
+                       let ok: Fn() -> Result[i64, String] = || Result.Ok(base + 1);\n\
+                       let err: Fn() -> Result[i64, String] = || Result.Err(f\"bad{base}\");\n\
+                       let _a: Result[i64, String] = ok();\n\
+                       let _b: Result[i64, String] = err();\n\
+                   }";
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let ir = compile_to_ir(&parsed.program, Some(&ownership), None)
+            .expect("inline-Result + f-string closure VALUES must lower to verifier-clean IR");
+        // The closure fns return the 6-word type-erased Result struct, not
+        // the i64 payload fallback.
+        assert!(
+            ir.contains("{ i64, i64, i64, i64, i64, i64 }"),
+            "expected the Result struct type in the closure IR"
+        );
+    }
+
     /// Compile, link with the runtime, and run the program. Returns stdout
     /// on success, None if link/exec fails (legitimate soft-skip when the
     /// runtime archive is missing). Parse and codegen failures panic — those
