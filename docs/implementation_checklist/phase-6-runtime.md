@@ -36,8 +36,8 @@
 
 - [ ] **`collect_all { }` language syntax** — gather-all-errors `par {}` variant → `Vec[Result[T, E]]`.
 - [ ] **`if let` / `while let` / `let...else` scrutinee temporary scope** — lowering landed 2026-06-06; remaining scope-extension bits.
-- [ ] **Cost-model specification** (v1.x) — replaces the degenerate "parallelize whenever distinctness allows" model.
-- [ ] **Independence → backend alias metadata (Tier-0 ILP / autovectorization)** — spend the effect-distinctness conflict graph on LLVM `noalias` / `!alias.scope` metadata, not just thread fan-out. Pairs with the cost-model entry (axis selection).
+- [ ] **Cost-model specification** (**P0 — gated on the noalias spike; was v1.x**, 2026-06-09) — replaces the degenerate "parallelize whenever distinctness allows" model (independence is *necessary, not sufficient*). Profitability signal = data-to-code ratio / arithmetic intensity (roofline), which is often a *static* property even when N isn't → an N-independent gate compatible with AOT determinism (surfaced r/Compilers, yuehuang). Pointer density (statically readable from types) is the negative signal. Selects the axis across the Tier 0/1/2 model — see design.md § Feature 5 ("Independence is an optimization asset").
+- [ ] **Independence → backend alias metadata (Tier-0 ILP / autovectorization)** (**P0 — gated on the noalias spike; was v1.x**, 2026-06-09) — spend the effect-distinctness conflict graph on LLVM `noalias` / `!alias.scope` metadata, not just thread fan-out. Pairs with the cost-model entry above (axis selection). **The codegen lowering mechanism + correctness-first gate (differential `noalias`-on/off fuzz harness — silent-miscompile risk, Rust `-Zmutable-noalias` precedent) live in `phase-7-codegen.md` (ILP/no-alias-metadata Tier-0 entry).** P0/v1.x decision is gated on `docs/spikes/independence-noalias-ilp.md` (measure the marginal win over LLVM+BCE before committing the launch narrative). Design: design.md § Feature 5.
 
 **Parallax demo (bench / comparators)** (bench authoring — no compiler collision):
 
