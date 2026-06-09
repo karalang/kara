@@ -37900,6 +37900,46 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tensor_fnret_receiver() {
+        // A shape transform whose receiver is a fresh OWNED tensor
+        // temporary — a free-function return (`make().reshape(..)`) or a
+        // non-transform method return (`f.build().slice(..)`) — must read
+        // the temp's header correctly AND free it after the copy
+        // (phase-11 line 39: `tensor_receiver_is_owned_fresh_temp`).
+        // Output correctness here proves the receiver pointer is sourced
+        // from the call value and the receiver free does not corrupt the
+        // result; the leak fix itself is pinned by the ASAN lifecycle
+        // test (Linux detect_leaks).
+        let out = run_program(
+            "fn make() -> Tensor[i64, [2, 3]] {\n\
+                 Tensor.from([[1, 2, 3], [4, 5, 6]])\n\
+             }\n\
+             struct Factory {}\n\
+             impl Factory {\n\
+                 fn build(ref self) -> Tensor[i64, [2, 3]] {\n\
+                     Tensor.from([[10, 20, 30], [40, 50, 60]])\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let r = make().reshape([3, 2]);\n\
+                 println(r[0, 0]); println(r[2, 1]);\n\
+                 let f = Factory {};\n\
+                 let m = f.build().slice(0, 1, 2);\n\
+                 println(m[0, 0]); println(m[0, 2]);\n\
+                 let p = make().permute([1, 0]);\n\
+                 println(p[0, 0]); println(p[2, 1]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "1\n6\n40\n60\n1\n6\n",
+                "owned fn-return / method-return receiver transforms must \
+                 match the interpreter twins",
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_tensor_slice_runtime_axis() {
         // Runtime-valued slice bounds degrade the sliced dim to `?` in
         // the type but codegen reads everything from the header, so the

@@ -642,20 +642,18 @@ impl<'ctx> super::Codegen<'ctx> {
         if !matches!(method, "reshape" | "permute" | "slice" | "squeeze") {
             return Ok(None);
         }
-        // A receiver that is itself a shape-transform call (`a.permute(..)
-        // .reshape(..)`) is a fresh owned temporary: the inner call
-        // malloc'd it, the current call copies out of it, and nothing
-        // else owns it. Free it after the copy so chained transforms
-        // don't leak the intermediates. An identifier / field / index
-        // receiver is borrowed and must NOT be freed here (it keeps its
-        // own scope cleanup); a function-return receiver (`make()
-        // .reshape(..)`) is also a fresh temporary but isn't freed yet —
-        // a benign leak, never a corruption (tracked with iter_axis).
-        let receiver_is_fresh_temp = matches!(
-            &object.kind,
-            ExprKind::MethodCall { method: m, .. }
-                if matches!(m.as_str(), "reshape" | "permute" | "slice" | "squeeze")
-        );
+        // A receiver that is a fresh OWNED tensor temporary — a chained
+        // transform (`a.permute(..).reshape(..)`), a free-fn return
+        // (`make().reshape(..)`), or a non-transform method return that
+        // hands back an owned tensor — was malloc'd upstream, is copied
+        // out of by this call, and is owned by nothing else; free it
+        // after the copy so the intermediate doesn't leak. An identifier
+        // / field / index receiver is borrowed and must NOT be freed
+        // here (it keeps its own scope cleanup), and a *borrowed*
+        // (`ref Tensor`) return must not be freed either — freeing a
+        // borrow would corrupt the owner. `tensor_receiver_is_owned_fresh_temp`
+        // draws that line via the ref-return side-tables.
+        let receiver_is_fresh_temp = self.tensor_receiver_is_owned_fresh_temp(object);
         let t_ptr = match &object.kind {
             ExprKind::Identifier(name) if self.tensor_var_infos.contains_key(name.as_str()) => {
                 self.tensor_ptr_for_var(name)?
@@ -681,6 +679,49 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
         }
         Ok(Some(v))
+    }
+
+    /// Is `object` — the receiver of a shape method — a *fresh owned*
+    /// tensor temporary that this call must free after copying out of it?
+    ///
+    /// True for the three sources of a malloc'd-here-and-owned-nowhere-else
+    /// tensor: a chained shape-transform call, a free-function call, and a
+    /// non-transform method call. The hazard a naive "any Call/MethodCall"
+    /// rule would hit is a *borrowed* return — `fn first(t: ref Tensor[..])
+    /// -> ref Tensor[..]` hands back a pointer into a tensor the caller
+    /// still owns, and freeing that would corrupt the owner. The compiler
+    /// records every `ref`/`mut ref` return so the *absence* of that
+    /// record is the owned-return signal: free-fn calls consult
+    /// `fn_ref_return_inner` (keyed by callee name), method calls consult
+    /// `ref_return_inner_types` (keyed by the call span — `MethodCall.span
+    /// == receiver.span`, which is `object.span` here). An identifier /
+    /// field / index receiver is borrowed (a live binding owns it) and is
+    /// never a fresh temp — those keep their own scope cleanup.
+    fn tensor_receiver_is_owned_fresh_temp(&self, object: &Expr) -> bool {
+        match &object.kind {
+            // A chained transform always returns a freshly malloc'd, owned
+            // block (the transforms never return a borrow), so it is owned
+            // regardless of any side-table entry.
+            ExprKind::MethodCall { method: m, .. }
+                if matches!(m.as_str(), "reshape" | "permute" | "slice" | "squeeze") =>
+            {
+                true
+            }
+            // Free-function return: owned unless the callee is a recorded
+            // `ref`/`mut ref`-returning function. A non-identifier callee
+            // (a qualified constructor like `Tensor.zeros(..)`) is left
+            // alone — a benign leak, not worth a free we can't prove safe.
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(n) => !self.fn_ref_return_inner.contains_key(n.as_str()),
+                _ => false,
+            },
+            // Non-transform method return: owned unless the call span
+            // carries a `ref`/`mut ref`-return record.
+            ExprKind::MethodCall { .. } => !self
+                .ref_return_inner_types
+                .contains_key(&(object.span.offset, object.span.length)),
+            _ => false,
+        }
     }
 
     /// Element LLVM type of a transform's *result* tensor, read from the

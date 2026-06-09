@@ -5177,6 +5177,65 @@ fn main() {
         );
     }
 
+    /// Owned fn-return / method-return receiver of a shape transform
+    /// (phase-11 line 39). `make().reshape(..)` and `f.build().slice(..)`
+    /// each produce a fresh OWNED tensor temporary that the transform
+    /// copies out of and must then free exactly once
+    /// (`tensor_receiver_is_owned_fresh_temp` → the `receiver_is_fresh_temp`
+    /// free). A missing free leaks the intermediate (Linux detect_leaks);
+    /// a free applied to a *borrowed* receiver, or a double free of the
+    /// result, trips ASAN everywhere. The identifier receivers in the
+    /// other tensor ASAN tests pin the negative (don't-free) side; this
+    /// pins the fresh-temp positive side for both the free-fn and method
+    /// return sources.
+    #[test]
+    fn asan_tensor_fnret_receiver_free_clean() {
+        let label = "tensor_fnret_receiver_free";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn make() -> Tensor[i64, [2, 3]] {
+    Tensor.from([[1, 2, 3], [4, 5, 6]])
+}
+struct Factory {}
+impl Factory {
+    fn build(ref self) -> Tensor[i64, [2, 3]] {
+        Tensor.from([[10, 20, 30], [40, 50, 60]])
+    }
+}
+fn main() {
+    let r = make().reshape([3, 2]);
+    println(r[2, 1]);
+    let f = Factory {};
+    let m = f.build().slice(0, 1, 2);
+    println(m[0, 2]);
+    let p = make().permute([1, 0]);
+    println(p[2, 1]);
+    let sq = make().squeeze();
+    println(sq[1, 2]);
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check the fresh fn-return/method-return receiver free",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["6", "60", "6", "6"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     // ── Owned Vec/String param moved into a local (kata-23, 2026-06-07) ──
     //
     // `let mut work = lists;` where `lists` is a bare by-value Vec/String
