@@ -771,6 +771,19 @@ fn unwrap_or(m: Maybe, default: i64) -> i64 {
         assert!(ir.contains("trunc"));
     }
 
+    #[test]
+    fn test_ir_int_signed_widen_emits_sext() {
+        // phase-8 cast slice 5 (int→int verification): widening a *signed*
+        // source sign-extends. Pairs with `test_ir_u8_cast_to_i32_emits_zext`
+        // (unsigned source → zext) and `test_ir_int_truncate` (narrowing →
+        // trunc) to pin all three int→int `as` lowerings.
+        let ir = ir_for("fn widen(x: i8) -> i64 { x as i64 }");
+        assert!(
+            ir.contains("sext i8"),
+            "signed widening should sign-extend:\n{ir}"
+        );
+    }
+
     // ── Multiple functions ────────────────────────────────────────
 
     #[test]
@@ -2008,6 +2021,31 @@ fn main() {
         );
         if let Some(out) = out {
             assert_eq!(out.trim(), "255");
+        }
+    }
+
+    #[test]
+    fn test_e2e_int_to_int_cast_spec_cases() {
+        // phase-8 cast slice 5 (int→int verification): the design.md test
+        // vectors. Narrowing keeps the low bits (`trunc`); widening sign- or
+        // zero-extends per source signedness. Compiled output must match the
+        // interpreter (and these documented values).
+        let out = run_program(
+            r#"
+fn main() {
+    println(0x1FFi32 as u8);   // narrow: low 8 bits -> 255
+    println(-1i32 as u8);      // narrow: 0xFF -> 255
+    println(300i32 as i8);     // narrow: 300 & 0xFF = 0x2C -> 44
+    println(-1i8 as u8);       // same width reinterpret -> 255
+    let a: i8 = -5;
+    println(a as i64);         // signed widen (sext) -> -5
+    let u: u8 = 200;
+    println(u as i64);         // unsigned widen (zext) -> 200
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "255\n255\n44\n255\n-5\n200");
         }
     }
 
