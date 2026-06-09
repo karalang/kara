@@ -3311,6 +3311,39 @@ fn main() {
     }
 
     #[test]
+    fn asan_nested_struct_pattern_no_double_free() {
+        // Nested struct pattern (`let Outer { inner: Inner { data }, n } = mk()`)
+        // — the dispatch fix made `data.len()` compile; this confirms the
+        // nested field's heap is freed exactly once. The enclosing `inner`
+        // field is discard-freed as a unit (running Inner's drop → frees the
+        // Vec), and `data` carries no separate cleanup, so looping faults under
+        // ASAN if the Vec is freed twice (or aliased + freed).
+        assert_clean_asan_run(
+            r#"
+struct Inner { data: Vec[i64] }
+struct Outer { inner: Inner, n: i64 }
+fn mk(x: i64) -> Outer {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(x);
+    v.push(x);
+    return Outer { inner: Inner { data: v }, n: x };
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let Outer { inner: Inner { data }, n } = mk(i);
+        println(data.len() + n);
+        i = i + 1;
+    }
+    println(99);
+}
+"#,
+            &["2", "3", "4", "5", "6", "99"],
+            "nested_struct_pattern_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_set_local_moved_into_returned_struct_no_uaf() {
         // Pre-existing UAF (fixed 2026-06-08): a `Set` local moved into a
         // struct LITERAL that the function returns was freed at the source

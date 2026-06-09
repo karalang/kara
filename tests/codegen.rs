@@ -12690,6 +12690,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_nested_struct_pattern_dispatch() {
+        // `let Outer { inner: Inner { data }, n } = make()` — a NESTED struct
+        // pattern. `bind_pattern` allocates the nested leaf `data`, but its
+        // dispatch side-tables were never registered, so `data.len()` failed
+        // with "no handler for method 'len' on variable 'data'". The recursive
+        // register_struct_pattern_dispatch closes that; the nested field's heap
+        // is still freed once by the enclosing-field discard (no double-free).
+        let out = run_program(
+            r#"
+struct Inner { data: Vec[i64] }
+struct Outer { inner: Inner, n: i64 }
+fn make() -> Outer {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10_i64);
+    v.push(20_i64);
+    return Outer { inner: Inner { data: v }, n: 5 };
+}
+fn main() {
+    let Outer { inner: Inner { data }, n } = make();
+    println(data.len() + n);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7");
+        }
+    }
+
+    #[test]
     fn test_ir_struct_destructure_bound_field_freed() {
         // A bound heap field is freed via its binding's scope-exit cleanup.
         let src = format!(

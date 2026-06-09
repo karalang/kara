@@ -3140,6 +3140,27 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(field_te) = field_tes.get(idx).cloned() else {
                 continue;
             };
+            // Nested struct pattern (`inner: Inner { data }`): `bind_pattern`
+            // already allocated the nested leaf bindings, but their dispatch
+            // side-tables were never registered (so `data.len()` failed with
+            // "no handler for method"). Recurse to register dispatch for every
+            // nested leaf. Dispatch-only — per-leaf CLEANUP for nested fields
+            // stays a tracked narrow leak: the enclosing field is freed as one
+            // unit by the `else` discard branch below, so its heap is still
+            // freed once; what's missing is per-nested-leaf move-out precision.
+            if let Some(p) = fields
+                .iter()
+                .find(|f| &f.name == fname)
+                .and_then(|f| f.pattern.as_ref())
+            {
+                if matches!(&p.kind, PatternKind::Struct { .. }) {
+                    if let TypeKind::Path(tp) = &field_te.kind {
+                        if let Some(nested) = tp.segments.last().cloned() {
+                            self.register_struct_pattern_dispatch(&nested, p);
+                        }
+                    }
+                }
+            }
             // Which name (if any) does the pattern bind this field to?
             let bound_name: Option<String> = match fields.iter().find(|f| &f.name == fname) {
                 Some(f) => match &f.pattern {
@@ -3181,6 +3202,58 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         Ok(())
+    }
+
+    /// Recursively register method-dispatch side-tables for the leaf bindings
+    /// of a (possibly nested) struct pattern — `bind_pattern` allocates the
+    /// nested leaves but leaves them dispatch-less, so without this
+    /// `let Outer { inner: Inner { data } } = …; data.len()` fails with "no
+    /// handler for method 'len' on variable 'data'". Dispatch-only: it just
+    /// populates the `register_var_from_type_expr` side-tables (Vec/Map/Set/
+    /// struct), exactly like the top-level leaves in
+    /// `finish_owned_struct_destructure`. Per-nested-leaf cleanup precision
+    /// stays a tracked narrow leak (the enclosing field frees its heap as one
+    /// unit). Tuple / enum sub-patterns inside a struct field are not walked
+    /// here (separate follow-ups) — only struct-in-struct nesting.
+    fn register_struct_pattern_dispatch(&mut self, struct_name: &str, pattern: &Pattern) {
+        let PatternKind::Struct { fields, .. } = &pattern.kind else {
+            return;
+        };
+        let Some(field_names) = self.struct_field_names.get(struct_name).cloned() else {
+            return;
+        };
+        let Some(field_tes) = self.struct_field_type_exprs.get(struct_name).cloned() else {
+            return;
+        };
+        for f in fields {
+            let Some(idx) = field_names.iter().position(|n| n == &f.name) else {
+                continue;
+            };
+            let Some(field_te) = field_tes.get(idx).cloned() else {
+                continue;
+            };
+            match &f.pattern {
+                // Shorthand leaf (`Inner { data }`): the field name is the var.
+                None => self.register_var_from_type_expr(&f.name, &field_te),
+                Some(p) => match &p.kind {
+                    // `field: x` leaf — bind `x`.
+                    PatternKind::Binding(n) => {
+                        let n = n.clone();
+                        self.register_var_from_type_expr(&n, &field_te);
+                    }
+                    // Deeper struct nesting — recurse.
+                    PatternKind::Struct { .. } => {
+                        if let TypeKind::Path(tp) = &field_te.kind {
+                            if let Some(nested) = tp.segments.last().cloned() {
+                                self.register_struct_pattern_dispatch(&nested, p);
+                            }
+                        }
+                    }
+                    // Wildcard / other — no dispatchable binding.
+                    _ => {}
+                },
+            }
+        }
     }
 
     /// Whether a destructured field's type owns heap that this slice's

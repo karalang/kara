@@ -112,8 +112,13 @@ miscompile; pre-existing, this fix doesn't widen them):**
   `test_ir_struct_destructure_{bound,unbound,rest}_field_freed` (codegen.rs);
   `asan_struct_destructure_bound_and_unbound_no_double_free`
   (memory_sanitizer.rs). **Remaining narrow gaps** (leaks, never double-frees):
-  ~~`Set` fields~~ **CLOSED 2026-06-08**, nested-enum / nested-pattern fields,
-  and non-fresh-temp RHS.
+  ~~`Set` fields~~ **CLOSED 2026-06-08**, ~~nested struct-pattern dispatch~~
+  **CLOSED 2026-06-08** (`register_struct_pattern_dispatch`; the enclosing field's
+  unit discard already freed the nested heap once, so dispatch-only was
+  sufficient — `test_e2e_nested_struct_pattern_dispatch` /
+  `asan_nested_struct_pattern_no_double_free`). **Deferred narrow remainder:**
+  non-fresh-temp RHS (benign leak) and tuple/enum sub-patterns nested inside a
+  struct field (dispatch — only struct-in-struct is wired).
   - **`Set` fields — CLOSED 2026-06-08, and surfaced+fixed a broader
     pre-existing UAF.** `destructure_field_needs_cleanup` +
     `track_owned_destructure_field_cleanup` (stmts.rs) now route a `Set` field
