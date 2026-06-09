@@ -12,7 +12,7 @@
 //! Lives in a sibling `impl<'a> super::Interpreter<'a>` block.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use regex::Regex as RustRegex;
 
@@ -918,6 +918,9 @@ impl<'a> super::Interpreter<'a> {
                 "assert_ne" => {
                     return self.eval_builtin_assert_ne(args, span);
                 }
+                "collect_all_vec" => {
+                    return self.eval_collect_all_vec(args, span);
+                }
                 _ => {}
             }
         }
@@ -1584,6 +1587,54 @@ impl<'a> super::Interpreter<'a> {
         m.push((key, default.clone()));
         self.env.set(&name, Value::Map(m));
         default
+    }
+
+    /// `collect_all_vec(fs)` — the gather-all-errors homogeneous parallel
+    /// primitive (design.md § Concurrency Semantics > `collect_all_vec` for
+    /// homogeneous branches). Runs EVERY closure in the input
+    /// `Vec[Fn() -> Result[T, E]]` to completion and returns one `Result`
+    /// per input, position-bound: `output[i]` is the outcome of `fs[i]`.
+    /// Unlike fail-fast `par {}`, an `Err` from one branch does NOT cancel
+    /// its siblings — only a panic dominates (it short-circuits the gather
+    /// via `pending_cf`, per design.md § Parallel Failure and Cleanup).
+    ///
+    /// The interpreter runs the branches **sequentially** in input order.
+    /// This is observably correct for `collect_all_vec`: the result vector
+    /// is position-bound (not completion-ordered), every branch runs to
+    /// completion regardless of peer `Err`, and parallelism is unobservable
+    /// absent shared mutation — which the interpreter models with real OS
+    /// threads only for explicit `par {}` (see `eval_par_block`). Codegen
+    /// (phase-6 slice 1b) provides the actually-parallel lowering.
+    pub(crate) fn eval_collect_all_vec(&mut self, args: &[CallArg], _span: &Span) -> Value {
+        // Arity (exactly one `Vec[Fn() -> Result[T, E]]`) is guaranteed by
+        // the typechecker against the stdlib `#[compiler_builtin]` signature.
+        let Some(arg0) = args.first() else {
+            return Value::Array(Arc::new(RwLock::new(Vec::new())));
+        };
+        let fs_val = self.eval_expr_inner(&arg0.value);
+        if self.pending_cf.is_some() {
+            return Value::Array(Arc::new(RwLock::new(Vec::new())));
+        }
+        // Snapshot the closures out from under the shared `Arc<RwLock>`
+        // before invoking any — a branch body may re-enter the interpreter
+        // against the same array, and `RwLock` is non-reentrant on one
+        // thread (same caveat documented on `invoke_value_comparator`).
+        let closures: Vec<Value> = match &fs_val {
+            Value::Array(rc) => rc.read().unwrap().clone(),
+            _ => return Value::Array(Arc::new(RwLock::new(Vec::new()))),
+        };
+        let mut results: Vec<Value> = Vec::with_capacity(closures.len());
+        for closure in closures {
+            let r = self.invoke_function_value(closure, Vec::new());
+            // A panicking / diverging branch dominates: stop the gather and
+            // let the pending control-flow signal propagate upward (panic
+            // cancels siblings; the partial result vector is never observed).
+            if self.pending_cf.is_some() {
+                return Value::Array(Arc::new(RwLock::new(results)));
+            }
+            results.push(r);
+        }
+        Value::Array(Arc::new(RwLock::new(results)))
     }
 
     /// Invoke a `Value::Function` (closure or named function) with

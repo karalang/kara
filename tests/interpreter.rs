@@ -3159,6 +3159,58 @@ fn test_repeatable_closure_in_vec_dispatched_via_index_call() {
     );
 }
 
+#[test]
+fn collect_all_vec_gathers_all_results_without_fail_fast() {
+    // Phase 6 slice 1a — `collect_all_vec` runs EVERY closure to
+    // completion and returns one Result per input, position-bound
+    // (`output[i]` == outcome of `fs[i]`). Unlike fail-fast `par {}`, an
+    // `Err` from one branch does NOT stop later branches: indices 0 and 2
+    // (Ok) and 1 and 3 (Err) all appear, and the Ok at index 2 proves a
+    // branch after an Err still ran. (design.md § Concurrency Semantics.)
+    assert_eq!(
+        run("fn work(n: i64) -> Result[i64, String] {\n\
+                 if n > 0 { Result.Ok(n * 10) } else { Result.Err(f\"neg:{n}\") }\n\
+             }\n\
+             fn main() {\n\
+                 let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| work(1), || work(-2), || work(3), || work(-4)];\n\
+                 let results: Vec[Result[i64, String]] = collect_all_vec(fs);\n\
+                 println(f\"len={results.len()}\");\n\
+                 for r in results {\n\
+                     match r {\n\
+                         Result.Ok(v) => { println(f\"ok {v}\"); }\n\
+                         Result.Err(e) => { println(f\"err {e}\"); }\n\
+                     }\n\
+                 }\n\
+             }"),
+        "len=4\nok 10\nerr neg:-2\nok 30\nerr neg:-4\n"
+    );
+}
+
+#[test]
+fn collect_all_vec_panic_in_branch_dominates() {
+    // A panicking branch dominates: it short-circuits the gather (via
+    // `pending_cf`) so the post-`collect_all_vec` line never runs and the
+    // panic propagates. (design.md § Parallel Failure and Cleanup — panic
+    // cancels siblings even under `collect_all_vec`.)
+    let (out, errors, _trace, _trunc) = run_program_full(
+        "fn boom() -> Result[i64, String] { todo(\"kaboom\") }\n\
+         fn main() {\n\
+             let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| Result.Ok(1), || boom(), || Result.Ok(3)];\n\
+             let results: Vec[Result[i64, String]] = collect_all_vec(fs);\n\
+             println(f\"after len={results.len()}\");\n\
+         }",
+    );
+    assert!(
+        !out.join("").contains("after"),
+        "post-collect_all_vec line must not run after a branch panic; stdout: {:?}",
+        out
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected a runtime panic to propagate; got no errors"
+    );
+}
+
 // ── `mut ref |...|` capture-mutation propagation (round 12.48) ──
 //
 // Mutations made by a `mut ref` closure to a captured outer binding

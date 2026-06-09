@@ -391,6 +391,22 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.lower_spawn_call(&args[0].value);
         }
 
+        // Phase 6 — `collect_all_vec(fs)` codegen is slice 1b (not yet
+        // landed). The interpreter (`eval_collect_all_vec`) runs it today;
+        // under `karac build` we MUST hard-error rather than fall through
+        // to the generic-fn path, which would lower the `#[compiler_builtin]`
+        // stub body (`Vec.new()`) into a silently-empty result vector — the
+        // closures would never run (a silent-wrong footgun, worse than a
+        // hard error). Fail loudly until 1b wires the parallel gather
+        // lowering (iterate the Vec of closure fat-pointers → per-branch
+        // trampolines into N Result slots → `karac_par_run` in gather-mode →
+        // assemble the output `Vec[Result[T, E]]`).
+        if name == "collect_all_vec" {
+            return Err("collect_all_vec is not yet supported under `karac build` \
+                 (codegen is phase-6 slice 1b); run it with `karac run` for now"
+                .to_string());
+        }
+
         // Layout-introspection intrinsics. Intercepted before the
         // generic-call lookup so the `{ 0 }` placeholder body in
         // `runtime/stdlib/intrinsics.kara` is never lowered. The

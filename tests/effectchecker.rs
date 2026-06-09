@@ -3933,6 +3933,41 @@ fn test_pub_fn_with_writes_env_declared_accepts_env_set() {
 }
 
 #[test]
+fn collect_all_vec_propagates_closure_effects_to_caller() {
+    // Phase 6 slice 1a — the closures' effects flow through
+    // `collect_all_vec` to the caller (design.md § Concurrency Semantics:
+    // "the enclosing function's inferred effect set is the union of all
+    // branch effects"), at exact parity with `spawn`. A public caller
+    // that under-declares is rejected. The `#[compiler_builtin]` stub body
+    // never calls the closures, so this is the generic closure-argument
+    // effect attribution — NOT a special-cased arm — which is what makes
+    // the no-`with Eff`-on-the-decl design sound.
+    let result = effectcheck_full_pipeline(
+        "pub trait Rec { fn record(mut ref self, v: i64); }
+         pub effect resource R: Rec;
+         fn does_write() -> Result[i64, String] with writes(R) { R.record(1); Result.Ok(1) }
+         pub fn via_cav() {
+             let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| does_write()];
+             let r: Vec[Result[i64, String]] = collect_all_vec(fs);
+         }",
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("writes(R)")),
+        "expected MissingEffectDeclaration mentioning writes(R) (closure effect \
+         must propagate through collect_all_vec); got: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_allocates_heap_propagates_through_call_chain() {
     // allocates(Heap) propagates transitively: inner → outer.
     let result = effectcheck_ok(

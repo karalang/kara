@@ -252,6 +252,25 @@ fn spawn[T](f: OnceFn() -> T) -> TaskHandle[T] {
     TaskHandle { task_id: 0 }
 }
 
+// Phase 6 — `collect_all_vec`: the gather-all-errors homogeneous
+// parallel primitive (design.md § Concurrency Semantics >
+// `collect_all_vec` for homogeneous branches). Runs EVERY closure in
+// `fs` to completion in parallel — unlike fail-fast `par {}`, an `Err`
+// from one branch does NOT cancel its siblings (only a panic does,
+// per design.md § Parallel Failure and Cleanup) — and returns one
+// `Result` per input, position-bound: `output[i]` is the outcome of
+// `fs[i]`. Homogeneous (`T`, `E` shared across all branches) and
+// unbounded (no arity cap, unlike the fixed-arity heterogeneous-tuple
+// `collect_all`, which is a separate follow-up slice). `#[compiler_builtin]`
+// because "run a runtime Vec of closures in parallel and gather every
+// result" cannot be expressed in pure Kāra: the call site is intercepted
+// in the interpreter (`eval_collect_all_vec`) and in codegen. The stub
+// body below only satisfies the declared return type; it never runs.
+#[compiler_builtin]
+fn collect_all_vec[T, E](fs: Vec[Fn() -> Result[T, E]]) -> Vec[Result[T, E]] {
+    Vec.new()
+}
+
 // `ScopeLocal` — sealed compiler-known marker trait. Types that
 // implement `ScopeLocal` cannot escape the scope that created them:
 // the typechecker rejects them in three positions per design.md §

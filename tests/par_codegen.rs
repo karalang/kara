@@ -104,6 +104,40 @@ mod par_codegen_tests {
         compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen failed")
     }
 
+    #[test]
+    fn collect_all_vec_hard_errors_under_build_until_slice_1b() {
+        // Phase 6 slice 1a — `collect_all_vec` runs in the interpreter but
+        // its codegen lowering is slice 1b. Until then `karac build` MUST
+        // hard-error, NOT fall through to the generic-fn path, which would
+        // lower the `#[compiler_builtin]` stub body (`Vec.new()`) into a
+        // silently empty result vector — the closures would never run (a
+        // silent-wrong footgun, worse than a hard error). When 1b lands,
+        // flip this from an error assertion to a lowering assertion.
+        let src = "fn work(n: i64) -> Result[i64, String] {\n\
+                       if n > 0 { Result.Ok(n) } else { Result.Err(\"neg\") }\n\
+                   }\n\
+                   fn main() {\n\
+                       let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| work(1)];\n\
+                       let r: Vec[Result[i64, String]] = collect_all_vec(fs);\n\
+                   }";
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, Some(&ownership), None)
+            .expect_err("collect_all_vec must NOT lower under karac build in slice 1a");
+        assert!(
+            err.contains("collect_all_vec") && err.contains("slice 1b"),
+            "expected a slice-1b not-yet-supported error; got: {err}"
+        );
+    }
+
     /// Compile, link with the runtime, and run the program. Returns stdout
     /// on success, None if link/exec fails (legitimate soft-skip when the
     /// runtime archive is missing). Parse and codegen failures panic — those

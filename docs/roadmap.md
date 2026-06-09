@@ -312,7 +312,7 @@ Note: Basic diagnostics (`--output=json`, source spans, error suggestions) are b
 - [x] Completion wins cancellation: a branch already executing its body completes naturally (cancel check is at entry, not mid-body). Full effect-boundary granularity deferred.
 - [x] Cascading cooperative cancellation: works at branch granularity (outer cancel observed at nested branch start). Mid-execution propagation into running nested pars deferred.
 - [x] Scheduler minimum invariants: no lost work (atomic counter ensures every branch is picked up exactly once); cancel eventually observed (checked before each new branch pickup); termination guaranteed (workers exit when counter >= count or cancel set); deadlock-free (no locks in hot path, only atomic operations).
-- [x] `collect_all`: deferred as language syntax feature — needs `collect_all { }` block syntax and runtime gather mode. Tracked in implementation_checklist/.
+- [x] `collect_all`: tracked as a language feature in implementation_checklist/phase-6-runtime.md. Surface = design.md's *function* form (`collect_all_vec` homogeneous `Vec[Fn() -> Result[T,E]] -> Vec[Result[T,E]]` + the heterogeneous fixed-arity `collect_all` tuple), dispatched compiler-side like `dbg`/`spawn` — NOT a `collect_all { }` block keyword (that framing was stale). `collect_all_vec` slice 1a (front-end + interpreter + codegen gate) shipped 2026-06-09; codegen slice 1b open.
 
 **Done when:** A benchmark program with three independent I/O calls runs ~3x faster with auto-concurrency than with `--sequential`. Cancellation works: if one branch fails, siblings are cancelled and the first error is returned. Pure programs have zero scheduling overhead (measured).
 

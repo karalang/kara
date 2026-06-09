@@ -21268,6 +21268,25 @@ fn taskgroup_spawn_non_consuming_closure_still_accepted() {
     );
 }
 
+#[test]
+fn collect_all_vec_typechecks_to_vec_of_results() {
+    // Phase 6 slice 1a — `collect_all_vec[T, E](fs: Vec[Fn() -> Result[T,
+    // E]]) -> Vec[Result[T, E]]` types via normal generic inference
+    // against the `#[compiler_builtin]` stdlib decl (no special
+    // typechecker arm, exactly like `spawn`). Homogeneous T/E; the result
+    // is a `Vec[Result[T, E]]` the caller can index / iterate.
+    typecheck_ok(
+        "fn work(n: i64) -> Result[i64, String] {
+             if n > 0 { Result.Ok(n) } else { Result.Err(\"neg\") }
+         }
+         fn main() {
+             let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| work(1), || work(-1)];
+             let results: Vec[Result[i64, String]] = collect_all_vec(fs);
+             let _n: i64 = results.len();
+         }",
+    );
+}
+
 // ── Phase 6 line 218 slice 2: ScopeLocal marker + enforcement ────────
 //
 // design.md § ScopeLocal — `TaskHandle[T]` (and any other future

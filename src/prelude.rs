@@ -1259,6 +1259,14 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // call from "boundary-detected unknown callee" to a real
     // stdlib item without changing the boundary-detection behavior.
     "spawn",
+    // Phase 6 — `collect_all_vec[T, E](fs: Vec[Fn() -> Result[T, E]]) ->
+    // Vec[Result[T, E]]`. Gather-all-errors homogeneous parallel
+    // primitive (decl in `runtime/stdlib/task_group.kara`). Like
+    // `spawn`, registering the name here promotes the bare-identifier
+    // call to a real stdlib item; the call site is intercepted in the
+    // interpreter (`eval_collect_all_vec`) and codegen rather than
+    // running its `#[compiler_builtin]` placeholder body.
+    "collect_all_vec",
     // Phase 8 line 153 (active-span propagation) — `std.tracing`.
     // `with_span(span, || body)` installs an ambient active span for the
     // body; the interpreter and codegen intercept the call shape (see
