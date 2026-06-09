@@ -1857,6 +1857,197 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
+    /// Cross-argument `?`-dim equality asserts at a call boundary
+    /// (design.md § Runtime equality check, the call-boundary flavor).
+    ///
+    /// When two of a generic callee's `Tensor` parameters share a named
+    /// `Dim` parameter — e.g. `K` in `matmul(a: Tensor[T, [M, K]], b:
+    /// Tensor[T, [K, N]])` — the two argument dims that bind `K` must be
+    /// equal at runtime. The type system can't prove equality of two `?`
+    /// dims statically (both are dynamic), so the compiler inserts a check
+    /// that fails fast with a clear message rather than letting the callee
+    /// read out of bounds. Concrete-vs-concrete is resolved at type-check
+    /// time (E_SHAPE on mismatch — no code here); concrete-vs-`?` lowers to
+    /// a bounds check against the static value (foldable by the optimizer);
+    /// `?`-vs-`?` lowers to a full equality check.
+    ///
+    /// Lives only on the generic-call path: a named dim parameter can only
+    /// appear in a function with generic params, so a non-generic call
+    /// never has cross-argument dim constraints. The tensor pointers come
+    /// from the already-compiled `arg_vals` (a tensor value is a single
+    /// pointer), so this reads no variable slots and is safe to run at any
+    /// point after the arguments are compiled.
+    pub(super) fn emit_tensor_crossarg_dim_asserts(
+        &mut self,
+        generic_fn: &crate::ast::Function,
+        args: &[CallArg],
+        arg_vals: &[BasicValueEnum<'ctx>],
+    ) -> Result<(), String> {
+        // Only the callee's own generic params are Dim params that create a
+        // cross-argument constraint — a module-level integer constant used
+        // as a dim is concrete (the typechecker checks it against the arg
+        // directly), not a shared runtime dim, so it must not be grouped.
+        let generic_names: std::collections::HashSet<&str> = generic_fn
+            .generic_params
+            .as_ref()
+            .map(|gp| gp.params.iter().map(|p| p.name.as_str()).collect())
+            .unwrap_or_default();
+        if generic_names.is_empty() {
+            return Ok(());
+        }
+
+        // dim-param name → the (param index, dim index) positions binding
+        // it. BTreeMap keeps the emitted asserts in a deterministic order
+        // (stable IR across builds).
+        let mut by_name: std::collections::BTreeMap<String, Vec<(usize, usize)>> =
+            std::collections::BTreeMap::new();
+        for (pi, p) in generic_fn.params.iter().enumerate() {
+            if let Some(named) = self.tensor_param_named_dims(&p.ty, &generic_names) {
+                for (di, slot) in named.iter().enumerate() {
+                    if let Some(nm) = slot {
+                        by_name.entry(nm.clone()).or_default().push((pi, di));
+                    }
+                }
+            }
+        }
+
+        let i64_t = self.context.i64_type();
+        for (dim_name, positions) in by_name {
+            if positions.len() < 2 {
+                continue;
+            }
+            // Resolve each position to its argument's tensor pointer, the
+            // dim slot, the statically-known dim value (if any), and a
+            // human label. A position whose argument didn't compile to a
+            // pointer (shouldn't happen for a tensor arg) is skipped — never
+            // a false trap.
+            let mut resolved: Vec<(PointerValue<'ctx>, usize, Option<i64>, String)> = Vec::new();
+            for (pi, di) in positions {
+                let Some(BasicValueEnum::PointerValue(ptr)) = arg_vals.get(pi).copied() else {
+                    continue;
+                };
+                let static_val = self.tensor_arg_static_dim(args.get(pi), di);
+                let label = match args.get(pi).map(|a| &a.value.kind) {
+                    Some(ExprKind::Identifier(n)) => format!("argument '{}'", n),
+                    _ => format!("argument {}", pi),
+                };
+                resolved.push((ptr, di, static_val, label));
+            }
+            if resolved.len() < 2 {
+                continue;
+            }
+
+            // A statically-known value on any position is the witness — the
+            // typechecker guarantees all concrete values in a group agree,
+            // so every other (runtime) position is bounds-checked against it
+            // (the foldable concrete-vs-`?` flavor). With no static witness,
+            // all positions are `?`: pin them to the first and assert the
+            // rest equal it.
+            let static_witness = resolved.iter().find_map(|(_, _, sv, _)| *sv);
+            if let Some(d) = static_witness {
+                let want = i64_t.const_int(d as u64, false);
+                for (ptr, di, sv, label) in &resolved {
+                    if sv.is_some() {
+                        continue;
+                    }
+                    let got = self.tensor_load_dim(*ptr, *di);
+                    let ok = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, got, want, "t.kdim.ok")
+                        .unwrap();
+                    self.emit_tensor_guard(
+                        ok,
+                        &format!(
+                            "call to {}: shape mismatch — dim '{}' of {} (dim {}) must be {}",
+                            generic_fn.name, dim_name, label, di, d
+                        ),
+                    )?;
+                }
+            } else {
+                let (ref_ptr, ref_di, _, ref_label) = resolved[0].clone();
+                let reference = self.tensor_load_dim(ref_ptr, ref_di);
+                for (ptr, di, _, label) in &resolved[1..] {
+                    let got = self.tensor_load_dim(*ptr, *di);
+                    let ok = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, got, reference, "t.kdim.ok")
+                        .unwrap();
+                    self.emit_tensor_guard(
+                        ok,
+                        &format!(
+                            "call to {}: shape mismatch — dim '{}' differs between arguments \
+                             ({} dim {} vs {} dim {})",
+                            generic_fn.name, dim_name, ref_label, ref_di, label, di
+                        ),
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Named `Dim` parameter per dim slot of a `Tensor` parameter type
+    /// (`Some(name)` for a bare-identifier dim that is one of the callee's
+    /// generic params, `None` otherwise). `None` for the whole type when it
+    /// is not a `Tensor` (after peeling one `ref`/`mut ref`) or when its
+    /// shape carries a `...` splice (rank unknown — out of scope here). A
+    /// concrete literal, a `?`, or a non-identifier const expression each
+    /// map to `None`: none impose a cross-argument equality constraint.
+    fn tensor_param_named_dims(
+        &self,
+        te: &TypeExpr,
+        generic_names: &std::collections::HashSet<&str>,
+    ) -> Option<Vec<Option<String>>> {
+        let inner = match &te.kind {
+            TypeKind::Ref(i) | TypeKind::MutRef(i) => i.as_ref(),
+            _ => te,
+        };
+        let TypeKind::Path(path) = &inner.kind else {
+            return None;
+        };
+        if path.segments.last().map(|s| s.as_str()) != Some("Tensor") {
+            return None;
+        }
+        let gargs = path.generic_args.as_ref()?;
+        for ga in gargs {
+            if let GenericArg::Shape(shape) = ga {
+                let mut out = Vec::with_capacity(shape.dims.len());
+                for d in &shape.dims {
+                    match d {
+                        ShapeDim::Const(e) => match &e.kind {
+                            ExprKind::Identifier(name) if generic_names.contains(name.as_str()) => {
+                                out.push(Some(name.clone()))
+                            }
+                            _ => out.push(None),
+                        },
+                        ShapeDim::Dynamic { .. } => out.push(None),
+                        ShapeDim::Splice { .. } => return None,
+                    }
+                }
+                return Some(out);
+            }
+        }
+        None
+    }
+
+    /// Statically-known dim `di` of a call argument, if any — from the
+    /// argument's tensor-var info (identifier binding) or the lowering
+    /// side-table keyed by the argument's span (any other tensor-typed
+    /// expression). `None` when the dim is `?` / runtime, or the argument
+    /// is not a tracked tensor.
+    fn tensor_arg_static_dim(&self, arg: Option<&CallArg>, di: usize) -> Option<i64> {
+        let arg = arg?;
+        if let ExprKind::Identifier(n) = &arg.value.kind {
+            if let Some(info) = self.tensor_var_infos.get(n.as_str()) {
+                return info.dims.get(di).copied().flatten();
+            }
+        }
+        let key = (arg.value.span.offset, arg.value.span.length);
+        self.tensor_typed_exprs
+            .get(&key)
+            .and_then(|ti| ti.dims.get(di).copied().flatten())
+    }
+
     /// Free `data` when `cap > 0` (temporary dims-Vec disposal).
     pub(super) fn emit_free_if_cap_positive(
         &mut self,

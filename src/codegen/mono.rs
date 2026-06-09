@@ -84,6 +84,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // requires an impl-table threading slice that isn't built yet.
         self.verify_bounds_at_codegen(&generic_fn, &subst)?;
 
+        // Cross-argument `?`-dim equality asserts at the call boundary
+        // (design.md § Runtime equality check). For a callee that shares a
+        // named `Dim` parameter across two `Tensor` params (the `K` in
+        // `matmul(a: [M, K], b: [K, N])`), insert a runtime check that the
+        // bound argument dims agree — the type system can't prove two `?`
+        // dims equal statically. Emitted here, before the specialization is
+        // generated and called, so the trap fires ahead of the operation
+        // (and ahead of any tensor read the callee would do out of bounds).
+        // The `arg_vals` were just compiled above; a tensor value is a
+        // single pointer, so this consults no variable slots.
+        self.emit_tensor_crossarg_dim_asserts(&generic_fn, args, &arg_vals)?;
+
         // Mangle a unique name for this specialization (e.g. `max$i64`).
         let mangled = self.mangle_mono_name(name, &generic_fn, &subst, &const_subst);
 

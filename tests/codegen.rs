@@ -38080,6 +38080,150 @@ fn main() {
         }
     }
 
+    // ── Cross-argument `?`-dim asserts at a call boundary ────────────
+    // design.md § Runtime equality check, the call-boundary flavor: two
+    // `Tensor` params sharing a named `Dim` (the `K` in
+    // `mm(a: [M, K], b: [K, N])`) must bind equal argument dims; the
+    // compiler inserts the check the type system can't prove statically
+    // for two `?` dims. Emitted in `compile_generic_call` via
+    // `emit_tensor_crossarg_dim_asserts`. The callee body is trivial here
+    // (the asserts fire at the call site, before the body) — a full matmul
+    // body that *indexes* the shape-generic tensors does not yet lower
+    // (tracked separately in phase-11-stdlib-longtail.md).
+
+    #[test]
+    fn test_e2e_tensor_crossarg_dim_match_ok() {
+        // K agrees (4 == 4): no trap, the trivial body runs.
+        let captured = run_program_capturing(
+            "fn mm[M, K, N](a: Tensor[f64, [M, K]], b: Tensor[f64, [K, N]]) -> f64 { 99.0 }\n\
+             fn mk(rows: i64, cols: i64) -> Tensor[f64, [?, ?]] {\n\
+                 let t: Tensor[f64, [?, ?]] = Tensor.zeros([rows, cols]);\n\
+                 t\n\
+             }\n\
+             fn main() {\n\
+                 let a: Tensor[f64, [?, ?]] = mk(2, 4);\n\
+                 let b: Tensor[f64, [?, ?]] = mk(4, 5);\n\
+                 println(mm(a, b));\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("99"),
+                "matching K must not trap; stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("shape mismatch"),
+                "no cross-argument trap on agreeing dims; stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_crossarg_dim_mismatch_dynamic_panics() {
+        // Both K positions are `?` (runtime): a's dim 1 = 4, b's dim 0 = 7.
+        // The type system can't prove the inequality, so the inserted
+        // equality check traps before `mm`'s body runs.
+        let captured = run_program_capturing(
+            "fn mm[M, K, N](a: Tensor[f64, [M, K]], b: Tensor[f64, [K, N]]) -> f64 { 99.0 }\n\
+             fn mk(rows: i64, cols: i64) -> Tensor[f64, [?, ?]] {\n\
+                 let t: Tensor[f64, [?, ?]] = Tensor.zeros([rows, cols]);\n\
+                 t\n\
+             }\n\
+             fn main() {\n\
+                 let a: Tensor[f64, [?, ?]] = mk(2, 4);\n\
+                 let b: Tensor[f64, [?, ?]] = mk(7, 5);\n\
+                 println(mm(a, b));\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout
+                    .contains("shape mismatch — dim 'K' differs between arguments"),
+                "expected the cross-argument equality trap; stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("99"),
+                "must trap before reaching the callee body / println"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_crossarg_dim_mismatch_static_panics() {
+        // One K position is concrete (b: [4, 5] ⇒ K = 4), the other is
+        // `?` (a: [3, ?], runtime dim 1 = 7). The check folds to a bounds
+        // check of a's runtime dim against the static value 4.
+        let captured = run_program_capturing(
+            "fn mm[M, K, N](a: Tensor[f64, [M, K]], b: Tensor[f64, [K, N]]) -> f64 { 99.0 }\n\
+             fn mk(rows: i64, cols: i64) -> Tensor[f64, [3, ?]] {\n\
+                 let t: Tensor[f64, [3, ?]] = Tensor.zeros([rows, cols]);\n\
+                 t\n\
+             }\n\
+             fn main() {\n\
+                 let a: Tensor[f64, [3, ?]] = mk(3, 7);\n\
+                 let b: Tensor[f64, [4, 5]] = Tensor.zeros([4, 5]);\n\
+                 println(mm(a, b));\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout
+                    .contains("shape mismatch — dim 'K' of argument 'a' (dim 1) must be 4"),
+                "expected the concrete-vs-? bounds trap; stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("99"),
+                "must trap before reaching the callee body / println"
+            );
+        }
+    }
+
+    #[test]
+    fn test_tensor_crossarg_dim_assert_ir_present_and_absent() {
+        // A shared named dim (`K`) emits the equality guard; a signature
+        // with no shared dim emits none.
+        let shared = ir_for(
+            "fn mm[M, K, N](a: Tensor[f64, [M, K]], b: Tensor[f64, [K, N]]) -> f64 { 0.0 }\n\
+             fn mk(r: i64, c: i64) -> Tensor[f64, [?, ?]] {\n\
+                 let t: Tensor[f64, [?, ?]] = Tensor.zeros([r, c]);\n\
+                 t\n\
+             }\n\
+             fn main() {\n\
+                 let a: Tensor[f64, [?, ?]] = mk(2, 4);\n\
+                 let b: Tensor[f64, [?, ?]] = mk(4, 5);\n\
+                 println(mm(a, b));\n\
+             }\n",
+        );
+        assert!(
+            shared.contains("t.kdim.ok"),
+            "shared named dim must emit the cross-argument equality guard"
+        );
+
+        let unshared = ir_for(
+            "fn pairfn[A, B, C, D](a: Tensor[f64, [A, B]], b: Tensor[f64, [C, D]]) -> f64 { 0.0 }\n\
+             fn mk(r: i64, c: i64) -> Tensor[f64, [?, ?]] {\n\
+                 let t: Tensor[f64, [?, ?]] = Tensor.zeros([r, c]);\n\
+                 t\n\
+             }\n\
+             fn main() {\n\
+                 let a: Tensor[f64, [?, ?]] = mk(2, 4);\n\
+                 let b: Tensor[f64, [?, ?]] = mk(4, 5);\n\
+                 println(pairfn(a, b));\n\
+             }\n",
+        );
+        assert!(
+            !unshared.contains("t.kdim.ok"),
+            "no shared dim ⇒ no cross-argument guard"
+        );
+    }
+
     // ── Tensor shape-transform family codegen (phase-11, 2026-06-08) ──
     // `reshape` / `permute` / `slice` / `squeeze`: each produces a fresh
     // copy; rank/dims read from the runtime header, element type from
