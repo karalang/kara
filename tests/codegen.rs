@@ -760,6 +760,30 @@ fn unwrap_or(m: Maybe, default: i64) -> i64 {
     }
 
     #[test]
+    fn test_ir_uint_to_float_emits_uitofp() {
+        // phase-8 cast slice 6 (int→float verification): an *unsigned* source
+        // converts via `uitofp` (so 255u8 → 255.0, not -1.0). Pairs with
+        // `test_ir_int_to_float_cast` (signed source → sitofp).
+        let ir = ir_for("fn to_float(x: u32) -> f64 { x as f64 }");
+        assert!(
+            ir.contains("uitofp"),
+            "unsigned int→float should use uitofp:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_float_narrow_emits_fptrunc() {
+        // phase-8 cast slice 7 (float→float verification): narrowing via `as`
+        // uses `fptrunc` (round-to-nearest-even). Widening is implicit and not
+        // exercised here.
+        let ir = ir_for("fn narrow(x: f64) -> f32 { x as f32 }");
+        assert!(
+            ir.contains("fptrunc"),
+            "float narrowing should use fptrunc:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_float_to_int_cast() {
         let ir = ir_for("fn to_int(x: f64) -> i64 { x as i64 }");
         assert!(ir.contains("fptosi"), "should use fptosi for float-to-int");
@@ -2046,6 +2070,49 @@ fn main() {
         );
         if let Some(out) = out {
             assert_eq!(out.trim(), "255\n255\n44\n255\n-5\n200");
+        }
+    }
+
+    #[test]
+    fn test_e2e_int_to_float_casts() {
+        // phase-8 cast slice 6 (int→float verification): signed via sitofp,
+        // unsigned via uitofp, never panics. Large values round to nearest —
+        // shown via a round-trip through a value not representable in f64
+        // (2^60 + 1 → 2^60), which prints as a stable integer (no float-format
+        // dependence).
+        let out = run_program(
+            r#"
+fn main() {
+    println(5i64 as f64);
+    println(255u8 as f64);
+    let x: i64 = 1152921504606846977;
+    println((x as f64) as i64);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5\n255\n1152921504606846976");
+        }
+    }
+
+    #[test]
+    fn test_e2e_float_to_float_casts() {
+        // phase-8 cast slice 7 (float→float verification): widening is implicit
+        // (f32→f64 is value-preserving), narrowing via `as` rounds, and
+        // narrowing overflow produces ±Infinity per IEEE 754 (not a trap).
+        let out = run_program(
+            r#"
+fn main() {
+    let f: f32 = 2.5;
+    println(f as f64);
+    println(1.5f64 as f32);
+    println(1e300f64 as f32);
+    println(-1e300f64 as f32);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2.5\n1.5\ninf\n-inf");
         }
     }
 
