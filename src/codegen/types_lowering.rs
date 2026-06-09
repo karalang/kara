@@ -1176,12 +1176,49 @@ impl<'ctx> super::Codegen<'ctx> {
             // `compile_function`), keeping the pointer-borrow ABI out of the
             // borrowed-struct path entirely (B-2026-06-07-5).
             TypeKind::Ref(inner) | TypeKind::MutRef(inner)
-                if self.type_expr_is_borrowed_struct(inner) =>
+                if self.ref_return_is_value_abi(inner) =>
             {
                 Some(self.llvm_type_for_type_expr(inner))
             }
             _ => Some(self.llvm_type_for_type_expr(te)),
         }
+    }
+
+    /// Does a `-> ref T` / `-> mut ref T` return use the BY-VALUE ABI
+    /// (return the value itself, no pointer indirection / caller-side
+    /// load) rather than the pointer-borrow ABI? True for two value types
+    /// whose representation already carries the borrow:
+    /// - a **borrowed struct** (a struct value with embedded `ref` fields);
+    /// - a **tensor** (`Tensor[T, Shape]`), whose value is a single heap
+    ///   `ptr` to the `[rank][dims][data]` block — `ref Tensor` borrows the
+    ///   same block with no extra indirection, so it is returned by value
+    ///   (the pointer) and the caller uses it directly. Shape-independent:
+    ///   concrete / `?` / splice shapes all qualify.
+    ///
+    /// Suppressing the pointer-borrow ABI here keeps `fn_ref_return_inner`
+    /// unset and `current_fn_returns_ref` false for these returns (see
+    /// `declare_one_function` / `compile_function`), so the body's normal
+    /// value-return path matches the signature and the caller does no
+    /// extra load (which for a tensor would dereference the rank word as a
+    /// pointer — the phase-11 `ref Tensor` AOT trap).
+    pub(super) fn ref_return_is_value_abi(&self, inner: &TypeExpr) -> bool {
+        if self.type_expr_is_borrowed_struct(inner) {
+            return true;
+        }
+        matches!(
+            &inner.kind,
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Tensor")
+        )
+    }
+
+    /// True when a function's declared return type is `ref T` / `mut ref T`
+    /// whose inner `T` uses the by-value ref-return ABI (`ref_return_is_value_abi`).
+    pub(super) fn return_type_ref_is_value_abi(&self, ret: &Option<TypeExpr>) -> bool {
+        matches!(
+            ret.as_ref().map(|t| &t.kind),
+            Some(TypeKind::Ref(inner) | TypeKind::MutRef(inner))
+                if self.ref_return_is_value_abi(inner)
+        )
     }
 
     /// Does this type expression name a *borrowed struct* — a user struct
@@ -1205,16 +1242,6 @@ impl<'ctx> super::Codegen<'ctx> {
                     .iter()
                     .any(|f| matches!(f.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
             })
-    }
-
-    /// True when a function's declared return type is `ref BorrowedStruct` /
-    /// `mut ref BorrowedStruct` — the by-value borrowed-struct return path.
-    pub(super) fn return_type_is_borrowed_struct(&self, ret: &Option<TypeExpr>) -> bool {
-        matches!(
-            ret.as_ref().map(|t| &t.kind),
-            Some(TypeKind::Ref(inner) | TypeKind::MutRef(inner))
-                if self.type_expr_is_borrowed_struct(inner)
-        )
     }
 
     pub(super) fn llvm_param_type(&self, param: &Param) -> BasicMetadataTypeEnum<'ctx> {

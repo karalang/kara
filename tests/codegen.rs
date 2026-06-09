@@ -38161,6 +38161,51 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tensor_ref_return() {
+        // `ref Tensor` / `mut ref Tensor` returns use the BY-VALUE ABI
+        // (phase-11 line 40): a tensor value is a single block pointer, so
+        // a borrow needs no extra indirection. Before the fix the caller
+        // did an extra load (dereferencing the rank word as a pointer →
+        // garbage), trapping in AOT though it worked under `karac run`.
+        // Covers all four forms: free-fn return used inline as a transform
+        // receiver and bound to a let (a borrow, indexable, not dropped);
+        // and a user `-> ref Tensor` accessor method, likewise inline and
+        // let-bound. The trailing `a[0,0]` / second `h.view()` confirm the
+        // owner's block is still live (the borrows did not free it).
+        let out = run_program(
+            "fn firstrow(t: ref Tensor[i64, [2, 3]]) -> ref Tensor[i64, [2, 3]] {\n\
+                 t\n\
+             }\n\
+             struct Holder { t: Tensor[i64, [2, 3]] }\n\
+             impl Holder {\n\
+                 fn view(ref self) -> ref Tensor[i64, [2, 3]] {\n\
+                     self.t\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let r = firstrow(a).reshape([3, 2]);\n\
+                 println(r[2, 1]);\n\
+                 let b = firstrow(a);\n\
+                 println(b[1, 2]);\n\
+                 println(a[0, 0]);\n\
+                 let h = Holder { t: Tensor.from([[10, 20, 30], [40, 50, 60]]) };\n\
+                 let m = h.view().permute([1, 0]);\n\
+                 println(m[2, 1]);\n\
+                 let v = h.view();\n\
+                 println(v[1, 2]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "6\n6\n1\n60\n60\n",
+                "ref Tensor returns (free-fn + method, inline + let-bound) \
+                 must match the interpreter twins",
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_tensor_slice_runtime_axis() {
         // Runtime-valued slice bounds degrade the sliced dim to `?` in
         // the type but codegen reads everything from the header, so the

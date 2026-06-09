@@ -1086,6 +1086,23 @@ impl<'ctx> super::Codegen<'ctx> {
                                 ty: ptr_ty.into(),
                             },
                         );
+                        // A `ref Tensor` accessor (`let r = h.view()` where
+                        // `view -> ref Tensor`): the method returns the block
+                        // pointer BY VALUE (tensors use the by-value ref ABI,
+                        // `ref_return_is_value_abi`), so `ptr_val` already IS
+                        // the tensor value. Bind `r` as a BORROWED tensor var
+                        // — indexable / shape / transform-able like an owned
+                        // tensor, but with NO `FreeTensor` (the owner frees
+                        // the block; a second free would double-free). This is
+                        // the method analogue of the borrowed-tensor binding
+                        // the normal let path takes for free-fn `-> ref Tensor`
+                        // returns; without it, `r` would be a deref-on-use
+                        // ref-local and `r[i, j]` (a tuple index) would not
+                        // dispatch as a tensor.
+                        if let Some(info) = self.tensor_var_info_from_type_expr(&inner_te) {
+                            self.tensor_var_infos.insert(var_name.clone(), info);
+                            return Ok(());
+                        }
                         let inner_llvm = self.llvm_type_for_type_expr(&inner_te);
                         self.ref_params.insert(var_name.clone(), inner_llvm);
                         // Make use-site dispatch (field access, method calls,
@@ -2168,14 +2185,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 // above. The move-suppression call handles `let b = a;`
                 // (source slot nulled — see `FreeTensor`'s null guard).
                 if let PatternKind::Binding(var_name) = &pattern.kind {
+                    let key = (value.span.offset, value.span.length);
+                    // A `ref Tensor` / `mut ref Tensor` RHS (e.g. a
+                    // `-> ref Tensor` free-fn return) binds a BORROW: the
+                    // binding is the same block pointer the owner holds, so
+                    // it is registered for indexing / shape / transforms but
+                    // must NOT get a `FreeTensor` (the owner frees the block;
+                    // a second free would double-free). `ref_return_inner_types`
+                    // carries every ref-typed expr span — its presence at the
+                    // RHS span is the borrow signal.
+                    let rhs_is_borrow = self.ref_return_inner_types.contains_key(&key);
                     if !self.tensor_var_infos.contains_key(var_name.as_str()) {
-                        let key = (value.span.offset, value.span.length);
                         if let Some(ti) = self.tensor_typed_exprs.get(&key).cloned() {
                             let info = self.tensor_var_info_from_table(&ti);
                             self.tensor_var_infos.insert(var_name.clone(), info);
                         }
                     }
-                    if self.tensor_var_infos.contains_key(var_name.as_str()) {
+                    if self.tensor_var_infos.contains_key(var_name.as_str()) && !rhs_is_borrow {
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             if matches!(slot.ty, BasicTypeEnum::PointerType(_)) {
                                 let slot_ptr = slot.ptr;

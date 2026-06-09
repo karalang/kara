@@ -134,28 +134,40 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     program.tensor_typed_exprs = tc
         .expr_types
         .iter()
-        .filter_map(|(k, ty)| match ty {
-            Type::Named { name, args } if name == "Tensor" && args.len() == 2 => {
-                let Type::Shape(dim_args) = &args[1] else {
-                    return None;
-                };
-                let mut dims = Vec::with_capacity(dim_args.len());
-                for d in dim_args {
-                    match d {
-                        DimArg::Splice(_) | DimArg::SpliceVar(_) => return None,
-                        DimArg::Const(ConstArg::Literal(v)) => dims.push(Some(*v)),
-                        _ => dims.push(None),
+        .filter_map(|(k, ty)| {
+            // A borrow of a tensor (`ref Tensor` / `mut ref Tensor`) is the
+            // same single heap pointer as the owned value, so a ref-tensor
+            // expression is just as indexable / transformable — unwrap the
+            // borrow so its span lands in the side-table too. The drop
+            // decision (a borrow is never freed) is taken separately at the
+            // binding site via `ref_return_inner_types`.
+            let core = match ty {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                other => other,
+            };
+            match core {
+                Type::Named { name, args } if name == "Tensor" && args.len() == 2 => {
+                    let Type::Shape(dim_args) = &args[1] else {
+                        return None;
+                    };
+                    let mut dims = Vec::with_capacity(dim_args.len());
+                    for d in dim_args {
+                        match d {
+                            DimArg::Splice(_) | DimArg::SpliceVar(_) => return None,
+                            DimArg::Const(ConstArg::Literal(v)) => dims.push(Some(*v)),
+                            _ => dims.push(None),
+                        }
                     }
+                    Some((
+                        (k.0, k.1),
+                        crate::ast::TensorTypeInfo {
+                            elem: TypeChecker::type_to_type_expr(&args[0]),
+                            dims,
+                        },
+                    ))
                 }
-                Some((
-                    (k.0, k.1),
-                    crate::ast::TensorTypeInfo {
-                        elem: TypeChecker::type_to_type_expr(&args[0]),
-                        dims,
-                    },
-                ))
+                _ => None,
             }
-            _ => None,
         })
         .collect();
     // Sibling to `string_typed_exprs`: spans of every `Vector[T, N]`-typed

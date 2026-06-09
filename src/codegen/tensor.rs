@@ -707,19 +707,32 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 true
             }
-            // Free-function return: owned unless the callee is a recorded
-            // `ref`/`mut ref`-returning function. A non-identifier callee
-            // (a qualified constructor like `Tensor.zeros(..)`) is left
-            // alone — a benign leak, not worth a free we can't prove safe.
+            // Free-function return: owned unless the callee's declared
+            // return type is a borrow (`ref`/`mut ref`). The declared type
+            // is the durable signal — `fn_ref_return_inner` is NOT set for
+            // a `ref Tensor` return (tensors use the by-value ref ABI, see
+            // `ref_return_is_value_abi`), so a borrowed tensor return would
+            // wrongly read as owned if we keyed off that table. A
+            // non-identifier callee (a qualified constructor like
+            // `Tensor.zeros(..)`) is left alone — a benign leak, not worth a
+            // free we can't prove safe.
             ExprKind::Call { callee, .. } => match &callee.kind {
-                ExprKind::Identifier(n) => !self.fn_ref_return_inner.contains_key(n.as_str()),
+                ExprKind::Identifier(n) => !matches!(
+                    self.fn_return_type_exprs.get(n.as_str()).map(|t| &t.kind),
+                    Some(TypeKind::Ref(_) | TypeKind::MutRef(_))
+                ),
                 _ => false,
             },
-            // Non-transform method return: owned unless the call span
-            // carries a `ref`/`mut ref`-return record.
-            ExprKind::MethodCall { .. } => !self
-                .ref_return_inner_types
-                .contains_key(&(object.span.offset, object.span.length)),
+            // Non-transform method return: owned unless it is a user
+            // accessor that returns a borrow (`-> ref T`, recorded by NAME
+            // in `user_ref_method_names`). The method NAME is the
+            // span-collision-immune signal: `MethodCall.span ==
+            // receiver.span`, so a chained `h.view().permute(..)` records
+            // the *outer* (owned `Tensor`) type at that shared span, which
+            // would make a span-keyed `ref_return_inner_types` lookup
+            // wrongly read the `h.view()` borrow as owned and free the
+            // owner's block (a use-after-free for any later `h.view()`).
+            ExprKind::MethodCall { method, .. } => !self.user_ref_method_names.contains(method),
             _ => false,
         }
     }

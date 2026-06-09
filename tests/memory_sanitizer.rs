@@ -5269,6 +5269,67 @@ fn main() {
         );
     }
 
+    /// `ref Tensor` returns are BORROWS — the by-value ref ABI hands back
+    /// the owner's block pointer, so the borrow must never be freed
+    /// (phase-11 line 40). Exercises the free-fn return (inline transform
+    /// receiver + let-bound) and a user `-> ref Tensor` accessor method
+    /// (inline transform receiver + let-bound). The ordering is adversarial:
+    /// `h.view().permute(..)` (an inline borrow receiver) is followed by a
+    /// later `h.view()` and `a[0,0]` — if a borrow receiver were wrongly
+    /// freed (the chained-method span-collision hazard), the later reads
+    /// would be use-after-free (ASAN) and the owner's scope-exit drop a
+    /// double free. Clean here means every owner block is freed exactly
+    /// once and no borrow frees anything.
+    #[test]
+    fn asan_tensor_ref_return_borrow_clean() {
+        let label = "tensor_ref_return_borrow";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn firstrow(t: ref Tensor[i64, [2, 3]]) -> ref Tensor[i64, [2, 3]] {
+    t
+}
+struct Holder { t: Tensor[i64, [2, 3]] }
+impl Holder {
+    fn view(ref self) -> ref Tensor[i64, [2, 3]] {
+        self.t
+    }
+}
+fn main() {
+    let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    let r = firstrow(a).reshape([3, 2]);
+    println(r[2, 1]);
+    let b = firstrow(a);
+    println(b[1, 2]);
+    let h = Holder { t: Tensor.from([[10, 20, 30], [40, 50, 60]]) };
+    let m = h.view().permute([1, 0]);
+    println(m[2, 1]);
+    let v = h.view();
+    println(v[1, 2]);
+    println(a[0, 0]);
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             a borrowed ref-Tensor return must not be freed",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["6", "6", "60", "60", "1"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     // ── Owned Vec/String param moved into a local (kata-23, 2026-06-07) ──
     //
     // `let mut work = lists;` where `lists` is a bare by-value Vec/String
