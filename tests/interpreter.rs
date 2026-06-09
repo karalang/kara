@@ -15142,3 +15142,64 @@ fn main() {
     );
     assert_eq!(output, "1\n0\n");
 }
+
+// ── Enum / struct structural equality (`==` / `!=`) ───────────────
+// Regression coverage for the interpreter gap where `==` on any enum
+// variant or struct hit `eval_ops`'s `unreachable!` (every enum, incl.
+// Option/Result/Ordering, panicked on `==`). `Value`'s `PartialEq`
+// already compared these structurally; the fix wires `eval_binary` to it.
+
+#[test]
+fn enum_equality_unit_and_payload_variants() {
+    let output = run(r#"
+#[derive(Eq)]
+enum Color { Red, Green, Blue }
+
+#[derive(Eq)]
+enum Tagged { N(i64), Z }
+
+fn main() {
+    println(f"{Color.Red == Color.Red}");
+    println(f"{Color.Red == Color.Blue}");
+    println(f"{Color.Red != Color.Blue}");
+    println(f"{Tagged.N(7) == Tagged.N(7)}");
+    println(f"{Tagged.N(7) == Tagged.N(9)}");
+    println(f"{Tagged.N(7) == Tagged.Z}");
+}
+"#);
+    assert_eq!(output, "true\nfalse\ntrue\ntrue\nfalse\nfalse\n");
+}
+
+#[test]
+fn builtin_enum_equality_option_result_ordering() {
+    let output = run(r#"
+fn main() {
+    println(f"{Some(1) == Some(1)}");
+    println(f"{Some(1) == Some(2)}");
+    let a: Result[i64, i64] = Ok(3);
+    let b: Result[i64, i64] = Ok(3);
+    println(f"{a == b}");
+    println(f"{3.cmp(5) == Ordering.Less}");
+    println(f"{3.cmp(5) == Ordering.Greater}");
+}
+"#);
+    assert_eq!(output, "true\nfalse\ntrue\ntrue\nfalse\n");
+}
+
+#[test]
+fn struct_equality_structural() {
+    let output = run(r#"
+#[derive(Eq)]
+struct Point { x: i64, y: i64 }
+
+fn main() {
+    let p = Point { x: 1, y: 2 };
+    let q = Point { x: 1, y: 2 };
+    let r = Point { x: 1, y: 3 };
+    println(f"{p == q}");
+    println(f"{p == r}");
+    println(f"{p != r}");
+}
+"#);
+    assert_eq!(output, "true\nfalse\ntrue\n");
+}

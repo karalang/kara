@@ -231,6 +231,26 @@ impl<'a> super::Interpreter<'a> {
             (BinOp::Shl, Value::Int(a), Value::Int(b)) => Value::Int(a << b),
             (BinOp::Shr, Value::Int(a), Value::Int(b)) => Value::Int(a >> b),
 
+            // Structural equality on aggregates — enum variants and structs.
+            // `Value`'s hand-written `PartialEq` already compares these
+            // structurally (recursing into payloads/fields, including nested
+            // String/Vec/enum values), so `==`/`!=` delegate to it. The
+            // typechecker gates these on the operand type deriving `Eq`
+            // (a warning otherwise); reaching here means two same-shape
+            // aggregates. Without these arms enum/struct `==` fell through to
+            // the `unreachable!` below (every enum, incl. Option/Result/
+            // Ordering, panicked on `==`).
+            (BinOp::Eq, l @ Value::EnumVariant { .. }, r @ Value::EnumVariant { .. }) => {
+                Value::Bool(l == r)
+            }
+            (BinOp::NotEq, l @ Value::EnumVariant { .. }, r @ Value::EnumVariant { .. }) => {
+                Value::Bool(l != r)
+            }
+            (BinOp::Eq, l @ Value::Struct { .. }, r @ Value::Struct { .. }) => Value::Bool(l == r),
+            (BinOp::NotEq, l @ Value::Struct { .. }, r @ Value::Struct { .. }) => {
+                Value::Bool(l != r)
+            }
+
             _ => unreachable!(
                 "binary {:?} at {}:{} on lhs=Value::{}, rhs=Value::{}; \
                  either an interpreter codepath produced the wrong variant \
