@@ -1672,6 +1672,18 @@ impl<'ctx> super::Codegen<'ctx> {
             // type name and look the qualified key up. Same -56 print
             // symptom as the free-fn arm, method shape (2026-06-06).
             ExprKind::MethodCall { object, method, .. } => {
+                // Float→int conversion methods with an unsigned target return a
+                // bare `u*` (phase-8 cast slice 4): `saturating_to_u8` /
+                // `wrapping_to_u16` / `trunc_to_u32` … so the print / coercion
+                // path must zero-extend (else 255u8 prints as -1). `checked_to_*`
+                // is excluded — it returns `Option[u*]`, not a bare integer (the
+                // `Some(v)` binding's signedness is handled at the pattern site).
+                if let Some((family, _, _, signed)) =
+                    crate::numeric_conv::parse_float_to_int(method)
+                {
+                    return !signed
+                        && !matches!(family, crate::numeric_conv::FloatToIntFamily::Checked);
+                }
                 // Element-typed vector reductions / lane folds on an
                 // unsigned-element `Vector[T, N]`: the result carries the
                 // receiver's element signedness. The receiver rides
@@ -1712,6 +1724,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 false
             }
+            // `<expr> as uN` in value position (`println(x as u8)`): the result
+            // carries the TARGET type's signedness, not the source's. Without
+            // this arm a direct unsigned as-cast in a print/coerce position
+            // sign-extends (255u8 → -1); a `let v: u8 = …` binding already works
+            // via `var_type_names`, so this closes the cast-expression case.
+            ExprKind::Cast { ty, .. } => matches!(&ty.kind, TypeKind::Path(p)
+                if p
+                    .segments
+                    .last()
+                    .map(|s| is_uint_name(s.as_str()))
+                    .unwrap_or(false)),
             // Struct-field read — the declared field TypeExpr carries
             // the signedness (`println(s.b)` for a `u8` field).
             ExprKind::FieldAccess { object, field } => {
@@ -1787,11 +1810,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// emitted a single `ldrb`. Two extra instructions per inner iter; same
     /// missed optimization applies to every `(u_typed_indexed_value) as
     /// wider_int` pattern in the language.
+    ///
+    /// `target_is_unsigned` selects `fptoui.sat` over `fptosi.sat` for the
+    /// float→int lane (the LLVM `IntType` target doesn't carry Kāra signedness);
+    /// the caller computes it from the target type name. It is ignored by the
+    /// other lanes.
     pub(super) fn compile_cast(
         &self,
         val: BasicValueEnum<'ctx>,
         target: BasicTypeEnum<'ctx>,
         source_is_unsigned: bool,
+        target_is_unsigned: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         match (val, target) {
             (BasicValueEnum::IntValue(iv), BasicTypeEnum::IntType(tt)) => {
@@ -1826,10 +1855,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(result.into())
             }
             (BasicValueEnum::FloatValue(fv), BasicTypeEnum::IntType(it)) => {
-                let result = self
-                    .builder
-                    .build_float_to_signed_int(fv, it, "cast")
-                    .unwrap();
+                // `f as iN` is the **saturating** float→int cast (design.md
+                // § Numeric Semantics > as-cast semantics; phase-8 cast slice 4):
+                // out-of-range clamps to the target MIN/MAX and NaN → 0, both
+                // guaranteed by `llvm.fptosi.sat` / `llvm.fptoui.sat` — a single
+                // target-independent instruction. (Pre-fix this was raw
+                // `fptosi`, which is poison on out-of-range.) Identical lowering
+                // to `f.saturating_to_iN()`.
+                let result = self.emit_float_to_int_sat(fv, it, target_is_unsigned)?;
                 Ok(result.into())
             }
             (BasicValueEnum::FloatValue(fv), BasicTypeEnum::FloatType(ft)) => {
@@ -1837,6 +1870,236 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(result.into())
             }
             _ => Ok(val),
+        }
+    }
+
+    /// Bit width (32 / 64) of an LLVM float type, for intrinsic name mangling.
+    fn float_bit_width(&self, ft: inkwell::types::FloatType<'ctx>) -> u32 {
+        if ft == self.context.f32_type() {
+            32
+        } else {
+            64
+        }
+    }
+
+    /// LLVM integer type of the given bit width — the standard types for the
+    /// 8/16/32/64/128 widths, `custom_width_int_type` for anything else (the
+    /// 256-bit round-trip width used by `emit_float_to_int_rangecheck`).
+    pub(super) fn int_type_for_bits(&self, bits: u32) -> inkwell::types::IntType<'ctx> {
+        match bits {
+            8 => self.context.i8_type(),
+            16 => self.context.i16_type(),
+            32 => self.context.i32_type(),
+            64 => self.context.i64_type(),
+            128 => self.context.i128_type(),
+            other => self
+                .context
+                .custom_width_int_type(std::num::NonZeroU32::new(other).expect("nonzero width"))
+                .expect("custom int width"),
+        }
+    }
+
+    /// Saturating float→int conversion to `int_ty` via the `llvm.fptosi.sat` /
+    /// `llvm.fptoui.sat` intrinsic (out-of-range clamps to MIN/MAX, NaN → 0).
+    /// Backs both `f as iN` and `f.saturating_to_iN()` (phase-8 cast slice 4),
+    /// and — invoked with a wider `int_ty` — the round-trip range check used by
+    /// the `checked`/`trunc`/`wrapping` families.
+    pub(super) fn emit_float_to_int_sat(
+        &self,
+        fv: inkwell::values::FloatValue<'ctx>,
+        int_ty: inkwell::types::IntType<'ctx>,
+        target_unsigned: bool,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let base = if target_unsigned {
+            "llvm.fptoui.sat"
+        } else {
+            "llvm.fptosi.sat"
+        };
+        let intrinsic = inkwell::intrinsics::Intrinsic::find(base)
+            .ok_or_else(|| format!("{base} intrinsic must exist in LLVM"))?;
+        // `fptosi.sat`/`fptoui.sat` are overloaded on BOTH the result int type
+        // and the operand float type (`llvm.fptosi.sat.iN.fM`).
+        let decl = intrinsic
+            .get_declaration(&self.module, &[int_ty.into(), fv.get_type().into()])
+            .ok_or_else(|| {
+                format!(
+                    "{base} has no declaration for i{}.f{}",
+                    int_ty.get_bit_width(),
+                    self.float_bit_width(fv.get_type())
+                )
+            })?;
+        Ok(self
+            .builder
+            .build_call(decl, &[fv.into()], "f2i.sat")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value())
+    }
+
+    /// Round-trip range check for the `checked`/`trunc` float→int families.
+    /// Returns `(in_range_i1, narrowed_iN)` where `narrowed` is the
+    /// truncate-toward-zero result (also the `wrapping` value for in-range
+    /// inputs) and `in_range` is true iff `f` is non-NaN AND exactly
+    /// representable in the target type. Works in exact integer arithmetic via
+    /// a wider saturating cast (`iW`, `W = 128` for ≤64-bit targets, `256` for
+    /// 128-bit) then narrow + re-extend + compare — sidestepping float-bound
+    /// rounding entirely. Mirrors the slice-2 interpreter oracle.
+    fn emit_float_to_int_rangecheck(
+        &self,
+        fv: inkwell::values::FloatValue<'ctx>,
+        int_ty: inkwell::types::IntType<'ctx>,
+        target_unsigned: bool,
+    ) -> Result<
+        (
+            inkwell::values::IntValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+        ),
+        String,
+    > {
+        let w = int_ty.get_bit_width();
+        let wide_w = if w < 128 { 128 } else { 256 };
+        let wide_ty = self.int_type_for_bits(wide_w);
+        // Signed wide saturation preserves the sign, so a negative value into an
+        // unsigned target fails the round-trip below (rather than silently
+        // clamping to 0 the way `fptoui.sat` would).
+        let wide = self.emit_float_to_int_sat(fv, wide_ty, false)?;
+        let narrowed = self
+            .builder
+            .build_int_truncate(wide, int_ty, "f2i.narrow")
+            .unwrap();
+        let re = if target_unsigned {
+            self.builder
+                .build_int_z_extend(narrowed, wide_ty, "f2i.re")
+                .unwrap()
+        } else {
+            self.builder
+                .build_int_s_extend(narrowed, wide_ty, "f2i.re")
+                .unwrap()
+        };
+        let fits = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, re, wide, "f2i.fits")
+            .unwrap();
+        // `f == f` is false exactly when `f` is NaN (saturating cast maps NaN to
+        // 0, which would otherwise pass the round-trip).
+        let not_nan = self
+            .builder
+            .build_float_compare(FloatPredicate::OEQ, fv, fv, "f2i.notnan")
+            .unwrap();
+        let in_range = self
+            .builder
+            .build_and(fits, not_nan, "f2i.inrange")
+            .unwrap();
+        Ok((in_range, narrowed))
+    }
+
+    /// Build an `Option[iN]` from a `checked_to_iN` result: `Some(narrowed)`
+    /// when `in_range`, else `None`. Branch-free (two `select`s into the seeded
+    /// `Option` aggregate). The payload coerces to one i64 word — exact for
+    /// targets ≤ 64 bits; `i128`/`u128` payloads beyond i64 truncate (the same
+    /// wide-int limitation the interpreter has).
+    fn build_checked_to_int_option(
+        &self,
+        in_range: inkwell::values::IntValue<'ctx>,
+        narrowed: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let zero = i64_t.const_zero();
+        let one = i64_t.const_int(1, false);
+        let payload = self.coerce_to_i64(narrowed.into())?;
+        let tag = self
+            .builder
+            .build_select(in_range, one, zero, "chk.tag")
+            .unwrap()
+            .into_int_value();
+        let w0 = self
+            .builder
+            .build_select(in_range, payload, zero, "chk.w0")
+            .unwrap()
+            .into_int_value();
+        let option_ty = self
+            .enum_layouts
+            .get("Option")
+            .ok_or("codegen: Option enum layout not seeded for checked_to_iN")?
+            .llvm_type;
+        let nfields = option_ty.count_fields();
+        let mut agg = option_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, tag, 0, "chk.tag.f")
+            .unwrap()
+            .into_struct_value();
+        // Field 1 = payload word 0; remaining payload words zeroed.
+        for i in 1..nfields {
+            let v = if i == 1 { w0 } else { zero };
+            agg = self
+                .builder
+                .build_insert_value(agg, v, i, "chk.wf")
+                .unwrap()
+                .into_struct_value();
+        }
+        Ok(agg.into())
+    }
+
+    /// Lower one of the four float→int conversion method families (phase-8 cast
+    /// slice 4). `Saturating` is identical to the `f as iN` cast; `Wrapping` is
+    /// modular truncation; `Checked` yields `Option[iN]`; `Trunc` traps with a
+    /// `panics` "float-to-int out of range" on NaN / out-of-range. Semantics
+    /// match `crate::numeric_conv` (the slice-2 interpreter oracle).
+    pub(super) fn emit_float_to_int_conv(
+        &self,
+        fv: inkwell::values::FloatValue<'ctx>,
+        family: crate::numeric_conv::FloatToIntFamily,
+        int_ty: inkwell::types::IntType<'ctx>,
+        target_unsigned: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use crate::numeric_conv::FloatToIntFamily as F;
+        match family {
+            F::Saturating => Ok(self
+                .emit_float_to_int_sat(fv, int_ty, target_unsigned)?
+                .into()),
+            F::Wrapping => {
+                // Modular truncation = low `bits` of the toward-zero integer.
+                // For ≤64-bit targets, truncate the i128 saturating cast (exact,
+                // matches the interpreter); for the 128-bit targets the i128 cast
+                // is already the result.
+                if int_ty.get_bit_width() >= 128 {
+                    Ok(self
+                        .emit_float_to_int_sat(fv, int_ty, target_unsigned)?
+                        .into())
+                } else {
+                    let wide_ty = self.context.i128_type();
+                    let wide = self.emit_float_to_int_sat(fv, wide_ty, false)?;
+                    let narrowed = self
+                        .builder
+                        .build_int_truncate(wide, int_ty, "f2i.wrap")
+                        .unwrap();
+                    Ok(narrowed.into())
+                }
+            }
+            F::Checked => {
+                let (in_range, narrowed) =
+                    self.emit_float_to_int_rangecheck(fv, int_ty, target_unsigned)?;
+                self.build_checked_to_int_option(in_range, narrowed)
+            }
+            F::Trunc => {
+                let (in_range, narrowed) =
+                    self.emit_float_to_int_rangecheck(fv, int_ty, target_unsigned)?;
+                let fn_val = self
+                    .current_fn
+                    .ok_or("codegen: trunc_to_iN outside a function")?;
+                let panic_bb = self.context.append_basic_block(fn_val, "f2i.trap");
+                let cont_bb = self.context.append_basic_block(fn_val, "f2i.ok");
+                self.builder
+                    .build_conditional_branch(in_range, cont_bb, panic_bb)
+                    .unwrap();
+                self.builder.position_at_end(panic_bb);
+                self.emit_panic("float-to-int out of range");
+                self.builder.build_unreachable().unwrap();
+                self.builder.position_at_end(cont_bb);
+                Ok(narrowed.into())
+            }
         }
     }
 

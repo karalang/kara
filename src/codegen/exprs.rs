@@ -694,9 +694,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // dependency direction obvious. Drives sext vs zext in
                 // `compile_cast`'s widening lane.
                 let source_is_unsigned = self.expr_is_unsigned_int(inner);
+                // Target signedness drives `fptoui.sat` vs `fptosi.sat` for the
+                // float→int (saturating) lane — read from the target type name.
+                let target_is_unsigned = matches!(&ty.kind, TypeKind::Path(p)
+                if matches!(
+                    p.segments.first().map(|s| s.as_str()),
+                    Some("u8") | Some("u16") | Some("u32") | Some("u64") | Some("u128") | Some("usize")
+                ));
                 let val = self.compile_expr(inner)?;
                 let target_ty = self.llvm_type_for_type_expr(ty);
-                let casted = self.compile_cast(val, target_ty, source_is_unsigned)?;
+                let casted =
+                    self.compile_cast(val, target_ty, source_is_unsigned, target_is_unsigned)?;
                 // `x as Refined` enforces the refinement predicate at runtime
                 // (phase-9 step 5c). The cast value is already the base
                 // layout; a false predicate aborts with a contract fault.

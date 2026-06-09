@@ -1848,26 +1848,44 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // Float→int / int→float conversion methods (phase-8 § "Saturating
-        // float→int", slice 2) are typed by the typechecker and run under
-        // `karac run` (interpreter), but their bit-exact `fptosi.sat` /
-        // `fptoui.sat` lowering is slice 4 and not yet wired. Reaching the
-        // fall-through means no impl/user method claimed the call, so a
-        // conversion-named method here is the deferred form — emit a clear
-        // interpreter-only error instead of the generic "this is a codegen
-        // bug". (A user-defined `to_f32`/`to_f64` on a struct dispatches via
-        // the impl-block path above and never reaches here.)
-        if args.is_empty()
-            && (crate::numeric_conv::parse_float_to_int(method).is_some()
-                || method == "to_f32"
-                || method == "to_f64")
-        {
-            return Err(format!(
-                "codegen: `{method}` (the float↔int conversion method family) is not yet \
-                 lowered under `karac build` — it currently works only under `karac run` \
-                 (the interpreter). The bit-exact `fptosi.sat`/`fptoui.sat` codegen is \
-                 phase-8 cast slice 4; tracked in \
-                 docs/implementation_checklist/phase-8-stdlib-floor.md."
-            ));
+        // float→int", slice 4 — the codegen for the slice-2 surface). Reaching
+        // the fall-through means no impl/user method claimed the call, so a
+        // conversion-named method here is the primitive form (a user-defined
+        // `to_f32`/`to_f64` on a struct dispatches via the impl-block path above
+        // and never reaches here). Semantics match `crate::numeric_conv` (the
+        // slice-2 interpreter oracle): `saturating_to_iN` ≡ the `f as iN`
+        // saturating cast, `wrapping_to_iN` = modular truncation,
+        // `checked_to_iN` → `Option[iN]`, `trunc_to_iN` traps on out-of-range.
+        if args.is_empty() {
+            if let Some((family, _target, bits, signed)) =
+                crate::numeric_conv::parse_float_to_int(method)
+            {
+                let recv = self.compile_expr(object)?;
+                if let BasicValueEnum::FloatValue(fv) = recv {
+                    let int_ty = self.int_type_for_bits(bits);
+                    return self.emit_float_to_int_conv(fv, family, int_ty, !signed);
+                }
+            }
+            // `i.to_f32()` / `i.to_f64()` — int→float widening (`sitofp`/
+            // `uitofp` per the source-integer signedness).
+            if method == "to_f32" || method == "to_f64" {
+                let src_unsigned = self.expr_is_unsigned_int(object);
+                let recv = self.compile_expr(object)?;
+                if let BasicValueEnum::IntValue(iv) = recv {
+                    let ft = if method == "to_f32" {
+                        self.context.f32_type()
+                    } else {
+                        self.context.f64_type()
+                    };
+                    let r = if src_unsigned {
+                        self.builder.build_unsigned_int_to_float(iv, ft, "to_float")
+                    } else {
+                        self.builder.build_signed_int_to_float(iv, ft, "to_float")
+                    }
+                    .unwrap();
+                    return Ok(r.into());
+                }
+            }
         }
 
         let receiver_desc = match &object.kind {
@@ -3942,6 +3960,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let src_unsigned = self
             .unsigned_vector_exprs
             .contains(&(src_span.offset, src_span.length));
+        // Target element signedness (for the float→int saturating lane) — read
+        // from the destination `Vector[U, N]`'s element type name.
+        let target_unsigned = generic_args.first().is_some_and(|ga| {
+            matches!(ga, GenericArg::Type(t)
+                if matches!(&t.kind, TypeKind::Path(p)
+                    if matches!(
+                        p.segments.first().map(|s| s.as_str()),
+                        Some("u8") | Some("u16") | Some("u32") | Some("u64") | Some("u128") | Some("usize")
+                    )))
+        });
         let src = self.compile_expr(&args[0].value)?.into_vector_value();
 
         let mut acc = vt.get_undef();
@@ -3951,7 +3979,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_extract_element(src, lane_idx, "cast_from.lane")
                 .map_err(|e| format!("cast_from extractelement failed: {e}"))?;
-            let converted = self.compile_cast(lane, target_elem, src_unsigned)?;
+            let converted = self.compile_cast(lane, target_elem, src_unsigned, target_unsigned)?;
             acc = self
                 .builder
                 .build_insert_element(acc, converted, lane_idx, "cast_from.ins")

@@ -9113,6 +9113,160 @@ fn main() {
         }
     }
 
+    // ── Float↔int conversion codegen (phase-8 cast slice 4) ────────────
+
+    #[test]
+    fn test_ir_float_as_int_is_saturating() {
+        // `f as iN` must lower to the saturating intrinsic, not raw `fptosi`
+        // (which is poison on out-of-range). Signed → fptosi.sat, unsigned →
+        // fptoui.sat.
+        let ir_s = ir_for("fn f(x: f64) -> i32 { x as i32 }");
+        assert!(
+            ir_s.contains("llvm.fptosi.sat.i32.f64"),
+            "signed float→int as-cast should use fptosi.sat:\n{ir_s}"
+        );
+        let ir_u = ir_for("fn f(x: f64) -> u8 { x as u8 }");
+        assert!(
+            ir_u.contains("llvm.fptoui.sat.i8.f64"),
+            "unsigned float→int as-cast should use fptoui.sat:\n{ir_u}"
+        );
+    }
+
+    #[test]
+    fn test_ir_saturating_to_uses_sat_intrinsic() {
+        let ir = ir_for("fn f(x: f64) -> i32 { x.saturating_to_i32() }");
+        assert!(ir.contains("llvm.fptosi.sat.i32.f64"), "{ir}");
+        let ir_u = ir_for("fn f(x: f64) -> u8 { x.saturating_to_u8() }");
+        assert!(ir_u.contains("llvm.fptoui.sat.i8.f64"), "{ir_u}");
+    }
+
+    #[test]
+    fn test_e2e_float_as_int_saturates() {
+        // The headline: `f as iN` saturates (was raw fptosi / UB pre-slice-4).
+        let out = run_program(
+            r#"
+fn main() {
+    println(1e30f64 as i32);
+    println(-1e30f64 as i32);
+    println(1e30f64 as u8);
+    println(-1.0f64 as u8);
+    println(f64.NAN as i32);
+    println(f64.INFINITY as i64);
+    println(f64.NEG_INFINITY as i64);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "2147483647\n-2147483648\n255\n0\n0\n9223372036854775807\n-9223372036854775808"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_saturating_to_int_family() {
+        let out = run_program(
+            r#"
+fn main() {
+    println((3.7f64).saturating_to_i32());
+    println((1e30f64).saturating_to_i32());
+    println((-1e30f64).saturating_to_i32());
+    println((1e30f64).saturating_to_u8());
+    println((-1.0f64).saturating_to_u8());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\n2147483647\n-2147483648\n255\n0");
+        }
+    }
+
+    #[test]
+    fn test_e2e_wrapping_to_int_family() {
+        // Modular truncation: 300 → 44 in i8, 256 → 0 / 257 → 1 in u8.
+        let out = run_program(
+            r#"
+fn main() {
+    println((300.0f64).wrapping_to_i8());
+    println((256.0f64).wrapping_to_u8());
+    println((257.9f64).wrapping_to_u8());
+    println((-3.7f64).wrapping_to_i32());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "44\n0\n1\n-3");
+        }
+    }
+
+    #[test]
+    fn test_e2e_checked_to_int_family() {
+        // `Some(trunc)` in range; `None` on out-of-range / NaN / negative→unsigned.
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Option[i32] = (1.5f64).checked_to_i32();
+    match a { Some(v) => println(v), None => println(-1) };
+    let b: Option[i32] = (1e30f64).checked_to_i32();
+    match b { Some(v) => println(v), None => println(-1) };
+    let c: Option[i32] = (f64.NAN).checked_to_i32();
+    match c { Some(v) => println(v), None => println(-1) };
+    let d: Option[u8] = (-1.0f64).checked_to_u8();
+    match d { Some(v) => println(v), None => println(-1) };
+    let e: Option[u8] = (200.0f64).checked_to_u8();
+    match e { Some(v) => println(v), None => println(-1) };
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\n-1\n-1\n-1\n200");
+        }
+    }
+
+    #[test]
+    fn test_e2e_trunc_to_in_range_and_to_float() {
+        let out = run_program(
+            r#"
+fn main() {
+    println((42.9f64).trunc_to_i32());
+    println((42i64).to_f64());
+    println((200u8).to_f32());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42\n42\n200");
+        }
+    }
+
+    #[test]
+    fn test_e2e_trunc_to_out_of_range_traps() {
+        // `trunc_to_iN` is the trapping form — out-of-range panics with the
+        // `#[track_caller]` "float-to-int out of range" message (carries the
+        // `panics` effect; slice 2 wired the effect, slice 4 the trap).
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let big: f64 = 1e30;
+    println(big.trunc_to_i32());
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("float-to-int out of range"),
+                "expected out-of-range trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("2147483647"),
+                "the saturated value must not print on the trapping path"
+            );
+        }
+    }
+
     // ── Built-in `to_string` / `clone` on scalar primitives ────────────
     // Both used to build-fail (typecheck poison + no codegen handler). Now
     // `to_string` builds an owning String via the f-string renderer and
