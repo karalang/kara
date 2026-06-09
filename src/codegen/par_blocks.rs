@@ -13,8 +13,8 @@ use crate::ast::*;
 use crate::token::Span;
 
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
-use inkwell::values::{BasicValueEnum, PointerValue};
-use inkwell::AddressSpace;
+use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::{AddressSpace, IntPredicate};
 
 use super::state::{CleanupAction, ResultSlot, ReturnSlot, SlotOwnership, VarSlot};
 
@@ -940,6 +940,342 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => None,
         };
         Ok((slot_values, result_surface, slot_ownership))
+    }
+
+    /// Lower `collect_all_vec(fs)` (phase-6 slice 1b) — the homogeneous
+    /// gather-all-errors parallel primitive. `fs : Vec[Fn() -> Result[T,
+    /// E]]`; runs every closure to completion and returns
+    /// `Vec[Result[T, E]]` with `output[i]` == outcome of `fs[i]`.
+    ///
+    /// Lowering (dynamic-N, reuses `karac_par_run` unchanged — gather-mode
+    /// is simply "never flip the cancel flag on `Err`", which the
+    /// trampoline below honours by never touching its cancel arg):
+    ///   1. read the input Vec's data pointer + length N (a runtime value);
+    ///   2. `malloc` three N-sized arrays — N `Result` slots (kept: becomes
+    ///      the output Vec's buffer), N branch ctx structs + N `KaracBranch`
+    ///      (freed after the join);
+    ///   3. a runtime counted loop fills, per `i`: ctx[i] = {closure[i].fn,
+    ///      closure[i].env, &slots[i]} and branches[i] = {trampoline, &ctx[i]};
+    ///   4. `karac_par_run(branches, N, par_id, parent_cancel)` runs them all
+    ///      and joins (the runtime barrier orders every slot write before it
+    ///      returns);
+    ///   5. assemble the output Vec `{slots, N, N}` and free the temp arrays.
+    ///
+    /// The `Result` LLVM layout is type-erased (`enum_layouts["Result"]`,
+    /// uniform across `T`/`E`), so a single shared trampoline + ctx layout
+    /// serve every `collect_all_vec` call site regardless of element type.
+    pub(super) fn compile_collect_all_vec(
+        &mut self,
+        fs_expr: &Expr,
+        call_span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let outer_fn = self
+            .current_fn
+            .ok_or_else(|| "collect_all_vec outside a function".to_string())?;
+
+        // The type-erased `Result[T, E]` LLVM struct (same layout the
+        // closures return by value, per `compile_closure`'s struct-return
+        // arm). Reused for the slots, the output Vec elements, and the
+        // trampoline's indirect-call return type.
+        let result_ty = self
+            .enum_layouts
+            .get("Result")
+            .ok_or_else(|| "collect_all_vec: Result enum layout missing".to_string())?
+            .llvm_type;
+        // Closure fat-pointer `{ fn_ptr, env_ptr }` — the Vec's element type.
+        let closure_ty = self.closure_value_type();
+        // Per-branch ctx `{ ptr fn_ptr, ptr env_ptr, ptr slot_ptr }`.
+        let ctx_ty = self
+            .context
+            .struct_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+
+        // Shared trampoline (emitted once per module).
+        let trampoline = self.emit_collect_all_vec_trampoline(result_ty, ctx_ty)?;
+
+        // 1. Evaluate the input Vec; extract data pointer + length N.
+        let fs_val = self.compile_expr(fs_expr)?.into_struct_value();
+        let data_ptr = self
+            .builder
+            .build_extract_value(fs_val, 0, "cav.fs.data")
+            .unwrap()
+            .into_pointer_value();
+        let n = self
+            .builder
+            .build_extract_value(fs_val, 1, "cav.fs.len")
+            .unwrap()
+            .into_int_value();
+
+        // 2. malloc the three N-sized arrays.
+        let result_size = result_ty.size_of().unwrap();
+        let slots_bytes = self
+            .builder
+            .build_int_mul(n, result_size, "cav.slots.bytes")
+            .unwrap();
+        let slots_ptr = self
+            .builder
+            .build_call(self.malloc_fn, &[slots_bytes.into()], "cav.slots")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let ctx_size = ctx_ty.size_of().unwrap();
+        let ctxs_bytes = self
+            .builder
+            .build_int_mul(n, ctx_size, "cav.ctxs.bytes")
+            .unwrap();
+        let ctxs_ptr = self
+            .builder
+            .build_call(self.malloc_fn, &[ctxs_bytes.into()], "cav.ctxs")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let branch_size = self.karac_branch_ty.size_of().unwrap();
+        let branches_bytes = self
+            .builder
+            .build_int_mul(n, branch_size, "cav.branches.bytes")
+            .unwrap();
+        let branches_ptr = self
+            .builder
+            .build_call(self.malloc_fn, &[branches_bytes.into()], "cav.branches")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        // 3. Fill loop: for i in 0..N.
+        let cond_bb = self.context.append_basic_block(outer_fn, "cav.fill.cond");
+        let body_bb = self.context.append_basic_block(outer_fn, "cav.fill.body");
+        let exit_bb = self.context.append_basic_block(outer_fn, "cav.fill.exit");
+        let i_alloca = self.create_entry_alloca(outer_fn, "cav.i", i64_t.into());
+        self.builder
+            .build_store(i_alloca, i64_t.const_zero())
+            .unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(cond_bb);
+        let i_cur = self
+            .builder
+            .build_load(i64_t, i_alloca, "cav.i.cur")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i_cur, n, "cav.lt")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        // closure_i = fs.data[i]; split into fn_ptr / env_ptr.
+        let closure_ep = unsafe {
+            self.builder
+                .build_gep(closure_ty, data_ptr, &[i_cur], "cav.closure.ep")
+                .unwrap()
+        };
+        let closure_val = self
+            .builder
+            .build_load(closure_ty, closure_ep, "cav.closure")
+            .unwrap()
+            .into_struct_value();
+        let fn_ptr = self
+            .builder
+            .build_extract_value(closure_val, 0, "cav.fn")
+            .unwrap();
+        let env_ptr = self
+            .builder
+            .build_extract_value(closure_val, 1, "cav.env")
+            .unwrap();
+        // slot_i = &slots[i].
+        let slot_ep = unsafe {
+            self.builder
+                .build_gep(result_ty, slots_ptr, &[i_cur], "cav.slot.ep")
+                .unwrap()
+        };
+        // ctx[i] = { fn_ptr, env_ptr, slot_ep }.
+        let ctx_ep = unsafe {
+            self.builder
+                .build_gep(ctx_ty, ctxs_ptr, &[i_cur], "cav.ctx.ep")
+                .unwrap()
+        };
+        let cf0 = self
+            .builder
+            .build_struct_gep(ctx_ty, ctx_ep, 0, "cav.ctx.fn")
+            .unwrap();
+        self.builder.build_store(cf0, fn_ptr).unwrap();
+        let cf1 = self
+            .builder
+            .build_struct_gep(ctx_ty, ctx_ep, 1, "cav.ctx.env")
+            .unwrap();
+        self.builder.build_store(cf1, env_ptr).unwrap();
+        let cf2 = self
+            .builder
+            .build_struct_gep(ctx_ty, ctx_ep, 2, "cav.ctx.slot")
+            .unwrap();
+        self.builder.build_store(cf2, slot_ep).unwrap();
+        // branches[i] = { trampoline, &ctx[i] }.
+        let branch_ep = unsafe {
+            self.builder
+                .build_gep(
+                    self.karac_branch_ty,
+                    branches_ptr,
+                    &[i_cur],
+                    "cav.branch.ep",
+                )
+                .unwrap()
+        };
+        let bf0 = self
+            .builder
+            .build_struct_gep(self.karac_branch_ty, branch_ep, 0, "cav.branch.fn")
+            .unwrap();
+        self.builder
+            .build_store(bf0, trampoline.as_global_value().as_pointer_value())
+            .unwrap();
+        let bf1 = self
+            .builder
+            .build_struct_gep(self.karac_branch_ty, branch_ep, 1, "cav.branch.ctx")
+            .unwrap();
+        self.builder.build_store(bf1, ctx_ep).unwrap();
+        let i_next = self
+            .builder
+            .build_int_add(i_cur, i64_t.const_int(1, false), "cav.i.next")
+            .unwrap();
+        self.builder.build_store(i_alloca, i_next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+
+        // 4. karac_par_run(branches, N, par_id, parent_cancel). `parent_cancel`
+        //    cascades an enclosing region's cancel inward (null at top level);
+        //    this region never originates a cancel (gather-mode), but a panic
+        //    in any branch still aborts under v1 panic=abort.
+        let par_id = self.record_spawn_site(call_span, None);
+        let par_id_val = self.context.i32_type().const_int(par_id as u64, false);
+        let parent_cancel = match self.branch_cancel_ptr {
+            Some(p) => p,
+            None => ptr_ty.const_null(),
+        };
+        self.builder
+            .build_call(
+                self.karac_par_run_fn,
+                &[
+                    branches_ptr.into(),
+                    n.into(),
+                    par_id_val.into(),
+                    parent_cancel.into(),
+                ],
+                "cav.par_run",
+            )
+            .unwrap();
+
+        // 5. Free the temp arrays (the slots buffer is kept — it becomes the
+        //    output Vec's storage).
+        self.builder
+            .build_call(self.free_fn, &[branches_ptr.into()], "")
+            .unwrap();
+        self.builder
+            .build_call(self.free_fn, &[ctxs_ptr.into()], "")
+            .unwrap();
+
+        // 5b. Free the input Vec's buffer. `fs` is a moved owned param (the
+        //     ownership pass rejects use-after-move), so the caller's
+        //     scope-exit drop is suppressed and `collect_all_vec` owns its
+        //     disposal. ONLY the heap `{ptr,len,cap}` buffer is freed — the
+        //     closures' envs are stack allocas in the constructing frame
+        //     (`compile_closure` uses `create_entry_alloca`), valid across
+        //     the synchronous `karac_par_run` join and reclaimed at frame
+        //     exit; freeing them here would corrupt the stack. cap-guarded:
+        //     an empty Vec (cap 0) has no allocation.
+        let fs_cap = self
+            .builder
+            .build_extract_value(fs_val, 2, "cav.fs.cap")
+            .unwrap()
+            .into_int_value();
+        self.emit_free_if_cap_positive(data_ptr, fs_cap);
+
+        // 6. Output Vec[Result[T, E]] = { slots, N, N }.
+        Ok(self.build_vec_value(slots_ptr, n, n))
+    }
+
+    /// Emit the shared `collect_all_vec` branch trampoline (once per
+    /// module): `void __collect_all_vec_branch(ptr ctx, ptr cancel)`.
+    /// `ctx` is `{ fn_ptr, env_ptr, slot_ptr }`; it invokes the closure
+    /// (`fn_ptr(env_ptr) -> Result`, the by-value struct-return closure
+    /// ABI) and stores the `Result` into the slot. It NEVER reads `cancel`
+    /// — that is precisely what makes this gather-mode rather than fail-fast.
+    fn emit_collect_all_vec_trampoline(
+        &mut self,
+        result_ty: StructType<'ctx>,
+        ctx_ty: StructType<'ctx>,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let name = "__collect_all_vec_branch";
+        if let Some(f) = self.module.get_function(name) {
+            return Ok(f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = self.context.void_type().fn_type(
+            &[
+                BasicMetadataTypeEnum::from(ptr_ty),
+                BasicMetadataTypeEnum::from(ptr_ty),
+            ],
+            false,
+        );
+        let tramp = self.module.add_function(name, fn_ty, None);
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(tramp);
+        let entry = self.context.append_basic_block(tramp, "entry");
+        self.builder.position_at_end(entry);
+
+        let ctx_arg = tramp.get_nth_param(0).unwrap().into_pointer_value();
+        let f0 = self
+            .builder
+            .build_struct_gep(ctx_ty, ctx_arg, 0, "cav.t.fn.ptr")
+            .unwrap();
+        let fn_ptr = self
+            .builder
+            .build_load(ptr_ty, f0, "cav.t.fn")
+            .unwrap()
+            .into_pointer_value();
+        let f1 = self
+            .builder
+            .build_struct_gep(ctx_ty, ctx_arg, 1, "cav.t.env.ptr")
+            .unwrap();
+        let env_ptr = self
+            .builder
+            .build_load(ptr_ty, f1, "cav.t.env")
+            .unwrap()
+            .into_pointer_value();
+        let f2 = self
+            .builder
+            .build_struct_gep(ctx_ty, ctx_arg, 2, "cav.t.slot.ptr")
+            .unwrap();
+        let slot_ptr = self
+            .builder
+            .build_load(ptr_ty, f2, "cav.t.slot")
+            .unwrap()
+            .into_pointer_value();
+
+        // result = fn_ptr(env_ptr) — closure ABI is `Result(ptr env)`.
+        let closure_fn_ty = result_ty.fn_type(&[BasicMetadataTypeEnum::from(ptr_ty)], false);
+        let result_val = self
+            .builder
+            .build_indirect_call(closure_fn_ty, fn_ptr, &[env_ptr.into()], "cav.t.invoke")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+        self.builder.build_store(slot_ptr, result_val).unwrap();
+        self.builder.build_return(None).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Ok(tramp)
     }
 
     /// Generate the branch function for a single par-block statement.

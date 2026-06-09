@@ -1811,7 +1811,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Build a `{ptr, len, cap}` Vec value from a buffer pointer + len +
     /// cap (the layout `vec_struct_type` produces).
-    fn build_vec_value(
+    pub(super) fn build_vec_value(
         &self,
         buf: PointerValue<'ctx>,
         len: IntValue<'ctx>,
@@ -1858,7 +1858,11 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Free `data` when `cap > 0` (temporary dims-Vec disposal).
-    fn emit_free_if_cap_positive(&mut self, data: PointerValue<'ctx>, cap: IntValue<'ctx>) {
+    pub(super) fn emit_free_if_cap_positive(
+        &mut self,
+        data: PointerValue<'ctx>,
+        cap: IntValue<'ctx>,
+    ) {
         let fn_val = self.current_fn.unwrap();
         let i64_t = self.context.i64_type();
         let do_bb = self.context.append_basic_block(fn_val, "t.tmpfree.do");

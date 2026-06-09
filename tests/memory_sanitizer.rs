@@ -285,6 +285,77 @@ fn main() {
         );
     }
 
+    // ── `collect_all_vec` gather (phase-6 slice 1b) ───────────────
+    //
+    // Lowers a runtime Vec of closures into parallel `karac_par_run`
+    // branches, each writing a `Result` into a malloc'd slot array; the
+    // slots become the output Vec's buffer while the temp branch/ctx
+    // arrays are freed. The `Err` payloads are heap `String`s
+    // (`f"neg:{n}"`) that flow closure → slot → output Vec → print →
+    // drop; a double-free across the par boundary or in the slot/Vec
+    // hand-off (or a use-after-free of a freed temp array) would trip
+    // ASAN here. (LeakSanitizer is unsupported on Darwin, so a pure
+    // leak is caught only in Linux CI; this guards the UAF/double-free
+    // class, which is the codegen-ownership risk.)
+
+    #[test]
+    fn asan_collect_all_vec_gather_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn work(n: i64) -> Result[i64, String] {
+    if n > 0 { Result.Ok(n * 10) } else { Result.Err(f"neg:{n}") }
+}
+fn main() {
+    let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| work(1), || work(-2), || work(3)];
+    let results: Vec[Result[i64, String]] = collect_all_vec(fs);
+    for r in results {
+        match r {
+            Result.Ok(v) => { println(f"ok {v}"); }
+            Result.Err(e) => { println(f"err {e}"); }
+        }
+    }
+}
+"#,
+            &["ok 10", "err neg:-2", "ok 30"],
+            "collect_all_vec_gather",
+        );
+    }
+
+    // ── `collect_all_vec` with capturing closures ─────────────────
+    //
+    // The canonical fan-out shape: each closure captures an outer
+    // binding and wraps a named call (`|| fetch(a)`). The captured
+    // values live in stack env allocas in `main`'s frame and are read
+    // by the worker threads across the synchronous `karac_par_run`
+    // join — a use-after-free of the env (or of the freed input Vec
+    // buffer) would trip ASAN here.
+
+    #[test]
+    fn asan_collect_all_vec_capturing_closures_no_uaf() {
+        assert_clean_asan_run(
+            r#"
+fn fetch(id: i64) -> Result[i64, String] {
+    if id > 0 { Result.Ok(id * 10) } else { Result.Err(f"bad:{id}") }
+}
+fn main() {
+    let a: i64 = 1;
+    let b: i64 = -2;
+    let c: i64 = 3;
+    let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| fetch(a), || fetch(b), || fetch(c)];
+    let results: Vec[Result[i64, String]] = collect_all_vec(fs);
+    for r in results {
+        match r {
+            Result.Ok(v) => { println(f"ok {v}"); }
+            Result.Err(e) => { println(f"err {e}"); }
+        }
+    }
+}
+"#,
+            &["ok 10", "err bad:-2", "ok 30"],
+            "collect_all_vec_capturing",
+        );
+    }
+
     // ── `println(String)` — `%.*s` length-bounded format ──────────
     //
     // Pre-fix `compile_print`'s struct-value arm passed the String's

@@ -105,20 +105,22 @@ mod par_codegen_tests {
     }
 
     #[test]
-    fn collect_all_vec_hard_errors_under_build_until_slice_1b() {
-        // Phase 6 slice 1a — `collect_all_vec` runs in the interpreter but
-        // its codegen lowering is slice 1b. Until then `karac build` MUST
-        // hard-error, NOT fall through to the generic-fn path, which would
-        // lower the `#[compiler_builtin]` stub body (`Vec.new()`) into a
-        // silently empty result vector — the closures would never run (a
-        // silent-wrong footgun, worse than a hard error). When 1b lands,
-        // flip this from an error assertion to a lowering assertion.
+    fn collect_all_vec_lowers_to_par_run_gather() {
+        // Phase 6 slice 1b — `collect_all_vec(fs)` lowers to a parallel
+        // gather: a shared `__collect_all_vec_branch` trampoline invoked
+        // per element via `karac_par_run`, each writing a Result into a
+        // malloc'd slot that becomes the output Vec's buffer. (Slice 1a's
+        // hard-error gate is gone; this asserts the lowering is present.)
+        // The closures here are the canonical fan-out shape — a captured
+        // arg + a named call returning Result (`|| work(a)`).
         let src = "fn work(n: i64) -> Result[i64, String] {\n\
                        if n > 0 { Result.Ok(n) } else { Result.Err(\"neg\") }\n\
                    }\n\
                    fn main() {\n\
-                       let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| work(1)];\n\
+                       let a: i64 = 1;\n\
+                       let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| work(a)];\n\
                        let r: Vec[Result[i64, String]] = collect_all_vec(fs);\n\
+                       let _n: i64 = r.len();\n\
                    }";
         let mut parsed = karac::parse(src);
         assert!(
@@ -130,11 +132,15 @@ mod par_codegen_tests {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
-        let err = compile_to_ir(&parsed.program, Some(&ownership), None)
-            .expect_err("collect_all_vec must NOT lower under karac build in slice 1a");
+        let ir = compile_to_ir(&parsed.program, Some(&ownership), None)
+            .expect("collect_all_vec must lower under karac build in slice 1b");
         assert!(
-            err.contains("collect_all_vec") && err.contains("slice 1b"),
-            "expected a slice-1b not-yet-supported error; got: {err}"
+            ir.contains("__collect_all_vec_branch"),
+            "expected the shared gather trampoline in the IR"
+        );
+        assert!(
+            ir.contains("karac_par_run"),
+            "expected the karac_par_run dispatch in the IR"
         );
     }
 
