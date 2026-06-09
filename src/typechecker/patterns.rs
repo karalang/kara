@@ -16,8 +16,8 @@ use std::collections::HashMap;
 
 use super::inference::{resolve_type_vars, substitute_type_params};
 use super::types::{
-    strip_refinement, type_display, ConstArg, ConstVarId, FloatSize, IntSize, ScrutineeMode,
-    SubstValue, Type, TypeVarId, UIntSize, VariantTypeInfo,
+    strip_refinement, type_display, ConstArg, ConstVarId, DimArg, FloatSize, IntSize,
+    ScrutineeMode, SubstValue, Type, TypeVarId, UIntSize, VariantTypeInfo,
 };
 use super::TypeErrorKind;
 
@@ -1037,8 +1037,39 @@ impl<'a> super::TypeChecker<'a> {
                 span,
             },
             Type::Named { name, args } => {
-                let arg_exprs = args.iter().map(Self::type_to_type_expr).collect();
-                path(name, arg_exprs)
+                // Args are usually plain types, but a `Tensor[T, Shape]`
+                // carries a `Type::Shape(dims)` second arg that must round-
+                // trip as `GenericArg::Shape`, not `GenericArg::Type` — else
+                // the reconstructed Tensor loses its shape (the Shape arm
+                // below would hit the `_ => Error` fallback) and downstream
+                // `tensor_var_info_from_type_expr` rejects it. Used by
+                // `owned_temp_drops` for `Vec[Tensor]` (the iter_axis
+                // result) so its for-loop element binds as a tensor.
+                let generic_args: Vec<GenericArg> = args
+                    .iter()
+                    .map(|a| match a {
+                        Type::Shape(dims) => GenericArg::Shape(ShapeLit {
+                            dims: dims
+                                .iter()
+                                .map(|d| Self::dim_arg_to_shape_dim(d, &span))
+                                .collect(),
+                            span: span.clone(),
+                        }),
+                        other => GenericArg::Type(Self::type_to_type_expr(other)),
+                    })
+                    .collect();
+                TypeExpr {
+                    kind: TypeKind::Path(PathExpr {
+                        segments: vec![name.clone()],
+                        generic_args: if generic_args.is_empty() {
+                            None
+                        } else {
+                            Some(generic_args)
+                        },
+                        span: span.clone(),
+                    }),
+                    span,
+                }
             }
             Type::Shared(name) => path(name, vec![]),
             Type::Rc(inner) => path("Rc", vec![Self::type_to_type_expr(inner)]),
@@ -1090,6 +1121,37 @@ impl<'a> super::TypeChecker<'a> {
                 kind: TypeKind::Error,
                 span,
             },
+        }
+    }
+
+    /// Reconstruct a shape-literal dim (`ShapeDim`) from a typechecker
+    /// `DimArg`. Literal dims round-trip to integer-literal `Const`s
+    /// (codegen folds them); named dim params to identifier `Const`s;
+    /// every dynamic / metavariable form to `?`; splices to `...IDENT`.
+    /// Codegen only distinguishes "concrete literal" (static dim) from
+    /// everything else (header-read), and rejects splice-bearing shapes
+    /// wholesale, so the non-literal mappings need only preserve that
+    /// coarse classification.
+    fn dim_arg_to_shape_dim(d: &DimArg, span: &Span) -> ShapeDim {
+        match d {
+            DimArg::Const(ConstArg::Literal(v)) => ShapeDim::Const(Box::new(Expr {
+                kind: ExprKind::Integer(*v, None),
+                span: span.clone(),
+            })),
+            DimArg::Const(ConstArg::ConstParam(name)) => ShapeDim::Const(Box::new(Expr {
+                kind: ExprKind::Identifier(name.clone()),
+                span: span.clone(),
+            })),
+            DimArg::Splice(name) => ShapeDim::Splice {
+                name: name.clone(),
+                span: span.clone(),
+            },
+            DimArg::SpliceVar(_) => ShapeDim::Splice {
+                name: "_splice".to_string(),
+                span: span.clone(),
+            },
+            // ConstVar / DynamicDim / Dynamic — all runtime dims.
+            _ => ShapeDim::Dynamic { span: span.clone() },
         }
     }
 

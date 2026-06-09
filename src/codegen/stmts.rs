@@ -2209,7 +2209,23 @@ impl<'ctx> super::Codegen<'ctx> {
                             // the registration when the slot's LLVM type is
                             // anything but the Vec / String aggregate.
                             if !matches!(slot.ty, BasicTypeEnum::ArrayType(_)) {
-                                self.track_vec_var(slot.ptr, Some(elem_ty));
+                                // `Vec[Tensor]` (the `iter_axis` result):
+                                // elements are `ptr`s to tensor blocks that
+                                // each need a `free`. The generic
+                                // recursive-drop only reaches vec-struct /
+                                // Map elements, so route to the
+                                // tensor-element cleanup instead.
+                                let is_tensor_elem = self
+                                    .var_elem_type_exprs
+                                    .get(var_name.as_str())
+                                    .cloned()
+                                    .map(|te| self.tensor_var_info_from_type_expr(&te).is_some())
+                                    .unwrap_or(false);
+                                if is_tensor_elem {
+                                    self.track_vec_of_tensors_var(slot.ptr);
+                                } else {
+                                    self.track_vec_var(slot.ptr, Some(elem_ty));
+                                }
                             }
                         }
                         // Move-aware suppression for `let outer = inner;`

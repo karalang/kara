@@ -740,6 +740,25 @@ impl<'ctx> super::Codegen<'ctx> {
             frame.push(CleanupAction::FreeVecBuffer {
                 vec_alloca,
                 elem_ty,
+                elem_is_tensor: false,
+            });
+        }
+    }
+
+    /// Track a `Vec[Tensor]` alloca for scope-exit cleanup: free each
+    /// live element's `[rank][dims][data]` block, then the outer buffer
+    /// (guarded by `cap > 0` so a moved-out Vec — `cap` zeroed by the
+    /// move-suppression path — skips both). The element LLVM type is a
+    /// `ptr`; the `elem_is_tensor` flag (not the type) drives the
+    /// per-element free, since a `ptr` element can't be told apart from a
+    /// Map handle / borrow by type alone. Used for the `iter_axis`
+    /// result Vec (`src/codegen/tensor.rs`).
+    pub(super) fn track_vec_of_tensors_var(&mut self, vec_alloca: PointerValue<'ctx>) {
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeVecBuffer {
+                vec_alloca,
+                elem_ty: Some(self.context.ptr_type(AddressSpace::default()).into()),
+                elem_is_tensor: true,
             });
         }
     }
@@ -2134,6 +2153,7 @@ impl<'ctx> super::Codegen<'ctx> {
             CleanupAction::FreeVecBuffer {
                 vec_alloca,
                 elem_ty,
+                elem_is_tensor,
             } => {
                 let cap_ptr = self
                     .builder
@@ -2301,6 +2321,71 @@ impl<'ctx> super::Codegen<'ctx> {
 
                         self.builder.position_at_end(drop_after_bb);
                     }
+                }
+
+                // Tensor-element drop: each element is a single `ptr` to a
+                // `[rank][dims][data]` block (the `iter_axis` result Vec).
+                // Iterate `len` elements and `free` each before releasing
+                // the outer buffer. One free per element — tensors are
+                // single allocations, no inner recursion. `free(null)` is a
+                // no-op, so no per-element null guard is needed.
+                if *elem_is_tensor {
+                    let len_ptr = self
+                        .builder
+                        .build_struct_gep(vec_ty, *vec_alloca, 1, "cleanup.tdrop.len.ptr")
+                        .unwrap();
+                    let len = self
+                        .builder
+                        .build_load(i64_t, len_ptr, "cleanup.tdrop.len")
+                        .unwrap()
+                        .into_int_value();
+                    let counter = self.create_entry_alloca(fn_val, "cleanup.tdrop.i", i64_t.into());
+                    self.builder.build_store(counter, zero).unwrap();
+                    let tcond_bb = self
+                        .context
+                        .append_basic_block(fn_val, "cleanup.tdrop.cond");
+                    let tbody_bb = self
+                        .context
+                        .append_basic_block(fn_val, "cleanup.tdrop.body");
+                    let tafter_bb = self
+                        .context
+                        .append_basic_block(fn_val, "cleanup.tdrop.after");
+                    self.builder.build_unconditional_branch(tcond_bb).unwrap();
+                    self.builder.position_at_end(tcond_bb);
+                    let cur = self
+                        .builder
+                        .build_load(i64_t, counter, "cleanup.tdrop.cur")
+                        .unwrap()
+                        .into_int_value();
+                    let lt = self
+                        .builder
+                        .build_int_compare(IntPredicate::ULT, cur, len, "cleanup.tdrop.lt")
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(lt, tbody_bb, tafter_bb)
+                        .unwrap();
+                    self.builder.position_at_end(tbody_bb);
+                    let elem_pp = unsafe {
+                        self.builder
+                            .build_gep(ptr_ty, data, &[cur], "cleanup.tdrop.elem.pp")
+                            .unwrap()
+                    };
+                    let elem_p = self
+                        .builder
+                        .build_load(ptr_ty, elem_pp, "cleanup.tdrop.elem")
+                        .unwrap()
+                        .into_pointer_value();
+                    self.builder
+                        .build_call(self.free_fn, &[elem_p.into()], "")
+                        .unwrap();
+                    let one = i64_t.const_int(1, false);
+                    let next = self
+                        .builder
+                        .build_int_add(cur, one, "cleanup.tdrop.next")
+                        .unwrap();
+                    self.builder.build_store(counter, next).unwrap();
+                    self.builder.build_unconditional_branch(tcond_bb).unwrap();
+                    self.builder.position_at_end(tafter_bb);
                 }
 
                 self.builder

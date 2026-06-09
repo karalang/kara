@@ -5033,6 +5033,55 @@ fn main() {
         );
     }
 
+    /// `iter_axis` Vec[Tensor] heap lifecycle (phase-11 follow-on slice):
+    /// the result `Vec` holds a buffer of tensor `ptr`s, each a separate
+    /// `[rank][dims][data]` block. The `Vec[Tensor]` cleanup
+    /// (`track_vec_of_tensors_var` → `cleanup.tdrop`) must free every
+    /// element block and the outer buffer exactly once — a missing free
+    /// leaks (Linux detect_leaks), a double free trips ASAN everywhere.
+    /// Exercises the `let`-bound result (indexed) and the for-loop
+    /// method-source materialization (which queues the synth temp's
+    /// cleanup), plus the rank-1 `Vec[T]` form (a plain buffer).
+    #[test]
+    fn asan_tensor_iter_axis_lifecycle_clean() {
+        let label = "tensor_iter_axis_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    let rows = a.iter_axis(0);
+    println(rows.len());
+    println(rows[1][2]);
+    for c in a.iter_axis(1) {
+        println(c[0]);
+    }
+    let v = Tensor.from([10, 20, 30]);
+    let scal = v.iter_axis(0);
+    println(scal[2]);
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check the Vec[Tensor] element drop (track_vec_of_tensors_var)",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["2", "6", "1", "2", "3", "30"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     // ── Owned Vec/String param moved into a local (kata-23, 2026-06-07) ──
     //
     // `let mut work = lists;` where `lists` is a bare by-value Vec/String

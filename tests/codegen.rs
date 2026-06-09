@@ -37925,6 +37925,105 @@ fn main() {
         }
     }
 
+    // ── Tensor iter_axis codegen (phase-11 follow-on, 2026-06-08) ──
+    // `t.iter_axis(n)` returns `Vec[Tensor[...]]` (or `Vec[T]` for a
+    // rank-1 receiver): the bucket gather loop in `src/codegen/tensor.rs`,
+    // the Vec-of-pointer element drop (`track_vec_of_tensors_var` +
+    // `cleanup.tdrop` in runtime.rs), and the for-loop method-source
+    // materialization in control_flow_for.rs.
+
+    #[test]
+    fn test_tensor_iter_axis_emits_bucket_loop_and_tensor_drop() {
+        let ir = ir_for(
+            "fn main() {\n\
+                 let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let rows = a.iter_axis(0);\n\
+                 println(rows.len());\n\
+             }\n",
+        );
+        assert!(
+            ir.contains("t.ia.bh"),
+            "iter_axis must emit the per-bucket gather loop:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.tdrop.cond"),
+            "Vec[Tensor] binding must emit the tensor-element drop loop:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_e2e_tensor_iter_axis() {
+        // rows / cols (rank ≥ 2 → Vec[Tensor]), rank-1 → Vec[T], and
+        // indexing a bound Vec[Tensor]. Output verified vs `karac run`.
+        let out = run_program(
+            "fn main() {\n\
+                 let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let rows = a.iter_axis(0);\n\
+                 println(rows.len());\n\
+                 for r in rows { println(r[0]); println(r[2]); }\n\
+                 let cols = a.iter_axis(1);\n\
+                 println(cols.len());\n\
+                 for c in cols { println(c[1]); }\n\
+                 let v = Tensor.from([10, 20, 30]);\n\
+                 let scal = v.iter_axis(0);\n\
+                 println(scal.len());\n\
+                 for x in scal { println(x); }\n\
+                 let subs = a.iter_axis(0);\n\
+                 println(subs[1][2]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "2\n1\n3\n4\n6\n3\n4\n5\n6\n3\n10\n20\n30\n6\n",
+                "iter_axis AOT output must match the interpreter twin",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_iter_axis_runtime_axis() {
+        // A runtime-valued axis: dims/axis read from the header, so the
+        // bucketing is computed at runtime (the item shape degrades to
+        // all-`?` in the type but the data is correct).
+        let out = run_program(
+            "fn main() {\n\
+                 let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let ax = 1;\n\
+                 let parts = a.iter_axis(ax);\n\
+                 println(parts.len());\n\
+                 for p in parts { println(p[0]); println(p[1]); }\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "3\n1\n4\n2\n5\n3\n6\n",
+                "runtime-axis iter_axis must bucket correctly"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_iter_axis_oob_panics() {
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let a = Tensor.from([[1, 2], [3, 4]]);\n\
+                 let ax = 5;\n\
+                 let parts = a.iter_axis(ax);\n\
+                 println(parts.len());\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("iter_axis axis out of bounds"),
+                "expected the iter_axis bounds trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
     // ── Owned String/Vec parameter retention (kata-22 family, 2026-06-06) ──
     //
     // The call ABI passes owned String/Vec headers by value while the

@@ -1202,19 +1202,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (covers identifier + chained receivers); only `iter_axis`
                 // remains a follow-on codegen slice and errors loudly here
                 // rather than falling through to the silent-0 default.
-                if self.tensor_var_infos.contains_key(name.as_str()) {
+                if let Some(info) = self.tensor_var_infos.get(name.as_str()) {
                     match method {
                         "shape" | "rank" => {
                             let t_ptr = self.tensor_ptr_for_var(name)?;
                             return self.compile_tensor_shape_method(t_ptr, method);
                         }
                         "iter_axis" => {
-                            return Err(
-                                "Tensor.iter_axis is not lowered to native code yet (phase-11 \
-                                 follow-on slice — Vec[Tensor] result needs Vec-of-pointer \
-                                 element drop glue) — run under `karac run` for now"
-                                    .to_string(),
-                            );
+                            let (elem, rank) = (info.elem, info.dims.len());
+                            let t_ptr = self.tensor_ptr_for_var(name)?;
+                            return self
+                                .compile_tensor_iter_axis(t_ptr, elem, rank, args, call_span);
                         }
                         _ => {}
                     }

@@ -277,10 +277,95 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
             _ => {
+                // Value-producing iterable whose type is a Vec — e.g.
+                // `for sub in t.iter_axis(0)` (a `Vec[Tensor]` temporary).
+                // Materialize it into a synth local and iterate. Returns
+                // None when the iterable isn't a recognised Vec-typed
+                // value, in which case the body is skipped (the prior
+                // behaviour for unknown iterables).
+                if let Some(result) =
+                    self.try_compile_for_vec_value(label, pattern, iterable, body)?
+                {
+                    return Ok(result);
+                }
                 // Unknown iterable — skip body, return unit
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
         }
+    }
+
+    /// Iterate a value-producing iterable whose type is a `Vec[T]` (a
+    /// method/function-call result that isn't a named variable or a
+    /// peeled `.iter()`/`.chars()`/`.bytes()` source — the driver case is
+    /// `for sub in t.iter_axis(n)`, whose result is `Vec[Tensor]`).
+    /// Materializes the value into a synth local, registers it as a Vec
+    /// (so `compile_for_vec_var` + `register_for_loop_bindings` drive the
+    /// loop and re-register each element — a `Tensor` element gets its
+    /// `tensor_var_infos` entry so `sub[i, j]` works in the body), queues
+    /// the temp's scope-exit cleanup (tensor-element-aware), then iterates.
+    /// Returns `Ok(None)` when the iterable isn't a Vec-typed value (the
+    /// owned-temp side-table has no Vec entry at its span) — caller skips
+    /// the body, preserving the prior unknown-iterable behaviour.
+    fn try_compile_for_vec_value(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        iterable: &Expr,
+        body: &Block,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        use super::state::VarSlot;
+        let key = (iterable.span.offset, iterable.span.length);
+        let Some(te) = self.owned_temp_drops.get(&key).cloned() else {
+            return Ok(None);
+        };
+        let is_vec = matches!(
+            &te.kind,
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec")
+        );
+        if !is_vec {
+            return Ok(None);
+        }
+        let val = self.compile_expr(iterable)?;
+        let fn_val = self.current_fn.unwrap();
+        let synth = format!("__for_vec_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        let alloca = self.create_entry_alloca(fn_val, &synth, val.get_type());
+        self.builder.build_store(alloca, val).unwrap();
+        self.variables.insert(
+            synth.clone(),
+            VarSlot {
+                ptr: alloca,
+                ty: val.get_type(),
+            },
+        );
+        self.register_var_from_type_expr(&synth, &te);
+        // Queue the materialized temp's scope-exit cleanup. A `Vec[Tensor]`
+        // element each owns a heap block (the iter_axis sub-tensors), so
+        // route to the tensor-element cleanup; other element types free the
+        // buffer (with the existing recursive drop for nested-heap elems).
+        let is_tensor_elem = self
+            .var_elem_type_exprs
+            .get(synth.as_str())
+            .cloned()
+            .map(|et| self.tensor_var_info_from_type_expr(&et).is_some())
+            .unwrap_or(false);
+        if is_tensor_elem {
+            self.track_vec_of_tensors_var(alloca);
+        } else if let Some(&elem_ty) = self.vec_elem_types.get(synth.as_str()) {
+            self.track_vec_var(alloca, Some(elem_ty));
+        }
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: iterable.span.clone(),
+        };
+        let result = self.compile_for(label, pattern, &synth_expr, body);
+        // Drop synth registries (the queued cleanup references the alloca,
+        // not the name, so it stays armed).
+        self.variables.remove(&synth);
+        self.vec_elem_types.remove(&synth);
+        self.slice_elem_types.remove(&synth);
+        self.var_elem_type_exprs.remove(&synth);
+        result.map(Some)
     }
 
     /// `for x in obj.field [.iter() / .into_iter()] { body }` driver.

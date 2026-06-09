@@ -327,6 +327,15 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Closes the 2026-05-13 leak documented in `deferred.md` §
         /// *Recursive Drop for Heap-Owned Collection Elements*.
         elem_ty: Option<BasicTypeEnum<'ctx>>,
+        /// True when the elements are `Tensor` values — each element is a
+        /// single `ptr` to a `[rank][dims][data]` block that must be
+        /// `free`d (one free per element, no inner recursion — tensors are
+        /// single allocations). Set for `Vec[Tensor]` bindings (the
+        /// `iter_axis` result); the `elem_ty` (a `ptr`) can't be
+        /// distinguished from a Map handle / borrow by LLVM type alone, so
+        /// this flag carries the intent. Mutually exclusive with the
+        /// vec-struct recursive-drop path.
+        elem_is_tensor: bool,
     },
     /// Free an owned `Tensor[T, Shape]`'s single heap block at scope
     /// exit. The binding's slot holds one pointer to the

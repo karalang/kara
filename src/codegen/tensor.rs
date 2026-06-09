@@ -1509,6 +1509,280 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(res.into())
     }
 
+    /// `t.iter_axis(n)` — axis iteration. Yields the `dims[n]`
+    /// sub-tensors obtained by fixing the index along axis `n` (the axis
+    /// is *dropped* — NumPy `take(i, axis=n)` semantics) as a `Vec` of
+    /// *copies*. A rank-1 receiver yields the scalar elements directly
+    /// (`Vec[T]`); a rank ≥ 2 receiver yields `Vec[Tensor[T,
+    /// dims-with-slot-n-removed]]`. The receiver `rank` is static (the
+    /// typechecker rejects splice/bare-`S` shapes) and `elem` is the
+    /// receiver's element type; everything else (dims, axis) is read /
+    /// computed at runtime, so `?`-dims and a runtime axis work. The
+    /// result `Vec` is built directly as a `{ptr, len, cap}` value; its
+    /// per-element tensor blocks are freed by the `Vec[Tensor]` cleanup
+    /// arm (`track_vec_of_tensors_var`). Interpreter twin:
+    /// `eval_tensor_iter_axis`.
+    pub(super) fn compile_tensor_iter_axis(
+        &mut self,
+        t_ptr: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        rank: usize,
+        args: &[CallArg],
+        _span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "iter_axis takes exactly 1 argument (the axis), found {}",
+                args.len()
+            ));
+        }
+        let elem_size = self.tensor_elem_size(elem)?;
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+        let axis = self.compile_expr(&args[0].value)?.into_int_value();
+        let rank_const = i64_t.const_int(rank as u64, false);
+        // axis in [0, rank) — unsigned compare rejects negatives too.
+        let oob = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, axis, rank_const, "t.ia.oob")
+            .unwrap();
+        let ok = self.builder.build_not(oob, "t.ia.ok").unwrap();
+        self.emit_tensor_guard(ok, "iter_axis axis out of bounds")?;
+
+        let rdims: Vec<IntValue<'ctx>> =
+            (0..rank).map(|i| self.tensor_load_dim(t_ptr, i)).collect();
+        let src_data = self.tensor_data_ptr(t_ptr, rank, "t.ia.src");
+
+        if rank == 1 {
+            // Rank-1: result is `Vec[T]` — a copy of the data.
+            let n = rdims[0];
+            let bytes = self
+                .builder
+                .build_int_mul(n, i64_t.const_int(elem_size, false), "t.ia.bytes")
+                .unwrap();
+            let buf = self
+                .builder
+                .build_call(self.malloc_fn, &[bytes.into()], "t.ia.buf")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            self.builder
+                .build_memcpy(buf, 8, src_data, 8, bytes)
+                .map_err(|e| format!("iter_axis data copy failed: {:?}", e))?;
+            return Ok(self.build_vec_value(buf, n, n));
+        }
+
+        // Rank ≥ 2. Single pass: outer (i<axis), n_buckets (i==axis),
+        // inner (i>axis).
+        let mut outer = i64_t.const_int(1, false);
+        let mut inner = i64_t.const_int(1, false);
+        let mut n_buckets = i64_t.const_int(1, false);
+        for (i, &d) in rdims.iter().enumerate() {
+            let ci = i64_t.const_int(i as u64, false);
+            let lt = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, ci, axis, "t.ia.lt")
+                .unwrap();
+            let eq = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, ci, axis, "t.ia.eq")
+                .unwrap();
+            let gt = self
+                .builder
+                .build_int_compare(IntPredicate::UGT, ci, axis, "t.ia.gt")
+                .unwrap();
+            let outer_m = self.builder.build_int_mul(outer, d, "t.ia.outm").unwrap();
+            outer = self
+                .builder
+                .build_select(lt, outer_m, outer, "t.ia.out")
+                .unwrap()
+                .into_int_value();
+            n_buckets = self
+                .builder
+                .build_select(eq, d, n_buckets, "t.ia.nb")
+                .unwrap()
+                .into_int_value();
+            let inner_m = self.builder.build_int_mul(inner, d, "t.ia.innm").unwrap();
+            inner = self
+                .builder
+                .build_select(gt, inner_m, inner, "t.ia.inn")
+                .unwrap()
+                .into_int_value();
+        }
+        let sub_rank = rank - 1;
+        // sub_dims[k] = (k < axis) ? rdims[k] : rdims[k+1].
+        let sub_dims: Vec<IntValue<'ctx>> = (0..sub_rank)
+            .map(|k| {
+                let ck = i64_t.const_int(k as u64, false);
+                let lt = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, ck, axis, "t.ia.sdlt")
+                    .unwrap();
+                self.builder
+                    .build_select(lt, rdims[k], rdims[k + 1], "t.ia.sd")
+                    .unwrap()
+                    .into_int_value()
+            })
+            .collect();
+
+        // Result buffer: `n_buckets` tensor pointers (8 bytes each).
+        let buf_bytes = self
+            .builder
+            .build_int_mul(n_buckets, i64_t.const_int(8, false), "t.ia.bufb")
+            .unwrap();
+        let result_buf = self
+            .builder
+            .build_call(self.malloc_fn, &[buf_bytes.into()], "t.ia.rbuf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let inner_bytes = self
+            .builder
+            .build_int_mul(inner, i64_t.const_int(elem_size, false), "t.ia.ib")
+            .unwrap();
+        let sub_header_bytes = i64_t.const_int(8 * (1 + sub_rank as u64), false);
+
+        // Bucket loop: for b in 0..n_buckets.
+        let bv = self.create_entry_alloca(fn_val, "t.ia.b", i64_t.into());
+        self.builder.build_store(bv, i64_t.const_zero()).unwrap();
+        let bh = self.context.append_basic_block(fn_val, "t.ia.bh");
+        let bb = self.context.append_basic_block(fn_val, "t.ia.bb");
+        let be = self.context.append_basic_block(fn_val, "t.ia.be");
+        self.builder.build_unconditional_branch(bh).unwrap();
+        self.builder.position_at_end(bh);
+        let b = self
+            .builder
+            .build_load(i64_t, bv, "t.ia.bv")
+            .unwrap()
+            .into_int_value();
+        let bcont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, b, n_buckets, "t.ia.bcont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(bcont, bb, be)
+            .unwrap();
+        self.builder.position_at_end(bb);
+        // Allocate the sub-tensor: header (sub_rank + sub_dims) + data.
+        let bucket_len = self.builder.build_int_mul(outer, inner, "t.ia.bl").unwrap();
+        let bucket_data_bytes = self
+            .builder
+            .build_int_mul(bucket_len, i64_t.const_int(elem_size, false), "t.ia.bdb")
+            .unwrap();
+        let sub_total = self
+            .builder
+            .build_int_add(sub_header_bytes, bucket_data_bytes, "t.ia.subt")
+            .unwrap();
+        let sub_t = self
+            .builder
+            .build_call(self.malloc_fn, &[sub_total.into()], "t.ia.subt.a")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder
+            .build_store(sub_t, i64_t.const_int(sub_rank as u64, false))
+            .unwrap();
+        for (k, dv) in sub_dims.iter().enumerate() {
+            let slot = self.tensor_header_slot(sub_t, 1 + k as u64, &format!("t.ia.sd{}.p", k));
+            self.builder.build_store(slot, *dv).unwrap();
+        }
+        let sub_data = self.tensor_data_ptr(sub_t, sub_rank, "t.ia.subd");
+        // Gather: for o in 0..outer, memcpy `inner` elements from
+        // src[(o*n_buckets + b)*inner] to sub_data[o*inner].
+        let ov = self.create_entry_alloca(fn_val, "t.ia.o", i64_t.into());
+        self.builder.build_store(ov, i64_t.const_zero()).unwrap();
+        let oh = self.context.append_basic_block(fn_val, "t.ia.oh");
+        let ob = self.context.append_basic_block(fn_val, "t.ia.ob");
+        let oe = self.context.append_basic_block(fn_val, "t.ia.oe");
+        self.builder.build_unconditional_branch(oh).unwrap();
+        self.builder.position_at_end(oh);
+        let o = self
+            .builder
+            .build_load(i64_t, ov, "t.ia.ov")
+            .unwrap()
+            .into_int_value();
+        let ocont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, o, outer, "t.ia.ocont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(ocont, ob, oe)
+            .unwrap();
+        self.builder.position_at_end(ob);
+        let on = self.builder.build_int_mul(o, n_buckets, "t.ia.on").unwrap();
+        let onb = self.builder.build_int_add(on, b, "t.ia.onb").unwrap();
+        let src_off = self.builder.build_int_mul(onb, inner, "t.ia.soff").unwrap();
+        let dst_off = self.builder.build_int_mul(o, inner, "t.ia.doff").unwrap();
+        let src_p = unsafe {
+            self.builder
+                .build_gep(elem, src_data, &[src_off], "t.ia.sp")
+                .unwrap()
+        };
+        let dst_p = unsafe {
+            self.builder
+                .build_gep(elem, sub_data, &[dst_off], "t.ia.dp")
+                .unwrap()
+        };
+        self.builder
+            .build_memcpy(dst_p, 8, src_p, 8, inner_bytes)
+            .map_err(|e| format!("iter_axis bucket copy failed: {:?}", e))?;
+        let no = self
+            .builder
+            .build_int_add(o, i64_t.const_int(1, false), "t.ia.no")
+            .unwrap();
+        self.builder.build_store(ov, no).unwrap();
+        self.builder.build_unconditional_branch(oh).unwrap();
+        self.builder.position_at_end(oe);
+        // Store the sub-tensor pointer into result_buf[b].
+        let bp = unsafe {
+            self.builder
+                .build_gep(ptr_ty, result_buf, &[b], "t.ia.bp")
+                .unwrap()
+        };
+        self.builder.build_store(bp, sub_t).unwrap();
+        let nb = self
+            .builder
+            .build_int_add(b, i64_t.const_int(1, false), "t.ia.nbk")
+            .unwrap();
+        self.builder.build_store(bv, nb).unwrap();
+        self.builder.build_unconditional_branch(bh).unwrap();
+        self.builder.position_at_end(be);
+        Ok(self.build_vec_value(result_buf, n_buckets, n_buckets))
+    }
+
+    /// Build a `{ptr, len, cap}` Vec value from a buffer pointer + len +
+    /// cap (the layout `vec_struct_type` produces).
+    fn build_vec_value(
+        &self,
+        buf: PointerValue<'ctx>,
+        len: IntValue<'ctx>,
+        cap: IntValue<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let vec_ty = self.vec_struct_type();
+        let mut agg = vec_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, buf, 0, "t.vec.data")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, len, 1, "t.vec.len")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, cap, 2, "t.vec.cap")
+            .unwrap()
+            .into_struct_value();
+        agg.into()
+    }
+
     // ── Shared emission helpers ─────────────────────────────────
 
     /// Branch-to-panic guard: continue in a fresh block when `ok`,
