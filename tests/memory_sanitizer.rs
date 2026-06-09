@@ -3275,6 +3275,101 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_struct_destructure_set_bound_and_unbound_no_double_free() {
+        // Set leg of B follow-up #3 (closes the Set remaining-leak gap): a
+        // fresh-temp struct destructure where one `Set` field is bound (`a`,
+        // freed via its binding) and another discarded (`b: _`, freed via a
+        // synthetic discard slot). Set lowers to `Map[T, ()]`, so both route
+        // through `karac_map_free`. Looped so a double-free or missed/extra
+        // free of either handle faults under ASAN's quarantine. macOS has no
+        // LeakSanitizer, so the leak closure is pinned by the IR tests; this
+        // is the double-free gate.
+        assert_clean_asan_run(
+            r#"
+struct Pair { a: Set[i64], b: Set[i64], n: i64 }
+fn mk(x: i64) -> Pair {
+    let mut sa: Set[i64] = Set.new();
+    sa.insert(x);
+    let mut sb: Set[i64] = Set.new();
+    sb.insert(x * 2);
+    return Pair { a: sa, b: sb, n: x };
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let Pair { a, b: _, n } = mk(i);
+        println(a.len() + n);
+        i = i + 1;
+    }
+    println(99);
+}
+"#,
+            &["1", "2", "3", "4", "5", "99"],
+            "struct_destructure_set_bound_and_unbound_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_set_local_moved_into_returned_struct_no_uaf() {
+        // Pre-existing UAF (fixed 2026-06-08): a `Set` local moved into a
+        // struct LITERAL that the function returns was freed at the source
+        // function's scope exit — the Vec path had move-suppression, Map/Set
+        // didn't — so the returned struct's handle dangled. Without the fix
+        // this crashed even without ASAN (SIGSEGV / abort); here the caller
+        // reads the moved-in handle (`contains`) in a loop, so a dangling /
+        // double-freed handle faults under ASAN. Set lowers to `Map[T, ()]`.
+        assert_clean_asan_run(
+            r#"
+struct Bag { tags: Set[i64], count: i64 }
+fn make(x: i64) -> Bag {
+    let mut s: Set[i64] = Set.new();
+    s.insert(x);
+    return Bag { tags: s, count: x };
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let b = make(i);
+        if b.tags.contains(i) { println(b.count); } else { println(-1); }
+        i = i + 1;
+    }
+    println(99);
+}
+"#,
+            &["0", "1", "2", "3", "4", "99"],
+            "set_local_moved_into_returned_struct_no_uaf",
+        );
+    }
+
+    #[test]
+    fn asan_map_local_moved_into_returned_struct_no_uaf() {
+        // Map sibling of the Set UAF above (was an abort/double-free, exit 134).
+        // The caller derefs the moved-in handle via `b.m.len()`, so a dangling
+        // handle faults under ASAN.
+        assert_clean_asan_run(
+            r#"
+struct Box { m: Map[i64, i64], n: i64 }
+fn make(x: i64) -> Box {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(x, x * 2);
+    return Box { m: m, n: x };
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let b = make(i);
+        println(b.n + b.m.len());
+        i = i + 1;
+    }
+    println(99);
+}
+"#,
+            &["1", "2", "3", "4", "5", "99"],
+            "map_local_moved_into_returned_struct_no_uaf",
+        );
+    }
+
     /// Oversized boxed enum payload — box-free double-free gate. A 4-word
     /// `Wide` exceeds Option's 3-word area, so `Some(Wide)` heap-boxes it
     /// (`coerce_to_payload_words`); the annotated `let o: Option[Wide]`

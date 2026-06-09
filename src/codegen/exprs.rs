@@ -1416,6 +1416,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Mirrors the enum-variant constructor pattern
                     // already wired at `try_compile_enum_variant`.
                     self.suppress_source_vec_cleanup_for_arg(&field_init.value);
+                    // Map/Set sibling of the Vec suppression: a `Map`/`Set`
+                    // local moved into this field hands the handle to the
+                    // struct, so drop the source's scope-exit `FreeMapHandle`
+                    // — otherwise the source frees the handle the struct now
+                    // carries downstream (UAF / double-free when the consumer
+                    // reads the field; Set/Map share `FreeMapHandle`).
+                    if let ExprKind::Identifier(n) = &field_init.value.kind {
+                        let n = n.clone();
+                        self.suppress_map_cleanup_for_tail_identifier(&n);
+                    }
                     self.suppress_fstr_acc_if_moved_out(&field_init.value);
                 }
                 return Ok(ptr.into());
@@ -1469,6 +1479,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the source's data pointer; suppress the source's
                 // scope-exit free so the consumer can read through.
                 self.suppress_source_vec_cleanup_for_arg(&field_init.value);
+                // Map/Set sibling of the Vec suppression (see the shared-struct
+                // branch above): a moved-in `Map`/`Set` local's source free is
+                // dropped so the struct's owner is the sole freer.
+                if let ExprKind::Identifier(n) = &field_init.value.kind {
+                    let n = n.clone();
+                    self.suppress_map_cleanup_for_tail_identifier(&n);
+                }
                 self.suppress_fstr_acc_if_moved_out(&field_init.value);
             }
             Ok(agg.into())

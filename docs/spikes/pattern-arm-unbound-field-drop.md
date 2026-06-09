@@ -112,7 +112,26 @@ miscompile; pre-existing, this fix doesn't widen them):**
   `test_ir_struct_destructure_{bound,unbound,rest}_field_freed` (codegen.rs);
   `asan_struct_destructure_bound_and_unbound_no_double_free`
   (memory_sanitizer.rs). **Remaining narrow gaps** (leaks, never double-frees):
-  `Set` fields, nested-enum / nested-pattern fields, and non-fresh-temp RHS.
+  ~~`Set` fields~~ **CLOSED 2026-06-08**, nested-enum / nested-pattern fields,
+  and non-fresh-temp RHS.
+  - **`Set` fields — CLOSED 2026-06-08, and surfaced+fixed a broader
+    pre-existing UAF.** `destructure_field_needs_cleanup` +
+    `track_owned_destructure_field_cleanup` (stmts.rs) now route a `Set` field
+    (lowers to `Map[T, ()]`) through the Map cleanup arm (`track_map_var` /
+    `karac_map_free`; `key_is_vec` from `set_elem_types`). Wiring that
+    consuming-side free turned the silent leak into a *double-free*, which
+    traced to the real bug: a `Set`/`Map` LOCAL moved into a struct **literal**
+    was never move-suppressed (the Vec path had
+    `suppress_source_vec_cleanup_for_arg` at the struct-literal field-init
+    sites; Map/Set were missed), so **any** function returning a plain struct
+    with a `Map`/`Set` field built from a local freed the handle at the
+    source's scope exit → use-after-free / double-free crashing at runtime
+    (SIGSEGV / abort) while `karac run` was correct. Fixed by calling the
+    existing `suppress_map_cleanup_for_tail_identifier` (covers Map + Set) at
+    both struct-literal field-init sites in `exprs.rs`. Tests:
+    `test_ir_struct_destructure_set_{bound,unbound}_field_freed`,
+    `asan_struct_destructure_set_bound_and_unbound_no_double_free`,
+    `asan_{set,map}_local_moved_into_returned_struct_no_uaf`.
 
 Distinct mechanism from the sibling spike (move-out-aware *partial* drop reusing
 `EnumDrop` + cap-suppression, not chokepoint routing of a whole temp), so it gets

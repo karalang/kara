@@ -12492,6 +12492,27 @@ fn main() {
         frees
     }
 
+    /// The IR of `@main`'s body only (between its `define` and the closing
+    /// `}`), so a `.contains(...)` check can't false-positive on a module-level
+    /// `declare` line or a call inside a different function.
+    fn main_body_ir(ir: &str) -> String {
+        let mut in_main = false;
+        let mut body = String::new();
+        for line in ir.lines() {
+            if line.starts_with("define") && line.contains("@main(") {
+                in_main = true;
+            }
+            if in_main {
+                body.push_str(line);
+                body.push('\n');
+                if line == "}" {
+                    break;
+                }
+            }
+        }
+        body
+    }
+
     // ── B follow-up #3: owned struct-destructure dispatch + cleanup ──
     //
     // `let Point { items, count } = make()` used to register neither method
@@ -12551,6 +12572,49 @@ fn main() {
         assert!(
             ir.contains("__destructure_discard_") && main_free_count(&ir) >= 1,
             "field dropped by `..` rest must be freed; got:\n{ir}"
+        );
+    }
+
+    // `Set` struct field — closes the Set leg of the struct-destructure
+    // remaining-leak list (phase-6 § "Pattern-arm unbound heap-field drop").
+    // Set lowers to `Map[T, ()]`, so cleanup routes through the same
+    // `track_map_var` / `karac_map_free` path as a Map field (key_is_vec read
+    // from `set_elem_types`; no value half). Both-primitive → plain
+    // `karac_map_free`, not `_with_drop_vec`.
+    const SET_DESTRUCTURE_PRELUDE: &str = "struct Bag { tags: Set[i64], count: i64 }\nfn make() -> Bag { let mut s: Set[i64] = Set.new(); s.insert(10_i64); s.insert(20_i64); return Bag { tags: s, count: 5 }; }\n";
+
+    #[test]
+    fn test_ir_struct_destructure_set_bound_field_freed() {
+        // A bound `Set` field is freed via its binding's scope-exit cleanup.
+        // Scoped to `main`'s body so the `declare @karac_map_free` line + any
+        // free inside `make()` don't false-positive.
+        let src = format!(
+            "{SET_DESTRUCTURE_PRELUDE}fn main() {{\n    let Bag {{ tags, count }} = make();\n    println(tags.len() + count);\n}}\n"
+        );
+        let ir = ir_for_with_ownership(&src);
+        let n = main_body_ir(&ir)
+            .matches("call void @karac_map_free")
+            .count();
+        assert_eq!(
+            n,
+            1,
+            "bound Set field must be freed exactly once in main (got {n}); IR:\n{}",
+            main_body_ir(&ir)
+        );
+    }
+
+    #[test]
+    fn test_ir_struct_destructure_set_unbound_field_freed() {
+        // An explicitly-discarded `Set` field (`tags: _`) is stashed in a
+        // synthetic discard slot and freed there.
+        let src = format!(
+            "{SET_DESTRUCTURE_PRELUDE}fn main() {{\n    let Bag {{ tags: _, count }} = make();\n    println(count);\n}}\n"
+        );
+        let ir = ir_for_with_ownership(&src);
+        let main_ir = main_body_ir(&ir);
+        assert!(
+            main_ir.contains("__destructure_discard_") && main_ir.contains("karac_map_free"),
+            "unbound Set field must be discard-freed via karac_map_free in main; got:\n{ir}"
         );
     }
 

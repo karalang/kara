@@ -3184,13 +3184,15 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Whether a destructured field's type owns heap that this slice's
-    /// per-field cleanup handles: Vec/String, Map, or a non-shared user
-    /// struct. Set, nested-enum, and nested-pattern fields are out of v1's
-    /// scope (a narrow remaining leak, never a double-free).
+    /// per-field cleanup handles: Vec/String, Map, `Set` (lowers to
+    /// `Map[T, ()]`), or a non-shared user struct. Nested-enum and
+    /// nested-pattern fields remain out of scope (a narrow remaining leak,
+    /// never a double-free).
     fn destructure_field_needs_cleanup(&self, te: &TypeExpr) -> bool {
         if self.extract_vec_elem_type(te).is_some()
             || self.is_string_type_expr(te)
             || self.extract_map_kv_types(te).is_some()
+            || self.extract_set_elem_type(te).is_some()
         {
             return true;
         }
@@ -3223,10 +3225,16 @@ impl<'ctx> super::Codegen<'ctx> {
             self.track_vec_var(alloca, Some(i8t));
             return;
         }
-        if self.extract_map_kv_types(te).is_some() {
+        if self.extract_map_kv_types(te).is_some() || self.extract_set_elem_type(te).is_some() {
+            // Map and Set share one cleanup (Set lowers to `Map[T, ()]`):
+            // `key_is_vec` falls back to `set_elem_types`, and a Set has no
+            // value half so `val_is_vec` / `val_shared_heap` are naturally
+            // empty (`map_val_types` never holds a Set var). Mirrors the
+            // simple-`let` Map/Set cleanup arm.
             let key_is_vec = self
                 .map_key_types
                 .get(var_name)
+                .or_else(|| self.set_elem_types.get(var_name))
                 .copied()
                 .is_some_and(|t| self.llvm_ty_is_vec_struct(t));
             let val_is_vec = self
