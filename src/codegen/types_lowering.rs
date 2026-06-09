@@ -1123,6 +1123,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 .context
                 .struct_type(&[self.context.i32_type().into()], false)
                 .into(),
+            // Phase 6 line 218 — baked-stdlib concurrency handles.
+            // `TaskGroup { id: i64 }` (`runtime/stdlib/task_group.kara`)
+            // and `TaskHandle[T] { task_id: i64 }` both lower to the
+            // hand-rolled `{ i64 }` value shape at their construction
+            // sites (`TaskGroup.new()` in `assoc_call.rs`, the spawn
+            // wrap in `task_group.rs`). Like the TCP/TLS structs above,
+            // codegen never loads these baked stdlib defs into
+            // `struct_types`, so a type-annotation-driven type lookup
+            // (`let g: TaskGroup = ...`) would otherwise hit the `i64`
+            // fall-through default below. That mis-sizes any slot built
+            // from the annotation rather than the value — e.g.
+            // auto-parallelization's return-slot inference
+            // (`infer_let_binding_llvm_type`) sizes the escaped `g`
+            // binding at `i64`, then `tg.spawn(...)`'s receiver load
+            // reads a bare `i64` where the dispatcher expects the
+            // `{ i64 }` struct and panics (`into_struct_value` on an
+            // `IntValue`). `TaskHandle`'s `T` only governs the `.join()`
+            // return type (recovered separately); the handle value is
+            // always `{ i64 }` regardless. Same family as B-2026-06-07-2
+            // (struct-returned-by-value ABI fall-through).
+            "TaskGroup" | "TaskHandle" => self
+                .context
+                .struct_type(&[self.context.i64_type().into()], false)
+                .into(),
             name => {
                 // Shared types are heap-allocated pointers.
                 if self.shared_types.contains_key(name) {

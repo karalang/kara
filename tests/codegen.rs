@@ -31673,6 +31673,40 @@ fn main() with reads(FileSystem) {
         );
     }
 
+    /// B-2026-06-07-1 regression: `tg.spawn(closure)` in a function that
+    /// also declares a `Vec` (or any heap collection) — which makes the
+    /// function eligible for statement-level auto-parallelization — must
+    /// compile and run. The `g` binding escapes into auto-par's
+    /// return-slot list; `infer_let_binding_llvm_type` sizes that slot
+    /// from the `TaskGroup` type annotation via `llvm_type_for_name`,
+    /// which used to hit the `i64` fall-through default (TaskGroup isn't
+    /// in `struct_types` — baked stdlib defs aren't loaded into codegen).
+    /// The reconstructed slot was then a bare `i64`, so `tg.spawn(...)`'s
+    /// receiver load read an `IntValue` where the dispatcher does
+    /// `into_struct_value()` on the `{ i64 }` TaskGroup shape → ICE
+    /// ("Found IntValue ... but expected the StructValue variant").
+    /// Fixed by giving `TaskGroup`/`TaskHandle` an explicit `{ i64 }`
+    /// arm in `llvm_type_for_name` (mirrors the TCP/TLS baked-struct
+    /// arms). Fire-and-forget (no `.join()`) per the bug repro — the
+    /// group's scope-exit drop waits for the child.
+    #[test]
+    fn test_e2e_taskgroup_spawn_aggregate_capture_under_auto_par() {
+        let out = run_program_capturing(
+            r#"
+fn consume(v: Vec[i64]) -> i64 { v.len() }
+fn main() {
+    let data: Vec[i64] = Vec.new();
+    let mut g: TaskGroup = TaskGroup.new();
+    g.spawn(|| consume(data));
+    println("ok");
+}
+"#,
+        );
+        if let Some(c) = out {
+            assert_eq!(c.stdout.trim(), "ok");
+        }
+    }
+
     /// Locate a function definition body by name and return its lines
     /// from the opening `{` (exclusive) through the closing `}`.
     /// Returns `None` if the function is not defined in the IR. Counts
