@@ -11,17 +11,68 @@ Questions, ideas, or design feedback? [Start a GitHub Discussion](https://github
 
 ---
 
-## How Kāra Was Born
+## Hello, Kāra
 
-Allow me to share some words before we go all technical. Before AI happened i used spend most of my time learning new proramming language/features. Coding feels like solving puzzles for me. Once AI happened I was kinda cluelsess for sometime. I thought of taking some time off and learn real spoken languages. While doing the research I started noticing the strengths and weakness of different languages because they were all organically developed over centuries. What if i can engineer a new language learning from all the issues and weakness. Evnetually i strted translating that in to a programming language and that's how Kara was born. Kara in sanskrit means worker. You express your intent and worker does the work. I am an artist and i consider this one of my finest art yet.
+```kara
+fn main() {
+    println("Hello, world!");
+}
+```
 
-I see some skepticism on the AI usage everywhere, I think this is going to be new normal or this already is. We need to find a balance between passion and building usable product within reasonable time to market. Kara fits right in.
+```bash
+karac run hello.kara        # Hello, world!
+```
 
-I have over 70 brainstorming docs with 1000's of lines of details and choices documented. Written by ai but i read each line of it and made the decision. I enjoyed engienering the syntax that i like. A language I would want to use and at the same time meaningful for the AI era. 
+Three things Kāra does that other languages make you do by hand:
 
-There could be some spelling and grammer mistakes in the narration and I left it unpolished. mistakes is what makes us humans. 
+- **Effects → automatic concurrency.** Functions declare what they touch; the compiler runs independent work in parallel for you — no `async`/`await`, no colored functions, no thread plumbing.
+- **Ownership without lifetime annotations.** Memory safety with no `'a` syntax — parameter modes are declared at the signature; the rest is inferred.
+- **Every compiler decision as JSON.** Effects, ownership, concurrency, and fixes are all queryable, so agents (and you) read exactly what the compiler decided.
 
-AI was my assistent, not the language author
+### The whole idea in one program
+
+Reads from two data sources and combines them — written as plain sequential code. The compiler proves the two reads are independent and runs them concurrently, and it borrows its inputs with no lifetime annotations:
+
+```kara
+// Two distinct data sources, both backed by one trait.
+trait Source {
+    fn load(ref self) -> Vec[i64];
+}
+effect resource UserDB: Source;
+effect resource OrderDB: Source;
+
+// Private functions — the compiler infers each one's effects from its body:
+//   fetch_users  -> reads(UserDB)
+//   fetch_orders -> reads(OrderDB)
+fn fetch_users() -> Vec[i64]  { UserDB.load() }
+fn fetch_orders() -> Vec[i64] { OrderDB.load() }
+
+// `ref` borrows its inputs — no copy, and no lifetime annotation.
+fn total(users: ref Vec[i64], orders: ref Vec[i64]) -> i64 {
+    users.len() as i64 + orders.len() as i64
+}
+
+fn main() {
+    // Two reads on two different resources: no shared data, no conflict.
+    // The compiler proves them independent and runs them concurrently —
+    // no async, no threads, no annotation.
+    let users  = fetch_users();      // statement 0
+    let orders = fetch_orders();     // statement 1
+
+    // Both results are first used here, so the compiler inserts the join.
+    println(total(users, orders));   // statement 2 — waits on 0 and 1
+}
+```
+
+Don't take the concurrency on faith — ask the compiler what it did:
+
+```bash
+$ karac query concurrency app.kara.main
+{"function":"main","total_statements":3,
+ "parallel_groups":[{"statements":[0,1],"reason":"independent reads on different resources"}]}
+```
+
+The two fetches run in parallel, and the compiler tells you *why* — there is no `par`, no `async`, and no thread code anywhere in the source. Everything below is the detail behind these three ideas.
 
 ---
 
@@ -169,6 +220,14 @@ $ karac query ownership user.kara.name_of
 {"function":"name_of","parameters":[{"name":"u","mode":"ref","representation":"ref (borrow)"}],"rc_values":[],"closures":[]}
 ```
 
+**Why this is safe.** Source pinning is deliberately *conservative*. A returned
+`ref` must trace to a `ref` parameter; when several qualify, the compiler unions
+them, so the result is bounded by its shortest-lived source. That means Kāra can
+*reject* a program a finer analysis would accept — but it can never *accept* one
+that dangles. When it can't prove a borrow outlives its use, it doesn't guess: it
+escalates to RC and tells you. The safety comes from refusing to guess, not from
+out-thinking the aliasing problem.
+
 Escalation path: owned → `ref` → RC. Reference counting is inserted only when
 a value's use-sites can't be ordered by control flow — and every insertion
 emits a note, never a silent surprise. Full model:
@@ -198,7 +257,12 @@ What v1 ships with, what the numbers look like, and what the toolchain gives you
 
 ### Concurrency Runtime
 
-- **2M idle WebSocket-over-TLS connections per process — measured, not a target** (r8g.4xlarge, 16 vCPU; 0 failures, handler executing). Every number below is reproducible: **[methodology + cost model + caveats](examples/ws_idle_holder/bench/REPORT.md)**, [reproduction harness](examples/ws_idle_holder/bench).
+**2M idle WebSocket-over-TLS connections in one process. ~12.1 KB/connection — 2.3× denser than Rust. Reproducible.**
+
+Measured on an r8g.4xlarge (16 vCPU), 0 failures, with the per-connection handler executing — not a target. The densest of seven runtimes benchmarked here (vs Rust, Java/Netty, Node, Go, .NET, Phoenix). Methodology, cost model, and caveats: **[REPORT.md](examples/ws_idle_holder/bench/REPORT.md)** · [reproduction harness](examples/ws_idle_holder/bench).
+
+The numbers behind each claim:
+
 - Blocking-style I/O syntax; effect-driven scheduling moves blocking work off the par-runtime threads.
 - **Demo 1 verified on r8g.4xlarge (Linux, 16 vCPU) at 1M and 2M, head-to-head with a Rust (tokio + rustls) reference on the same box** — with the per-connection handler **executing** (recv/send over the coroutine network-async transform; the recv buffer + coroutine frame are held, not freed): both impls hold **2 000 000 idle WebSocket-over-TLS connections, 0 failures**. **Kāra at ~12.1 KB/conn** server-side RSS vs **Rust at ~27.9 KB/conn** — **2.30× runtime-density advantage**, scale-invariant 1M↔2M (Kāra −0.03 % drift). In production-cost terms, counting the kernel socket buffer both stacks pay equally, total server-side memory is **15.0 KB vs 30.4 KB/conn (2.03×)** — so at a realistic 250K conns/box Kāra fits an 8 GiB `m7g.large` where Rust needs a 16 GiB `m7g.xlarge`, ≈**50 % lower infra cost** (~$473 vs ~$946/yr per 250K unit on a 1-yr reserved instance). Connect-phase latency at `--concurrency 64` (1M): Kāra **mean 82 ms, p50 46 ms, p99 255 ms**; Rust keeps a ~3 ms p50 (tighter handshake hop) but a wider tail. Source: [`examples/ws_idle_holder`](examples/ws_idle_holder); full methodology + cost model + caveats in [`examples/ws_idle_holder/bench/REPORT.md`](examples/ws_idle_holder/bench/REPORT.md); reproduction harness in [`examples/ws_idle_holder/bench`](examples/ws_idle_holder/bench). _Note: an earlier 7.8 KB/conn / 3.55× figure was measured before the handler executed and is superseded._
 - **Benchmarked against five commercial WebSocket stacks** at 250K idle conns/box (same harness as the Rust reference, in-process TLS, apples-to-apples). Per-connection server RSS, densest first: **Kāra 12.1 KB** · Java/Netty 14.4 KB\* · Rust 27.9 KB · Node.js 40.4 KB · Go 43.4 KB · .NET/Kestrel (Linux) 52.9 KB · Phoenix Channels 102.8 KB — **the densest runtime in this set**: **3.4× lighter than Node, 3.7× than Go, 4.5× than .NET, 8.7× than Phoenix**. _\*Netty's RSS is a JVM `-Xmx` dial: 14.4 KB is its balanced-heap deployment point (marginal slope ~12.8 KB, live set ~8–10 KB); every other stack here, Kāra included, reports a fixed live footprint._ Per-comparator tables, GC-dial analysis, and the per-runtime cost reframes are in [`examples/ws_idle_holder/bench/REPORT.md`](examples/ws_idle_holder/bench/REPORT.md).
@@ -319,6 +383,18 @@ cargo fmt                            # format
 Codegen E2E tests (`tests/codegen.rs`, `tests/par_codegen.rs`, `tests/memory_sanitizer.rs`) are gated on `--features llvm` and need the runtime library built once via `cargo build -p karac-runtime --release`. The memory-sanitizer suite additionally needs a `cc` toolchain that supports `-fsanitize=address`; it skips gracefully on hosts that don't.
 
 See [docs/roadmap.md](docs/roadmap.md) for current progress and [docs/design.md](docs/design.md) for the language specification.
+
+## Why I Built Kāra
+
+Allow me to share some words before we go all technical. Before AI happened i used spend most of my time learning new proramming language/features. Coding feels like solving puzzles for me. Once AI happened I was kinda cluelsess for sometime. I thought of taking some time off and learn real spoken languages. While doing the research I started noticing the strengths and weakness of different languages because they were all organically developed over centuries. What if i can engineer a new language learning from all the issues and weakness. Evnetually i strted translating that in to a programming language and that's how Kara was born. Kara in sanskrit means worker. You express your intent and worker does the work. I am an artist and i consider this one of my finest art yet.
+
+I see some skepticism on the AI usage everywhere, I think this is going to be new normal or this already is. We need to find a balance between passion and building usable product within reasonable time to market. Kara fits right in.
+
+I have over 70 brainstorming docs with 1000's of lines of details and choices documented. Written by ai but i read each line of it and made the decision. I enjoyed engienering the syntax that i like. A language I would want to use and at the same time meaningful for the AI era. 
+
+There could be some spelling and grammer mistakes in the narration and I left it unpolished. mistakes is what makes us humans. 
+
+AI was my assistent, not the language author
 
 ## License
 
