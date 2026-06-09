@@ -736,7 +736,34 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     Type::Str
                 } else if is_numeric(&left_ty) {
-                    if !types_compatible(&left_ty, &right_ty) {
+                    // Integer operands must match EXACTLY (same width and
+                    // signedness) — design.md § Integer overflow: "mixed-
+                    // signedness across lhs and rhs is a type error … cast
+                    // explicitly with `as`", and mixed *width* likewise
+                    // (`n + x` where `n: i64`, `x: i32` is a compile error).
+                    // Narrow integer types are real fixed-width types, so
+                    // `i64 + u8` does not silently widen — it is rejected here
+                    // and the programmer writes `x as i64`. Q4 literal
+                    // promotion above already unified any suffix-free literal
+                    // operand, so a surviving mismatch is between two concrete
+                    // types. Floats keep the looser `types_compatible` check.
+                    let both_ints = matches!(left_ty, Type::Int(_) | Type::UInt(_))
+                        && matches!(right_ty, Type::Int(_) | Type::UInt(_));
+                    if both_ints {
+                        if left_ty != right_ty {
+                            self.type_error(
+                                format!(
+                                    "cannot mix integer types '{}' and '{}' in arithmetic — they \
+                                     must match; cast explicitly with `as` (e.g. the operand as '{}')",
+                                    type_display(&left_ty),
+                                    type_display(&right_ty),
+                                    type_display(&left_ty)
+                                ),
+                                right.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
+                    } else if !types_compatible(&left_ty, &right_ty) {
                         self.type_error(
                             format!(
                                 "expected '{}', found '{}'",

@@ -25354,3 +25354,83 @@ fn test_range_pattern_mixed_width_int_bounds_rejected() {
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ── Strict narrow-integer arithmetic (design.md § Integer overflow) ──
+//
+// Narrow ints are real fixed-width types: arithmetic operands must match
+// exactly (same width AND signedness); mixed-width / mixed-signedness needs
+// an explicit `as` cast. This is the typechecker half of restoring real
+// narrow-int semantics — it turns the former `i64 + u8` silent codegen
+// miscompile (B-2026-06-08-1) into a clean "cast explicitly" error. Q4
+// literal promotion (a suffix-free literal adopting the other operand's
+// type) is preserved.
+
+#[test]
+fn test_mixed_width_int_arithmetic_rejected() {
+    for src in [
+        "fn main() { let a: i64 = 1; let b: i32 = 2; let _ = a + b; }",
+        "fn main() { let a: i64 = 1; let b: u8 = 2; let _ = a + b; }",
+        "fn main() { let a: i32 = 1; let b: i64 = 2; let _ = a * b; }",
+        "fn main() { let a: u8 = 1; let b: u16 = 2; let _ = a - b; }",
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("cannot mix integer types")),
+            "expected a mixed-integer-type diagnostic for: {src}\ngot: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn test_mixed_signedness_int_arithmetic_rejected() {
+    // Same width, different signedness is still a mix (the classic
+    // signed/unsigned hazard).
+    let errors = typecheck_errors("fn main() { let a: i32 = 1; let b: u32 = 2; let _ = a + b; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("cannot mix integer types")),
+        "expected a mixed-integer-type diagnostic for i32 + u32, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_same_width_int_arithmetic_accepted() {
+    typecheck_ok(
+        "fn main() {
+             let a: u8 = 1; let b: u8 = 2; let _ = a + b;
+             let c: i64 = 3; let d: i64 = 4; let _ = c * d;
+             let e: i32 = 5; let f: i32 = 6; let _ = e - f;
+         }",
+    );
+}
+
+#[test]
+fn test_int_literal_promotion_still_accepted() {
+    // A suffix-free literal adopts the other operand's narrow type (Q4) —
+    // this must keep working, it is NOT a mix.
+    typecheck_ok(
+        "fn main() {
+             let x: i32 = 5;
+             let _ = x + 1;
+             let _ = 1 + x;
+             let y: u8 = 10;
+             let _ = y * 2;
+         }",
+    );
+}
+
+#[test]
+fn test_mixed_int_arithmetic_explicit_cast_accepted() {
+    // The escape hatch the diagnostic points at: cast one operand.
+    typecheck_ok(
+        "fn main() {
+             let a: i64 = 1; let b: u8 = 2;
+             let _ = a + (b as i64);
+         }",
+    );
+}
