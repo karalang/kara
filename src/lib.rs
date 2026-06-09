@@ -94,7 +94,7 @@ use crate::ast::Program;
 use crate::concurrency::{ConcurrencyAnalysis, ConcurrencyChecker};
 use crate::effectchecker::{EffectCheckResult, EffectChecker, PublicEffectsPolicy};
 use crate::lexer::Lexer;
-use crate::manifest::CompileProfile;
+use crate::manifest::{CompileProfile, ProfileConfig};
 use crate::ownership::{OwnershipCheckResult, OwnershipChecker};
 use crate::parser::{ParseResult, Parser};
 use crate::resolver::{ResolveResult, Resolver};
@@ -244,14 +244,17 @@ pub fn effectcheck_with_method_types(
 pub fn effectcheck_with_typecheck_data(
     program: &Program,
     policy: PublicEffectsPolicy,
-    profile: CompileProfile,
+    profile_config: impl Into<ProfileConfig>,
     method_callee_types: std::collections::HashMap<crate::resolver::SpanKey, String>,
     call_type_subs: std::collections::HashMap<
         crate::resolver::SpanKey,
         std::collections::HashMap<String, String>,
     >,
 ) -> EffectCheckResult {
-    let checker = EffectChecker::new_with_policy_and_profile(program, policy, profile)
+    // Accepts a bare `CompileProfile` (via `From`) or the full `ProfileConfig`
+    // knob carrier — the `Pipeline` threads the latter from the manifest's
+    // parsed `[profile]` table.
+    let checker = EffectChecker::new_with_policy_and_config(program, policy, profile_config.into())
         .with_method_callee_types(method_callee_types)
         .with_call_type_subs(call_type_subs);
     checker.check()

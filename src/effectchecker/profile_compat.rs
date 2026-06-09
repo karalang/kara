@@ -10,15 +10,17 @@
 //! sets — and emit one diagnostic per offending effect, naming every
 //! listed profile that forbids it.
 //!
-//! Per-profile forbidden-effect table mirrors
-//! `extern_ffi::profile_forbids` but is keyed on a `CompileProfile`
-//! argument (not `self.profile`), because the attribute names target
-//! profiles independently of the active build profile.
+//! The per-profile forbidden-effect membership test is
+//! [`CompileProfile::forbids_effect`] (manifest.rs) — the single source of
+//! truth this and `extern_ffi::profile_forbids` both query. Here it is
+//! applied to each *listed* attribute profile (not the active build
+//! profile), because the attribute names target profiles independently of
+//! the active build profile.
 
 use crate::ast::*;
 use crate::manifest::CompileProfile;
 
-use super::{verb_name, Effect, EffectError, EffectErrorKind};
+use super::{verb_name, EffectError, EffectErrorKind};
 
 impl super::EffectChecker<'_> {
     pub(crate) fn check_profile_compat(&mut self) {
@@ -77,7 +79,7 @@ impl super::EffectChecker<'_> {
             let forbidding: Vec<&'static str> = parsed
                 .iter()
                 .copied()
-                .filter(|p| profile_forbids_effect(*p, &tagged.effect))
+                .filter(|p| p.forbids_effect(&tagged.effect))
                 .map(|p| p.as_str())
                 .collect();
             if forbidding.is_empty() {
@@ -114,26 +116,5 @@ impl super::EffectChecker<'_> {
                 replacement: None,
             });
         }
-    }
-}
-
-/// Per-profile forbidden-effect predicate. Mirrors the table in
-/// `extern_ffi::profile_forbids` but keyed on an explicit
-/// `CompileProfile` argument so it can iterate the attribute's listed
-/// profiles rather than the active build profile.
-fn profile_forbids_effect(profile: CompileProfile, effect: &Effect) -> bool {
-    match profile {
-        CompileProfile::Default => false,
-        CompileProfile::Embedded => matches!(
-            (&effect.verb, effect.resource.as_str()),
-            (EffectVerbKind::Allocates, "Heap")
-        ),
-        CompileProfile::Kernel => matches!(
-            &effect.verb,
-            EffectVerbKind::Allocates
-                | EffectVerbKind::Panics
-                | EffectVerbKind::Blocks
-                | EffectVerbKind::Suspends
-        ),
     }
 }

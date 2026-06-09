@@ -15,7 +15,6 @@
 //! Lives in a sibling `impl<'a> super::EffectChecker<'a>` block.
 
 use crate::ast::*;
-use crate::manifest::CompileProfile;
 use crate::token::Span;
 
 use super::{
@@ -243,35 +242,23 @@ impl<'a> super::EffectChecker<'a> {
     }
 
     fn profile_forbids(&self, effect: &Effect, fn_name: &str, abi: &str) -> Option<String> {
-        let forbidden = match self.profile {
-            CompileProfile::Default => return None,
-            CompileProfile::Embedded => matches!(
-                (&effect.verb, effect.resource.as_str()),
-                (EffectVerbKind::Allocates, "Heap")
-            ),
-            CompileProfile::Kernel => matches!(
-                &effect.verb,
-                EffectVerbKind::Allocates
-                    | EffectVerbKind::Panics
-                    | EffectVerbKind::Blocks
-                    | EffectVerbKind::Suspends
-            ),
-        };
-        if forbidden {
-            let effect_str = if effect.resource.is_empty() {
-                verb_name(&effect.verb)
-            } else {
-                format!("{}({})", verb_name(&effect.verb), effect.resource)
-            };
-            Some(format!(
-                "extern \"{}\" fn {} declares effect `{}`, which is forbidden by the '{}' profile",
-                abi,
-                fn_name,
-                effect_str,
-                self.profile.as_str(),
-            ))
-        } else {
-            None
+        // Single source of truth for the per-profile forbidden-effect table:
+        // `CompileProfile::forbids` (manifest.rs). `profile_compat.rs` queries
+        // the same method for `#[profile(...)]`-attribute gating.
+        if !self.profile().forbids_effect(effect) {
+            return None;
         }
+        let effect_str = if effect.resource.is_empty() {
+            verb_name(&effect.verb)
+        } else {
+            format!("{}({})", verb_name(&effect.verb), effect.resource)
+        };
+        Some(format!(
+            "extern \"{}\" fn {} declares effect `{}`, which is forbidden by the '{}' profile",
+            abi,
+            fn_name,
+            effect_str,
+            self.profile().as_str(),
+        ))
     }
 }

@@ -28,6 +28,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::ast::EffectVerbKind;
+use crate::effectchecker::{verb_name, Effect};
+
 /// Default language edition for a manifest that omits `[package].edition`.
 pub const DEFAULT_EDITION: &str = "2026";
 
@@ -87,6 +90,150 @@ impl CompileProfile {
             Self::Embedded => "embedded",
             Self::Kernel => "kernel",
         }
+    }
+
+    /// Does this profile forbid `verb(resource)` at `extern` declaration
+    /// and effect-checked call sites? The queryable form of the
+    /// forbidden-effect table in this type's doc comment — the single
+    /// source of truth consumed by `effectchecker::extern_ffi`
+    /// (build-profile gating) and `effectchecker::profile_compat`
+    /// (`#[profile(...)]`-attribute gating), which previously each carried
+    /// their own copy of this match. `default` forbids nothing; `embedded`
+    /// forbids `allocates(Heap)` specifically; `kernel` forbids `allocates`
+    /// of *any* resource plus `panics` / `blocks` / `suspends`.
+    pub fn forbids(self, verb: &EffectVerbKind, resource: &str) -> bool {
+        match self {
+            Self::Default => false,
+            Self::Embedded => matches!(verb, EffectVerbKind::Allocates) && resource == "Heap",
+            Self::Kernel => matches!(
+                verb,
+                EffectVerbKind::Allocates
+                    | EffectVerbKind::Panics
+                    | EffectVerbKind::Blocks
+                    | EffectVerbKind::Suspends
+            ),
+        }
+    }
+
+    /// `forbids` over a whole `Effect`. Convenience for call sites that
+    /// already hold an `Effect` rather than its parts.
+    pub fn forbids_effect(self, effect: &Effect) -> bool {
+        self.forbids(&effect.verb, &effect.resource)
+    }
+
+    /// The profile's forbidden-effect set, made queryable per the
+    /// prerequisite entry (phase-8 `[profile]`-table substrate). The
+    /// canonical representative list mirroring this type's doc-comment
+    /// table; the `kernel` `allocates` entry is shown in its `Heap`
+    /// representative form, but the precise membership test (`kernel`
+    /// forbids `allocates` of *any* resource) lives in [`Self::forbids`].
+    /// Used for introspection and to drive the moot-knob scaffold below.
+    pub fn forbidden_effects(self) -> Vec<Effect> {
+        let heap = |verb| Effect {
+            verb,
+            resource: "Heap".to_string(),
+        };
+        let bare = |verb| Effect {
+            verb,
+            resource: String::new(),
+        };
+        match self {
+            Self::Default => Vec::new(),
+            Self::Embedded => vec![heap(EffectVerbKind::Allocates)],
+            Self::Kernel => vec![
+                heap(EffectVerbKind::Allocates),
+                bare(EffectVerbKind::Panics),
+                bare(EffectVerbKind::Blocks),
+                bare(EffectVerbKind::Suspends),
+            ],
+        }
+    }
+}
+
+/// One typed `[profile]`-table knob that governs a runtime effect, paired
+/// with the effect it guards. Registered by a downstream knob entry (e.g.
+/// `panic_on_alloc_failure`, which guards `allocates(Heap)`) when the knob
+/// is set, so the moot-flag scaffold can reject it on a profile whose
+/// forbidden set already covers the guarded effect. The substrate defines
+/// the carrier; downstream entries populate it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileKnob {
+    /// The `[profile]`-table key as written, e.g. `"panic_on_alloc_failure"`.
+    pub name: String,
+    /// Verb of the effect this knob governs.
+    pub guarded_verb: EffectVerbKind,
+    /// Resource of the guarded effect (`"Heap"`, or `""` for the
+    /// resourceless execution verbs).
+    pub guarded_resource: String,
+}
+
+/// Typed per-`[profile]`-table knob carrier — the shared substrate every
+/// per-profile boolean/string knob threads through (`panic_on_alloc_failure`,
+/// `panic = "unwind"|"abort"`, future `bounds_checks`/`overflow_checks`).
+/// Subsumes the scalar [`CompileProfile`] selector so the active profile and
+/// its knobs travel as one object from manifest parse → `Pipeline` → effect
+/// checker. At the substrate layer it carries no typed knob fields yet;
+/// downstream entries each add their typed field plus, when the knob guards a
+/// runtime effect, a [`ProfileKnob`] registration in `guarded_knobs`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProfileConfig {
+    /// Active compile profile — the `[package].profile` selector (or a
+    /// `[target.*.profile]` override applied by the build pipeline).
+    pub profile: CompileProfile,
+    /// Knobs that govern a runtime effect, collected at parse time. The
+    /// moot-flag pass rejects any whose guarded effect is already forbidden
+    /// outright by `profile`. Empty at the substrate layer.
+    pub guarded_knobs: Vec<ProfileKnob>,
+}
+
+impl ProfileConfig {
+    /// Carrier for `profile` with no knobs — the form used everywhere a
+    /// bare [`CompileProfile`] was threaded before the substrate landed.
+    pub fn with_profile(profile: CompileProfile) -> Self {
+        Self {
+            profile,
+            guarded_knobs: Vec::new(),
+        }
+    }
+
+    /// Moot-flag rejection scaffold. A knob that toggles a runtime effect is
+    /// *moot* when the active profile already forbids that effect outright —
+    /// e.g. `panic_on_alloc_failure` on `embedded`/`kernel`, which forbid the
+    /// heap entirely, so there is no allocation to fail over. Returns one
+    /// human-readable message per moot knob; the manifest parser surfaces
+    /// each as a hard [`ManifestError::ProfileKnobMoot`]. The rejection logic
+    /// is centralised here so a downstream knob only has to register its
+    /// [`ProfileKnob`] — it never re-derives the heap-forbidding test.
+    pub fn moot_knob_errors(&self) -> Vec<String> {
+        self.guarded_knobs
+            .iter()
+            .filter(|k| self.profile.forbids(&k.guarded_verb, &k.guarded_resource))
+            .map(|k| {
+                format!(
+                    "`[profile].{}` is moot under the `{}` profile: it governs `{}`, which that profile already forbids outright",
+                    k.name,
+                    self.profile.as_str(),
+                    render_effect(&k.guarded_verb, &k.guarded_resource),
+                )
+            })
+            .collect()
+    }
+}
+
+impl From<CompileProfile> for ProfileConfig {
+    fn from(profile: CompileProfile) -> Self {
+        Self::with_profile(profile)
+    }
+}
+
+/// Render `verb(resource)` for diagnostics, dropping the parens for the
+/// resourceless execution verbs. Shares `effectchecker::verb_name` so the
+/// spelling matches the effect checker's own diagnostics.
+fn render_effect(verb: &EffectVerbKind, resource: &str) -> String {
+    if resource.is_empty() {
+        verb_name(verb)
+    } else {
+        format!("{}({})", verb_name(verb), resource)
     }
 }
 
@@ -240,6 +387,14 @@ pub struct Manifest {
     /// wasm32-wasip1-threads target default (16384 pages = 1 GiB).
     /// `None` when absent.
     pub wasm_max_memory_pages: Option<u32>,
+    /// `[profile]` table — the typed per-profile knob carrier. Subsumes the
+    /// scalar `profile` selector above and carries every per-profile knob
+    /// (`panic_on_alloc_failure`, `panic = "unwind"|"abort"`, … as those
+    /// entries land) in one object threaded to the effect checker. At the
+    /// substrate layer the table recognises no knob keys yet, so this is
+    /// always `ProfileConfig::with_profile(self.profile)` with an empty knob
+    /// set; unknown `[profile]` keys soft-warn like the rest of the manifest.
+    pub profile_config: ProfileConfig,
     pub warnings: Vec<ManifestWarning>,
 }
 
@@ -378,6 +533,16 @@ pub enum ManifestError {
         path: PathBuf,
         message: String,
     },
+    /// A `[profile]`-table knob is moot under the active profile because the
+    /// profile already forbids the effect the knob governs (e.g.
+    /// `panic_on_alloc_failure` on a heap-forbidding `embedded`/`kernel`
+    /// profile). Produced by the moot-flag scaffold
+    /// ([`ProfileConfig::moot_knob_errors`]); `message` is the rendered
+    /// explanation.
+    ProfileKnobMoot {
+        path: PathBuf,
+        message: String,
+    },
 }
 
 impl ManifestError {
@@ -469,6 +634,9 @@ impl std::fmt::Display for ManifestError {
             ),
             ManifestError::InvalidBuildTargets { path, message } => {
                 write!(f, "`{}`: `[build].targets`: {}", path.display(), message)
+            }
+            ManifestError::ProfileKnobMoot { path, message } => {
+                write!(f, "`{}`: {}", path.display(), message)
             }
         }
     }
@@ -673,6 +841,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     let toolchain_wasm_tools = parse_toolchain_table(path, &table, &mut warnings)?;
     let (wasm_pool_size, wasm_fallback, wasm_max_memory_pages) =
         parse_wasm_table(path, &table, &mut warnings)?;
+    let profile_config = parse_profile_table(path, &table, profile, &mut warnings)?;
 
     // Stable order across package-key + dependency warnings — same sort key
     // (message string) used as before, but now applied after the full
@@ -702,8 +871,64 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         wasm_pool_size,
         wasm_fallback,
         wasm_max_memory_pages,
+        profile_config,
         warnings,
     })
+}
+
+/// Parse the `[profile]` table when present — the typed per-profile knob
+/// carrier (design.md § Project Profiles / § Panic Strategy). Distinct from
+/// the scalar `[package].profile` selector, whose value is passed in as
+/// `profile`: this table holds *knobs*, not the profile name. At the
+/// substrate layer NO knob keys are recognised yet — the downstream
+/// `panic_on_alloc_failure` and `panic = "unwind"|"abort"` entries each add
+/// their typed key here (a recognised-key arm in the loop below) and, when
+/// the knob guards a runtime effect, register a [`ProfileKnob`] so the
+/// moot-flag pass can reject it. Until then every key soft-warns — the same
+/// drop-on-the-floor discipline as `[wasm]` / `[release]`. A non-table
+/// `profile` value hard-errors; an absent table yields a knob-empty config.
+///
+/// After building the config, the moot-flag scaffold
+/// ([`ProfileConfig::moot_knob_errors`]) rejects any registered knob the
+/// active profile already forbids outright. With no knobs registered the
+/// pass is a no-op; it is wired here so a downstream knob lights it up for
+/// free.
+fn parse_profile_table(
+    path: &Path,
+    table: &toml::Table,
+    profile: CompileProfile,
+    warnings: &mut Vec<ManifestWarning>,
+) -> Result<ProfileConfig, ManifestError> {
+    let config = ProfileConfig::with_profile(profile);
+    let Some(value) = table.get("profile") else {
+        return Ok(config);
+    };
+    let profile_table = value
+        .as_table()
+        .ok_or_else(|| ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "profile".to_string(),
+            expected: "a table (e.g. `[profile]`)",
+        })?;
+    // No knob keys recognised at the substrate layer — downstream entries
+    // add a recognised-key arm here and push the parsed value onto `config`.
+    for key in profile_table.keys() {
+        warnings.push(ManifestWarning {
+            line: None,
+            message: format!(
+                "unknown key `[profile].{key}` — ignored in v1 (reserved for a later release)"
+            ),
+        });
+    }
+    // Moot-flag rejection scaffold (no-op until a knob registers a guarded
+    // effect). Surface the first moot knob as a hard error.
+    if let Some(message) = config.moot_knob_errors().into_iter().next() {
+        return Err(ManifestError::ProfileKnobMoot {
+            path: path.to_path_buf(),
+            message,
+        });
+    }
+    Ok(config)
 }
 
 /// Parse the `[release]` table when present. Recognised keys at v1:
@@ -1255,6 +1480,10 @@ pub fn merge_target_overlay(manifest: &Manifest, active_target: Option<&str>) ->
     }
     if let Some(override_profile) = manifest.target_profile_overrides.get(triple) {
         merged.profile = *override_profile;
+        // Keep the knob carrier's active profile aligned with the override so
+        // the moot-flag scaffold and downstream knob consumers see the
+        // effective per-target profile, not the base one.
+        merged.profile_config.profile = *override_profile;
     }
     merged
 }
@@ -3124,6 +3353,147 @@ max-memory-pages = 4096
             "expected a soft warning for the unknown key, got: {:?}",
             m.warnings,
         );
+    }
+
+    // ===== `[profile]`-table substrate (phase-8 prerequisite entry) =====
+
+    fn eff(verb: EffectVerbKind, resource: &str) -> Effect {
+        Effect {
+            verb,
+            resource: resource.to_string(),
+        }
+    }
+
+    #[test]
+    fn compile_profile_forbids_matches_doc_table() {
+        // slice 2 — the queryable form of the doc-comment forbidden table.
+        let heap = eff(EffectVerbKind::Allocates, "Heap");
+        let arena = eff(EffectVerbKind::Allocates, "Arena");
+        let panics = eff(EffectVerbKind::Panics, "");
+        let blocks = eff(EffectVerbKind::Blocks, "");
+        let reads = eff(EffectVerbKind::Reads, "Clock");
+
+        // `default` forbids nothing.
+        for e in [&heap, &arena, &panics, &blocks, &reads] {
+            assert!(!CompileProfile::Default.forbids_effect(e), "{e:?}");
+        }
+        // `embedded` forbids `allocates(Heap)` specifically — not other
+        // allocation resources, not panics/blocks.
+        assert!(CompileProfile::Embedded.forbids_effect(&heap));
+        assert!(!CompileProfile::Embedded.forbids_effect(&arena));
+        assert!(!CompileProfile::Embedded.forbids_effect(&panics));
+        assert!(!CompileProfile::Embedded.forbids_effect(&blocks));
+        // `kernel` forbids `allocates` of ANY resource, plus panics/blocks/
+        // suspends.
+        assert!(CompileProfile::Kernel.forbids_effect(&heap));
+        assert!(CompileProfile::Kernel.forbids_effect(&arena));
+        assert!(CompileProfile::Kernel.forbids_effect(&panics));
+        assert!(CompileProfile::Kernel.forbids_effect(&blocks));
+        assert!(CompileProfile::Kernel.forbids_effect(&eff(EffectVerbKind::Suspends, "")));
+        assert!(!CompileProfile::Kernel.forbids_effect(&reads));
+    }
+
+    #[test]
+    fn compile_profile_forbidden_effects_list() {
+        // slice 2 — the canonical representative list for introspection.
+        assert!(CompileProfile::Default.forbidden_effects().is_empty());
+        assert_eq!(
+            CompileProfile::Embedded.forbidden_effects(),
+            vec![eff(EffectVerbKind::Allocates, "Heap")]
+        );
+        let kernel = CompileProfile::Kernel.forbidden_effects();
+        assert_eq!(kernel.len(), 4);
+        assert!(kernel.contains(&eff(EffectVerbKind::Allocates, "Heap")));
+        assert!(kernel.contains(&eff(EffectVerbKind::Panics, "")));
+        assert!(kernel.contains(&eff(EffectVerbKind::Blocks, "")));
+        assert!(kernel.contains(&eff(EffectVerbKind::Suspends, "")));
+        // Every representative entry round-trips through `forbids_effect`.
+        for e in &kernel {
+            assert!(CompileProfile::Kernel.forbids_effect(e), "{e:?}");
+        }
+    }
+
+    #[test]
+    fn profile_table_absent_or_empty_yields_knobless_config() {
+        // slice 1 — the carrier mirrors the scalar profile with no knobs.
+        let m = parse_manifest(&p(), "[package]\nname = \"hello\"\n").unwrap();
+        assert_eq!(m.profile_config, ProfileConfig::with_profile(m.profile));
+        assert!(m.profile_config.guarded_knobs.is_empty());
+        let src = "[package]\nname = \"hello\"\nprofile = \"embedded\"\n\n[profile]\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.profile_config.profile, CompileProfile::Embedded);
+        assert!(m.profile_config.guarded_knobs.is_empty());
+    }
+
+    #[test]
+    fn profile_table_unknown_key_soft_warns() {
+        // slice 1 — no knob keys recognised yet, so every key soft-warns
+        // (same drop-on-the-floor discipline as `[wasm]`).
+        let src = "[package]\nname = \"hello\"\n\n[profile]\npanic = \"abort\"\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(
+            m.warnings
+                .iter()
+                .any(|w| w.message.contains("unknown key `[profile].panic`")),
+            "expected a soft warning, got: {:?}",
+            m.warnings,
+        );
+    }
+
+    #[test]
+    fn profile_table_non_table_is_hard_error() {
+        // slice 1 — a root-level `profile` that is not a table (the knob-table
+        // slot is `[profile]`) hard-errors, so a misplaced value can't be
+        // silently read as an empty knob table. Profile *selection* lives at
+        // `[package].profile`, which is unaffected (absent → default).
+        let src = "profile = 1\n\n[package]\nname = \"hello\"\n";
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => assert_eq!(key, "profile"),
+            other => panic!("expected InvalidFieldType on `profile`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn moot_knob_scaffold_flags_heap_forbidding_profiles() {
+        // slice 4 — the reusable moot-flag scaffold. A knob guarding
+        // `allocates(Heap)` is moot on a profile that forbids the heap
+        // outright. Exercised with a synthetic knob (no production knob
+        // registers one yet); downstream knobs reuse this exact logic.
+        let knob = ProfileKnob {
+            name: "panic_on_alloc_failure".to_string(),
+            guarded_verb: EffectVerbKind::Allocates,
+            guarded_resource: "Heap".to_string(),
+        };
+        // Moot on embedded + kernel (both forbid the heap).
+        for profile in [CompileProfile::Embedded, CompileProfile::Kernel] {
+            let cfg = ProfileConfig {
+                profile,
+                guarded_knobs: vec![knob.clone()],
+            };
+            let errs = cfg.moot_knob_errors();
+            assert_eq!(errs.len(), 1, "{profile:?}");
+            assert!(errs[0].contains("panic_on_alloc_failure"), "{}", errs[0]);
+            assert!(errs[0].contains("allocates(Heap)"), "{}", errs[0]);
+            assert!(errs[0].contains(profile.as_str()), "{}", errs[0]);
+        }
+        // Not moot on default (heap permitted) — the knob has real effect.
+        let cfg = ProfileConfig {
+            profile: CompileProfile::Default,
+            guarded_knobs: vec![knob],
+        };
+        assert!(cfg.moot_knob_errors().is_empty());
+        // An empty knob set never produces a moot finding (the substrate
+        // state today on every profile).
+        for profile in [
+            CompileProfile::Default,
+            CompileProfile::Embedded,
+            CompileProfile::Kernel,
+        ] {
+            assert!(ProfileConfig::with_profile(profile)
+                .moot_knob_errors()
+                .is_empty());
+        }
     }
 
     #[test]

@@ -519,6 +519,7 @@ mod tests {
             wasm_pool_size: None,
             wasm_fallback: None,
             wasm_max_memory_pages: None,
+            profile_config: manifest::ProfileConfig::default(),
             warnings: Vec::new(),
         }
     }

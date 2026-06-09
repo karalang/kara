@@ -817,6 +817,13 @@ struct Pipeline {
     /// vacuous there; it is a codegen/`check` surface.
     simd_errors: Option<Vec<crate::simd_report::SimdFinding>>,
     profile: crate::manifest::CompileProfile,
+    /// Per-profile `[profile]`-table knob carrier from the manifest. Carries
+    /// the active profile plus any typed knobs; threaded into the effect
+    /// checker at [`Pipeline::effectcheck`]. Its `.profile` is kept aligned
+    /// with `profile` (which per-target overrides may rewrite) at the point
+    /// of use. Defaulted in [`Pipeline::new`]; populated from
+    /// `Manifest::profile_config` by the per-subcommand entry points.
+    profile_config: crate::manifest::ProfileConfig,
     /// Build-wide lint level overrides from CLI flags
     /// (`-A NAME` / `-W NAME` / `-D NAME` / `-F NAME` / `-D warnings`).
     /// Slice 4b polish. Defaulted empty in [`Pipeline::new`]; the
@@ -842,6 +849,7 @@ impl Pipeline {
             raii_errors: None,
             simd_errors: None,
             profile: crate::manifest::CompileProfile::Default,
+            profile_config: crate::manifest::ProfileConfig::default(),
             lint_overrides: crate::lints::CliLintOverrides::default(),
         }
     }
@@ -949,10 +957,16 @@ impl Pipeline {
             .as_ref()
             .map(|t| t.call_type_subs.clone())
             .unwrap_or_default();
+        // Thread the manifest's `[profile]`-table knob carrier into the effect
+        // checker. Realign its active profile with `self.profile` so any
+        // per-target profile override (which rewrites `self.profile`) is
+        // reflected for the moot-flag scaffold and downstream knob consumers.
+        let mut profile_config = self.profile_config.clone();
+        profile_config.profile = self.profile;
         self.effects = Some(crate::effectcheck_with_typecheck_data(
             &self.parsed.program,
             crate::effectchecker::PublicEffectsPolicy::default(),
-            self.profile,
+            profile_config,
             method_types,
             call_type_subs,
         ));
@@ -3799,6 +3813,7 @@ fn cmd_run(
     let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
     if let Some(ref m) = discovered_manifest {
         pipeline.profile = m.profile;
+        pipeline.profile_config = m.profile_config.clone();
     }
     pipeline.resolve();
 
@@ -6450,6 +6465,7 @@ fn run_multi_file_codegen(
         raii_errors: None,
         simd_errors: None,
         profile: crate::manifest::CompileProfile::Default,
+        profile_config: crate::manifest::ProfileConfig::default(),
         lint_overrides: crate::lints::CliLintOverrides::default(),
     };
     pipeline.resolve();

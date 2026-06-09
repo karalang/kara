@@ -2972,6 +2972,39 @@ fn test_profile_embedded_forbids_heap_allocation() {
 }
 
 #[test]
+fn test_profile_config_carrier_threads_through_pipeline_path() {
+    // The `Pipeline` path threads the full `ProfileConfig` knob carrier (not
+    // just a bare profile) into the effect checker via the
+    // `impl Into<ProfileConfig>` parameter of `effectcheck_with_typecheck_data`
+    // + the `with_profile_config` builder. A carrier built with the `embedded`
+    // profile must reject an extern `allocates(Heap)` exactly as a bare profile
+    // does — proving the carrier's active profile reaches the forbidden-effect
+    // check (phase-8 `[profile]`-table substrate, slice 3).
+    let parsed = parse("unsafe extern \"C\" { fn malloc(size: i64) -> i64 allocates(Heap); }");
+    assert!(
+        parsed.errors.is_empty(),
+        "parse errors: {:?}",
+        parsed.errors
+    );
+    let cfg = karac::manifest::ProfileConfig::with_profile(CompileProfile::Embedded);
+    let result = effectcheck_with_typecheck_data(
+        &parsed.program,
+        PublicEffectsPolicy::Declared,
+        cfg,
+        Default::default(),
+        Default::default(),
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e.kind, EffectErrorKind::ProfileViolation)),
+        "carrier-threaded embedded profile should reject allocates(Heap): {:?}",
+        result.errors
+    );
+}
+
+#[test]
 fn test_profile_embedded_allows_non_heap_allocates() {
     // Embedded only forbids allocates(Heap); other resources are fine.
     profile_ok(

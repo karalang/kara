@@ -7,7 +7,7 @@
 //! and detects effect conflicts for auto-concurrency analysis.
 
 use crate::ast::*;
-use crate::manifest::CompileProfile;
+use crate::manifest::{CompileProfile, ProfileConfig};
 use crate::resolver::SpanKey;
 use crate::token::Span;
 use std::collections::{HashMap, HashSet};
@@ -358,8 +358,11 @@ pub struct EffectChecker<'a> {
     pub(crate) public_effects_policy: PublicEffectsPolicy,
     /// Expanded effect groups: group name → EffectSet.
     pub(crate) expanded_groups: HashMap<String, EffectSet>,
-    /// Active compile profile — determines which effects are forbidden at extern sites.
-    pub(crate) profile: CompileProfile,
+    /// Per-profile knob carrier — the active compile profile plus any
+    /// `[profile]`-table knobs. Determines which effects are forbidden at
+    /// extern sites (via the active profile) and carries the typed knobs
+    /// downstream consumers read. Use [`Self::profile`] for the bare profile.
+    pub(crate) profile_config: ProfileConfig,
     /// Transparent effect verb names.
     pub(crate) transparent_effects: HashSet<String>,
     /// Declared effects per function name.
@@ -453,10 +456,21 @@ impl<'a> EffectChecker<'a> {
         policy: PublicEffectsPolicy,
         profile: CompileProfile,
     ) -> Self {
+        Self::new_with_policy_and_config(program, policy, ProfileConfig::with_profile(profile))
+    }
+
+    /// Construct with the full per-profile knob carrier. The path the
+    /// `Pipeline` takes — `new_with_policy_and_profile` wraps a bare profile
+    /// for callers that have no knobs.
+    pub fn new_with_policy_and_config(
+        program: &'a Program,
+        policy: PublicEffectsPolicy,
+        profile_config: ProfileConfig,
+    ) -> Self {
         EffectChecker {
             program,
             public_effects_policy: policy,
-            profile,
+            profile_config,
             expanded_groups: HashMap::new(),
             transparent_effects: HashSet::new(),
             declared_effects: HashMap::new(),
@@ -488,6 +502,20 @@ impl<'a> EffectChecker<'a> {
                 .collect(),
             errors: Vec::new(),
         }
+    }
+
+    /// The active compile profile (the `[package].profile` selector, or a
+    /// per-target override). Reads through the [`ProfileConfig`] carrier.
+    pub(crate) fn profile(&self) -> CompileProfile {
+        self.profile_config.profile
+    }
+
+    /// Override the per-profile knob carrier wholesale — the `Pipeline` path,
+    /// which threads the manifest's parsed `[profile]` knobs in. Builds on the
+    /// builder pattern of the `with_*` methods below.
+    pub fn with_profile_config(mut self, profile_config: ProfileConfig) -> Self {
+        self.profile_config = profile_config;
+        self
     }
 
     /// Attach typechecker-resolved `MethodCall` callee keys so the `MethodCall`
@@ -1328,7 +1356,7 @@ impl<'a> EffectChecker<'a> {
     /// profiles forbid `allocates(Heap)` outright; that rejection is owned by
     /// [`check_profile_compat`], so this permit is Default-profile-only.
     fn is_default_permitted_effect(&self, effect: &Effect) -> bool {
-        matches!(self.profile, CompileProfile::Default)
+        matches!(self.profile(), CompileProfile::Default)
             && effect.verb == EffectVerbKind::Allocates
             && effect.resource == "Heap"
     }
