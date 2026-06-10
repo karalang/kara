@@ -222,7 +222,12 @@ impl<'a> super::TypeChecker<'a> {
         let mut elem_types: Vec<Type> = Vec::with_capacity(args.len());
         for (i, arg) in args.iter().enumerate() {
             let arg_ty = self.infer_expr(&arg.value);
-            // Each branch must be a zero-arg closure.
+            // A branch is either an explicit zero-arg closure
+            // `|| Result[…]` (use its return type) OR a bare expression
+            // `fetch()` of type `Result[…]` that the lowering pass
+            // auto-thunks into `|| fetch()` (use the expression's own
+            // type). Either way the branch result type is checked to be a
+            // `Result[A, E]` below.
             let ret = match &arg_ty {
                 Type::Function {
                     params,
@@ -232,12 +237,13 @@ impl<'a> super::TypeChecker<'a> {
                     params,
                     return_type,
                 } if params.is_empty() => (**return_type).clone(),
-                Type::Error => Type::Error,
-                _ => {
+                // A closure that takes arguments is not a valid branch (a
+                // branch is invoked with no args).
+                Type::Function { .. } | Type::OnceFunction { .. } => {
                     self.type_error(
                         format!(
-                            "collect_all branch {} must be a zero-argument closure \
-                             returning Result[T, E], found '{}'",
+                            "collect_all branch {} must be a zero-argument closure, \
+                             found '{}'",
                             i + 1,
                             type_display(&arg_ty)
                         ),
@@ -246,6 +252,9 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     Type::Error
                 }
+                // Bare-expression (auto-thunked) branch: the argument's own
+                // type is the branch result.
+                other => other.clone(),
             };
             // …whose return type is a Result[A, E].
             let elem = match &ret {

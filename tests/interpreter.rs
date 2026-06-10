@@ -3259,6 +3259,30 @@ fn collect_all_gathers_heterogeneous_tuple() {
     );
 }
 
+#[test]
+fn collect_all_auto_thunks_bare_and_mixed_branches() {
+    // design.md "closure wrappers optional" — bare-expression branches
+    // (`collect_all(fa(x), fb(y))`) are auto-thunked by lowering into
+    // `|| fa(x)` etc., so they gather identically to explicit closures;
+    // mixed explicit/bare branches work too, and captured locals (`x`,
+    // `y`) flow into the thunked closures.
+    assert_eq!(
+        run("fn fa(n: i64) -> Result[i64, String] {\n\
+                 if n > 0 { Result.Ok(n * 10) } else { Result.Err(f\"a{n}\") }\n\
+             }\n\
+             fn fb(s: String) -> Result[String, i64] { Result.Err(7) }\n\
+             fn main() {\n\
+                 let x: i64 = 4;\n\
+                 let t: (Result[i64, String], Result[String, i64], Result[i64, String]) =\n\
+                     collect_all(fa(x), fb(\"z\"), || fa(-1));\n\
+                 match t.0 { Result.Ok(v) => { println(f\"0 ok {v}\"); } Result.Err(e) => { println(f\"0 err {e}\"); } }\n\
+                 match t.1 { Result.Ok(v) => { println(f\"1 ok {v}\"); } Result.Err(e) => { println(f\"1 err {e}\"); } }\n\
+                 match t.2 { Result.Ok(v) => { println(f\"2 ok {v}\"); } Result.Err(e) => { println(f\"2 err {e}\"); } }\n\
+             }"),
+        "0 ok 40\n1 err 7\n2 err a-1\n"
+    );
+}
+
 // ── `mut ref |...|` capture-mutation propagation (round 12.48) ──
 //
 // Mutations made by a `mut ref` closure to a captured outer binding

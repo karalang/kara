@@ -21310,16 +21310,35 @@ fn collect_all_typechecks_to_heterogeneous_tuple() {
 }
 
 #[test]
-fn collect_all_rejects_bad_arity_and_non_result_branches() {
-    // Arity gate (2..=8) + the branch-shape checks: a single branch points
-    // at collect_all_vec; a non-closure arg and a closure not returning
-    // Result are each rejected.
+fn collect_all_auto_thunks_bare_expression_branches() {
+    // design.md "closure wrappers optional" — a bare expression is a valid
+    // branch (lowering wraps each non-closure arg as `|| e`); the
+    // expression's own `Result[A, E]` type drives the tuple element. Mixed
+    // explicit-closure + bare branches typecheck too.
+    typecheck_ok(
+        "fn fa(n: i64) -> Result[i64, String] { Result.Ok(n) }
+         fn fb(s: String) -> Result[String, i64] { Result.Ok(s) }
+         fn main() {
+             let t: (Result[i64, String], Result[String, i64]) = collect_all(fa(1), fb(\"x\"));
+             let m: (Result[i64, String], Result[i64, String]) = collect_all(|| fa(2), fa(3));
+             let _0: Result[i64, String] = t.0;
+             let _m1: Result[i64, String] = m.1;
+         }",
+    );
+}
+
+#[test]
+fn collect_all_rejects_bad_arity_and_bad_branches() {
+    // Arity gate (2..=8) — a single branch points at collect_all_vec. A
+    // closure WITH parameters is not a valid (zero-arg) branch. A bare
+    // expression whose type isn't Result[T,E] auto-thunks but still fails
+    // the branch-result type check.
     let errs = typecheck_errors(
         "fn fa() -> Result[i64, String] { Result.Ok(1) }
          fn main() {
              let a = collect_all(|| fa());
-             let b = collect_all(|| fa(), 42);
-             let c = collect_all(|| fa(), || 99);
+             let b = collect_all(|| fa(), |n: i64| fa());
+             let c = collect_all(|| fa(), 42);
          }",
     );
     let joined: String = errs
@@ -21333,11 +21352,11 @@ fn collect_all_rejects_bad_arity_and_non_result_branches() {
     );
     assert!(
         joined.contains("must be a zero-argument closure"),
-        "expected non-closure-branch error; got: {joined}"
+        "expected zero-arg-closure error (param closure); got: {joined}"
     );
     assert!(
         joined.contains("must return Result[T, E]"),
-        "expected non-Result-branch error; got: {joined}"
+        "expected non-Result-branch error (bare 42); got: {joined}"
     );
 }
 

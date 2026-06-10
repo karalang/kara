@@ -370,8 +370,38 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Call { callee, args } => {
                 self.lower_expr(callee);
-                for a in args {
+                // `collect_all` auto-thunking (design.md § Concurrency
+                // Semantics — "closure wrappers optional"): wrap each
+                // bare-expression branch `e` as `|| e` so the
+                // typechecker-validated branches reach codegen / the
+                // interpreter uniformly as zero-arg closures. Explicit
+                // `|| …` branches are already closures and are left
+                // untouched. `infer_collect_all` (which runs *before*
+                // lowering) accepts the bare form by using the expression's
+                // own type, so the synthesized closure's return type matches.
+                let is_collect_all =
+                    matches!(&callee.kind, ExprKind::Identifier(n) if n == "collect_all");
+                for a in args.iter_mut() {
                     self.lower_expr(&mut a.value);
+                    if is_collect_all && !matches!(&a.value.kind, ExprKind::Closure { .. }) {
+                        let span = a.value.span.clone();
+                        let inner = std::mem::replace(
+                            &mut a.value,
+                            Expr {
+                                kind: ExprKind::Tuple(Vec::new()),
+                                span: span.clone(),
+                            },
+                        );
+                        a.value = Expr {
+                            kind: ExprKind::Closure {
+                                params: Vec::new(),
+                                capture_mode: None,
+                                prefix_span: None,
+                                body: Box::new(inner),
+                            },
+                            span,
+                        };
+                    }
                 }
             }
             ExprKind::MethodCall { object, args, .. } => {
