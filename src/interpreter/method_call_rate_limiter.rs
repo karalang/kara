@@ -62,7 +62,7 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_rate_limiter_method(
         &mut self,
         method: &str,
-        obj: Value,
+        obj: &Value,
         args: &[CallArg],
         _span: &Span,
     ) -> Option<Value> {
@@ -72,8 +72,8 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
-    fn eval_rate_limiter_try_acquire(&mut self, obj: Value, args: &[CallArg]) -> Option<Value> {
-        let handle = rate_limiter_handle(&obj)?;
+    fn eval_rate_limiter_try_acquire(&mut self, obj: &Value, args: &[CallArg]) -> Option<Value> {
+        let handle = rate_limiter_handle(obj)?;
         let key = match args.first().map(|a| self.eval_expr_inner(&a.value))? {
             Value::String(s) => s,
             _ => return None,

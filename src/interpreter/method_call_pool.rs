@@ -84,14 +84,16 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_pool_method(
         &mut self,
         method: &str,
-        obj: Value,
+        obj: &Value,
         args: &[CallArg],
         _span: &Span,
     ) -> Option<Value> {
+        // Borrow + clone-on-match (B-2026-06-07-4): a non-pool method
+        // (e.g. a `Map`'s `get`) returns `None` here without cloning.
         match method {
-            "acquire" => self.eval_pool_acquire(obj),
-            "release" => self.eval_pool_release(obj, args),
-            "with_health_check" => self.eval_pool_with_health_check(obj, args),
+            "acquire" => self.eval_pool_acquire(obj.clone()),
+            "release" => self.eval_pool_release(obj.clone(), args),
+            "with_health_check" => self.eval_pool_with_health_check(obj.clone(), args),
             _ => None,
         }
     }

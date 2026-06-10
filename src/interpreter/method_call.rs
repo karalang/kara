@@ -588,22 +588,29 @@ impl<'a> super::Interpreter<'a> {
         if let Some(v) = self.try_eval_regex_method(method, obj.clone(), args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_process_method(method, obj.clone(), args, span) {
+        if let Some(v) = self.try_eval_process_method(method, &obj, args, span) {
             return v;
         }
         if let Some(v) = self.try_eval_tensor_method(method, &obj, args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_pool_method(method, obj.clone(), args, span) {
+        if let Some(v) = self.try_eval_pool_method(method, &obj, args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_semaphore_method(method, obj.clone(), args, span) {
+        // Backpressure guards borrow the receiver (`&obj`) instead of
+        // cloning it: each only reads the `{name, handle_id}` struct via
+        // `*_handle(&obj)`, so a speculative clone here was pure waste —
+        // and for a large receiver (e.g. a `Map` whose method is `get`/
+        // `insert`) each clone is O(n), so the three guards multiplied a
+        // map-heavy O(n²) workload's cost (B-2026-06-07-4). Mirrors the
+        // `try_eval_tensor_method(&obj, ...)` precedent above.
+        if let Some(v) = self.try_eval_semaphore_method(method, &obj, args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_rate_limiter_method(method, obj.clone(), args, span) {
+        if let Some(v) = self.try_eval_rate_limiter_method(method, &obj, args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_bounded_channel_method(method, obj.clone(), args, span) {
+        if let Some(v) = self.try_eval_bounded_channel_method(method, &obj, args, span) {
             return v;
         }
         if let Some(v) = self.try_eval_set_method(method, object, obj.clone(), args, span) {

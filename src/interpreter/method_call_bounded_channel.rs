@@ -65,7 +65,7 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_bounded_channel_method(
         &mut self,
         method: &str,
-        obj: Value,
+        obj: &Value,
         args: &[CallArg],
         _span: &Span,
     ) -> Option<Value> {
@@ -76,8 +76,8 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
-    fn eval_bounded_channel_send(&mut self, obj: Value, args: &[CallArg]) -> Option<Value> {
-        let handle = bounded_channel_handle(&obj)?;
+    fn eval_bounded_channel_send(&mut self, obj: &Value, args: &[CallArg]) -> Option<Value> {
+        let handle = bounded_channel_handle(obj)?;
         let value = args.first().map(|a| self.eval_expr_inner(&a.value))?;
         match self.bounded_channel_table.get_mut(&handle) {
             Some(entry) if (entry.queue.len() as i64) < entry.capacity => {
@@ -90,8 +90,8 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
-    fn eval_bounded_channel_recv(&mut self, obj: Value) -> Option<Value> {
-        let handle = bounded_channel_handle(&obj)?;
+    fn eval_bounded_channel_recv(&mut self, obj: &Value) -> Option<Value> {
+        let handle = bounded_channel_handle(obj)?;
         let popped = self
             .bounded_channel_table
             .get_mut(&handle)

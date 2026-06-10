@@ -56,7 +56,7 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_semaphore_method(
         &mut self,
         method: &str,
-        obj: Value,
+        obj: &Value,
         _args: &[CallArg],
         _span: &Span,
     ) -> Option<Value> {
@@ -67,8 +67,8 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
-    fn eval_semaphore_acquire(&mut self, obj: Value) -> Option<Value> {
-        let handle = semaphore_handle(&obj)?;
+    fn eval_semaphore_acquire(&mut self, obj: &Value) -> Option<Value> {
+        let handle = semaphore_handle(obj)?;
         match self.semaphore_table.get_mut(&handle) {
             Some(entry) if entry.available > 0 => {
                 entry.available -= 1;
@@ -81,8 +81,8 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
-    fn eval_semaphore_release(&mut self, obj: Value) -> Option<Value> {
-        let handle = semaphore_handle(&obj)?;
+    fn eval_semaphore_release(&mut self, obj: &Value) -> Option<Value> {
+        let handle = semaphore_handle(obj)?;
         if let Some(entry) = self.semaphore_table.get_mut(&handle) {
             // Saturate at the initial budget — returning more permits
             // than were taken is a bookkeeping bug, and growing past

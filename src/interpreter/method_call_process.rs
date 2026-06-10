@@ -24,27 +24,31 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_process_method(
         &mut self,
         method: &str,
-        obj: Value,
+        obj: &Value,
         _args: &[CallArg],
         _span: &Span,
     ) -> Option<Value> {
+        // Borrow the receiver and clone only inside the arm that actually
+        // handles `method` — the match returns `None` for any non-process
+        // method (e.g. a `Map`'s `get`/`insert`) without cloning at all.
+        // See the dispatch-clone fix in `method_call.rs` (B-2026-06-07-4).
         match method {
-            "spawn" => self.eval_command_spawn(obj),
-            "wait" => self.eval_child_wait(obj),
-            "try_wait" => self.eval_child_try_wait(obj),
-            "kill" => self.eval_child_kill(obj),
+            "spawn" => self.eval_command_spawn(obj.clone()),
+            "wait" => self.eval_child_wait(obj.clone()),
+            "try_wait" => self.eval_child_try_wait(obj.clone()),
+            "kill" => self.eval_child_kill(obj.clone()),
             // Captured-pipe accessors / handle methods. Each guards on the
             // receiver struct name and returns `None` for any other shape,
             // so a same-named method on an unrelated type (e.g. the
             // `Command.stdout(cfg)` builder, a `File.write`, or the `Stdin`
             // resource's `read_to_string`) falls through to its own
             // dispatcher.
-            "stdout" => self.eval_child_take_stream(obj, StdStream::Out),
-            "stderr" => self.eval_child_take_stream(obj, StdStream::Err),
-            "stdin" => self.eval_child_take_stream(obj, StdStream::In),
-            "read_to_string" => self.eval_child_stream_read_to_string(obj),
-            "write" => self.eval_child_stdin_write(obj, _args),
-            "close" => self.eval_child_stdin_close(obj),
+            "stdout" => self.eval_child_take_stream(obj.clone(), StdStream::Out),
+            "stderr" => self.eval_child_take_stream(obj.clone(), StdStream::Err),
+            "stdin" => self.eval_child_take_stream(obj.clone(), StdStream::In),
+            "read_to_string" => self.eval_child_stream_read_to_string(obj.clone()),
+            "write" => self.eval_child_stdin_write(obj.clone(), _args),
+            "close" => self.eval_child_stdin_close(obj.clone()),
             _ => None,
         }
     }
