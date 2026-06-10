@@ -905,6 +905,29 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Inline index of a method/function-returned `Vec` (`a.shape()[k]`,
+        // `f()[i]`): the object is a non-place expression whose value is a
+        // `Vec` `{ptr, len, cap}` struct. The identifier-keyed Vec path above
+        // fires only for named bindings; an arbitrary Vec-producing expr
+        // otherwise reaches the generic tail below, which stores the struct
+        // to a temp and dispatches only `ArrayType` / `VectorType` — a Vec
+        // struct falls through to the "non-array type" error. Mirror the
+        // FieldAccess synth-var arm: materialize the value into a synth Vec
+        // local, recurse so the identifier Vec path lowers the index, then
+        // drop the temp Vec (buffer + nested element heap) after the read.
+        //
+        // The Vec element `TypeExpr` is resolved from the callee's return
+        // signature (`inline_temp_vec_te`), NOT from `owned_temp_drops`:
+        // the parser gives every postfix expr the receiver's span, so a
+        // `Call`/`Index` pair on `make()[i]` collide, and the `Index`'s
+        // element-type clobbers the `Call`'s `Vec` in `expr_types` (and
+        // hence in `owned_temp_drops`). The signature lookup sidesteps the
+        // collision entirely. (Phase-11 longtail: shape-generic `matmul`
+        // reading dims via `a.shape()[k]`, 2026-06-09.)
+        if let Some(vec_te) = self.inline_temp_vec_te(object) {
+            return self.compile_inline_temp_vec_index(object, index, &vec_te);
+        }
+
         let idx_val = self.compile_expr(index)?.into_int_value();
         let i64_t = self.context.i64_type();
 
@@ -1001,6 +1024,162 @@ impl<'ctx> super::Codegen<'ctx> {
             // above. Anything still reaching here is genuinely not indexable.
             Err("Index operator applied to non-array type".to_string())
         }
+    }
+
+    /// Resolve the `Vec[T]` / `VecDeque[T]` `TypeExpr` an inline-indexed
+    /// temporary (`make()[i]`, `a.shape()[k]`) produces — the element type
+    /// needed to register the synth Vec local and to drop/clone correctly.
+    ///
+    /// Resolved from the callee *signature*, not `owned_temp_drops`: the
+    /// parser stamps every postfix expr with the receiver's span, so the
+    /// `Call` and its wrapping `Index` share a span and the `Index` result
+    /// type clobbers the `Call`'s `Vec` in `expr_types` (the table
+    /// `owned_temp_drops` is built from). `None` for anything that isn't a
+    /// fresh-owned Vec temporary — a non-Vec return, a `ref`-returning
+    /// callee (a borrow, returned as a `ptr`, must not be freed), or an
+    /// unrecognized receiver — leaving the generic path to handle it.
+    fn inline_temp_vec_te(&self, object: &Expr) -> Option<TypeExpr> {
+        match &object.kind {
+            // Free-function call: the declared return `TypeExpr`. A direct
+            // (non-`ref`) `Vec[T]` / `VecDeque[T]` return is a fresh owned
+            // temp; a `Ref`/`MutRef` return is a borrow and is excluded.
+            ExprKind::Call { callee, .. } => {
+                let ExprKind::Identifier(name) = &callee.kind else {
+                    return None;
+                };
+                let te = self.fn_return_type_exprs.get(name)?;
+                if matches!(te.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
+                    return None;
+                }
+                self.extract_vec_elem_type(te).is_some().then(|| te.clone())
+            }
+            // `tensor.shape()` is the one built-in producing a fresh owned
+            // `Vec[i64]` (`compile_tensor_shape_method`). Gated on a tensor
+            // receiver — an identifier tensor var or a tensor-typed chained
+            // receiver (`h.view().shape()`) — so a hypothetical user method
+            // named `shape` returning some other type can't match.
+            ExprKind::MethodCall {
+                object: recv,
+                method,
+                ..
+            } if method == "shape" => {
+                let recv_is_tensor = match &recv.kind {
+                    ExprKind::Identifier(n) => self.tensor_var_infos.contains_key(n.as_str()),
+                    _ => self
+                        .tensor_typed_exprs
+                        .contains_key(&(recv.span.offset, recv.span.length)),
+                };
+                if !recv_is_tensor {
+                    return None;
+                }
+                let sp = recv.span.clone();
+                let i64_te = TypeExpr {
+                    kind: TypeKind::Path(PathExpr {
+                        segments: vec!["i64".to_string()],
+                        generic_args: None,
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                };
+                Some(TypeExpr {
+                    kind: TypeKind::Path(PathExpr {
+                        segments: vec!["Vec".to_string()],
+                        generic_args: Some(vec![GenericArg::Type(i64_te)]),
+                        span: sp.clone(),
+                    }),
+                    span: sp,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Index a freshly-produced, owned `Vec` temporary (`a.shape()[k]`,
+    /// `make_vec()[i]`) — the value `object` evaluates to is a `Vec`
+    /// `{ptr, len, cap}` struct, not a named binding the identifier-keyed
+    /// Vec path can dispatch on. Materializes the value into a synth Vec
+    /// local (so the existing `compile_vec_index` lowering runs unchanged),
+    /// reads the element, deep-clones it when the element type isn't
+    /// trivially Copy (the read shallow-aliases the about-to-be-freed
+    /// buffer otherwise), then drops the temp Vec (buffer + every nested
+    /// element's heap) via the Vec drop fn. `vec_te` is the temporary's
+    /// `Vec[T]` / `VecDeque[T]` `TypeExpr` (from `inline_temp_vec_te`).
+    fn compile_inline_temp_vec_index(
+        &mut self,
+        object: &Expr,
+        index: &Expr,
+        vec_te: &TypeExpr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let vec_val = self.compile_expr(object)?;
+        // Defensive: a `ref Vec` borrow (or any non-Vec shape that slipped
+        // past the hint) yields a `ptr`, not the `{ptr, len, cap}` struct —
+        // don't synth/free it; report the generic error rather than freeing
+        // memory we don't own.
+        if !self.llvm_ty_is_vec_struct(vec_val.get_type()) {
+            return Err("Index operator applied to non-array type".to_string());
+        }
+        let fn_val = self.current_fn.unwrap();
+
+        // Materialize into a synth Vec local + register so the recursion's
+        // identifier-keyed Vec path (`compile_vec_index`) lowers `[index]`.
+        let synth = format!("__inline_vec_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        let slot = self.create_entry_alloca(fn_val, "inline.vec.tmp", vec_val.get_type());
+        self.builder.build_store(slot, vec_val).unwrap();
+        self.variables.insert(
+            synth.clone(),
+            super::state::VarSlot {
+                ptr: slot,
+                ty: vec_val.get_type(),
+            },
+        );
+        self.register_var_from_type_expr(&synth, vec_te);
+
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: object.span.clone(),
+        };
+        let elem = self.compile_index(&synth_expr, index)?;
+
+        // The element value shallow-aliases buffer memory for non-Copy
+        // element types (a `String` / `Vec` element's inner `data` ptr is
+        // shared); deep-clone it before the buffer's nested heap is freed so
+        // the returned value stands alone. Trivially-Copy elements (the
+        // `Vec[i64]` `shape()` case) are already standalone scalars.
+        let inner_te = vec_inner_type_expr(vec_te);
+        let result = match &inner_te {
+            Some(elem_te) if !super::vec_method::is_trivially_copyable_te(elem_te) => {
+                let elem_ll = elem.get_type();
+                let src = self.create_entry_alloca(fn_val, "inline.elem.src", elem_ll);
+                self.builder.build_store(src, elem).unwrap();
+                let dst = self.create_entry_alloca(fn_val, "inline.elem.clone", elem_ll);
+                let clone_fn = self.emit_clone_fn_for_type_expr(elem_te);
+                self.builder
+                    .build_call(clone_fn, &[src.into(), dst.into()], "")
+                    .unwrap();
+                self.builder
+                    .build_load(elem_ll, dst, "inline.elem.cloned")
+                    .unwrap()
+            }
+            _ => elem,
+        };
+
+        // Free the temp Vec: buffer + (for non-Copy elements) each element's
+        // nested heap. Safe because the returned element was deep-cloned.
+        let drop_fn = self.emit_drop_fn_for_type_expr(vec_te);
+        self.builder
+            .build_call(drop_fn, &[slot.into()], "")
+            .unwrap();
+
+        // Tidy the synth registrations (same set `register_var_from_type_expr`
+        // could have touched for a Vec / VecDeque / String binding).
+        self.variables.remove(&synth);
+        self.vec_elem_types.remove(&synth);
+        self.var_elem_type_exprs.remove(&synth);
+        self.var_type_names.remove(&synth);
+        self.string_vars.remove(&synth);
+
+        Ok(result)
     }
 
     /// String slicing `s[a..b]` -> a fresh `String` (phase-8 line 737).

@@ -321,6 +321,37 @@ fn main() {
         );
     }
 
+    // ── Inline index of a fn-returned `Vec` — temp drop + element clone ──
+    //
+    // `names()[i]` indexes a fresh owned `Vec[String]` temporary inline
+    // (no intermediate binding). The element read shallow-aliases the
+    // temp's buffer, so codegen deep-clones the indexed `String` before
+    // dropping the temp Vec (buffer + every element's char heap). A
+    // missing clone → use-after-free on the printed value; a missing drop
+    // → leak of the buffer + the un-indexed elements; double-freeing the
+    // clone's source → double-free. Each `names()` allocates three
+    // Strings; only the indexed one's clone escapes, the rest and the
+    // buffer must free exactly once. (phase-11-stdlib-longtail.md)
+
+    #[test]
+    fn asan_inline_index_fn_returned_vec_string_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alice"); v.push("bob"); v.push("carol");
+    v
+}
+fn main() {
+    println(names()[0]);
+    println(names()[2]);
+}
+"#,
+            &["alice", "carol"],
+            "inline_index_fn_returned_vec_string",
+        );
+    }
+
     // ── `collect_all_vec` with capturing closures ─────────────────
     //
     // The canonical fan-out shape: each closure captures an outer

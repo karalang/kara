@@ -38451,6 +38451,100 @@ fn main() {
         );
     }
 
+    // ── Inline index of a method/function-returned `Vec` ─────────────
+    // `expr[i]` where `expr` is a non-place expression producing a `Vec`
+    // (`a.shape()[k]`, `make()[i]`) now lowers: the arbitrary-Vec arm in
+    // `compile_index` materializes the value into a synth Vec local,
+    // recurses so the identifier Vec path reads the element, then drops
+    // the temp Vec (buffer + nested element heap) after the read —
+    // deep-cloning the element first when it isn't trivially Copy. Before
+    // this the Vec struct fell to the generic tail and died with "Index
+    // operator applied to non-array type". (phase-11-stdlib-longtail.md)
+
+    #[test]
+    fn test_e2e_inline_index_tensor_shape() {
+        // The motivating case: read a tensor dim inline via `shape()[k]`.
+        // `shape()` returns `Vec[i64]` (trivially Copy element → no clone,
+        // just free the temp buffer after the read).
+        let out = run_program(
+            "fn main() {\n\
+                 let a: Tensor[f64, [2, 3]] = Tensor.zeros([2, 3]);\n\
+                 println(a.shape()[0]);\n\
+                 println(a.shape()[1]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "2\n3\n",
+                "inline shape()[k] must read dims (codegen == karac run)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_inline_index_fn_returned_vec_scalar() {
+        // General (non-tensor) case: a free fn returning `Vec[i64]`,
+        // indexed inline. Hits non-generic code, scalar element.
+        let out = run_program(
+            "fn make() -> Vec[i64] {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(10); v.push(20); v.push(30);\n\
+                 v\n\
+             }\n\
+             fn main() {\n\
+                 println(make()[0]);\n\
+                 println(make()[2]);\n\
+                 println(make()[0] + make()[1]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "10\n30\n30\n",
+                "inline make()[i] must read (codegen == karac run)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_inline_index_fn_returned_vec_string() {
+        // Non-Copy element: a fn returning `Vec[String]`, indexed inline.
+        // The read shallow-aliases the buffer; the element must be
+        // deep-cloned before the temp Vec's nested heap is freed, so the
+        // printed value is intact (no use-after-free) and the buffer's
+        // other elements free cleanly.
+        let out = run_program(
+            "fn names() -> Vec[String] {\n\
+                 let mut v: Vec[String] = Vec.new();\n\
+                 v.push(\"alice\"); v.push(\"bob\"); v.push(\"carol\");\n\
+                 v\n\
+             }\n\
+             fn main() {\n\
+                 println(names()[0]);\n\
+                 println(names()[2]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "alice\ncarol\n",
+                "inline names()[i] must deep-clone the String element (codegen == karac run)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_inline_index_fn_returned_vec_ir_lowers() {
+        // The inline index compiles (no "Index operator applied to
+        // non-array type") — the synth Vec materialization + drop fn.
+        let ir = ir_for(
+            "fn make() -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(7); v }\n\
+             fn main() { println(make()[0]); }\n",
+        );
+        assert!(
+            ir.contains("define") && !ir.is_empty(),
+            "the inline-Vec-index program must compile to IR"
+        );
+    }
+
     // ── Mono-body owned-local cleanup ────────────────────────────────
     // A monomorphized body that binds an owned local needing drop (a
     // `Tensor` / `Vec` / `String` local) now compiles: `compile_mono_function`
