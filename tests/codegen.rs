@@ -1070,6 +1070,57 @@ fn main() {
     }
 
     #[test]
+    fn e2e_try_extend_from_slice_fallible_codegen() {
+        // phase-8-stdlib-floor item 8: `Vec.try_extend_from_slice` — fallible
+        // `extend_from_slice`. Trivially-copyable elements (i64) take the memcpy
+        // path; dst starts cap 2 and src len 4 forces the grow (fallible alloc).
+        // Verify the result matches `Ok` AND every element actually landed.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let src: Vec[i64] = Vec.filled(4_i64, 5_i64);\n\
+                 let mut dst: Vec[i64] = Vec.with_capacity(2);\n\
+                 dst.push(1_i64);\n\
+                 match dst.try_extend_from_slice(src) {\n\
+                     Ok(_) => println(\"ok\"),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+                 println(dst.len());\n\
+                 println(dst[0]);\n\
+                 println(dst[4]);\n\
+             }",
+        ) {
+            assert_eq!(out, "ok\n5\n1\n5\n");
+        }
+    }
+
+    #[test]
+    fn e2e_try_extend_from_slice_clone_path_codegen() {
+        // The heap-element path (Vec[String]) takes the per-element clone loop
+        // (not the bit-copy memcpy), so the cloned strings are independent of the
+        // source and survive content round-trip through `Ok(())`. (`?`-propagation
+        // for the companion is covered by the try_push composition test.)
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut src: Vec[String] = Vec.new();\n\
+                 src.push(\"ab\");\n\
+                 src.push(\"cd\");\n\
+                 let mut dst: Vec[String] = Vec.new();\n\
+                 dst.push(\"x\");\n\
+                 match dst.try_extend_from_slice(src) {\n\
+                     Ok(_) => println(\"ok\"),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+                 println(dst.len());\n\
+                 println(dst[0]);\n\
+                 println(dst[1]);\n\
+                 println(dst[2]);\n\
+             }",
+        ) {
+            assert_eq!(out, "ok\n3\nx\nab\ncd\n");
+        }
+    }
+
+    #[test]
     fn e2e_builtin_enum_eq_option_result() {
         // Built-in enum `==` is sound in codegen too (None/Ok unit + payload
         // words). Regression guard for the zero-init enum construction.

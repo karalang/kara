@@ -1054,6 +1054,56 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_try_extend_from_slice_triggers_grow_clean() {
+        // Fallible sibling of `asan_vec_extend_from_slice_triggers_grow_clean`
+        // (phase-8-stdlib-floor item 8). `try_extend_from_slice` shares the
+        // grow CFG with the panicking base but allocates through
+        // `karac_alloc_fallible`; the success path must still free the old
+        // buffer on grow (not on scope exit) and free the new buffer on scope
+        // exit (not on grow). dst cap=2, src len=4 forces the grow.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let src: Vec[i64] = Vec.filled(4, 5);
+    let mut dst: Vec[i64] = Vec.with_capacity(2);
+    dst.push(1);
+    let _ = dst.try_extend_from_slice(src);
+    println(dst.len());
+}
+"#,
+            &["5"],
+            "vec_try_extend_from_slice_triggers_grow_clean",
+        );
+    }
+
+    #[test]
+    fn asan_vec_try_extend_from_slice_string_elements_independent() {
+        // `try_extend_from_slice` must take the same per-element clone path as
+        // the panicking base for heap-bearing elements — bit-copying String
+        // aggregates would alias src/dst inner buffers and double-free at
+        // scope exit. Heap-allocated Strings (cap > 0) so the free fires.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut a: String = String.new();
+    a.push_str("hello");
+    let mut b: String = String.new();
+    b.push_str("world");
+    let mut src: Vec[String] = Vec.new();
+    src.push(a);
+    src.push(b);
+    let mut dst: Vec[String] = Vec.new();
+    let _ = dst.try_extend_from_slice(src);
+    println(dst[0]);
+    println(dst[1]);
+}
+"#,
+            &["hello", "world"],
+            "vec_try_extend_from_slice_string_elements_independent",
+        );
+    }
+
+    #[test]
     fn asan_vec_from_slice_string_elements_independent() {
         // Same hazard for `Vec.from_slice` — pre-dates
         // `extend_from_slice` but inherits the same v1 limitation.

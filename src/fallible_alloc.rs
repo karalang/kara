@@ -73,13 +73,14 @@ pub fn static_companion_base(method: &str) -> Option<&'static str> {
 /// this set flows through to its dispatcher (`compile_vec_method`) and emits
 /// real fallible allocation + `Result`; any other recognized companion is still
 /// interpreter-only and `compile_method_call` rejects it loudly. Grows as more
-/// `try_*` codegen arms land (`push_str`, `extend_from_slice`, the constructors,
+/// `try_*` codegen arms land (`from_slice`, the `with_capacity` constructors,
 /// `clone`, the `Map`/`Set` `insert` forms — the last need fallible runtime FFI).
 pub const CODEGEN_FALLIBLE_INSTANCE_BASES: &[&str] = &[
-    "push",       // Vec.try_push
-    "push_back",  // VecDeque.try_push_back (shares Vec storage / the push arm)
-    "push_str",   // String.try_push_str
-    "push_front", // VecDeque.try_push_front
+    "push",              // Vec.try_push
+    "push_back",         // VecDeque.try_push_back (shares Vec storage / the push arm)
+    "push_str",          // String.try_push_str
+    "push_front",        // VecDeque.try_push_front
+    "extend_from_slice", // Vec.try_extend_from_slice
 ];
 
 /// `true` when `method`'s instance `try_*` companion has codegen lowering today

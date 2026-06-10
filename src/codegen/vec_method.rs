@@ -1963,6 +1963,369 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
+            // `Vec.try_extend_from_slice(src)` — fallible `extend_from_slice`
+            // (phase-8-stdlib-floor item 8). Same append-with-grow shape as the
+            // `extend_from_slice` arm above (overlap guard, geometric growth,
+            // trivial-memcpy vs per-element clone), but the grow allocation goes
+            // through `karac_alloc_fallible`: a null result short-circuits to
+            // `Result.Err(AllocError.OutOfMemory{requested_bytes})` instead of
+            // aborting, and the success path returns `Result.Ok(())`. The
+            // aliasing **overlap guard stays a panic** — a source slice that
+            // points into the receiver's own buffer is a caller logic error, not
+            // an allocation failure, so it must not be reported as recoverable
+            // OOM. The panic block (`unreachable` terminator) and the OOM block
+            // (branches to merge) simply coexist as distinct successors of the
+            // grow block.
+            "try_extend_from_slice" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "try_extend_from_slice expects 1 argument (source), got {}",
+                        args.len()
+                    ));
+                }
+                // Source coercion — identical to `extend_from_slice`: slice
+                // fast path, else compile-and-extract a Vec/Slice struct.
+                let src_data;
+                let src_len;
+                if let Some(slice_val) = self.coerce_to_slice(&args[0].value, elem_ty)? {
+                    let slice_sv = slice_val.into_struct_value();
+                    src_data = self
+                        .builder
+                        .build_extract_value(slice_sv, 0, "tefs.src.data")
+                        .unwrap()
+                        .into_pointer_value();
+                    src_len = self
+                        .builder
+                        .build_extract_value(slice_sv, 1, "tefs.src.len")
+                        .unwrap()
+                        .into_int_value();
+                } else {
+                    let compiled = self.compile_expr(&args[0].value)?;
+                    let sv = match compiled {
+                        BasicValueEnum::StructValue(sv) => sv,
+                        _ => {
+                            return Err(format!(
+                                "try_extend_from_slice: source expression does not produce a slice or vec value (got {compiled:?})"
+                            ))
+                        }
+                    };
+                    let n_fields = sv.get_type().count_fields();
+                    if n_fields != 2 && n_fields != 3 {
+                        return Err(format!(
+                            "try_extend_from_slice: source struct has {n_fields} fields; expected 2 (Slice) or 3 (Vec)"
+                        ));
+                    }
+                    src_data = self
+                        .builder
+                        .build_extract_value(sv, 0, "tefs.src.data")
+                        .unwrap()
+                        .into_pointer_value();
+                    src_len = self
+                        .builder
+                        .build_extract_value(sv, 1, "tefs.src.len")
+                        .unwrap()
+                        .into_int_value();
+                }
+                let elem_size = elem_ty.size_of().unwrap();
+                let src_bytes = self
+                    .builder
+                    .build_int_mul(src_len, elem_size, "tefs.src.bytes")
+                    .unwrap();
+
+                // Load target fields.
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "tefs.t.data.ptr")
+                    .unwrap();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "tefs.t.len.ptr")
+                    .unwrap();
+                let cap_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "tefs.t.cap.ptr")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "tefs.t.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "tefs.t.len")
+                    .unwrap()
+                    .into_int_value();
+                let cap = self
+                    .builder
+                    .build_load(i64_t, cap_ptr, "tefs.t.cap")
+                    .unwrap()
+                    .into_int_value();
+
+                let new_len = self
+                    .builder
+                    .build_int_add(len, src_len, "tefs.new_len")
+                    .unwrap();
+
+                let fn_val = self.current_fn.unwrap();
+                let grow_bb = self.context.append_basic_block(fn_val, "tefs.grow");
+                let copy_bb = self.context.append_basic_block(fn_val, "tefs.copy");
+                let oom_bb = self.context.append_basic_block(fn_val, "tefs.oom");
+                let merge_bb = self.context.append_basic_block(fn_val, "tefs.merge");
+                let needs_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, new_len, cap, "tefs.needs_grow")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(needs_grow, grow_bb, copy_bb)
+                    .unwrap();
+
+                // Grow path. Overlap guard first (panic on alias — a logic error,
+                // not OOM), then geometric growth + fallible alloc.
+                self.builder.position_at_end(grow_bb);
+                let src_int = self
+                    .builder
+                    .build_ptr_to_int(src_data, i64_t, "tefs.src.int")
+                    .unwrap();
+                let data_int = self
+                    .builder
+                    .build_ptr_to_int(data, i64_t, "tefs.data.int")
+                    .unwrap();
+                let cap_bytes_grow = self
+                    .builder
+                    .build_int_mul(cap, elem_size, "tefs.cap.bytes")
+                    .unwrap();
+                let data_end = self
+                    .builder
+                    .build_int_add(data_int, cap_bytes_grow, "tefs.data.end")
+                    .unwrap();
+                let ge_start = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::UGE,
+                        src_int,
+                        data_int,
+                        "tefs.ge.start",
+                    )
+                    .unwrap();
+                let lt_end = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::ULT, src_int, data_end, "tefs.lt.end")
+                    .unwrap();
+                let overlap = self
+                    .builder
+                    .build_and(ge_start, lt_end, "tefs.overlap")
+                    .unwrap();
+                let panic_bb = self.context.append_basic_block(fn_val, "tefs.alias.panic");
+                let no_overlap_bb = self.context.append_basic_block(fn_val, "tefs.no_overlap");
+                self.builder
+                    .build_conditional_branch(overlap, panic_bb, no_overlap_bb)
+                    .unwrap();
+                self.builder.position_at_end(panic_bb);
+                self.emit_panic(
+                    "Vec.try_extend_from_slice: source slice aliases destination buffer (use a distinct source when grow is required)",
+                );
+                self.builder.build_unreachable().unwrap();
+                self.builder.position_at_end(no_overlap_bb);
+
+                let two = i64_t.const_int(2, false);
+                let four = i64_t.const_int(4, false);
+                let doubled = self
+                    .builder
+                    .build_int_mul(cap, two, "tefs.doubled")
+                    .unwrap();
+                let cmp1 = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, four, "tefs.cmp1")
+                    .unwrap();
+                let growth_min = self
+                    .builder
+                    .build_select(cmp1, doubled, four, "tefs.growth_min")
+                    .unwrap()
+                    .into_int_value();
+                let cmp2 = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, new_len, growth_min, "tefs.cmp2")
+                    .unwrap();
+                let new_cap = self
+                    .builder
+                    .build_select(cmp2, new_len, growth_min, "tefs.new_cap")
+                    .unwrap()
+                    .into_int_value();
+
+                // Fallible allocation: null → OOM Result.Err.
+                let new_alloc_bytes = self
+                    .builder
+                    .build_int_mul(new_cap, elem_size, "tefs.new.bytes")
+                    .unwrap();
+                let new_data = self
+                    .builder
+                    .build_call(
+                        self.alloc_fallible_fn,
+                        &[new_alloc_bytes.into()],
+                        "tefs.new_data",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                let alloc_ok_bb = self.context.append_basic_block(fn_val, "tefs.grow.ok");
+                let is_null = self
+                    .builder
+                    .build_is_null(new_data, "tefs.is_null")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(is_null, oom_bb, alloc_ok_bb)
+                    .unwrap();
+
+                // Grow succeeded: memcpy old elements, free old buffer if heap,
+                // publish the new {ptr, cap}.
+                self.builder.position_at_end(alloc_ok_bb);
+                let old_bytes = self
+                    .builder
+                    .build_int_mul(len, elem_size, "tefs.old.bytes")
+                    .unwrap();
+                self.builder
+                    .build_memcpy(new_data, 8, data, 8, old_bytes)
+                    .unwrap();
+                let zero_val = i64_t.const_int(0, false);
+                let was_heap = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, cap, zero_val, "tefs.was_heap")
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(fn_val, "tefs.free");
+                let after_free_bb = self.context.append_basic_block(fn_val, "tefs.after_free");
+                self.builder
+                    .build_conditional_branch(was_heap, free_bb, after_free_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                self.builder
+                    .build_call(self.free_fn, &[data.into()], "")
+                    .unwrap();
+                self.builder
+                    .build_unconditional_branch(after_free_bb)
+                    .unwrap();
+                self.builder.position_at_end(after_free_bb);
+                self.builder.build_store(data_ptr_ptr, new_data).unwrap();
+                self.builder.build_store(cap_ptr, new_cap).unwrap();
+                self.builder.build_unconditional_branch(copy_bb).unwrap();
+
+                // OOM → Result.Err(AllocError.OutOfMemory{requested_bytes}).
+                self.builder.position_at_end(oom_bb);
+                let err_result = self.build_alloc_oom_result(new_alloc_bytes)?;
+                let oom_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Copy src elements into dest[len..] — memcpy for trivially-
+                // copyable elements, per-element synth_clone otherwise (same
+                // double-free avoidance as the panicking arm). Reached from the
+                // no-grow path (entry) and the grow-success path (after_free).
+                self.builder.position_at_end(copy_bb);
+                let cur_data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "tefs.cur_data")
+                    .unwrap()
+                    .into_pointer_value();
+                let cur_len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "tefs.cur_len")
+                    .unwrap()
+                    .into_int_value();
+                let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
+                let trivial = elem_te
+                    .as_ref()
+                    .map(is_trivially_copyable_te)
+                    .unwrap_or(true);
+                if trivial {
+                    let dest = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, cur_data, &[cur_len], "tefs.dest")
+                            .unwrap()
+                    };
+                    self.builder
+                        .build_memcpy(dest, 8, src_data, 8, src_bytes)
+                        .unwrap();
+                } else {
+                    let elem_te = elem_te.unwrap();
+                    let clone_fn = self.emit_clone_fn_for_type_expr(&elem_te);
+                    let loop_cond_bb = self.context.append_basic_block(fn_val, "tefs.clone.cond");
+                    let loop_body_bb = self.context.append_basic_block(fn_val, "tefs.clone.body");
+                    let loop_exit_bb = self.context.append_basic_block(fn_val, "tefs.clone.exit");
+                    let i_alloca = self.create_entry_alloca(fn_val, "tefs.clone.i", i64_t.into());
+                    self.builder
+                        .build_store(i_alloca, i64_t.const_zero())
+                        .unwrap();
+                    self.builder
+                        .build_unconditional_branch(loop_cond_bb)
+                        .unwrap();
+
+                    self.builder.position_at_end(loop_cond_bb);
+                    let i_cur = self
+                        .builder
+                        .build_load(i64_t, i_alloca, "tefs.clone.i.cur")
+                        .unwrap()
+                        .into_int_value();
+                    let cond = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::ULT,
+                            i_cur,
+                            src_len,
+                            "tefs.clone.lt",
+                        )
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(cond, loop_body_bb, loop_exit_bb)
+                        .unwrap();
+
+                    self.builder.position_at_end(loop_body_bb);
+                    let src_ep = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, src_data, &[i_cur], "tefs.clone.src.ep")
+                            .unwrap()
+                    };
+                    let dst_idx = self
+                        .builder
+                        .build_int_add(cur_len, i_cur, "tefs.clone.dst.idx")
+                        .unwrap();
+                    let dst_ep = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, cur_data, &[dst_idx], "tefs.clone.dst.ep")
+                            .unwrap()
+                    };
+                    self.builder
+                        .build_call(clone_fn, &[src_ep.into(), dst_ep.into()], "")
+                        .unwrap();
+                    let one = i64_t.const_int(1, false);
+                    let i_next = self
+                        .builder
+                        .build_int_add(i_cur, one, "tefs.clone.i.next")
+                        .unwrap();
+                    self.builder.build_store(i_alloca, i_next).unwrap();
+                    self.builder
+                        .build_unconditional_branch(loop_cond_bb)
+                        .unwrap();
+
+                    self.builder.position_at_end(loop_exit_bb);
+                }
+                let updated_len = self
+                    .builder
+                    .build_int_add(cur_len, src_len, "tefs.updated_len")
+                    .unwrap();
+                self.builder.build_store(len_ptr, updated_len).unwrap();
+                let unit_val = i64_t.const_zero().into();
+                let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[unit_val])?;
+                let ok_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Merge the two `Result` aggregates.
+                self.builder.position_at_end(merge_bb);
+                let phi = self
+                    .builder
+                    .build_phi(ok_result.get_type(), "tefs.result")
+                    .unwrap();
+                phi.add_incoming(&[(&ok_result, ok_end), (&err_result, oom_end)]);
+                Ok(phi.as_basic_value())
+            }
             "is_empty" => {
                 let len_ptr = self
                     .builder
