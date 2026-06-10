@@ -668,6 +668,17 @@ impl<'a> EffectChecker<'a> {
             "Iterator.chunk_by",
             "Iterator.chunks",
             "Iterator.windows",
+            // Fallible-allocation companions (phase-8-stdlib-floor item 2)
+            // carry the same `allocates(Heap)` effect as their panicking
+            // counterparts. The static constructor forms are keyed by their
+            // fully-qualified `Type.try_<base>` name (reached through the
+            // `Call` branch's `{seg0}.{seg1}` lookup); the instance forms route
+            // to `TRY_ALLOC_EFFECT_KEY` from the `MethodCall` walker below.
+            "Vec.try_with_capacity",
+            "VecDeque.try_with_capacity",
+            "String.try_with_capacity",
+            "Vec.try_from_slice",
+            crate::fallible_alloc::TRY_ALLOC_EFFECT_KEY,
         ] {
             let mut set = EffectSet::new();
             set.add(

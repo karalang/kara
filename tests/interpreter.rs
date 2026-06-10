@@ -6804,6 +6804,151 @@ fn test_map_clone_independent_after_source_insert() {
     assert_eq!(output, "1\n");
 }
 
+// ── Fallible-allocation `try_*` companions (phase-8-stdlib-floor item 2) ──
+// The interpreter never OOMs, so every companion returns `Ok`; these pin the
+// happy-path behaviour (operation took effect, result wrapped in `Ok`).
+
+#[test]
+fn test_try_push_wraps_ok_and_mutates() {
+    let output = run("fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             match v.try_push(5_i64) {\n\
+                 Ok(_) => println(\"ok\"),\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+             v.try_push(6_i64);\n\
+             println(v.len());\n\
+             println(v[0]);\n\
+             println(v[1]);\n\
+         }");
+    assert_eq!(output, "ok\n2\n5\n6\n");
+}
+
+#[test]
+fn test_try_clone_vec_wraps_ok() {
+    let output = run("fn main() {\n\
+             let v: Vec[i64] = [1_i64, 2_i64, 3_i64];\n\
+             match v.try_clone() {\n\
+                 Ok(c) => println(c.len()),\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+         }");
+    assert_eq!(output, "3\n");
+}
+
+#[test]
+fn test_try_extend_from_slice_wraps_ok() {
+    let output = run("fn main() {\n\
+             let mut v: Vec[i64] = [1_i64];\n\
+             let src: Vec[i64] = [2_i64, 3_i64];\n\
+             match v.try_extend_from_slice(src) {\n\
+                 Ok(_) => println(\"ok\"),\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+             println(v.len());\n\
+         }");
+    assert_eq!(output, "ok\n3\n");
+}
+
+#[test]
+fn test_try_push_str_and_try_push_char_string() {
+    let output = run("fn main() {\n\
+             let mut s: String = \"\";\n\
+             s.try_push('a');\n\
+             match s.try_push_str(\"bc\") {\n\
+                 Ok(_) => println(\"ok\"),\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+             println(s);\n\
+         }");
+    assert_eq!(output, "ok\nabc\n");
+}
+
+#[test]
+fn test_try_clone_string_wraps_ok() {
+    let output = run("fn main() {\n\
+             let s = \"hello\";\n\
+             match s.try_clone() {\n\
+                 Ok(t) => println(t),\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+         }");
+    assert_eq!(output, "hello\n");
+}
+
+#[test]
+fn test_try_insert_map_wraps_ok() {
+    // First insert returns `Ok(None)` (no prior value); the entry is present.
+    let output = run("fn main() {\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             match m.try_insert(\"k\", 1_i64) {\n\
+                 Ok(prev) => match prev {\n\
+                     Some(p) => println(p),\n\
+                     None => println(\"no-prev\"),\n\
+                 },\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+             println(m.len());\n\
+         }");
+    assert_eq!(output, "no-prev\n1\n");
+}
+
+#[test]
+fn test_try_insert_set_wraps_ok() {
+    let output = run("fn main() {\n\
+             let mut s: Set[i64] = Set.new();\n\
+             match s.try_insert(7_i64) {\n\
+                 Ok(added) => println(added),\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+             println(s.len());\n\
+         }");
+    assert_eq!(output, "true\n1\n");
+}
+
+#[test]
+fn test_try_with_capacity_static_wraps_ok() {
+    let output = run("fn main() {\n\
+             match Vec.try_with_capacity(8_i64) {\n\
+                 Ok(v) => {\n\
+                     let mut vv = v;\n\
+                     vv.push(1_i64);\n\
+                     println(vv.len());\n\
+                 },\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+         }");
+    assert_eq!(output, "1\n");
+}
+
+#[test]
+fn test_try_from_slice_static_wraps_ok() {
+    let output = run("fn main() {\n\
+             let src: Vec[i64] = [4_i64, 5_i64];\n\
+             match Vec.try_from_slice(src) {\n\
+                 Ok(v) => println(v.len()),\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+         }");
+    assert_eq!(output, "2\n");
+}
+
+#[test]
+fn test_try_companion_not_shadowing_user_method() {
+    // A user type that defines its own `try_push` is dispatched normally —
+    // the builtin-collection gate keeps the fallible-alloc interception off
+    // non-collection receivers. The user method returns a bare `i64` (not an
+    // `Ok`-wrapped value), proving it was not intercepted.
+    let output = run("struct Bag { n: i64 }\n\
+         impl Bag { fn try_push(ref self, x: i64) -> i64 { x + 100_i64 } }\n\
+         fn main() {\n\
+             let b = Bag { n: 0 };\n\
+             println(b.try_push(3_i64));\n\
+             println(b.try_push(4_i64));\n\
+         }");
+    assert_eq!(output, "103\n104\n");
+}
+
 #[test]
 fn test_set_clone_preserves_membership() {
     let output = run("fn main() {\n\

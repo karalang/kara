@@ -497,6 +497,27 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
+        // Fallible-allocation companions (phase-8-stdlib-floor item 2). A
+        // `try_<base>` instance method on a builtin collection types
+        // identically to its panicking `<base>` counterpart but returns
+        // `Result[<base-ret>, AllocError]`. Recursing into the base method
+        // reuses its argument validation + return-type synthesis verbatim;
+        // `infer_expr(object)` is idempotent (the property the `spawn` intercept
+        // below relies on) so the receiver double-inference is side-effect-free.
+        // Gated on a builtin-collection receiver so a user type that happens to
+        // define `try_push` / `try_clone` / … is never shadowed.
+        if let Some(base) = crate::fallible_alloc::instance_companion_base(method) {
+            if self.receiver_is_alloc_collection(object) {
+                let base_ret = self.infer_method_call(object, base, args, span);
+                if base_ret == Type::Error {
+                    return Type::Error;
+                }
+                let result_ty = self.result_alloc_error_type(base_ret);
+                self.record_expr_type(span, &result_ty);
+                return result_ty;
+            }
+        }
+
         // Phase 6 line 170 slice 3a — cross-task-safe boundary check at
         // `tg.spawn(closure)` call sites. Fires before any other dispatch
         // so the outer-scope snapshot taken inside
@@ -3531,6 +3552,44 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Error
             }
         }
+    }
+
+    /// `Result[ok, AllocError]` — the return shape of every fallible-allocation
+    /// `try_*` companion (phase-8-stdlib-floor item 2). `AllocError` is the
+    /// baked prelude enum, available without import.
+    pub(super) fn result_alloc_error_type(&self, ok: Type) -> Type {
+        Type::Named {
+            name: "Result".to_string(),
+            args: vec![
+                ok,
+                Type::Named {
+                    name: "AllocError".to_string(),
+                    args: Vec::new(),
+                },
+            ],
+        }
+    }
+
+    /// `true` when `object` infers to a builtin heap-allocating collection
+    /// (`Vec` / `VecDeque` / `Map` / `Set` / `SortedSet` / `String`), peeling
+    /// `ref` / `mut ref`. Gates the `try_*` companion interception so it only
+    /// fires for the builtin collections whose alloc-bearing methods it mirrors
+    /// — a user type that defines its own `try_push` / `try_clone` / … falls
+    /// through to normal dispatch. `infer_expr` is idempotent for an
+    /// already-checked receiver, so this pre-inference is side-effect-free.
+    pub(super) fn receiver_is_alloc_collection(&mut self, object: &Expr) -> bool {
+        fn is_coll(ty: &Type) -> bool {
+            match ty {
+                Type::Str => true,
+                Type::Named { name, .. } => matches!(
+                    name.as_str(),
+                    "Vec" | "VecDeque" | "Map" | "Set" | "SortedSet"
+                ),
+                Type::Ref(inner) | Type::MutRef(inner) => is_coll(inner),
+                _ => false,
+            }
+        }
+        is_coll(&self.infer_expr(object))
     }
 
     // ── Field Access ────────────────────────────────────────────

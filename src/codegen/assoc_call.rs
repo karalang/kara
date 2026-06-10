@@ -26,6 +26,22 @@ impl<'ctx> super::Codegen<'ctx> {
         _args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let args = _args;
+        // Fallible-allocation constructor companions (phase-8-stdlib-floor
+        // item 2) are interpreter-only in v1 — their codegen lowering (runtime
+        // allocator wrappers) is item 8 (Phase 7). Reject at `karac build` with
+        // a clear, actionable message; without this the unrecognized
+        // `Type.try_<base>` would fall through to this function's silent
+        // `Ok(const 0)` default and miscompile to a constant.
+        if let Some(base) = crate::fallible_alloc::static_companion_base(method) {
+            if matches!(type_name, "Vec" | "VecDeque" | "String") {
+                return Err(format!(
+                    "codegen: fallible-allocation constructor `{type_name}.{method}(...)` is \
+                     interpreter-only in v1; its codegen lowering is phase-8-stdlib-floor item 8. \
+                     Run under `karac run`, or use the panicking `{type_name}.{base}(...)` \
+                     constructor under `karac build`."
+                ));
+            }
+        }
         // Phase 11 numerical stdlib — Tensor constructors. zeros/ones/
         // full thread the destination binding's element type + static
         // dims via `pending_let_tensor_info` (the `Vec.with_capacity`

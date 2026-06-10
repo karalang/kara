@@ -851,6 +851,17 @@ impl<'a> super::EffectChecker<'a> {
                         calls.push((qualified.to_string(), expr.span.clone()));
                     }
                 }
+                // Fallible-allocation instance companions (phase-8-stdlib-floor
+                // item 2) — `try_push` / `try_insert` / `try_clone` / … carry
+                // `allocates(Heap)`, like their panicking counterparts. Matched
+                // by name (conservative over-approximation, consistent with the
+                // map above) and routed to the seeded `TRY_ALLOC_EFFECT_KEY`.
+                if crate::fallible_alloc::instance_companion_base(method).is_some() {
+                    calls.push((
+                        crate::fallible_alloc::TRY_ALLOC_EFFECT_KEY.to_string(),
+                        expr.span.clone(),
+                    ));
+                }
                 // `f.trunc_to_<intN>()` carries `panics` (the trapping float→int
                 // form — phase-8 cast slice 2). Matched by name prefix: no
                 // non-float type carries a `trunc_to_*` method, so a

@@ -7711,6 +7711,75 @@ fn main() {
     }
 
     #[test]
+    fn test_try_companion_instance_codegen_rejected_cleanly() {
+        // Fallible-allocation `try_*` instance companions (phase-8-stdlib-floor
+        // item 2) are interpreter-only in v1; codegen lowering is item 8. The
+        // typechecker accepts them, so `karac build` must fail loud with the
+        // actionable item-8 message rather than mis-lower or silently miscompile.
+        let mut parsed = karac::parse(
+            "fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 let _ = v.try_push(1_i64);\n\
+             }",
+        );
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "try_push should typecheck: {:?}",
+            typed.errors
+        );
+        karac::lower(&mut parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, None, None)
+            .expect_err("try_push codegen must fail loud (interpreter-only)");
+        assert!(
+            err.contains("interpreter-only") && err.contains("item 8") && err.contains("try_push"),
+            "expected the actionable item-8 message, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_try_companion_constructor_codegen_rejected_cleanly() {
+        // The static-constructor companion path (`Vec.try_with_capacity`) must
+        // also reject cleanly — without the guard it falls through to
+        // `compile_assoc_call`'s silent `Ok(const 0)` default and miscompiles.
+        let mut parsed = karac::parse(
+            "fn build() -> Result[i64, AllocError] {\n\
+                 let mut v = Vec.try_with_capacity(8_i64)?;\n\
+                 v.push(1_i64);\n\
+                 Ok(v.len())\n\
+             }\n\
+             fn main() { let _ = build(); }",
+        );
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "try_with_capacity should typecheck: {:?}",
+            typed.errors
+        );
+        karac::lower(&mut parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, None, None)
+            .expect_err("try_with_capacity codegen must fail loud (interpreter-only)");
+        assert!(
+            err.contains("interpreter-only")
+                && err.contains("item 8")
+                && err.contains("try_with_capacity"),
+            "expected the actionable item-8 message, got: {err}"
+        );
+    }
+
+    #[test]
     fn test_ir_array_len_constant_fold() {
         // `Array[i64, 3]` annotation pins the fixed-array `len()` constant
         // fold (bare `[…]` is now a Vec, whose `len()` loads the len field —

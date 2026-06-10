@@ -12,6 +12,29 @@ use super::helpers::{kara_json_to_serde_json, value_compare};
 use super::pascal_to_snake;
 use super::value::{try_write_or_panic, EnumData, Value};
 
+/// `true` when `v` is a builtin heap-allocating collection — the receiver
+/// shapes whose `try_*` companions (phase-8-stdlib-floor item 2) the
+/// interpreter wraps in `Result.Ok`. `Vec` and `VecDeque` both back onto
+/// `Value::Array`.
+fn value_is_alloc_collection(v: &Value) -> bool {
+    matches!(
+        v,
+        Value::Array(_) | Value::Map(_) | Value::Set(_) | Value::SortedSet(_) | Value::String(_)
+    )
+}
+
+/// Wrap `v` in `Result.Ok(v)` — the success arm every fallible-allocation
+/// `try_*` companion returns on the interpreter path (the host allocator never
+/// OOMs, so the `Err(AllocError)` arm is unreachable here). Shared with
+/// `eval_call`'s static-constructor companion path.
+pub(super) fn result_ok(v: Value) -> Value {
+    Value::EnumVariant {
+        enum_name: "Result".to_string(),
+        variant: "Ok".to_string(),
+        data: EnumData::Tuple(vec![v]),
+    }
+}
+
 impl<'a> super::Interpreter<'a> {
     /// Run a refinement type's `try_from` at runtime if `type_name` names a
     /// refinement (phase-9 step 5b): evaluate the predicate against the
@@ -455,6 +478,24 @@ impl<'a> super::Interpreter<'a> {
         }
 
         let obj = self.eval_expr_inner(object);
+
+        // Fallible-allocation companions (phase-8-stdlib-floor item 2). A
+        // `try_<base>` instance method on a builtin collection runs the
+        // panicking `<base>` operation and wraps its result in `Result.Ok(_)`:
+        // the tree-walk host allocator never actually OOMs, so the companion
+        // always succeeds (failure injection arrives with the codegen runtime
+        // allocator wrappers, item 8). The base op recurses through
+        // `eval_method_call`; a builtin collection's backing store is shared
+        // (`Arc<RwLock<…>>` / re-read place), so re-evaluating an
+        // identifier/place receiver in the recursion mutates the same store.
+        // Gated on a builtin-collection receiver value so a user type's own
+        // `try_push` / `try_clone` / … is never shadowed.
+        if value_is_alloc_collection(&obj) {
+            if let Some(base) = crate::fallible_alloc::instance_companion_base(method) {
+                let base_val = self.eval_method_call(object, base, args, span);
+                return result_ok(base_val);
+            }
+        }
 
         // Distinct-type `.raw()` unwrap (design.md § Distinct Types). A
         // distinct type is zero-cost — its runtime value already *is* the

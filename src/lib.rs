@@ -36,6 +36,7 @@ pub mod dominator;
 pub mod edit_distance;
 pub mod effectchecker;
 pub mod exhaustive;
+pub mod fallible_alloc;
 pub mod ffi_lint;
 pub mod formatter;
 #[cfg(not(target_arch = "wasm32"))]

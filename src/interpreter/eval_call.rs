@@ -140,6 +140,33 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Fallible-allocation constructor companions (phase-8-stdlib-floor
+        // item 2). `Vec.try_with_capacity(n)` / `Vec.try_from_slice(src)` /
+        // `String.try_with_capacity(n)` run the base constructor and wrap the
+        // result in `Result.Ok(_)` — the tree-walk host allocator never OOMs.
+        // Recurse into the base constructor by rewriting the path's method
+        // segment. Gated on the recognized `(collection, base)` pairs.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 {
+                if let Some(base) = crate::fallible_alloc::static_companion_base(&segments[1]) {
+                    let coll = segments[0].as_str();
+                    let recognized = match base {
+                        "with_capacity" => matches!(coll, "Vec" | "VecDeque" | "String"),
+                        "from_slice" => coll == "Vec",
+                        _ => false,
+                    };
+                    if recognized {
+                        let mut base_callee = callee.clone();
+                        if let ExprKind::Path { segments, .. } = &mut base_callee.kind {
+                            segments[1] = base.to_string();
+                        }
+                        let base_val = self.eval_call(&base_callee, args, span);
+                        return super::method_call::result_ok(base_val);
+                    }
+                }
+            }
+        }
+
         // `Vector[T, N](lane0, …)` SIMD construction (design.md § Portable
         // SIMD, slice 1b). Parses as `Call(Path(["Vector"], generic_args))`.
         // The typechecker has already verified lane count == N and each lane's

@@ -281,6 +281,40 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
+        // Fallible-allocation constructor companions (phase-8-stdlib-floor
+        // item 2). `Type.try_with_capacity(n)` / `Vec.try_from_slice(src)` type
+        // identically to their panicking `Type.<base>(...)` constructor but
+        // return `Result[<constructor-ret>, AllocError]`. Recurse into the base
+        // constructor (rewriting the path's method segment) to reuse its
+        // argument validation + return-type synthesis, then wrap. Gated on the
+        // recognized `(collection, base)` pairs so an unknown `X.try_<base>`
+        // still reports against its own name via the normal rejection path.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 {
+                if let Some(base) = crate::fallible_alloc::static_companion_base(&segments[1]) {
+                    let coll = segments[0].as_str();
+                    let recognized = match base {
+                        "with_capacity" => matches!(coll, "Vec" | "VecDeque" | "String"),
+                        "from_slice" => coll == "Vec",
+                        _ => false,
+                    };
+                    if recognized {
+                        let mut base_callee = callee.clone();
+                        if let ExprKind::Path { segments, .. } = &mut base_callee.kind {
+                            segments[1] = base.to_string();
+                        }
+                        let base_ret = self.infer_call(&base_callee, args, span);
+                        if base_ret == Type::Error {
+                            return Type::Error;
+                        }
+                        let ty = self.result_alloc_error_type(base_ret);
+                        self.record_expr_type(span, &ty);
+                        return ty;
+                    }
+                }
+            }
+        }
+
         // Phase 6 line 170 slice 3a — cross-task-safe boundary check at
         // `spawn(closure)` call sites. Fires before any other dispatch so
         // the outer-scope snapshot taken inside

@@ -8215,3 +8215,41 @@ fn extern_c_export_panicking_body_has_no_panics_requirement() {
         result.errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
     );
 }
+
+// ── Fallible-allocation `try_*` companions carry allocates(Heap) ──
+// (phase-8-stdlib-floor item 2) — same effect as their panicking counterparts.
+// A borrowed `mut ref Vec` param isolates the companion's contribution (no
+// allocating constructor in the body to confound the inference).
+
+#[test]
+fn test_try_push_companion_requires_allocates_declaration() {
+    let errors = effectcheck_errors("pub fn fill(v: mut ref Vec[i64]) { v.try_push(1_i64); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("allocates(Heap)")),
+        "try_push should infer allocates(Heap); got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_try_push_companion_allocates_declared_ok() {
+    effectcheck_ok("pub fn fill(v: mut ref Vec[i64]) allocates(Heap) { v.try_push(1_i64); }");
+}
+
+#[test]
+fn test_try_insert_companion_requires_allocates_declaration() {
+    let errors = effectcheck_errors(
+        "pub fn put(m: mut ref Map[String, i64]) { m.try_insert(\"k\", 1_i64); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("allocates(Heap)")),
+        "try_insert should infer allocates(Heap); got: {:?}",
+        errors
+    );
+}

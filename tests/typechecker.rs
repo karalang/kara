@@ -25571,3 +25571,130 @@ fn bad() -> Shape {
         "expected missing-field error, got: {joined}"
     );
 }
+
+// ── Fallible-allocation `try_*` companions (phase-8-stdlib-floor item 2) ──
+// Each `try_<base>` types identically to its panicking `<base>` counterpart but
+// returns `Result[<base-ret>, AllocError]`. The explicit `let` annotations
+// force `check_assignable` against the expected `Result[..]` shape, so a wrong
+// synthesized return type would surface as a type error.
+
+#[test]
+fn test_try_push_returns_result_unit_alloc_error() {
+    typecheck_ok(
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             let r: Result[(), AllocError] = v.try_push(5_i64);\n\
+             let _ = r;\n\
+         }",
+    );
+}
+
+#[test]
+fn test_try_clone_returns_result_self_alloc_error() {
+    typecheck_ok(
+        "fn main() {\n\
+             let v: Vec[i64] = [1_i64, 2_i64];\n\
+             let c: Result[Vec[i64], AllocError] = v.try_clone();\n\
+             let _ = c;\n\
+         }",
+    );
+}
+
+#[test]
+fn test_try_push_str_returns_result_unit() {
+    typecheck_ok(
+        "fn main() {\n\
+             let mut s: String = \"\";\n\
+             let r: Result[(), AllocError] = s.try_push_str(\"hi\");\n\
+             let _ = r;\n\
+         }",
+    );
+}
+
+#[test]
+fn test_try_insert_map_returns_result_option() {
+    typecheck_ok(
+        "fn main() {\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             let r: Result[Option[i64], AllocError] = m.try_insert(\"k\", 1_i64);\n\
+             let _ = r;\n\
+         }",
+    );
+}
+
+#[test]
+fn test_try_insert_set_returns_result_bool() {
+    typecheck_ok(
+        "fn main() {\n\
+             let mut s: Set[i64] = Set.new();\n\
+             let r: Result[bool, AllocError] = s.try_insert(3_i64);\n\
+             let _ = r;\n\
+         }",
+    );
+}
+
+#[test]
+fn test_try_with_capacity_static_returns_result_vec() {
+    // `try_with_capacity` mirrors `with_capacity`: the element type is inferred
+    // from downstream use, here via `?`-unwrap + push (the realistic shape).
+    // A bare annotated-`Result` binding with no element evidence is ambiguous
+    // for the same reason `let v = Vec.new()` is — element type unknown.
+    typecheck_ok(
+        "fn build() -> Result[i64, AllocError] {\n\
+             let mut v = Vec.try_with_capacity(8_i64)?;\n\
+             v.push(1_i64);\n\
+             Ok(v.len())\n\
+         }\n\
+         fn main() { let _ = build(); }",
+    );
+}
+
+#[test]
+fn test_try_from_slice_static_returns_result_vec() {
+    typecheck_ok(
+        "fn main() {\n\
+             let src: Vec[i64] = [1_i64];\n\
+             let r: Result[Vec[i64], AllocError] = Vec.try_from_slice(src);\n\
+             let _ = r;\n\
+         }",
+    );
+}
+
+#[test]
+fn test_try_companion_question_propagates_alloc_error() {
+    // Item 7: `?` on a `try_*` result propagates `AllocError` when the
+    // enclosing function returns `Result[_, AllocError]`. No new machinery —
+    // same-error-type propagation through the existing `?` rule.
+    typecheck_ok(
+        "fn build() -> Result[Vec[i64], AllocError] {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.try_push(1_i64)?;\n\
+             v.try_push(2_i64)?;\n\
+             Ok(v)\n\
+         }\n\
+         fn main() {\n\
+             match build() {\n\
+                 Ok(v) => println(v.len()),\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+         }",
+    );
+}
+
+#[test]
+fn test_try_push_result_not_assignable_to_scalar() {
+    // The companion's `Result[..]` return is not the base method's `()` — a
+    // scalar annotation must reject it.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             let r: i64 = v.try_push(5_i64);\n\
+             let _ = r;\n\
+         }",
+    );
+    let joined: String = errors.iter().map(|e| e.to_string()).collect();
+    assert!(
+        joined.contains("Result") || joined.to_lowercase().contains("mismatch"),
+        "expected a Result-vs-i64 mismatch, got: {joined}"
+    );
+}
