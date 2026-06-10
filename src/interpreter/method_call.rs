@@ -12,6 +12,64 @@ use super::helpers::{kara_json_to_serde_json, value_compare};
 use super::pascal_to_snake;
 use super::value::{try_write_or_panic, EnumData, Value};
 
+/// Clone a method receiver for a by-value category dispatcher in
+/// `eval_method_call`.
+///
+/// Most category guards (`try_eval_iterator_method`, `..._map_method`, …)
+/// take the receiver **by value** because their signatures consume it. For
+/// a large collection receiver (a `Map`/`Set`/`Vec` with N entries) each
+/// such clone is O(N), so the count of by-value guards a receiver traverses
+/// before its handler accepts is a silent per-op cost multiplier — the
+/// exact shape of the B-2026-06-07-4 map-heavy regression, where
+/// speculative backpressure guards sitting *above* the map handler each
+/// deep-cloned the map (O(n²) kata → 3 extra whole-map clones per op).
+///
+/// Routing every by-value clone through this one choke point lets the perf
+/// gate (`tests::map_receiver_dispatch_clones_are_bounded`) count exactly
+/// how many times a `Map` receiver is deep-cloned in a single dispatch and
+/// assert it stays O(1), not O(handlers).
+///
+/// A new category guard added above an existing handler MUST either borrow
+/// the receiver (`&obj` — preferred when the `try_eval_*` only reads it, as
+/// the backpressure/process/tensor/pool guards now do) or clone through
+/// this helper. A raw `obj.clone()` is invisible to the gate.
+#[inline]
+fn clone_receiver(obj: &Value) -> Value {
+    #[cfg(test)]
+    if matches!(obj, Value::Map(_)) {
+        test_probe::bump_map_receiver_clone();
+    }
+    obj.clone()
+}
+
+/// Per-thread counter of by-value `Map`-receiver clones performed by
+/// `clone_receiver`, used only by the perf-gate unit test below. Compiled
+/// out of production builds (`cfg(test)`), so `clone_receiver` is a plain
+/// `obj.clone()` there with zero added cost.
+#[cfg(test)]
+pub(crate) mod test_probe {
+    use std::cell::Cell;
+
+    thread_local! {
+        static MAP_RECEIVER_CLONES: Cell<u32> = const { Cell::new(0) };
+    }
+
+    /// Record one by-value clone of a `Map` receiver in the dispatch loop.
+    pub(super) fn bump_map_receiver_clone() {
+        MAP_RECEIVER_CLONES.with(|c| c.set(c.get() + 1));
+    }
+
+    /// Reset the per-thread counter to zero before a measured run.
+    pub(crate) fn reset_map_receiver_clones() {
+        MAP_RECEIVER_CLONES.with(|c| c.set(0));
+    }
+
+    /// Read the per-thread counter.
+    pub(crate) fn map_receiver_clones() -> u32 {
+        MAP_RECEIVER_CLONES.with(|c| c.get())
+    }
+}
+
 /// `true` when `v` is a builtin heap-allocating collection — the receiver
 /// shapes whose `try_*` companions (phase-8-stdlib-floor item 2) the
 /// interpreter wraps in `Result.Ok`. `Vec` and `VecDeque` both back onto
@@ -620,13 +678,15 @@ impl<'a> super::Interpreter<'a> {
         // Category dispatchers — each returns `Some(Value)` if `method`
         // matches one of its handled names and the receiver shape is
         // compatible; otherwise `None` and we fall through to the next.
-        if let Some(v) = self.try_eval_iterator_method(method, object, obj.clone(), args, span) {
+        if let Some(v) =
+            self.try_eval_iterator_method(method, object, clone_receiver(&obj), args, span)
+        {
             return v;
         }
-        if let Some(v) = self.try_eval_http_method(method, obj.clone(), args, span) {
+        if let Some(v) = self.try_eval_http_method(method, clone_receiver(&obj), args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_regex_method(method, obj.clone(), args, span) {
+        if let Some(v) = self.try_eval_regex_method(method, clone_receiver(&obj), args, span) {
             return v;
         }
         if let Some(v) = self.try_eval_process_method(method, &obj, args, span) {
@@ -654,32 +714,38 @@ impl<'a> super::Interpreter<'a> {
         if let Some(v) = self.try_eval_bounded_channel_method(method, &obj, args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_set_method(method, object, obj.clone(), args, span) {
-            return v;
-        }
-        if let Some(v) = self.try_eval_map_method(method, object, obj.clone(), args, span) {
-            return v;
-        }
-        if let Some(v) = self.try_eval_option_result_method(method, object, obj.clone(), args, span)
+        if let Some(v) = self.try_eval_set_method(method, object, clone_receiver(&obj), args, span)
         {
             return v;
         }
-        if let Some(v) = self.try_eval_channel_method(method, obj.clone(), args, span) {
+        if let Some(v) = self.try_eval_map_method(method, object, clone_receiver(&obj), args, span)
+        {
             return v;
         }
-        if let Some(v) = self.try_eval_file_method(method, obj.clone(), args, span) {
+        if let Some(v) =
+            self.try_eval_option_result_method(method, object, clone_receiver(&obj), args, span)
+        {
             return v;
         }
-        if let Some(v) = self.try_eval_bufreader_method(method, obj.clone(), args, span) {
+        if let Some(v) = self.try_eval_channel_method(method, clone_receiver(&obj), args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_bufwriter_method(method, obj.clone(), args, span) {
+        if let Some(v) = self.try_eval_file_method(method, clone_receiver(&obj), args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_vector_method(method, object, obj.clone(), args, span) {
+        if let Some(v) = self.try_eval_bufreader_method(method, clone_receiver(&obj), args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_seq_method(method, object, obj.clone(), args, span) {
+        if let Some(v) = self.try_eval_bufwriter_method(method, clone_receiver(&obj), args, span) {
+            return v;
+        }
+        if let Some(v) =
+            self.try_eval_vector_method(method, object, clone_receiver(&obj), args, span)
+        {
+            return v;
+        }
+        if let Some(v) = self.try_eval_seq_method(method, object, clone_receiver(&obj), args, span)
+        {
             return v;
         }
 
@@ -994,5 +1060,84 @@ impl<'a> super::Interpreter<'a> {
             ),
             span,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_probe::{map_receiver_clones, reset_map_receiver_clones};
+
+    /// Perf gate for the B-2026-06-07-4 map-heavy regression (fixed in
+    /// `6a049301`, which left no regression test — this is it). A method
+    /// call on a `Map` receiver must traverse only an O(1) number of
+    /// by-value receiver clones in the `eval_method_call` dispatch loop,
+    /// independent of how many category guards exist above the map handler.
+    /// The regression was three speculative backpressure guards each
+    /// deep-cloning the map (O(N)) per op, turning the O(n²) `hash_map.kara`
+    /// kata's cost into 3 extra whole-map clones per operation.
+    ///
+    /// `get_or` is a map-specific read, so it falls through every guard
+    /// above `try_eval_map_method` (iterator / http / regex / set) before
+    /// the map handler accepts it. Each of those by-value guards clones the
+    /// receiver once via `clone_receiver`, so today's count is **5**
+    /// (4 fall-through guards + the accepting map handler).
+    ///
+    /// If this assertion fails:
+    /// - count **went up** → a new category guard was added above the map
+    ///   handler that takes the receiver by value. Make it borrow (`&obj`)
+    ///   if its `try_eval_*` only reads the receiver — that is the fix, not
+    ///   bumping the ceiling. (See the `clone_receiver` doc comment.)
+    /// - count **went down** → the planned follow-on landed (converting the
+    ///   inline `iterator`/`http`/`regex`/`set` guards to `&obj`, residue of
+    ///   B-2026-06-07-4a). Good — lower `EXPECTED` to match. The O(1)
+    ///   property is what matters, not the exact constant.
+    #[test]
+    fn map_receiver_dispatch_clones_are_bounded() {
+        // One map value-receiver dispatch: `Map.new()` is an associated-fn
+        // call (it never enters the value-receiver guard loop), and the
+        // f-string interpolates a bare `i64` binding (no further dispatch),
+        // so `m.get_or(..)` is the only call that clones a `Map` receiver.
+        const PROGRAM: &str = "fn main() {\n\
+             let m: Map[i64, i64] = Map.new();\n\
+             let v = m.get_or(1, 0);\n\
+             println(f\"{v}\")\n\
+         }";
+        const EXPECTED: u32 = 5;
+
+        // Drive the interpreter inline on THIS thread (mirroring
+        // `run_program_full`'s pipeline). `crate::run_program` runs the
+        // interpreter on a freshly spawned 16 MB-stack thread, which would
+        // increment the per-thread clone counter on that worker, not here.
+        // This tiny program can't overflow the default test stack.
+        let mut parsed = crate::parse(PROGRAM);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        crate::desugar_program(&mut parsed.program);
+        let resolved = crate::resolve(&parsed.program);
+        let typed = crate::typecheck(&parsed.program, &resolved);
+        crate::lower(&mut parsed.program, &typed);
+        let mut interp = crate::interpreter::Interpreter::new(&parsed.program, &typed);
+        interp.captured_output = Some(Vec::new());
+
+        reset_map_receiver_clones();
+        interp.run();
+
+        let out = interp.captured_output.take().unwrap_or_default();
+        assert_eq!(
+            out.join("").trim(),
+            "0",
+            "program should run and print the default value"
+        );
+
+        let clones = map_receiver_clones();
+        assert_eq!(
+            clones, EXPECTED,
+            "a single Map-receiver method dispatch deep-cloned the map {clones} times \
+             (expected {EXPECTED}); see this test's doc comment — a rise means a new \
+             by-value guard above the map handler, which should borrow `&obj` instead"
+        );
     }
 }
