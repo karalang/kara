@@ -1005,6 +1005,77 @@ fn main() {
         }
     }
 
+    #[test]
+    fn e2e_generic_enum_heap_payload_eq_compares_by_content() {
+        // Generic heap-payload enums (`Option[String]`, `Result[_, String]`)
+        // compare by *content*, not by pointer word. The bare seeded layout is
+        // monomorphization-blind (one `Option`/`Result` shape, payload-as-
+        // words), so routing keys off the lowering pass's recorded
+        // instantiation (`enum_inst_type_exprs`): `compile_enum_eq` substitutes
+        // the `[String]` arg into the `Some`/`Err` payload type and rebuilds it
+        // as a `String`. Distinct allocations with equal content must compare
+        // equal; scalar instantiations (`Option[i64]`) stay word-wise.
+        // Comparisons are written *inline inside f-string interpolations* on
+        // purpose: every interp expr is re-parsed under a fixed-length
+        // `fn __interp__() { … }` wrapper, so same-position operands across
+        // different f-strings share a span. Routing therefore resolves an
+        // identifier operand's instantiation by *name* (`enum_inst_var_types`),
+        // not by the colliding span — without that, `g == h` (`Option[i64]`)
+        // and `a == b` (`Option[String]`) would alias and mis-route. The
+        // bound-then-formatted variant is covered by the assertions below too,
+        // but the inline form is the regression guard for the span collision.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let a: Option[String] = Some(\"a\" + \"b\");\n\
+                 let b: Option[String] = Some(\"ab\");\n\
+                 let c: Option[String] = Some(\"xy\");\n\
+                 let n: Option[String] = None;\n\
+                 println(f\"{a == b}\");\n\
+                 println(f\"{a == c}\");\n\
+                 println(f\"{a == n}\");\n\
+                 println(f\"{n == n}\");\n\
+                 let r: Result[String, i64] = Ok(\"a\" + \"b\");\n\
+                 let s: Result[String, i64] = Ok(\"ab\");\n\
+                 println(f\"{r == s}\");\n\
+                 let e1: Result[i64, String] = Err(\"x\" + \"y\");\n\
+                 let e2: Result[i64, String] = Err(\"xy\");\n\
+                 let e3: Result[i64, String] = Err(\"zz\");\n\
+                 println(f\"{e1 == e2}\");\n\
+                 println(f\"{e1 == e3}\");\n\
+                 let g: Option[i64] = Some(7);\n\
+                 let h: Option[i64] = Some(7);\n\
+                 println(f\"{g == h}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "true\nfalse\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\n");
+        }
+    }
+
+    #[test]
+    fn e2e_generic_enum_heap_eq_through_params() {
+        // The instantiated-enum type of a *parameter* (`opt: Option[String]`)
+        // is registered by name at function entry, so a heap-payload `==`
+        // inside the function body compares by content — exercises the
+        // parameter-binding leg of `enum_inst_var_types` (distinct from the
+        // let-binding leg above).
+        if let Some(out) = run_program(
+            "fn same_opt(x: Option[String], y: Option[String]) -> bool { x == y }\n\
+             fn same_res(x: Result[String, i64], y: Result[String, i64]) -> bool { x == y }\n\
+             fn main() {\n\
+                 let a: Option[String] = Some(\"a\" + \"b\");\n\
+                 let b: Option[String] = Some(\"ab\");\n\
+                 let c: Option[String] = Some(\"zz\");\n\
+                 println(f\"{same_opt(a, b)}\");\n\
+                 println(f\"{same_opt(a, c)}\");\n\
+                 let r: Result[String, i64] = Ok(\"x\" + \"y\");\n\
+                 let s: Result[String, i64] = Ok(\"xy\");\n\
+                 println(f\"{same_res(r, s)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "true\nfalse\ntrue\n");
+        }
+    }
+
     /// Stdout + stderr capture. Used by tests that assert against trace
     /// output written to stderr by the runtime's atexit handler.
     struct CapturedRun {

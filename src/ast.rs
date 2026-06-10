@@ -313,6 +313,23 @@ pub type PatternBindingInnerTypesTable = std::collections::HashMap<(usize, usize
 pub type OwnedTempDropsTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
 /// Side-table populated by the lowering pass from the typechecker's
+/// `expr_types` map: for every expression whose Kāra type is a *generic*
+/// `Named` type instantiation (`Type::Named { name, args }` with non-empty
+/// `args` — e.g. `Option[String]`, `Result[i64, AllocError]`), maps
+/// `(span.offset, span.length)` to that expression's fully-instantiated
+/// surface `TypeExpr`. Codegen's heap-payload enum `==` consumer
+/// (`compile_enum_eq`) keys this by operand span to recover the concrete
+/// type argument a generic enum's variant payload was instantiated with —
+/// the bare `var_type_names` entry is only `"Option"`, losing the `[String]`
+/// that decides whether the `Some` payload compares by content (String/Vec)
+/// or by word (scalar). A missing entry simply degrades to the word-wise
+/// path (sound for scalar/unit enums); it never introduces a miscompile.
+/// Mirrors the other TypeExpr-valued hint tables (e.g.
+/// [`OwnedTempDropsTable`]) so codegen stays free of a full
+/// `TypeCheckResult` dependency (codegen containment, CLAUDE.md).
+pub type EnumInstTypeExprsTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
+/// Side-table populated by the lowering pass from the typechecker's
 /// `expr_types` map: the set of `(span.offset, span.length)` keys for every
 /// expression whose Kāra type is `String`. Codegen consults this to
 /// distinguish `String` from `Vec[T]` and other 3-word `{ptr, len, cap}`
@@ -517,6 +534,13 @@ pub struct Program {
     /// `materialize_owned_temp` to scope-drop unnamed temporaries. See
     /// [`OwnedTempDropsTable`].
     pub owned_temp_drops: OwnedTempDropsTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: surface
+    /// `TypeExpr` per generic `Named` instantiation expression (`Option[String]`,
+    /// `Result[i64, AllocError]`, …). Consumed by codegen's heap-payload enum
+    /// `==` (`compile_enum_eq`) to recover the concrete type argument a generic
+    /// enum's variant payload was instantiated with. See
+    /// [`EnumInstTypeExprsTable`].
+    pub enum_inst_type_exprs: EnumInstTypeExprsTable,
     /// Set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_borrow_modes`. Consumed by codegen
     /// to apply the ref-binding shim at match-arm leaf bindings under a

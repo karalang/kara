@@ -383,6 +383,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // side-tables were simply missing from the list.
         self.vec_elem_types.clear();
         self.var_elem_type_exprs.clear();
+        // Name-keyed instantiated-generic-enum types (`Option[String]`, …) for
+        // heap-payload `==`. Same per-function-reset rationale as the other
+        // name-keyed tables above: a stale entry from one function's `a:
+        // Option[String]` must not resolve a next function's same-named
+        // `a: Option[i64]` (which would mis-route a scalar `==` to the heap
+        // String comparator). Repopulated below from params and at let sites.
+        self.enum_inst_var_types.clear();
         self.string_vars.clear();
         self.slice_elem_types.clear();
         self.map_key_types.clear();
@@ -533,6 +540,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 if let Some(te) = registration_te {
                     self.register_var_from_type_expr(&param_name, te);
+                    // Record an instantiated generic-enum param (`opt: Option[String]`)
+                    // by name for heap-payload `==` routing — collision-free across
+                    // f-string interpolations, unlike the span-keyed table.
+                    if self.is_generic_named_enum_type_expr(te) {
+                        self.enum_inst_var_types
+                            .insert(param_name.clone(), te.clone());
+                    }
                 }
                 // Record owned (bare, non-ref) `String` / `Vec[T]` params.
                 // The registrar above put String/Vec params into

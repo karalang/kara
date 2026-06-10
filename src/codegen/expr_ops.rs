@@ -2961,18 +2961,276 @@ impl<'ctx> super::Codegen<'ctx> {
             .collect()
     }
 
+    /// Fully-instantiated surface `TypeExpr` of an expression, if known (every
+    /// *generic* `Named` instantiation — `Option[String]`, `Result[i64,
+    /// AllocError]`, generic user enums). For an **identifier** operand the
+    /// answer comes from the name-keyed `enum_inst_var_types` (populated at
+    /// binding sites) — this is collision-free, the path that matters inside
+    /// f-string interpolations where the span-keyed table is unreliable. Other
+    /// operand forms (constructor calls, struct literals) fall back to the
+    /// span-keyed `enum_inst_type_exprs`; `None` when neither knows it (the
+    /// caller then keeps the bare-name `enum_has_heap_payload` routing).
+    pub(super) fn enum_inst_type_of_expr(&self, expr: &Expr) -> Option<TypeExpr> {
+        if let ExprKind::Identifier(name) = &expr.kind {
+            if let Some(t) = self.enum_inst_var_types.get(name) {
+                return Some(t.clone());
+            }
+        }
+        self.enum_inst_type_from_span(expr)
+    }
+
+    /// Span-keyed instantiation lookup (the lowering pass's
+    /// `enum_inst_type_exprs`). Reliable only for **absolute** spans — the
+    /// binding sites that seed `enum_inst_var_types`, and use sites outside
+    /// f-string interpolations. See `enum_inst_type_of_expr`.
+    pub(super) fn enum_inst_type_from_span(&self, expr: &Expr) -> Option<TypeExpr> {
+        self.enum_inst_type_exprs
+            .get(&(expr.span.offset, expr.span.length))
+            .cloned()
+    }
+
+    /// Is `te` a *generic instantiation* of a known enum — a `Path` whose name
+    /// is in `enum_layouts` carrying at least one generic argument (`Option[T]`,
+    /// `Result[T, E]`)? Gates what gets recorded in `enum_inst_var_types`.
+    pub(super) fn is_generic_named_enum_type_expr(&self, te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Path(p) => {
+                p.generic_args.as_ref().is_some_and(|a| !a.is_empty())
+                    && p.segments
+                        .last()
+                        .is_some_and(|s| self.enum_layouts.contains_key(s.as_str()))
+            }
+            _ => false,
+        }
+    }
+
+    /// Generic-parameter names of `enum_name`'s declaration (e.g. `["T"]` for
+    /// `Option[+T]`, `["T", "E"]` for `Result[+T, +E]`), scanning the user
+    /// program then the baked stdlib. Empty for a non-generic enum.
+    fn enum_generic_param_names(&self, enum_name: &str) -> Vec<String> {
+        fn names(items: &[Item], enum_name: &str) -> Option<Vec<String>> {
+            items.iter().find_map(|item| match item {
+                Item::EnumDef(e) if e.name == enum_name => Some(
+                    e.generic_params
+                        .as_ref()
+                        .map(|g| g.params.iter().map(|p| p.name.clone()).collect())
+                        .unwrap_or_default(),
+                ),
+                _ => None,
+            })
+        }
+        self.program_snapshot
+            .as_ref()
+            .and_then(|p| names(&p.items, enum_name))
+            .or_else(|| {
+                crate::prelude::STDLIB_PROGRAMS
+                    .iter()
+                    .find_map(|(_, p)| names(&p.items, enum_name))
+            })
+            .unwrap_or_default()
+    }
+
+    /// Build the param→arg substitution for a generic enum from its
+    /// instantiation `TypeExpr`. `Option[String]` against `Option[+T]` yields
+    /// `{ "T" => String }`. Empty when `inst` is absent / has no type args, in
+    /// which case `subst_type_params` is the identity (the concrete path).
+    fn enum_param_subst(
+        &self,
+        enum_name: &str,
+        inst: Option<&TypeExpr>,
+    ) -> std::collections::HashMap<String, TypeExpr> {
+        let mut subst = std::collections::HashMap::new();
+        let Some(inst) = inst else { return subst };
+        let TypeKind::Path(path) = &inst.kind else {
+            return subst;
+        };
+        let Some(args) = &path.generic_args else {
+            return subst;
+        };
+        let params = self.enum_generic_param_names(enum_name);
+        // Zip declared params with the instantiation's *type* args (skip
+        // const / shape args — enums payloads are typed by Type params).
+        // Canonicalize each arg's spelling first: the instantiation came from
+        // the typechecker's `type_to_type_expr`, which lowers `Type::Str` to
+        // the internal `"str"` spelling — but the codegen classifiers
+        // (`enum_drop_kind_for_type_expr` routing,
+        // `payload_word_count_for_type_expr` offsets) match the *source*
+        // spelling `"String"`. Without this the heap-payload routing silently
+        // misses a `Some(String)` and falls back to a (wrong) pointer-word
+        // compare.
+        let type_args = args.iter().filter_map(|a| match a {
+            GenericArg::Type(t) => Some(Self::canonicalize_payload_type_names(t)),
+            _ => None,
+        });
+        for (name, arg) in params.into_iter().zip(type_args) {
+            subst.insert(name, arg);
+        }
+        subst
+    }
+
+    /// Rewrite the typechecker-internal `"str"` spelling to the source-level
+    /// `"String"` throughout a `TypeExpr` (recursing into generic args, tuples,
+    /// refs). `compile_enum_eq`'s field classifiers key on the source spelling;
+    /// instantiation args round-tripped through `type_to_type_expr` carry the
+    /// internal one. A no-op for every other type name.
+    fn canonicalize_payload_type_names(ty: &TypeExpr) -> TypeExpr {
+        let kind = match &ty.kind {
+            TypeKind::Path(p) => {
+                let segments = p
+                    .segments
+                    .iter()
+                    .map(|s| {
+                        if s == "str" {
+                            "String".to_string()
+                        } else {
+                            s.clone()
+                        }
+                    })
+                    .collect();
+                let generic_args = p.generic_args.as_ref().map(|args| {
+                    args.iter()
+                        .map(|a| match a {
+                            GenericArg::Type(t) => {
+                                GenericArg::Type(Self::canonicalize_payload_type_names(t))
+                            }
+                            other => other.clone(),
+                        })
+                        .collect()
+                });
+                TypeKind::Path(PathExpr {
+                    segments,
+                    generic_args,
+                    span: p.span.clone(),
+                })
+            }
+            TypeKind::Tuple(elems) => TypeKind::Tuple(
+                elems
+                    .iter()
+                    .map(Self::canonicalize_payload_type_names)
+                    .collect(),
+            ),
+            TypeKind::Ref(inner) => {
+                TypeKind::Ref(Box::new(Self::canonicalize_payload_type_names(inner)))
+            }
+            TypeKind::MutRef(inner) => {
+                TypeKind::MutRef(Box::new(Self::canonicalize_payload_type_names(inner)))
+            }
+            TypeKind::MutSlice(inner) => {
+                TypeKind::MutSlice(Box::new(Self::canonicalize_payload_type_names(inner)))
+            }
+            TypeKind::Weak(inner) => {
+                TypeKind::Weak(Box::new(Self::canonicalize_payload_type_names(inner)))
+            }
+            _ => return ty.clone(),
+        };
+        TypeExpr {
+            kind,
+            span: ty.span.clone(),
+        }
+    }
+
+    /// Substitute generic parameters in a `TypeExpr` per `subst`. A bare path
+    /// matching a param name (`T`) becomes its argument; a parameterized path
+    /// (`Vec[T]`) recurses into its args; tuples / refs recurse structurally.
+    /// Anything unmatched is returned unchanged — so for the concrete path
+    /// (empty `subst`) this is the identity.
+    fn subst_type_params(
+        ty: &TypeExpr,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> TypeExpr {
+        let kind = match &ty.kind {
+            TypeKind::Path(p) => {
+                if p.segments.len() == 1 && p.generic_args.is_none() {
+                    if let Some(rep) = subst.get(&p.segments[0]) {
+                        return rep.clone();
+                    }
+                }
+                let generic_args = p.generic_args.as_ref().map(|args| {
+                    args.iter()
+                        .map(|a| match a {
+                            GenericArg::Type(t) => {
+                                GenericArg::Type(Self::subst_type_params(t, subst))
+                            }
+                            other => other.clone(),
+                        })
+                        .collect()
+                });
+                TypeKind::Path(PathExpr {
+                    segments: p.segments.clone(),
+                    generic_args,
+                    span: p.span.clone(),
+                })
+            }
+            TypeKind::Tuple(elems) => TypeKind::Tuple(
+                elems
+                    .iter()
+                    .map(|t| Self::subst_type_params(t, subst))
+                    .collect(),
+            ),
+            TypeKind::Ref(inner) => TypeKind::Ref(Box::new(Self::subst_type_params(inner, subst))),
+            TypeKind::MutRef(inner) => {
+                TypeKind::MutRef(Box::new(Self::subst_type_params(inner, subst)))
+            }
+            TypeKind::MutSlice(inner) => {
+                TypeKind::MutSlice(Box::new(Self::subst_type_params(inner, subst)))
+            }
+            TypeKind::Weak(inner) => {
+                TypeKind::Weak(Box::new(Self::subst_type_params(inner, subst)))
+            }
+            _ => return ty.clone(),
+        };
+        TypeExpr {
+            kind,
+            span: ty.span.clone(),
+        }
+    }
+
+    /// Does `enum_name`, *instantiated as `inst`*, carry a heap (`String`/`Vec`)
+    /// payload field? This is the generic counterpart of `enum_has_heap_payload`
+    /// (which keys off the seeded, monomorphization-blind drop kinds): it
+    /// substitutes the instantiation's type args into each variant field and
+    /// classifies the *resolved* type. `Option[String]` → true; `Option[i64]` →
+    /// false. Routes generic operands to `compile_enum_eq` exactly when a
+    /// word-wise compare would be unsound.
+    pub(super) fn instantiated_enum_has_heap_payload(
+        &self,
+        enum_name: &str,
+        inst: Option<&TypeExpr>,
+    ) -> bool {
+        if inst.is_none() {
+            return false;
+        }
+        let subst = self.enum_param_subst(enum_name, inst);
+        if subst.is_empty() {
+            return false;
+        }
+        self.enum_variant_field_type_exprs(enum_name)
+            .iter()
+            .flat_map(|(_, _, tys)| tys.iter())
+            .any(|t| {
+                let resolved = Self::subst_type_params(t, &subst);
+                matches!(
+                    self.enum_drop_kind_for_type_expr(&resolved),
+                    super::state::EnumDropKind::VecOrString
+                )
+            })
+    }
+
     /// Variant-aware enum equality. Compares the tag, then `switch`es on it and
     /// compares only the active variant's payload **type-aware**: each field is
-    /// rebuilt from its payload words at the variant's `field_word_offsets` and
-    /// recursed through `compile_binop(Eq)` — so a `String`/`Vec` payload
-    /// compares by content (via `compile_string_binop`), not by pointer word.
-    /// Used for enums with heap-payload variants; unit/scalar enums keep the
+    /// rebuilt from its payload words (offsets computed from the field types,
+    /// substituting any generic params via `inst`) and recursed through
+    /// `compile_binop(Eq)` — so a `String`/`Vec` payload compares by content
+    /// (via `compile_string_binop`), not by pointer word. Used for enums with
+    /// heap-payload variants, concrete (`Msg { Text(String) }`) or generic
+    /// (`Option[String]`, `Result[_, String]`); unit/scalar enums keep the
     /// cheaper word-wise path. (Nested-enum and >3-word payload fields fall back
     /// to a word compare — see the per-field branch.)
     pub(super) fn compile_enum_eq(
         &mut self,
         op: &BinOp,
         enum_name: &str,
+        inst: Option<&TypeExpr>,
         lhs: inkwell::values::StructValue<'ctx>,
         rhs: inkwell::values::StructValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
@@ -2993,10 +3251,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_int_compare(IntPredicate::EQ, l_tag, r_tag, "enum.tag.eq")
             .unwrap();
 
-        let layout = self.enum_layouts[enum_name].clone();
+        // Resolve each variant's field types, substituting generic params with
+        // the instantiation's args (`Some(T)` → `Some(String)` for
+        // `Option[String]`). For the concrete path `subst` is empty, so this is
+        // the identity.
+        let subst = self.enum_param_subst(enum_name, inst);
         let variants = self.enum_variant_field_type_exprs(enum_name);
         let payload_variants: Vec<(u64, String, Vec<TypeExpr>)> = variants
             .into_iter()
+            .map(|(tag, name, tys)| {
+                let tys: Vec<TypeExpr> = tys
+                    .iter()
+                    .map(|t| Self::subst_type_params(t, &subst))
+                    .collect();
+                (tag, name, tys)
+            })
             .filter(|(_, _, t)| !t.is_empty())
             .collect();
 
@@ -3024,14 +3293,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 .append_basic_block(fn_val, &format!("enumeq.{vname}"));
             cases.push((i64_t.const_int(*tag, false), vbb));
             self.builder.position_at_end(vbb);
-            let offsets = layout
-                .field_word_offsets
-                .get(vname)
-                .cloned()
-                .unwrap_or_default();
+            // Compute per-field `(start, words)` from the *resolved* field
+            // types rather than `layout.field_word_offsets`. The seeded
+            // generic layouts record a variant's whole payload span as one
+            // entry (`Some` → `(0, 3)`, `Ok`/`Err` → `(0, 5)` union-overlaid),
+            // which would push a 3-word `String` field into the >3-word
+            // word-wise branch for `Result[String, _]`. Packing sequentially
+            // from word 0 by each field's own word count matches exactly how
+            // the user-enum layout builder lays variants out (declarations.rs),
+            // so the concrete path is unchanged while the generic path gets
+            // the right field widths.
+            let mut running = 0usize;
             let mut peq = bool_t.const_int(1, false);
-            for (i, fty) in field_types.iter().enumerate() {
-                let (start, n) = offsets.get(i).copied().unwrap_or((i, 1));
+            for fty in field_types.iter() {
+                let n = self.payload_word_count_for_type_expr(fty, enum_name, vname);
+                let start = running;
+                running += n;
                 let feq = if n <= 3 {
                     // Rebuild the field from its ≤3 payload words at its declared
                     // LLVM type, then recurse — String/Vec compare by content.

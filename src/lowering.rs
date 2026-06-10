@@ -286,6 +286,28 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             droppable.then(|| ((k.0, k.1), TypeChecker::type_to_type_expr(ty)))
         })
         .collect();
+    // Surface the fully-instantiated `TypeExpr` of every *generic* `Named`
+    // instantiation expression (`Option[String]`, `Result[i64, AllocError]`,
+    // generic user enums). Codegen's heap-payload enum `==`
+    // (`compile_enum_eq`) keys this by operand span to recover the concrete
+    // type argument a generic enum's variant payload was instantiated with —
+    // `var_type_names` only keeps the bare name (`"Option"`), losing the
+    // `[String]` that decides whether `Some`'s payload compares by content
+    // (String/Vec) or by word (scalar). Restricted to non-empty `args` so the
+    // table stays small (concrete enums like a user `Msg { Text(String) }`
+    // already route via `enum_has_heap_payload` and need no entry); a missing
+    // entry degrades to the word-wise path (sound for scalar/unit enums),
+    // never a miscompile. See `EnumInstTypeExprsTable`.
+    program.enum_inst_type_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Named { args, .. } if !args.is_empty() => {
+                Some(((k.0, k.1), TypeChecker::type_to_type_expr(ty)))
+            }
+            _ => None,
+        })
+        .collect();
 }
 
 struct Lowerer<'a> {

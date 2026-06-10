@@ -1118,6 +1118,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         return Ok(());
                     }
                 }
+                // Record the binding's instantiated generic-enum type
+                // (`Option[String]`, `Result[_, String]`) keyed by *variable
+                // name* so heap-payload enum `==` (`compile_enum_eq`) can
+                // resolve the type argument at a use site without span-keyed
+                // lookup — which collides across f-string interpolations (each
+                // interp expr is re-parsed under a fixed-length
+                // `fn __interp__() { … }` wrapper, so same-position operands in
+                // different f-strings share a span). Prefer the annotation;
+                // else the RHS's own (absolute, reliable) span entry.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    let inst = ty
+                        .as_ref()
+                        .filter(|te| self.is_generic_named_enum_type_expr(te))
+                        .cloned()
+                        .or_else(|| self.enum_inst_type_from_span(value));
+                    if let Some(inst) = inst {
+                        self.enum_inst_var_types.insert(var_name.clone(), inst);
+                    }
+                }
                 // Track Vec/String element types from type annotation or RHS.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     let mut detected = false;

@@ -371,8 +371,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Heap-payload enum `==`/`!=`: route to the variant-aware
                     // comparator so a `String`/`Vec` payload compares by content,
                     // not by pointer word (the word-wise `compile_struct_eq` path
-                    // is only sound for unit/scalar-payload enums). Unresolvable
-                    // operands and scalar enums keep the cheaper path.
+                    // is only sound for unit/scalar-payload enums). Two routes to
+                    // "has a heap payload": the bare-name `enum_has_heap_payload`
+                    // (concrete enums — `Msg { Text(String) }`), and, for a
+                    // *generic* operand whose instantiation the lowering pass
+                    // recorded (`Option[String]`, `Result[_, String]`),
+                    // `instantiated_enum_has_heap_payload` resolving the type
+                    // arg. The instantiation also feeds `compile_enum_eq` so the
+                    // `Some` payload rebuilds as a `String`, not an opaque word.
+                    // Unresolvable operands and scalar enums keep the cheaper path.
                     if matches!(op, BinOp::Eq | BinOp::NotEq)
                         && lhs.is_struct_value()
                         && rhs.is_struct_value()
@@ -381,10 +388,32 @@ impl<'ctx> super::Codegen<'ctx> {
                             .enum_name_of_expr(left)
                             .or_else(|| self.enum_name_of_expr(right))
                         {
-                            if self.enum_has_heap_payload(&en) {
+                            // Resolve the operands' instantiation, but only
+                            // trust one whose outer name matches `en` — a
+                            // span-fallback lookup can return a *different*
+                            // enum's type when spans collide across f-string
+                            // interpolations, and routing that to `compile_enum_eq`
+                            // would rebuild the payload at the wrong type. The
+                            // name guard plus the name-keyed `enum_inst_var_types`
+                            // (preferred for identifier operands) keep the heap
+                            // route sound; an unresolved/foreign inst simply
+                            // degrades to the word-wise path.
+                            let inst = self
+                                .enum_inst_type_of_expr(left)
+                                .or_else(|| self.enum_inst_type_of_expr(right))
+                                .filter(|t| match &t.kind {
+                                    crate::ast::TypeKind::Path(p) => {
+                                        p.segments.last().map(String::as_str) == Some(en.as_str())
+                                    }
+                                    _ => false,
+                                });
+                            let heap = self.enum_has_heap_payload(&en)
+                                || self.instantiated_enum_has_heap_payload(&en, inst.as_ref());
+                            if heap {
                                 return self.compile_enum_eq(
                                     op,
                                     &en,
+                                    inst.as_ref(),
                                     lhs.into_struct_value(),
                                     rhs.into_struct_value(),
                                 );
