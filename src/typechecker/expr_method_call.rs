@@ -1204,6 +1204,29 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Tensor broadcasting — `broadcast_add` / `broadcast_sub` /
+        // `broadcast_mul` / `broadcast_div` apply a binary op with NumPy-style
+        // shape broadcasting (size-1 dims expand; shapes align from the
+        // right). The result shape depends on *both* operand shapes, so it's
+        // computed here before impl dispatch, like the shape/reduce families.
+        // Typing in `src/typechecker/expr_method_tensor.rs`.
+        if matches!(
+            method,
+            "broadcast_add" | "broadcast_sub" | "broadcast_mul" | "broadcast_div"
+        ) {
+            let tensor_args = match &obj_ty {
+                Type::Named { name, args } if name == "Tensor" => Some(args),
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args } if name == "Tensor" => Some(args),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(tensor_args) = tensor_args.cloned() {
+                return self.infer_tensor_broadcast(method, &tensor_args, args, span);
+            }
+        }
+
         // Iterator-source methods: `iter()` / `into_iter()` on any iterable
         // collection produce an `Iterator[Item = T]` value. Handled here in
         // one place so per-collection method handlers don't have to repeat

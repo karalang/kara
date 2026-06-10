@@ -39999,6 +39999,99 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_tensor_broadcast() {
+        // Row / column / rank-mismatch broadcasting, two-singleton expand, a
+        // fresh-temp argument (`a + b`), and float division. Operand reuse
+        // afterward confirms borrow-not-move. Output verified vs `karac run`.
+        let out = run_program(
+            "fn main() {\n\
+                 let m: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let row: Tensor[i64, [1, 3]] = Tensor.from([[10, 20, 30]]);\n\
+                 let r = m.broadcast_add(row);\n\
+                 println(r[0, 0]); println(r[1, 2]);\n\
+                 let col: Tensor[i64, [2, 1]] = Tensor.from([[100], [200]]);\n\
+                 let c = m.broadcast_mul(col);\n\
+                 println(c[0, 1]); println(c[1, 0]);\n\
+                 let v: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);\n\
+                 let d = m.broadcast_sub(v);\n\
+                 println(d[0, 0]); println(d[1, 1]);\n\
+                 // two singletons broadcast UP to [2, 3].\n\
+                 let g = row.broadcast_add(col);\n\
+                 println(g[1, 0]);\n\
+                 // fresh-temp argument (the `b + b` intermediate is freed).\n\
+                 let b: Tensor[i64, [1, 3]] = Tensor.from([[1, 1, 1]]);\n\
+                 let h = m.broadcast_add(b + b);\n\
+                 println(h[0, 0]);\n\
+                 // float division.\n\
+                 let fm: Tensor[f64, [2, 2]] = Tensor.from([[2.0, 4.0], [6.0, 8.0]]);\n\
+                 let fc: Tensor[f64, [2, 1]] = Tensor.from([[2.0], [4.0]]);\n\
+                 let fq = fm.broadcast_div(fc);\n\
+                 println(fq[1, 0]);\n\
+                 println(m[1, 2]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            // r[0,0]=1+10=11, r[1,2]=6+30=36; c[0,1]=2*100=200, c[1,0]=4*200=800;
+            // d[0,0]=1-1=0, d[1,1]=5-2=3; g[1,0]=row[0,0]+col[1,0]=10+200=210;
+            // h[0,0]=1+(1+1)=3; fq[1,0]=6/4=1.5; m reused=6.
+            assert_eq!(
+                out, "11\n36\n200\n800\n0\n3\n210\n3\n1.5\n6\n",
+                "tensor broadcast AOT output must match the interpreter twin",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_broadcast_runtime_dims_and_trap() {
+        // `?`-dim operands: a compatible broadcast (row [1,?] over [?,?]) and
+        // an incompatible one that the codegen runtime guard traps. The static
+        // checker can't prove either, so both go through the header-driven
+        // runtime path.
+        let ok = run_program(
+            "fn mk_mat(r: i64, c: i64) -> Tensor[i64, [?, ?]] {\n\
+                 let t: Tensor[i64, [?, ?]] = Tensor.full([r, c], 2);\n\
+                 t\n\
+             }\n\
+             fn mk_row(n: i64) -> Tensor[i64, [1, ?]] {\n\
+                 let t: Tensor[i64, [1, ?]] = Tensor.full([1, n], 5);\n\
+                 t\n\
+             }\n\
+             fn main() {\n\
+                 let m: Tensor[i64, [?, ?]] = mk_mat(2, 3);\n\
+                 let row: Tensor[i64, [1, ?]] = mk_row(3);\n\
+                 let r = m.broadcast_add(row);\n\
+                 println(r[0, 0]); println(r[1, 2]);\n\
+             }\n",
+        );
+        if let Some(out) = ok {
+            assert_eq!(
+                out, "7\n7\n",
+                "runtime-dim broadcast must match `karac run`"
+            );
+        }
+        let captured = run_program_capturing(
+            "fn mk(r: i64, c: i64) -> Tensor[i64, [?, ?]] {\n\
+                 let t: Tensor[i64, [?, ?]] = Tensor.full([r, c], 1);\n\
+                 t\n\
+             }\n\
+             fn main() {\n\
+                 let a: Tensor[i64, [?, ?]] = mk(2, 3);\n\
+                 let b: Tensor[i64, [?, ?]] = mk(2, 4);\n\
+                 let r = a.broadcast_add(b);\n\
+                 println(r[0, 0]);\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("not broadcast-compatible"),
+                "expected the broadcast-incompatible trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
     // ── Owned String/Vec parameter retention (kata-22 family, 2026-06-06) ──
     //
     // The call ABI passes owned String/Vec headers by value while the

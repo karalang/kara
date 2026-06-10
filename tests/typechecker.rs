@@ -24933,6 +24933,80 @@ fn test_tensor_reduce_error_cases() {
     }
 }
 
+#[test]
+fn test_tensor_broadcast_typing() {
+    // The result shape is the broadcast of the two operand shapes: a size-1
+    // dim expands to the partner, missing leading axes are size 1, and shapes
+    // align from the right.
+    typecheck_ok(
+        "fn main() {\n\
+             let m: Tensor[i64, [2, 3]] = Tensor.zeros([2, 3]);\n\
+             let row: Tensor[i64, [1, 3]] = Tensor.zeros([1, 3]);\n\
+             let col: Tensor[i64, [2, 1]] = Tensor.zeros([2, 1]);\n\
+             let vec: Tensor[i64, [3]] = Tensor.zeros([3]);\n\
+             // size-1 row expands over rows.\n\
+             let r1: Tensor[i64, [2, 3]] = m.broadcast_add(row);\n\
+             // size-1 column expands over cols.\n\
+             let r2: Tensor[i64, [2, 3]] = m.broadcast_mul(col);\n\
+             // rank-mismatch: [3] aligns to the trailing axis, leading 1 added.\n\
+             let r3: Tensor[i64, [2, 3]] = m.broadcast_sub(vec);\n\
+             // two size-1 operands broadcast UP to the larger.\n\
+             let r4: Tensor[i64, [2, 3]] = row.broadcast_add(col);\n\
+             // exact-shape broadcast is a no-op shape-wise.\n\
+             let r5: Tensor[i64, [2, 3]] = m.broadcast_div(m);\n\
+         }\n",
+    );
+    // `?` partner against a concrete dim: the concrete dim wins statically
+    // (runtime-guarded), so the result is fully concrete.
+    typecheck_ok(
+        "fn mk(n: i64) -> Tensor[i64, [1, ?]] {\n\
+             let t: Tensor[i64, [1, ?]] = Tensor.zeros([1, n]);\n\
+             t\n\
+         }\n\
+         fn main() {\n\
+             let m: Tensor[i64, [2, 3]] = Tensor.zeros([2, 3]);\n\
+             let row: Tensor[i64, [1, ?]] = mk(3);\n\
+             let r: Tensor[i64, [2, 3]] = m.broadcast_add(row);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_tensor_broadcast_error_cases() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let a: Tensor[i64, [2, 3]] = Tensor.zeros([2, 3]);\n\
+             let b: Tensor[i64, [2, 4]] = Tensor.zeros([2, 4]);\n\
+             let bad1 = a.broadcast_add(b);\n\
+             let f: Tensor[f64, [2, 3]] = Tensor.zeros([2, 3]);\n\
+             let bad2 = a.broadcast_mul(f);\n\
+             let bad3 = a.broadcast_sub(5);\n\
+             let bb: Tensor[bool, [2, 3]] = Tensor.zeros([2, 3]);\n\
+             let bad4 = bb.broadcast_add(bb);\n\
+         }\n\
+         fn splice_recv[T: Numeric, ...S](t: Tensor[T, S], u: Tensor[T, [2, 2]]) {\n\
+             let x = t.broadcast_add(u);\n\
+         }\n",
+    );
+    for needle in [
+        // concrete-vs-concrete incompatible dim.
+        "not broadcast-compatible",
+        // element types differ.
+        "must share an element type",
+        // non-tensor argument.
+        "expects a tensor argument to broadcast against",
+        // non-numeric element.
+        "requires a numeric element type",
+        // splice-generic receiver rank not statically known.
+        "requires the receiver's rank to be statically known",
+    ] {
+        assert!(
+            errors.iter().any(|e| e.message.contains(needle)),
+            "missing '{needle}' in {errors:?}",
+        );
+    }
+}
+
 // ── Effect-resource dispatch types untyped `let` bindings ─────────
 //
 // bugs.md "Untyped `let` from an effect-resource method call doesn't

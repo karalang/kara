@@ -2469,6 +2469,288 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(res.into())
     }
 
+    // ── Broadcasting ────────────────────────────────────────────
+
+    /// Dispatch a tensor broadcasting method (`broadcast_add` / `_sub` /
+    /// `_mul` / `_div`) — NumPy-style element-wise op where the argument's
+    /// shape is broadcast against the receiver's (size-1 dims expand; shapes
+    /// align from the right). Phase-11 "Explicit broadcasting methods".
+    ///
+    /// **Identifier receiver only** (like reductions): the element type +
+    /// static rank come from the name-keyed `tensor_var_infos`, immune to the
+    /// parser's postfix span reuse. A value / chained receiver stamps the
+    /// *call* span onto the receiver, so the span-keyed side-table holds the
+    /// result shape there, not the receiver's — those stay on `karac run`
+    /// (bind to a `let` first). The *argument* may be any tensor-typed expr:
+    /// its span doesn't collide with the call span, so its static rank is read
+    /// from `tensor_var_infos` (identifier) or the span-keyed side-table.
+    /// `None` when the method isn't a broadcast, the receiver isn't a tensor
+    /// identifier, or the argument's rank isn't statically known.
+    pub(super) fn try_compile_tensor_broadcast(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        _call_span: &Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let op = match method {
+            "broadcast_add" => BinOp::Add,
+            "broadcast_sub" => BinOp::Sub,
+            "broadcast_mul" => BinOp::Mul,
+            "broadcast_div" => BinOp::Div,
+            _ => return Ok(None),
+        };
+        let ExprKind::Identifier(name) = &object.kind else {
+            return Ok(None);
+        };
+        let Some(info) = self.tensor_var_infos.get(name.as_str()).cloned() else {
+            return Ok(None);
+        };
+        if args.len() != 1 {
+            return Err(format!(
+                "{method} takes exactly 1 argument, found {}",
+                args.len()
+            ));
+        }
+        let arg = &args[0].value;
+        // The argument's static rank — from the name-keyed registry (identifier
+        // arg) or the span-keyed side-table (any other tensor-typed expr; the
+        // arg span doesn't collide with the call span). Needed to unroll the
+        // alignment; `None` (unknown rank) falls through to `karac run`.
+        let arg_rank = match &arg.kind {
+            ExprKind::Identifier(an) => {
+                self.tensor_var_infos.get(an.as_str()).map(|i| i.dims.len())
+            }
+            _ => self
+                .tensor_typed_exprs
+                .get(&(arg.span.offset, arg.span.length))
+                .map(|ti| ti.dims.len()),
+        };
+        let Some(arg_rank) = arg_rank else {
+            return Ok(None);
+        };
+        let a_ptr = self.tensor_ptr_for_var(name)?;
+        let b_ptr = self.compile_expr(arg)?.into_pointer_value();
+        let result = self.compile_tensor_broadcast(
+            &op,
+            info.elem,
+            info.elem_unsigned,
+            info.dims.len(),
+            a_ptr,
+            arg_rank,
+            b_ptr,
+        )?;
+        // Free a fresh-temp argument (e.g. `a.broadcast_add(b + c)`); the
+        // identifier receiver is a live binding and is never freed here.
+        if self.tensor_operand_is_owned_fresh_temp(arg) {
+            self.builder
+                .build_call(self.free_fn, &[b_ptr.into()], "")
+                .unwrap();
+        }
+        Ok(Some(result))
+    }
+
+    /// C-order strides for a runtime dim list: `stride[i] = product(dims[i+1..])`,
+    /// `stride[last] = 1`. Pure IR over already-loaded dim values.
+    fn runtime_c_strides(&self, dims: &[IntValue<'ctx>]) -> Vec<IntValue<'ctx>> {
+        let i64_t = self.context.i64_type();
+        let n = dims.len();
+        let mut strides = vec![i64_t.const_int(1, false); n];
+        for i in (0..n.saturating_sub(1)).rev() {
+            strides[i] = self
+                .builder
+                .build_int_mul(strides[i + 1], dims[i + 1], "t.cstride")
+                .unwrap();
+        }
+        strides
+    }
+
+    /// Lower `self <op> other` with NumPy-style broadcasting into a fresh
+    /// result tensor. Static ranks `ra`/`rb` unroll the per-axis alignment;
+    /// every dim *value* comes from the runtime headers (so `?` dims and
+    /// runtime broadcasting work uniformly). Per output axis: the aligned dim
+    /// pair must be broadcast-compatible (equal, or one is 1) — guarded at
+    /// runtime — and the output dim is their max. Effective per-operand
+    /// strides are 0 on absent / size-1 axes, so a single C-order pass over
+    /// the output reads the correct (possibly repeated) source element from
+    /// each operand. Interpreter twin: `eval_tensor_broadcast`.
+    #[allow(clippy::too_many_arguments)]
+    fn compile_tensor_broadcast(
+        &mut self,
+        op: &BinOp,
+        elem: BasicTypeEnum<'ctx>,
+        is_unsigned: bool,
+        ra: usize,
+        a_ptr: PointerValue<'ctx>,
+        rb: usize,
+        b_ptr: PointerValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let elem_size = self.tensor_elem_size(elem)?;
+        let one = i64_t.const_int(1, false);
+        let zero = i64_t.const_zero();
+        let out_rank = ra.max(rb);
+        let off_a = out_rank - ra;
+        let off_b = out_rank - rb;
+
+        // Operand dims from the headers, then within-operand C-order strides.
+        let a_dims: Vec<IntValue<'ctx>> = (0..ra).map(|j| self.tensor_load_dim(a_ptr, j)).collect();
+        let b_dims: Vec<IntValue<'ctx>> = (0..rb).map(|j| self.tensor_load_dim(b_ptr, j)).collect();
+        let a_strides = self.runtime_c_strides(&a_dims);
+        let b_strides = self.runtime_c_strides(&b_dims);
+
+        // Per output axis: compatibility guard, output dim (max), and the
+        // effective per-operand strides (0 where the axis is absent / size-1).
+        let mut out_dims: Vec<IntValue<'ctx>> = Vec::with_capacity(out_rank);
+        let mut eff_a: Vec<IntValue<'ctx>> = Vec::with_capacity(out_rank);
+        let mut eff_b: Vec<IntValue<'ctx>> = Vec::with_capacity(out_rank);
+        for k in 0..out_rank {
+            let da = if k >= off_a { a_dims[k - off_a] } else { one };
+            let db = if k >= off_b { b_dims[k - off_b] } else { one };
+            let eq = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, da, db, "t.bc.eq")
+                .unwrap();
+            let a1 = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, da, one, "t.bc.a1")
+                .unwrap();
+            let b1 = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, db, one, "t.bc.b1")
+                .unwrap();
+            let or1 = self.builder.build_or(eq, a1, "t.bc.or1").unwrap();
+            let ok = self.builder.build_or(or1, b1, "t.bc.ok").unwrap();
+            self.emit_tensor_guard(ok, "shapes are not broadcast-compatible")?;
+            let agtb = self
+                .builder
+                .build_int_compare(IntPredicate::UGT, da, db, "t.bc.gt")
+                .unwrap();
+            let od = self
+                .builder
+                .build_select(agtb, da, db, "t.bc.od")
+                .unwrap()
+                .into_int_value();
+            out_dims.push(od);
+            let ea = if k >= off_a {
+                let j = k - off_a;
+                let is1 = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, a_dims[j], one, "t.bc.ea1")
+                    .unwrap();
+                self.builder
+                    .build_select(is1, zero, a_strides[j], "t.bc.ea")
+                    .unwrap()
+                    .into_int_value()
+            } else {
+                zero
+            };
+            eff_a.push(ea);
+            let eb = if k >= off_b {
+                let j = k - off_b;
+                let is1 = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, b_dims[j], one, "t.bc.eb1")
+                    .unwrap();
+                self.builder
+                    .build_select(is1, zero, b_strides[j], "t.bc.eb")
+                    .unwrap()
+                    .into_int_value()
+            } else {
+                zero
+            };
+            eff_b.push(eb);
+        }
+
+        // Output strides + element count.
+        let out_strides = self.runtime_c_strides(&out_dims);
+        let mut count = one;
+        for d in &out_dims {
+            count = self.builder.build_int_mul(count, *d, "t.bc.cnt").unwrap();
+        }
+
+        // Allocate the result and write its dim header.
+        let out_rank_val = i64_t.const_int(out_rank as u64, false);
+        let (res, res_data) = self.tensor_alloc_runtime(out_rank_val, count, elem_size);
+        for (k, dv) in out_dims.iter().enumerate() {
+            let slot = self.tensor_header_slot(res, 1 + k as u64, &format!("t.bc.hd{k}"));
+            self.builder.build_store(slot, *dv).unwrap();
+        }
+
+        let a_data = self.tensor_data_ptr(a_ptr, ra, "t.bc.ad");
+        let b_data = self.tensor_data_ptr(b_ptr, rb, "t.bc.bd");
+
+        // for f in 0..count { coords via out_strides; fa/fb via eff strides;
+        //                     res[f] = a[fa] op b[fb] }
+        let fv = self.create_entry_alloca(fn_val, "t.bc.f", i64_t.into());
+        self.builder.build_store(fv, zero).unwrap();
+        let head = self.context.append_basic_block(fn_val, "t.bc.head");
+        let body = self.context.append_basic_block(fn_val, "t.bc.body");
+        let exit = self.context.append_basic_block(fn_val, "t.bc.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let f = self
+            .builder
+            .build_load(i64_t, fv, "t.bc.fv")
+            .unwrap()
+            .into_int_value();
+        let cont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, f, count, "t.bc.cont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cont, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let mut fa = zero;
+        let mut fb = zero;
+        for k in 0..out_rank {
+            let div = self
+                .builder
+                .build_int_unsigned_div(f, out_strides[k], "t.bc.div")
+                .unwrap();
+            let coord = self
+                .builder
+                .build_int_unsigned_rem(div, out_dims[k], "t.bc.coord")
+                .unwrap();
+            let ta = self
+                .builder
+                .build_int_mul(coord, eff_a[k], "t.bc.ta")
+                .unwrap();
+            fa = self.builder.build_int_add(fa, ta, "t.bc.fa").unwrap();
+            let tb = self
+                .builder
+                .build_int_mul(coord, eff_b[k], "t.bc.tb")
+                .unwrap();
+            fb = self.builder.build_int_add(fb, tb, "t.bc.fb").unwrap();
+        }
+        let ap = unsafe {
+            self.builder
+                .build_gep(elem, a_data, &[fa], "t.bc.ap")
+                .unwrap()
+        };
+        let av = self.builder.build_load(elem, ap, "t.bc.av").unwrap();
+        let bp = unsafe {
+            self.builder
+                .build_gep(elem, b_data, &[fb], "t.bc.bp")
+                .unwrap()
+        };
+        let bv = self.builder.build_load(elem, bp, "t.bc.bv").unwrap();
+        let r = self.compile_binop_typed(op, av, bv, is_unsigned)?;
+        let rp = unsafe {
+            self.builder
+                .build_gep(elem, res_data, &[f], "t.bc.rp")
+                .unwrap()
+        };
+        self.builder.build_store(rp, r).unwrap();
+        let nf = self.builder.build_int_add(f, one, "t.bc.nf").unwrap();
+        self.builder.build_store(fv, nf).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(exit);
+        Ok(res.into())
+    }
+
     // ── Reductions ──────────────────────────────────────────────
 
     /// Dispatch a tensor reduction (`sum`/`mean`/`prod`/`min`/`max` →

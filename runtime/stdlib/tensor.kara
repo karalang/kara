@@ -214,6 +214,36 @@ impl[T, ...S] Tensor[T, S] {
     fn mean_axis(ref self, axis: i64) -> Tensor[f64, S] {
         Tensor { handle_id: 0 }
     }
+
+    // NumPy-style broadcasting binary ops. Unlike `+ - * /` (which require an
+    // *exact* shape match), these broadcast `other` against the receiver:
+    // dims align from the right, a size-1 dim expands to the partner's size,
+    // and missing leading axes are treated as size 1. The result shape is the
+    // broadcast of the two — computed by the typechecker
+    // (`infer_tensor_broadcast`), so it isn't expressible in this surface
+    // signature; the `Tensor[T, S]` argument / return types are doc-only
+    // (the methods intercept before impl dispatch). Compatibility is checked
+    // statically when both shapes are fully concrete, else at runtime. Both
+    // operands are read; the result is a fresh value-semantics tensor.
+    #[compiler_builtin]
+    fn broadcast_add(ref self, other: ref Tensor[T, S]) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
+
+    #[compiler_builtin]
+    fn broadcast_sub(ref self, other: ref Tensor[T, S]) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
+
+    #[compiler_builtin]
+    fn broadcast_mul(ref self, other: ref Tensor[T, S]) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
+
+    #[compiler_builtin]
+    fn broadcast_div(ref self, other: ref Tensor[T, S]) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
 }
 
 // Element-wise arithmetic on `Tensor[T, Shape]` (design.md § Numerical
@@ -229,8 +259,9 @@ impl[T, ...S] Tensor[T, S] {
 //     *exact* shape match (concrete-dim mismatch is a compile-time E_SHAPE;
 //     a `?`-dim mismatch traps at runtime). Result is a fresh tensor of the
 //     same shape and element type; both operands are read, not moved.
-//     Broadcasting (mismatched-but-compatible shapes) is v1.5 — see the
-//     future `broadcast_add` / `broadcast_mul` methods.
+//     Broadcasting (mismatched-but-compatible shapes) is the explicit
+//     `broadcast_add` / `broadcast_sub` / `broadcast_mul` / `broadcast_div`
+//     method family above — `+ - * /` stay exact-shape on purpose.
 //   - `a + s` / `s + a` (and `- * /`) broadcast a scalar `s: T` across every
 //     element; an unsuffixed numeric literal promotes to `T`.
 //   - `-a` negates every element into a fresh tensor.

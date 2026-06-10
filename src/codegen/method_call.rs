@@ -160,6 +160,16 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(v);
         }
 
+        // Tensor broadcasting — `broadcast_add`/`broadcast_sub`/`broadcast_mul`
+        // /`broadcast_div` apply an element-wise op with NumPy-style shape
+        // broadcasting (size-1 dims expand; shapes align from the right).
+        // Identifier receiver only (like reductions; span-collision-immune);
+        // `None` for a value / chained receiver (bind to a `let` first) or a
+        // non-tensor receiver. `src/codegen/tensor.rs`.
+        if let Some(v) = self.try_compile_tensor_broadcast(object, method, args, call_span)? {
+            return Ok(v);
+        }
+
         // SIMD static constructor — `Vector[T, N].splat(x)` (design.md
         // § Portable SIMD). The receiver is the bare vector type-path, not a
         // value, so intercept before the receiver is compiled as an

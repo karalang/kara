@@ -99,6 +99,17 @@ pub(super) fn tensor_offset(dims: &[i64], idx: &[i64]) -> Result<usize, String> 
     Ok(offset)
 }
 
+/// C-order strides for `dims`: `stride[i] = product(dims[i+1..])`, with
+/// `stride[last] = 1`. Used by the broadcast path to map an output
+/// coordinate back to each operand's flat index.
+fn c_order_strides(dims: &[i64]) -> Vec<i64> {
+    let mut strides = vec![1i64; dims.len()];
+    for i in (0..dims.len().saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * dims[i + 1];
+    }
+    strides
+}
+
 /// Syntax walk for `Tensor.from`'s literal argument — interpreter twin
 /// of the typechecker's `collect_tensor_literal`
 /// (`src/typechecker/expr_call.rs`): the leftmost spine establishes
@@ -345,7 +356,124 @@ impl<'a> super::Interpreter<'a> {
             "sum_axis" | "mean_axis" => {
                 Some(self.eval_tensor_axis_reduce(method, dims, data, args, span))
             }
+            "broadcast_add" | "broadcast_sub" | "broadcast_mul" | "broadcast_div" => {
+                Some(self.eval_tensor_broadcast(method, dims, data, args, span))
+            }
             _ => None,
+        }
+    }
+
+    /// `t.broadcast_add(other)` (and `_sub` / `_mul` / `_div`) — NumPy-style
+    /// broadcasting element-wise op. Shapes align from the right; a size-1 dim
+    /// expands; missing leading axes are size 1. Result is a fresh tensor of
+    /// the broadcast shape; both operands are read. Compatibility is
+    /// re-checked at runtime (the `run_program` bypass) — an incompatible pair
+    /// traps. Effective per-operand strides are 0 on absent / size-1 axes, so
+    /// a single C-order pass over the output reads the correct (possibly
+    /// repeated) source element from each operand.
+    fn eval_tensor_broadcast(
+        &mut self,
+        method: &str,
+        a_dims: &[i64],
+        a_data: &Arc<RwLock<Vec<Value>>>,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Value {
+        let op = match method {
+            "broadcast_add" => BinOp::Add,
+            "broadcast_sub" => BinOp::Sub,
+            "broadcast_mul" => BinOp::Mul,
+            "broadcast_div" => BinOp::Div,
+            _ => unreachable!("eval_tensor_broadcast: unrouted method '{method}'"),
+        };
+        let Some(arg) = args.first() else {
+            return self.record_runtime_error(format!("{method} takes exactly 1 argument"), span);
+        };
+        let other = self.eval_expr_inner(&arg.value);
+        if self.pending_cf.is_some() {
+            return Value::Unit;
+        }
+        let Value::Tensor {
+            dims: b_dims,
+            data: b_data,
+        } = other
+        else {
+            return self.record_runtime_error(format!("{method} argument must be a tensor"), span);
+        };
+
+        // Broadcast the shapes (align from the right).
+        let ra = a_dims.len();
+        let rb = b_dims.len();
+        let out_rank = ra.max(rb);
+        let off_a = out_rank - ra;
+        let off_b = out_rank - rb;
+        let mut out_dims = Vec::with_capacity(out_rank);
+        for k in 0..out_rank {
+            let da = if k >= off_a { a_dims[k - off_a] } else { 1 };
+            let db = if k >= off_b { b_dims[k - off_b] } else { 1 };
+            if da == db || da == 1 || db == 1 {
+                out_dims.push(da.max(db));
+            } else {
+                return self.record_runtime_error(
+                    format!(
+                        "shapes are not broadcast-compatible: {:?} vs {:?} — dim {} has \
+                         incompatible sizes {} and {}",
+                        a_dims,
+                        b_dims.as_ref(),
+                        k,
+                        da,
+                        db
+                    ),
+                    span,
+                );
+            }
+        }
+
+        // Within-operand C-order strides, then effective per-output-axis
+        // strides (0 where the axis is absent or size-1).
+        let stride_a = c_order_strides(a_dims);
+        let stride_b = c_order_strides(&b_dims);
+        let eff_a: Vec<i64> = (0..out_rank)
+            .map(|k| {
+                if k >= off_a && a_dims[k - off_a] != 1 {
+                    stride_a[k - off_a]
+                } else {
+                    0
+                }
+            })
+            .collect();
+        let eff_b: Vec<i64> = (0..out_rank)
+            .map(|k| {
+                if k >= off_b && b_dims[k - off_b] != 1 {
+                    stride_b[k - off_b]
+                } else {
+                    0
+                }
+            })
+            .collect();
+        let out_strides = c_order_strides(&out_dims);
+        let out_count: i64 = out_dims.iter().product();
+
+        let a = a_data.read().unwrap().clone();
+        let b = b_data.read().unwrap().clone();
+        let mut out = Vec::with_capacity(out_count.max(0) as usize);
+        for f in 0..out_count {
+            let mut fa = 0i64;
+            let mut fb = 0i64;
+            for k in 0..out_rank {
+                let coord = (f / out_strides[k]) % out_dims[k];
+                fa += coord * eff_a[k];
+                fb += coord * eff_b[k];
+            }
+            let r = self.eval_binary(&op, a[fa as usize].clone(), b[fb as usize].clone(), span);
+            if self.pending_cf.is_some() {
+                return Value::Unit;
+            }
+            out.push(r);
+        }
+        Value::Tensor {
+            dims: Arc::new(out_dims),
+            data: Arc::new(RwLock::new(out)),
         }
     }
 

@@ -5571,6 +5571,56 @@ fn main() {
         );
     }
 
+    /// Tensor broadcasting heap lifecycle (phase-11 "Explicit broadcasting
+    /// methods"). Each `broadcast_*` mallocs a fresh result block the
+    /// let-binding `FreeTensor` reclaims; the identifier receiver and an
+    /// identifier argument are borrowed (keep their own frees); a fresh-temp
+    /// argument (`one + one`) is freed after the copy (the
+    /// `tensor_operand_is_owned_fresh_temp` path) — a missing free leaks
+    /// (Linux detect_leaks), a wrong free double-frees (caught everywhere).
+    /// Receiver + argument reuse after the ops pins borrow-not-move.
+    #[test]
+    fn asan_tensor_broadcast_lifecycle_clean() {
+        let label = "tensor_broadcast_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let m: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    let row: Tensor[i64, [1, 3]] = Tensor.from([[10, 20, 30]]);
+    let r = m.broadcast_add(row);
+    println(r[1, 2]);
+    let col: Tensor[i64, [2, 1]] = Tensor.from([[100], [200]]);
+    let c = m.broadcast_mul(col);
+    println(c[1, 0]);
+    let one: Tensor[i64, [1, 3]] = Tensor.from([[1, 1, 1]]);
+    let h = m.broadcast_add(one + one);
+    println(h[0, 0]);
+    println(m[0, 0]);
+    println(row[0, 1]);
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check the broadcast result FreeTensor / fresh-temp-arg free paths",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["36", "800", "3", "1", "20"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Tensor reduction heap lifecycle (phase-11 line 47, Slice B). Full
     /// reduces return a scalar (no malloc); axis reduces malloc a fresh
     /// rank-1-lower block that the let-binding `FreeTensor` must reclaim. A

@@ -15320,6 +15320,68 @@ fn test_tensor_reduce_empty_traps() {
     }
 }
 
+#[test]
+fn test_tensor_broadcast() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let m: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             // row [1,3] broadcasts over the 2 rows.\n\
+             let row: Tensor[i64, [1, 3]] = Tensor.from([[10, 20, 30]]);\n\
+             let r = m.broadcast_add(row);\n\
+             println(r[0, 0]); println(r[1, 2]);\n\
+             // column [2,1] broadcasts over the 3 cols.\n\
+             let col: Tensor[i64, [2, 1]] = Tensor.from([[100], [200]]);\n\
+             let c = m.broadcast_mul(col);\n\
+             println(c[0, 1]); println(c[1, 0]);\n\
+             // rank-mismatch: [3] aligns to the trailing axis.\n\
+             let v: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);\n\
+             let d = m.broadcast_sub(v);\n\
+             println(d[0, 0]); println(d[1, 1]);\n\
+             // operands are read, not moved — reuse afterward.\n\
+             println(m[1, 2]);\n\
+         }",
+    );
+    // r=[ [11,22,33],[14,25,36] ]; c=[ [100,200,300],[800,1000,1200] ];
+    // d=[ [0,0,0],[3,3,3] ]; m reused = 6.
+    assert_eq!(out, "11\n36\n200\n800\n0\n3\n6\n");
+}
+
+#[test]
+fn test_tensor_broadcast_div_and_two_singletons() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let m: Tensor[f64, [2, 2]] = Tensor.from([[2.0, 4.0], [6.0, 8.0]]);\n\
+             let col: Tensor[f64, [2, 1]] = Tensor.from([[2.0], [4.0]]);\n\
+             let q = m.broadcast_div(col);\n\
+             println(q[0, 0]); println(q[1, 0]);\n\
+             // [1,3] broadcast with [2,1] -> [2,3], both singletons expand.\n\
+             let row: Tensor[i64, [1, 3]] = Tensor.from([[1, 2, 3]]);\n\
+             let coli: Tensor[i64, [2, 1]] = Tensor.from([[10], [20]]);\n\
+             let g = row.broadcast_add(coli);\n\
+             println(g[0, 2]); println(g[1, 0]);\n\
+         }",
+    );
+    // q=[ [1,2],[1.5,2] ]; g=[ [11,12,13],[21,22,23] ].
+    assert_eq!(out, "1\n1.5\n13\n21\n");
+}
+
+#[test]
+fn test_tensor_broadcast_incompatible_traps() {
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let a: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let b: Tensor[i64, [2, 4]] = Tensor.from([[1, 2, 3, 4], [5, 6, 7, 8]]);\n\
+             let r = a.broadcast_add(b);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("not broadcast-compatible")),
+        "{errors:?}",
+    );
+}
+
 // ── `ref name @ PATTERN` — explicit-ref @ bindings (design.md § @
 // Bindings): bindings borrow, scrutinee stays usable after ──────────
 

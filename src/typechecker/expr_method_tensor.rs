@@ -45,6 +45,51 @@ fn shape_display(shape: &[DimArg]) -> String {
     type_display(&Type::Shape(shape.to_vec()))
 }
 
+/// Broadcast two shapes per NumPy rules: align from the right, a size-1 dim
+/// expands to the partner, missing leading axes are treated as size 1.
+/// Returns the merged dim list, or `Err((output_axis, a, b))` for a *static*
+/// incompatibility (both dims concrete literals, unequal, neither 1).
+fn broadcast_shapes(a: &[DimArg], b: &[DimArg]) -> Result<Vec<DimArg>, (usize, i64, i64)> {
+    let out_rank = a.len().max(b.len());
+    let off_a = out_rank - a.len();
+    let off_b = out_rank - b.len();
+    let one = DimArg::Const(ConstArg::Literal(1));
+    let mut out = Vec::with_capacity(out_rank);
+    for k in 0..out_rank {
+        let da = if k >= off_a { &a[k - off_a] } else { &one };
+        let db = if k >= off_b { &b[k - off_b] } else { &one };
+        out.push(merge_broadcast_dim(da, db).map_err(|(x, y)| (k, x, y))?);
+    }
+    Ok(out)
+}
+
+/// Merge one aligned dim pair under broadcasting. `Err((a, b))` only for two
+/// concrete literals that are unequal and neither is 1 (the static-error
+/// case). A concrete `1` broadcasts up to its non-literal partner (so the
+/// result is the partner, not `1`); a concrete `>1` against a non-literal
+/// wins statically (the partner must be 1 or equal at runtime — codegen
+/// guards it); two non-literals survive when equal (same param / `?`), else
+/// degrade to `?`.
+fn merge_broadcast_dim(l: &DimArg, r: &DimArg) -> Result<DimArg, (i64, i64)> {
+    use ConstArg::Literal;
+    use DimArg::Const;
+    match (l, r) {
+        (Const(Literal(a)), Const(Literal(b))) => {
+            if a == b || *a == 1 || *b == 1 {
+                Ok(Const(Literal((*a).max(*b))))
+            } else {
+                Err((*a, *b))
+            }
+        }
+        // A concrete `1` broadcasts up to the (non-literal) partner.
+        (Const(Literal(1)), other) | (other, Const(Literal(1))) => Ok(other.clone()),
+        // A concrete `>1` against a non-literal wins (runtime-guarded).
+        (Const(Literal(a)), _) | (_, Const(Literal(a))) => Ok(Const(Literal(*a))),
+        // Two non-literals: equal survives, else `?`.
+        (l, r) => Ok(if l == r { l.clone() } else { DimArg::Dynamic }),
+    }
+}
+
 impl<'a> super::TypeChecker<'a> {
     /// Entry point for the tensor shape-method family. `tensor_args` is
     /// the receiver's `[T, Shape]` generic-arg list. Performs the shared
@@ -334,6 +379,165 @@ impl<'a> super::TypeChecker<'a> {
         Type::Named {
             name: "Tensor".to_string(),
             args: vec![item_elem, Type::Shape(item_dims)],
+        }
+    }
+
+    /// `t.broadcast_add(other)` / `broadcast_sub` / `broadcast_mul` /
+    /// `broadcast_div` — NumPy-style broadcasting element-wise op. The
+    /// argument's shape is broadcast against the receiver's (dims align from
+    /// the right; a size-1 dim expands; missing leading axes are size 1), and
+    /// the result is a fresh tensor of the broadcast shape. Both operands need
+    /// a numeric, matching element type and a statically-known (splice-free)
+    /// rank. Static-vs-runtime posture mirrors the element-wise op + cross-arg
+    /// asserts: a fully-concrete incompatible dim pair is a compile-time
+    /// `E_SHAPE`; a `?` / dim-param dim defers compatibility to a codegen
+    /// runtime guard. Lowering twins:
+    /// `src/interpreter/method_call_tensor.rs::eval_tensor_broadcast` and
+    /// `src/codegen/tensor.rs::compile_tensor_broadcast`.
+    pub(super) fn infer_tensor_broadcast(
+        &mut self,
+        method: &str,
+        recv_args: &[Type],
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let (self_elem, self_shape) = match recv_args {
+            [elem, Type::Shape(dims)]
+                if !dims
+                    .iter()
+                    .any(|d| matches!(d, DimArg::Splice(_) | DimArg::SpliceVar(_))) =>
+            {
+                (elem.clone(), dims.clone())
+            }
+            _ => {
+                self.type_error(
+                    format!(
+                        "{} requires the receiver's rank to be statically known; \
+                         a bare-`S` or splice-bearing shape isn't supported here \
+                         (rank-polymorphic broadcasting is v1.5 shape arithmetic)",
+                        method
+                    ),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                return Type::Error;
+            }
+        };
+        if !is_numeric(&self_elem) && !self.type_param_has_numeric_bound(&self_elem) {
+            self.type_error(
+                format!(
+                    "{} requires a numeric element type, found '{}'",
+                    method,
+                    type_display(&self_elem)
+                ),
+                span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "{} takes exactly 1 argument (the tensor to broadcast against), found {}",
+                    method,
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+        let other_ty = self.infer_expr(&args[0].value);
+        if other_ty == Type::Error {
+            return Type::Error;
+        }
+        // The argument must itself be a tensor (peel one borrow) with a
+        // statically-known rank.
+        let other_core = match &other_ty {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            other => other,
+        };
+        let other_args = match other_core {
+            Type::Named { name, args } if name == "Tensor" && args.len() == 2 => args.clone(),
+            _ => {
+                self.type_error(
+                    format!(
+                        "{} expects a tensor argument to broadcast against, found '{}'",
+                        method,
+                        type_display(&other_ty)
+                    ),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+        };
+        let (other_elem, other_shape) = match &other_args[..] {
+            [elem, Type::Shape(dims)]
+                if !dims
+                    .iter()
+                    .any(|d| matches!(d, DimArg::Splice(_) | DimArg::SpliceVar(_))) =>
+            {
+                (elem.clone(), dims.clone())
+            }
+            _ => {
+                self.type_error(
+                    format!(
+                        "{} requires the argument tensor's rank to be statically known; \
+                         a bare-`S` or splice-bearing shape isn't supported here",
+                        method
+                    ),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+        };
+        if self_elem != other_elem {
+            self.type_error(
+                format!(
+                    "{} operands must share an element type; found '{}' and '{}'",
+                    method,
+                    type_display(&self_elem),
+                    type_display(&other_elem)
+                ),
+                args[0].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return Type::Error;
+        }
+        let merged = match broadcast_shapes(&self_shape, &other_shape) {
+            Ok(m) => m,
+            Err((axis, a, b)) => {
+                self.type_error(
+                    format!(
+                        "shapes are not broadcast-compatible: '{}' vs '{}' — dim {} has \
+                         incompatible sizes {} and {} (broadcasting requires equal dims, \
+                         or a size-1 dim that expands)",
+                        shape_display(&self_shape),
+                        shape_display(&other_shape),
+                        axis,
+                        a,
+                        b
+                    ),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+        };
+        Type::Named {
+            name: "Tensor".to_string(),
+            args: vec![self_elem, Type::Shape(merged)],
         }
     }
 
