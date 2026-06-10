@@ -14582,6 +14582,80 @@ fn test_tensor_rank1_bare_index() {
 }
 
 #[test]
+fn test_tensor_zeros_ones_int_elem_integer_semantics() {
+    // An integer-element tensor's zeros/ones fill `Value::Int`, not the
+    // historical blanket `Value::Float` — so a fill cell participates in
+    // integer division (`1 / 2 == 0`), not float division (`1.0 / 2 ==
+    // 0.5`). The element type is read off the `let`'s annotation.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let o: Tensor[i32, [2]] = Tensor.ones([2]);\n\
+             println(o[0] / 2);\n\
+             let z: Tensor[i64, [3]] = Tensor.zeros([3]);\n\
+             println(z[0]);\n\
+         }",
+    );
+    assert_eq!(out, "0\n0\n");
+}
+
+#[test]
+fn test_tensor_zeros_ones_bool_elem() {
+    // A bool-element tensor fills `Value::Bool` — zeros → false, ones →
+    // true — so the cells render as `false`/`true` (not `0`/`1`) and are
+    // usable as a condition. Previously the f64 fill made `b[0]` a
+    // `Value::Float(0.0)`.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let b: Tensor[bool, [2]] = Tensor.zeros([2]);\n\
+             println(b[0]);\n\
+             let t: Tensor[bool, [2]] = Tensor.ones([2]);\n\
+             println(t[0]);\n\
+             if t[1] {\n\
+                 println(\"flag-set\");\n\
+             }\n\
+         }",
+    );
+    assert_eq!(out, "false\ntrue\nflag-set\n");
+}
+
+#[test]
+fn test_tensor_zeros_ones_float_elem_unchanged() {
+    // The f64 default is preserved: a float-element tensor still fills
+    // `Value::Float`, so `0.0 / 1.0` render as `0` / `1` and division is
+    // float division (`1 / 2 == 0.5`).
+    let out = run_no_errors(
+        "fn main() {\n\
+             let z: Tensor[f64, [2]] = Tensor.zeros([2]);\n\
+             println(z[0]);\n\
+             let o: Tensor[f32, [2]] = Tensor.ones([2]);\n\
+             println(o[0] / 2.0);\n\
+         }",
+    );
+    assert_eq!(out, "0\n0.5\n");
+}
+
+#[test]
+fn test_tensor_zeros_nested_let_annotations_dont_leak() {
+    // The fill hint is saved/restored around each `let` RHS, so an inner
+    // tensor `let` with its own annotation doesn't corrupt an outer one.
+    // Here the outer `i64` zeros and inner `bool` zeros each pick their
+    // own element fill even though the inner `let` evaluates inside the
+    // outer block-expr RHS.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let outer: Tensor[i64, [2]] = {\n\
+                 let inner: Tensor[bool, [2]] = Tensor.zeros([2]);\n\
+                 println(inner[0]);\n\
+                 Tensor.zeros([2])\n\
+             };\n\
+             println(outer[0] + 5);\n\
+         }",
+    );
+    // inner[0] → false (bool fill); outer[0] → Int(0), 0 + 5 → 5 (int).
+    assert_eq!(out, "false\n5\n");
+}
+
+#[test]
 fn test_tensor_row_major_layout_distinct_cells() {
     // Writes to distinct cells must not alias (row-major offsets).
     let out = run_no_errors(

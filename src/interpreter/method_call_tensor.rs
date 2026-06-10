@@ -10,15 +10,70 @@
 //! Index-expression sites (`eval_expr.rs` / `set_index`), routed by the
 //! `Value::Tensor` match arms there via [`tensor_offset`].
 //!
-//! See `runtime/stdlib/tensor.kara` for the surface declaration and the
-//! interpreter fill-type note (`zeros`/`ones` fill `f64`; `full` is the
-//! typed fill).
+//! See `runtime/stdlib/tensor.kara` for the surface declaration. The
+//! `zeros`/`ones` fill type is read off the enclosing `let`'s
+//! `Tensor[Elem, …]` annotation (threaded via `pending_tensor_fill` —
+//! the interpreter is dynamically typed and the typechecker only records
+//! the unresolved `Tensor[T, S]` at the call span): an integer / bool
+//! element fills `Value::Int` / `Value::Bool`, anything else (or no
+//! annotation) falls back to the `f64` default. `full` takes an explicit
+//! typed value and so needs no hint.
 
 use std::sync::{Arc, RwLock};
 
-use crate::ast::{CallArg, Expr, ExprKind};
+use crate::ast::{CallArg, Expr, ExprKind, TypeExpr, TypeKind};
 use crate::interpreter::value::Value;
 use crate::token::Span;
+
+/// Element-fill class for `Tensor.zeros` / `Tensor.ones` — the only
+/// distinction the dynamically-typed interpreter's `Value` makes among
+/// numeric element types (integer widths collapse to `Value::Int`, both
+/// float widths to `Value::Float`). Derived from a `let`'s `Tensor[Elem,
+/// …]` annotation by [`tensor_elem_fill`] and stashed on
+/// `Interpreter::pending_tensor_fill`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TensorElemFill {
+    Int,
+    Float,
+    Bool,
+}
+
+/// Classify a tensor *element* type annotation into a [`TensorElemFill`].
+/// The element is the first generic argument of a `Tensor[Elem, Shape]`
+/// path type. `None` for non-primitive / unrecognized elements (the fill
+/// then degrades to the `f64` default). Integer widths (signed + unsigned)
+/// and `f16`/`bf16`-vs-`f32`/`f64` are not distinguished — the
+/// interpreter's `Value` can't represent the distinction.
+fn classify_elem_name(name: &str) -> Option<TensorElemFill> {
+    match name {
+        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
+        | "usize" => Some(TensorElemFill::Int),
+        "f16" | "bf16" | "f32" | "f64" => Some(TensorElemFill::Float),
+        "bool" => Some(TensorElemFill::Bool),
+        _ => None,
+    }
+}
+
+/// Pull the fill class out of a `let` annotation when it is a
+/// `Tensor[Elem, …]` whose `Elem` is a recognized primitive. Returns
+/// `None` for any other annotation shape (no hint — `zeros`/`ones` keep
+/// the float default).
+pub(super) fn tensor_elem_fill(ty: &TypeExpr) -> Option<TensorElemFill> {
+    let TypeKind::Path(path) = &ty.kind else {
+        return None;
+    };
+    if path.segments.last().map(String::as_str) != Some("Tensor") {
+        return None;
+    }
+    let elem = match path.generic_args.as_ref()?.first()? {
+        crate::ast::GenericArg::Type(t) => t,
+        _ => return None,
+    };
+    let TypeKind::Path(elem_path) = &elem.kind else {
+        return None;
+    };
+    classify_elem_name(elem_path.segments.last()?.as_str())
+}
 
 /// Row-major (C-order) flat offset for `idx` into `dims`. Errors carry
 /// the user-facing message for `record_runtime_error`.
@@ -139,6 +194,27 @@ pub(super) fn index_components(idx: &Value) -> Option<Vec<i64>> {
 }
 
 impl<'a> super::Interpreter<'a> {
+    /// Scalar fill `Value` for `Tensor.zeros` / `Tensor.ones`, picked
+    /// from the element-type hint threaded off the enclosing `let`'s
+    /// `Tensor[Elem, …]` annotation (`pending_tensor_fill`). The
+    /// tree-walk interpreter is dynamically typed and the typechecker
+    /// records only the *declared* return type `Tensor[T, S]` (with `T`
+    /// unresolved) at the call span, so the concrete element type comes
+    /// from the annotation — the same source codegen reads via
+    /// `pending_let_tensor_info`. An integer / bool element tensor fills
+    /// `Value::Int` / `Value::Bool`; with no hint (unannotated, or the
+    /// element wasn't a recognized primitive) it falls back to the
+    /// historical `Value::Float` — the numerical stack's primary element
+    /// type. `is_one` selects the 1-fill (`Tensor.ones`) vs the 0-fill
+    /// (`Tensor.zeros`).
+    fn tensor_scalar_fill(&self, is_one: bool) -> Value {
+        match self.pending_tensor_fill {
+            Some(TensorElemFill::Int) => Value::Int(if is_one { 1 } else { 0 }),
+            Some(TensorElemFill::Bool) => Value::Bool(is_one),
+            Some(TensorElemFill::Float) | None => Value::Float(if is_one { 1.0 } else { 0.0 }),
+        }
+    }
+
     /// `Tensor.zeros(dims)` / `Tensor.ones(dims)` / `Tensor.full(dims,
     /// value)`. Returns `None` when the args don't fit (caller falls
     /// through to normal call dispatch, which lands on the baked stub
@@ -172,8 +248,8 @@ impl<'a> super::Interpreter<'a> {
             _ => return None,
         };
         let fill = match path_str {
-            "Tensor.zeros" => Value::Float(0.0),
-            "Tensor.ones" => Value::Float(1.0),
+            "Tensor.zeros" => self.tensor_scalar_fill(false),
+            "Tensor.ones" => self.tensor_scalar_fill(true),
             "Tensor.full" => {
                 let val_arg = args.get(1)?;
                 self.eval_expr_inner(&val_arg.value)

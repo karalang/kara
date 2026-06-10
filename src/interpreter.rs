@@ -151,6 +151,18 @@ pub struct Interpreter<'a> {
     /// (cheap; small in real programs) — a public accessor is exposed
     /// so test harness functions can read it after `run()`.
     pub drop_trace: Vec<String>,
+    /// Element-type hint for a `Tensor.zeros` / `Tensor.ones` fill,
+    /// threaded from the enclosing `let`'s annotation. The tree-walk
+    /// interpreter is dynamically typed and the typechecker records only
+    /// the *declared* return type `Tensor[T, S]` (T unresolved) at the
+    /// call span, so the concrete element type `T` is recoverable only
+    /// from the binding annotation — exactly the source codegen reads via
+    /// `pending_let_tensor_info`. `eval_stmt_cf`'s `Let` arm sets this
+    /// from a `Tensor[Elem, …]` annotation (save/restore around the RHS
+    /// so nested `let`s nest correctly), and `tensor_scalar_fill`
+    /// consumes it; `None` falls back to the historical `f64` fill. See
+    /// `src/interpreter/method_call_tensor.rs`.
+    pub(crate) pending_tensor_fill: Option<method_call_tensor::TensorElemFill>,
     /// Full source text of the program being executed. Used by
     /// `eval_builtin_dbg` to slice the argument's `Span.offset/length`
     /// for the `expr` field (terminal mode) and `"expr":"…"` field
@@ -477,6 +489,7 @@ impl<'a> Interpreter<'a> {
             type_subs_stack: Vec::new(),
             cancel_flag: None,
             drop_trace: Vec::new(),
+            pending_tensor_fill: None,
             source_text: String::new(),
             dbg_output_mode: DbgOutputMode::Terminal,
             current_task_id: None,

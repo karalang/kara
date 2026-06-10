@@ -23,10 +23,16 @@
 // read), mirroring `Pool[T]`'s pattern.
 //
 // **Interpreter element-type note.** The tree-walk interpreter is
-// dynamically typed and cannot see `T` at `zeros` / `ones` call sites,
-// so they fill `f64` elements (the numerical stack's primary element
-// type); `full(dims, value)` is the typed fill for other element
-// types. Codegen lowers typed zero-fills properly (follow-on slice).
+// dynamically typed, so it recovers `T` for a `zeros` / `ones` fill from
+// the binding's `Tensor[Elem, …]` annotation (the same source codegen
+// reads): an integer element fills `Value::Int`, a `bool` element fills
+// `Value::Bool`, and `f32`/`f64` (or any unannotated / unrecognized
+// element) keeps the `f64` default. Integer widths and `f16`/`bf16`-vs-
+// `f32`/`f64` are not distinguished — the interpreter's `Value` can't
+// represent the distinction. `full(dims, value)` takes an explicit typed
+// value and is the path for an element with no annotation (or a
+// non-primitive element). Codegen lowers typed zero-fills directly from
+// the static element type.
 //
 // **Static-dim consistency note.** Where the annotated shape's dims
 // are concrete (`Tensor[f64, [3, 4]]`), agreement with the runtime

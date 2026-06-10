@@ -711,7 +711,19 @@ impl<'a> super::Interpreter<'a> {
     #[allow(clippy::result_large_err)]
     fn eval_stmt_cf(&mut self, stmt: &Stmt) -> EvalResult {
         match &stmt.kind {
-            StmtKind::Let { pattern, value, .. } => {
+            StmtKind::Let {
+                pattern, ty, value, ..
+            } => {
+                // Thread the binding's `Tensor[Elem, …]` annotation (when
+                // present) into a fill-type hint for any `Tensor.zeros` /
+                // `Tensor.ones` in the RHS — the only place the concrete
+                // element type `T` survives for the dynamically-typed
+                // interpreter (see `tensor_scalar_fill`). Saved/restored so
+                // nested `let`s in a block-expr RHS nest correctly.
+                let saved_tensor_fill = self.pending_tensor_fill;
+                self.pending_tensor_fill = ty
+                    .as_ref()
+                    .and_then(super::method_call_tensor::tensor_elem_fill);
                 // REPL value-snapshot replay: when the binding pattern is
                 // a single `Binding(name)` and `name` is in
                 // `let_value_overrides`, skip RHS evaluation entirely and
@@ -725,6 +737,7 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         let v = self.eval_expr_inner(value);
                         if let Some(cf) = self.pending_cf.take() {
+                            self.pending_tensor_fill = saved_tensor_fill;
                             return Err(cf);
                         }
                         v
@@ -732,10 +745,12 @@ impl<'a> super::Interpreter<'a> {
                 } else {
                     let v = self.eval_expr_inner(value);
                     if let Some(cf) = self.pending_cf.take() {
+                        self.pending_tensor_fill = saved_tensor_fill;
                         return Err(cf);
                     }
                     v
                 };
+                self.pending_tensor_fill = saved_tensor_fill;
                 // Capture for snapshot if this name is being watched.
                 // We must clone before `bind_pattern` consumes `val`.
                 if let crate::ast::PatternKind::Binding(name) = &pattern.kind {
