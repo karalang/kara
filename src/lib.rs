@@ -187,6 +187,35 @@ pub fn typecheck_with_lint_overrides(
     checker.check()
 }
 
+/// Type-check with both CLI lint overrides and the manifest's `[profile]`-table
+/// knob carrier (phase-8-stdlib-floor item 4). The carrier gates the
+/// `panic_on_alloc_failure`-driven rejection passes (`E_PANICKING_ALLOC_REJECTED`,
+/// `E_DERIVE_CLONE_ALLOCATES`). The `Pipeline` threads its `profile_config` here;
+/// callers that need neither override keep using [`typecheck`].
+pub fn typecheck_with_lint_overrides_and_profile(
+    program: &Program,
+    resolve_result: &ResolveResult,
+    overrides: crate::lints::CliLintOverrides,
+    profile_config: impl Into<crate::manifest::ProfileConfig>,
+) -> TypeCheckResult {
+    let checker = TypeChecker::new(program, resolve_result)
+        .with_cli_lint_overrides(overrides)
+        .with_profile_config(profile_config);
+    checker.check()
+}
+
+/// Type-check with the manifest's `[profile]`-table knob carrier and no CLI lint
+/// overrides — the form in-process callers and tests use to exercise the
+/// `panic_on_alloc_failure`-gated rejection passes (items 4–5).
+pub fn typecheck_with_profile_config(
+    program: &Program,
+    resolve_result: &ResolveResult,
+    profile_config: impl Into<crate::manifest::ProfileConfig>,
+) -> TypeCheckResult {
+    let checker = TypeChecker::new(program, resolve_result).with_profile_config(profile_config);
+    checker.check()
+}
+
 /// Rewrite operator expressions into trait-method calls in place.
 /// Runs after typecheck (uses inferred operand types) and before
 /// effectcheck / ownership / interpret / codegen.

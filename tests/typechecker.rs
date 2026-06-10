@@ -25698,3 +25698,202 @@ fn test_try_push_result_not_assignable_to_scalar() {
         "expected a Result-vs-i64 mismatch, got: {joined}"
     );
 }
+
+// ── E_PANICKING_ALLOC_REJECTED — panic_on_alloc_failure = false (item 4) ──
+
+fn typecheck_hard_mode(source: &str) -> Vec<TypeError> {
+    use karac::manifest::ProfileConfig;
+    let parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "Parse errors");
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty(), "Resolve errors");
+    let cfg = ProfileConfig {
+        panic_on_alloc_failure: Some(false),
+        ..Default::default()
+    };
+    karac::typecheck_with_profile_config(&parsed.program, &resolved, cfg).errors
+}
+
+fn assert_panicking_alloc_rejected(errors: &[TypeError], needle: &str) {
+    assert!(
+        errors.iter().any(|e| matches!(
+            e.kind,
+            karac::typechecker::TypeErrorKind::PanickingAllocRejected
+        ) && e.message.contains(needle)),
+        "expected PanickingAllocRejected mentioning `{needle}`, got: {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_hard_mode_rejects_vec_push() {
+    let errors = typecheck_hard_mode(
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1_i64);\n\
+         }",
+    );
+    assert_panicking_alloc_rejected(&errors, "Vec.try_push");
+}
+
+#[test]
+fn test_hard_mode_rejects_map_insert() {
+    let errors = typecheck_hard_mode(
+        "fn main() {\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             m.insert(\"k\", 1_i64);\n\
+         }",
+    );
+    assert_panicking_alloc_rejected(&errors, "Map.try_insert");
+}
+
+#[test]
+fn test_hard_mode_rejects_string_push_str() {
+    let errors = typecheck_hard_mode(
+        "fn main() {\n\
+             let mut s: String = \"\";\n\
+             s.push_str(\"x\");\n\
+         }",
+    );
+    assert_panicking_alloc_rejected(&errors, "String.try_push_str");
+}
+
+#[test]
+fn test_hard_mode_rejects_vec_with_capacity() {
+    let errors = typecheck_hard_mode(
+        "fn main() {\n\
+             let v: Vec[i64] = Vec.with_capacity(8_i64);\n\
+             let _ = v;\n\
+         }",
+    );
+    assert_panicking_alloc_rejected(&errors, "Vec.try_with_capacity");
+}
+
+#[test]
+fn test_hard_mode_accepts_try_companion() {
+    // The fix — the `try_*` companion — is accepted under hard mode.
+    let errors = typecheck_hard_mode(
+        "fn build() -> Result[(), AllocError] {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.try_push(1_i64)?;\n\
+             Ok(())\n\
+         }\n\
+         fn main() { let _ = build(); }",
+    );
+    assert!(
+        !errors.iter().any(|e| matches!(
+            e.kind,
+            karac::typechecker::TypeErrorKind::PanickingAllocRejected
+        )),
+        "try_push must not be flagged: {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_default_mode_allows_panicking_alloc() {
+    // With the flag unset (default true), panicking allocators are fine.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1_i64);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_hard_mode_does_not_flag_user_method_named_push() {
+    // A user type's own `push` is not a builtin-collection alloc site.
+    let errors = typecheck_hard_mode(
+        "struct Bag { n: i64 }\n\
+         impl Bag { fn push(ref self, x: i64) -> i64 { x } }\n\
+         fn main() {\n\
+             let b = Bag { n: 0 };\n\
+             let _ = b.push(3_i64);\n\
+         }",
+    );
+    assert!(
+        !errors.iter().any(|e| matches!(
+            e.kind,
+            karac::typechecker::TypeErrorKind::PanickingAllocRejected
+        )),
+        "user push must not be flagged: {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_hard_mode_rejects_vec_literal() {
+    let errors = typecheck_hard_mode(
+        "fn main() {\n\
+             let v: Vec[i64] = [1_i64, 2_i64, 3_i64];\n\
+             let _ = v;\n\
+         }",
+    );
+    assert_panicking_alloc_rejected(&errors, "Vec literal");
+}
+
+#[test]
+fn test_hard_mode_rejects_map_literal() {
+    let errors = typecheck_hard_mode(
+        "fn main() {\n\
+             let m = Map[\"a\": 1_i64, \"b\": 2_i64];\n\
+             let _ = m;\n\
+         }",
+    );
+    assert_panicking_alloc_rejected(&errors, "Map literal");
+}
+
+#[test]
+fn test_hard_mode_rejects_fstring_interpolation() {
+    let errors = typecheck_hard_mode(
+        "fn main() {\n\
+             let n = 5_i64;\n\
+             let s = f\"n is {n}\";\n\
+             let _ = s;\n\
+         }",
+    );
+    assert_panicking_alloc_rejected(&errors, "f-string");
+}
+
+#[test]
+fn test_hard_mode_rejects_string_concat() {
+    let errors = typecheck_hard_mode(
+        "fn main() {\n\
+             let a: String = \"x\";\n\
+             let b: String = \"y\";\n\
+             let c = a + b;\n\
+             let _ = c;\n\
+         }",
+    );
+    assert_panicking_alloc_rejected(&errors, "concatenation");
+}
+
+#[test]
+fn test_hard_mode_rejects_string_compound_concat() {
+    let errors = typecheck_hard_mode(
+        "fn main() {\n\
+             let mut a: String = \"x\";\n\
+             a += \"y\";\n\
+             let _ = a;\n\
+         }",
+    );
+    assert_panicking_alloc_rejected(&errors, "concatenation");
+}
+
+#[test]
+fn test_hard_mode_allows_integer_arithmetic() {
+    // Non-allocating operations are untouched under hard mode.
+    let errors = typecheck_hard_mode(
+        "fn add(a: i64, b: i64) -> i64 { a + b }\n\
+         fn main() { let _ = add(1_i64, 2_i64); }",
+    );
+    assert!(
+        !errors.iter().any(|e| matches!(
+            e.kind,
+            karac::typechecker::TypeErrorKind::PanickingAllocRejected
+        )),
+        "integer arithmetic must not be flagged: {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}

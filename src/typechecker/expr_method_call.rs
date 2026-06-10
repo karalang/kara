@@ -969,6 +969,19 @@ impl<'a> super::TypeChecker<'a> {
             return Type::Error;
         }
 
+        // Record the builtin-collection receiver name keyed by the method-call
+        // span for the panicking-alloc rejection pass (phase-8-stdlib-floor
+        // item 4). Only populated under `panic_on_alloc_failure = false`; the
+        // pass cannot recover the receiver type from `expr_types` because the
+        // method-call span equals the receiver's span (which then holds the
+        // method's return type).
+        if !self.profile_config.panics_on_alloc_failure() {
+            if let Some(coll) = super::alloc_rejection::builtin_collection_name(&obj_ty) {
+                self.method_receiver_collections
+                    .insert(SpanKey::from_span(span), coll.to_string());
+            }
+        }
+
         // Refinement base-deref (§1C — phase-9 step 2). A method call on a
         // refinement-typed receiver resolves against the refinement's own
         // inherent / trait impls *first* (design.md § Method Resolution:
@@ -3578,18 +3591,30 @@ impl<'a> super::TypeChecker<'a> {
     /// through to normal dispatch. `infer_expr` is idempotent for an
     /// already-checked receiver, so this pre-inference is side-effect-free.
     pub(super) fn receiver_is_alloc_collection(&mut self, object: &Expr) -> bool {
-        fn is_coll(ty: &Type) -> bool {
+        self.alloc_collection_receiver_name(object).is_some()
+    }
+
+    /// Builtin-collection display name of `object`'s receiver type (`"Vec"` /
+    /// `"VecDeque"` / `"Map"` / `"Set"` / `"SortedSet"` / `"String"`), peeling
+    /// `ref` / `mut ref`; `None` for any other type. Drives both the `try_*`
+    /// companion gate and the `E_PANICKING_ALLOC_REJECTED` subject string.
+    pub(super) fn alloc_collection_receiver_name(&mut self, object: &Expr) -> Option<String> {
+        fn coll_name(ty: &Type) -> Option<String> {
             match ty {
-                Type::Str => true,
-                Type::Named { name, .. } => matches!(
-                    name.as_str(),
-                    "Vec" | "VecDeque" | "Map" | "Set" | "SortedSet"
-                ),
-                Type::Ref(inner) | Type::MutRef(inner) => is_coll(inner),
-                _ => false,
+                Type::Str => Some("String".to_string()),
+                Type::Named { name, .. }
+                    if matches!(
+                        name.as_str(),
+                        "Vec" | "VecDeque" | "Map" | "Set" | "SortedSet"
+                    ) =>
+                {
+                    Some(name.clone())
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => coll_name(inner),
+                _ => None,
             }
         }
-        is_coll(&self.infer_expr(object))
+        coll_name(&self.infer_expr(object))
     }
 
     // ── Field Access ────────────────────────────────────────────

@@ -18,6 +18,7 @@ use crate::resolver::{ResolveResult, SpanKey};
 use crate::token::{FloatSuffix, IntSuffix, Span};
 use std::collections::{HashMap, HashSet};
 
+mod alloc_rejection;
 mod bounds;
 mod closures;
 mod const_eval;
@@ -403,6 +404,19 @@ pub enum TypeErrorKind {
     /// unknown, names a non-const, or evaluates to a non-integer/char
     /// value. See design.md § Range Patterns (v60 item 51).
     RangePatternBoundNotConst,
+    /// A panicking, heap-allocating operation appears under
+    /// `panic_on_alloc_failure = false` (phase-8-stdlib-floor item 4) — a
+    /// `Vec.push` / `String.push_str` / `Map.insert` / `Vec.with_capacity` /
+    /// collection literal / f-string / `String` concatenation that may panic on
+    /// allocation failure. The fix-it points at the `try_*` companion where one
+    /// exists (item 2). See design.md § Fallible Allocation API and OOM Handling.
+    PanickingAllocRejected,
+    /// `#[derive(Clone)]` on a type whose synthesized `clone` reaches a
+    /// panicking allocator under `panic_on_alloc_failure = false`
+    /// (phase-8-stdlib-floor item 5). Suppressible with
+    /// `#[allow(derive_clone_allocates)]`; the fix-it suggests a manual
+    /// `try_clone`. See design.md § Fallible Allocation API and OOM Handling.
+    DeriveCloneAllocates,
     /// A `mut` field of a `par struct` / `par enum` is declared with a type
     /// other than `Atomic[T]` or `Mutex[T]`. `par struct` enforces concurrent
     /// safety structurally at the definition site: immutable fields are freely
@@ -701,6 +715,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::LockTargetNotMutex
         | TypeErrorKind::InvalidRefinementPredicate
         | TypeErrorKind::RangePatternBoundNotConst
+        | TypeErrorKind::PanickingAllocRejected
+        | TypeErrorKind::DeriveCloneAllocates
         | TypeErrorKind::CrossTaskUnsafeCapture => None,
     }
 }
@@ -1224,6 +1240,22 @@ pub struct TypeChecker<'a> {
     /// key is absent. Byte-offset alone is unique-enough as a key —
     /// each lint-name token in the source has a distinct offset.
     pub(super) fulfilled_expectations: HashSet<(usize, String)>,
+    /// Active `[profile]`-table knob carrier (phase-8-stdlib-floor items 3–5).
+    /// Defaulted to the knobless `default` profile in [`Self::new`]; threaded
+    /// from `Pipeline.profile_config` via [`Self::with_profile_config`]. Its
+    /// `panics_on_alloc_failure()` accessor gates the `E_PANICKING_ALLOC_REJECTED`
+    /// pass (item 4) and the `E_DERIVE_CLONE_ALLOCATES` derive check (item 5).
+    pub(super) profile_config: crate::manifest::ProfileConfig,
+    /// Spans already flagged by the panicking-alloc rejection pass (item 4),
+    /// so re-inference of the same expression doesn't double-report.
+    pub(super) alloc_rejected_spans: HashSet<SpanKey>,
+    /// Method-call span → builtin-collection receiver name (`"Vec"` / … /
+    /// `"String"`), recorded during inference when the receiver resolves to a
+    /// builtin collection. The panicking-alloc rejection pass (item 4) reads
+    /// this because a `MethodCall`'s span equals its *receiver's* span, so the
+    /// receiver type cannot be recovered from `expr_types` at that span (the
+    /// method's return type is recorded there instead).
+    pub(super) method_receiver_collections: HashMap<SpanKey, String>,
 }
 
 /// Why a closure is `OnceFunction`-typed: which captured outer binding the
@@ -1287,7 +1319,24 @@ impl<'a> TypeChecker<'a> {
             lint_override_stack: Vec::new(),
             cli_lint_overrides: crate::lints::CliLintOverrides::default(),
             fulfilled_expectations: HashSet::new(),
+            profile_config: crate::manifest::ProfileConfig::default(),
+            alloc_rejected_spans: HashSet::new(),
+            method_receiver_collections: HashMap::new(),
         }
+    }
+
+    /// Attach the manifest's `[profile]`-table knob carrier (phase-8-stdlib-floor
+    /// item 3). Builder method, defaulted to the knobless `default` profile in
+    /// [`Self::new`]. Accepts a bare [`crate::manifest::CompileProfile`] (via
+    /// `From`) or the full [`crate::manifest::ProfileConfig`], mirroring the
+    /// effect-checker's `impl Into<ProfileConfig>` thread. Read by the
+    /// `panic_on_alloc_failure`-gated rejection passes (items 4–5).
+    pub fn with_profile_config(
+        mut self,
+        config: impl Into<crate::manifest::ProfileConfig>,
+    ) -> Self {
+        self.profile_config = config.into();
+        self
     }
 
     /// Attach CLI-driven build-wide lint level overrides (slice 4b
@@ -1354,6 +1403,11 @@ impl<'a> TypeChecker<'a> {
         self.emit_missing_non_exhaustive_warnings();
         self.check_items();
         self.finalize_pattern_binding_inner_types();
+        // Fallible-allocation: under `panic_on_alloc_failure = false`, reject
+        // every panicking heap-allocating site (phase-8-stdlib-floor item 4).
+        // Runs after `check_items` so `expr_types` (the receiver-type source)
+        // is fully populated; a no-op in the default mode.
+        self.check_panicking_alloc_rejections();
         // Lint-level slice 5 — end-of-typecheck sweep. Walks every
         // item's `lint_overrides` and emits `unfulfilled_lint_expectation`
         // for any `Expect` override that wasn't fulfilled during
@@ -1782,6 +1836,40 @@ impl<'a> TypeChecker<'a> {
             expected: None,
             got: None,
         });
+    }
+
+    /// Emit `E_PANICKING_ALLOC_REJECTED` for a panicking, heap-allocating site
+    /// under `panic_on_alloc_failure = false` (phase-8-stdlib-floor item 4).
+    /// `subject` names the operation (`"Vec.push"`, `"`[...]` Vec literal"`);
+    /// `companion` is the `try_*` form to suggest, or `None` for a site with no
+    /// fallible companion (literals / f-strings / `String` concatenation), which
+    /// get a restructure hint. Deduplicated by span so re-inference doesn't
+    /// double-report. No-op in the default (`true`) mode — the early caller-side
+    /// gate keeps this off the hot path, but the guard here is the source of
+    /// truth.
+    pub(super) fn reject_panicking_alloc(
+        &mut self,
+        span: &Span,
+        subject: &str,
+        companion: Option<&str>,
+    ) {
+        if self.profile_config.panics_on_alloc_failure() {
+            return;
+        }
+        if !self.alloc_rejected_spans.insert(SpanKey::from_span(span)) {
+            return;
+        }
+        let message = match companion {
+            Some(c) => format!(
+                "{subject} may panic on allocation failure; use `{c}` instead under \
+                 `panic_on_alloc_failure = false`"
+            ),
+            None => format!(
+                "{subject} may panic on allocation failure; build it explicitly with the `try_*` \
+                 collection methods under `panic_on_alloc_failure = false`"
+            ),
+        };
+        self.type_error(message, span.clone(), TypeErrorKind::PanickingAllocRejected);
     }
 
     /// Render a `ConstEvalError` from the const-expression evaluator

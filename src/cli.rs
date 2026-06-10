@@ -920,10 +920,18 @@ impl Pipeline {
         if self.resolved.is_none() || self.has_resolve_errors() {
             return;
         }
-        self.typed = Some(crate::typecheck_with_lint_overrides(
+        // Thread the manifest's `[profile]`-table knob carrier into the
+        // typechecker, realigning its active profile with any per-target
+        // override (mirrors the effect-checker leg in `effectcheck`). The
+        // `panic_on_alloc_failure` knob gates the fallible-alloc rejection
+        // passes (phase-8-stdlib-floor items 4–5).
+        let mut profile_config = self.profile_config.clone();
+        profile_config.profile = self.profile;
+        self.typed = Some(crate::typecheck_with_lint_overrides_and_profile(
             &self.parsed.program,
             self.resolved.as_ref().unwrap(),
             self.lint_overrides.clone(),
+            profile_config,
         ));
     }
 
@@ -2854,6 +2862,13 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // Range Patterns (v60 item 51) — a const-named range bound
                 // does not resolve to a module-level int/char const.
                 crate::typechecker::TypeErrorKind::RangePatternBoundNotConst => "E0263",
+                // Fallible Allocation (v60 item 46) — a panicking heap-allocating
+                // operation appears under `panic_on_alloc_failure = false`.
+                crate::typechecker::TypeErrorKind::PanickingAllocRejected => "E0264",
+                // Fallible Allocation (v60 item 46) — `#[derive(Clone)]` whose
+                // synthesized clone may panic on allocation failure under
+                // `panic_on_alloc_failure = false`.
+                crate::typechecker::TypeErrorKind::DeriveCloneAllocates => "E0265",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
