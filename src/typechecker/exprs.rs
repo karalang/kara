@@ -2392,8 +2392,19 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Continue { .. } => Type::Never,
 
             ExprKind::Tuple(exprs) => {
-                let types: Vec<Type> = exprs.iter().map(|e| self.infer_expr(e)).collect();
-                Type::Tuple(types)
+                // The empty-tuple literal `()` IS the unit value — canonicalize
+                // it to `Type::Unit` so it matches the `()` *type* annotation
+                // (which lowers to `Type::Unit`). Without this, `Some(())` /
+                // `Ok(())` / `fn f() -> Result[(), E] { Ok(()) }` infer a
+                // `Type::Tuple(vec![])` payload that prints identically to `()`
+                // but is not `types_compatible` with `Type::Unit`, producing the
+                // baffling `expected 'Option<()>', found 'Option<()>'` mismatch.
+                if exprs.is_empty() {
+                    Type::Unit
+                } else {
+                    let types: Vec<Type> = exprs.iter().map(|e| self.infer_expr(e)).collect();
+                    Type::Tuple(types)
+                }
             }
 
             ExprKind::StructLiteral {

@@ -26043,3 +26043,72 @@ fn test_question_alloc_error_without_from_impl_rejected() {
         "expected a missing-From[AllocError] diagnostic, got: {joined}"
     );
 }
+
+// ── Unit-payload variant constructor `Ok(())` / `Some(())` (regression) ──
+// The empty-tuple literal `()` is the unit value; it must infer as `Type::Unit`
+// so it matches the `()` *type*. Before the fix it inferred `Type::Tuple([])`,
+// which printed identically to `()` but was not `types_compatible` with
+// `Type::Unit`, breaking `fn f() -> Result[(), E] { Ok(()) }` (and the
+// cross-error `?` + `Ok(())` shape surfaced by the fallible-alloc work).
+
+#[test]
+fn test_ok_unit_payload_returns_result_unit() {
+    typecheck_ok("fn f() -> Result[(), i64] { Ok(()) }\nfn main() { let _ = f(); }");
+}
+
+#[test]
+fn test_some_unit_payload_returns_option_unit() {
+    typecheck_ok("fn f() -> Option[()] { Some(()) }\nfn main() { let _ = f(); }");
+}
+
+#[test]
+fn test_ok_unit_payload_let_annotated() {
+    typecheck_ok("fn main() { let r: Result[(), i64] = Ok(()); let _ = r; }");
+}
+
+#[test]
+fn test_empty_tuple_literal_is_unit() {
+    typecheck_ok("fn main() { let x: () = (); let _ = x; }");
+}
+
+#[test]
+fn test_question_then_ok_unit_tail_same_error() {
+    typecheck_ok(
+        "fn p() -> Result[i64, i64] { Ok(1_i64) }\n\
+         fn build() -> Result[(), i64] {\n\
+             let _x: i64 = p()?;\n\
+             Ok(())\n\
+         }\n\
+         fn main() { let _ = build(); }",
+    );
+}
+
+#[test]
+fn test_question_then_ok_unit_tail_cross_error() {
+    // The exact shape surfaced (and previously failed) during the
+    // fallible-allocation work: cross-error `?` + an `Ok(())` unit tail.
+    typecheck_ok(
+        "struct E1 { c: i64 }\n\
+         struct E2 { c: i64 }\n\
+         impl From for E2 { fn from(e: E1) -> E2 { E2 { c: 1_i64 } } }\n\
+         fn p() -> Result[i64, E1] { Ok(1_i64) }\n\
+         fn build() -> Result[(), E2] {\n\
+             let _x: i64 = p()?;\n\
+             Ok(())\n\
+         }\n\
+         fn main() { let _ = build(); }",
+    );
+}
+
+#[test]
+fn test_try_push_question_ok_unit_tail() {
+    // The fallible-allocation `try_*` + `?` + `Ok(())` pattern (Result[(), AllocError]).
+    typecheck_ok(
+        "fn build() -> Result[(), AllocError] {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.try_push(1_i64)?;\n\
+             Ok(())\n\
+         }\n\
+         fn main() { let _ = build(); }",
+    );
+}

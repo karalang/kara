@@ -955,6 +955,35 @@ fn main() {
     }
 
     #[test]
+    fn e2e_unit_payload_ok_some_codegen() {
+        // The empty-tuple literal `()` now types as `Type::Unit`, so
+        // `fn f() -> Result[(), i64] { Ok(()) }` typechecks and reaches codegen
+        // (it failed at typecheck before the unit-payload fix). Verify the
+        // newly-enabled path compiles + runs: construct, `?`-propagate, and
+        // match on `Ok(())` / `Some(())`.
+        if let Some(out) = run_program(
+            "fn unit_ok() -> Result[(), i64] { Ok(()) }\n\
+             fn unit_some() -> Option[()] { Some(()) }\n\
+             fn build() -> Result[(), i64] {\n\
+                 unit_ok()?;\n\
+                 Ok(())\n\
+             }\n\
+             fn main() {\n\
+                 match build() {\n\
+                     Ok(_) => println(\"ok\"),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+                 match unit_some() {\n\
+                     Some(_) => println(\"some\"),\n\
+                     None => println(\"none\"),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "ok\nsome\n");
+        }
+    }
+
+    #[test]
     fn e2e_builtin_enum_eq_option_result() {
         // Built-in enum `==` is sound in codegen too (None/Ok unit + payload
         // words). Regression guard for the zero-init enum construction.
