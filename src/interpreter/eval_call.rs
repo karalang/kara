@@ -951,6 +951,9 @@ impl<'a> super::Interpreter<'a> {
                 "collect_all" => {
                     return self.eval_collect_all(args, span);
                 }
+                "sleep_ms" => {
+                    return self.eval_builtin_sleep_ms(args, span);
+                }
                 _ => {}
             }
         }

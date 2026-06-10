@@ -321,4 +321,25 @@ impl<'a> super::Interpreter<'a> {
         let rstr = right.debug_fmt();
         self.record_runtime_assertion("assertion failed: left == right", lstr, rstr, span)
     }
+
+    /// `std.time::sleep_ms(ms: i64)` — the tree-walk interpreter has no
+    /// async reactor, so the faithful semantics of a `suspends` sleep is
+    /// a real wall-clock pause: block this thread for `ms` milliseconds.
+    /// The codegen path (`emit_state_machine_invocation_for_park_on_timer`)
+    /// instead parks the task on the reactor's timer wheel so siblings in a
+    /// `par {}` overlap; the interpreter is sequential, so a thread sleep
+    /// matches its execution model. Negative / missing arg → no-op.
+    pub(crate) fn eval_builtin_sleep_ms(&mut self, args: &[CallArg], span: &Span) -> Value {
+        self.track_effect("suspends");
+        let ms = match args.first() {
+            Some(a) => self.eval_expr_inner(&a.value),
+            None => return self.record_runtime_error("sleep_ms requires one argument", span),
+        };
+        if let Value::Int(ms) = ms {
+            if ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+            }
+        }
+        Value::Unit
+    }
 }

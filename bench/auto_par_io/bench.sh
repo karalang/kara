@@ -72,6 +72,31 @@ gen_par() {
       echo '}'
     } > "$f"; GEN+=("$f")
 }
+# gen_straight_suspends K FILE — K independent `suspends` sleep_ms calls,
+# straight-line. `sleep_ms` (std.time, A2a-2.2) parks on the reactor timer
+# wheel instead of pinning an OS thread, so the `par` rail overlaps WITHOUT
+# a thread per nap. The auto rail stays SERIAL until A2b lifts the
+# (Suspends,Suspends) conflict — this rail makes that gap measurable.
+gen_straight_suspends() {
+    local k="$1" f="$2" i
+    { echo 'fn main() {'
+      for ((i=0;i<k;i++)); do echo "    sleep_ms($DMS);"; done
+      echo '    println(0);'
+      echo '}'
+    } > "$f"; GEN+=("$f")
+}
+# gen_par_suspends K FILE — same K `sleep_ms` calls inside `par {}` (the
+# timer-wheel overlap ceiling; proves the primitive overlaps).
+gen_par_suspends() {
+    local k="$1" f="$2" i
+    { echo 'fn main() {'
+      echo '    par {'
+      for ((i=0;i<k;i++)); do echo "        sleep_ms($DMS);"; done
+      echo '    }'
+      echo '    println(0);'
+      echo '}'
+    } > "$f"; GEN+=("$f")
+}
 
 build_bin() { # SRC OUT [VAR=val ...]
     local src="$1" out="$2"; shift 2
@@ -122,6 +147,26 @@ for K in $KSWEEP; do
     printf '   %4s | %-8s | %6ss | %6ss | %6ss | %s\n' "$K" "$G" "$S" "$P" "$A" "$V"
 done
 echo "   (par scales in pool-bounded waves: ~ceil(K/cores)×D — that is the honest ceiling)"
+
+echo
+echo "## suspends fan-out, K-sweep  (K independent sleep_ms — the async-timer primitive)"
+echo "##   A2a-2.2 state: par OVERLAPS (timer wheel), auto still SERIAL (A2b lifts it)."
+printf '   %4s | %-8s | %7s | %7s | %7s | %s\n' K "grouped?" seq par auto "par<<seq?"
+printf '   %4s-+-%-8s-+-%7s-+-%7s-+-%7s-+-%s\n' "----" "--------" "-------" "-------" "-------" "--------"
+for K in $KSWEEP; do
+    gen_straight_suspends "$K" "suspends_K${K}.kara"
+    gen_par_suspends      "$K" "suspends_par_K${K}.kara"
+    build_bin "suspends_K${K}.kara"     "suspends_auto_${K}"
+    build_bin "suspends_K${K}.kara"     "suspends_seq_${K}"  KARAC_AUTO_PAR=0
+    build_bin "suspends_par_K${K}.kara" "suspends_par_${K}"
+    G=$(stmts_grouped "suspends_K${K}.kara.main" 0 1)
+    S=$(median_real "suspends_seq_${K}"); P=$(median_real "suspends_par_${K}"); A=$(median_real "suspends_auto_${K}")
+    # The A2a-2.2 win: does the explicit-par rail overlap the naps (par << seq)?
+    V=$(awk -v s="$S" -v p="$P" 'BEGIN{print (p<=(s/1.5))?"YES":"no"}')
+    printf '   %4s | %-8s | %6ss | %6ss | %6ss | %s\n' "$K" "$G" "$S" "$P" "$A" "$V"
+done
+echo "   (grouped?=no + auto≈seq is EXPECTED pre-A2b; par<<seq proves sleep_ms overlaps"
+echo "    on the timer wheel — A2b then routes auto-par grouped suspends through it too.)"
 
 echo
 echo "## positive control  (positive_control.kara — distinct-resource shape)"

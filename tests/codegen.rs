@@ -7797,6 +7797,107 @@ fn main() {
         );
     }
 
+    // ── Async `sleep_ms` — park-on-timer lowering (phase-5 auto-par ──
+    //    divergence A2a-2.2) ──
+    //
+    // `sleep_ms(ms)` (the leaf `suspends` primitive, `std.time`) lowers to
+    // the `karac_park_on_timer` state machine: the call site converts ms →
+    // ns, allocs the state struct, drives the poll-fn once (state_0 arms a
+    // reactor deadline via `karac_runtime_event_loop_register_timer` and
+    // returns Pending), then blocks on a completion slot the dispatcher
+    // signals on expiry. Unlike a `blocks` libc `usleep`, two `sleep_ms`
+    // calls under `par {}` overlap on the timer wheel rather than pin two
+    // OS threads for their full naps.
+
+    #[test]
+    fn sleep_ms_lowers_to_park_on_timer() {
+        // Runtime-valued duration so the ms→ns multiply is NOT
+        // constant-folded away (a literal `sleep_ms(500)` folds
+        // `500 * 1_000_000` to a constant and the named `mul` vanishes).
+        let ir = ir_for(
+            "fn nap(ms: i64) {\n\
+                 sleep_ms(ms);\n\
+             }\n\
+             fn main() {\n\
+                 nap(500);\n\
+             }",
+        );
+        // The deadline is armed through the timer-register FFI (NOT
+        // register_fd — there is no fd).
+        assert!(
+            ir.contains("karac_runtime_event_loop_register_timer"),
+            "expected sleep_ms to arm a reactor deadline via \
+             karac_runtime_event_loop_register_timer; IR:\n{ir}"
+        );
+        // The park-on-timer poll-fn + constructor are emitted.
+        assert!(
+            ir.contains("__kara_poll_karac_park_on_timer")
+                && ir.contains("__kara_state_new_karac_park_on_timer"),
+            "expected the karac_park_on_timer poll-fn + constructor in IR:\n{ir}"
+        );
+        // The call site composes with the primitive: ms→ns convert (survives
+        // because `ms` is runtime-valued), alloc the state, drive the poll,
+        // and block on the completion slot (dispatcher-yield model).
+        let nap_body = function_body(&ir, "nap").unwrap_or_else(|| {
+            panic!("nap body not found in IR:\n{ir}");
+        });
+        assert!(
+            nap_body.contains("kara.timer.ms_to_nanos"),
+            "expected the call site to convert ms→ns; nap body:\n{nap_body}"
+        );
+        assert!(
+            nap_body.contains("kara.timer.dur.field") && nap_body.contains("kara.timer.poll_wait"),
+            "expected the call site to store the duration + block on the \
+             completion slot; nap body:\n{nap_body}"
+        );
+        // Unlike the fd park, sleep_ms performs NO fd deregister (timers
+        // have no fd / no epoll registration; the dispatcher claims its own).
+        assert!(
+            !nap_body.contains("karac_runtime_event_loop_deregister_fd"),
+            "sleep_ms must NOT deregister an fd (timers have none); nap body:\n{nap_body}"
+        );
+    }
+
+    #[test]
+    fn e2e_sleep_ms_resumes_in_order() {
+        // A short async sleep runs to completion and resumes the caller in
+        // program order — proving the full arm→park→dispatcher-signal→resume
+        // path works end-to-end (not just that the IR shape is right).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println(\"a\");\n\
+                 sleep_ms(20);\n\
+                 println(\"b\");\n\
+                 sleep_ms(20);\n\
+                 println(\"c\");\n\
+             }",
+        ) {
+            assert_eq!(out, "a\nb\nc\n");
+        }
+    }
+
+    #[test]
+    fn e2e_par_sleeps_both_branches_complete() {
+        // Two `sleep_ms` calls inside `par {}` each run to completion (the
+        // overlap *timing* win is measured by the bench harness
+        // `bench/auto_par_io`; here we pin that the par+suspend composition
+        // resumes BOTH branches rather than wedging one). Each branch prints
+        // after its nap; both lines must appear.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 par {\n\
+                     { sleep_ms(20); println(\"left\"); }\n\
+                     { sleep_ms(20); println(\"right\"); }\n\
+                 }\n\
+             }",
+        ) {
+            assert!(
+                out.contains("left") && out.contains("right"),
+                "expected both par branches to complete after their naps; got:\n{out}"
+            );
+        }
+    }
+
     // ── Move-suppression for user-Drop bindings (let-rebind) ──
     //
     // `let g = f;` where `f` has a user `impl Drop` moves the value

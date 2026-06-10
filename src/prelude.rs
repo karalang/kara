@@ -761,6 +761,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     // stdlib). Interpreter MVP: zeros/ones/full + shape/rank + tuple
     // indexing; see `runtime/stdlib/tensor.kara`.
     ("tensor.kara", include_str!("../runtime/stdlib/tensor.kara")),
+    // `std.time` — native async `sleep_ms` (the leaf `suspends` timer
+    // primitive; auto-par divergence slice A2a-2.2). See
+    // `runtime/stdlib/time.kara`.
+    ("time.kara", include_str!("../runtime/stdlib/time.kara")),
 ];
 
 /// Phase-10 (`std.web`): baked stdlib modules that are GATED — real Kāra
@@ -1253,6 +1257,12 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // additive on top of the typechecker / codegen wiring.
     "size_of",
     "align_of",
+    // `std.time::sleep_ms(ms: i64) with suspends` — native async sleep,
+    // the leaf `suspends` timer primitive (auto-par divergence slice
+    // A2a-2.2). See `runtime/stdlib/time.kara`. Codegen intercepts the
+    // call (`compile_call`) and emits the park-on-timer state machine;
+    // the prelude entry makes the resolver accept the bare identifier.
+    "sleep_ms",
     // Phase 6 line 186 slice 1 — free-fn `spawn[T](f: Fn() -> T) ->
     // TaskHandle[T]`. Counterpart to `TaskGroup.spawn`; uses an
     // ambient process-wide scope rather than a user-controlled

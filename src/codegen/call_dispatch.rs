@@ -381,6 +381,25 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_diverge(&name, args);
         }
 
+        // Phase-5 auto-par divergence (A2a-2.2): `sleep_ms(ms: i64)` — the
+        // leaf `suspends` async-sleep primitive. Intercepted before the
+        // generic-fn path so the `#[compiler_builtin]` empty stub body in
+        // `runtime/stdlib/time.kara` never lowers. Convert the millisecond
+        // argument to nanoseconds and compose with the `karac_park_on_timer`
+        // state machine (`emit_state_machine_invocation_for_park_on_timer`),
+        // which arms a reactor deadline and parks on a completion slot.
+        // Returns unit (the `i64 0` placeholder shared by all void builtins).
+        if name == "sleep_ms" && args.len() == 1 {
+            let ms = self.compile_expr(&args[0].value)?.into_int_value();
+            let nanos_per_ms = self.context.i64_type().const_int(1_000_000, false);
+            let nanos = self
+                .builder
+                .build_int_mul(ms, nanos_per_ms, "kara.timer.ms_to_nanos")
+                .expect("ms * 1_000_000");
+            self.emit_state_machine_invocation_for_park_on_timer(nanos);
+            return Ok(self.context.i64_type().const_int(0, false).into());
+        }
+
         // Phase 6 line 218 slice 4: free `spawn(closure) -> TaskHandle[T]`
         // dispatch. Intercepted before the generic-fn path so the slice-1
         // stub body (`TaskHandle { task_id: 0 }`) never lowers. The

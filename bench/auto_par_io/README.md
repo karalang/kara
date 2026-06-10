@@ -108,11 +108,36 @@ the table: **2.6× at K=4, 13× at K=64.**
 *every* K, and stmts 0 & 1 co-group. The existing `par_run` fan-out overlaps the
 blocking calls on the pool — no runtime/codegen change, only the conflict model.
 
-## Not here yet — `suspends` (A2)
+## `suspends` rail — A2a-2.2 ✅ (primitive overlaps; auto-grouping is A2b)
 
-No `suspends` probe: it needs a deterministic *async* wait primitive (the runtime
-exposes no async sleep today — see `examples/parallax_lite/src/resources.kara`).
-That primitive is the first brick of **A2**, so the suspends probe lands with it.
-Caveat for that probe: `par {}` of suspending calls overlaps via *threads* (a
-modest ceiling); the real suspends win — millions of tasks parked on a few
-threads — is a separate *scaling* bench, not this latency-overlap one.
+The `suspends` K-sweep now runs against a real async-sleep primitive:
+`sleep_ms(ms)` (`std.time`, the leaf `suspends` verb), which parks on the
+reactor's timer wheel (`runtime/src/event_loop.rs::register_timer`) instead of
+pinning an OS thread. `bench.sh` generates the straight-line + `par {}` siblings
+exactly like the `blocks` rail, but with `sleep_ms($DMS)`.
+
+What it shows today (A2a-2.2 — the primitive + its codegen park-on-timer
+lowering shipped; the `(Suspends,Suspends)` conflict is NOT yet lifted):
+
+```
+   K | grouped? |   seq   |   par   |  auto   | par<<seq?
+   4 | no       |  0.94s  |  0.42s  |  0.80s  | YES
+```
+
+- **`grouped?` = no** and **`auto ≈ seq`** is the *expected* pre-A2b state: the
+  conflict model still serializes two suspending calls (this is the A2b boundary,
+  by design — the A1 commit lifted only `blocks`).
+- **`par << seq`** is the A2a-2.2 win: `sleep_ms` genuinely overlaps. Two naps in
+  a `par {}` finish in ~one nap, proving the timer-wheel park composes with the
+  par runtime.
+
+**A2b** then lifts `(Suspends,Suspends)` *and* routes auto-par'd suspending calls
+through the async dispatcher (park task, free thread) rather than `par_run` — at
+which point the `auto` column drops to the `par` ceiling here, the same migration
+the `blocks` rail shows after A1.
+
+Caveat unchanged: this `par {}` rail overlaps suspends via *threads* (one worker
+blocked per nap on its completion slot — a pool-bounded ceiling, like `blocks`).
+The real suspends win — millions of tasks parked on a few threads — is the
+thread-free dispatcher path A2b unlocks, measured by a separate *scaling* bench,
+not this latency-overlap one.

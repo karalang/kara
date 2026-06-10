@@ -697,6 +697,21 @@ impl<'a> EffectChecker<'a> {
             self.inferred_effects
                 .insert("Receiver.recv".to_string(), set);
         }
+        // `std.time::sleep_ms(ms)` suspends — the leaf timer-park primitive
+        // (auto-par divergence slice A2a-2.2). Like the network surface
+        // above, the baked-stdlib `with suspends` clause in
+        // `runtime/stdlib/time.kara` is documentation; this seed is the
+        // propagation mechanism that surfaces `suspends` to callers'
+        // inferred sets (so the auto-par conflict model and `query
+        // concurrency` both see it). Free-function key — the bare name.
+        {
+            let mut set = EffectSet::new();
+            set.add(
+                suspends_effect.clone(),
+                EffectOrigin::Direct(builtin_span.clone()),
+            );
+            self.inferred_effects.insert("sleep_ms".to_string(), set);
+        }
         // Network surface (`std.http` + `std.tcp` + `std.tls` + WebSocket):
         // every method that performs network I/O carries sends(Network) +
         // receives(Network). Seeding the qualified key is the only path that

@@ -34,6 +34,19 @@ use super::state::{EnumDropKind, EnumLayout, SharedTypeInfo, SoaGroup, SoaLayout
 /// `callee_network_yield_effect` machinery.
 pub(super) const KARAC_PARK_ON_FD: &str = "karac_park_on_fd";
 
+/// Phase-5 auto-par divergence (slice A2a-2.2): name of the leaf
+/// async-sleep parking primitive — the timer-axis sibling of
+/// [`KARAC_PARK_ON_FD`]. `sleep_ms`'s codegen lowering composes with
+/// this primitive's state machine through
+/// `emit_state_machine_invocation_for_park_on_timer`. Its whole family
+/// (state-struct type, two-state poll-fn, constructor) is emitted by
+/// `emit_park_on_timer_family`, which — unlike the AST-driven fd path —
+/// builds everything directly (the primitive has no kara-source body and
+/// only ever calls runtime FFIs), so it needs no `state_struct_layouts`
+/// entry, `find_function_ast` lookup, or split across the three
+/// `emit_state_machine_*` passes.
+pub(super) const KARAC_PARK_ON_TIMER: &str = "karac_park_on_timer";
+
 /// Synthesize a `StateStructLayout` for `karac_park_on_fd`. The
 /// standard layout-builder (`cli::build_state_struct_layouts`) only
 /// emits an entry for functions whose body contains at least one
@@ -1777,6 +1790,292 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_unreachable()
             .expect("unreachable park-on-fd tag default");
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+    }
+
+    // ── Async-sleep timer primitive family (phase-5 divergence A2a-2.2) ─
+
+    /// Emit the complete state-machine family for the leaf async-sleep
+    /// primitive [`KARAC_PARK_ON_TIMER`] — state-struct type, two-state
+    /// poll-fn, and constructor — registering each in `state_struct_types`
+    /// / `state_machine_poll_fns` / `state_machine_state_constructors` so
+    /// `emit_state_machine_invocation_for_park_on_timer` can compose with
+    /// it from a `sleep_ms` call site.
+    ///
+    /// Unlike the fd path (split across three AST-driven passes because
+    /// user network-boundary poll-fns call user functions declared in a
+    /// later pass), this primitive's poll-fn only ever calls runtime FFIs
+    /// (all declared in `Codegen::new`), so the whole family is emitted in
+    /// one shot. Emitted unconditionally, exactly like the fd family —
+    /// LLVM DCE strips the three internal functions from any module that
+    /// never calls `sleep_ms`.
+    ///
+    /// State-struct layout (timer-axis analog of the fd struct, minus the
+    /// fd/direction captures and the fd path's registration-token field —
+    /// the timer dispatcher claims its own registration via
+    /// `take_registration_with_cancel`, and a timer has no fd to
+    /// `epoll_ctl(DEL)`, so the caller keeps no token and does no
+    /// post-wait cleanup):
+    ///   field 0: i32  tag            (0 = entry/state_0, 1 = state_1)
+    ///   field 1: i64  duration_nanos (the nap length; the caller fills it)
+    ///   field 2: ptr  parked.poll_fn (constructor fills: this poll-fn)
+    ///   field 3: ptr  parked.state   (constructor fills: self-pointer)
+    ///   field 4: ptr  slot           (state_0 allocs the completion slot)
+    pub(super) fn emit_park_on_timer_family(&mut self) {
+        if self.state_struct_types.contains_key(KARAC_PARK_ON_TIMER) {
+            return;
+        }
+        let i8_ty = self.context.i8_type();
+        let i32_ty = self.context.i32_type();
+        let i64_ty = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        // 1. State-struct type.
+        let fields: [BasicTypeEnum<'ctx>; 5] = [
+            i32_ty.into(), // 0 tag
+            i64_ty.into(), // 1 duration_nanos
+            ptr_ty.into(), // 2 parked.poll_fn
+            ptr_ty.into(), // 3 parked.state
+            ptr_ty.into(), // 4 completion slot
+        ];
+        let st = self
+            .context
+            .opaque_struct_type(&format!("kara.state.{}", KARAC_PARK_ON_TIMER));
+        st.set_body(&fields, false);
+        // Anchor the named type so `print_to_string` keeps it referenced
+        // even before the poll-fn body lands (same idiom as the fd family).
+        let anchor = self.module.add_global(
+            st,
+            None,
+            &format!("__kara_state_type_anchor_{}", KARAC_PARK_ON_TIMER),
+        );
+        anchor.set_linkage(Linkage::Private);
+        anchor.set_initializer(&st.const_zero());
+        self.state_struct_types
+            .insert(KARAC_PARK_ON_TIMER.to_string(), st);
+
+        // 2. Poll-fn (`i8 fn(ptr state, ptr cancel)` — KaracParkedTask ABI).
+        let poll_name = format!("__kara_poll_{}", KARAC_PARK_ON_TIMER);
+        let poll_fn = self.module.get_function(&poll_name).unwrap_or_else(|| {
+            let fn_ty = i8_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+            let f = self.module.add_function(&poll_name, fn_ty, None);
+            f.set_linkage(Linkage::Internal);
+            f
+        });
+        self.emit_park_on_timer_poll_body(poll_fn, st);
+        self.state_machine_poll_fns
+            .insert(KARAC_PARK_ON_TIMER.to_string(), poll_fn);
+
+        // 3. Constructor: malloc, tag=0, fill the parked record (poll_fn +
+        // self-pointer); the duration and slot fields are filled later
+        // (caller / state_0 respectively).
+        let ctor_name = format!("__kara_state_new_{}", KARAC_PARK_ON_TIMER);
+        let ctor_fn = self
+            .module
+            .add_function(&ctor_name, ptr_ty.fn_type(&[], false), None);
+        ctor_fn.set_linkage(Linkage::Internal);
+        let saved_bb = self.builder.get_insert_block();
+        let entry = self.context.append_basic_block(ctor_fn, "entry");
+        self.builder.position_at_end(entry);
+        let size = st
+            .size_of()
+            .expect("timer state struct size_of always succeeds for sized types");
+        let state_ptr = self
+            .builder
+            .build_call(self.malloc_fn, &[size.into()], "timer.state.alloc")
+            .expect("call malloc for timer state struct")
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(st, state_ptr, 0, "timer.tag.init")
+            .expect("GEP timer tag field");
+        self.builder
+            .build_store(tag_ptr, i32_ty.const_int(0, false))
+            .expect("store timer tag = 0");
+        let poll_field = self
+            .builder
+            .build_struct_gep(st, state_ptr, 2, "timer.parked.poll")
+            .expect("GEP timer parked.poll_fn field");
+        self.builder
+            .build_store(poll_field, poll_fn.as_global_value().as_pointer_value())
+            .expect("store timer parked.poll_fn");
+        let state_field = self
+            .builder
+            .build_struct_gep(st, state_ptr, 3, "timer.parked.state")
+            .expect("GEP timer parked.state field");
+        self.builder
+            .build_store(state_field, state_ptr)
+            .expect("store timer parked.state (self-reference)");
+        self.builder
+            .build_return(Some(&state_ptr))
+            .expect("return timer state pointer from constructor");
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.state_machine_state_constructors
+            .insert(KARAC_PARK_ON_TIMER.to_string(), ctor_fn);
+    }
+
+    /// Two-state poll-fn body for `karac_park_on_timer` — the timer-axis
+    /// analog of [`emit_park_on_fd_poll_body`].
+    ///
+    ///   entry:   `start_dispatcher()` (idempotent — the dispatcher, not
+    ///            the caller's poll loop, re-enters this fn at `state_1`,
+    ///            so it MUST be running before the deadline is armed), then
+    ///            switch on the tag.
+    ///   state_0 (caller thread): allocate the completion slot (field 4),
+    ///            publish `tag = 1`, then arm the deadline via
+    ///            `register_timer(duration, &parked, null_cancel)` and
+    ///            return Pending. Slot + tag are stored *before* the arming
+    ///            `register_timer` for the same race reason the fd path
+    ///            documents: once the deadline is on the reactor heap the
+    ///            dispatcher can re-enter `state_1` on another thread, and
+    ///            it must observe tag=1 (not re-run state_0). `register_timer`'s
+    ///            `fds`-mutex release publishes both writes ahead of any
+    ///            wakeup. The returned token is dropped — a non-cancellable
+    ///            `sleep_ms` never deregisters (the dispatcher claims the
+    ///            registration itself; there is no fd to `epoll_ctl(DEL)`).
+    ///   state_1 (dispatcher thread): the dispatcher only re-enters here
+    ///            when *this* task's deadline fired (routed by the wakeup's
+    ///            `parked` pointer), so signal the caller's slot and return
+    ///            Ready.
+    fn emit_park_on_timer_poll_body(
+        &mut self,
+        poll_fn: FunctionValue<'ctx>,
+        state_struct: StructType<'ctx>,
+    ) {
+        let i8_ty = self.context.i8_type();
+        let i32_ty = self.context.i32_type();
+        let i64_ty = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        let saved_bb = self.builder.get_insert_block();
+        let entry = self.context.append_basic_block(poll_fn, "entry");
+        let state_0_bb = self.context.append_basic_block(poll_fn, "state_0");
+        let state_1_bb = self.context.append_basic_block(poll_fn, "state_1");
+        let default_bb = self.context.append_basic_block(poll_fn, "tag_unreachable");
+
+        self.builder.position_at_end(entry);
+        if let Some(start_dispatcher) = self
+            .module
+            .get_function("karac_runtime_scheduler_start_dispatcher")
+        {
+            self.builder
+                .build_call(start_dispatcher, &[], "kara.timer.dispatcher_start")
+                .expect("call karac_runtime_scheduler_start_dispatcher");
+        }
+        let state_ptr = poll_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 0, "kara.timer.tag_ptr")
+            .expect("GEP tag field for park-on-timer");
+        let tag = self
+            .builder
+            .build_load(i32_ty, tag_ptr, "kara.timer.tag")
+            .expect("load tag for park-on-timer")
+            .into_int_value();
+        self.builder
+            .build_switch(
+                tag,
+                default_bb,
+                &[
+                    (i32_ty.const_int(0, false), state_0_bb),
+                    (i32_ty.const_int(1, false), state_1_bb),
+                ],
+            )
+            .expect("switch on park-on-timer tag");
+
+        // state_0 (caller thread): arm the deadline, return Pending.
+        self.builder.position_at_end(state_0_bb);
+        let dur_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 1, "kara.timer.dur_ptr")
+            .expect("GEP duration field");
+        let duration = self
+            .builder
+            .build_load(i64_ty, dur_ptr, "kara.timer.dur")
+            .expect("load duration from state struct")
+            .into_int_value();
+        // Allocate + publish the completion slot (field 4) before arming.
+        let park_slot_new_fn = self
+            .module
+            .get_function("karac_runtime_park_slot_new")
+            .expect("karac_runtime_park_slot_new declared in Codegen::new");
+        let slot = self
+            .builder
+            .build_call(park_slot_new_fn, &[], "kara.timer.slot")
+            .expect("call karac_runtime_park_slot_new")
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let slot_field_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 4, "kara.timer.slot_ptr")
+            .expect("GEP completion-slot field");
+        self.builder
+            .build_store(slot_field_ptr, slot)
+            .expect("store completion slot into timer state struct");
+        // Publish tag = 1 before the arming register_timer (race ordering;
+        // see the doc comment).
+        self.builder
+            .build_store(tag_ptr, i32_ty.const_int(1, false))
+            .expect("store tag = 1 (before arming register_timer)");
+        // &parked = field 2 (the {poll_fn, state} pair the runtime reads as
+        // *const KaracParkedTask).
+        let parked_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 2, "kara.timer.parked_ptr")
+            .expect("GEP parked_task field");
+        let null_cancel = ptr_ty.const_null();
+        let register_timer_fn = self
+            .module
+            .get_function("karac_runtime_event_loop_register_timer")
+            .expect("karac_runtime_event_loop_register_timer declared in Codegen::new");
+        self.builder
+            .build_call(
+                register_timer_fn,
+                &[duration.into(), parked_ptr.into(), null_cancel.into()],
+                "kara.timer.register",
+            )
+            .expect("call karac_runtime_event_loop_register_timer");
+        self.builder
+            .build_return(Some(&i8_ty.const_int(0, false)))
+            .expect("return Pending from timer state_0");
+
+        // state_1 (dispatcher thread): signal the slot, return Ready.
+        self.builder.position_at_end(state_1_bb);
+        let slot_field_ptr_s1 = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 4, "kara.timer.slot_ptr.s1")
+            .expect("GEP completion-slot field (state_1)");
+        let slot_s1 = self
+            .builder
+            .build_load(ptr_ty, slot_field_ptr_s1, "kara.timer.slot.s1")
+            .expect("load completion slot from timer state struct");
+        let park_slot_signal_fn = self
+            .module
+            .get_function("karac_runtime_park_slot_signal")
+            .expect("karac_runtime_park_slot_signal declared in Codegen::new");
+        self.builder
+            .build_call(
+                park_slot_signal_fn,
+                &[slot_s1.into()],
+                "kara.timer.slot_signal",
+            )
+            .expect("call karac_runtime_park_slot_signal");
+        self.builder
+            .build_return(Some(&i8_ty.const_int(1, false)))
+            .expect("return Ready from timer state_1");
+
+        self.builder.position_at_end(default_bb);
+        self.builder
+            .build_unreachable()
+            .expect("unreachable park-on-timer tag default");
 
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);

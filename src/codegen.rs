@@ -3270,6 +3270,42 @@ impl<'ctx> Codegen<'ctx> {
             deregister_fd_ty,
             Some(Linkage::External),
         );
+        // ── Async-sleep timer (phase-5 auto-par divergence A2a-2.2) ───────
+        //
+        // `karac_runtime_event_loop_register_timer(duration_nanos: u64,
+        // parked: *mut c_void, cancel: *const AtomicBool) -> u64` — the
+        // timer-axis sibling of `register_fd`: no fd, no `epoll_ctl`, just a
+        // deadline on the reactor's min-heap (A2a-1). On expiry the poller
+        // surfaces a `Wakeup{parked}` that the dispatcher routes to the
+        // parked poll-fn's `state_1`. `sleep_ms`'s park-on-timer state
+        // machine (`emit_state_machine_invocation_for_park_on_timer`) is the
+        // sole emitter. The dispatcher claims the registration itself
+        // (`take_registration_with_cancel`), so — unlike the fd path, which
+        // must `epoll_ctl(DEL)` via `deregister_fd` — the timer caller needs
+        // no post-wait cleanup call.
+        let register_timer_ty = i64_type.fn_type(
+            &[
+                i64_type.into(), // duration_nanos (u64)
+                ptr_type.into(), // parked task pointer (opaque)
+                ptr_type.into(), // cancel: *const AtomicBool (null = none)
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_event_loop_register_timer",
+            register_timer_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_event_loop_cancel_timer(token: u64) -> i32` — claims
+        // a not-yet-fired timer registration (the cooperative-cancel path,
+        // A2b). Declared here for completeness; the non-cancellable
+        // `sleep_ms` lowering never calls it.
+        let cancel_timer_ty = context.i32_type().fn_type(&[i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_event_loop_cancel_timer",
+            cancel_timer_ty,
+            Some(Linkage::External),
+        );
         // Per-park completion slot. `new` allocates; `wait` blocks the
         // caller until the dispatcher signals readiness; `signal` is called
         // by the leaf poll-fn's `state_1` on the dispatcher thread; `free`
@@ -5037,6 +5073,13 @@ impl<'ctx> Codegen<'ctx> {
         // up the struct type at body-rewrite time. Empty when no
         // network-boundary functions exist (the common case).
         self.emit_state_struct_types(program);
+        // Phase-5 auto-par divergence (A2a-2.2): emit the async-sleep timer
+        // primitive family (state-struct + poll-fn + constructor) in one
+        // shot — self-contained (calls only runtime FFIs), so unlike the fd
+        // family it needs no split across the constructor / poll-fn passes.
+        // `sleep_ms` call sites compose with it via
+        // `emit_state_machine_invocation_for_park_on_timer`.
+        self.emit_park_on_timer_family();
         // Phase 6 line 26 slice 8c: emit a state-struct constructor
         // helper per state-struct entry. Caller-side wiring in
         // slice 8d+ replaces direct calls to network-boundary fns

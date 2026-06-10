@@ -1,0 +1,25 @@
+// `std.time` — native asynchronous sleep (phase-5 auto-par divergence,
+// slice A2a-2.2). PRELUDE module (in `STDLIB_SOURCES`), so `sleep_ms`
+// is callable without an import — it is the leaf `suspends` primitive
+// the auto-parallelizer reasons about, the timer-axis sibling of the
+// network `karac_park_on_fd` primitive.
+//
+// `sleep_ms(ms)` parks the calling task on a one-shot deadline timer
+// (`runtime/src/event_loop.rs::register_timer`, A2a-1) and resumes it
+// after `ms` milliseconds. Unlike a libc `usleep` (which carries the
+// `blocks` execution verb and pins an OS thread for the whole nap),
+// `sleep_ms` carries `suspends`: the codegen lowering registers the
+// deadline with the reactor and blocks on a per-park completion slot
+// that the dispatcher signals on expiry. Two `sleep_ms` calls run
+// inside a `par {}` block therefore overlap on the timer wheel rather
+// than serialize.
+//
+// `#[compiler_builtin]`: the body is a typecheck-only placeholder
+// (unit). Codegen intercepts the call by name (`compile_call` in
+// `src/codegen/call_dispatch.rs`) and emits the park-on-timer state
+// machine (`emit_state_machine_invocation_for_park_on_timer`); the stub
+// body is never lowered. The declared `with suspends` is the contract
+// the effect checker and the auto-par conflict model both read.
+
+#[compiler_builtin]
+pub fn sleep_ms(ms: i64) with suspends {}
