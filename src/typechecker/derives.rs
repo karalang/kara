@@ -991,4 +991,130 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
     }
+
+    /// `E_DERIVE_CLONE_ALLOCATES` (phase-8-stdlib-floor item 5). Under
+    /// `panic_on_alloc_failure = false`, a `#[derive(Clone)]` type whose
+    /// synthesized `clone` reaches a panicking allocator (a heap-collection /
+    /// `String` / `Box` field, transitively) is rejected — the derived clone has
+    /// no fallible form. The author writes a manual `try_clone` instead, or opts
+    /// into the panic with `#[allow(derive_clone_allocates)]` on the type.
+    /// Pure-`Copy` types and types whose fields all clone infallibly
+    /// (primitives, refs, `Rc`/`Arc`, nested all-infallible types) are
+    /// unaffected. No-op in the default mode.
+    pub(super) fn validate_derive_clone_allocates(&mut self) {
+        if self.profile_config.panics_on_alloc_failure() {
+            return;
+        }
+        let items: Vec<_> = self.program.items.clone();
+        for item in &items {
+            let (name, attrs, overrides, span) = match item {
+                Item::StructDef(s) => (&s.name, &s.attributes, &s.lint_overrides, &s.span),
+                Item::EnumDef(e) => (&e.name, &e.attributes, &e.lint_overrides, &e.span),
+                _ => continue,
+            };
+            if !extract_derived_traits(attrs).contains("Clone") {
+                continue;
+            }
+            if allows_derive_clone_allocates(overrides) {
+                continue;
+            }
+            let Some((descriptor, field_ty)) = self.first_clone_allocating_field(name) else {
+                continue;
+            };
+            self.type_error(
+                format!(
+                    "`#[derive(Clone)]` on type '{name}' generates a 'clone' that may panic on \
+                     allocation failure ({descriptor} of type '{}' allocates); write a manual \
+                     'try_clone' method instead, or suppress with \
+                     '#[allow(derive_clone_allocates)]' if you accept the panic",
+                    type_display(&field_ty)
+                ),
+                span.clone(),
+                TypeErrorKind::DeriveCloneAllocates,
+            );
+        }
+    }
+
+    /// First field / variant payload of the named type whose clone allocates,
+    /// as a `(descriptor, type)` pair (`descriptor` is e.g. `"field 'name'"` or
+    /// `"variant 'V' payload"`). `None` when the type clones infallibly.
+    fn first_clone_allocating_field(&self, name: &str) -> Option<(String, Type)> {
+        if let Some(info) = self.env.structs.get(name) {
+            for (fname, fty, _) in &info.fields {
+                if self.clone_allocates(fty, &mut std::collections::HashSet::new()) {
+                    return Some((format!("field '{fname}'"), fty.clone()));
+                }
+            }
+        } else if let Some(info) = self.env.enums.get(name) {
+            for (vname, vti) in &info.variants {
+                let tys: Vec<&Type> = match vti {
+                    VariantTypeInfo::Unit => Vec::new(),
+                    VariantTypeInfo::Tuple(ts) => ts.iter().collect(),
+                    VariantTypeInfo::Struct(fs) => fs.iter().map(|(_, t)| t).collect(),
+                };
+                for t in tys {
+                    if self.clone_allocates(t, &mut std::collections::HashSet::new()) {
+                        return Some((format!("variant '{vname}' payload"), t.clone()));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Whether cloning a value of `ty` performs a heap allocation that may
+    /// panic on OOM. `true` for owned heap collections (`Vec` / `String` /
+    /// `Map` / `Set` / `VecDeque` / `SortedSet` / `Box`), transitively for
+    /// user structs/enums with such a field, and for `Option`/`Result`/tuples/
+    /// arrays wrapping one. `false` for primitives, refs, and `Rc`/`Arc`/`Weak`
+    /// (clone is a refcount bump) and `shared` types (RC). `visiting` guards
+    /// against recursive type definitions.
+    fn clone_allocates(&self, ty: &Type, visiting: &mut std::collections::HashSet<String>) -> bool {
+        match ty {
+            Type::Str => true,
+            Type::Named { name, args } => match name.as_str() {
+                "Vec" | "VecDeque" | "Map" | "Set" | "SortedSet" | "TreeMap" | "TreeSet"
+                | "Box" | "String" => true,
+                "Rc" | "Arc" | "Weak" => false,
+                "Option" | "Result" => args.iter().any(|a| self.clone_allocates(a, visiting)),
+                other => {
+                    if !visiting.insert(other.to_string()) {
+                        return false; // cycle — already being inspected
+                    }
+                    let result = if let Some(info) = self.env.structs.get(other) {
+                        info.fields
+                            .iter()
+                            .any(|(_, fty, _)| self.clone_allocates(fty, visiting))
+                    } else if let Some(info) = self.env.enums.get(other) {
+                        info.variants.iter().any(|(_, vti)| match vti {
+                            VariantTypeInfo::Unit => false,
+                            VariantTypeInfo::Tuple(ts) => {
+                                ts.iter().any(|t| self.clone_allocates(t, visiting))
+                            }
+                            VariantTypeInfo::Struct(fs) => {
+                                fs.iter().any(|(_, t)| self.clone_allocates(t, visiting))
+                            }
+                        })
+                    } else {
+                        false // unknown nominal — conservative (don't flag)
+                    };
+                    visiting.remove(other);
+                    result
+                }
+            },
+            Type::Array { element, .. } => self.clone_allocates(element, visiting),
+            Type::Tuple(elems) => elems.iter().any(|e| self.clone_allocates(e, visiting)),
+            // `Rc`/`Arc`/`Weak` clone is a refcount bump; `shared` types are RC.
+            Type::Rc(_) | Type::Arc(_) | Type::Weak(_) | Type::Shared(_) => false,
+            _ => false,
+        }
+    }
+}
+
+/// Whether the type's lint overrides include `#[allow(derive_clone_allocates)]`
+/// (phase-8-stdlib-floor item 5 suppression). Free fn — no `self` needed.
+fn allows_derive_clone_allocates(overrides: &[crate::lints::LintLevelOverride]) -> bool {
+    overrides.iter().any(|o| {
+        o.lint == "derive_clone_allocates" && matches!(o.level, crate::lints::LintLevel::Allow)
+    })
 }

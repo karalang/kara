@@ -25897,3 +25897,107 @@ fn test_hard_mode_allows_integer_arithmetic() {
         errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
     );
 }
+
+// ── E_DERIVE_CLONE_ALLOCATES — panic_on_alloc_failure = false (item 5) ──
+
+fn assert_derive_clone_allocates(errors: &[TypeError], needle: &str) {
+    assert!(
+        errors.iter().any(|e| matches!(
+            e.kind,
+            karac::typechecker::TypeErrorKind::DeriveCloneAllocates
+        ) && e.message.contains(needle)),
+        "expected DeriveCloneAllocates mentioning `{needle}`, got: {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+fn has_derive_clone_allocates(errors: &[TypeError]) -> bool {
+    errors.iter().any(|e| {
+        matches!(
+            e.kind,
+            karac::typechecker::TypeErrorKind::DeriveCloneAllocates
+        )
+    })
+}
+
+#[test]
+fn test_hard_mode_rejects_derive_clone_with_string_field() {
+    let errors = typecheck_hard_mode(
+        "#[derive(Clone)]\n\
+         struct User { name: String, age: i64 }\n\
+         fn main() {}",
+    );
+    assert_derive_clone_allocates(&errors, "field 'name'");
+}
+
+#[test]
+fn test_hard_mode_rejects_derive_clone_with_vec_field() {
+    let errors = typecheck_hard_mode(
+        "#[derive(Clone)]\n\
+         struct Bag { items: Vec[i64] }\n\
+         fn main() {}",
+    );
+    assert_derive_clone_allocates(&errors, "field 'items'");
+}
+
+#[test]
+fn test_hard_mode_allows_derive_clone_all_copy_fields() {
+    let errors = typecheck_hard_mode(
+        "#[derive(Clone)]\n\
+         struct Point { x: i64, y: i64 }\n\
+         fn main() {}",
+    );
+    assert!(
+        !has_derive_clone_allocates(&errors),
+        "{:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_hard_mode_derive_clone_allocates_suppressed_by_allow() {
+    let errors = typecheck_hard_mode(
+        "#[derive(Clone)]\n\
+         #[allow(derive_clone_allocates)]\n\
+         struct User { name: String }\n\
+         fn main() {}",
+    );
+    assert!(
+        !has_derive_clone_allocates(&errors),
+        "{:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_default_mode_allows_derive_clone_with_string() {
+    typecheck_ok(
+        "#[derive(Clone)]\n\
+         struct User { name: String, age: i64 }\n\
+         fn main() {}",
+    );
+}
+
+#[test]
+fn test_hard_mode_rejects_derive_clone_enum_string_payload() {
+    let errors = typecheck_hard_mode(
+        "#[derive(Clone)]\n\
+         enum Msg { Text(String), Code(i64), Empty }\n\
+         fn main() {}",
+    );
+    assert_derive_clone_allocates(&errors, "variant 'Text'");
+}
+
+#[test]
+fn test_hard_mode_rejects_derive_clone_transitive_field() {
+    // A field of a user struct that itself has a String field allocates.
+    let errors = typecheck_hard_mode(
+        "#[derive(Clone)]\n\
+         struct Inner { s: String }\n\
+         #[derive(Clone)]\n\
+         struct Outer { inner: Inner, n: i64 }\n\
+         fn main() {}",
+    );
+    // Both Inner (field s) and Outer (field inner) are flagged.
+    assert_derive_clone_allocates(&errors, "field 'inner'");
+}

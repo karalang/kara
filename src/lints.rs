@@ -183,6 +183,18 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         description: "A lint-level attribute names a lint the compiler does not recognise.",
     },
     LintInfo {
+        // phase-8-stdlib-floor item 5 / 9. Registered so
+        // `#[allow(derive_clone_allocates)]` is a recognised lint name (no
+        // `unknown_lint` warning); the diagnostic itself is a hard error
+        // (`E_DERIVE_CLONE_ALLOCATES`) emitted directly under
+        // `panic_on_alloc_failure = false`, and the `#[allow]` suppression is
+        // honoured by the derive-clone validator reading the type's
+        // `lint_overrides`. `Deny` reflects its error class.
+        name: "derive_clone_allocates",
+        default_level: LintLevel::Deny,
+        description: "A `#[derive(Clone)]` type's synthesized `clone` may panic on allocation failure under `panic_on_alloc_failure = false`.",
+    },
+    LintInfo {
         name: "unreachable_arm",
         default_level: LintLevel::Warn,
         description:

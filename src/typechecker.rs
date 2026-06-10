@@ -1366,6 +1366,10 @@ impl<'a> TypeChecker<'a> {
         self.build_type_env();
         self.validate_derive_copy();
         self.validate_copy_implies_clone();
+        // Fallible-allocation: under `panic_on_alloc_failure = false`, reject a
+        // `#[derive(Clone)]` whose synthesized clone may panic on OOM
+        // (phase-8-stdlib-floor item 5). No-op in the default mode.
+        self.validate_derive_clone_allocates();
         self.validate_derived_traits_recursive();
         self.validate_enum_payload_no_nested_enum();
         self.validate_derive_arithmetic();
