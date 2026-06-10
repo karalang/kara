@@ -366,6 +366,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_option_shared_heap.clear();
         self.ref_params.clear();
         self.owned_vecstr_params.clear();
+        self.owned_struct_params.clear();
         self.rc_fallback_heap_types.clear();
         // Per-function reset of the name-keyed local-variable type side-
         // tables. These mirror exactly what `register_var_from_type_expr`
@@ -579,6 +580,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(type_name) = path.segments.first() {
                         self.var_type_names
                             .insert(param_name.clone(), type_name.clone());
+                        // Owned (bare, non-ref Path) struct param whose struct
+                        // has a heap (`Vec`/`String`) field — the field-move-out
+                        // double-free set (B-2026-06-10-2). A `ref Struct` param
+                        // doesn't take ownership, so it's excluded by the
+                        // `Path(_)`-only guard.
+                        if matches!(&param.ty.kind, TypeKind::Path(_))
+                            && self
+                                .struct_field_type_names
+                                .get(type_name.as_str())
+                                .is_some_and(|fields| {
+                                    fields.iter().any(|f| {
+                                        matches!(
+                                            f.as_deref(),
+                                            Some("Vec") | Some("VecDeque") | Some("String")
+                                        )
+                                    })
+                                })
+                        {
+                            self.owned_struct_params.insert(param_name.clone());
+                        }
                         // rc_inc for shared-type parameters (caller keeps its
                         // reference). Only fires for owned Path params — a
                         // shared-typed `ref T` doesn't take ownership, so no

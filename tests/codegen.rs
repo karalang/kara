@@ -8847,6 +8847,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_param_field_move_out() {
+        // B-2026-06-10-2: moving a Vec field OUT of a by-value struct PARAM
+        // (`let inner = h.v`) deep-copies the field buffer so the moved-out
+        // local is independent of the caller's (the caller's struct-drop frees
+        // the original). Pre-fix this double-freed (the buffer was shallow-
+        // shared; ASAN coverage in `tests/memory_sanitizer.rs`). Output
+        // correctness on the codegen lane is the non-ASAN guard: reuse + the
+        // original both stay valid.
+        let out = run_program(
+            "struct Holder { v: Vec[i64] }\n\
+             fn build() -> Holder {\n\
+             \x20   let mut inner: Vec[i64] = Vec.new();\n\
+             \x20   inner.push(10i64); inner.push(20i64);\n\
+             \x20   Holder { v: inner }\n\
+             }\n\
+             fn first_elem(h: Holder) -> i64 { let inner = h.v; inner[0] }\n\
+             fn main() {\n\
+             \x20   let h = build();\n\
+             \x20   let a = first_elem(h);\n\
+             \x20   let b = first_elem(h);\n\
+             \x20   println(a + b);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "20");
+        }
+    }
+
+    #[test]
     fn test_e2e_let_rebind_move_no_double_free() {
         // `let outer = inner;` where `inner` is a tracked Vec /
         // String is a move — both slots end up holding the same

@@ -2552,6 +2552,63 @@ fn main() {
         );
     }
 
+    // ── B-2026-06-10-2: moving a heap field OUT of a by-value struct PARAM ──
+    // The param is a shallow copy whose field buffer aliases the caller's; the
+    // moved-out local is deep-copied so it owns an independent buffer (the
+    // caller's struct-drop frees the original exactly once). The repro above
+    // (`asan_struct_with_vec_field_returned_no_double_free`) is the base case;
+    // these pin the reuse / String-field / field-return shapes.
+
+    #[test]
+    fn asan_struct_param_field_move_reuse_no_double_free() {
+        // Passing the same struct by value TWICE — each `first_elem(h)`
+        // deep-copies `h.v`, so each callee frees its own copy and `main` frees
+        // the original once. Pre-fix this double-freed (exit 134).
+        assert_clean_asan_run(
+            r#"
+struct Holder { v: Vec[i64] }
+fn build() -> Holder { let mut inner: Vec[i64] = Vec.new(); inner.push(7i64); let h: Holder = Holder { v: inner }; h }
+fn first_elem(h: Holder) -> i64 { let inner = h.v; inner[0] }
+fn main() { let h = build(); let a = first_elem(h); let b = first_elem(h); println(a + b); }
+"#,
+            &["14"],
+            "struct_param_field_move_reuse",
+        );
+    }
+
+    #[test]
+    fn asan_struct_param_string_field_move_no_double_free() {
+        // String field (layout-equivalent to `Vec[u8]`) moved out of a by-value
+        // struct param — same deep-copy path, exercises the `String`/i8-elem arm.
+        assert_clean_asan_run(
+            r#"
+struct Named { name: String }
+fn build() -> Named { let mut s = String.new(); s.push_str("hi"); let n: Named = Named { name: s }; n }
+fn firstn(n: Named) -> i64 { let inner = n.name; inner.len() }
+fn main() { let n = build(); println(firstn(n)); }
+"#,
+            &["2"],
+            "struct_param_string_field_move",
+        );
+    }
+
+    #[test]
+    fn asan_struct_param_field_returned_no_double_free() {
+        // The moved-out field is RETURNED to the caller: the deep-copy is the
+        // returned value (caller owns it), the param's original field is freed
+        // by the outer `main`'s struct-drop — two independent buffers.
+        assert_clean_asan_run(
+            r#"
+struct Holder { v: Vec[i64] }
+fn build() -> Holder { let mut inner: Vec[i64] = Vec.new(); inner.push(9i64); let h: Holder = Holder { v: inner }; h }
+fn takev(h: Holder) -> Vec[i64] { let inner = h.v; inner }
+fn main() { let h = build(); let v = takev(h); println(v[0]); }
+"#,
+            &["9"],
+            "struct_param_field_returned",
+        );
+    }
+
     #[test]
     fn asan_struct_with_string_field_freed_on_scope_exit() {
         // String is layout-equivalent to Vec[u8] (`{ptr, len, cap}`)

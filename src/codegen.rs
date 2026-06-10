@@ -1350,6 +1350,17 @@ pub(super) struct Codegen<'ctx> {
     /// recursion base case; `fn id(s: String) -> String { s }`).
     /// Cleared per-function alongside `ref_params`.
     pub(crate) owned_vecstr_params: HashSet<String>,
+    /// Owned (bare, non-ref) **struct** params with at least one heap
+    /// (`Vec`/`String`) field. Same copy-model rationale as
+    /// `owned_vecstr_params`, one level in: a by-value struct param is a
+    /// shallow copy whose heap-field buffers alias the caller's, but the
+    /// caller retains and frees them. So moving a heap field OUT
+    /// (`let inner = h.v`) into an owned local that the callee then frees
+    /// double-frees against the caller's struct-drop. The let-FieldAccess
+    /// lowering deep-copies such a field's buffer so the moved-out local is
+    /// independent (B-2026-06-10-2). Cleared per-function alongside
+    /// `ref_params`.
+    pub(crate) owned_struct_params: HashSet<String>,
     /// SoA layout metadata (layout name → SoaLayout).
     pub(crate) soa_layouts: HashMap<String, SoaLayout>,
     /// Function parameter ref-ness (function name → vec of is_ref per param).
@@ -4300,6 +4311,7 @@ impl<'ctx> Codegen<'ctx> {
             fn_param_slice_elem: HashMap::new(),
             ref_params: HashMap::new(),
             owned_vecstr_params: HashSet::new(),
+            owned_struct_params: HashSet::new(),
             fn_param_ref: HashMap::new(),
             fn_return_type_names: HashMap::new(),
             fn_return_type_exprs: HashMap::new(),

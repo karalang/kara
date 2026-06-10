@@ -999,6 +999,53 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-06-10-2 fix. If `value` is `P.field` where `P` is an owned
+    /// (bare, non-ref) by-value struct PARAM, deep-copy the Vec/String field
+    /// buffer that was just bound into `var_name`'s slot, so the moved-out
+    /// local owns an independent buffer.
+    ///
+    /// A by-value struct param is a shallow copy whose heap-field buffers alias
+    /// the caller's; the caller retains and frees them (its scope-exit
+    /// struct-drop). Moving a field out (`let inner = h.v`) binds a shallow
+    /// alias that this function then tracks for a `FreeVecBuffer` — so without
+    /// the copy, `free(inner.data)` here and the caller's
+    /// `__karac_drop_struct_<T>` free the SAME buffer (double-free). The copy
+    /// makes the two frees hit independent buffers. Gated to PARAM sources: a
+    /// field moved out of a LOCAL struct this function owns is handled by the
+    /// existing in-function cap-zero suppression (it can reach the local's
+    /// slot; a cross-function caller's slot it cannot). Bare-`Vec`/`String`
+    /// params already deep-copy at the call site (`owned_vecstr_params`); this
+    /// is the one-level-in analogue.
+    fn deep_copy_owned_struct_param_field_move(
+        &mut self,
+        var_name: &str,
+        value: &Expr,
+        elem_ty: BasicTypeEnum<'ctx>,
+    ) {
+        let is_param_field = matches!(
+            &value.kind,
+            ExprKind::FieldAccess { object, .. }
+                if matches!(&object.kind, ExprKind::Identifier(p)
+                    if self.owned_struct_params.contains(p.as_str()))
+        );
+        if !is_param_field {
+            return;
+        }
+        let slot_ptr = match self.variables.get(var_name) {
+            Some(s) => s.ptr,
+            None => return,
+        };
+        let vec_ty = self.vec_struct_type();
+        let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
+        if let Ok(cur) = self
+            .builder
+            .build_load(vec_ty, slot_ptr, "move.field.copy.cur")
+        {
+            let copied = self.emit_vecstr_defensive_copy(cur, elem_ty, elem_te.as_ref());
+            let _ = self.builder.build_store(slot_ptr, copied);
+        }
+    }
+
     pub(super) fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         // Slice c-repl.B.5.1: REPL value-snapshot replay short-circuit.
         // When this stmt is a top-level `let <name> = <expr>` whose
@@ -2256,6 +2303,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Track Vec variables for scope cleanup.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     if let Some(&elem_ty) = self.vec_elem_types.get(var_name.as_str()) {
+                        // B-2026-06-10-2: a Vec/String field moved OUT of a
+                        // by-value struct param (`let inner = h.v`) is bound as
+                        // a shallow alias of the caller's buffer (the param is a
+                        // shallow struct copy). The new local is tracked for a
+                        // `FreeVecBuffer` below, and the CALLER's struct-drop
+                        // frees the same buffer → double-free. Deep-copy the
+                        // field buffer so the moved-out local owns an
+                        // independent one; the caller frees the original
+                        // exactly once. Runs BEFORE `track_vec_var` so the
+                        // queued free targets the copy.
+                        self.deep_copy_owned_struct_param_field_move(
+                            var_name.as_str(),
+                            value,
+                            elem_ty,
+                        );
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             // Defensive guard against stale `vec_elem_types`
                             // entries for non-Vec slots — specifically, Array
