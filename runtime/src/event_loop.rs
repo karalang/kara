@@ -33,7 +33,8 @@
 //!   phase-6 entry calls out by name.
 
 use mio::{Events, Interest, Poll, Token};
-use std::collections::{HashMap, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::ffi::c_void;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -84,11 +85,12 @@ pub struct RegistrationToken(usize);
 struct FdState {
     parked: *mut c_void,
     direction: IoDirection,
-    /// Optional deadline. Stored as part of the v1 per-fd state per
-    /// the phase-6 line 15 spec. Timer-driven expiry is the M2 polish
-    /// layer's work (timer wheel); v1 stores the field so M2 hooks
-    /// into the existing per-fd state map without re-shaping it.
-    #[allow(dead_code)]
+    /// Optional deadline. For a **timer** registration (`register_timer`,
+    /// A2a-1 — the `suspends` async-sleep substrate) this is `Some(_)` and is
+    /// the authoritative expiry instant: the `timers` min-heap drives the
+    /// poll-timeout and the expiry scan reads this field to confirm a popped
+    /// heap entry's registration is genuinely due. For an **fd** registration
+    /// it is `None` (a future fd-with-timeout bound could set it).
     deadline: Option<Instant>,
     /// Per-task cancel flag (slice 5c). Bound at register time for a
     /// `spawn_coro`-driven coroutine (the handler's `cancel: AtomicBool`,
@@ -113,6 +115,22 @@ struct FdState {
 // `Arc<EventLoop>`, so the inner `fds` HashMap (storing `FdState`)
 // must itself be `Send` to live inside the `Mutex`.
 unsafe impl Send for FdState {}
+
+/// One entry in the [`EventLoopFds::timers`] min-heap (A2a-1, the
+/// async-sleep / `suspends` timer substrate).
+///
+/// Carries only `Copy`, `Send` scalars — the deadline and the raw token —
+/// so the heap itself needs no `unsafe Send`. The opaque `parked` pointer
+/// lives in the matching [`FdState`] in `by_token`, keyed by this token; the
+/// expiry scan re-reads `FdState.deadline` as the authoritative due-time, so
+/// a stale heap entry left by a re-armed or cancelled timer is filtered out
+/// rather than firing the wrong task. Ordered by `(deadline, token)` and
+/// stored under [`Reverse`] so [`BinaryHeap`] yields the *earliest* deadline.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct TimerEntry {
+    deadline: Instant,
+    token_raw: usize,
+}
 
 /// A readiness wakeup surfaced by [`EventLoop::run_once`].
 ///
@@ -186,6 +204,13 @@ struct EventLoopPoll {
 
 struct EventLoopFds {
     by_token: HashMap<Token, FdState>,
+    /// Min-heap of pending timer deadlines (A2a-1). A `register_timer`
+    /// registration has no fd and no mio arming — it lives only here (for the
+    /// poll-timeout cap + expiry scan) and in `by_token` (for `parked` +
+    /// `take_registration`). Stale entries (cancelled or superseded timers)
+    /// are filtered lazily at pop time against `by_token`/`FdState.deadline`,
+    /// so cancellation never has to rebuild the heap.
+    timers: BinaryHeap<Reverse<TimerEntry>>,
     /// Monotonically increasing source of unique tokens. Reserved
     /// values: `0` is the cross-thread waker (see [`WAKER_TOKEN`]);
     /// user-fd tokens start at `1`.
@@ -210,6 +235,7 @@ impl EventLoop {
             }),
             fds: Mutex::new(EventLoopFds {
                 by_token: HashMap::new(),
+                timers: BinaryHeap::new(),
                 next_token: 1,
             }),
             pending: Mutex::new(Vec::new()),
@@ -295,6 +321,59 @@ impl EventLoop {
             return Err(e);
         }
         Ok(RegistrationToken(token.0))
+    }
+
+    /// Register a one-shot timer that fires at `deadline`, with no fd.
+    ///
+    /// The async-sleep / `suspends` substrate (A2a-1). Unlike `register`
+    /// there is no `mio::Source` and no `epoll_ctl`: the registration lives in
+    /// the `timers` min-heap (driving the poll-timeout cap + expiry scan in
+    /// `run_once`) and in `by_token` (so `take_registration` claims it
+    /// uniformly with an fd wakeup and the dispatcher resume path is
+    /// identical). On or after `deadline`, the next `run_once` surfaces a
+    /// `Wakeup` carrying `parked`; `direction` is reported as `Read` (a timer
+    /// has no I/O direction and the resumed task does not consult it). Cancel
+    /// before firing via `take_registration` (drops the `by_token` entry; the
+    /// stale heap entry is filtered lazily at pop). `cancel` is the per-task
+    /// cancel flag (null if unbound), stored like any other registration.
+    ///
+    /// Wakes the loop after publishing so a poller already blocked in
+    /// `run_once(None)` re-derives its timeout and observes the new deadline
+    /// (an fd ADD is seen by an in-flight `poll`, but a timeout change is not).
+    /// Acquires only the `fds` Mutex briefly.
+    pub fn register_timer(
+        &self,
+        deadline: Instant,
+        parked: *mut c_void,
+        cancel: *const AtomicBool,
+    ) -> RegistrationToken {
+        let token = {
+            let mut fds = self.fds.lock().unwrap_or_else(|p| p.into_inner());
+            let token = Token(fds.next_token);
+            fds.next_token = fds
+                .next_token
+                .checked_add(1)
+                .expect("event loop token exhaustion (usize wrap)");
+            fds.by_token.insert(
+                token,
+                FdState {
+                    parked,
+                    direction: IoDirection::Read,
+                    deadline: Some(deadline),
+                    cancel,
+                },
+            );
+            fds.timers.push(Reverse(TimerEntry {
+                deadline,
+                token_raw: token.0,
+            }));
+            token
+        };
+        // Force a blocked poller to recompute its timeout against the new
+        // deadline. Best-effort: a failed wake only delays this timer until
+        // the next natural wakeup, never drops it.
+        let _ = self.waker.wake();
+        RegistrationToken(token.0)
     }
 
     /// Remove a registration.
@@ -462,6 +541,22 @@ impl EventLoop {
         } else {
             Some(Duration::ZERO)
         };
+        // A2a-1: cap the poll timeout by the earliest pending timer so a task
+        // parked on a deadline with no fd activity still wakes on time. An
+        // already-due timer collapses the wait to zero (fire on this pass). A
+        // stale earliest entry (cancelled timer not yet popped) can only cap
+        // *too short* → one extra non-blocking pass, never a missed wakeup.
+        let max_wait = {
+            let now = Instant::now();
+            let fds = self.fds.lock().unwrap_or_else(|p| p.into_inner());
+            match fds.timers.peek() {
+                Some(Reverse(entry)) => {
+                    let until = entry.deadline.saturating_duration_since(now);
+                    Some(max_wait.map_or(until, |w| w.min(until)))
+                }
+                None => max_wait,
+            }
+        };
         let mut poll_guard = self.poll.lock().unwrap_or_else(|p| p.into_inner());
         let EventLoopPoll {
             ref mut poll,
@@ -478,7 +573,7 @@ impl EventLoop {
             }
             return Err(e);
         }
-        let fds = self.fds.lock().unwrap_or_else(|p| p.into_inner());
+        let mut fds = self.fds.lock().unwrap_or_else(|p| p.into_inner());
         // Stashed wakeups (oldest readiness) deliver ahead of this
         // poll's fresh events.
         let mut wakeups = std::mem::take(&mut stashed);
@@ -503,6 +598,31 @@ impl EventLoop {
                 parked: state.parked,
                 direction,
             });
+        }
+        // A2a-1: drain expired timers. Re-sample `now` so a long `poll` counts
+        // toward expiry. Fire only registrations still live in `by_token`
+        // (filters cancelled timers) and genuinely due per `FdState.deadline`
+        // (filters a re-armed timer whose deadline advanced past a stale heap
+        // entry). The dispatcher then claims each via `take_registration`,
+        // exactly as for an fd wakeup.
+        let now = Instant::now();
+        // Peek-then-pop: the `is_some_and` confines the immutable `peek`
+        // borrow to the condition, so the `pop` in the body is conflict-free.
+        while fds
+            .timers
+            .peek()
+            .is_some_and(|Reverse(entry)| entry.deadline <= now)
+        {
+            let Reverse(entry) = fds.timers.pop().expect("peeked due above");
+            if let Some(state) = fds.by_token.get(&Token(entry.token_raw)) {
+                if state.deadline.is_some_and(|d| d <= now) {
+                    wakeups.push(Wakeup {
+                        token: RegistrationToken(entry.token_raw),
+                        parked: state.parked,
+                        direction: state.direction,
+                    });
+                }
+            }
         }
         Ok(wakeups)
     }
@@ -4417,6 +4537,183 @@ mod tests {
         );
 
         woke.join().unwrap();
+    }
+
+    // ── A2a-1: timer wheel ─────────────────────────────────────────
+
+    /// A registered timer fires on or after its deadline, surfacing a
+    /// `Wakeup` that carries the exact `parked` pointer and token, and
+    /// no earlier than the deadline.
+    #[test]
+    fn timer_fires_at_deadline_carrying_parked() {
+        let ev = EventLoop::new().unwrap();
+        let parked = 0xA11CE_usize as *mut c_void;
+        let tok = ev.register_timer(
+            Instant::now() + Duration::from_millis(40),
+            parked,
+            std::ptr::null(),
+        );
+
+        let start = Instant::now();
+        let mut got: Option<Wakeup> = None;
+        // Loop: the register-time waker makes the first poll return empty;
+        // the timer fires on a later pass once the deadline elapses. The 2s
+        // outer bound keeps a regression from hanging the suite.
+        while start.elapsed() < Duration::from_secs(2) {
+            let wakeups = ev.run_once(Some(Duration::from_millis(100))).unwrap();
+            if let Some(w) = wakeups.into_iter().next() {
+                got = Some(w);
+                break;
+            }
+        }
+        let elapsed = start.elapsed();
+        let w = got.expect("timer must fire within 2s");
+        assert_eq!(w.parked as usize, 0xA11CE, "wakeup carries the parked ptr");
+        assert_eq!(w.token.0, tok.0, "wakeup carries the timer's token");
+        assert!(
+            elapsed >= Duration::from_millis(35),
+            "timer fired early ({elapsed:?} < ~40ms deadline)"
+        );
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "timer fired far too late: {elapsed:?}"
+        );
+    }
+
+    /// The core fix: a timer must cap an otherwise-infinite `run_once(None)`
+    /// so a task parked on a deadline with no fd activity still wakes. Runs
+    /// the blocking poll on a watchdog thread — a broken cap blocks forever,
+    /// which this surfaces as a `recv_timeout` failure instead of a hang.
+    #[test]
+    fn timer_caps_blocking_poll_none() {
+        let ev = std::sync::Arc::new(EventLoop::new().unwrap());
+        ev.register_timer(
+            Instant::now() + Duration::from_millis(40),
+            0xBEEF_usize as *mut c_void,
+            std::ptr::null(),
+        );
+        let ev2 = std::sync::Arc::clone(&ev);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let h = thread::spawn(move || loop {
+            let wakeups = ev2.run_once(None).unwrap();
+            if !wakeups.is_empty() {
+                let _ = tx.send(wakeups[0].parked as usize);
+                return;
+            }
+        });
+        let got = rx.recv_timeout(Duration::from_secs(2));
+        assert_eq!(
+            got,
+            Ok(0xBEEF),
+            "run_once(None) with a pending timer must wake on the deadline, not block forever"
+        );
+        h.join().unwrap();
+    }
+
+    /// An already-past deadline fires on the very next poll (no blocking).
+    #[test]
+    fn past_due_timer_fires_immediately() {
+        let ev = EventLoop::new().unwrap();
+        let tok = ev.register_timer(
+            Instant::now() - Duration::from_millis(5),
+            0xDEAD_usize as *mut c_void,
+            std::ptr::null(),
+        );
+        let start = Instant::now();
+        let wakeups = ev.run_once(Some(Duration::from_secs(2))).unwrap();
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "past-due timer must not block"
+        );
+        assert_eq!(wakeups.len(), 1);
+        assert_eq!(wakeups[0].token.0, tok.0);
+    }
+
+    /// Cancelling a timer (claiming its registration before it fires) must
+    /// drop it: the stale heap entry is filtered at pop, never fires.
+    #[test]
+    fn cancelled_timer_never_fires() {
+        let ev = EventLoop::new().unwrap();
+        let tok = ev.register_timer(
+            Instant::now() + Duration::from_millis(30),
+            0xC0FFEE_usize as *mut c_void,
+            std::ptr::null(),
+        );
+        // Cancel by claiming the by_token entry (the dispatcher-uniform path).
+        let claimed = ev.take_registration(RegistrationToken(tok.0));
+        assert_eq!(claimed, Some(0xC0FFEE_usize as *mut c_void));
+
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(150) {
+            let wakeups = ev.run_once(Some(Duration::from_millis(40))).unwrap();
+            assert!(
+                wakeups.is_empty(),
+                "cancelled timer must not fire, got {wakeups:?}"
+            );
+        }
+    }
+
+    /// With two timers, the earlier deadline fires first.
+    #[test]
+    fn earliest_deadline_fires_first() {
+        let ev = EventLoop::new().unwrap();
+        let far = ev.register_timer(
+            Instant::now() + Duration::from_millis(800),
+            0x0F_usize as *mut c_void,
+            std::ptr::null(),
+        );
+        let near = ev.register_timer(
+            Instant::now() + Duration::from_millis(40),
+            0x0E_usize as *mut c_void,
+            std::ptr::null(),
+        );
+        let start = Instant::now();
+        let mut first: Option<Wakeup> = None;
+        while start.elapsed() < Duration::from_secs(2) {
+            let wakeups = ev.run_once(Some(Duration::from_millis(100))).unwrap();
+            if let Some(w) = wakeups.into_iter().next() {
+                first = Some(w);
+                break;
+            }
+        }
+        let w = first.expect("near timer must fire");
+        assert_eq!(w.token.0, near.0, "earlier deadline must fire first");
+        assert_ne!(w.token.0, far.0);
+    }
+
+    /// A fired timer is claimed exactly once via `take_registration` — the
+    /// dispatcher path is identical to an fd wakeup.
+    #[test]
+    fn fired_timer_claimed_once() {
+        let ev = EventLoop::new().unwrap();
+        let tok = ev.register_timer(
+            Instant::now() + Duration::from_millis(30),
+            0x5107_usize as *mut c_void,
+            std::ptr::null(),
+        );
+        let start = Instant::now();
+        let mut fired = false;
+        while start.elapsed() < Duration::from_secs(2) {
+            if !ev
+                .run_once(Some(Duration::from_millis(60)))
+                .unwrap()
+                .is_empty()
+            {
+                fired = true;
+                break;
+            }
+        }
+        assert!(fired, "timer must fire");
+        assert_eq!(
+            ev.take_registration(RegistrationToken(tok.0)),
+            Some(0x5107_usize as *mut c_void),
+            "dispatcher claims the parked ptr"
+        );
+        assert_eq!(
+            ev.take_registration(RegistrationToken(tok.0)),
+            None,
+            "second claim is a no-op (one-shot)"
+        );
     }
 
     #[test]
