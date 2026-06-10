@@ -855,6 +855,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     compiled_args.push(elem_ptr.into());
                     continue;
                 }
+                // A borrow-returning call in `ref`-arg position
+                // (`first(pick(v))`, B-2026-06-10-4): the call's result IS
+                // already a pointer to the borrowed data (the `-> ref T`
+                // ABI), so forward it directly. The normal `compile_expr`
+                // path would hit `compile_call`'s direct-use intercept,
+                // which LOADS the pointee into a `{ptr,len,cap}` value;
+                // the rvalue-ref path below would then store that into a
+                // temp and queue its cleanup — double-freeing the borrow
+                // source the callee only borrows. Bypass the intercept via
+                // `compiling_ref_return_let_rhs` so the call yields its raw
+                // borrow ptr (mirrors the let-RHS / explicit-return
+                // handling in stmts.rs / exprs.rs). No temp, no cleanup —
+                // a borrow is never an ownership transfer.
+                if self.is_borrow_returning_call_expr(&a.value) {
+                    let prev = self.compiling_ref_return_let_rhs;
+                    self.compiling_ref_return_let_rhs = true;
+                    let ptr = self.compile_expr(&a.value);
+                    self.compiling_ref_return_let_rhs = prev;
+                    compiled_args.push(ptr?.into());
+                    continue;
+                }
             }
             // Slice-parameter coercion: if this parameter slot expects
             // Slice[T] / mut Slice[T] and the argument is an Array[T, N],

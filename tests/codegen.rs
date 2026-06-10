@@ -2031,6 +2031,37 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_borrow_return_call_into_ref_arg() {
+        // B-2026-06-10-4: a borrow-returning call forwarded straight into a
+        // `ref` parameter (`first(pick(v))`). The call result IS the borrow
+        // ptr; it must be forwarded directly, NOT loaded-into-a-value-then-
+        // stored-in-a-cleanup-tracked-temp (which double-freed the source's
+        // heap buffer — the source `v`/`s` is freed once by its own binding).
+        // Asserts both the value AND that the source stays usable afterward
+        // (a premature/duplicate free would corrupt the post-use read or
+        // crash). Covers Vec (cap>0 heap) and String (push_str-grown heap).
+        let out = run_program(
+            "fn pickv(v: ref Vec[i64]) -> ref Vec[i64] { v }\n\
+             fn firstv(v: ref Vec[i64]) -> i64 { v[0] }\n\
+             fn picks(s: ref String) -> ref String { s }\n\
+             fn lens(s: ref String) -> i64 { s.len() }\n\
+             fn main() {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(10); v.push(20);\n\
+             \x20   println(firstv(pickv(v)));\n\
+             \x20   println(v[1]);\n\
+             \x20   let mut s: String = \"\";\n\
+             \x20   s.push_str(\"hello\");\n\
+             \x20   println(lens(picks(s)));\n\
+             \x20   println(s);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "10\n20\n5\nhello");
+        }
+    }
+
+    #[test]
     fn test_e2e_borrow_return_borrowed_struct() {
         // Borrowed-struct return (design.md Feature 4 Part 3, B-2026-06-07-5):
         // `-> ref Parser` returns the struct BY VALUE with its `ref` field
