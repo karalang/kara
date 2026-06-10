@@ -31,7 +31,7 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_bufreader_method(
         &mut self,
         method: &str,
-        obj: Value,
+        obj: &Value,
         args: &[CallArg],
         span: &Span,
     ) -> Option<Value> {

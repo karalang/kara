@@ -25,49 +25,52 @@ use super::value::{try_write_or_panic, EnumData, Value};
 /// deep-cloned the map (O(n²) kata → 3 extra whole-map clones per op).
 ///
 /// Routing every by-value clone through this one choke point lets the perf
-/// gate (`tests::map_receiver_dispatch_clones_are_bounded`) count exactly
-/// how many times a `Map` receiver is deep-cloned in a single dispatch and
-/// assert it stays O(1), not O(handlers).
+/// gates (`tests::map_receiver_dispatch_clones_are_bounded`,
+/// `tests::vec_receiver_dispatch_clones_are_bounded`) count exactly how many
+/// times a heavy collection receiver (`Map`/`Vec`) is deep-cloned in a single
+/// dispatch and assert it stays O(1), not O(handlers).
 ///
 /// A new category guard added above an existing handler MUST either borrow
 /// the receiver (`&obj` — preferred when the `try_eval_*` only reads it, as
-/// the iterator/http/regex/set/backpressure/process/tensor/pool guards now
+/// the iterator/http/regex/set/map/backpressure/process/tensor/pool guards now
 /// do) or clone through this helper. A raw `obj.clone()` is invisible to the
 /// gate.
 #[inline]
 fn clone_receiver(obj: &Value) -> Value {
     #[cfg(test)]
-    if matches!(obj, Value::Map(_)) {
-        test_probe::bump_map_receiver_clone();
+    if matches!(obj, Value::Map(_) | Value::Array(_)) {
+        test_probe::bump_collection_receiver_clone();
     }
     obj.clone()
 }
 
-/// Per-thread counter of by-value `Map`-receiver clones performed by
-/// `clone_receiver`, used only by the perf-gate unit test below. Compiled
-/// out of production builds (`cfg(test)`), so `clone_receiver` is a plain
-/// `obj.clone()` there with zero added cost.
+/// Per-thread counter of by-value heavy-collection-receiver (`Map`/`Vec`)
+/// clones performed by `clone_receiver`, used only by the perf-gate unit
+/// tests below. Compiled out of production builds (`cfg(test)`), so
+/// `clone_receiver` is a plain `obj.clone()` there with zero added cost. Each
+/// gate drives one dispatch with a single receiver type, so the shared
+/// counter unambiguously attributes the clones to that type.
 #[cfg(test)]
 pub(crate) mod test_probe {
     use std::cell::Cell;
 
     thread_local! {
-        static MAP_RECEIVER_CLONES: Cell<u32> = const { Cell::new(0) };
+        static COLLECTION_RECEIVER_CLONES: Cell<u32> = const { Cell::new(0) };
     }
 
-    /// Record one by-value clone of a `Map` receiver in the dispatch loop.
-    pub(super) fn bump_map_receiver_clone() {
-        MAP_RECEIVER_CLONES.with(|c| c.set(c.get() + 1));
+    /// Record one by-value clone of a heavy collection receiver.
+    pub(super) fn bump_collection_receiver_clone() {
+        COLLECTION_RECEIVER_CLONES.with(|c| c.set(c.get() + 1));
     }
 
     /// Reset the per-thread counter to zero before a measured run.
-    pub(crate) fn reset_map_receiver_clones() {
-        MAP_RECEIVER_CLONES.with(|c| c.set(0));
+    pub(crate) fn reset_collection_receiver_clones() {
+        COLLECTION_RECEIVER_CLONES.with(|c| c.set(0));
     }
 
     /// Read the per-thread counter.
-    pub(crate) fn map_receiver_clones() -> u32 {
-        MAP_RECEIVER_CLONES.with(|c| c.get())
+    pub(crate) fn collection_receiver_clones() -> u32 {
+        COLLECTION_RECEIVER_CLONES.with(|c| c.get())
     }
 }
 
@@ -716,30 +719,39 @@ impl<'a> super::Interpreter<'a> {
         if let Some(v) = self.try_eval_set_method(method, object, &obj, args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_map_method(method, object, clone_receiver(&obj), args, span)
-        {
+        // The map handler owns Map/Set/SortedSet/Entry receivers and consumes
+        // an owned value (insert/merge move out of it). Borrow-check the
+        // receiver shape BEFORE cloning so a non-matching receiver (a `Vec`/
+        // `String` on the dispatch hot path) passes through uncloned — the
+        // single legitimate clone (`clone_receiver`, counted by the perf gate)
+        // only happens for a receiver this handler actually accepts
+        // (B-2026-06-07-4a). The post-map guards below borrow `&obj`.
+        if matches!(
+            obj,
+            Value::Map(_) | Value::SortedSet(_) | Value::Set(_) | Value::Entry { .. }
+        ) {
+            if let Some(v) =
+                self.try_eval_map_method(method, object, clone_receiver(&obj), args, span)
+            {
+                return v;
+            }
+        }
+        if let Some(v) = self.try_eval_option_result_method(method, object, &obj, args, span) {
             return v;
         }
-        if let Some(v) =
-            self.try_eval_option_result_method(method, object, clone_receiver(&obj), args, span)
-        {
+        if let Some(v) = self.try_eval_channel_method(method, &obj, args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_channel_method(method, clone_receiver(&obj), args, span) {
+        if let Some(v) = self.try_eval_file_method(method, &obj, args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_file_method(method, clone_receiver(&obj), args, span) {
+        if let Some(v) = self.try_eval_bufreader_method(method, &obj, args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_bufreader_method(method, clone_receiver(&obj), args, span) {
+        if let Some(v) = self.try_eval_bufwriter_method(method, &obj, args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_bufwriter_method(method, clone_receiver(&obj), args, span) {
-            return v;
-        }
-        if let Some(v) =
-            self.try_eval_vector_method(method, object, clone_receiver(&obj), args, span)
-        {
+        if let Some(v) = self.try_eval_vector_method(method, object, &obj, args, span) {
             return v;
         }
         if let Some(v) = self.try_eval_seq_method(method, object, clone_receiver(&obj), args, span)
@@ -1063,53 +1075,20 @@ impl<'a> super::Interpreter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::test_probe::{map_receiver_clones, reset_map_receiver_clones};
+    use super::test_probe::{collection_receiver_clones, reset_collection_receiver_clones};
 
-    /// Perf gate for the B-2026-06-07-4 map-heavy regression (fixed in
-    /// `6a049301`, which left no regression test — this is it). A method
-    /// call on a `Map` receiver must traverse only an O(1) number of
-    /// by-value receiver clones in the `eval_method_call` dispatch loop,
-    /// independent of how many category guards exist above the map handler.
-    /// The regression was three speculative backpressure guards each
-    /// deep-cloning the map (O(N)) per op, turning the O(n²) `hash_map.kara`
-    /// kata's cost into 3 extra whole-map clones per operation.
+    /// Run `program` to completion, counting heavy-collection-receiver
+    /// (`Map`/`Vec`) deep-clones performed in the `eval_method_call` dispatch
+    /// loop, and assert its trimmed stdout equals `expected_output`. Returns
+    /// the clone count.
     ///
-    /// `get_or` is a map-specific read, so it falls through every guard
-    /// above `try_eval_map_method` before the map handler accepts it. As of
-    /// B-2026-06-07-4a (the inline `iterator`/`http`/`regex`/`set` guards now
-    /// borrow `&obj` instead of cloning), the ONLY by-value clone a `Map`
-    /// receiver incurs is the accepting map handler's own, so the count is
-    /// **1**. This is the tight end-state: O(1) and independent of how many
-    /// category guards sit above the map handler.
-    ///
-    /// If this assertion fails:
-    /// - count **went up** → a new category guard was added above the map
-    ///   handler that takes the receiver by value (cloning it via
-    ///   `clone_receiver`). Make it borrow (`&obj`) if its `try_eval_*` only
-    ///   reads the receiver — that is the fix, not bumping the ceiling. (See
-    ///   the `clone_receiver` doc comment.)
-    /// - count **went down** → the map handler itself stopped taking the
-    ///   receiver by value. Good — lower `EXPECTED` to match. The O(1)
-    ///   property is what matters, not the exact constant.
-    #[test]
-    fn map_receiver_dispatch_clones_are_bounded() {
-        // One map value-receiver dispatch: `Map.new()` is an associated-fn
-        // call (it never enters the value-receiver guard loop), and the
-        // f-string interpolates a bare `i64` binding (no further dispatch),
-        // so `m.get_or(..)` is the only call that clones a `Map` receiver.
-        const PROGRAM: &str = "fn main() {\n\
-             let m: Map[i64, i64] = Map.new();\n\
-             let v = m.get_or(1, 0);\n\
-             println(f\"{v}\")\n\
-         }";
-        const EXPECTED: u32 = 1;
-
-        // Drive the interpreter inline on THIS thread (mirroring
-        // `run_program_full`'s pipeline). `crate::run_program` runs the
-        // interpreter on a freshly spawned 16 MB-stack thread, which would
-        // increment the per-thread clone counter on that worker, not here.
-        // This tiny program can't overflow the default test stack.
-        let mut parsed = crate::parse(PROGRAM);
+    /// The interpreter runs **inline on this thread** (mirroring
+    /// `run_program_full`'s pipeline). `crate::run_program` runs it on a freshly
+    /// spawned 16 MB-stack thread, which would increment the per-thread clone
+    /// counter on that worker, not here — the tiny gate programs can't overflow
+    /// the default test stack.
+    fn dispatch_clone_count(program: &str, expected_output: &str) -> u32 {
+        let mut parsed = crate::parse(program);
         assert!(
             parsed.errors.is_empty(),
             "parse errors: {:?}",
@@ -1122,22 +1101,91 @@ mod tests {
         let mut interp = crate::interpreter::Interpreter::new(&parsed.program, &typed);
         interp.captured_output = Some(Vec::new());
 
-        reset_map_receiver_clones();
+        reset_collection_receiver_clones();
         interp.run();
 
         let out = interp.captured_output.take().unwrap_or_default();
         assert_eq!(
             out.join("").trim(),
-            "0",
-            "program should run and print the default value"
+            expected_output,
+            "unexpected program output"
         );
+        collection_receiver_clones()
+    }
 
-        let clones = map_receiver_clones();
+    /// Perf gate for the B-2026-06-07-4 map-heavy regression (fixed in
+    /// `6a049301`, which left no regression test — this is it). A method call
+    /// on a `Map` receiver must deep-clone the map an O(1) number of times in
+    /// the `eval_method_call` dispatch loop, independent of how many category
+    /// guards exist above the map handler. The regression was speculative
+    /// guards each deep-cloning the map (O(N)) per op, turning the O(n²)
+    /// `hash_map.kara` kata's cost into extra whole-map clones per operation.
+    ///
+    /// As of B-2026-06-07-4a (the pre-map iterator/http/regex/set guards
+    /// borrow `&obj`, and the map call site is borrow-checked before cloning),
+    /// the ONLY clone a `Map` receiver incurs is the accepting map handler's
+    /// own, so the count is **1** — the tight O(1) end-state.
+    ///
+    /// If this fails:
+    /// - count **went up** → a new category guard above the map handler takes
+    ///   the receiver by value. Make it borrow (`&obj`), or borrow-check its
+    ///   call site before `clone_receiver` — that is the fix, not bumping the
+    ///   ceiling. (See the `clone_receiver` doc comment.)
+    /// - count **went down** → the map handler stopped cloning. Good — lower
+    ///   `EXPECTED`. The O(1) property is what matters, not the constant.
+    #[test]
+    fn map_receiver_dispatch_clones_are_bounded() {
+        // `Map.new()` is an associated-fn call (never enters the value-receiver
+        // guard loop) and the f-string interpolates a bare `i64` binding, so
+        // `m.get_or(..)` is the only Map-receiver dispatch.
+        const EXPECTED: u32 = 1;
+        let clones = dispatch_clone_count(
+            "fn main() {\n\
+                 let m: Map[i64, i64] = Map.new();\n\
+                 let v = m.get_or(1, 0);\n\
+                 println(f\"{v}\")\n\
+             }",
+            "0",
+        );
         assert_eq!(
             clones, EXPECTED,
             "a single Map-receiver method dispatch deep-cloned the map {clones} times \
+             (expected {EXPECTED}); see this test's doc comment"
+        );
+    }
+
+    /// Perf gate for `Vec` (`Value::Array`) receivers — the post-map residue of
+    /// B-2026-06-07-4a. A `Vec` receiver traverses every guard down to the
+    /// `seq` handler; before this slice each by-value guard between the map
+    /// handler and `seq` (`map`/`option_result`/`channel`/`file`/`bufreader`/
+    /// `bufwriter`/`vector`) deep-cloned the vector (~8 clones/op for a
+    /// Vec/String workload). Now those guards borrow `&obj` (or borrow-check
+    /// before cloning), so the ONLY clone is `seq`'s own when it accepts the
+    /// method — count **1**, the same O(1) end-state as the map gate.
+    ///
+    /// Same failure interpretation as `map_receiver_dispatch_clones_are_bounded`:
+    /// a rise means a new by-value guard above `seq` that should borrow `&obj`.
+    #[test]
+    fn vec_receiver_dispatch_clones_are_bounded() {
+        // `[1, 2, 3]` is a `Value::Array`; `.contains(..)` routes through the
+        // full category-guard chain to the `seq` handler (unlike `len`/
+        // `is_empty`, which are intercepted inline before the guards), so it
+        // exercises every post-map guard. `println` of the bound `bool`
+        // triggers no further collection dispatch.
+        const EXPECTED: u32 = 1;
+        let clones = dispatch_clone_count(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3];\n\
+                 let found = v.contains(2);\n\
+                 println(f\"{found}\")\n\
+             }",
+            "true",
+        );
+        assert_eq!(
+            clones, EXPECTED,
+            "a single Vec-receiver method dispatch deep-cloned the vector {clones} times \
              (expected {EXPECTED}); see this test's doc comment — a rise means a new \
-             by-value guard above the map handler, which should borrow `&obj` instead"
+             by-value guard above the seq handler, which should borrow `&obj` instead"
         );
     }
 }

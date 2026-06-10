@@ -33,7 +33,7 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_bufwriter_method(
         &mut self,
         method: &str,
-        obj: Value,
+        obj: &Value,
         args: &[CallArg],
         span: &Span,
     ) -> Option<Value> {

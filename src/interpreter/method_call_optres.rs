@@ -15,13 +15,13 @@ impl<'a> super::Interpreter<'a> {
         // `Value::Atomic` is now an `Arc<Mutex<…>>` shared cell mutated in
         // place under lock, so there is no write-back to the env slot/field.
         _object: &Expr,
-        obj: Value,
+        obj: &Value,
         args: &[CallArg],
         span: &Span,
     ) -> Option<Value> {
         match method {
             "unwrap" => {
-                return Some(match &obj {
+                return Some(match obj {
                     Value::EnumVariant {
                         variant,
                         data: EnumData::Tuple(vals),
@@ -47,7 +47,7 @@ impl<'a> super::Interpreter<'a> {
                 } else {
                     String::new()
                 };
-                return Some(match &obj {
+                return Some(match obj {
                     Value::EnumVariant {
                         variant,
                         data: EnumData::Tuple(vals),
@@ -69,32 +69,32 @@ impl<'a> super::Interpreter<'a> {
                 });
             }
             "is_some" => {
-                return Some(match &obj {
+                return Some(match obj {
                     Value::EnumVariant { variant, .. } if variant == "Some" => Value::Bool(true),
                     Value::EnumVariant { variant, .. } if variant == "None" => Value::Bool(false),
                     _ => Value::Bool(true),
                 });
             }
             "is_none" => {
-                return Some(match &obj {
+                return Some(match obj {
                     Value::EnumVariant { variant, .. } if variant == "None" => Value::Bool(true),
                     _ => Value::Bool(false),
                 });
             }
             "is_ok" => {
-                return Some(match &obj {
+                return Some(match obj {
                     Value::EnumVariant { variant, .. } if variant == "Ok" => Value::Bool(true),
                     _ => Value::Bool(false),
                 });
             }
             "is_err" => {
-                return Some(match &obj {
+                return Some(match obj {
                     Value::EnumVariant { variant, .. } if variant == "Err" => Value::Bool(true),
                     _ => Value::Bool(false),
                 });
             }
             "load" => {
-                if let Value::Atomic(cell) = &obj {
+                if let Value::Atomic(cell) = obj {
                     // Ordering argument accepted but ignored — the `Mutex`
                     // already serialises every op, which is stronger than any
                     // requested ordering.
@@ -102,7 +102,7 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
             "store" => {
-                if let Value::Atomic(cell) = &obj {
+                if let Value::Atomic(cell) = obj {
                     // Evaluate the argument *before* taking the lock: the
                     // interpreter could otherwise re-enter and touch the same
                     // atomic, and `std::sync::Mutex` is not re-entrant.
@@ -128,7 +128,7 @@ impl<'a> super::Interpreter<'a> {
             // exchanges any value (incl. `Atomic[bool]`). The ordering arg is
             // accepted and ignored.
             "fetch_add" | "fetch_sub" | "fetch_and" | "fetch_or" | "fetch_xor" | "swap" => {
-                if let Value::Atomic(cell) = &obj {
+                if let Value::Atomic(cell) = obj {
                     // Eval the operand before locking (re-entrancy guard, as in
                     // `store`).
                     let arg_val = args
@@ -164,7 +164,7 @@ impl<'a> super::Interpreter<'a> {
             // the cell's `Mutex` so it is genuinely atomic across branches;
             // orderings ignored.
             "compare_exchange" => {
-                if let Value::Atomic(cell) = &obj {
+                if let Value::Atomic(cell) = obj {
                     // Eval both operands before locking (re-entrancy guard).
                     // `new` is evaluated unconditionally — these are value
                     // arguments per the CAS signature, so this matches Rust

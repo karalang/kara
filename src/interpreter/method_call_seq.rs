@@ -982,13 +982,18 @@ impl<'a> super::Interpreter<'a> {
         &mut self,
         method: &str,
         object: &Expr,
-        obj: Value,
+        obj: &Value,
         args: &[CallArg],
         span: &Span,
     ) -> Option<Value> {
+        // Borrow-check the receiver first so a non-Vector receiver (e.g. an
+        // `Array`/`String` on the dispatch hot path) is rejected WITHOUT a
+        // deep clone (B-2026-06-07-4a); clone the confirmed (N-lane) Vector
+        // only when it matches.
         let Value::Vector(lanes) = obj else {
             return None;
         };
+        let lanes = lanes.clone();
         match method {
             // Horizontal folds: combine all lanes with the matching scalar op.
             // The typechecker guarantees N >= 1 (and an integer element for the
