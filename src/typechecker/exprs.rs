@@ -2416,6 +2416,28 @@ impl<'a> super::TypeChecker<'a> {
                         &expr.span,
                     );
                 }
+                // Enum struct-variant construction `Enum.Variant { ... }`:
+                // when the second-to-last segment names a known enum whose
+                // `Variant` is struct-shaped, route to enum-variant inference
+                // (else `infer_struct_literal` looks up `Variant` as a struct
+                // and rejects "not a struct"). See `enum_struct_variant_fields`.
+                if path.len() >= 2 {
+                    let enum_name = path[path.len() - 2].clone();
+                    if let Some(decl_fields) =
+                        self.enum_struct_variant_fields(&enum_name, &target_name)
+                    {
+                        if let Some(ref spread_expr) = spread {
+                            self.infer_expr(spread_expr);
+                        }
+                        return self.infer_enum_struct_variant_literal(
+                            &enum_name,
+                            &target_name,
+                            &decl_fields,
+                            fields,
+                            &expr.span,
+                        );
+                    }
+                }
                 if let Some(ref spread_expr) = spread {
                     self.infer_expr(spread_expr);
                 }

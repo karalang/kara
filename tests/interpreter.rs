@@ -15203,3 +15203,35 @@ fn main() {
 "#);
     assert_eq!(output, "true\nfalse\ntrue\n");
 }
+
+#[test]
+fn enum_struct_variant_construction_match_and_equality() {
+    // Source-level `Enum.Variant { field: value }` construction builds a
+    // proper `Value::EnumVariant` (not a `Value::Struct`), so match-with-
+    // field-binding, `==`, and mixed unit/struct-variant comparison all work.
+    let output = run(r#"
+#[derive(Eq)]
+enum Shape { Circle { r: i64 }, Square { side: i64 }, Unknown }
+
+fn area(s: Shape) -> i64 {
+    match s {
+        Shape.Circle { r } => 3 * r * r,
+        Shape.Square { side } => side * side,
+        Shape.Unknown => 0,
+    }
+}
+
+fn main() {
+    let c = Shape.Circle { r: 2 };
+    let c2 = Shape.Circle { r: 2 };
+    let sq = Shape.Square { side: 3 };
+    let u = Shape.Unknown;
+    println(f"{area(c)}");
+    println(f"{area(sq)}");
+    println(f"{c == c2}");
+    println(f"{c == sq}");
+    println(f"{c == u}");
+}
+"#);
+    assert_eq!(output, "12\n9\ntrue\nfalse\nfalse\n");
+}

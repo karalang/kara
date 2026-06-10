@@ -1518,6 +1518,40 @@ impl<'a> Interpreter<'a> {
         })
     }
 
+    /// For a qualified `Enum.Variant`, return the variant's declared
+    /// struct-field names in declaration order when `Variant` is a
+    /// struct-shaped variant of the (user or baked-stdlib) enum `Enum`;
+    /// `None` otherwise. Drives source-level enum struct-variant
+    /// construction (`AllocError.OutOfMemory { requested_bytes: n }`) so it
+    /// builds a `Value::EnumVariant` (with `EnumData::Struct` in declared
+    /// order, for deterministic Display + structural `==`) rather than
+    /// falling through to a plain `Value::Struct`.
+    fn qualified_enum_struct_variant_field_order(
+        &self,
+        enum_name: &str,
+        variant: &str,
+    ) -> Option<Vec<String>> {
+        fn scan(items: &[Item], enum_name: &str, variant: &str) -> Option<Vec<String>> {
+            items.iter().find_map(|item| match item {
+                Item::EnumDef(e) if e.name == enum_name => {
+                    e.variants.iter().find(|v| v.name == variant).and_then(|v| {
+                        if let VariantKind::Struct(fields) = &v.kind {
+                            Some(fields.iter().map(|f| f.name.clone()).collect())
+                        } else {
+                            None
+                        }
+                    })
+                }
+                _ => None,
+            })
+        }
+        scan(&self.program.items, enum_name, variant).or_else(|| {
+            crate::prelude::STDLIB_PROGRAMS
+                .iter()
+                .find_map(|(_, p)| scan(&p.items, enum_name, variant))
+        })
+    }
+
     /// Read a field from a struct value. Out of line from `eval_expr_inner`
     /// to keep the recursive evaluator's stack frame small.
     fn read_field(&mut self, obj: Value, field: &str, span: &Span) -> Value {
@@ -1642,6 +1676,30 @@ impl<'a> Interpreter<'a> {
         for field in fields {
             let val = self.eval_expr_inner(&field.value);
             field_vals.insert(field.name.clone(), val);
+        }
+        // Enum struct-variant construction `Enum.Variant { field: val, ... }`:
+        // when the qualifier names a known enum whose `Variant` is
+        // struct-shaped, build a `Value::EnumVariant` (payload in declared
+        // field order) instead of falling through to a plain `Value::Struct`.
+        // Keeps construction consistent with unit/tuple variants so `==`,
+        // `match`, and Display all behave (the typechecker routes the same
+        // shape via `infer_enum_struct_variant_literal`).
+        if path.len() >= 2 {
+            let enum_name = &path[path.len() - 2];
+            if let Some(order) = self.qualified_enum_struct_variant_field_order(enum_name, &name) {
+                // `EnumData::Struct` is keyed by field name (order-independent
+                // for `==`); pull each declared field from the evaluated set.
+                let mut data_fields: HashMap<String, Value> = HashMap::new();
+                for fname in order {
+                    let v = field_vals.remove(&fname).unwrap_or(Value::Unit);
+                    data_fields.insert(fname, v);
+                }
+                return Value::EnumVariant {
+                    enum_name: enum_name.clone(),
+                    variant: name,
+                    data: EnumData::Struct(data_fields),
+                };
+            }
         }
         if let Some(def) = self.find_struct_def(&name) {
             // `par struct` is reference-semantic like `shared struct` (both are

@@ -25526,3 +25526,48 @@ fn test_mixed_int_arithmetic_explicit_cast_accepted() {
          }",
     );
 }
+
+#[test]
+fn enum_struct_variant_construction_typechecks() {
+    // `Enum.Variant { field: value }` is routed to enum-variant inference
+    // (not struct-literal inference, which would reject the variant name as
+    // "not a struct"). Well-formed construction type-checks clean.
+    typecheck_ok(
+        r#"
+enum Shape { Circle { r: i64 }, Square { side: i64 } }
+fn use_shapes() -> i64 {
+    let c = Shape.Circle { r: 2 };
+    let s = Shape.Square { side: 3 };
+    match c {
+        Shape.Circle { r } => r,
+        Shape.Square { side } => side,
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn enum_struct_variant_missing_and_unknown_fields() {
+    let errs = typecheck_errors(
+        r#"
+enum Shape { Circle { r: i64 } }
+fn bad() -> Shape {
+    Shape.Circle { radius: 2 }
+}
+"#,
+    );
+    let joined = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        joined.contains("unknown field 'radius'"),
+        "expected unknown-field error, got: {joined}"
+    );
+    assert!(
+        joined.contains("missing field 'r'"),
+        "expected missing-field error, got: {joined}"
+    );
+}

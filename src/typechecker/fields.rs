@@ -554,4 +554,74 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
     }
+
+    // ── Enum struct-variant literals ────────────────────────────
+    //
+    // `Enum.Variant { field: value, ... }` — qualified construction of an
+    // enum's struct-shaped variant. The parser produces the same
+    // `StructLiteral` node a struct literal does, with `path = [.., Enum,
+    // Variant]`; the dispatcher routes here when the leading segment names a
+    // known enum whose `Variant` is a `VariantTypeInfo::Struct`. Without this
+    // path the node falls to `infer_struct_literal`, which looks up the last
+    // segment (`Variant`) as a *struct* and rejects it as "not a struct".
+
+    /// If `Enum.Variant` names a struct-shaped variant of a known enum,
+    /// return its declared `(field, type)` list (cloned). `None` otherwise
+    /// (unit/tuple variant, unknown enum, or a plain struct path).
+    pub(super) fn enum_struct_variant_fields(
+        &self,
+        enum_name: &str,
+        variant: &str,
+    ) -> Option<Vec<(String, Type)>> {
+        let info = self.env.enums.get(enum_name)?;
+        let (_, vinfo) = info.variants.iter().find(|(n, _)| n == variant)?;
+        match vinfo {
+            super::types::VariantTypeInfo::Struct(fields) => Some(fields.clone()),
+            _ => None,
+        }
+    }
+
+    /// Type-check an `Enum.Variant { ... }` literal against the variant's
+    /// declared struct fields and return the enum type. Mirrors
+    /// `infer_struct_literal`'s missing/extra/field-type checks; like it,
+    /// generic args are left empty (`Type::Named { args: [] }`) — context
+    /// (`let e: Enum[T] = ...`) drives instantiation, not the literal.
+    pub(super) fn infer_enum_struct_variant_literal(
+        &mut self,
+        enum_name: &str,
+        variant: &str,
+        declared_fields: &[(String, Type)],
+        fields: &[FieldInit],
+        span: &Span,
+    ) -> Type {
+        let provided: HashSet<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+        for (fname, _) in declared_fields {
+            if !provided.contains(fname.as_str()) {
+                self.type_error(
+                    format!("missing field '{fname}' in enum variant '{enum_name}.{variant}'"),
+                    span.clone(),
+                    TypeErrorKind::MissingField,
+                );
+            }
+        }
+        for f in fields {
+            if let Some((_, expected_ty)) = declared_fields.iter().find(|(n, _)| n == &f.name) {
+                self.check_expr(&f.value, &expected_ty.clone());
+            } else {
+                self.type_error(
+                    format!(
+                        "unknown field '{}' in enum variant '{enum_name}.{variant}'",
+                        f.name
+                    ),
+                    f.span.clone(),
+                    TypeErrorKind::ExtraField,
+                );
+                self.infer_expr(&f.value);
+            }
+        }
+        Type::Named {
+            name: enum_name.to_string(),
+            args: Vec::new(),
+        }
+    }
 }
