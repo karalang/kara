@@ -8,7 +8,7 @@ Development plan for the `karac` compiler, aligned with [design.md](docs/design.
 2. **LLVM codegen is the single execution backend.** The tree-walk interpreter (Phase 4) served its original purpose as a semantic-validation step before codegen (Phase 4 → Phase 7) and is retained as a *dev/debug tool* — useful for stepping through compiler internals, validating semantics during compiler work, and any future reflection-style introspection. It is **not** the runtime backend for user-facing `karac repl` / `karac test` workflows. Those workflows use **always-JIT** via LLJIT (`llvm-sys::orc2`): every function lazy-compiled on first call, fast on subsequent calls. Single execution model across `karac build`, `karac repl`, and `karac test` — no semantic divergence between interactive and compiled execution. (Locked 2026-05-05; see brainstorming archive for the alternatives considered and the principle-driven argument for "always-JIT over hybrid tree-walk + JIT.")
 3. **Incremental phases** — each phase produces a working compiler for a growing subset of the language.
 4. **Diagnostics are incremental** — structured error output is built alongside each phase, not deferred. Every compiler feature ships with its diagnostics. JSON output format exists from the first error the compiler can report.
-5. **North star: self-hosting** — the Kāra compiler should eventually be written in Kāra.
+5. **North star: self-hosting — pulled into v1 as the pivot (2026-06-10).** The Kāra compiler is rewritten in Kāra *before* the long-tail stdlib, not after v1. Self-hosting (Phase 12) is sequenced after the Phase 8 floor + Phase 9 enforcement (both effectively done) and Phase 10 targets (mostly done); Phase 11 is then built *on* the self-hosted compiler, so every compiler-internal feature (f16 lowering, shape-kinded generics, inline asm, the codegen IR pass) is written once, in Kāra, never twice. Execution order is therefore 8 → 9 → 10 → 12 → 11; numeric order no longer equals execution order. See [Phase 12](#phase-12-self-hosting) and the [Phase Dependency Graph](#phase-dependency-graph).
 6. **Interactive is first-class, not an afterthought.** REPL and Jupyter kernel are positioned as differentiators, not convenience tooling — Kāra is one of few systems-grade statically-typed languages whose interactive surface runs at compiled-binary speed (lazy LLJIT amortizes the ~100 ms cold-compile across cell lifetime; subsequent calls are native code). The advantage over `evcxr`-style recompile-per-cell or JShell's JVM startup tax is **execution model parity** — REPL cells exhibit the same effect / ownership / perf behavior as `karac build` artifacts. Trivial REPL cells (`let x = 1+1`) cost ~100 ms instead of <1 ms — but the cost is *expected and uniform*, never a mystery slowdown; honest framing for users: "REPL has built-in compile latency by design."
 
 ---
@@ -29,8 +29,8 @@ Development plan for the `karac` compiler, aligned with [design.md](docs/design.
 - [Phase 8.5: V1 Ship Readiness](#phase-85-v1-ship-readiness) — parallel track (Interactive Development, Build & Dependency Tooling, Discovery)
 - [Phase 9: Gradual Verification Enforcement](#phase-9-gradual-verification-enforcement)
 - [Phase 10: Additional Compilation Targets](#phase-10-additional-compilation-targets)
-- [Phase 11: Standard Library — Long-Tail](#phase-11-standard-library--long-tail)
-- [Phase 12: Self-Hosting](#phase-12-self-hosting)
+- [Phase 12: Self-Hosting](#phase-12-self-hosting) — **the v1 pivot; executes before Phase 11**
+- [Phase 11: Standard Library — Long-Tail](#phase-11-standard-library--long-tail) — **built on the self-hosted compiler; END = v1 release**
 - [Future: Gradual Verification](#future-gradual-verification-feature-6)
 - [Future: Comptime](#future-comptime-compile-time-code-execution)
 - [Future: Language Server and Reactive Query-Based Compilation](#future-language-server-and-reactive-query-based-compilation)
@@ -844,6 +844,8 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
 
 **Goal:** Same language compiles to multiple targets.
 
+> **Status (2026-06-10) — most shipped Phase 10 work lives in the tracker, not as checkboxes here.** The coarse boxes below understate progress because the granular work has no roadmap checkbox. Per `implementation_checklist/phase-10-targets.md` (≈29/33 done), these are **DONE**: TLS provider cross-compile to all v1 targets + CI gate, `std.web` / `std.wasi` gated effect modules, `host fn` (parse → typecheck → native lowering), WASM **strip-by-default** (482 KiB → 30 KiB browser hello), and the dual / threaded WASM runtime archives + sequential cooperative scheduler. The boxes that remain `[ ]` below are genuinely open: **GPU** is still at the `#[gpu]` routing-design stage (P1 v1 gate, not yet built); **atomic RMW / fences** and **FPGA** are unstarted; **WebAssembly**'s core lowering is in but the event-loop-yield scheduler refinement is pending. Trust the tracker over the box state in this section.
+
 > **v66 graduation update (2026-05-11):** **GPU compute shaders pulled forward to v1 ship-readiness** as a P1 gate, no longer Phase 10. The implementation tasks below stay in Phase 10's tracker for sequencing (codegen work proceeds during the Phase 8–11 window) but the gate is v1 ship, not "post-v1 target completion." Multi-vendor coverage already satisfied by the existing wgpu-primary design (Metal on macOS, Vulkan on Linux, DX12 on Windows, WebGPU in browser; CUDA opt-in via `--target cuda`). See `deferred.md § Additional Compilation Targets (Phase 10)` for the v1 pull-forward note, and `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 5.2` for the decision rationale. WebAssembly and embedded targets stay at Phase 10 post-v1.
 
 - [ ] **WebAssembly:** LLVM WASM backend. Concurrency lowering: sequential cooperative scheduling on the main thread by default; `--features wasm-threads` opts into Web Workers + SharedArrayBuffer + atomics (user deploys with COOP/COEP headers). Compiler-managed transparent threading (ownership-proven partitioning without opt-in) is deferred post-v1 — see `docs/deferred.md § Compiler-Managed Transparent Threading on WASM`. Source-level `go`/channel/`par` semantics are target-agnostic — see `design.md § Concurrency Across Targets`.
@@ -893,6 +895,14 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
 
 **Goal:** Domain-specific stdlib that programs need beyond the floor — numerical/data-science stack, security types, embedded primitives, plus codegen IR optimization. **End of this phase = v1 release.** The split from [Phase 8](#phase-8-standard-library--floor) lets v1 ship semantically locked (after Phase 9) and target-complete (after Phase 10) before the long-tail lands. Co-locating the long-tail with target work pays off concretely: the numerical stack composes with the GPU call-site backend, embedded primitives co-design with the embedded target, and WASM portability is already proven for new modules. **v64 reshape (2026-05-09):** the backend-platform stdlib bundle (`std.http`, TLS, WebSocket, etc.) was lifted into Phase 8 floor — see [Phase 8 § Backend Platform](#backend-platform-v64-lifted) — leaving Phase 11 narrowly scoped to the numerical / data-science / security / embedded long-tail. Working tracker: [`implementation_checklist/phase-11-stdlib-longtail.md`](implementation_checklist/phase-11-stdlib-longtail.md) (physically reorganized out of the Phase 8 tracker, 2026-06-06).
 
+> **Built on the self-hosted compiler (2026-06-10 resequence).** Phase 11 executes *after* [Phase 12 Self-Hosting](#phase-12-self-hosting), not before it. **"Built on the self-hosted compiler" ≠ rebuild Phase 11.** Sort the work by the *language of the artifact* and whether it already exists — three buckets:
+>
+> - **Stdlib-in-Kāra — reused verbatim, zero rewrite.** `runtime/stdlib/tensor.kara`, `stats.kara`, and every other `*.kara` (plus future Column/DataFrame/`LazyDataFrame`, `std.embeddings`, `std.autograd`, `Secret[T]`/`ConstantTimeEq`/`Zeroize`, `CircularBuffer[T]`, data docs/examples) are already Kāra source. The self-hosted `karac` *compiles* them exactly as the Rust compiler did — it doesn't matter who compiled them before. No phase distinction applies.
+> - **Compiler-internal already built in Rust — *ported* during self-hosting, not redesigned.** The Tensor type-system + codegen is substantially built: `Type::Shape` + shape-kind machinery, shape literal grammar, `src/codegen/tensor.rs`, `src/typechecker/expr_method_tensor.rs`, literal-involved promotion (Q4) — plus all of Phase 9 enforcement and Phase 10 target codegen. A Kāra compiler can't link Rust passes, so these are re-expressed in Kāra; but the working+tested Rust version is the spec, the **differential oracle** (same input through both, diff the output), and a near-line-for-line translation source. The hard part (design + debug) is sunk; the port is mechanical.
+> - **Compiler-internal NOT yet built — built once, directly in Kāra.** `f16`/`bf16` *lowering* (keywords reserved, LLVM `half`/`bfloat` emission not), `Secret[T]` derive codegen, the entire **Embedded / Hardware Primitives** subsection (inline `asm`/`global_asm`, volatile intrinsics, `#[interrupt]`, linker control, `Atomic` codegen), the **Codegen Optimization (IR quality pass)**, and Phase 10's residual GPU codegen. **This is the only bucket the pivot saves work on** — don't add these to the Rust `karac` after the pivot; build them straight into the self-hosted compiler.
+>
+> The IR-quality pass is in the unbuilt bucket, so the self-hosted compiler's *own* speed is recovered by **bootstrap staging**, not by porting the pass into Rust first — see [§ Codegen Optimization](#codegen-optimization-ir-quality-pass) and [Phase 12](#phase-12-self-hosting).
+
 ### `f16` / `bf16` Numeric Primitives
 - [x] Reserve `f16` and `bf16` as lexer-level keywords in v1 (compile error if used as identifiers — prevents future source-breaking rename). ✓ Shipped since the first commit; lexer tests + E2E re-verified 2026-06-06 — see `implementation_checklist/phase-11-stdlib-longtail.md`.
 - [ ] Type system: add `f16` (IEEE 754-2008 half-precision) and `bf16` (bfloat16) as primitive types with the same trait surface as `f32`/`f64` (`PartialEq`, `PartialOrd`, arithmetic traits, `Copy`) but NOT `Eq`/`Ord`/`Hash`.
@@ -909,10 +919,10 @@ See `design.md § f16 / bf16 Implementation` for full design shape.
 Semantics in `design.md § Numerical Types`, `§ Numeric Semantics > Literal-involved promotion`. Implementation tasks in [`implementation_checklist/phase-11-stdlib-longtail.md § Numerical and data-science stdlib`](implementation_checklist/phase-11-stdlib-longtail.md#numerical-and-data-science-stdlib).
 
 **Type system (forcing functions).**
-- [ ] `Tensor[T, Shape]` — shape-typed N-D container with static + dynamic (`?`) dims. Q1 (1A).
-- [ ] Shape as a new generic-parameter kind; shape literal grammar; `Dim`-kinded params with compile-time unification. Q2 (2C). Arithmetic on shape params (`[A + B]`) deferred to v1.5.
-- [ ] Implicit scalar-tensor broadcasting (`arr + 1`); explicit methods (`arr.broadcast_add(row_vec)`) for tensor-tensor. Q3 (3B+3C hybrid).
-- [ ] Literal-involved promotion in numeric binary operators — `arr + 1` works, `arr + typed_var` still requires matching types. Q4 (4B).
+- [x] `Tensor[T, Shape]` — shape-typed N-D container with static + dynamic (`?`) dims. Q1 (1A).
+- [x] Shape as a new generic-parameter kind; shape literal grammar; `Dim`-kinded params with compile-time unification. Q2 (2C). Arithmetic on shape params (`[A + B]`) deferred to v1.5.
+- [x] Implicit scalar-tensor broadcasting (`arr + 1`); explicit methods (`arr.broadcast_add(row_vec)`) for tensor-tensor. Q3 (3B+3C hybrid).
+- [x] Literal-involved promotion in numeric binary operators — `arr + 1` works, `arr + typed_var` still requires matching types. Q4 (4B).
 
 **Data types (Arrow commitment).**
 - [ ] `Column[T]` — bitmap-backed nullable 1D column, Arrow layout. Q5 (5A) + Q6 (6C).
@@ -965,6 +975,14 @@ Semantics in `design.md § Numerical Types`, `§ Numeric Semantics > Literal-inv
 
 **Goal of this pass:** Reduce the Phase 7 ≤2x gap to ≤10% of equivalent hand-written Rust on compute-bound benchmarks. Ships at the end of v1 because IR-quality polish only pays off once the long-tail stdlib is the last thing being measured.
 
+**Bootstrap staging — why this pass does not need to precede self-hosting (2026-06-10).** Because Phase 11 runs *on* the self-hosted compiler, this pass is written in Kāra and lands *inside* the self-hosted `karac`. A self-hosted compiler built before the pass exists is ~2× slower than the Rust `karac` — but that slowness is confined to the *stage-1* binary and never reaches the shipped artifact:
+
+1. Rust `karac` (no pass) compiles the Kāra compiler source → **stage-1** (slow binary, but it *contains* the pass logic).
+2. **stage-1** recompiles the same source → **stage-2** (fast — stage-1 applied the pass while compiling it).
+3. Ship **stage-2**; verify the fixpoint with **stage-3** (stage-2 and stage-3 must be byte-identical).
+
+So the only cost is a slow stage-1 *during* Phase 11 development (re-stage periodically to keep iteration fast) — never a shipped-quality regression. This is standard GCC/rustc bootstrap discipline, and it retires the earlier idea of pulling the IR pass forward into the Rust compiler / Phase 8.
+
 ### Deferred from v1 (P1, ships post-v1)
 - [ ] **v1.5 — Axis-indexed reductions.** `sum[AXIS]()`, `mean[AXIS]()`, `min[AXIS]()`, `max[AXIS]()`, `argmin[AXIS]()`, `argmax[AXIS]()` with fully typed return shapes (`remove_dim(Shape, AXIS)`). Held for v1.5 because shipping with `Tensor[T, [?]]` return types would be a breaking change when shape arithmetic tightens them. See `design.md § Axis-Indexed Reductions`.
 - [x] ~~**v1.5 — Lazy evaluation / pipeline fusion.**~~ Lazy `LazyDataFrame` (Option A scope — predicate pushdown + projection pushdown + constant folding + CSE) pulled forward from v1.5 to v1 P1 on 2026-05-11 (v66 graduation). See `deferred.md § Lazy DataFrame Query Planner — Option A v1 Scope` and `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 3.2 and Q1`. Full optimizer expansion (join reordering, push-through-joins, scan-time filters) stays post-v1 as P2 — see `deferred.md § Lazy DataFrame Query Optimizer Expansion`. `LazyColumn` / `LazyTensor` / `Iterator` specializations + kernel-fusion lazy stay v1.5+; this lift is `LazyDataFrame` only.
@@ -995,13 +1013,21 @@ Semantics in `design.md § Numerical Types`, `§ Numeric Semantics > Literal-inv
 
 **Goal:** Rewrite the Kāra compiler in Kāra.
 
+**The v1 pivot (2026-06-10 resequence).** Self-hosting is no longer post-v1 tail work — it executes *after* the Phase 8 floor + Phase 9 enforcement (effectively done) and Phase 10 targets (mostly done), and *before* [Phase 11](#phase-11-standard-library--long-tail). Numeric order ≠ execution order; the real order is **8 → 9 → 10 → 12 → 11**. Everything Phase 11 still has to add lands *on* the self-hosted compiler, but in three different ways (see the Phase 11 banner): its stdlib (`tensor.kara`, `std.stats`, …) is **reused verbatim**; its already-built Rust passes (the Tensor type-system + codegen, plus Phase 9/10) are **ported** against the Rust differential oracle, near-line-for-line; and its **unbuilt** compiler-internal features (f16/bf16 lowering, embedded primitives, the IR pass, residual GPU codegen) are written **once**, in Kāra. **Rationale:** any *new* compiler feature implemented in the Rust `karac` after the pivot would have to be re-implemented in Kāra anyway; pivoting first deletes that double-work. Already-built Rust passes are ported regardless — so the pivot's savings are bounded to the *unbuilt* features, which means: pivot as soon as the Phase 8 floor is done and stop adding new compiler features to Rust.
+
+**Prerequisite is only the Phase 8 floor.** A compiler-in-Kāra consumes `Vec`/`Map`/`Set`, `String` methods, file I/O, `std.json`, `std.error`, pattern matching — all Phase 8 floor, none of Phase 11. Phase 9 is done (semantics frozen). The single remaining gate is **finishing the Phase 8 floor** (tracker: `implementation_checklist/phase-8-stdlib-floor.md`).
+
+**The bar is "production dev platform," not "passes the fixpoint."** Because Phase 11 (and Phase 10's residual GPU work) get built *on* the self-hosted compiler — shape-kinded generics, GPU codegen, the IR pass — the self-hosted `karac` must be pleasant to do real feature development in: usable diagnostics, fast iteration, complete language coverage. Budget this phase to reach that, not a minimal bootstrap.
+
+**Codegen needs LLVM-C FFI bindings.** The self-hosted codegen module calls LLVM through Kāra FFI (`extern "C"` over the LLVM-C API) — the analogue of the Rust compiler's `inkwell`. FFI is Phase 7 (✅), so this is a large chunk of in-phase work but not a new dependency.
+
 - [ ] Lexer in Kāra
 - [ ] Parser in Kāra
-- [ ] Semantic analyzer in Kāra
-- [ ] Interpreter or codegen in Kāra
-- [ ] Bootstrap: Kāra compiler compiles itself
+- [ ] Semantic analyzer in Kāra (resolver + typechecker + effect + ownership)
+- [ ] Codegen in Kāra (LLVM-C via `extern "C"` FFI)
+- [ ] Bootstrap: Kāra compiler compiles itself; **stage-2 = stage-3 byte-identical** (fixpoint)
 
-**Done when:** `karac build src/main.kara` produces a binary that can itself compile Kāra programs, producing identical output to the Rust-based compiler.
+**Done when:** `karac build src/main.kara` produces a binary that can itself compile Kāra programs, producing identical output to the Rust-based compiler, and the three-stage bootstrap reaches a byte-identical fixpoint. From here, all new compiler work (Phase 11 compiler-internal features, Phase 10 residual GPU codegen) lands in the Kāra compiler — the Rust `karac` is frozen as the bootstrap seed.
 
 ---
 
@@ -1184,22 +1210,29 @@ Phase 8 (Stdlib — Floor)        ← full method sets, traits, I/O, providers, 
   │                                       Track 3: Discovery — items added as found during demo build.
   │                                       Does not block Phase 9–11; lands before v1 ships at end of Phase 11.
   ▼
-Phase 9 (Verification)          ← refinement types, distinct types, contracts (parsing done in Phase 2; enforcement here)
+Phase 9 (Verification) ✅       ← refinement types, distinct types, contracts (DONE — semantics frozen)
   │
   ▼
-Phase 10 (WASM/GPU Targets)
+Phase 10 (WASM/GPU Targets) ✅  ← mostly done in Rust (WASM P0 + GPU P1 gate); residual GPU codegen later lands on the self-hosted compiler
   │
   ▼
-Phase 11 (Stdlib — Long-Tail)   ← numerical/data-science, regex/http/process/stats, security, embedded primitives, codegen IR pass.  END = v1 RELEASE.
-  │
+Phase 12 (Self-Hosting)         ← ★ THE v1 PIVOT. Rewrite karac in Kāra; 3-stage bootstrap to a byte-identical fixpoint.
+  │                                Prereq = Phase 8 floor ONLY. After this the Rust karac is frozen as the bootstrap seed.
   ▼
-Phase 12 (Self-Hosting)
+Phase 11 (Stdlib — Long-Tail)   ← built ON the self-hosted compiler, each item written once in Kāra:
+                                   · stdlib-in-Kāra (compiled by self-hosted karac): Tensor/Column/DataFrame, std.stats,
+                                     std.embeddings, std.autograd, Secret[T], CircularBuffer
+                                   · compiler-internal (built INTO the Kāra compiler): f16/bf16 lowering, shape-kinded generics,
+                                     inline asm/volatile/#[interrupt]/Atomic codegen, the IR-quality pass (bootstrap-staged)
+                                   END = v1 RELEASE.
 
 Notes:
-- Phases are linear — each phase builds on the previous
+- Phases are NO LONGER strictly linear. Execution order is 8 → 9 → 10 → 12 → 11; numeric order ≠ execution order (2026-06-10 resequence).
 - Phase 7 splits into 7.1 (core codegen, done) and 7.2 (compiled stdlib type codegen + layout codegen). 7.2 owns memory layouts and minimum method sets; Phase 8 + Phase 11 own full API surface.
-- Stdlib is split across two phases: **Phase 8** owns the floor (universal modules every program needs); **Phase 11** owns the long-tail (numerical/data-science stack, scripting helpers, security, embedded primitives, codegen IR optimization). Verification (Phase 9) and target backends (Phase 10) ship between the two so v1 is fully semantically locked and target-complete before the long-tail lands.
-- Refinement types (Level 2) and contracts (Level 2.5) are committed — parsing complete (Phase 2), enforcement in Phase 9
-- v1 release = end of Phase 11. Phase 12 (self-hosting) is post-v1.
-- Phase 0 has no compiler dependency and can be done anytime
+- Stdlib is split across two phases: **Phase 8** owns the floor; **Phase 11** owns the long-tail. **Phase 8 is the *only* self-hosting prerequisite; Phase 11 is the *only* phase built on the self-hosted compiler.**
+- Self-hosting (Phase 12) is the pivot: it executes after 8/9/10 and before 11, so every compiler-internal feature is written once, in Kāra. The IR-quality pass recovers the self-hosted compiler's own speed via the 3-stage bootstrap (stage-2 = stage-3 byte-identical), not by porting into Rust.
+- Refinement types (Level 2) and contracts (Level 2.5) are committed — parsing complete (Phase 2), enforcement DONE in Phase 9.
+- v1 release = end of Phase 11. **Self-hosting (Phase 12) ships IN v1**, sequenced before Phase 11 (was: post-v1).
+- Phase 0 has no compiler dependency and can be done anytime.
+- ⚠ roadmap.md checkbox state is STALE relative to the trackers (Phase 8 ≈195/288 done, Phase 10 ≈29/33 done as of 2026-06-10) — trust `implementation_checklist/` + git over the [x]/[ ] marks in this file.
 ```
