@@ -39,7 +39,65 @@ fn tuple_index_parts(index: &Expr) -> Vec<Option<&Expr>> {
 }
 
 impl<'a> super::TypeChecker<'a> {
+    /// `true` when `expr` is a `Coll.try_with_capacity(n)` path call — the
+    /// fallible constructor whose `?`-form needs check-mode element pinning
+    /// (phase-8-stdlib-floor item 8).
+    fn is_try_with_capacity_call(expr: &Expr) -> bool {
+        let ExprKind::Call { callee, args } = &expr.kind else {
+            return false;
+        };
+        args.len() == 1
+            && matches!(&callee.kind, ExprKind::Path { segments, .. }
+                if segments.len() == 2 && segments[1] == "try_with_capacity")
+    }
+
+    /// `true` when `expected` is `Result[<ok>, _]` whose `ok` payload matches
+    /// the collection a `coll.try_with_capacity` produces — `Vec`/`VecDeque`
+    /// map to a same-named `Named` Ok payload, `String` to `Type::Str`.
+    fn try_with_capacity_result_matches(coll: &str, expected: &Type) -> bool {
+        let Type::Named { name, args } = expected else {
+            return false;
+        };
+        if name != "Result" || args.len() != 2 {
+            return false;
+        }
+        match coll {
+            "Vec" => matches!(&args[0], Type::Named { name, .. } if name == "Vec"),
+            "VecDeque" => matches!(&args[0], Type::Named { name, .. } if name == "VecDeque"),
+            "String" => matches!(&args[0], Type::Str),
+            _ => false,
+        }
+    }
+
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+        // Fallible-allocation constructor `?`-form at check-mode
+        // (phase-8-stdlib-floor item 8): `let v: Vec[T] =
+        // Vec.try_with_capacity(n)?`. The `?` unwraps `Result[Vec[?T],
+        // AllocError]` to `Vec[?T]`, whose fresh element typevar then can't
+        // unify against the declared `Vec[i64]` (the unannotated form pins
+        // `?T` from a downstream op instead). Push the `Result`-wrapped
+        // expected into the inner constructor so its check-mode adopt arm
+        // (below) binds the element, then run the normal `?` error-
+        // propagation check on the pinned operand.
+        if let ExprKind::Question(inner) = &expr.kind {
+            if Self::is_try_with_capacity_call(inner) {
+                if self.in_defer {
+                    self.type_error(
+                        "'?' operator is not allowed inside defer/errdefer blocks".to_string(),
+                        expr.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                let wrapped = self.result_alloc_error_type(expected.clone());
+                let inner_ty = self.check_expr(inner, &wrapped);
+                if inner_ty == Type::Error {
+                    return Type::Error;
+                }
+                let result = self.resolve_question(inner_ty, &expr.span);
+                self.record_expr_type(&expr.span, &result);
+                return result;
+            }
+        }
         // Built-in collection constructors at check-mode: `Vec.new()` /
         // `VecDeque.new()` / `Set.new()` / `SortedSet.new()` / `Map.new()`
         // resolve to the expected type directly when the surface names
@@ -115,6 +173,34 @@ impl<'a> super::TypeChecker<'a> {
                             _ => false,
                         };
                         if matches_expected {
+                            let cap_ty = self.infer_expr(&args[0].value);
+                            self.check_assignable(
+                                &Type::Int(IntSize::I64),
+                                &cap_ty,
+                                args[0].value.span.clone(),
+                            );
+                            self.record_expr_type(&expr.span, expected);
+                            return expected.clone();
+                        }
+                    }
+                }
+            }
+            // Fallible-allocation constructor companion at check-mode
+            // (phase-8-stdlib-floor item 8): a `let r: Result[Vec[T],
+            // AllocError] = Vec.try_with_capacity(n)` binds the `Result`
+            // directly. The zero-arg `try_with_capacity` synth-returns
+            // `Result[Vec[?T], _]`, whose nested fresh element typevar
+            // `types_compatible` can't unify against the declared
+            // `Result[Vec[i64], _]` — the same hazard as `with_capacity`
+            // above, one `Result` layer deeper. Adopt the expected `Result`
+            // type, then typecheck the capacity arg as i64. (VecDeque/String
+            // type-check here too; their codegen is gated separately and
+            // still rejects with the item-8 message under `karac build`.)
+            if args.len() == 1 {
+                if let ExprKind::Path { segments, .. } = &callee.kind {
+                    if segments.len() == 2 && segments[1] == "try_with_capacity" {
+                        let coll = segments[0].as_str();
+                        if Self::try_with_capacity_result_matches(coll, expected) {
                             let cap_ty = self.infer_expr(&args[0].value);
                             self.check_assignable(
                                 &Type::Int(IntSize::I64),

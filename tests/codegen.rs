@@ -1237,6 +1237,77 @@ fn main() {
     }
 
     #[test]
+    fn e2e_try_with_capacity_match_codegen() {
+        // phase-8-stdlib-floor item 8: `Vec.try_with_capacity` — fallible
+        // `with_capacity` returning `Result[Vec[T], AllocError]`. Match form
+        // binds the `Result` directly; the empty `{cap=n, len=0}` Vec is
+        // wrapped in `Result.Ok(_)` and round-trips through match-extraction.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let r: Result[Vec[i64], AllocError] = Vec.try_with_capacity(4);\n\
+                 match r {\n\
+                     Ok(v) => {\n\
+                         let mut v3 = v;\n\
+                         v3.push(7_i64);\n\
+                         println(\"ok\"); println(v3.len()); println(v3[0]);\n\
+                     }\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "ok\n1\n7\n");
+        }
+    }
+
+    #[test]
+    fn e2e_try_with_capacity_question_codegen() {
+        // `?`-form: `let mut v: Vec[i64] = Vec.try_with_capacity(n)?` pre-sizes
+        // the Vec, pushes fill the reserved slots. Exercises both the
+        // element-type recovery through the `Result` wrapper AND the multi-word
+        // `?` Ok-payload reconstruction (the `Vec` unwrapped by `?`).
+        if let Some(out) = run_program(
+            "fn build() -> Result[i64, AllocError] {\n\
+                 let mut v: Vec[i64] = Vec.try_with_capacity(3)?;\n\
+                 v.push(10_i64);\n\
+                 v.push(20_i64);\n\
+                 v.push(30_i64);\n\
+                 Ok(v[0] + v[1] + v[2])\n\
+             }\n\
+             fn main() {\n\
+                 match build() { Ok(s) => println(s), Err(_) => println(\"err\") }\n\
+             }",
+        ) {
+            assert_eq!(out, "60\n");
+        }
+    }
+
+    #[test]
+    fn e2e_question_multiword_ok_payload_codegen() {
+        // The `?` operator must reconstruct a multi-word Ok payload from ALL its
+        // words, not just the first. Previously `?` returned only `w0`, so a
+        // 3-word `Vec`/`String` lost its `len`/`cap` and crashed on use. Covers
+        // `Result[String, _]?` and `Result[Vec[T], _]?` (via try_from_slice).
+        if let Some(out) = run_program(
+            "fn s() -> Result[i64, AllocError] {\n\
+                 let r: Result[String, AllocError] = Ok(\"hello\");\n\
+                 let st: String = r?;\n\
+                 Ok(st.len())\n\
+             }\n\
+             fn v() -> Result[i64, AllocError] {\n\
+                 let src: Vec[i64] = Vec.filled(2_i64, 5_i64);\n\
+                 let vv: Vec[i64] = Vec.try_from_slice(src)?;\n\
+                 Ok(vv.len())\n\
+             }\n\
+             fn main() {\n\
+                 match s() { Ok(n) => println(n), Err(_) => println(\"e\") }\n\
+                 match v() { Ok(n) => println(n), Err(_) => println(\"e\") }\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n2\n");
+        }
+    }
+
+    #[test]
     fn e2e_builtin_enum_eq_option_result() {
         // Built-in enum `==` is sound in codegen too (None/Ok unit + payload
         // words). Regression guard for the zero-init enum construction.
@@ -8093,14 +8164,16 @@ fn main() {
 
     #[test]
     fn test_try_companion_constructor_codegen_rejected_cleanly() {
-        // The static-constructor companion path (`Vec.try_with_capacity`) must
-        // also reject cleanly — without the guard it falls through to
-        // `compile_assoc_call`'s silent `Ok(const 0)` default and miscompiles.
+        // A still-unimplemented static-constructor companion must reject
+        // cleanly — without the guard it falls through to `compile_assoc_call`'s
+        // silent `Ok(const 0)` default and miscompiles. Uses
+        // `VecDeque.try_with_capacity` (still interpreter-only — its panicking
+        // base `VecDeque.with_capacity` has no codegen arm either, B-2026-06-10-3;
+        // `Vec.try_with_capacity` now compiles, so it would no longer reject).
         let mut parsed = karac::parse(
             "fn build() -> Result[i64, AllocError] {\n\
-                 let mut v = Vec.try_with_capacity(8_i64)?;\n\
-                 v.push(1_i64);\n\
-                 Ok(v.len())\n\
+                 let r: Result[VecDeque[i64], AllocError] = VecDeque.try_with_capacity(8);\n\
+                 match r { Ok(v) => Ok(v.len()), Err(_) => Ok(0_i64) }\n\
              }\n\
              fn main() { let _ = build(); }",
         );
@@ -8113,12 +8186,12 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         assert!(
             typed.errors.is_empty(),
-            "try_with_capacity should typecheck: {:?}",
+            "VecDeque.try_with_capacity should typecheck: {:?}",
             typed.errors
         );
         karac::lower(&mut parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("try_with_capacity codegen must fail loud (interpreter-only)");
+            .expect_err("VecDeque.try_with_capacity codegen must fail loud (interpreter-only)");
         assert!(
             err.contains("interpreter-only")
                 && err.contains("item 8")

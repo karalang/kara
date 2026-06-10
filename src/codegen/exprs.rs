@@ -1231,7 +1231,87 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_call(self.karac_error_trace_clear_fn, &[], "q_trace_clear")
                 .unwrap();
         }
-        Ok(w0)
+        // Reconstruct a multi-word Ok/Some payload from all its words. The
+        // success path historically returned only `w0` (the first payload
+        // word), silently truncating a 3-word `Vec`/`String` (losing
+        // `len`/`cap`) → malformed value that crashes on use. Surfaced by
+        // `Result[Vec[T], AllocError]?` from the fallible constructors, but the
+        // bug is general (any multi-word `?` payload — `String`, tuples).
+        self.reconstruct_question_ok_payload(inner, val, w0)
+    }
+
+    /// Rebuild the `Ok`/`Some` payload value at a `?` success path. `?`
+    /// originally returned only the first payload word `w0`; a multi-word
+    /// payload (3-word `Vec`/`String`, 2-word `Slice`, small struct) needs all
+    /// its words or the value is malformed (missing `len`/`cap` → crash on
+    /// first use). Recover the operand's `Ok`/`Some` element type from its
+    /// recorded generic instantiation (`enum_inst_type_exprs`, e.g.
+    /// `Result[Vec[i64], AllocError]` / `Result[String, AllocError]`) and
+    /// rebuild from the payload words via `rebuild_value_from_payload_words`.
+    /// A scalar / pointer / float payload — or any operand whose type wasn't
+    /// recorded — keeps the single-word `w0`, which is exactly its value.
+    fn reconstruct_question_ok_payload(
+        &mut self,
+        inner: &Expr,
+        result_val: BasicValueEnum<'ctx>,
+        w0: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // The `?` operand and the `?` expression share a span (parser
+        // collision), and the `?` result type — i.e. the *unwrapped* Ok/Some
+        // payload type — is the last write at that key. So the recorded type
+        // at the operand span IS the payload type directly:
+        //   * `String` lands in `string_typed_exprs` (`Type::Str` isn't a
+        //     `Named`, so `enum_inst_type_exprs` misses it); its layout is the
+        //     3-word `{ptr, len, cap}` vec shape.
+        //   * `Vec[T]` and other generic `Named` payloads land in
+        //     `enum_inst_type_exprs`, recorded as the payload type itself.
+        let key = (inner.span.offset, inner.span.length);
+        let payload_llvm: BasicTypeEnum<'ctx> = if self.string_typed_exprs.contains(&key) {
+            self.vec_struct_type().into()
+        } else if let Some(te) = self.enum_inst_type_exprs.get(&key).cloned() {
+            // Defensive: if the `Result`/`Option` wrapper itself were recorded
+            // here, its enum aggregate must not be rebuilt from 3 payload words.
+            if let TypeKind::Path(p) = &te.kind {
+                if matches!(
+                    p.segments.first().map(String::as_str),
+                    Some("Result") | Some("Option")
+                ) {
+                    return Ok(w0);
+                }
+            }
+            self.llvm_type_for_type_expr(&te)
+        } else {
+            return Ok(w0);
+        };
+        // Only multi-word struct payloads (Vec / String / Slice / small
+        // struct) need reconstruction; scalars / pointers / floats are
+        // exactly `w0`.
+        if !matches!(payload_llvm, BasicTypeEnum::StructType(_)) {
+            return Ok(w0);
+        }
+        let ok_llvm = payload_llvm;
+        let sv = result_val.into_struct_value();
+        let n_fields = sv.get_type().count_fields();
+        let i64_t = self.context.i64_type();
+        let zero = i64_t.const_int(0, false);
+        let w0_i = w0.into_int_value();
+        let w1_i = if n_fields >= 3 {
+            self.builder
+                .build_extract_value(sv, 2, "q_ok_w1")
+                .unwrap()
+                .into_int_value()
+        } else {
+            zero
+        };
+        let w2_i = if n_fields >= 4 {
+            self.builder
+                .build_extract_value(sv, 3, "q_ok_w2")
+                .unwrap()
+                .into_int_value()
+        } else {
+            zero
+        };
+        self.rebuild_value_from_payload_words(ok_llvm, w0_i, w1_i, w2_i)
     }
 
     /// Slice 2 (Phase 7 § *defer / errdefer codegen*). Recognise the

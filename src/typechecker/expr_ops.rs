@@ -1432,7 +1432,19 @@ impl<'a> super::TypeChecker<'a> {
         if inner_ty == Type::Error {
             return Type::Error;
         }
+        self.resolve_question(inner_ty, span)
+    }
 
+    /// The error-propagation half of the `?` operator, factored out of
+    /// [`infer_question`] so a check-mode caller can feed an already-pinned
+    /// operand type. Given the `?` operand's `Result`/`Option` type, validates
+    /// it against the enclosing function's return type (recording any
+    /// cross-error `impl From` conversion in `question_conversions`) and
+    /// returns the unwrapped `Ok`/`Some` payload type. Used by `check_expr`'s
+    /// fallible-constructor `?`-form arm (`let v: Vec[T] =
+    /// Vec.try_with_capacity(n)?`), where inferring the operand first would
+    /// mint an unpinnable fresh element typevar (phase-8-stdlib-floor item 8).
+    pub(super) fn resolve_question(&mut self, inner_ty: Type, span: &Span) -> Type {
         let (inner_name, inner_args) = match &inner_ty {
             Type::Named { name, args } => (name.clone(), args.clone()),
             _ => {

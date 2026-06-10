@@ -252,6 +252,31 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(loop_exit_bb);
     }
 
+    /// Recover the LLVM element type of the collection inside a
+    /// `Result[Vec[T] | VecDeque[T], _]` annotation — the Ok-payload `T` a
+    /// `Vec.try_with_capacity(n)` RHS needs but its zero-arg signature can't
+    /// supply. Used at the `let` site (`stmts.rs`) to seed
+    /// `pending_let_elem_type` when the destination binds the fallible
+    /// constructor's `Result` directly (the match form), where the bare
+    /// `vec_elem_types[var]` lookup sees a `Result`, not a `Vec`.
+    /// (phase-8-stdlib-floor item 8.)
+    pub(super) fn result_ok_collection_elem_type(
+        &self,
+        te: &TypeExpr,
+    ) -> Option<BasicTypeEnum<'ctx>> {
+        let TypeKind::Path(path) = &te.kind else {
+            return None;
+        };
+        if path.segments.first().map(|s| s.as_str()) != Some("Result") {
+            return None;
+        }
+        let args = path.generic_args.as_ref()?;
+        let GenericArg::Type(ok_te) = args.first()? else {
+            return None;
+        };
+        super::helpers::vec_inner_type_expr(ok_te).map(|elem| self.llvm_type_for_type_expr(&elem))
+    }
+
     pub(super) fn compile_assoc_call(
         &mut self,
         type_name: &str,
@@ -1688,6 +1713,98 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap()
                 .into_struct_value();
             return Ok(agg.into());
+        }
+
+        // `Vec.try_with_capacity(n: i64) -> Result[Vec[T], AllocError]` —
+        // fallible `with_capacity` (phase-8-stdlib-floor item 8). Same empty
+        // `{data, len=0, cap=n}` Vec as `with_capacity`, but the reservation
+        // goes through `karac_alloc_fallible`: a null result short-circuits to
+        // `Result.Err(AllocError.OutOfMemory{requested_bytes})` and the success
+        // path wraps the Vec in `Result.Ok(_)`. Element-type recovery is the
+        // crux: the zero-arg constructor can't get `T` from an argument, and
+        // the destination binding is a `Result[Vec[T], _]` (not a `Vec[T]`),
+        // so the `let` path threads `T` from the annotation's Ok payload into
+        // `pending_let_elem_type` (see `stmts.rs`, the `result_ok_collection_
+        // elem_type` recovery). The `?`-unwrap form (`let v: Vec[T] =
+        // try_with_capacity(n)?`) already carries `T` via `vec_elem_types[v]`.
+        if type_name == "Vec" && method == "try_with_capacity" {
+            if args.len() != 1 {
+                return Err(format!(
+                    "Vec.try_with_capacity expects 1 argument (capacity), got {}",
+                    args.len()
+                ));
+            }
+            let elem_ty = self.pending_let_elem_type.ok_or_else(|| {
+                "Vec.try_with_capacity: element type unknown — requires a \
+                 `let v: Result[Vec[T], AllocError] = ...` (or `let v: Vec[T] = ...?`) annotation"
+                    .to_string()
+            })?;
+            let n = self.compile_expr(&args[0].value)?.into_int_value();
+            let elem_size = elem_ty.size_of().unwrap();
+            let alloc_bytes = self
+                .builder
+                .build_int_mul(n, elem_size, "try_with_cap.alloc_bytes")
+                .unwrap();
+            let buf = self
+                .builder
+                .build_call(
+                    self.alloc_fallible_fn,
+                    &[alloc_bytes.into()],
+                    "try_with_cap.buf",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+
+            let fn_val = self.current_fn.unwrap();
+            let ok_bb = self.context.append_basic_block(fn_val, "twc.ok");
+            let oom_bb = self.context.append_basic_block(fn_val, "twc.oom");
+            let merge_bb = self.context.append_basic_block(fn_val, "twc.merge");
+            let is_null = self.builder.build_is_null(buf, "twc.is_null").unwrap();
+            self.builder
+                .build_conditional_branch(is_null, oom_bb, ok_bb)
+                .unwrap();
+
+            // Alloc succeeded: build the empty {data=buf, len=0, cap=n} Vec,
+            // wrap in Result.Ok(_).
+            self.builder.position_at_end(ok_bb);
+            let vec_ty = self.vec_struct_type();
+            let zero = self.context.i64_type().const_int(0, false);
+            let mut agg = vec_ty.get_undef();
+            agg = self
+                .builder
+                .build_insert_value(agg, buf, 0, "vec.data")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, zero, 1, "vec.len")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, n, 2, "vec.cap")
+                .unwrap()
+                .into_struct_value();
+            let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[agg.into()])?;
+            let ok_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // OOM → Result.Err(AllocError.OutOfMemory{requested_bytes}).
+            self.builder.position_at_end(oom_bb);
+            let err_result = self.build_alloc_oom_result(alloc_bytes)?;
+            let oom_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // Merge the two `Result` aggregates.
+            self.builder.position_at_end(merge_bb);
+            let phi = self
+                .builder
+                .build_phi(ok_result.get_type(), "twc.result")
+                .unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, oom_end)]);
+            return Ok(phi.as_basic_value());
         }
 
         // `Vec.filled(n: i64, val: T) -> Vec[T]` — produces n copies of

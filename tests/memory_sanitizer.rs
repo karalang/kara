@@ -1158,6 +1158,34 @@ fn main() {
     }
 
     #[test]
+    fn asan_question_multiword_ok_payload_owned_once() {
+        // The `?` multi-word Ok-payload reconstruction (phase-8-stdlib-floor
+        // item 8) rebuilds a 3-word String/Vec from all its payload words. The
+        // unwrapped heap value must be owned by the binding and freed exactly
+        // once at scope exit — a reconstruction that aliased or dropped a word
+        // would double-free or leak. `?`-unwrap a heap `String` and a heap
+        // `Vec[i64]` (cap > 0 so the free fires), use both, return.
+        assert_clean_asan_run(
+            r#"
+fn take() -> Result[i64, AllocError] {
+    let mut a: String = String.new();
+    a.push_str("hello");
+    let r: Result[String, AllocError] = Ok(a);
+    let s: String = r?;
+    let src: Vec[i64] = Vec.filled(3, 9);
+    let v: Vec[i64] = Vec.try_from_slice(src)?;
+    Ok(s.len() + v.len())
+}
+fn main() {
+    match take() { Ok(n) => println(n), Err(_) => println("err") }
+}
+"#,
+            &["8"],
+            "question_multiword_ok_payload_owned_once",
+        );
+    }
+
+    #[test]
     fn asan_vec_from_slice_nested_index_source_clean() {
         // `Vec.from_slice(rows[r])` on Vec[Vec[T]] — symmetric to the
         // extend_from_slice nested-index test. The new codegen branch

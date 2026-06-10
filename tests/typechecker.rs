@@ -25843,8 +25843,6 @@ fn test_try_insert_set_returns_result_bool() {
 fn test_try_with_capacity_static_returns_result_vec() {
     // `try_with_capacity` mirrors `with_capacity`: the element type is inferred
     // from downstream use, here via `?`-unwrap + push (the realistic shape).
-    // A bare annotated-`Result` binding with no element evidence is ambiguous
-    // for the same reason `let v = Vec.new()` is — element type unknown.
     typecheck_ok(
         "fn build() -> Result[i64, AllocError] {\n\
              let mut v = Vec.try_with_capacity(8_i64)?;\n\
@@ -25852,6 +25850,44 @@ fn test_try_with_capacity_static_returns_result_vec() {
              Ok(v.len())\n\
          }\n\
          fn main() { let _ = build(); }",
+    );
+}
+
+#[test]
+fn test_try_with_capacity_match_form_pins_element() {
+    // phase-8-stdlib-floor item 8: a `let r: Result[Vec[T], AllocError] =
+    // Vec.try_with_capacity(n)` binding (the match idiom) pins `T` from the
+    // annotation's Ok payload — the zero-arg constructor's fresh element
+    // typevar would otherwise fail to unify against the declared `Result`.
+    typecheck_ok(
+        "fn main() {\n\
+             let r: Result[Vec[i64], AllocError] = Vec.try_with_capacity(8);\n\
+             match r { Ok(v) => { let _ = v.len(); } Err(_) => {} }\n\
+         }",
+    );
+}
+
+#[test]
+fn test_try_with_capacity_annotated_question_pins_element() {
+    // The annotated `?`-form (`let v: Vec[T] = Vec.try_with_capacity(n)?`)
+    // pins `T` by pushing the `Result`-wrapped expected through the `?`.
+    typecheck_ok(
+        "fn build() -> Result[i64, AllocError] {\n\
+             let v: Vec[i64] = Vec.try_with_capacity(4)?;\n\
+             Ok(v.len())\n\
+         }\n\
+         fn main() { let _ = build(); }",
+    );
+}
+
+#[test]
+fn test_try_with_capacity_string_match_form_pins() {
+    // String variant of the match-form pin (`Result[String, AllocError]`).
+    typecheck_ok(
+        "fn main() {\n\
+             let r: Result[String, AllocError] = String.try_with_capacity(8);\n\
+             match r { Ok(s) => { let _ = s.len(); } Err(_) => {} }\n\
+         }",
     );
 }
 

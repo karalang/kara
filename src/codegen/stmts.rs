@@ -1592,6 +1592,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(&elem_ty) = self.vec_elem_types.get(var_name.as_str()) {
                         self.pending_let_elem_type = Some(elem_ty);
                     }
+                    // Fallible-allocation constructor companions: a binding
+                    // `let r: Result[Vec[T], AllocError] = Vec.try_with_capacity(n)`
+                    // registers as a `Result`, not a `Vec`, so the lookup above
+                    // doesn't carry `T`. Recover the element type from the
+                    // annotation's Ok payload so the zero-arg fallible
+                    // constructor in the RHS can size its allocation. The
+                    // `?`-unwrap form (`let v: Vec[T] = try_with_capacity(n)?`)
+                    // already has `T` via `vec_elem_types`, so this only fires
+                    // for the match form. (phase-8-stdlib-floor item 8.)
+                    if self.pending_let_elem_type.is_none() {
+                        if let Some(elem_ty) = ty
+                            .as_ref()
+                            .and_then(|t| self.result_ok_collection_elem_type(t))
+                        {
+                            self.pending_let_elem_type = Some(elem_ty);
+                        }
+                    }
                     if let Some(info) = self.tensor_var_infos.get(var_name.as_str()) {
                         self.pending_let_tensor_info = Some(info.clone());
                     }

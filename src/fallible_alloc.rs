@@ -95,10 +95,13 @@ pub fn instance_companion_has_codegen(method: &str) -> bool {
 /// flows through to `compile_assoc_call`'s real fallible lowering; any other
 /// recognized static companion is still interpreter-only and
 /// `compile_assoc_call` rejects it loudly. Grows as more constructor `try_*`
-/// codegen arms land (the `with_capacity` trio — blocked on element-type
-/// recovery through the `Result` wrapper).
+/// codegen arms land. `VecDeque`/`String` `try_with_capacity` remain
+/// interpreter-only because their *panicking* `with_capacity` has no codegen
+/// arm either (it falls through and crashes — see bugs.md); their `try_`
+/// companions are blocked on that base landing first.
 pub const CODEGEN_FALLIBLE_STATIC: &[(&str, &str)] = &[
-    ("Vec", "from_slice"), // Vec.try_from_slice
+    ("Vec", "from_slice"),    // Vec.try_from_slice
+    ("Vec", "with_capacity"), // Vec.try_with_capacity
 ];
 
 /// `true` when `type_name.<method>` is a static `try_*` constructor companion
