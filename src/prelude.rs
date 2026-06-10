@@ -88,6 +88,7 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "MemoryOrdering",
     "IoError",
     "VarError",
+    "AllocError",
     "Utf8Error",
     "SortedSet",
     "Channel",
@@ -625,6 +626,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     (
         "var_error.kara",
         include_str!("../runtime/stdlib/var_error.kara"),
+    ),
+    (
+        "alloc_error.kara",
+        include_str!("../runtime/stdlib/alloc_error.kara"),
     ),
     (
         "utf8_error.kara",

@@ -1,0 +1,20 @@
+// runtime/stdlib/alloc_error.kara
+//
+// Memory-allocation failure type — the `Err` payload of the fallible
+// allocation API (`Vec.try_push`, `String.try_with_capacity`, `Box.try_new`,
+// …; design.md § Fallible Allocation API and OOM Handling, v60 item 46).
+// Lives in the prelude so `Result[(), AllocError]` / `Result[T, AllocError]`
+// need no import, parallel to `IoError` / `VarError`.
+//
+// `OutOfMemory` carries the byte count the allocator was asked for (useful
+// for diagnostics and for a caller deciding whether to retry smaller);
+// `CapacityOverflow` is the fieldless "requested size overflowed `usize`"
+// case (e.g. `try_with_capacity(usize.MAX)`), where no allocation was even
+// attempted. Both variants are pure-`Copy` (the only payload is a `usize`),
+// so the type derives `Eq` + `Copy` like `Ordering`.
+
+#[derive(Debug, Display, Eq, Copy)]
+enum AllocError {
+    OutOfMemory { requested_bytes: usize },
+    CapacityOverflow,
+}

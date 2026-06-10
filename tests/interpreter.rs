@@ -15235,3 +15235,35 @@ fn main() {
 "#);
     assert_eq!(output, "12\n9\ntrue\nfalse\nfalse\n");
 }
+
+#[test]
+fn alloc_error_prelude_type_usable_without_import() {
+    // The `AllocError` prelude type (phase-8 § Fallible Allocation API) is
+    // available without import as `Result[T, AllocError]`, constructs both
+    // variants (struct + unit), compares with `==`, renders via Display, and
+    // pattern-matches with field binding.
+    let output = run(r#"
+fn try_make(fail: bool) -> Result[i64, AllocError] {
+    if fail {
+        Err(AllocError.OutOfMemory { requested_bytes: 64 })
+    } else {
+        Ok(1)
+    }
+}
+
+fn main() {
+    let oom = AllocError.OutOfMemory { requested_bytes: 64 };
+    let oom2 = AllocError.OutOfMemory { requested_bytes: 64 };
+    let co = AllocError.CapacityOverflow;
+    println(f"{oom == oom2}");
+    println(f"{oom == co}");
+    println(f"{co}");
+    match try_make(true) {
+        Ok(_) => println("ok"),
+        Err(AllocError.OutOfMemory { requested_bytes }) => println(f"oom:{requested_bytes}"),
+        Err(AllocError.CapacityOverflow) => println("co"),
+    }
+}
+"#);
+    assert_eq!(output, "true\nfalse\nCapacityOverflow\noom:64\n");
+}

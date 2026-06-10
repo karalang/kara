@@ -3139,6 +3139,45 @@ impl<'ctx> super::Codegen<'ctx> {
             self.seeded_enum_names.insert("VarError".to_string());
         }
 
+        // Stdlib `AllocError` enum (`runtime/stdlib/alloc_error.kara`) — the
+        // `Err` payload of the fallible-allocation API (phase-8 § Fallible
+        // Allocation API and OOM Handling). Baked into `STDLIB_PROGRAMS` so the
+        // typechecker sees it, but `declare_enums` only walks the user's
+        // `program.items`, so seed the layout here (same rationale as
+        // `VarError`/`TcpError`). Variant layout (2 i64 words — tag + single
+        // payload), tags in stdlib declaration order:
+        //   OutOfMemory      (tag=0) — 1 payload word (usize requested_bytes)
+        //   CapacityOverflow (tag=1) — 0 payload words (fieldless)
+        // The lone payload is a pure integer (`usize`), no heap-owning state —
+        // drop kinds are uniformly None.
+        if !self.enum_layouts.contains_key("AllocError") {
+            let alloc_error_type = self.context.struct_type(&[i64_t, i64_t], false);
+            let mut tags = HashMap::new();
+            tags.insert("OutOfMemory".to_string(), 0u64);
+            tags.insert("CapacityOverflow".to_string(), 1u64);
+            let mut field_counts = HashMap::new();
+            field_counts.insert("OutOfMemory".to_string(), 1usize);
+            field_counts.insert("CapacityOverflow".to_string(), 0usize);
+            let mut field_word_offsets = HashMap::new();
+            field_word_offsets.insert("OutOfMemory".to_string(), vec![(0, 1usize)]);
+            field_word_offsets.insert("CapacityOverflow".to_string(), Vec::new());
+            let mut field_drop_kinds = HashMap::new();
+            field_drop_kinds.insert("OutOfMemory".to_string(), vec![EnumDropKind::None]);
+            field_drop_kinds.insert("CapacityOverflow".to_string(), Vec::new());
+            self.enum_layouts.insert(
+                "AllocError".to_string(),
+                EnumLayout {
+                    llvm_type: alloc_error_type,
+                    tags,
+                    field_counts,
+                    field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
+                },
+            );
+            self.seeded_enum_names.insert("AllocError".to_string());
+        }
+
         // `BoundedChannel[T]` companion enums (`runtime/stdlib/
         // bounded_channel.kara`). Baked into `STDLIB_PROGRAMS` so the
         // typechecker sees them, but `declare_enums` only walks the user's
