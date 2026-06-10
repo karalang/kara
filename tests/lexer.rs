@@ -650,11 +650,15 @@ fn test_interpolated_string_basic() {
         assert_eq!(parts.len(), 2);
         assert!(matches!(&parts[0], InterpolationPart::Text(s) if s == "hello "));
         // `f"hello {name}"` — `f"hello {` is 9 bytes, so `name`'s first byte is
-        // at source offset 9. The parser relies on this absolute offset to
-        // rebase the re-parsed expr's spans (B-2026-06-09-1).
-        assert!(
-            matches!(&parts[1], InterpolationPart::Expr { raw, offset } if raw == "name" && *offset == 9)
-        );
+        // at source offset 9, line 1, column 10 (1-indexed). The parser relies
+        // on these absolute coordinates to rebase the re-parsed expr's spans
+        // (offset → SpanKey B-2026-06-09-1; line/column → diagnostics
+        // B-2026-06-09-1a).
+        assert!(matches!(
+            &parts[1],
+            InterpolationPart::Expr { raw, offset, line, column }
+                if raw == "name" && *offset == 9 && *line == 1 && *column == 10
+        ));
     }
 }
 
@@ -663,14 +667,19 @@ fn test_interpolated_string_multiple_exprs() {
     let tokens = tokens_only(r#"f"{a} and {b}""#);
     if let Token::InterpolatedStringLiteral(parts) = &tokens[0] {
         assert_eq!(parts.len(), 3);
-        // `f"{a} and {b}"`: `a` at source offset 3, `b` at offset 11.
-        assert!(
-            matches!(&parts[0], InterpolationPart::Expr { raw, offset } if raw == "a" && *offset == 3)
-        );
+        // `f"{a} and {b}"`: `a` at offset 3 / col 4, `b` at offset 11 / col 12
+        // (both line 1).
+        assert!(matches!(
+            &parts[0],
+            InterpolationPart::Expr { raw, offset, line, column }
+                if raw == "a" && *offset == 3 && *line == 1 && *column == 4
+        ));
         assert!(matches!(&parts[1], InterpolationPart::Text(s) if s == " and "));
-        assert!(
-            matches!(&parts[2], InterpolationPart::Expr { raw, offset } if raw == "b" && *offset == 11)
-        );
+        assert!(matches!(
+            &parts[2],
+            InterpolationPart::Expr { raw, offset, line, column }
+                if raw == "b" && *offset == 11 && *line == 1 && *column == 12
+        ));
     }
 }
 
@@ -1543,11 +1552,14 @@ fn test_interpolated_string_preserves_non_ascii() {
     };
     assert_eq!(parts.len(), 3);
     assert!(matches!(&parts[0], InterpolationPart::Text(s) if s == "hi "));
-    // `名前` begins at byte offset 6 (`f"hi {` is 6 ASCII bytes), confirming the
-    // recorded offset is a byte index, not a char count.
-    assert!(
-        matches!(&parts[1], InterpolationPart::Expr { raw, offset } if raw == "名前" && *offset == 6)
-    );
+    // `名前` begins at byte offset 6 (`f"hi {` is 6 ASCII bytes) but column 7:
+    // `offset` is a byte index, `column` counts codepoints (both 1-indexed for
+    // line/column, line 1).
+    assert!(matches!(
+        &parts[1],
+        InterpolationPart::Expr { raw, offset, line, column }
+            if raw == "名前" && *offset == 6 && *line == 1 && *column == 7
+    ));
     assert!(matches!(&parts[2], InterpolationPart::Text(s) if s == " 日本語"));
 }
 

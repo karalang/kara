@@ -563,29 +563,44 @@ fn visit_field_pattern(fp: &FieldPattern, visit: &mut impl FnMut(&Span)) {
 
 // ── Mutable span shift (f-string interpolation rebase) ─────────
 //
-// `shift_expr_offsets` rebases every `Span.offset` reachable from an
-// expression by a constant `delta`. The parser uses it after re-parsing
-// an f-string interpolation hole inside the synthetic
-// `fn __interp__() { … }` wrapper: the re-parse produces spans relative
-// to that wrapper string, so distinct interpolation exprs at the same
-// syntactic position alias in the `(offset, length)` SpanKey that every
-// codegen/typecheck side-table keys on (B-2026-06-09-1). Shifting by
-// `delta = source_offset_of_hole - wrapper_prefix_len` makes them
-// absolute, eliminating the collision. Only `offset` is touched —
-// SpanKey ignores line/column, so they stay wrapper-relative (a
-// pre-existing, harmless residual for diagnostics that point into a
-// hole).
+// `shift_expr_spans` rebases every `Span` reachable from an expression
+// from re-parse-wrapper coordinates to absolute source coordinates. The
+// parser uses it after re-parsing an f-string interpolation hole inside
+// the synthetic `fn __interp__() { … }` wrapper: the re-parse produces
+// spans relative to that wrapper string, so without rebasing (a) distinct
+// holes at the same syntactic position alias in the `(offset, length)`
+// SpanKey that every codegen/typecheck side-table keys on
+// (B-2026-06-09-1), and (b) `line`/`column` point into the synthetic
+// wrapper, so any diagnostic that targets a sub-expr of the hole reports
+// the wrong source position (B-2026-06-09-1a).
+//
+// The wrapper is `fn __interp__() { RAW; }`; RAW's first byte sits at
+// wrapper offset 18 / line 1 / column 19 (1-indexed). Given the hole's
+// absolute `(offset, line, column)` in the source, every wrapper-relative
+// span maps back exactly: `offset` shifts by a constant; a span on wrapper
+// line 1 shares the hole's start line and shifts its column; a span on a
+// later line (a multi-line hole body) keeps its column verbatim — RAW is a
+// verbatim copy, so its internal line breaks align wrapper and source
+// line-for-line and the column is already source-accurate — and only its
+// line number offsets past the hole's start line.
 //
 // This mirrors the immutable `visit_*` walkers above over the
 // expression-reachable surface; keep the two in lockstep when the AST
 // grows a node — a missed arm leaves a stale span, which is exactly the
-// collision class this fixes.
-pub fn shift_expr_offsets(e: &mut Expr, delta: isize) {
-    if delta == 0 {
-        return;
-    }
+// bug class this fixes.
+pub fn shift_expr_spans(e: &mut Expr, hole_offset: usize, hole_line: usize, hole_column: usize) {
+    const PREFIX_LEN: usize = "fn __interp__() { ".len(); // 18
+    let offset_delta = hole_offset as isize - PREFIX_LEN as isize;
+    // RAW begins at wrapper column PREFIX_LEN + 1 (1-indexed) on line 1.
+    let col_delta = hole_column as isize - (PREFIX_LEN as isize + 1);
     visit_expr_spans_mut(e, &mut |s| {
-        s.offset = (s.offset as isize + delta) as usize;
+        s.offset = (s.offset as isize + offset_delta) as usize;
+        if s.line <= 1 {
+            s.column = (s.column as isize + col_delta).max(1) as usize;
+            s.line = hole_line;
+        } else {
+            s.line = hole_line + s.line - 1;
+        }
     });
 }
 

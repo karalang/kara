@@ -545,19 +545,22 @@ impl super::Parser {
                         crate::token::InterpolationPart::Text(t) => {
                             parsed_parts.push(crate::ast::ParsedInterpolationPart::Text(t));
                         }
-                        crate::token::InterpolationPart::Expr { raw, offset } => {
+                        crate::token::InterpolationPart::Expr {
+                            raw,
+                            offset,
+                            line,
+                            column,
+                        } => {
                             // Re-parse the interpolation hole as a standalone
                             // expression by wrapping it in a synthetic fn. The
-                            // prefix `fn __interp__() { ` is exactly 18 bytes,
-                            // so `raw` begins at wrapper offset 18; the lexer
-                            // recorded `offset` as `raw`'s absolute source
-                            // offset. Rebasing each sub-span by the difference
-                            // restores absolute coordinates so the
-                            // `(offset, length)` SpanKey is unique across
-                            // f-strings (B-2026-06-09-1) — without this, two
-                            // holes at the same syntactic position alias in
-                            // every codegen/typecheck span-keyed side-table.
-                            const WRAPPER_PREFIX_LEN: usize = "fn __interp__() { ".len();
+                            // re-parse produces spans relative to that wrapper;
+                            // the lexer recorded the hole's absolute source
+                            // `(offset, line, column)`, so `shift_expr_spans`
+                            // rebases every sub-span back to absolute
+                            // coordinates — making the `(offset, length)`
+                            // SpanKey unique across f-strings (B-2026-06-09-1)
+                            // and the line/column correct for diagnostics that
+                            // point into the hole (B-2026-06-09-1a).
                             let wrapper = format!("fn __interp__() {{ {}; }}", raw);
                             let result = crate::parse(&wrapper);
                             let expr = result.program.items.into_iter().find_map(|item| {
@@ -574,8 +577,7 @@ impl super::Parser {
                                 }
                             });
                             if let Some(mut e) = expr {
-                                let delta = offset as isize - WRAPPER_PREFIX_LEN as isize;
-                                crate::span_visitor::shift_expr_offsets(&mut e, delta);
+                                crate::span_visitor::shift_expr_spans(&mut e, offset, line, column);
                                 parsed_parts
                                     .push(crate::ast::ParsedInterpolationPart::Expr(Box::new(e)));
                             } else {

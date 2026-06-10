@@ -11091,3 +11091,64 @@ fn test_fstring_interp_spans_distinct_across_strings() {
     assert_eq!(&source[first.offset..first.offset + first.length], "x");
     assert_eq!(&source[second.offset..second.offset + second.length], "p");
 }
+
+/// `Span.line`/`Span.column` of an interpolation sub-expression must point to
+/// its true position in the ORIGINAL source — not into the synthetic
+/// `fn __interp__() { … }` re-parse wrapper (B-2026-06-09-1a). Before the fix
+/// every hole sub-span reported `line 1, column ~19`, so any diagnostic
+/// targeting it (a resolver/typecheck error inside `f"{…}"`) printed the wrong
+/// position. Verified for single-line and multi-line holes (the latter
+/// exercises the `line > 1` rebase branch).
+#[test]
+fn test_fstring_interp_spans_have_correct_line_column() {
+    // The 1-indexed (line, column) of a byte offset, by scanning `source`.
+    fn pos_at(source: &str, offset: usize) -> (usize, usize) {
+        let mut line = 1;
+        let mut col = 1;
+        for (i, ch) in source.char_indices() {
+            if i == offset {
+                break;
+            }
+            if ch == '\n' {
+                line += 1;
+                col = 1;
+            } else {
+                col += 1;
+            }
+        }
+        (line, col)
+    }
+
+    let check = |source: &str, expected_left: &str, expected_right: &str| {
+        let prog = parse(source).program;
+        let holes = collect_interp_hole_exprs(&prog);
+        assert_eq!(holes.len(), 1, "expected one hole in:\n{source}");
+        let ExprKind::Binary { left, right, .. } = &holes[0].kind else {
+            panic!("expected Binary, got {:?}", holes[0].kind);
+        };
+        for (span, text) in [(&left.span, expected_left), (&right.span, expected_right)] {
+            assert_eq!(&source[span.offset..span.offset + span.length], text);
+            let (line, col) = pos_at(source, span.offset);
+            assert_eq!(
+                (span.line, span.column),
+                (line, col),
+                "span for `{text}` reports wrong line:column"
+            );
+        }
+    };
+
+    // Single-line hole.
+    check(
+        "fn main() { let s = f\"{alpha == beta}\"; }",
+        "alpha",
+        "beta",
+    );
+    // Multi-line hole: `alpha` on one source line, `beta` on the next — the
+    // `==` is split across the newline inside the interpolation. Exercises the
+    // line>1 rebase (column kept verbatim, line offset past the hole's start).
+    check(
+        "fn main() {\n    let s = f\"{alpha ==\nbeta}\";\n}",
+        "alpha",
+        "beta",
+    );
+}

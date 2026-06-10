@@ -1055,12 +1055,18 @@ impl<'a> Lexer<'a> {
                     current_text.clear();
                 }
                 self.advance(); // consume '{'
-                                // Absolute byte offset of the expression's first byte in the
-                                // original source — `expr_text` is a verbatim copy from here to
-                                // the matching `}`, so byte i of `raw` maps to source offset
-                                // `expr_start + i`. The parser uses this to rebase re-parse
-                                // spans to absolute coordinates (B-2026-06-09-1).
+                                // Absolute source position of the expression's first byte. After
+                                // consuming `{`, `current`/`line`/`column` point at `raw`'s first
+                                // char (1-indexed line/column). `expr_text` is a verbatim copy from
+                                // here to the matching `}`, so byte i of `raw` maps to source
+                                // offset `expr_start + i`. The parser uses these to rebase the
+                                // re-parsed sub-expression's spans to absolute coordinates: the
+                                // offset fixes the SpanKey collision (B-2026-06-09-1), the
+                                // line/column fix diagnostics that point into the hole
+                                // (B-2026-06-09-1a).
                 let expr_start = self.current;
+                let expr_line = self.line;
+                let expr_column = self.column;
                 let mut expr_text = String::new();
                 let mut brace_depth = 1;
                 while brace_depth > 0 && !self.is_at_end() {
@@ -1083,6 +1089,8 @@ impl<'a> Lexer<'a> {
                 parts.push(InterpolationPart::Expr {
                     raw: expr_text,
                     offset: expr_start,
+                    line: expr_line,
+                    column: expr_column,
                 });
             } else if self.peek() == b'\\' {
                 self.advance(); // consume backslash
