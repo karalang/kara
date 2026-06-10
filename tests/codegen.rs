@@ -1031,6 +1031,45 @@ fn main() {
     }
 
     #[test]
+    fn e2e_try_push_str_fallible_codegen() {
+        // `String.try_push_str` — fallible append, returns Result[(), AllocError].
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut s: String = \"\";\n\
+                 match s.try_push_str(\"ab\") {\n\
+                     Ok(_) => println(\"ok\"),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+                 let _ = s.try_push_str(\"cde\");\n\
+                 println(s);\n\
+                 println(s.len());\n\
+             }",
+        ) {
+            assert_eq!(out, "ok\nabcde\n5\n");
+        }
+    }
+
+    #[test]
+    fn e2e_try_push_front_fallible_codegen() {
+        // `VecDeque.try_push_front` — fallible shift-insert at index 0.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut q: VecDeque[i64] = VecDeque.new();\n\
+                 let _ = q.try_push_back(2_i64);\n\
+                 match q.try_push_front(1_i64) {\n\
+                     Ok(_) => println(\"ok\"),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+                 println(q.len());\n\
+                 println(q[0]);\n\
+                 println(q[1]);\n\
+             }",
+        ) {
+            assert_eq!(out, "ok\n2\n1\n2\n");
+        }
+    }
+
+    #[test]
     fn e2e_builtin_enum_eq_option_result() {
         // Built-in enum `==` is sound in codegen too (None/Ok unit + payload
         // words). Regression guard for the zero-init enum construction.

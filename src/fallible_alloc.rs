@@ -76,8 +76,10 @@ pub fn static_companion_base(method: &str) -> Option<&'static str> {
 /// `try_*` codegen arms land (`push_str`, `extend_from_slice`, the constructors,
 /// `clone`, the `Map`/`Set` `insert` forms — the last need fallible runtime FFI).
 pub const CODEGEN_FALLIBLE_INSTANCE_BASES: &[&str] = &[
-    "push",      // Vec.try_push
-    "push_back", // VecDeque.try_push_back (shares Vec storage / the push arm)
+    "push",       // Vec.try_push
+    "push_back",  // VecDeque.try_push_back (shares Vec storage / the push arm)
+    "push_str",   // String.try_push_str
+    "push_front", // VecDeque.try_push_front
 ];
 
 /// `true` when `method`'s instance `try_*` companion has codegen lowering today
