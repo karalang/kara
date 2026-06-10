@@ -1661,16 +1661,25 @@ impl<'ctx> super::Codegen<'ctx> {
         // would need the typechecker's inferred-type table; not
         // supported here — requires an explicit `let v: Vec[T] = ...`
         // annotation.
-        if type_name == "Vec" && method == "with_capacity" {
+        //
+        // `VecDeque.with_capacity(n)` rides the same arm: VecDeque shares
+        // Vec's `{ptr, len, cap}` storage and its element type flows through
+        // `pending_let_elem_type` identically (`vec_inner_type_expr` peels
+        // both `Vec[T]` and `VecDeque[T]`). Without it, a `VecDeque`-typed
+        // binding fell through to the `Ok(const 0)` default and crashed
+        // (B-2026-06-10-3).
+        if (type_name == "Vec" || type_name == "VecDeque") && method == "with_capacity" {
             if args.len() != 1 {
                 return Err(format!(
-                    "Vec.with_capacity expects 1 argument (capacity), got {}",
+                    "{type_name}.with_capacity expects 1 argument (capacity), got {}",
                     args.len()
                 ));
             }
             let elem_ty = self.pending_let_elem_type.ok_or_else(|| {
-                "Vec.with_capacity: element type unknown — requires a `let v: Vec[T] = ...` annotation"
-                    .to_string()
+                format!(
+                    "{type_name}.with_capacity: element type unknown — requires a \
+                     `let v: {type_name}[T] = ...` annotation"
+                )
             })?;
             let n = self.compile_expr(&args[0].value)?.into_int_value();
             let elem_size = elem_ty.size_of().unwrap();
@@ -1715,6 +1724,50 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(agg.into());
         }
 
+        // `String.with_capacity(n: i64) -> String` — empty String (len=0)
+        // reserving n bytes. String shares Vec's `{ptr, len, cap}` shape but
+        // its element is always a byte (`u8`), so — unlike the Vec/VecDeque
+        // arm — no `pending_let_elem_type` is needed: the allocation is
+        // exactly `n` bytes. Without this arm a `String`-typed binding fell
+        // through to the `Ok(const 0)` default and crashed (B-2026-06-10-3).
+        if type_name == "String" && method == "with_capacity" {
+            if args.len() != 1 {
+                return Err(format!(
+                    "String.with_capacity expects 1 argument (capacity), got {}",
+                    args.len()
+                ));
+            }
+            let n = self.compile_expr(&args[0].value)?.into_int_value();
+            // Byte element → cap bytes == n; reserve via the panicking
+            // allocator (matches the panicking `Vec.with_capacity` policy).
+            let buf = self
+                .builder
+                .build_call(self.alloc_or_panic_fn, &[n.into()], "str_with_cap.buf")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            let vec_ty = self.vec_struct_type();
+            let zero = self.context.i64_type().const_int(0, false);
+            let mut agg = vec_ty.get_undef();
+            agg = self
+                .builder
+                .build_insert_value(agg, buf, 0, "str.data")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, zero, 1, "str.len")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, n, 2, "str.cap")
+                .unwrap()
+                .into_struct_value();
+            return Ok(agg.into());
+        }
+
         // `Vec.try_with_capacity(n: i64) -> Result[Vec[T], AllocError]` —
         // fallible `with_capacity` (phase-8-stdlib-floor item 8). Same empty
         // `{data, len=0, cap=n}` Vec as `with_capacity`, but the reservation
@@ -1727,17 +1780,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // `pending_let_elem_type` (see `stmts.rs`, the `result_ok_collection_
         // elem_type` recovery). The `?`-unwrap form (`let v: Vec[T] =
         // try_with_capacity(n)?`) already carries `T` via `vec_elem_types[v]`.
-        if type_name == "Vec" && method == "try_with_capacity" {
+        // `VecDeque.try_with_capacity` rides this arm (shared Vec storage +
+        // identical element-type recovery), now that its panicking base
+        // `VecDeque.with_capacity` codegens (B-2026-06-10-3).
+        if (type_name == "Vec" || type_name == "VecDeque") && method == "try_with_capacity" {
             if args.len() != 1 {
                 return Err(format!(
-                    "Vec.try_with_capacity expects 1 argument (capacity), got {}",
+                    "{type_name}.try_with_capacity expects 1 argument (capacity), got {}",
                     args.len()
                 ));
             }
             let elem_ty = self.pending_let_elem_type.ok_or_else(|| {
-                "Vec.try_with_capacity: element type unknown — requires a \
-                 `let v: Result[Vec[T], AllocError] = ...` (or `let v: Vec[T] = ...?`) annotation"
-                    .to_string()
+                format!(
+                    "{type_name}.try_with_capacity: element type unknown — requires a \
+                     `let v: Result[{type_name}[T], AllocError] = ...` (or `let v: {type_name}[T] = ...?`) annotation"
+                )
             })?;
             let n = self.compile_expr(&args[0].value)?.into_int_value();
             let elem_size = elem_ty.size_of().unwrap();
@@ -1802,6 +1859,74 @@ impl<'ctx> super::Codegen<'ctx> {
             let phi = self
                 .builder
                 .build_phi(ok_result.get_type(), "twc.result")
+                .unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, oom_end)]);
+            return Ok(phi.as_basic_value());
+        }
+
+        // `String.try_with_capacity(n) -> Result[String, AllocError]` —
+        // fallible `String.with_capacity` (phase-8-stdlib-floor item 8). Byte
+        // element (`u8`), so the reservation is exactly `n` bytes and no
+        // `pending_let_elem_type` is needed (cf. the panicking String arm).
+        // Null fallible-alloc → `Result.Err(AllocError.OutOfMemory{n})`,
+        // success → `Result.Ok({buf, len=0, cap=n})`.
+        if type_name == "String" && method == "try_with_capacity" {
+            if args.len() != 1 {
+                return Err(format!(
+                    "String.try_with_capacity expects 1 argument (capacity), got {}",
+                    args.len()
+                ));
+            }
+            let n = self.compile_expr(&args[0].value)?.into_int_value();
+            let buf = self
+                .builder
+                .build_call(self.alloc_fallible_fn, &[n.into()], "str_try_with_cap.buf")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+
+            let fn_val = self.current_fn.unwrap();
+            let ok_bb = self.context.append_basic_block(fn_val, "stwc.ok");
+            let oom_bb = self.context.append_basic_block(fn_val, "stwc.oom");
+            let merge_bb = self.context.append_basic_block(fn_val, "stwc.merge");
+            let is_null = self.builder.build_is_null(buf, "stwc.is_null").unwrap();
+            self.builder
+                .build_conditional_branch(is_null, oom_bb, ok_bb)
+                .unwrap();
+
+            self.builder.position_at_end(ok_bb);
+            let vec_ty = self.vec_struct_type();
+            let zero = self.context.i64_type().const_int(0, false);
+            let mut agg = vec_ty.get_undef();
+            agg = self
+                .builder
+                .build_insert_value(agg, buf, 0, "str.data")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, zero, 1, "str.len")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, n, 2, "str.cap")
+                .unwrap()
+                .into_struct_value();
+            let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[agg.into()])?;
+            let ok_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            self.builder.position_at_end(oom_bb);
+            let err_result = self.build_alloc_oom_result(n)?;
+            let oom_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            self.builder.position_at_end(merge_bb);
+            let phi = self
+                .builder
+                .build_phi(ok_result.get_type(), "stwc.result")
                 .unwrap();
             phi.add_incoming(&[(&ok_result, ok_end), (&err_result, oom_end)]);
             return Ok(phi.as_basic_value());

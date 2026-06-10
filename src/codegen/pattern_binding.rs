@@ -236,7 +236,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(inner_te) = self.pattern_binding_inner_types.get(&key).cloned() {
                         let elem_llvm = self.llvm_type_for_type_expr(&inner_te);
                         match type_name.as_str() {
-                            "Vec" => {
+                            // `VecDeque[T]` shares `Vec[T]`'s `{ptr, len, cap}`
+                            // storage + method dispatch, so a `match … { Ok(v)
+                            // => v.len() }` over a `VecDeque` payload must
+                            // register `vec_elem_types` too — without this it
+                            // fell through method dispatch ("no handler for
+                            // method 'len'"), the VecDeque half of
+                            // B-2026-06-10-3.
+                            "Vec" | "VecDeque" => {
                                 self.vec_elem_types.insert(name.clone(), elem_llvm);
                                 bound_vec_elem = Some(elem_llvm);
                             }

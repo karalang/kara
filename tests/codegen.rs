@@ -1308,6 +1308,82 @@ fn main() {
     }
 
     #[test]
+    fn e2e_vecdeque_string_with_capacity_codegen() {
+        // B-2026-06-10-3: `VecDeque.with_capacity` / `String.with_capacity` had
+        // no codegen arm and fell through to the `Ok(const 0)` default → SIGTRAP.
+        // Both now build: VecDeque rides Vec's `{ptr,len,cap}` storage + element
+        // recovery; String reserves `n` bytes (u8 element). Reserved capacity is
+        // logically empty (len=0); pushes fill the slots.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut q: VecDeque[i64] = VecDeque.with_capacity(8);\n\
+                 q.push_back(1_i64);\n\
+                 q.push_front(2_i64);\n\
+                 println(q.len()); println(q[0]); println(q[1]);\n\
+                 let mut s: String = String.with_capacity(8);\n\
+                 s.push_str(\"hi\");\n\
+                 println(s); println(s.len());\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n2\n1\nhi\n2\n");
+        }
+    }
+
+    #[test]
+    fn e2e_vecdeque_string_try_with_capacity_codegen() {
+        // phase-8-stdlib-floor item 8: the `try_with_capacity` companions for
+        // VecDeque (rides the Vec arm) and String (byte element), now that their
+        // panicking base codegens. Covers both the match form (VecDeque payload
+        // in Result — exercises the VecDeque-enum-payload reconstruction fix) and
+        // the `?`-form.
+        if let Some(out) = run_program(
+            "fn bvd() -> Result[i64, AllocError] {\n\
+                 let mut v: VecDeque[i64] = VecDeque.try_with_capacity(4)?;\n\
+                 v.push_back(1_i64);\n\
+                 v.push_front(2_i64);\n\
+                 Ok(v[0] + v[1])\n\
+             }\n\
+             fn bstr() -> Result[i64, AllocError] {\n\
+                 let mut s: String = String.try_with_capacity(8)?;\n\
+                 s.push_str(\"hello\");\n\
+                 Ok(s.len())\n\
+             }\n\
+             fn main() {\n\
+                 let rv: Result[VecDeque[i64], AllocError] = VecDeque.try_with_capacity(4);\n\
+                 match rv { Ok(v) => println(v.len()), Err(_) => println(\"e\") }\n\
+                 match bvd() { Ok(n) => println(n), Err(_) => println(\"e\") }\n\
+                 match bstr() { Ok(n) => println(n), Err(_) => println(\"e\") }\n\
+             }",
+        ) {
+            assert_eq!(out, "0\n3\n5\n");
+        }
+    }
+
+    #[test]
+    fn e2e_vecdeque_payload_in_option_match_codegen() {
+        // B-2026-06-10-3 general fix: a VecDeque payload bound out of an
+        // Option/Result via `match` was reconstructed with the 1-word default
+        // (the payload word-count/type gates handled `Vec`/`String` but not
+        // `VecDeque`) → malformed value, SIGTRAP at the binding's scope-exit
+        // free. VecDeque shares Vec's 3-word layout; the binding now dispatches
+        // and frees cleanly.
+        if let Some(out) = run_program(
+            "fn mk() -> VecDeque[i64] {\n\
+                 let mut q: VecDeque[i64] = VecDeque.new();\n\
+                 q.push_back(5_i64);\n\
+                 q.push_back(6_i64);\n\
+                 q\n\
+             }\n\
+             fn main() {\n\
+                 let o: Option[VecDeque[i64]] = Some(mk());\n\
+                 match o { Some(v) => { println(v.len()); println(v[0]); } None => println(\"n\") }\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n5\n");
+        }
+    }
+
+    #[test]
     fn e2e_builtin_enum_eq_option_result() {
         // Built-in enum `==` is sound in codegen too (None/Ok unit + payload
         // words). Regression guard for the zero-init enum construction.
@@ -8239,19 +8315,23 @@ fn main() {
     }
 
     #[test]
-    fn test_try_companion_constructor_codegen_rejected_cleanly() {
-        // A still-unimplemented static-constructor companion must reject
-        // cleanly — without the guard it falls through to `compile_assoc_call`'s
-        // silent `Ok(const 0)` default and miscompiles. Uses
-        // `VecDeque.try_with_capacity` (still interpreter-only — its panicking
-        // base `VecDeque.with_capacity` has no codegen arm either, B-2026-06-10-3;
-        // `Vec.try_with_capacity` now compiles, so it would no longer reject).
+    fn test_try_companion_constructors_codegen_all_implemented() {
+        // Every recognized static-constructor `try_*` companion now codegens
+        // (Vec.try_from_slice + Vec/VecDeque/String.try_with_capacity), so none
+        // hits the `compile_assoc_call` interpreter-only reject guard anymore.
+        // Regression guard: these must compile to IR cleanly (the guard stays as
+        // a defensive net for any future companion, exercised by the parallel
+        // instance test `test_try_companion_instance_codegen_rejected_cleanly`).
         let mut parsed = karac::parse(
-            "fn build() -> Result[i64, AllocError] {\n\
+            "fn vd() -> Result[i64, AllocError] {\n\
                  let r: Result[VecDeque[i64], AllocError] = VecDeque.try_with_capacity(8);\n\
                  match r { Ok(v) => Ok(v.len()), Err(_) => Ok(0_i64) }\n\
              }\n\
-             fn main() { let _ = build(); }",
+             fn st() -> Result[i64, AllocError] {\n\
+                 let r: Result[String, AllocError] = String.try_with_capacity(8);\n\
+                 match r { Ok(s) => Ok(s.len()), Err(_) => Ok(0_i64) }\n\
+             }\n\
+             fn main() { let _ = vd(); let _ = st(); }",
         );
         assert!(
             parsed.errors.is_empty(),
@@ -8262,17 +8342,13 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         assert!(
             typed.errors.is_empty(),
-            "VecDeque.try_with_capacity should typecheck: {:?}",
+            "VecDeque/String.try_with_capacity should typecheck: {:?}",
             typed.errors
         );
         karac::lower(&mut parsed.program, &typed);
-        let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("VecDeque.try_with_capacity codegen must fail loud (interpreter-only)");
         assert!(
-            err.contains("interpreter-only")
-                && err.contains("item 8")
-                && err.contains("try_with_capacity"),
-            "expected the actionable item-8 message, got: {err}"
+            compile_to_ir(&parsed.program, None, None).is_ok(),
+            "VecDeque/String.try_with_capacity must now codegen (no interpreter-only reject)"
         );
     }
 

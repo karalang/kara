@@ -25892,6 +25892,17 @@ fn test_try_with_capacity_string_match_form_pins() {
 }
 
 #[test]
+fn test_try_with_capacity_vecdeque_match_form_pins() {
+    // VecDeque variant of the match-form pin (`Result[VecDeque[T], AllocError]`).
+    typecheck_ok(
+        "fn main() {\n\
+             let r: Result[VecDeque[i64], AllocError] = VecDeque.try_with_capacity(8);\n\
+             match r { Ok(v) => { let _ = v.len(); } Err(_) => {} }\n\
+         }",
+    );
+}
+
+#[test]
 fn test_try_from_slice_static_returns_result_vec() {
     typecheck_ok(
         "fn main() {\n\

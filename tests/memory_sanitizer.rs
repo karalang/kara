@@ -1186,6 +1186,35 @@ fn main() {
     }
 
     #[test]
+    fn asan_vecdeque_payload_in_match_freed_once() {
+        // B-2026-06-10-3: a VecDeque bound out of an Option via `match` is
+        // reconstructed as a 3-word `{ptr,len,cap}` value (the gates now handle
+        // `VecDeque`, not just `Vec`/`String`) and freed exactly once at the
+        // arm's scope exit. A 1-word-default reconstruction freed a garbage
+        // pointer (SIGTRAP); a mis-registered cleanup could double-free. Heap
+        // buffer (cap > 0 via pushes) so the free actually fires.
+        assert_clean_asan_run(
+            r#"
+fn mk() -> VecDeque[i64] {
+    let mut q: VecDeque[i64] = VecDeque.new();
+    q.push_back(5);
+    q.push_back(6);
+    q
+}
+fn main() {
+    let o: Option[VecDeque[i64]] = Some(mk());
+    match o {
+        Some(v) => { println(v.len()); println(v[0]); }
+        None => { println("n"); }
+    }
+}
+"#,
+            &["2", "5"],
+            "vecdeque_payload_in_match_freed_once",
+        );
+    }
+
+    #[test]
     fn asan_vec_from_slice_nested_index_source_clean() {
         // `Vec.from_slice(rows[r])` on Vec[Vec[T]] — symmetric to the
         // extend_from_slice nested-index test. The new codegen branch

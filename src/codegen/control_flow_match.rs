@@ -936,7 +936,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 match self.pattern_binding_types.get(&key).map(|s| s.as_str()) {
-                    Some("Vec") | Some("String") => 3,
+                    // VecDeque rides Vec's 3-word `{ptr, len, cap}` layout
+                    // (B-2026-06-10-3): without it, a VecDeque enum payload
+                    // got the 1-word default → malformed value, crash on use.
+                    Some("Vec") | Some("VecDeque") | Some("String") => 3,
                     Some("Slice") => 2,
                     Some(name) => self
                         .struct_types
@@ -994,7 +997,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 match self.pattern_binding_types.get(&key).map(|s| s.as_str()) {
-                    Some("Vec") | Some("String") => self.vec_struct_type().into(),
+                    Some("Vec") | Some("VecDeque") | Some("String") => {
+                        self.vec_struct_type().into()
+                    }
                     Some("Slice") => self.slice_struct_type().into(),
                     Some(name) => self
                         .struct_types
@@ -1241,7 +1246,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let type_name = self.pattern_binding_types.get(&key).cloned();
         let target_ty: Option<BasicTypeEnum<'ctx>> =
             type_name.as_ref().and_then(|n| match n.as_str() {
-                "String" | "str" | "Vec" => Some(self.vec_struct_type().into()),
+                "String" | "str" | "Vec" | "VecDeque" => Some(self.vec_struct_type().into()),
                 "Slice" => Some(self.slice_struct_type().into()),
                 _ => self
                     .struct_types
