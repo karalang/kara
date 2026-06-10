@@ -5459,6 +5459,51 @@ fn cmd_build(
                     }
                     Some(BindingsMode::Component) | Some(BindingsMode::None) | None => {}
                 }
+                // Strip DWARF debug info from emitted .wasm artifacts. wasm-ld
+                // keeps the `.debug_*` custom sections (the native link path
+                // strips by default; the wasm path does not), and they are
+                // ~90%+ of an unstripped module — a 482 KiB browser hello is
+                // 93% DWARF, collapsing to ~30 KiB. Strip by default for every
+                // wasm artifact (the main module/component plus any
+                // `.threads.wasm` sibling); `KARAC_WASM_KEEP_DEBUG=1` opts out
+                // for source-level wasm debugging. Best-effort: Component
+                // bindings already resolved+required the tool above; for
+                // browser/raw builds resolve it lazily here, and a missing or
+                // failed strip is a warning, never a build failure.
+                if is_wasm && std::env::var_os("KARAC_WASM_KEEP_DEBUG").is_none() {
+                    let strip_tool = wasm_tools.clone().or_else(|| {
+                        let pin = manifest_release_field_for(filename, output, |m| {
+                            m.toolchain_wasm_tools.clone()
+                        });
+                        crate::componentize::resolve_wasm_tools(pin.as_deref()).ok()
+                    });
+                    match strip_tool {
+                        Some(tool) => {
+                            let mut artifacts = vec![exe_path.clone()];
+                            artifacts.extend(
+                                companions
+                                    .iter()
+                                    .filter(|(k, _)| *k == "threads_wasm")
+                                    .map(|(_, p)| p.clone()),
+                            );
+                            for artifact in &artifacts {
+                                if let Err(e) = crate::componentize::strip_debug(
+                                    &tool,
+                                    std::path::Path::new(artifact),
+                                ) {
+                                    eprintln!(
+                                        "warning: wasm debug-strip skipped for {artifact}: {e}"
+                                    );
+                                }
+                            }
+                        }
+                        None => eprintln!(
+                            "note: wasm-tools not found — emitted .wasm retains debug info \
+                             (install wasm-tools for ~10x smaller modules, or set \
+                             KARAC_WASM_KEEP_DEBUG=1 to silence this note)"
+                        ),
+                    }
+                }
                 match output {
                     OutputMode::Text => {
                         let mut line = format!("Built: {exe_path}");

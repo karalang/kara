@@ -39,7 +39,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A resolved `wasm-tools` binary: where it lives and what
 /// `--version` reported (pin-checked when the manifest carries one).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WasmTools {
     pub path: PathBuf,
     pub version: String,
@@ -162,6 +162,41 @@ fn run_wasm_tools(tool: &WasmTools, args: &[&str]) -> Result<(), String> {
         args.join(" "),
         String::from_utf8_lossy(&output.stderr).trim_end()
     ))
+}
+
+/// Strip DWARF debug info from an emitted `.wasm` artifact, in place.
+///
+/// `wasm-ld` keeps the `.debug_*` custom sections (the native link path
+/// strips by default; the wasm path does not), and they dominate an
+/// unstripped module — a 482 KiB browser hello-world is ~93% DWARF and
+/// collapses to ~30 KiB stripped. `wasm-tools strip`'s default removes the
+/// debug sections while **keeping** `name`, `component-type`, and
+/// `dylink.0`, so this is safe for components and shared-memory (threaded)
+/// modules without any special-casing. Writes to a temp sibling and renames
+/// over the original so a failed/partial strip never corrupts the artifact.
+pub fn strip_debug(tool: &WasmTools, path: &Path) -> Result<(), String> {
+    let tmp = PathBuf::from(format!("{}.strip-tmp", path.display()));
+    let result = run_wasm_tools(
+        tool,
+        &[
+            "strip",
+            &path.display().to_string(),
+            "-o",
+            &tmp.display().to_string(),
+        ],
+    )
+    .and_then(|()| {
+        std::fs::rename(&tmp, path).map_err(|e| {
+            format!(
+                "failed to replace {} with stripped module: {e}",
+                path.display()
+            )
+        })
+    });
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 /// Lift `core_wasm` (a wasm32-wasip1 C-ABI core module) into a single

@@ -12067,6 +12067,69 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Strip-by-default: `karac build --target=wasm_*` runs `wasm-tools strip`
+/// on every emitted `.wasm` artifact. The native link path strips by
+/// default, but wasm-ld keeps the `.debug_*` DWARF sections — ~90%+ of an
+/// unstripped module (a 482 KiB browser hello is 93% DWARF). Proven by the
+/// ~10x size delta against the `KARAC_WASM_KEEP_DEBUG=1` opt-out build.
+/// Uses the wasm_wasi component path, so `wasm_build_skip_reason` already
+/// covers a missing wasm-tools / runtime archive / linker.
+#[test]
+fn wasm_build_strips_debug_info_by_default() {
+    let tmp = wasm_test_dir("strip-default");
+    let path = tmp.join("strip_hello.kara");
+    std::fs::write(&path, "fn main() { println(\"hi\"); }\n").unwrap();
+    let wasm_path = tmp.join("strip_hello.wasm");
+
+    // Default build — stripped.
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .env_remove("KARAC_WASM_KEEP_DEBUG")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_build_strips_debug_info_by_default — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "default wasm build failed: {stderr}");
+    let stripped = std::fs::metadata(&wasm_path)
+        .expect("expected strip_hello.wasm after default build")
+        .len();
+
+    // Opt-out build — DWARF retained.
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .env("KARAC_WASM_KEEP_DEBUG", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "keep-debug wasm build failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let unstripped = std::fs::metadata(&wasm_path)
+        .expect("expected strip_hello.wasm after keep-debug build")
+        .len();
+
+    assert!(
+        stripped < unstripped,
+        "stripped build ({stripped} B) should be smaller than the KEEP_DEBUG \
+         build ({unstripped} B)"
+    );
+    assert!(
+        stripped.saturating_mul(3) < unstripped,
+        "strip should remove the bulk of the module (DWARF is ~90%+): stripped \
+         {stripped} B vs unstripped {unstripped} B — expected >3x reduction"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The `Vector[T, N]` program the WASM SIMD-128 tests share (phase-10
 /// "WASM SIMD-128 lowering"). The `a` lane inputs flow from function
 /// params so the ops survive at `KARAC_OPT_LEVEL=0` (constant inputs
