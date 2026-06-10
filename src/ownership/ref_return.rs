@@ -357,13 +357,20 @@ fn classify_borrow_return(
         ExprKind::Block(b) => classify_borrow_return_block(b, ref_params, ref_locals),
         // Conditional borrow return via `match` (sibling of the `if` arm):
         // every arm body must itself be a borrowable shape, combined across
-        // arms. Bounded — in lockstep with codegen's
-        // `compile_ref_return_ptr` `Match` arm — to guard-free arms whose
-        // patterns are scalar literals (`Integer`/`Char`/`Bool`) or `_`.
-        // Destructuring patterns, guards, and non-scalar scrutinees are
-        // tracked follow-ons; they report `UnsupportedForm` (clean error).
-        ExprKind::Match { arms, .. } => {
-            if arms.is_empty() || !arms.iter().all(match_arm_borrowable_shape) {
+        // arms. Bounded — in EXACT lockstep with codegen's
+        // `compile_ref_return_ptr` `Match` arm (an accepting shape here that
+        // codegen can't lower falls through to the value-return miscompile) —
+        // to: (1) an *identifier* scrutinee, so the scrutinee's own binding
+        // owns its drop and the match adds none (a fresh-temp scrutinee needs
+        // drop machinery the simplified lowering lacks → `UnsupportedForm`);
+        // and (2) guard-free, *binding-free* arms (`pattern_binding_free`).
+        // Payload-binding arms (`Some(x) => x`) are the deferred `Option[ref
+        // T]` case; guards and undotted unit-variant arms stay follow-ons.
+        ExprKind::Match { scrutinee, arms } => {
+            if arms.is_empty()
+                || !matches!(scrutinee.kind, ExprKind::Identifier(_))
+                || !arms.iter().all(match_arm_borrowable_shape)
+            {
                 return Some(BorrowReturnShape::UnsupportedForm);
             }
             arms.iter()
@@ -403,21 +410,31 @@ fn classify_borrow_return_block(
 }
 
 /// A `match` arm is in-scope for borrow-return classification only when it
-/// has no guard and its pattern is a scalar literal (`Integer`/`Char`/`Bool`)
-/// or `_`. Kept identical to codegen's
-/// `expr_ops.rs::ref_return_match_arm_ok` so the source-pinning check and the
-/// lowering accept the same set (lockstep — see that fn's note).
+/// has no guard and its pattern binds nothing (`pattern_binding_free`). Kept
+/// identical to codegen's `expr_ops.rs::ref_return_match_arm_ok` so the
+/// source-pinning check and the lowering accept the same set (lockstep — see
+/// that fn's note).
 fn match_arm_borrowable_shape(arm: &MatchArm) -> bool {
-    arm.guard.is_none()
-        && matches!(
-            arm.pattern.kind,
-            PatternKind::Wildcard
-                | PatternKind::Literal(
-                    LiteralPattern::Integer(..)
-                        | LiteralPattern::Char(..)
-                        | LiteralPattern::Bool(..)
-                )
-        )
+    arm.guard.is_none() && pattern_binding_free(&arm.pattern)
+}
+
+/// A pattern that binds no variable. Byte-identical to codegen's
+/// `expr_ops.rs::ref_return_pattern_binding_free` — see that fn for the full
+/// rationale (the dot in a `Binding` name disambiguates a no-bind dotted unit
+/// variant like `Side.Left` from a payload binding, the distinction the
+/// ownership pass cannot make via types).
+fn pattern_binding_free(pat: &Pattern) -> bool {
+    match &pat.kind {
+        PatternKind::Wildcard => true,
+        PatternKind::Literal(
+            LiteralPattern::Integer(..) | LiteralPattern::Char(..) | LiteralPattern::Bool(..),
+        ) => true,
+        PatternKind::TupleVariant { patterns, .. } => patterns
+            .iter()
+            .all(|p| matches!(p.kind, PatternKind::Wildcard)),
+        PatternKind::Binding(name) => name.contains('.'),
+        _ => false,
+    }
 }
 
 /// Merge two branch classifications. `None` is OK; a genuinely dangling

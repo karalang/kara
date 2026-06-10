@@ -159,27 +159,43 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(phi.as_basic_value().into_pointer_value())
             }
             // Borrow returned from a `match` (sibling of the `if` arm):
-            // lower the scalar selector, branch per arm, compile each arm
-            // body to a borrow pointer, and phi them at the merge. Covers
-            // `match which { 0 => a, 1 => b, _ => c }` selecting among `ref`
-            // params/fields. Gated — in lockstep with `classify_borrow_return`
-            // (src/ownership/ref_return.rs) — to guard-free arms whose
-            // patterns are integer/char/bool literals or `_`, over a scalar
-            // (int) scrutinee. That keeps the scrutinee free of heap/drop
-            // obligations (no String/enum destructure), so no per-arm scope
-            // frame is needed. Any shape this rejects (returns `None` before
-            // emitting IR) is reported upstream as `UnsupportedForm` — never
-            // miscompiled. Destructuring patterns, guards, and non-scalar
-            // scrutinees are tracked follow-ons (B-2026-06-07-5).
+            // lower the selector, branch per arm, compile each arm body to a
+            // borrow pointer, and phi them at the merge. Covers
+            // `match which { 0 => a, 1 => b, _ => c }`, `match res { Ok(_) =>
+            // a, _ => b }`, and `match side { Side.Left => a, Side.Right => b
+            // }` selecting among `ref` params/fields.
+            //
+            // Soundness (zero drop obligation, so no per-arm scope frame) rests
+            // on two AST-determinable, type-info-free conditions — kept in
+            // exact lockstep with `classify_borrow_return` (ownership/
+            // ref_return.rs):
+            //   1. The scrutinee is an *identifier*. A named binding's heap (if
+            //      any) is freed by that binding's own cleanup, never by the
+            //      match — so even an owned `String`/enum scrutinee adds no
+            //      drop here. A fresh-temp scrutinee (`match make() { … }`)
+            //      WOULD need the fresh-temp drop machinery `compile_match` has,
+            //      so it is rejected (→ `UnsupportedForm`).
+            //   2. Every arm is guard-free and *binds nothing*
+            //      (`ref_return_match_arm_ok`): literal/`_`, an all-wildcard
+            //      tuple variant (`Some(_)`), or a dotted unit variant
+            //      (`Side.Left`). Binding a payload (`Some(x) => x`) is the
+            //      deferred `Option[ref T]` case; guards can spawn heap temps
+            //      with no frame to free them — both stay follow-ons.
+            // `compile_pattern_condition` is condition-only (it never emits
+            // bindings/cleanups), so the tag/literal checks below are pure.
+            // Any rejected shape returns `None` *before* emitting IR and is
+            // reported upstream as `UnsupportedForm` — never miscompiled.
+            // (The lockstep is load-bearing: ownership accepting a shape this
+            // can't lower falls through to the value-return miscompile.)
             ExprKind::Match { scrutinee, arms } => {
-                if arms.is_empty() || !arms.iter().all(Self::ref_return_match_arm_ok) {
+                if arms.is_empty()
+                    || !matches!(scrutinee.kind, ExprKind::Identifier(_))
+                    || !arms.iter().all(Self::ref_return_match_arm_ok)
+                {
                     return None;
                 }
                 let fn_val = self.current_fn?;
                 let scrut = self.compile_expr(scrutinee).ok()?;
-                if !scrut.is_int_value() {
-                    return None;
-                }
                 let merge_bb = self
                     .context
                     .append_basic_block(fn_val, "refret.match.merge");
@@ -252,22 +268,38 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// A `match` arm is lowerable in borrow-return position only when it has
-    /// no guard and its pattern is a scalar literal (`Integer`/`Char`/`Bool`)
-    /// or `_`. Kept identical to the classify-side gate in
-    /// `src/ownership/ref_return.rs::match_arm_borrowable_shape` so the two
-    /// stay in lockstep (codegen accepting more than classify would
+    /// no guard and its pattern binds nothing (see
+    /// `ref_return_pattern_binding_free`). Kept identical to the classify-side
+    /// gate in `src/ownership/ref_return.rs::match_arm_borrowable_shape` so the
+    /// two stay in lockstep (codegen accepting more than classify would
     /// miscompile; classify accepting more would dangle).
     fn ref_return_match_arm_ok(arm: &MatchArm) -> bool {
-        arm.guard.is_none()
-            && matches!(
-                arm.pattern.kind,
-                PatternKind::Wildcard
-                    | PatternKind::Literal(
-                        LiteralPattern::Integer(..)
-                            | LiteralPattern::Char(..)
-                            | LiteralPattern::Bool(..)
-                    )
-            )
+        arm.guard.is_none() && Self::ref_return_pattern_binding_free(&arm.pattern)
+    }
+
+    /// A pattern that binds no variable — the precondition that lets the
+    /// borrow-return `match`/`if` lowering skip all per-arm drop machinery
+    /// (nothing is moved out of or aliased into the scrutinee). Accepts:
+    /// `_`; a scalar literal (`Integer`/`Char`/`Bool`); an all-wildcard tuple
+    /// variant (`Some(_)`, `Foo(_, _)`); and a *dotted* unit-variant pattern
+    /// (`Side.Left`) — the parser emits those as `Binding("Side.Left")`, and a
+    /// real value binding can never contain `.`, so the dot disambiguates a
+    /// no-bind variant from a payload binding without any type information
+    /// (which the ownership pass lacks). A bare-name `Binding` (`x`, or an
+    /// undotted unit variant `None`) is conservatively rejected. Kept
+    /// byte-identical to `ref_return.rs::pattern_binding_free`.
+    fn ref_return_pattern_binding_free(pat: &Pattern) -> bool {
+        match &pat.kind {
+            PatternKind::Wildcard => true,
+            PatternKind::Literal(
+                LiteralPattern::Integer(..) | LiteralPattern::Char(..) | LiteralPattern::Bool(..),
+            ) => true,
+            PatternKind::TupleVariant { patterns, .. } => patterns
+                .iter()
+                .all(|p| matches!(p.kind, PatternKind::Wildcard)),
+            PatternKind::Binding(name) => name.contains('.'),
+            _ => false,
+        }
     }
 
     pub(super) fn compile_field_access(

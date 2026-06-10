@@ -1826,6 +1826,82 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_borrow_return_match_tuple_variant() {
+        // Tier 2c (B-2026-06-07-5): borrow-return `match` over a non-scalar
+        // identifier scrutinee with a binding-free tuple-variant arm
+        // (`Ok(_)`) + wildcard catch-all. Per-arm pointer phi'd at the merge;
+        // the enum tag drives arm selection (verified both branches).
+        let out = run_program(
+            "fn pick(res: ref Result[i64, String], a: ref String, b: ref String) -> ref String {\n\
+             \x20   match res {\n\
+             \x20       Ok(_) => a,\n\
+             \x20       _ => b,\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let ok: Result[i64, String] = Result.Ok(1);\n\
+             \x20   let er: Result[i64, String] = Result.Err(\"e\");\n\
+             \x20   let x = \"yes\"; let y = \"no\";\n\
+             \x20   println(pick(ok, x, y));\n\
+             \x20   println(pick(er, x, y));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "yes\nno");
+        }
+    }
+
+    #[test]
+    fn test_e2e_borrow_return_match_dotted_unit_variant() {
+        // Tier 2c: dotted unit-variant arms (`Side.Left`/`Side.Right`) over an
+        // enum identifier scrutinee, returning a field reached through a `ref`
+        // param. Exercises the no-`_`-catch-all exhaustive enum form (the
+        // trailing block is unreachable because the value is always Left/Right).
+        let out = run_program(
+            "enum Side { Left, Right }\n\
+             struct Pair { first: String, second: String }\n\
+             fn choose(s: ref Side, p: ref Pair) -> ref String {\n\
+             \x20   match s {\n\
+             \x20       Side.Left => p.first,\n\
+             \x20       Side.Right => p.second,\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let pr = Pair { first: \"FST\", second: \"SND\" };\n\
+             \x20   println(choose(Side.Left, pr));\n\
+             \x20   println(choose(Side.Right, pr));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "FST\nSND");
+        }
+    }
+
+    #[test]
+    fn test_e2e_borrow_return_match_string_scrutinee() {
+        // Tier 2c / lockstep-gap fix: a `match` over a *String* identifier
+        // scrutinee with a wildcard-only arm. Before, ownership false-accepted
+        // this (it ignored the scrutinee) while codegen's `is_int_value()`
+        // gate returned None → value-return miscompile (garbage output). Now
+        // both gates accept identifier scrutinees of any type and the borrow
+        // lowers correctly.
+        let out = run_program(
+            "fn pick(s: ref String, a: ref String, b: ref String) -> ref String {\n\
+             \x20   match s {\n\
+             \x20       _ => a,\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let scrut = \"ignored\"; let a = \"chosen\"; let b = \"zzz\";\n\
+             \x20   println(pick(scrut, a, b));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "chosen");
+        }
+    }
+
+    #[test]
     fn test_e2e_borrow_return_chained_call() {
         // Chained borrow return (B-2026-06-07-5): a borrow-returning free-fn
         // call in tail position (`echo(t)`) and at an explicit `return`. The

@@ -236,6 +236,138 @@ fn reject_match_arm_dangling_source() {
     );
 }
 
+/// Tier 2c (B-2026-06-07-5): a `match` over a non-scalar *identifier*
+/// scrutinee with binding-free destructuring arms — an all-wildcard tuple
+/// variant (`Ok(_)`) plus a wildcard catch-all — returning a borrow from a
+/// `ref` param. Sound because nothing is bound (no payload aliasing) and the
+/// scrutinee's own binding owns its drop, so the match adds no drop
+/// obligation. Previously `UnsupportedForm`.
+#[test]
+fn accept_match_tuple_variant_borrow_return() {
+    assert_static_accept(
+        "fn pick(res: ref Result[i64, String], a: ref String, b: ref String) -> ref String {\n\
+             match res {\n\
+                 Ok(_) => a,\n\
+                 _ => b,\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let ok: Result[i64, String] = Result.Ok(1);\n\
+             let x = String.from(\"yes\");\n\
+             let y = String.from(\"no\");\n\
+             let r = pick(ok, x, y);\n\
+             println(r.len());\n\
+         }",
+        "accept_match_tuple_variant_borrow_return",
+    );
+}
+
+/// Tier 2c: dotted unit-variant arms (`Side.Left` / `Side.Right`) over an
+/// enum identifier scrutinee. The dot makes each pattern unambiguously a
+/// no-bind variant (a value binding can never be dotted), so both the
+/// source-pinning gate and codegen accept it without type information.
+#[test]
+fn accept_match_dotted_unit_variant_borrow_return() {
+    assert_static_accept(
+        "enum Side { Left, Right }\n\
+         fn pick(s: ref Side, a: ref String, b: ref String) -> ref String {\n\
+             match s {\n\
+                 Side.Left => a,\n\
+                 Side.Right => b,\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let sd: Side = Side.Left;\n\
+             let x = String.from(\"L\");\n\
+             let y = String.from(\"R\");\n\
+             let r = pick(sd, x, y);\n\
+             println(r.len());\n\
+         }",
+        "accept_match_dotted_unit_variant_borrow_return",
+    );
+}
+
+/// Tier 2c boundary: a payload-*binding* arm (`Some(x) => x`) returns a
+/// borrow of the bound payload — the deferred `Option[ref T]` semantics. It
+/// must stay a clean `UnsupportedForm` (not accepted, not miscompiled): the
+/// gate rejects any pattern that binds a variable.
+#[test]
+fn reject_match_payload_binding_borrow_return_unsupported() {
+    assert_ownership_error_kind(
+        "fn pick(opt: ref Option[String], b: ref String) -> ref String {\n\
+             match opt {\n\
+                 Some(x) => x,\n\
+                 _ => b,\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let o: Option[String] = Option.Some(String.from(\"hi\"));\n\
+             let y = String.from(\"no\");\n\
+             let r = pick(o, y);\n\
+             println(r.len());\n\
+         }",
+        OwnershipErrorKind::BorrowReturnNotSourcePinned {
+            shape: karac::ownership::BorrowReturnShape::UnsupportedForm,
+        },
+        "reject_match_payload_binding_borrow_return_unsupported",
+    );
+}
+
+/// Tier 2c boundary: a guarded arm needs a per-arm scope frame to free any
+/// heap temporary the guard expression spawns — machinery the simplified
+/// borrow-return lowering lacks. Must stay `UnsupportedForm`.
+#[test]
+fn reject_match_guarded_arm_borrow_return_unsupported() {
+    assert_ownership_error_kind(
+        "fn pick(score: i64, a: ref String, b: ref String) -> ref String {\n\
+             match score {\n\
+                 _ if score > 90 => a,\n\
+                 _ => b,\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let x = String.from(\"hi\");\n\
+             let y = String.from(\"lo\");\n\
+             let r = pick(95, x, y);\n\
+             println(r.len());\n\
+         }",
+        OwnershipErrorKind::BorrowReturnNotSourcePinned {
+            shape: karac::ownership::BorrowReturnShape::UnsupportedForm,
+        },
+        "reject_match_guarded_arm_borrow_return_unsupported",
+    );
+}
+
+/// Tier 2c boundary + lockstep guard: a *fresh-temp* scrutinee
+/// (`match make() { … }`) has no binding to own its drop, so the simplified
+/// lowering can't handle it. The gate requires an identifier scrutinee and
+/// reports anything else as `UnsupportedForm` — keeping the ownership pass
+/// and codegen in exact lockstep (an accepted-but-unlowerable shape would
+/// fall through to the value-return miscompile).
+#[test]
+fn reject_match_nonident_scrutinee_borrow_return_unsupported() {
+    assert_ownership_error_kind(
+        "fn id(s: Result[i64, String]) -> Result[i64, String] { s }\n\
+         fn pick(r: Result[i64, String], a: ref String, b: ref String) -> ref String {\n\
+             match id(r) {\n\
+                 Ok(_) => a,\n\
+                 _ => b,\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let ok: Result[i64, String] = Result.Ok(1);\n\
+             let x = String.from(\"yes\");\n\
+             let y = String.from(\"no\");\n\
+             let z = pick(ok, x, y);\n\
+             println(z.len());\n\
+         }",
+        OwnershipErrorKind::BorrowReturnNotSourcePinned {
+            shape: karac::ownership::BorrowReturnShape::UnsupportedForm,
+        },
+        "reject_match_nonident_scrutinee_borrow_return_unsupported",
+    );
+}
+
 /// design.md Feature 4 Part 3, ref inside generic wrappers:
 /// "`ref T` is a first-class type ... and may appear inside generic type
 /// arguments in a return type: `Option[ref T]`, `Result[ref T, E]`,
@@ -704,6 +836,56 @@ mod runtime_confirmation {
                  println(p.position);\n\
              }",
             "asan_borrowed_struct_return",
+        );
+    }
+
+    // Tier 2c (B-2026-06-07-5): a `match` over an enum identifier scrutinee
+    // returning a borrow from a `ref` param, across both binding-free
+    // destructuring shapes — an all-wildcard tuple variant (`Ok(_)`) and
+    // dotted unit variants (`Side.*`). The returned borrow aliases the
+    // caller's heap `String`; the match itself binds/aliases nothing and the
+    // scrutinee's binding frees it once. A double-free (match wrongly freeing
+    // the source) or a UAF (returning a pointer into a freed temp) would trip
+    // ASAN. Mirrors the now-accepted `accept_match_*_borrow_return` static
+    // tests.
+    #[test]
+    fn asan_match_tuple_variant_borrow_return() {
+        assert_accepted_program_is_asan_clean(
+            "fn pick(res: ref Result[i64, String], a: ref String, b: ref String) -> ref String {\n\
+                 match res {\n\
+                     Ok(_) => a,\n\
+                     _ => b,\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let ok: Result[i64, String] = Result.Ok(1);\n\
+                 let x = String.from(\"a longer string here\");\n\
+                 let y = String.from(\"short\");\n\
+                 let r = pick(ok, x, y);\n\
+                 println(r.len());\n\
+             }",
+            "asan_match_tuple_variant_borrow_return",
+        );
+    }
+
+    #[test]
+    fn asan_match_dotted_unit_variant_borrow_return() {
+        assert_accepted_program_is_asan_clean(
+            "enum Side { Left, Right }\n\
+             fn pick(s: ref Side, a: ref String, b: ref String) -> ref String {\n\
+                 match s {\n\
+                     Side.Left => a,\n\
+                     Side.Right => b,\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let sd: Side = Side.Right;\n\
+                 let x = String.from(\"left payload here\");\n\
+                 let y = String.from(\"right payload here\");\n\
+                 let r = pick(sd, x, y);\n\
+                 println(r.len());\n\
+             }",
+            "asan_match_dotted_unit_variant_borrow_return",
         );
     }
 
