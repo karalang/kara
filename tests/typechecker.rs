@@ -26001,3 +26001,45 @@ fn test_hard_mode_rejects_derive_clone_transitive_field() {
     // Both Inner (field s) and Outer (field inner) are flagged.
     assert_derive_clone_allocates(&errors, "field 'inner'");
 }
+
+// ── Item 7: `?`-propagation through AllocError (From-chain) ──
+// No new mechanism — AllocError rides the standard `?` From-chain. The
+// same-error-type case is covered by test_try_companion_question_propagates_
+// alloc_error above; these cover the cross-error `impl From[AllocError]` case.
+
+#[test]
+fn test_question_alloc_error_converts_via_from_impl() {
+    typecheck_ok(
+        "struct AppError { code: i64 }\n\
+         impl From for AppError {\n\
+             fn from(e: AllocError) -> AppError { AppError { code: 1_i64 } }\n\
+         }\n\
+         fn build() -> Result[i64, AppError] {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.try_push(1_i64)?;\n\
+             Ok(v.len())\n\
+         }\n\
+         fn main() { let _ = build(); }",
+    );
+}
+
+#[test]
+fn test_question_alloc_error_without_from_impl_rejected() {
+    // `?` on a `try_*` (Result[_, AllocError]) in a fn returning a different
+    // error type with no `impl From[AllocError]` is rejected — same rule as
+    // every other propagated error.
+    let errors = typecheck_errors(
+        "struct AppError { code: i64 }\n\
+         fn build() -> Result[(), AppError] {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.try_push(1_i64)?;\n\
+             Ok(())\n\
+         }\n\
+         fn main() { let _ = build(); }",
+    );
+    let joined: String = errors.iter().map(|e| e.to_string()).collect();
+    assert!(
+        joined.contains("AllocError") && joined.contains("From"),
+        "expected a missing-From[AllocError] diagnostic, got: {joined}"
+    );
+}
