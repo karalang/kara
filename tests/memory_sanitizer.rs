@@ -1130,6 +1130,34 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_try_from_slice_string_elements_independent() {
+        // Fallible sibling of the above (phase-8-stdlib-floor item 8).
+        // `try_from_slice` wraps the new Vec in `Result.Ok(_)`; the
+        // Vec[String]-in-Result payload must drop exactly once at scope
+        // exit (no double-free against the per-element-cloned source).
+        // Heap-allocated Strings (cap > 0) so the free fires.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut a: String = String.new();
+    a.push_str("alpha");
+    let mut b: String = String.new();
+    b.push_str("beta");
+    let mut src: Vec[String] = Vec.new();
+    src.push(a);
+    src.push(b);
+    match Vec.try_from_slice(src) {
+        Ok(dst) => { println(dst[0]); println(dst[1]); }
+        Err(_) => { println("err"); }
+    }
+}
+"#,
+            &["alpha", "beta"],
+            "vec_try_from_slice_string_elements_independent",
+        );
+    }
+
+    #[test]
     fn asan_vec_from_slice_nested_index_source_clean() {
         // `Vec.from_slice(rows[r])` on Vec[Vec[T]] — symmetric to the
         // extend_from_slice nested-index test. The new codegen branch

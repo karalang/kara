@@ -1121,6 +1121,46 @@ fn main() {
     }
 
     #[test]
+    fn e2e_try_from_slice_fallible_codegen() {
+        // phase-8-stdlib-floor item 8: `Vec.try_from_slice` — fallible
+        // `from_slice` returning `Result[Vec[T], AllocError]`. The freshly-built
+        // `Vec` aggregate is wrapped in `Result.Ok(_)` and round-trips through
+        // match-extraction (the Vec-in-Result payload concern). Trivial element
+        // (i64) takes the memcpy path.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let src: Vec[i64] = Vec.filled(3_i64, 7_i64);\n\
+                 match Vec.try_from_slice(src) {\n\
+                     Ok(v) => { println(\"ok\"); println(v.len()); println(v[0]); println(v[2]); }\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "ok\n3\n7\n7\n");
+        }
+    }
+
+    #[test]
+    fn e2e_try_from_slice_string_clone_codegen() {
+        // Heap-element source (Vec[String]) takes the per-element clone loop, so
+        // the new Vec's strings are independent of the source. Exercises the
+        // Vec[String]-in-Result.Ok round-trip end to end.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut src: Vec[String] = Vec.new();\n\
+                 src.push(\"ab\");\n\
+                 src.push(\"cd\");\n\
+                 match Vec.try_from_slice(src) {\n\
+                     Ok(v) => { println(v.len()); println(v[0]); println(v[1]); }\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "2\nab\ncd\n");
+        }
+    }
+
+    #[test]
     fn e2e_builtin_enum_eq_option_result() {
         // Built-in enum `==` is sound in codegen too (None/Ok unit + payload
         // words). Regression guard for the zero-init enum construction.

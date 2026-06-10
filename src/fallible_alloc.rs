@@ -88,3 +88,22 @@ pub const CODEGEN_FALLIBLE_INSTANCE_BASES: &[&str] = &[
 pub fn instance_companion_has_codegen(method: &str) -> bool {
     instance_companion_base(method).is_some_and(|b| CODEGEN_FALLIBLE_INSTANCE_BASES.contains(&b))
 }
+
+/// Static constructor `try_*` companions whose **codegen** (`karac build`)
+/// lowering has landed (phase-8-stdlib-floor item 8), keyed by
+/// `(type_name, base)`. The `Type.try_<base>` form for a pair in this set
+/// flows through to `compile_assoc_call`'s real fallible lowering; any other
+/// recognized static companion is still interpreter-only and
+/// `compile_assoc_call` rejects it loudly. Grows as more constructor `try_*`
+/// codegen arms land (the `with_capacity` trio — blocked on element-type
+/// recovery through the `Result` wrapper).
+pub const CODEGEN_FALLIBLE_STATIC: &[(&str, &str)] = &[
+    ("Vec", "from_slice"), // Vec.try_from_slice
+];
+
+/// `true` when `type_name.<method>` is a static `try_*` constructor companion
+/// whose codegen lowering has landed (its `(type_name, base)` pair is in
+/// [`CODEGEN_FALLIBLE_STATIC`]).
+pub fn static_companion_has_codegen(type_name: &str, method: &str) -> bool {
+    static_companion_base(method).is_some_and(|b| CODEGEN_FALLIBLE_STATIC.contains(&(type_name, b)))
+}

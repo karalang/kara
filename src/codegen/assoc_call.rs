@@ -15,10 +15,243 @@ use crate::ast::*;
 
 use inkwell::module::Linkage;
 use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, IntValue, PointerValue};
 use inkwell::AddressSpace;
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// Shared source recovery for `Vec.from_slice` / `Vec.try_from_slice`:
+    /// resolve the source argument's LLVM element type, its element
+    /// `TypeExpr` (drives the RC-aware per-element clone path), and the
+    /// `(data, len)` of the source's slice header. Bare-Identifier sources
+    /// (slice / vec / array vars) coerce via `coerce_to_slice`; a
+    /// `Vec[Vec[T]]` nested-index source (`rows[r]`) compiles the inner Vec
+    /// aggregate and extracts its first two fields. Kept in one place so the
+    /// fallible companion can't drift from the panicking constructor.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn recover_from_slice_src(
+        &mut self,
+        arg: &Expr,
+    ) -> Result<
+        (
+            BasicTypeEnum<'ctx>,
+            Option<TypeExpr>,
+            PointerValue<'ctx>,
+            IntValue<'ctx>,
+        ),
+        String,
+    > {
+        // Element type recovery — bare Identifier path first, then
+        // nested-Index path for Vec[Vec[T]] sources. Returns
+        // (LLVM elem type, optional elem TypeExpr for the RC-clone path,
+        // label for diagnostics).
+        let (elem_ty, src_elem_te, src_label): (BasicTypeEnum<'ctx>, Option<TypeExpr>, String) =
+            match &arg.kind {
+                ExprKind::Identifier(src_name) => {
+                    let t = if let Some(&t) = self.slice_elem_types.get(src_name.as_str()) {
+                        t
+                    } else if let Some(&t) = self.vec_elem_types.get(src_name.as_str()) {
+                        t
+                    } else if let Some(slot) = self.variables.get(src_name.as_str()).copied() {
+                        if let BasicTypeEnum::ArrayType(at) = slot.ty {
+                            at.get_element_type()
+                        } else {
+                            return Err(format!(
+                                "Vec.from_slice: source '{}' is not a slice / vec / array",
+                                src_name
+                            ));
+                        }
+                    } else {
+                        return Err(format!(
+                            "Vec.from_slice: source '{}' not found in scope",
+                            src_name
+                        ));
+                    };
+                    let te = self.var_elem_type_exprs.get(src_name.as_str()).cloned();
+                    (t, te, src_name.clone())
+                }
+                ExprKind::Index {
+                    object: outer,
+                    index: _,
+                } => {
+                    let ExprKind::Identifier(outer_name) = &outer.kind else {
+                        return Err(
+                            "Vec.from_slice: nested-index source must root at a named variable"
+                                .to_string(),
+                        );
+                    };
+                    let inner_te = self
+                        .var_elem_type_exprs
+                        .get(outer_name.as_str())
+                        .and_then(super::helpers::vec_inner_type_expr)
+                        .ok_or_else(|| {
+                            format!(
+                                "Vec.from_slice: nested-index source `{outer_name}[i]` requires \
+                                 outer to be Vec[Vec[T]]"
+                            )
+                        })?;
+                    (
+                        self.llvm_type_for_type_expr(&inner_te),
+                        Some(inner_te),
+                        format!("{outer_name}[i]"),
+                    )
+                }
+                _ => {
+                    return Err(
+                        "Vec.from_slice: source must be a named slice / vec / array variable, \
+                         or a nested index expression on a Vec[Vec[T]]"
+                            .to_string(),
+                    );
+                }
+            };
+
+        // Get src {data, len}. Identifier path uses `coerce_to_slice`;
+        // Index path compiles the expression directly to get the inner Vec
+        // aggregate value and extracts its first two fields (same fallback
+        // shape as `extend_from_slice`).
+        let (src_data, src_len) = if matches!(arg.kind, ExprKind::Identifier(_)) {
+            let slice_val = self.coerce_to_slice(arg, elem_ty)?.ok_or_else(|| {
+                format!(
+                    "Vec.from_slice: could not coerce '{}' to a slice header",
+                    src_label
+                )
+            })?;
+            let slice_sv = slice_val.into_struct_value();
+            let data = self
+                .builder
+                .build_extract_value(slice_sv, 0, "from_slice.src.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(slice_sv, 1, "from_slice.src.len")
+                .unwrap()
+                .into_int_value();
+            (data, len)
+        } else {
+            let compiled = self.compile_expr(arg)?;
+            let BasicValueEnum::StructValue(sv) = compiled else {
+                return Err(format!(
+                    "Vec.from_slice: nested-index source did not produce a struct value (got {compiled:?})"
+                ));
+            };
+            let n_fields = sv.get_type().count_fields();
+            if n_fields != 2 && n_fields != 3 {
+                return Err(format!(
+                    "Vec.from_slice: source struct has {n_fields} fields; expected 2 (Slice) or 3 (Vec)"
+                ));
+            }
+            let data = self
+                .builder
+                .build_extract_value(sv, 0, "from_slice.src.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(sv, 1, "from_slice.src.len")
+                .unwrap()
+                .into_int_value();
+            (data, len)
+        };
+        let _ = src_label; // retained for diagnostic clarity in errors above
+        Ok((elem_ty, src_elem_te, src_data, src_len))
+    }
+
+    /// Copy `src_len` elements from `src_data` into the freshly-allocated
+    /// `new_buf` for `Vec.from_slice` / `Vec.try_from_slice`. Branches on
+    /// element triviality: a single `memcpy` of `alloc_bytes` for primitives,
+    /// or a per-element `synth_clone` loop for anything carrying a heap
+    /// pointer (String / Vec / Map / Set / shared T / nested aggregates).
+    /// Without the clone path a `Vec[String]` / `Vec[Vec[T]]` source
+    /// bit-copies the aggregate values and both src and dst alias the same
+    /// inner heap pointers → double-free at scope exit (ASAN-flagged in
+    /// `tests/memory_sanitizer.rs::asan_vec_from_slice_string_elements_independent`).
+    /// Builder is left positioned after the copy (the clone-loop exit BB).
+    pub(super) fn copy_from_slice_elems(
+        &mut self,
+        elem_ty: BasicTypeEnum<'ctx>,
+        src_elem_te: &Option<TypeExpr>,
+        src_data: PointerValue<'ctx>,
+        new_buf: PointerValue<'ctx>,
+        src_len: IntValue<'ctx>,
+        alloc_bytes: IntValue<'ctx>,
+    ) {
+        let trivial = src_elem_te
+            .as_ref()
+            .map(super::vec_method::is_trivially_copyable_te)
+            .unwrap_or(true);
+        if trivial {
+            self.builder
+                .build_memcpy(new_buf, 8, src_data, 8, alloc_bytes)
+                .unwrap();
+            return;
+        }
+        let elem_te = src_elem_te.as_ref().unwrap();
+        let clone_fn = self.emit_clone_fn_for_type_expr(elem_te);
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+        let loop_cond_bb = self
+            .context
+            .append_basic_block(fn_val, "from_slice.clone.cond");
+        let loop_body_bb = self
+            .context
+            .append_basic_block(fn_val, "from_slice.clone.body");
+        let loop_exit_bb = self
+            .context
+            .append_basic_block(fn_val, "from_slice.clone.exit");
+        let i_alloca = self.create_entry_alloca(fn_val, "from_slice.clone.i", i64_t.into());
+        self.builder
+            .build_store(i_alloca, i64_t.const_zero())
+            .unwrap();
+        self.builder
+            .build_unconditional_branch(loop_cond_bb)
+            .unwrap();
+
+        self.builder.position_at_end(loop_cond_bb);
+        let i_cur = self
+            .builder
+            .build_load(i64_t, i_alloca, "from_slice.clone.i.cur")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::ULT,
+                i_cur,
+                src_len,
+                "from_slice.clone.lt",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, loop_body_bb, loop_exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(loop_body_bb);
+        let src_ep = unsafe {
+            self.builder
+                .build_gep(elem_ty, src_data, &[i_cur], "from_slice.clone.src.ep")
+                .unwrap()
+        };
+        let dst_ep = unsafe {
+            self.builder
+                .build_gep(elem_ty, new_buf, &[i_cur], "from_slice.clone.dst.ep")
+                .unwrap()
+        };
+        self.builder
+            .build_call(clone_fn, &[src_ep.into(), dst_ep.into()], "")
+            .unwrap();
+        let one = i64_t.const_int(1, false);
+        let i_next = self
+            .builder
+            .build_int_add(i_cur, one, "from_slice.clone.i.next")
+            .unwrap();
+        self.builder.build_store(i_alloca, i_next).unwrap();
+        self.builder
+            .build_unconditional_branch(loop_cond_bb)
+            .unwrap();
+
+        self.builder.position_at_end(loop_exit_bb);
+    }
+
     pub(super) fn compile_assoc_call(
         &mut self,
         type_name: &str,
@@ -33,7 +266,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // `Type.try_<base>` would fall through to this function's silent
         // `Ok(const 0)` default and miscompile to a constant.
         if let Some(base) = crate::fallible_alloc::static_companion_base(method) {
-            if matches!(type_name, "Vec" | "VecDeque" | "String") {
+            if matches!(type_name, "Vec" | "VecDeque" | "String")
+                && !crate::fallible_alloc::static_companion_has_codegen(type_name, method)
+            {
                 return Err(format!(
                     "codegen: fallible-allocation constructor `{type_name}.{method}(...)` is \
                      interpreter-only in v1; its codegen lowering is phase-8-stdlib-floor item 8. \
@@ -1585,120 +1820,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 ));
             }
             let arg = &args[0].value;
-
-            // Element type recovery — bare Identifier path first, then
-            // nested-Index path for Vec[Vec[T]] sources. Returns
-            // (LLVM elem type, optional elem TypeExpr for the
-            // RC-clone path below, label for diagnostics).
-            let (elem_ty, src_elem_te, src_label): (BasicTypeEnum<'ctx>, Option<TypeExpr>, String) =
-                match &arg.kind {
-                    ExprKind::Identifier(src_name) => {
-                        let t = if let Some(&t) = self.slice_elem_types.get(src_name.as_str()) {
-                            t
-                        } else if let Some(&t) = self.vec_elem_types.get(src_name.as_str()) {
-                            t
-                        } else if let Some(slot) = self.variables.get(src_name.as_str()).copied() {
-                            if let BasicTypeEnum::ArrayType(at) = slot.ty {
-                                at.get_element_type()
-                            } else {
-                                return Err(format!(
-                                    "Vec.from_slice: source '{}' is not a slice / vec / array",
-                                    src_name
-                                ));
-                            }
-                        } else {
-                            return Err(format!(
-                                "Vec.from_slice: source '{}' not found in scope",
-                                src_name
-                            ));
-                        };
-                        let te = self.var_elem_type_exprs.get(src_name.as_str()).cloned();
-                        (t, te, src_name.clone())
-                    }
-                    ExprKind::Index {
-                        object: outer,
-                        index: _,
-                    } => {
-                        let ExprKind::Identifier(outer_name) = &outer.kind else {
-                            return Err(
-                                "Vec.from_slice: nested-index source must root at a named variable"
-                                    .to_string(),
-                            );
-                        };
-                        let inner_te = self
-                            .var_elem_type_exprs
-                            .get(outer_name.as_str())
-                            .and_then(super::helpers::vec_inner_type_expr)
-                            .ok_or_else(|| {
-                                format!(
-                                "Vec.from_slice: nested-index source `{outer_name}[i]` requires \
-                                 outer to be Vec[Vec[T]]"
-                            )
-                            })?;
-                        (
-                            self.llvm_type_for_type_expr(&inner_te),
-                            Some(inner_te),
-                            format!("{outer_name}[i]"),
-                        )
-                    }
-                    _ => {
-                        return Err(
-                            "Vec.from_slice: source must be a named slice / vec / array variable, \
-                         or a nested index expression on a Vec[Vec[T]]"
-                                .to_string(),
-                        );
-                    }
-                };
-
-            // Get src {data, len}. Identifier path uses `coerce_to_slice`;
-            // Index path compiles the expression directly to get the
-            // inner Vec aggregate value and extracts its first two
-            // fields (same fallback shape as `extend_from_slice`).
-            let (src_data, src_len) = if matches!(arg.kind, ExprKind::Identifier(_)) {
-                let slice_val = self.coerce_to_slice(arg, elem_ty)?.ok_or_else(|| {
-                    format!(
-                        "Vec.from_slice: could not coerce '{}' to a slice header",
-                        src_label
-                    )
-                })?;
-                let slice_sv = slice_val.into_struct_value();
-                let data = self
-                    .builder
-                    .build_extract_value(slice_sv, 0, "from_slice.src.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let len = self
-                    .builder
-                    .build_extract_value(slice_sv, 1, "from_slice.src.len")
-                    .unwrap()
-                    .into_int_value();
-                (data, len)
-            } else {
-                let compiled = self.compile_expr(arg)?;
-                let BasicValueEnum::StructValue(sv) = compiled else {
-                    return Err(format!(
-                        "Vec.from_slice: nested-index source did not produce a struct value (got {compiled:?})"
-                    ));
-                };
-                let n_fields = sv.get_type().count_fields();
-                if n_fields != 2 && n_fields != 3 {
-                    return Err(format!(
-                        "Vec.from_slice: source struct has {n_fields} fields; expected 2 (Slice) or 3 (Vec)"
-                    ));
-                }
-                let data = self
-                    .builder
-                    .build_extract_value(sv, 0, "from_slice.src.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let len = self
-                    .builder
-                    .build_extract_value(sv, 1, "from_slice.src.len")
-                    .unwrap()
-                    .into_int_value();
-                (data, len)
-            };
-            let _ = src_label; // retained for diagnostic clarity in errors above
+            let (elem_ty, src_elem_te, src_data, src_len) = self.recover_from_slice_src(arg)?;
 
             let elem_size = elem_ty.size_of().unwrap();
             let alloc_bytes = self
@@ -1717,92 +1839,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap_basic()
                 .into_pointer_value();
 
-            // Branch on element triviality: memcpy for primitives,
-            // per-element synth_clone for anything carrying a heap
-            // pointer (String, Vec, Map, Set, shared T, tuples /
-            // structs that recursively contain those). Without the
-            // clone path, `Vec.from_slice` on a `Vec[String]` /
-            // `Vec[Vec[T]]` source bit-copies the aggregate values
-            // and both src and dst alias the same inner heap
-            // pointers — first scope-exit free wins, second
-            // double-frees (ASAN-flagged in `tests/memory_sanitizer
-            // .rs :: asan_vec_from_slice_string_elements_independent`).
-            let elem_te = src_elem_te;
-            let trivial = elem_te
-                .as_ref()
-                .map(super::vec_method::is_trivially_copyable_te)
-                .unwrap_or(true);
-            if trivial {
-                self.builder
-                    .build_memcpy(new_buf, 8, src_data, 8, alloc_bytes)
-                    .unwrap();
-            } else {
-                let elem_te = elem_te.unwrap();
-                let clone_fn = self.emit_clone_fn_for_type_expr(&elem_te);
-                let i64_t = self.context.i64_type();
-                let fn_val = self.current_fn.unwrap();
-                let loop_cond_bb = self
-                    .context
-                    .append_basic_block(fn_val, "from_slice.clone.cond");
-                let loop_body_bb = self
-                    .context
-                    .append_basic_block(fn_val, "from_slice.clone.body");
-                let loop_exit_bb = self
-                    .context
-                    .append_basic_block(fn_val, "from_slice.clone.exit");
-                let i_alloca = self.create_entry_alloca(fn_val, "from_slice.clone.i", i64_t.into());
-                self.builder
-                    .build_store(i_alloca, i64_t.const_zero())
-                    .unwrap();
-                self.builder
-                    .build_unconditional_branch(loop_cond_bb)
-                    .unwrap();
-
-                self.builder.position_at_end(loop_cond_bb);
-                let i_cur = self
-                    .builder
-                    .build_load(i64_t, i_alloca, "from_slice.clone.i.cur")
-                    .unwrap()
-                    .into_int_value();
-                let cond = self
-                    .builder
-                    .build_int_compare(
-                        inkwell::IntPredicate::ULT,
-                        i_cur,
-                        src_len,
-                        "from_slice.clone.lt",
-                    )
-                    .unwrap();
-                self.builder
-                    .build_conditional_branch(cond, loop_body_bb, loop_exit_bb)
-                    .unwrap();
-
-                self.builder.position_at_end(loop_body_bb);
-                let src_ep = unsafe {
-                    self.builder
-                        .build_gep(elem_ty, src_data, &[i_cur], "from_slice.clone.src.ep")
-                        .unwrap()
-                };
-                let dst_ep = unsafe {
-                    self.builder
-                        .build_gep(elem_ty, new_buf, &[i_cur], "from_slice.clone.dst.ep")
-                        .unwrap()
-                };
-                self.builder
-                    .build_call(clone_fn, &[src_ep.into(), dst_ep.into()], "")
-                    .unwrap();
-                let one = i64_t.const_int(1, false);
-                let i_next = self
-                    .builder
-                    .build_int_add(i_cur, one, "from_slice.clone.i.next")
-                    .unwrap();
-                self.builder.build_store(i_alloca, i_next).unwrap();
-                self.builder
-                    .build_unconditional_branch(loop_cond_bb)
-                    .unwrap();
-
-                self.builder.position_at_end(loop_exit_bb);
-            }
+            self.copy_from_slice_elems(
+                elem_ty,
+                &src_elem_te,
+                src_data,
+                new_buf,
+                src_len,
+                alloc_bytes,
+            );
 
             let vec_ty = self.vec_struct_type();
             let mut agg = vec_ty.get_undef();
@@ -1822,6 +1866,101 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap()
                 .into_struct_value();
             return Ok(agg.into());
+        }
+
+        // `Vec.try_from_slice(src) -> Result[Vec[T], AllocError]` — fallible
+        // `from_slice` (phase-8-stdlib-floor item 8). Same source recovery +
+        // element copy as `from_slice`, but the single backing allocation goes
+        // through `karac_alloc_fallible`: a null result short-circuits to
+        // `Result.Err(AllocError.OutOfMemory{requested_bytes})` and the success
+        // path wraps the freshly-built `Vec` aggregate in `Result.Ok(_)`. The
+        // `Vec`-in-`Result` payload (3 words) packs inline into the Result's
+        // 5-word payload area via the standard `coerce_to_payload_words` path
+        // (well under the oversized-box threshold), so it round-trips through
+        // match-extraction and scope-exit drop exactly like any other
+        // `Result[Vec[T], _]` value — no special drop handling needed here.
+        if type_name == "Vec" && method == "try_from_slice" {
+            if args.len() != 1 {
+                return Err(format!(
+                    "Vec.try_from_slice expects 1 argument (source slice / vec / array), got {}",
+                    args.len()
+                ));
+            }
+            let arg = &args[0].value;
+            let (elem_ty, src_elem_te, src_data, src_len) = self.recover_from_slice_src(arg)?;
+
+            let elem_size = elem_ty.size_of().unwrap();
+            let alloc_bytes = self
+                .builder
+                .build_int_mul(src_len, elem_size, "try_from_slice.bytes")
+                .unwrap();
+            let new_buf = self
+                .builder
+                .build_call(
+                    self.alloc_fallible_fn,
+                    &[alloc_bytes.into()],
+                    "try_from_slice.buf",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+
+            let fn_val = self.current_fn.unwrap();
+            let ok_bb = self.context.append_basic_block(fn_val, "tfs.ok");
+            let oom_bb = self.context.append_basic_block(fn_val, "tfs.oom");
+            let merge_bb = self.context.append_basic_block(fn_val, "tfs.merge");
+            let is_null = self.builder.build_is_null(new_buf, "tfs.is_null").unwrap();
+            self.builder
+                .build_conditional_branch(is_null, oom_bb, ok_bb)
+                .unwrap();
+
+            // Alloc succeeded: copy elements, build the Vec aggregate, wrap in
+            // Result.Ok(_).
+            self.builder.position_at_end(ok_bb);
+            self.copy_from_slice_elems(
+                elem_ty,
+                &src_elem_te,
+                src_data,
+                new_buf,
+                src_len,
+                alloc_bytes,
+            );
+            let vec_ty = self.vec_struct_type();
+            let mut agg = vec_ty.get_undef();
+            agg = self
+                .builder
+                .build_insert_value(agg, new_buf, 0, "vec.data")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, src_len, 1, "vec.len")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, src_len, 2, "vec.cap")
+                .unwrap()
+                .into_struct_value();
+            let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[agg.into()])?;
+            let ok_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // OOM → Result.Err(AllocError.OutOfMemory{requested_bytes}).
+            self.builder.position_at_end(oom_bb);
+            let err_result = self.build_alloc_oom_result(alloc_bytes)?;
+            let oom_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // Merge the two `Result` aggregates.
+            self.builder.position_at_end(merge_bb);
+            let phi = self
+                .builder
+                .build_phi(ok_result.get_type(), "tfs.result")
+                .unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, oom_end)]);
+            return Ok(phi.as_basic_value());
         }
 
         // `Atomic.new(v)` — transparent constructor for the `Atomic[T]`
