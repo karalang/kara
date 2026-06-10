@@ -143,8 +143,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         // F4b — register the File-typed binding for
                         // scope-exit close. The drain emits
                         // `karac_runtime_file_close(load(file_alloca))`
-                        // when this scope frame unwinds.
-                        self.track_file_var(alloca);
+                        // when this scope frame unwinds. Gated on
+                        // `!pattern_binding_is_borrow` exactly like the
+                        // Vec/String `track_vec_var` site below: under a
+                        // borrow-returning scrutinee (`Map.get`) or a
+                        // `ref x @ Ok(f)` by_ref bind, the fd is owned by
+                        // the source and closed there — registering a
+                        // second close here double-closes the same fd
+                        // (`karac_runtime_file_close` fired twice).
+                        if !self.pattern_binding_is_borrow {
+                            self.track_file_var(alloca);
+                        }
                         return Ok(());
                     }
                 }
@@ -294,8 +303,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // String caps + the headers handle on move). Targeted to the
                 // seeded HTTP structs by name so unrelated struct
                 // destructures keep their current (untracked) behavior.
+                // Gated on `!pattern_binding_is_borrow` for the same
+                // reason as the File and Vec/String sites: a borrow-mode
+                // bind (`Map.get` scrutinee / `ref x @` by_ref) aliases a
+                // `Response`/`HttpError` owned by the source, so its drop
+                // fires there — a second `track_struct_var` here would
+                // double-free the body String + headers handle.
                 let bound_type = self.var_type_names.get(name.as_str()).cloned();
-                if matches!(bound_type.as_deref(), Some("Response" | "HttpError")) {
+                if !self.pattern_binding_is_borrow
+                    && matches!(bound_type.as_deref(), Some("Response" | "HttpError"))
+                {
                     self.track_struct_var(bound_type.as_deref().unwrap(), alloca);
                 }
                 // Slice 3a (ref-scrutinee leaf binding ABI parity):

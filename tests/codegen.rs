@@ -31346,6 +31346,61 @@ fn main() with reads(FileSystem) writes(FileSystem) {{
         let _ = std::fs::remove_file(&tmp);
     }
 
+    // B-2026-06-07-3 regression: a borrow-mode pattern bind of a `File`
+    // must NOT register its own scope-exit `karac_runtime_file_close`.
+    // The fd is owned by the binding's source (here the `ref whole @`
+    // by_ref alias keeps drop responsibility on the matched value), so a
+    // second close drains the same fd twice — a double-close. The fix
+    // gates the `File` arm's `track_file_var` in `bind_pattern_values`
+    // on `!pattern_binding_is_borrow`, exactly like the Vec/String
+    // `track_vec_var` site. We assert against the owned form (plain
+    // `Ok(f)`), which legitimately DOES register one close, so the test
+    // also catches the gate over-firing and silently leaking fds.
+    #[test]
+    fn test_ir_borrow_mode_file_bind_registers_no_close() {
+        let close_count = |src: &str| -> usize {
+            let ir = ir_for(src);
+            function_body(&ir, "main")
+                .unwrap_or_default()
+                .matches("karac_runtime_file_close")
+                .count()
+        };
+        // Borrow mode: `ref whole @ Ok(f)` sets `pattern_binding_is_borrow`,
+        // so `f` aliases the fd the source owns — no close of its own.
+        let borrow = close_count(
+            r#"
+fn main() with reads(FileSystem) {
+    match File.open("/tmp/karac_b070703_borrow") {
+        ref whole @ Ok(f) => println("ok"),
+        Err(_) => println("err"),
+    }
+}
+"#,
+        );
+        // Owned mode: plain `Ok(f)` owns the fd, so its scope-exit close
+        // IS registered (this is the existing F4b drop behavior).
+        let owned = close_count(
+            r#"
+fn main() with reads(FileSystem) {
+    match File.open("/tmp/karac_b070703_owned") {
+        Ok(f) => println("ok"),
+        Err(_) => println("err"),
+    }
+}
+"#,
+        );
+        assert_eq!(
+            borrow, 0,
+            "borrow-mode File bind must not register its own file_close \
+             (double-close on the source's fd); got {borrow}"
+        );
+        assert_eq!(
+            owned, 1,
+            "owned File bind must still register exactly one scope-exit \
+             file_close; got {owned}"
+        );
+    }
+
     // ── Phase 6 line 236 follow-on (a): FileSystem.read_to_string ──
     //
     // `FileSystem.read_to_string(path) -> Result[String, IoError]`
