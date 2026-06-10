@@ -501,6 +501,66 @@ impl<'ctx> super::Codegen<'ctx> {
                 fields,
                 has_rest: _,
             } => {
+                // Enum struct-variant pattern `Enum.Variant { field, ... }`:
+                // the qualifier names an enum whose `Variant` is struct-shaped.
+                // Extract each named field's payload words by mapping the field
+                // name to its declared position, then to the variant's
+                // `field_word_offsets` slot — the named-field twin of the
+                // TupleVariant arm above. (Without this, the struct-name lookup
+                // below misses and the fields stay unbound → "Undefined
+                // variable".)
+                let variant_name = path.last().cloned().unwrap_or_default();
+                if path.len() >= 2 {
+                    let enum_name = path[path.len() - 2].clone();
+                    if let Some(decl_field_names) =
+                        self.enum_variant_struct_field_names(&enum_name, &variant_name)
+                    {
+                        if let BasicValueEnum::StructValue(sv) = scrut {
+                            let offsets: Vec<(usize, usize)> = self
+                                .enum_layouts
+                                .get(&enum_name)
+                                .and_then(|l| l.field_word_offsets.get(&variant_name).cloned())
+                                .unwrap_or_default();
+                            for field_pat in fields {
+                                let Some(pos) =
+                                    decl_field_names.iter().position(|n| n == &field_pat.name)
+                                else {
+                                    continue;
+                                };
+                                let (start_word, num_words) =
+                                    offsets.get(pos).copied().unwrap_or((pos, 1));
+                                let mut field_words: Vec<inkwell::values::IntValue<'ctx>> =
+                                    Vec::with_capacity(num_words);
+                                for j in 0..num_words {
+                                    let w = self
+                                        .builder
+                                        .build_extract_value(
+                                            sv,
+                                            (start_word + j + 1) as u32, // +1 for tag
+                                            "payload",
+                                        )
+                                        .unwrap()
+                                        .into_int_value();
+                                    field_words.push(w);
+                                }
+                                if let Some(sub_pat) = &field_pat.pattern {
+                                    let bound =
+                                        self.reconstruct_payload_value(sub_pat, &field_words)?;
+                                    self.bind_pattern_values(sub_pat, bound)?;
+                                } else {
+                                    let synthetic = Pattern {
+                                        kind: PatternKind::Binding(field_pat.name.clone()),
+                                        span: field_pat.span.clone(),
+                                    };
+                                    let bound =
+                                        self.reconstruct_payload_value(&synthetic, &field_words)?;
+                                    self.bind_pattern_values(&synthetic, bound)?;
+                                }
+                            }
+                        }
+                        return Ok(());
+                    }
+                }
                 let struct_name = path.last().cloned().unwrap_or_default();
                 let field_names = self.struct_field_names.get(&struct_name).cloned();
                 if let (BasicValueEnum::StructValue(sv), Some(field_names)) = (scrut, field_names) {

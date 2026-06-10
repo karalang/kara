@@ -1246,8 +1246,9 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(Some(ptr.into()));
         }
 
-        // Non-shared enum: stack-allocated aggregate.
-        let mut agg = llvm_type.get_undef();
+        // Non-shared enum: stack-allocated aggregate. Zero-init so unused
+        // payload words stay `0` (sound word-wise `==`; see build_nonshared).
+        let mut agg = llvm_type.const_zero();
 
         // Store tag as field 0
         agg = self
@@ -1341,7 +1342,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or_default();
 
         let i64_t = self.context.i64_type();
-        let mut agg = llvm_type.get_undef();
+        // Zero-init (not `get_undef`) so a narrower variant's unused payload
+        // words stay `0` — keeps the word-wise `==` path sound for unit/scalar-
+        // payload enums (an undef payload word made `V::B == V::B` fold to undef).
+        let mut agg = llvm_type.const_zero();
         agg = self
             .builder
             .build_insert_value(agg, i64_t.const_int(tag, false), 0, "tag")
@@ -1350,6 +1354,98 @@ impl<'ctx> super::Codegen<'ctx> {
         for (i, val) in payload_vals.iter().enumerate() {
             let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
             let words = self.coerce_to_payload_words(*val, num_words)?;
+            for (j, w) in words.into_iter().enumerate() {
+                agg = self
+                    .builder
+                    .build_insert_value(agg, w, (start_word + j + 1) as u32, "word")
+                    .unwrap()
+                    .into_struct_value();
+            }
+        }
+        Ok(agg.into())
+    }
+
+    /// Declared struct-field names (in order) of `Enum.Variant` when it is a
+    /// struct-shaped variant, scanning the user program and the baked stdlib
+    /// (so prelude enums like `AllocError` resolve). `None` otherwise. Drives
+    /// `compile_enum_struct_variant_init` (mapping named field inits onto the
+    /// variant's positional `field_word_offsets`).
+    pub(super) fn enum_variant_struct_field_names(
+        &self,
+        enum_name: &str,
+        variant: &str,
+    ) -> Option<Vec<String>> {
+        fn scan(items: &[Item], enum_name: &str, variant: &str) -> Option<Vec<String>> {
+            items.iter().find_map(|item| match item {
+                Item::EnumDef(e) if e.name == enum_name => {
+                    e.variants.iter().find(|v| v.name == variant).and_then(|v| {
+                        if let VariantKind::Struct(fields) = &v.kind {
+                            Some(fields.iter().map(|f| f.name.clone()).collect())
+                        } else {
+                            None
+                        }
+                    })
+                }
+                _ => None,
+            })
+        }
+        self.program_snapshot
+            .as_ref()
+            .and_then(|p| scan(&p.items, enum_name, variant))
+            .or_else(|| {
+                crate::prelude::STDLIB_PROGRAMS
+                    .iter()
+                    .find_map(|(_, p)| scan(&p.items, enum_name, variant))
+            })
+    }
+
+    /// Compile source-level enum struct-variant construction
+    /// `Enum.Variant { field: value, ... }` into the seeded enum aggregate.
+    /// The struct-variant twin of the tuple-variant constructor: it maps each
+    /// *named* field init onto the variant's declared field position and writes
+    /// its coerced payload words at that field's `field_word_offsets` slot. The
+    /// aggregate is zero-initialized so a narrower variant's unused payload
+    /// words stay `0` (keeps the word-wise `==` path sound for unit/scalar-
+    /// payload enums). The typechecker (`infer_enum_struct_variant_literal`)
+    /// and interpreter (`eval_struct_literal`) route the same shape.
+    pub(super) fn compile_enum_struct_variant_init(
+        &mut self,
+        enum_name: &str,
+        variant: &str,
+        fields: &[FieldInit],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let field_names = self
+            .enum_variant_struct_field_names(enum_name, variant)
+            .ok_or_else(|| {
+                format!("enum struct-variant `{enum_name}.{variant}` has no known field layout")
+            })?;
+        let (tag, llvm_type) = {
+            let layout = &self.enum_layouts[enum_name];
+            (*layout.tags.get(variant).unwrap(), layout.llvm_type)
+        };
+        let offsets: Vec<(usize, usize)> = self.enum_layouts[enum_name]
+            .field_word_offsets
+            .get(variant)
+            .cloned()
+            .unwrap_or_default();
+        let i64_t = self.context.i64_type();
+        let mut agg = llvm_type.const_zero();
+        agg = self
+            .builder
+            .build_insert_value(agg, i64_t.const_int(tag, false), 0, "tag")
+            .unwrap()
+            .into_struct_value();
+        for (i, fname) in field_names.iter().enumerate() {
+            let init = fields.iter().find(|f| &f.name == fname).ok_or_else(|| {
+                format!("missing field `{fname}` in `{enum_name}.{variant}` construction")
+            })?;
+            let val = self.compile_expr(&init.value)?;
+            // Owned String/Vec param captured into a payload field is deep-copied
+            // (the caller retains the buffer free under the by-value ABI) — mirrors
+            // the struct-literal / tuple-variant constructor paths.
+            let val = self.maybe_defensive_copy_param_arg(&init.value, val);
+            let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
+            let words = self.coerce_to_payload_words(val, num_words)?;
             for (j, w) in words.into_iter().enumerate() {
                 agg = self
                     .builder
@@ -2054,7 +2150,8 @@ impl<'ctx> super::Codegen<'ctx> {
             word_phis.push(phi);
         }
 
-        let mut agg: BasicValueEnum<'ctx> = option_ty.get_undef().into();
+        // Zero-init so `None`'s unused payload words stay `0` (sound `==`).
+        let mut agg: BasicValueEnum<'ctx> = option_ty.const_zero().into();
         agg = self
             .builder
             .build_insert_value(
@@ -2161,7 +2258,9 @@ impl<'ctx> super::Codegen<'ctx> {
             return Some(ptr.into());
         }
 
-        let mut agg = layout.llvm_type.get_undef();
+        // Zero-init so a multi-word enum's unit variant has `0` payload words
+        // (not undef) — makes `V::B == V::B` sound under the word-wise `==`.
+        let mut agg = layout.llvm_type.const_zero();
         agg = self
             .builder
             .build_insert_value(agg, i64_t.const_int(tag, false), 0, "tag")

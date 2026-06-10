@@ -671,7 +671,26 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::FieldAccess { object, field } => self.compile_field_access(object, field),
             ExprKind::StructLiteral { path, fields, .. } => {
                 let name = path.last().map(|s| s.as_str()).unwrap_or("");
-                self.compile_struct_init(name, fields)
+                // Enum struct-variant construction `Enum.Variant { ... }`: the
+                // qualifier (`path[len-2]`) names a known enum whose `Variant`
+                // is one of its variants. Route to the enum-aggregate builder
+                // (the typechecker/interpreter route the same shape); otherwise
+                // it's a struct literal.
+                let enum_variant = if path.len() >= 2 {
+                    let enum_name = &path[path.len() - 2];
+                    self.enum_layouts
+                        .get(enum_name)
+                        .filter(|l| l.tags.contains_key(name))
+                        .map(|_| enum_name.clone())
+                } else {
+                    None
+                };
+                if let Some(enum_name) = enum_variant {
+                    let variant = name.to_string();
+                    self.compile_enum_struct_variant_init(&enum_name, &variant, fields)
+                } else {
+                    self.compile_struct_init(name, fields)
+                }
             }
             ExprKind::ArrayLiteral(elems) => self.compile_array_literal(elems),
             ExprKind::PrefixCollectionLiteral { type_name, items } if type_name == "Vec" => {
@@ -892,7 +911,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .unwrap();
                             return Ok(ptr.into());
                         }
-                        let mut agg = layout.llvm_type.get_undef();
+                        // Zero-init so a multi-word enum's unit variant has `0`
+                        // payload words (not undef) — `V::B == V::B` folded to
+                        // undef under the word-wise `==` otherwise.
+                        let mut agg = layout.llvm_type.const_zero();
                         agg = self
                             .builder
                             .build_insert_value(agg, i64_t.const_int(tag, false), 0, "tag")

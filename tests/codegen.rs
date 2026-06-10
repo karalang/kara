@@ -883,6 +883,99 @@ fn main() {
         run_program_capturing(src).map(|c| c.stdout)
     }
 
+    // ── Enum struct-variant construction + scalar enum `==` (codegen) ──
+
+    #[test]
+    fn e2e_enum_struct_variant_construction_match_and_eq() {
+        // Source-level `Enum.Variant { field: value }` lowers to the seeded
+        // enum aggregate; match binds named fields by extracting payload words;
+        // `==` is sound across unit/struct/mixed variants (zero-init keeps the
+        // word-wise compare from reading undef payload words).
+        if let Some(out) = run_program(
+            "#[derive(Eq)]\n\
+             enum Shape { Circle { r: i64 }, Square { side: i64 }, Unknown }\n\
+             fn area(s: Shape) -> i64 {\n\
+                 match s {\n\
+                     Shape.Circle { r } => 3 * r * r,\n\
+                     Shape.Square { side } => side * side,\n\
+                     Shape.Unknown => 0,\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let c = Shape.Circle { r: 2 };\n\
+                 let c2 = Shape.Circle { r: 2 };\n\
+                 let sq = Shape.Square { side: 3 };\n\
+                 let u = Shape.Unknown;\n\
+                 println(f\"{area(c)}\");\n\
+                 println(f\"{area(sq)}\");\n\
+                 println(f\"{area(u)}\");\n\
+                 println(f\"{c == c2}\");\n\
+                 println(f\"{c == sq}\");\n\
+                 println(f\"{c == u}\");\n\
+                 println(f\"{u == u}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "12\n9\n0\ntrue\nfalse\nfalse\ntrue\n");
+        }
+    }
+
+    #[test]
+    fn e2e_alloc_error_codegen() {
+        // The `AllocError` prelude type (struct + unit variant) compiles: both
+        // variants construct, `==` compares payload + tag, `match` binds the
+        // struct-variant field, and it flows through `Result[i64, AllocError]`.
+        if let Some(out) = run_program(
+            "fn make(fail: bool) -> Result[i64, AllocError] {\n\
+                 if fail { Err(AllocError.OutOfMemory { requested_bytes: 2048 }) } else { Ok(7) }\n\
+             }\n\
+             fn classify(e: AllocError) -> i64 {\n\
+                 match e {\n\
+                     AllocError.OutOfMemory { requested_bytes } => requested_bytes as i64,\n\
+                     AllocError.CapacityOverflow => -1,\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let a = AllocError.OutOfMemory { requested_bytes: 2048 };\n\
+                 let a2 = AllocError.OutOfMemory { requested_bytes: 2048 };\n\
+                 let a3 = AllocError.OutOfMemory { requested_bytes: 99 };\n\
+                 let b = AllocError.CapacityOverflow;\n\
+                 println(f\"{a == a2}\");\n\
+                 println(f\"{a == a3}\");\n\
+                 println(f\"{a == b}\");\n\
+                 println(f\"{b == b}\");\n\
+                 println(f\"{classify(a)}\");\n\
+                 match make(true) {\n\
+                     Ok(n) => println(f\"ok:{n}\"),\n\
+                     Err(e) => println(f\"err:{classify(e)}\"),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "true\nfalse\nfalse\ntrue\n2048\nerr:2048\n");
+        }
+    }
+
+    #[test]
+    fn e2e_builtin_enum_eq_option_result() {
+        // Built-in enum `==` is sound in codegen too (None/Ok unit + payload
+        // words). Regression guard for the zero-init enum construction.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let a: Option[i64] = Some(1);\n\
+                 let b: Option[i64] = Some(1);\n\
+                 let c: Option[i64] = None;\n\
+                 let d: Option[i64] = None;\n\
+                 println(f\"{a == b}\");\n\
+                 println(f\"{a == c}\");\n\
+                 println(f\"{c == d}\");\n\
+                 let r: Result[i64, i64] = Ok(5);\n\
+                 let s: Result[i64, i64] = Ok(5);\n\
+                 println(f\"{r == s}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "true\nfalse\ntrue\ntrue\n");
+        }
+    }
+
     /// Stdout + stderr capture. Used by tests that assert against trace
     /// output written to stderr by the runtime's atexit handler.
     struct CapturedRun {
