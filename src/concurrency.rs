@@ -1190,8 +1190,10 @@ impl<'a> ConcurrencyChecker<'a> {
     ///   - receives + receives = CONFLICT
     ///   - allocates + allocates = CONFLICT (same resource)
     ///   - panics + panics = CONFLICT
-    ///   - blocks + blocks = CONFLICT
-    ///   - suspends + suspends = CONFLICT
+    ///   - blocks + blocks = NO conflict — execution verb drives placement, not
+    ///     conflict (A1, 2026-06-10; design.md:5907/:5920)
+    ///   - suspends + suspends = CONFLICT (serialized pending A2 — coroutine
+    ///     double-drop hazard; see `effects_mark_coroutine_boundary`)
     ///   - Cross-category (e.g. reads + sends) = NO conflict even on same resource
     /// - Different resources = NO conflict regardless of verbs
     fn two_effects_conflict(&self, a: &StmtEffect, b: &StmtEffect) -> bool {
@@ -1207,8 +1209,8 @@ impl<'a> ConcurrencyChecker<'a> {
         // Group 2: sends/receives — same category
         // Group 3: allocates — self-conflict
         // Group 4: panics — self-conflict
-        // Group 5: blocks — self-conflict
-        // Group 6: suspends — self-conflict
+        // Group 5: blocks — execution verb, NOT a conflict (A1; design.md:5907)
+        // Group 6: suspends — self-conflict (pending A2)
         // Cross-group: no conflict
 
         match (&a.verb, &b.verb) {
@@ -1229,7 +1231,13 @@ impl<'a> ConcurrencyChecker<'a> {
             // Self-conflicts for singleton verbs
             (Allocates, Allocates) => true,
             (Panics, Panics) => true,
-            (Blocks, Blocks) => true,
+            // blocks + blocks = NO conflict. Execution verbs answer PLACEMENT,
+            // not conflict (design.md:5907/:5920) — two independent blocking
+            // calls overlap on the blocking pool via the same `emit_par_run`
+            // fan-out that explicit `par {}` uses. Lifted in A1 (2026-06-10);
+            // see phase-5-diagnostics.md and bench/auto_par_io/. `suspends`
+            // stays conflicting (below) pending A2's coroutine-aware lowering.
+            (Blocks, Blocks) => false,
             (Suspends, Suspends) => true,
 
             // User-defined verbs: conflict if same verb on same resource

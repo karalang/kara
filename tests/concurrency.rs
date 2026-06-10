@@ -128,6 +128,68 @@ fn test_effect_conflict_serializes() {
     );
 }
 
+// ── Independent blocking calls parallelize (A1) ────────────────
+
+#[test]
+fn test_independent_blocking_calls_parallelize() {
+    // Two independent `blocks` statements (libc `usleep`, ABI "C" → default
+    // `blocks` effect). Before A1 the auto-par conflict model wrongly treated
+    // blocks+blocks as a conflict and serialized them; A1 lifts that
+    // (design.md:5907 — execution verbs answer placement, not conflict), so
+    // the runtime overlaps them on the blocking pool via the `par_run`
+    // fan-out. See bench/auto_par_io/ for the wall-clock proof.
+    let analysis = analyze(
+        r#"
+        unsafe extern "C" { fn usleep(usecs: u32) -> i32; }
+        fn main() {
+            usleep(100);
+            usleep(100);
+        }
+        "#,
+    );
+
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.total_statements, 2);
+    assert_eq!(
+        main_fc.parallel_groups.len(),
+        1,
+        "two independent blocking calls should parallelize (A1), got {:?}",
+        main_fc.parallel_groups
+    );
+    assert_eq!(main_fc.parallel_groups[0].statement_indices.len(), 2);
+    assert!(main_fc.parallel_groups[0].statement_indices.contains(&0));
+    assert!(main_fc.parallel_groups[0].statement_indices.contains(&1));
+}
+
+// ── Suspends still serializes (A2 pending) ─────────────────────
+
+#[test]
+fn test_independent_suspending_calls_still_serialize() {
+    // A1 deliberately scopes to `blocks`. `suspends` must stay serialized
+    // until A2 wires coroutine-aware lowering (the by-value-param double-drop
+    // hazard at concurrency.rs:483-488, plus routing to the async pool, not
+    // par_run). Two independent reads(Network) calls would group on their own
+    // (read+read is safe) — adding `suspends` must keep them serial. Pins the
+    // A1/A2 boundary: a premature suspends flip without the wiring fails here.
+    let analysis = analyze(
+        r#"
+        fn fetch_a() -> i64 with reads(Network) suspends { return 1; }
+        fn fetch_b() -> i64 with reads(Network) suspends { return 2; }
+        fn main() {
+            let x = fetch_a();
+            let y = fetch_b();
+        }
+        "#,
+    );
+
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.parallel_groups.is_empty(),
+        "suspends must stay serialized until A2, got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
 // ── Different resources are parallelizable ─────────────────────
 
 #[test]

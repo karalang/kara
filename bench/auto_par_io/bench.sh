@@ -79,8 +79,12 @@ build_bin() { # SRC OUT [VAR=val ...]
     env "$@" karac build "$src" >/dev/null 2>&1
     mv "${src%.kara}" "$out"; GEN+=("$out")
 }
-median_real() { # BIN — median of RUNS `real` seconds (no warm: sleeps don't warm)
+median_real() { # BIN — median of RUNS `real` seconds
     local bin="$1" t; local -a s=()
+    # One warm run, discarded: a freshly-built binary's first exec pays
+    # dyld/page-in cold start (~0.2s here) — that, not the sleep, is what
+    # would otherwise corrupt a RUNS=1 single sample on the first K measured.
+    $TO "./$bin" >/dev/null 2>&1 || true
     for _ in $(seq "$RUNS"); do
         t=$({ $TO /usr/bin/time -p "./$bin" >/dev/null; } 2>&1 | awk '/^real/{print $2}')
         s+=("${t:-99}")

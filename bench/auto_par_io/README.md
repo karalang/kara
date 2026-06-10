@@ -92,18 +92,21 @@ K=64 (`ceil(64/18)·200ms` ≈ 0.8s + fixed runtime/dispatch startup ~0.2s). Tha
 becomes the break-even (the `D_US=` knob probes it). The gap auto-par leaves on
 the table: **2.6× at K=4, 13× at K=64.**
 
-## Acceptance target — AFTER A1 (`blocks`)
+## Result — AFTER A1 (`blocks`) ✅ DONE 2026-06-10
+
+`(Blocks,Blocks) => false` in `src/concurrency.rs::two_effects_conflict`
+(phase-5-diagnostics.md, "Auto-par conflict model…" A1). Measured, same machine:
 
 ```
-   K | grouped? |   seq   |   par   |  auto   | verdict
-   4 | yes      |  1.01s  |  0.39s  | ~0.39s  | OVERLAP
-  16 | yes      |  3.45s  |  0.40s  | ~0.40s  | OVERLAP
-  64 | yes      | 13.36s  |  1.02s  | ~1.02s  | OVERLAP
+   K | grouped? |   seq   |   par   |  auto   | verdict   win
+   4 | yes      |  0.82s  |  0.20s  |  0.20s  | OVERLAP   4.1×
+  16 | yes      |  3.24s  |  0.20s  |  0.20s  | OVERLAP   16×   (16 ≤ pool: full overlap)
+  64 | yes      | 13.05s  |  0.81s  |  0.81s  | OVERLAP   16×   (≈4 pool-bounded waves)
 ```
 
-`auto` migrates from the floor to the (pool-bounded) ceiling at *every* K, and
-stmts 0 & 1 co-group. A1 = stop treating `blocks+blocks` as a conflict; the
-existing `par_run` fan-out then overlaps them on the blocking pool.
+`auto` migrated from the serial floor to the (pool-bounded) `par` ceiling at
+*every* K, and stmts 0 & 1 co-group. The existing `par_run` fan-out overlaps the
+blocking calls on the pool — no runtime/codegen change, only the conflict model.
 
 ## Not here yet — `suspends` (A2)
 
