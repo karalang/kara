@@ -432,6 +432,18 @@ impl<'a> super::TypeChecker<'a> {
     /// `local_scope` keeps the real refinement type for type-checking.
     fn record_pattern_binding_surface_types(&mut self, pattern: &Pattern, expected: &Type) {
         let expected = strip_refinement(expected);
+        // Peel an immutable/exclusive borrow: a `ref T` / `mut ref T` payload
+        // binding (e.g. `Some(w)` from `Vec.first()` / `Vec.get(i)`, now typed
+        // `Option[ref T]`) reconstructs at codegen as the inner *value* T — a
+        // by-value aliasing borrow whose borrow-ness is carried by cleanup
+        // suppression (`scrutinee_is_borrow_call`), not by the recorded layout
+        // name. Record the inner T's surface name + element side-tables so the
+        // binding gets T's true word-count/dispatch; without this it falls to
+        // the 1-word default and a `ref String` truncates to a single word.
+        if let Type::Ref(inner) | Type::MutRef(inner) = expected {
+            self.record_pattern_binding_surface_types(pattern, inner);
+            return;
+        }
         if let Type::Named {
             name: type_name, ..
         } = expected

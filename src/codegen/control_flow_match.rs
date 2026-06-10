@@ -326,9 +326,21 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::MethodCall { object, method, .. } = &scrutinee.kind else {
             return false;
         };
-        if method != "get" {
+        // `get`/`first`/`last` on a Vec/Slice now return `Option[ref T]` — the
+        // payload aliases the container's element storage, so a `Some(x)`
+        // binding must NOT register its own buffer cleanup (double-free against
+        // the container's drop). `first`/`last` were previously omitted because
+        // the v1 stdlib only returned scalar payloads from them; with the
+        // `Option[ref T]` flip a heap-bearing element (`Vec[String].first()`)
+        // can reach here, so they need the same borrow classification as `get`.
+        if !matches!(method.as_str(), "get" | "first" | "last") {
             return false;
         }
+        // `Client.get(url)` is a GET request returning a freshly-**owned**
+        // `Result[Response, HttpError]` — opposite ownership from a collection
+        // accessor; suppressing its cleanup leaks the response (B-2026-06-10-3).
+        // `first`/`last` have no `Client` overload, so the guard only bites
+        // `get`, but applying it uniformly is harmless and future-proof.
         !matches!(
             self.inferred_receiver_type(object).as_deref(),
             Some("Client")

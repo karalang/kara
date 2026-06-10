@@ -461,9 +461,15 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
     ) -> Type {
         let elem = element.clone();
+        // get/first/last return a BORROW of the element — `Option[ref T]`
+        // (design.md § Feature 4 Part 3 — Option[ref T] accessors). At runtime
+        // the borrow is a by-value alias of the element with codegen cleanup
+        // suppressed (`scrutinee_is_borrow_call`); the `ref` makes the no-move
+        // contract honest at the type level, so the typechecker rejects moving
+        // the bound payload into an owned position.
         let option_elem = Type::Named {
             name: "Option".to_string(),
-            args: vec![elem.clone()],
+            args: vec![Type::Ref(Box::new(elem.clone()))],
         };
         let option_i64 = Type::Named {
             name: "Option".to_string(),
@@ -739,9 +745,15 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
     ) -> Option<Type> {
         let elem = element.clone();
+        // get/first/last return a BORROW of the element — `Option[ref T]`
+        // (design.md § Feature 4 Part 3 — Option[ref T] accessors). At runtime
+        // the borrow is a by-value alias of the element with codegen cleanup
+        // suppressed (`scrutinee_is_borrow_call`); the `ref` makes the no-move
+        // contract honest at the type level, so the typechecker rejects moving
+        // the bound payload into an owned position.
         let option_elem = Type::Named {
             name: "Option".to_string(),
-            args: vec![elem.clone()],
+            args: vec![Type::Ref(Box::new(elem.clone()))],
         };
         let option_i64 = Type::Named {
             name: "Option".to_string(),

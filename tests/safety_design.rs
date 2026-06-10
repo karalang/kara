@@ -373,22 +373,15 @@ fn reject_match_nonident_scrutinee_borrow_return_unsupported() {
 /// arguments in a return type: `Option[ref T]`, `Result[ref T, E]`,
 /// `(ref T, ref U)`."
 ///
-/// Today the call site rejects passing an owned `Vec[i64]` to a
-/// `ref Vec[i64]` parameter — the call-site auto-ref rule that works for
-/// `String` doesn't extend to `Vec` yet. Marked as a spec test so it
-/// surfaces when generic-type call-site coercion lands.
-///
-/// **Ignored — and the prior green was vacuous.** Until `b231814c`,
-/// `v.get(0)` fell through the typechecker's silent-prelude path to
-/// `Type::Error`, which `check_assignable` accepts against anything —
-/// this test "passed" without ever exercising `Option[ref T]`. The
-/// accessor-typing fix exposed the truth: `Vec.get` types as owned
-/// `Option[T]` (mirroring the pre-existing `Slice` surface), while
-/// design.md §Vec/§Slice tables (`fn get(ref self, idx: i64) ->
-/// Option[ref T]`) want a borrowed return. Un-ignore when the
-/// borrowed-accessor-return entry lands — see phase-7-codegen.md
-/// § "Borrowed accessor returns (`Option[ref T]`)".
-#[ignore = "Option[ref T] accessor returns unimplemented (never were — pre-b231814c green was Type::Error poison); tracked in phase-7-codegen.md § Borrowed accessor returns"]
+/// **Implemented 2026-06-10 (B-2026-06-07-5 Option[ref T] slice).** `Vec`/
+/// `Slice` `get`/`first`/`last` now type as `Option[ref T]` (was owned
+/// `Option[T]`): the typechecker builds `Option[Ref(elem)]` in
+/// `stdlib_seq.rs`, ownership treats the `ref T` payload binding as Copy
+/// (re-readable, never moved) and rejects moving it into an owned position,
+/// and codegen reconstructs the by-value aliasing borrow with cleanup
+/// suppressed (`scrutinee_is_borrow_call`). The earlier ignore note's "prior
+/// green was vacuous" (`v.get(0)` → `Type::Error` poison) is the history that
+/// motivated this; the borrowed return is now real and exercised end-to-end.
 #[test]
 fn spec_option_ref_t_return() {
     assert_static_accept(

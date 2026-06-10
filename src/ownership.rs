@@ -780,6 +780,13 @@ pub(crate) fn is_copy_type(ty: &Type, tc: &TypeCheckResult) -> bool {
         // ... return node;` fires a spurious UAM on `node` because
         // `push_back`'s owned-arg slot is classified as Consume.
         Type::Shared(_) | Type::Rc(_) | Type::Arc(_) => true,
+        // An immutable borrow `ref T` is a read-only alias — Copy. A use
+        // reads *through* it without consuming the binding, so multiple
+        // reads (`println(w); w.len()`) don't fire a use-after-move. This
+        // is what makes `Option[ref T]` accessors (Vec/Slice `get`/`first`/
+        // `last`) freely re-readable. `mut ref T` is an EXCLUSIVE borrow
+        // (aliasing-hazardous), so it stays non-Copy and falls through.
+        Type::Ref(_) => true,
         Type::Named { name, args } => {
             if matches!(name.as_str(), "Option" | "Result") {
                 return args.iter().all(|a| is_copy_type(a, tc));

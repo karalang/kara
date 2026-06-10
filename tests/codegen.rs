@@ -3995,6 +3995,41 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_get_first_option_ref_t_reread() {
+        // Vec/Slice `get`/`first`/`last` return `Option[ref T]`
+        // (B-2026-06-07-5 Option[ref T] slice). The `Some(x)` binding is an
+        // immutable borrow → Copy, so it is freely RE-READABLE
+        // (`println(w); println(w.len())` — no use-after-move, which the
+        // pre-flip owned `Option[T]` accessor rejected). Exercises a scalar
+        // `get`, a `String` `first` (the full 3-word value reconstructed from
+        // the peeled `ref` binding type), and an out-of-bounds `None`.
+        let out = run_program(
+            r#"
+fn main() {
+    let v = [10, 20, 30];
+    match v.get(1) {
+        Some(x) => println(x),
+        None => println("none"),
+    };
+    let words = ["alpha", "beta", "gamma"];
+    match words.first() {
+        Some(w) => { println(w); println(w.len()); }
+        None => println("empty"),
+    };
+    match v.get(99) {
+        Some(x) => println(x),
+        None => println("oob"),
+    };
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["20", "alpha", "5", "oob"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_match_at_binding_or() {
         // `@` + or-pattern composition: the alias binds from the first
         // alternative and the condition ORs each alternative's test.

@@ -794,6 +794,45 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_vec_get_ref_t_over_heap_source_no_double_free() {
+        // `Vec[String].get(i)` types as `Option[ref T]` (B-2026-06-07-5
+        // Option[ref T] slice). The `Some(n)` binding is a by-value alias of
+        // the element's heap buffer — cleanup is suppressed via
+        // `scrutinee_is_borrow_call` so the binding does NOT register a second
+        // free against a buffer the Vec still owns. Each element is forced
+        // onto the heap (`"al" + "ice"` concat allocates), read through a
+        // `ref String` param + `.len()`, in a loop (alloca reuse). The Vec
+        // frees each String exactly once at scope exit; a regression where the
+        // borrow binding re-frees the aliased buffer surfaces here as ASAN
+        // double-free / heap-use-after-free.
+        assert_clean_asan_run(
+            r#"
+fn shout(s: ref String) {
+    println(s);
+    println(s.len());
+}
+
+fn main() {
+    let mut names: Vec[String] = Vec.new();
+    names.push("al" + "ice");
+    names.push("b" + "ob");
+    names.push("ca" + "rol");
+    let mut i = 0;
+    while i < 3 {
+        match names.get(i) {
+            Some(n) => shout(n),
+            None => println("none"),
+        };
+        i = i + 1;
+    };
+}
+"#,
+            &["alice", "5", "bob", "3", "carol", "5"],
+            "vec_get_ref_t_over_heap_source_no_double_free",
+        );
+    }
+
     // ── Vec: owned heap buffer, scope-exit free ───────────────────
     // Exercises `emit_scope_vec_cleanup` — the Vec's data pointer must be
     // freed when `v` goes out of scope at the end of `main`.
