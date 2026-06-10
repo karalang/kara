@@ -38159,6 +38159,77 @@ fn main() {
         }
     }
 
+    // ── Shape-generic function body — tensor-param indexing ──────────
+    // A `fn f[N](a: Tensor[T, [N, N]], ...)` body that indexes its tensor
+    // params (`a[i, j]`) lowers in codegen: `compile_mono_function`
+    // registers each `Tensor` param in `tensor_var_infos` (the shape
+    // literal's named `Dim`s become runtime `?` dims read from the header;
+    // the element type resolves through the active `type_subst`), so the
+    // multi-dim index / `shape()` / transform lowering applies inside the
+    // monomorphized body. Before this the params were opaque pointers and
+    // `a[i, j]` died with "Index operator applied to non-array type".
+    // (Tensor *locals* in such bodies and inline `a.shape()[k]` are
+    // separate gaps — see phase-11-stdlib-longtail.md.)
+
+    #[test]
+    fn test_e2e_shape_generic_body_tensor_param_index() {
+        // `a[i, i]` on a shape-generic tensor param, scalar return — the
+        // diagonal trace. Dim bound passed explicitly (avoids the separate
+        // inline-`shape()[k]` gap).
+        let out = run_program(
+            "fn trace_diag[N](a: Tensor[f64, [N, N]], n: i64) -> f64 {\n\
+                 let mut s = 0.0;\n\
+                 for i in 0..n { s = s + a[i, i]; }\n\
+                 s\n\
+             }\n\
+             fn main() {\n\
+                 let a: Tensor[f64, [3, 3]] = Tensor.from([[1.0,2.0,3.0],[4.0,5.0,6.0],[7.0,8.0,9.0]]);\n\
+                 println(trace_diag(a, 3));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "15\n", "1+5+9 = 15 (codegen must match karac run)");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shape_generic_body_two_tensor_params() {
+        // Two shape-generic tensor params, both indexed in the body — proves
+        // each registers independently in the mono body.
+        let out = run_program(
+            "fn diag_sum[N](a: Tensor[f64, [N, N]], b: Tensor[f64, [N, N]], n: i64) -> f64 {\n\
+                 let mut s = 0.0;\n\
+                 for i in 0..n { s = s + a[i, i] + b[i, i]; }\n\
+                 s\n\
+             }\n\
+             fn main() {\n\
+                 let a: Tensor[f64, [2, 2]] = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+                 let b: Tensor[f64, [2, 2]] = Tensor.from([[10.0, 0.0], [0.0, 20.0]]);\n\
+                 println(diag_sum(a, b, 2));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "35\n", "1+4+10+20 = 35 (codegen must match karac run)");
+        }
+    }
+
+    #[test]
+    fn test_shape_generic_body_tensor_param_index_ir_lowers() {
+        // The generic body compiles (no "Index operator applied to
+        // non-array type") and the mono specialization is emitted.
+        let ir = ir_for(
+            "fn first_elem[N](a: Tensor[f64, [N, N]]) -> f64 { a[0, 0] }\n\
+             fn main() {\n\
+                 let a: Tensor[f64, [2, 2]] = Tensor.zeros([2, 2]);\n\
+                 println(first_elem(a));\n\
+             }\n",
+        );
+        assert!(
+            ir.contains("@first_elem"),
+            "the shape-generic specialization must be emitted"
+        );
+    }
+
     // ── Cross-argument `?`-dim asserts at a call boundary ────────────
     // design.md § Runtime equality check, the call-boundary flavor: two
     // `Tensor` params sharing a named `Dim` (the `K` in
@@ -38166,9 +38237,10 @@ fn main() {
     // compiler inserts the check the type system can't prove statically
     // for two `?` dims. Emitted in `compile_generic_call` via
     // `emit_tensor_crossarg_dim_asserts`. The callee body is trivial here
-    // (the asserts fire at the call site, before the body) — a full matmul
-    // body that *indexes* the shape-generic tensors does not yet lower
-    // (tracked separately in phase-11-stdlib-longtail.md).
+    // (the asserts fire at the call site, before the body); shape-generic
+    // tensor-param *indexing* now lowers (cluster above), but tensor
+    // *locals* / inline `shape()[k]` in such bodies remain separate gaps
+    // (tracked in phase-11-stdlib-longtail.md).
 
     #[test]
     fn test_e2e_tensor_crossarg_dim_match_ok() {

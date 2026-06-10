@@ -129,6 +129,15 @@ impl<'ctx> super::Codegen<'ctx> {
             let saved_fn = self.current_fn;
             let saved_vars = std::mem::take(&mut self.variables);
             let saved_var_types = std::mem::take(&mut self.var_type_names);
+            // The mono body is compiled INLINE, mid-caller — so its tensor
+            // param registrations (added by `compile_mono_function`) must not
+            // leak into the caller's `tensor_var_infos`, which is keyed by
+            // bare var name and would otherwise have a caller-side `a` / `b`
+            // overwritten by the callee's same-named tensor param. Swap to a
+            // clean slate for the body (module-level tensor bindings are
+            // re-seeded inside `compile_mono_function`) and restore below —
+            // parallel to `variables` / `var_type_names`.
+            let saved_tensor_infos = std::mem::take(&mut self.tensor_var_infos);
             let saved_loop_stack = std::mem::take(&mut self.loop_stack);
             let saved_subst = std::mem::replace(&mut self.type_subst, subst.clone());
             // Const generics slice 4: thread the const-arg substitution
@@ -159,6 +168,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.const_subst = saved_const_subst;
             self.type_subst = saved_subst;
             self.loop_stack = saved_loop_stack;
+            self.tensor_var_infos = saved_tensor_infos;
             self.var_type_names = saved_var_types;
             self.variables = saved_vars;
             self.current_fn = saved_fn;
@@ -623,6 +633,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.var_type_names
                         .insert(param_name.clone(), type_name.clone());
                 }
+            }
+            // Register `Tensor` params in `tensor_var_infos` so the body's
+            // multi-dim index (`a[i, j]`), `shape()`/`rank()`, and the
+            // shape-transform family recognize them. Without this a
+            // shape-generic body — `fn f[M, K, N](a: Tensor[T, [M, K]], …)`
+            // indexing / `shape()`-ing its tensor params — failed codegen
+            // with "Index operator applied to non-array type" (the params
+            // were bound as opaque pointers only). The shape literal's named
+            // `Dim` params (`M`, `K`) carry no static value, so they lower to
+            // runtime `?` dims read from the header; the element type
+            // resolves through the active `type_subst` (set by
+            // `compile_generic_call` around this call). Mirrors
+            // `compile_function`'s `register_var_from_type_expr` for the
+            // tensor case — the other collection side-tables stay on the
+            // minimal mono binding (full registration would change cleanup
+            // behavior for existing generic Vec/Map/String fns). A
+            // `ref Tensor` param registers off its inner type (the by-value
+            // ref-tensor ABI hands back the same block pointer).
+            let tensor_te = match &param.ty.kind {
+                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                _ => &param.ty,
+            };
+            if let Some(info) = self.tensor_var_info_from_type_expr(tensor_te) {
+                self.tensor_var_infos.insert(param_name.clone(), info);
             }
             self.variables.insert(
                 param_name,
