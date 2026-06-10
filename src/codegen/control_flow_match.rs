@@ -93,7 +93,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // would double-free against the `karac_map_free_with_val_drop_vec`
         // path at function exit.
         let saved_borrow_flag = self.pattern_binding_is_borrow;
-        self.pattern_binding_is_borrow = Self::scrutinee_is_borrow_call(scrutinee);
+        self.pattern_binding_is_borrow = self.scrutinee_is_borrow_call(scrutinee);
         let fn_val = self.current_fn.unwrap();
         let merge_bb = self.context.append_basic_block(fn_val, "match.merge");
 
@@ -312,11 +312,27 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Map.remove` truly transfers ownership (the entry is deleted) and
     /// is intentionally NOT on this list — its `Some(v)` bindings still
     /// own the Vec they receive.
-    pub(super) fn scrutinee_is_borrow_call(scrutinee: &Expr) -> bool {
-        if let ExprKind::MethodCall { method, .. } = &scrutinee.kind {
-            return method == "get";
+    ///
+    /// Receiver-aware: a `.get()` is classified as a borrow-return *unless*
+    /// its receiver is the HTTP `Client`. `Client.get(url)` is a GET request
+    /// that returns a freshly-**owned** `Result[Response, HttpError]` — same
+    /// method name, opposite ownership from a collection accessor. Classifying
+    /// it as a borrow suppresses the Response/HttpError scope-exit Drop and
+    /// leaks the body `String` buffer, the headers side-table handle, and the
+    /// `HttpError.message` buffer (B-2026-06-10-3 — the name-only heuristic
+    /// regressed these). Every other `.get()` keeps the conservative borrow
+    /// classification, so the `Map.get` double-free protection is unchanged.
+    pub(super) fn scrutinee_is_borrow_call(&self, scrutinee: &Expr) -> bool {
+        let ExprKind::MethodCall { object, method, .. } = &scrutinee.kind else {
+            return false;
+        };
+        if method != "get" {
+            return false;
         }
-        false
+        !matches!(
+            self.inferred_receiver_type(object).as_deref(),
+            Some("Client")
+        )
     }
 
     /// Returns an i1 (bool) value: 1 if the scrutinee matches the pattern.
