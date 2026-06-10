@@ -5702,6 +5702,55 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_borrow_local_read_methods_no_double_free() {
+        // B-2026-06-07-5 residue: read-only methods beyond len/is_empty on a
+        // borrow-LOCAL now route through `compile_vec_method` (the receiver is
+        // registered in `vec_elem_types`). Reading through the borrow must NOT
+        // free the source's heap buffer — only the source frees it, once, at
+        // scope exit. The String source is a heap concat (not a static
+        // literal) and the Vec is heap, so a stray free of the borrow would
+        // double-free (ASAN abort) and an early free would leave the trailing
+        // `s.len()`/`xs.len()` reading freed memory.
+        let label = "borrow_local_read_methods";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn sid(s: ref String) -> ref String { s }
+fn vid(v: ref Vec[i64]) -> ref Vec[i64] { v }
+fn main() {
+    let s: String = "hello " + "world";
+    let n = sid(s);
+    println(n.starts_with("hello"));
+    let xs: Vec[i64] = [10, 20, 30];
+    let m = vid(xs);
+    match m.get(1) { Some(x) => println(x), None => println(0 - 1) }
+    match m.last() { Some(x) => println(x), None => println(0 - 1) }
+    println(s.len());
+    println(xs.len());
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             a read method on a borrow-local must not free the source's buffer",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["true", "20", "30", "11", "3"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Mono-body owned-local cleanup (phase-11): a monomorphized
     /// (shape-generic) body that binds an owned `Tensor` local must free it
     /// exactly once at scope exit when it's dropped, and NOT free it when

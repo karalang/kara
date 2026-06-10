@@ -1432,6 +1432,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_borrow_return_local_read_methods() {
+        // B-2026-06-07-5 residue: read-only methods BEYOND `len`/`is_empty` on
+        // a borrow-LOCAL (`let n = sid(s)`, registered in `ref_params`) now
+        // dispatch through the value-receiver Vec/String path
+        // (`compile_vec_method`), reading through the borrow via
+        // `get_data_ptr`'s ref-deref. Before the fix these fell through to
+        // "no handler for method X on variable n" — only `len`/`is_empty` had a
+        // dedicated borrow-local arm. Covers String `starts_with`/`is_empty`
+        // and Vec `get`/`first`/`last`.
+        let out = run_program(
+            "fn sid(s: ref String) -> ref String { s }\n\
+             fn vid(v: ref Vec[i64]) -> ref Vec[i64] { v }\n\
+             fn main() {\n\
+             \x20   let s: String = \"hello world\";\n\
+             \x20   let n = sid(s);\n\
+             \x20   println(n.starts_with(\"hello\"));\n\
+             \x20   println(n.is_empty());\n\
+             \x20   let xs: Vec[i64] = [10, 20, 30];\n\
+             \x20   let m = vid(xs);\n\
+             \x20   match m.get(1) { Some(x) => println(x), None => println(0 - 1) }\n\
+             \x20   match m.first() { Some(x) => println(x), None => println(0 - 1) }\n\
+             \x20   match m.last() { Some(x) => println(x), None => println(0 - 1) }\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "true\nfalse\n20\n10\n30");
+        }
+    }
+
+    #[test]
     fn test_e2e_borrow_return_if_multi_source() {
         // Tier 2 (B-2026-06-07-5): `longer`-style `if` over two `ref`
         // params returns a borrow from whichever branch runs — phi of
