@@ -888,6 +888,11 @@ fn main() {
     struct CapturedRun {
         stdout: String,
         stderr: String,
+        /// Child process exit status. Lets tests distinguish a clean exit
+        /// from a crash (SIGSEGV / abort) when stdout alone can't — e.g.
+        /// B-2026-06-09-1, where the program prints its output and *then*
+        /// faults at scope-exit drop.
+        status: std::process::ExitStatus,
     }
 
     fn run_program_capturing(src: &str) -> Option<CapturedRun> {
@@ -971,6 +976,7 @@ fn main() {
         Some(CapturedRun {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            status: output.status,
         })
     }
 
@@ -1040,6 +1046,7 @@ fn main() {
         Some(CapturedRun {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            status: output.status,
         })
     }
 
@@ -15375,6 +15382,7 @@ fn main() {
         Some(CapturedRun {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            status: output.status,
         })
     }
 
@@ -31704,6 +31712,42 @@ fn main() {
         );
         if let Some(c) = out {
             assert_eq!(c.stdout.trim(), "ok");
+        }
+    }
+
+    /// B-2026-06-09-1 regression: a `TaskGroup`-registered child that is
+    /// ALSO explicitly `.join()`ed used to be consumed twice — the
+    /// explicit join freed the runtime handle, then the group's scope-exit
+    /// drop joined the dangling pointer → use-after-free → SIGSEGV (exit
+    /// 139). The crash fired *after* `println("done")` (group drop runs at
+    /// scope exit, past the last statement), so stdout alone can't catch
+    /// it — assert a clean exit (status 0), not just the output. Fixed by
+    /// marking a registered handle "group-owned" so an explicit join waits
+    /// + copies the result without freeing; the group is the sole freer.
+    #[test]
+    fn test_e2e_taskgroup_child_explicit_join_no_double_free() {
+        let out = run_program_capturing(
+            r#"
+fn z() -> i64 { 42 }
+fn main() {
+    let mut g: TaskGroup = TaskGroup.new();
+    let h: TaskHandle[i64] = g.spawn(|| z());
+    let r: i64 = h.join();
+    println(r);
+    println("done");
+}
+"#,
+        );
+        if let Some(c) = out {
+            assert!(
+                c.status.success(),
+                "registered child + explicit join must exit cleanly (no double-free); \
+                 status={:?} stdout={:?} stderr={:?}",
+                c.status,
+                c.stdout,
+                c.stderr
+            );
+            assert_eq!(c.stdout, "42\ndone\n");
         }
     }
 

@@ -89,6 +89,13 @@ pub struct SeqTaskHandle {
     result_buf: *mut u8,
     result_layout: Layout,
     cancel: AtomicBool,
+    /// B-2026-06-09-1 — set true by `seq_taskgroup_register`. A
+    /// group-registered handle is freed exactly once, by the group's
+    /// scope-exit `seq_taskgroup_join_and_free`; an explicit `.join()`
+    /// on it drives + copies the result but does NOT free (the group is
+    /// the sole freer). `Cell` not `AtomicBool` — this scheduler is
+    /// single-threaded. Mirror of `scheduler.rs`'s `registered` field.
+    registered: Cell<bool>,
 }
 
 /// One enqueued task: the closure wrapper + its captured environment,
@@ -143,6 +150,7 @@ pub(crate) unsafe fn seq_spawn(
         result_buf,
         result_layout,
         cancel: AtomicBool::new(false),
+        registered: Cell::new(false),
     }));
 
     READY.with(|q| {
@@ -214,6 +222,25 @@ pub(crate) unsafe fn seq_task_join(handle: *mut SeqTaskHandle, out_slot: *mut u8
     if handle.is_null() {
         return TASK_STATE_CANCELLED;
     }
+    // B-2026-06-09-1 — a group-registered handle is freed by the group's
+    // scope-exit drop, not here; an explicit `.join()` drives + copies
+    // the result but leaves the handle alive for the group to reclaim.
+    let do_free = !(*handle).registered.get();
+    seq_task_join_inner(handle, out_slot, do_free)
+}
+
+/// Drive `handle` to terminal, copy the result into `out_slot` (when
+/// non-null and completed), and free iff `do_free`. The single
+/// waiter+reaper shared by the explicit `.join()` path and the
+/// `TaskGroup` join barrier; `drive_until_terminal` is a no-op on an
+/// already-terminal handle, so calling this twice (explicit join with
+/// `do_free = false`, then the group with `do_free = true`) is sound.
+///
+/// # Safety
+///
+/// `handle` must be live; when `do_free` is false the caller guarantees
+/// a later `do_free = true` call reclaims it exactly once.
+unsafe fn seq_task_join_inner(handle: *mut SeqTaskHandle, out_slot: *mut u8, do_free: bool) -> u8 {
     drive_until_terminal(handle);
 
     let h = &*handle;
@@ -225,7 +252,9 @@ pub(crate) unsafe fn seq_task_join(handle: *mut SeqTaskHandle, out_slot: *mut u8
     {
         std::ptr::copy_nonoverlapping(h.result_buf, out_slot, h.result_layout.size());
     }
-    free_handle(handle);
+    if do_free {
+        free_handle(handle);
+    }
     terminal
 }
 
@@ -302,6 +331,9 @@ pub(crate) unsafe fn seq_taskgroup_register(
     if group.is_null() || child.is_null() {
         return;
     }
+    // B-2026-06-09-1 — mark the child group-owned so an explicit
+    // `.join()` waits without freeing; the group is the sole freer.
+    (*child).registered.set(true);
     (*group).children.borrow_mut().push(child);
 }
 
@@ -322,7 +354,10 @@ pub(crate) unsafe fn seq_taskgroup_join_and_free(group: *mut SeqTaskGroupHandle)
     // the same group can re-borrow `children` without panicking.
     let children: Vec<*mut SeqTaskHandle> = std::mem::take(&mut *(*group).children.borrow_mut());
     for child in children {
-        let _status = seq_task_join(child, std::ptr::null_mut());
+        // B-2026-06-09-1 — sole freer: call the inner with `do_free =
+        // true` directly. The public `seq_task_join` would see
+        // `registered == true` and skip the free → leak.
+        let _status = seq_task_join_inner(child, std::ptr::null_mut(), true);
     }
     drop(Box::from_raw(group));
 }
@@ -564,6 +599,34 @@ mod tests {
             assert!(log.is_empty(), "children must not run before the join");
             seq_taskgroup_join_and_free(group);
             assert_eq!(log, vec![1, 2, 3, 4, 5]);
+        }
+    }
+
+    // B-2026-06-09-1 — a group-registered child that is ALSO explicitly
+    // `.join()`ed must be freed exactly once: the explicit join reads the
+    // result without freeing, and the group's scope-exit drop reaps it.
+    // Before the fix this double-freed the handle (the explicit join and
+    // the group join both called `free_handle`).
+    #[test]
+    fn registered_child_explicit_join_then_group_drop_frees_once() {
+        unsafe {
+            let env: i64 = 41;
+            let group = seq_taskgroup_new();
+            let child = seq_spawn(
+                add_one_wrapper,
+                &env as *const i64 as *mut c_void,
+                std::mem::size_of::<i64>(),
+                std::mem::align_of::<i64>(),
+            );
+            seq_taskgroup_register(group, child);
+            // Explicit join transports the result and must NOT free the
+            // handle (the group still owns it).
+            let mut out: i64 = 0;
+            let status = seq_task_join(child, &mut out as *mut i64 as *mut u8);
+            assert_eq!(status, TASK_STATE_COMPLETED);
+            assert_eq!(out, 42);
+            // Group drop is now the sole freer — no double-free / UAF.
+            seq_taskgroup_join_and_free(group);
         }
     }
 

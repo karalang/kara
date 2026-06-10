@@ -91,6 +91,12 @@ pub struct WasmTaskHandle {
     cancel: AtomicBool,
     notify_mutex: Mutex<()>,
     notify_cv: Condvar,
+    /// B-2026-06-09-1 — set true by `wt_taskgroup_register`. A
+    /// group-registered handle is freed exactly once, by the group's
+    /// scope-exit `wt_taskgroup_join_and_free`; an explicit `.join()` on
+    /// it waits + copies the result but does NOT free (the group is the
+    /// sole freer). Mirror of `scheduler.rs`'s `registered` field.
+    registered: AtomicBool,
 }
 
 // SAFETY: same reasoning as `scheduler.rs::KaracTaskHandle` — the raw
@@ -141,6 +147,7 @@ pub(crate) unsafe fn wt_spawn(
         cancel: AtomicBool::new(false),
         notify_mutex: Mutex::new(()),
         notify_cv: Condvar::new(),
+        registered: AtomicBool::new(false),
     }));
 
     // Per-task ParCall: 1 work unit, no frame tracking — the
@@ -217,6 +224,25 @@ pub(crate) unsafe fn wt_task_join(handle: *mut WasmTaskHandle, out_slot: *mut u8
     if handle.is_null() {
         return TASK_STATE_CANCELLED;
     }
+    // B-2026-06-09-1 — a group-registered handle is freed by the group's
+    // scope-exit drop, not here; an explicit `.join()` waits + copies the
+    // result but leaves the handle alive for the group to reclaim.
+    let do_free = !(*handle).registered.load(Ordering::Acquire);
+    wt_task_join_inner(handle, out_slot, do_free)
+}
+
+/// Condvar-wait `handle` to terminal, copy its result into `out_slot`
+/// (when non-null and completed), and free iff `do_free`. The single
+/// waiter+reaper shared by the explicit `.join()` path and the
+/// `TaskGroup` join barrier; the `wait_while` returns immediately on an
+/// already-terminal task, so calling this twice (explicit join with
+/// `do_free = false`, then the group with `do_free = true`) is sound.
+///
+/// # Safety
+///
+/// `handle` must be live; when `do_free` is false the caller guarantees
+/// a later `do_free = true` call reclaims it exactly once.
+unsafe fn wt_task_join_inner(handle: *mut WasmTaskHandle, out_slot: *mut u8, do_free: bool) -> u8 {
     let h = &*handle;
 
     let guard = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
@@ -236,7 +262,9 @@ pub(crate) unsafe fn wt_task_join(handle: *mut WasmTaskHandle, out_slot: *mut u8
         std::ptr::copy_nonoverlapping(h.result_buf, out_slot, h.result_layout.size());
     }
     drop(final_guard);
-    free_handle(handle);
+    if do_free {
+        free_handle(handle);
+    }
     terminal
 }
 
@@ -317,6 +345,9 @@ pub(crate) unsafe fn wt_taskgroup_register(
     if group.is_null() || child.is_null() {
         return;
     }
+    // B-2026-06-09-1 — mark the child group-owned so an explicit
+    // `.join()` waits without freeing; the group is the sole freer.
+    (*child).registered.store(true, Ordering::Release);
     let g = &*group;
     let mut children = g.children.lock().unwrap_or_else(|p| p.into_inner());
     children.push(child);
@@ -341,7 +372,10 @@ pub(crate) unsafe fn wt_taskgroup_join_and_free(group: *mut WasmTaskGroupHandle)
         std::mem::take(&mut *guard)
     };
     for child in children {
-        let _status = wt_task_join(child, std::ptr::null_mut());
+        // B-2026-06-09-1 — sole freer: call the inner with `do_free =
+        // true` directly. The public `wt_task_join` would see
+        // `registered == true` and skip the free → leak.
+        let _status = wt_task_join_inner(child, std::ptr::null_mut(), true);
     }
     drop(Box::from_raw(group));
 }
@@ -685,6 +719,32 @@ mod tests {
                 N,
                 "group join must wait for every registered child"
             );
+        }
+    }
+
+    // B-2026-06-09-1 — a group-registered child that is ALSO explicitly
+    // `.join()`ed must be freed exactly once: the explicit join transports
+    // the result without freeing (the group still owns it), the group's
+    // scope-exit drop reaps it. Before the fix both freed the same handle
+    // → use-after-free.
+    #[test]
+    fn wt_registered_child_explicit_join_then_group_drop_frees_once() {
+        let env_val: i64 = 41;
+        unsafe {
+            let group = wt_taskgroup_new();
+            let child = wt_spawn(
+                add_one_wrapper,
+                &env_val as *const i64 as *mut c_void,
+                std::mem::size_of::<i64>(),
+                std::mem::align_of::<i64>(),
+            );
+            wt_taskgroup_register(group, child);
+            let mut out: i64 = 0;
+            let status = wt_task_join(child, &mut out as *mut i64 as *mut u8);
+            assert_eq!(status, TASK_STATE_COMPLETED);
+            assert_eq!(out, 42);
+            // Group drop is the sole freer — no double-free / UAF.
+            wt_taskgroup_join_and_free(group);
         }
     }
 

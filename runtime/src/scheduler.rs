@@ -104,6 +104,15 @@ pub struct KaracTaskHandle {
     /// the join reads back as COMPLETED; the ramp-panic path stores
     /// PANICKED + signals the slot so the joiner still wakes).
     coro_slot: *mut crate::event_loop::KaracParkSlot,
+    /// B-2026-06-09-1 — set true by `karac_runtime_taskgroup_register`
+    /// when this handle is registered with a `TaskGroup`. A registered
+    /// handle is freed **exactly once**, by the group's scope-exit
+    /// `karac_runtime_taskgroup_join_and_free`; an explicit `.join()` on
+    /// it waits + copies the result but does NOT free. Without this, a
+    /// `g.spawn(...)` child that the user *also* explicitly `.join()`s is
+    /// consumed twice (the join frees, then group-drop joins a dangling
+    /// pointer) → use-after-free → SIGSEGV.
+    registered: AtomicBool,
 }
 
 // SAFETY: KaracTaskHandle stores a raw `*mut u8` (result_buf) which is
@@ -195,6 +204,7 @@ pub unsafe extern "C" fn karac_runtime_spawn(
         notify_mutex: Mutex::new(()),
         notify_cv: Condvar::new(),
         coro_slot: std::ptr::null_mut(),
+        registered: AtomicBool::new(false),
     });
     let handle_ptr: *mut KaracTaskHandle = Box::into_raw(handle_box);
 
@@ -324,6 +334,7 @@ pub unsafe extern "C" fn karac_runtime_spawn_coro(
         notify_mutex: Mutex::new(()),
         notify_cv: Condvar::new(),
         coro_slot: slot,
+        registered: AtomicBool::new(false),
     });
     let handle_ptr: *mut KaracTaskHandle = Box::into_raw(handle_box);
 
@@ -431,6 +442,32 @@ pub unsafe extern "C" fn karac_runtime_task_join(
     if handle.is_null() {
         return TASK_STATE_CANCELLED;
     }
+    // B-2026-06-09-1 — a handle registered with a `TaskGroup` is freed by
+    // the group's scope-exit `karac_runtime_taskgroup_join_and_free`, not
+    // here. An explicit `.join()` on such a handle must wait + copy the
+    // result but leave the handle alive for the group to reclaim; freeing
+    // it here too would double-consume it (use-after-free at group drop).
+    let do_free = !(*handle).registered.load(Ordering::Acquire);
+    join_inner(handle, out_slot, do_free)
+}
+
+/// Wait for `handle`'s task to reach a terminal state, copy its result
+/// into `out_slot` (when non-null and the task completed), and free the
+/// handle iff `do_free`. The single waiter+reaper for both the explicit
+/// `.join()` FFI path and the `TaskGroup` join barrier.
+///
+/// The wait is idempotent on an already-terminal task — both the
+/// `notify_cv` state-wait and the `coro_slot` `park_slot_wait` (a
+/// `while !done` loop) return immediately once the task is done — so it
+/// is sound to call this twice on one handle (explicit `.join()` with
+/// `do_free = false`, then the group with `do_free = true`).
+///
+/// # Safety
+///
+/// `handle` must be a non-null live `*mut KaracTaskHandle`. When
+/// `do_free` is false the caller guarantees a later call with
+/// `do_free = true` reclaims it exactly once.
+unsafe fn join_inner(handle: *mut KaracTaskHandle, out_slot: *mut u8, do_free: bool) -> u8 {
     let h = &*handle;
 
     // A2 slice 5a — coroutine-spawn handle: completion is the dispatcher
@@ -447,7 +484,9 @@ pub unsafe extern "C" fn karac_runtime_task_join(
         } else {
             st
         };
-        free_handle(handle);
+        if do_free {
+            free_handle(handle);
+        }
         return terminal;
     }
 
@@ -473,12 +512,15 @@ pub unsafe extern "C" fn karac_runtime_task_join(
         std::ptr::copy_nonoverlapping(h.result_buf, out_slot, h.result_layout.size());
     }
 
-    // Drop the result buffer + reclaim the handle.
+    // Drop the result buffer + reclaim the handle (unless a registering
+    // group owns the free — see `do_free`).
     // Re-take ownership of the Box and let it drop the handle struct;
     // the result buffer is freed manually since it was alloc'd via
     // `std::alloc::alloc`, not boxed.
     drop(_final_guard);
-    free_handle(handle);
+    if do_free {
+        free_handle(handle);
+    }
 
     terminal
 }
@@ -623,18 +665,24 @@ pub unsafe extern "C" fn karac_runtime_taskgroup_register(
     if group.is_null() || child.is_null() {
         return;
     }
+    // B-2026-06-09-1 — mark the child group-owned so an explicit
+    // `.join()` on it waits without freeing; the group is the sole freer.
+    (*child).registered.store(true, Ordering::Release);
     let g = &*group;
     let mut children = g.children.lock().unwrap_or_else(|p| p.into_inner());
     children.push(child);
 }
 
 /// Block until every registered child has reached a terminal state,
-/// then free the group itself. Each child handle is consumed
-/// (`karac_runtime_task_join` frees it) — the runtime invariant that
-/// each handle is joined or freed exactly once is upheld because
-/// registration is the only path that adds entries here, every entry
-/// is joined here, and the group cannot be referenced again after
-/// this returns (codegen emits the call from `@TaskGroup.drop`).
+/// then free the group itself. Each child handle is consumed here — the
+/// group is the **sole freer** of a registered handle (B-2026-06-09-1):
+/// registration sets the child's `registered` flag so any explicit
+/// `.join()` waits + copies the result but does *not* free, leaving the
+/// reclaim to this loop. The "freed exactly once" invariant holds
+/// because registration is the only path that adds entries here, every
+/// entry is freed here via `join_inner(.., true)`, and the group cannot
+/// be referenced again after this returns (codegen emits the call from
+/// `@TaskGroup.drop`).
 ///
 /// **Discards each child's result.** TaskGroup's design.md contract
 /// is "wait for children", not "collect children's results"; explicit
@@ -661,10 +709,12 @@ pub unsafe extern "C" fn karac_runtime_taskgroup_join_and_free(group: *mut Karac
         std::mem::take(&mut *guard)
     };
     for child in children {
-        // `karac_runtime_task_join` blocks until terminal, frees the
-        // handle, returns the terminal discriminant. v1 discards the
-        // discriminant — see commentary above.
-        let _status = karac_runtime_task_join(child, std::ptr::null_mut());
+        // `join_inner` blocks until terminal, frees the handle, returns
+        // the terminal discriminant (v1 discards it). Call with
+        // `do_free = true` directly — the group is the sole freer of a
+        // registered child, and going through the FFI `..._task_join`
+        // would see `registered == true` and skip the free → leak.
+        let _status = join_inner(child, std::ptr::null_mut(), true);
     }
     // Reclaim the group itself.
     drop(Box::from_raw(group));
@@ -1055,6 +1105,34 @@ mod tests {
             // No timeout — drop must return in bounded time. If the
             // join hangs, the test framework's per-test timeout
             // (defaults to 60s in cargo test) will catch it.
+            karac_runtime_taskgroup_join_and_free(group);
+        }
+    }
+
+    // B-2026-06-09-1 — a group-registered child that the user ALSO
+    // explicitly `.join()`s must be freed exactly once: the explicit join
+    // transports the result without freeing (the group still owns it),
+    // and the group's scope-exit drop reaps it. Before the fix both the
+    // explicit join and the group join called `free_handle` on the same
+    // pointer → use-after-free → SIGSEGV (the codegen-level repro).
+    #[test]
+    fn registered_child_explicit_join_then_group_drop_frees_once() {
+        let env_val: i64 = 41;
+        unsafe {
+            let group = karac_runtime_taskgroup_new();
+            let child = karac_runtime_spawn(
+                add_one_wrapper,
+                &env_val as *const i64 as *mut c_void,
+                std::mem::size_of::<i64>(),
+                std::mem::align_of::<i64>(),
+            );
+            karac_runtime_taskgroup_register(group, child);
+            // Explicit join: reads the result, must leave the handle alive.
+            let mut out: i64 = 0;
+            let status = karac_runtime_task_join(child, &mut out as *mut i64 as *mut u8);
+            assert_eq!(status, TASK_STATE_COMPLETED);
+            assert_eq!(out, 42);
+            // Group drop is the sole freer — no double-free / UAF.
             karac_runtime_taskgroup_join_and_free(group);
         }
     }
