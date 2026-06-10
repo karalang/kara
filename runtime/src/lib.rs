@@ -32,6 +32,7 @@
 //! 4. **Crash-report `parallel_context` field** — co-developed with these
 //!    globals, lands with `std.panic` (separate Phase 8 entry).
 
+mod alloc;
 mod bounded_channel;
 mod channel;
 mod clone;
@@ -99,6 +100,11 @@ pub fn __preserve_no_mangle_symbols() -> usize {
             $( acc = acc.wrapping_add(black_box($f as *const () as usize)); )*
         };
     }
+    // Fallible / panicking allocation wrappers (`runtime/src/alloc.rs`,
+    // phase-8-stdlib-floor item 8). Backs the `try_*` collection companions
+    // (`karac_alloc_fallible`) and the panicking collection methods
+    // (`karac_alloc_or_panic`).
+    keep!(alloc::karac_alloc_fallible, alloc::karac_alloc_or_panic,);
     // Map runtime (`runtime/src/map.rs`).
     keep!(
         map::karac_map_new,

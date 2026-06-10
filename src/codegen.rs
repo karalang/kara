@@ -1281,6 +1281,15 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) shared_types: HashMap<String, SharedTypeInfo<'ctx>>,
     /// malloc function for heap allocation.
     pub(crate) malloc_fn: FunctionValue<'ctx>,
+    /// `karac_alloc_fallible(size) -> ptr` — non-null on success, null on OOM
+    /// (phase-8-stdlib-floor item 8). The `try_*` collection companions call
+    /// this and branch on null to build `Result.Err(AllocError)`.
+    pub(crate) alloc_fallible_fn: FunctionValue<'ctx>,
+    /// `karac_alloc_or_panic(size) -> ptr` — the panicking counterpart that
+    /// aborts on OOM instead of returning null. The panicking collection
+    /// methods (`Vec.with_capacity`, `Vec.from_slice`, grow paths) route
+    /// through it so OOM is a clean abort, not a null-deref segfault.
+    pub(crate) alloc_or_panic_fn: FunctionValue<'ctx>,
     /// free function for heap deallocation.
     pub(crate) free_fn: FunctionValue<'ctx>,
     /// exit function for runtime panics.
@@ -2390,6 +2399,15 @@ impl<'ctx> Codegen<'ctx> {
             malloc_type,
             Some(Linkage::External),
         );
+        // Fallible / panicking allocation wrappers (phase-8-stdlib-floor item 8).
+        // Same `ptr fn(i64)` signature as `malloc`. `karac_alloc_fallible`
+        // returns null on OOM (the `try_*` companions branch on it);
+        // `karac_alloc_or_panic` aborts on OOM (the panicking collection
+        // methods route through it).
+        let alloc_fallible_fn =
+            module.add_function("karac_alloc_fallible", malloc_type, Some(Linkage::External));
+        let alloc_or_panic_fn =
+            module.add_function("karac_alloc_or_panic", malloc_type, Some(Linkage::External));
         let free_type = context
             .void_type()
             .fn_type(&[BasicMetadataTypeEnum::from(ptr_type)], false);
@@ -4268,6 +4286,8 @@ impl<'ctx> Codegen<'ctx> {
             last_fstr_acc: None,
             shared_types: HashMap::new(),
             malloc_fn,
+            alloc_fallible_fn,
+            alloc_or_panic_fn,
             free_fn,
             exit_fn,
             memcmp_fn,

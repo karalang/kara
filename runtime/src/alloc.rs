@@ -1,0 +1,78 @@
+//! Fallible / panicking allocation wrappers (phase-8-stdlib-floor item 8).
+//!
+//! Two entry points sit in front of the system allocator so the compiler can
+//! dispatch a single allocation routine to the appropriate failure behaviour:
+//!
+//! * [`karac_alloc_fallible`] returns a non-null pointer on success and **null**
+//!   on failure. The fallible-allocation `try_*` collection companions
+//!   (`Vec.try_push`, …) call this and branch on null to build
+//!   `Result.Err(AllocError)`.
+//! * [`karac_alloc_or_panic`] is the infallible counterpart: it calls the
+//!   fallible variant and, on null (OOM), prints a diagnostic and aborts —
+//!   replacing the historical behaviour where the panicking collection methods
+//!   (`Vec.push`, `Vec.with_capacity`, …) `malloc`'d without a null check and
+//!   then dereferenced null (a segfault). It is the symbol those panicking
+//!   methods route through.
+//!
+//! Both use the platform `malloc`'s natural alignment (suitable for any Kāra
+//! value), matching the existing collection codegen which allocated via raw
+//! `malloc` directly. The `malloc` signature mirrors the other in-crate
+//! declarations (`-> *mut u8`) so the redeclaration is consistent.
+
+extern "C" {
+    fn malloc(size: usize) -> *mut u8;
+}
+
+/// Fallible allocation — non-null on success, null on failure (OOM).
+///
+/// A zero-byte request is normalised to one byte so a successful allocation is
+/// always a unique non-null pointer; the collection codegen treats a non-null
+/// result as success, so a `malloc(0)`-returns-null platform must not be
+/// mistaken for OOM.
+#[no_mangle]
+pub extern "C" fn karac_alloc_fallible(size: usize) -> *mut u8 {
+    let n = if size == 0 { 1 } else { size };
+    unsafe { malloc(n) }
+}
+
+/// Panicking allocation — the infallible counterpart of
+/// [`karac_alloc_fallible`]. On OOM it writes a diagnostic to stderr and
+/// aborts rather than returning null for the caller to dereference. The write
+/// uses a `'static` byte slice (no heap allocation on the OOM path, which is
+/// exactly what just failed).
+#[no_mangle]
+pub extern "C" fn karac_alloc_or_panic(size: usize) -> *mut u8 {
+    let p = karac_alloc_fallible(size);
+    if p.is_null() {
+        use std::io::Write;
+        let _ = std::io::stderr().write_all(b"panic: out of memory\n");
+        std::process::abort();
+    }
+    p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // These tests intentionally leak the small allocations — declaring a
+    // `free` shim here would clash with the crate's existing `free` extern
+    // (signature redeclaration), and a few leaked bytes in a unit test that
+    // exits immediately is harmless.
+
+    #[test]
+    fn fallible_small_alloc_is_non_null() {
+        assert!(!karac_alloc_fallible(64).is_null());
+    }
+
+    #[test]
+    fn fallible_zero_size_is_non_null() {
+        // A zero-size request must still yield a usable non-null pointer.
+        assert!(!karac_alloc_fallible(0).is_null());
+    }
+
+    #[test]
+    fn or_panic_returns_non_null_on_success() {
+        assert!(!karac_alloc_or_panic(128).is_null());
+    }
+}

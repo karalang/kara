@@ -67,3 +67,21 @@ pub fn static_companion_base(method: &str) -> Option<&'static str> {
     let base = method.strip_prefix("try_")?;
     TRY_ALLOC_STATIC_BASES.iter().copied().find(|&b| b == base)
 }
+
+/// Instance `try_*` companions whose **codegen** (`karac build`) lowering has
+/// landed (phase-8-stdlib-floor item 8). The `try_<base>` form for a base in
+/// this set flows through to its dispatcher (`compile_vec_method`) and emits
+/// real fallible allocation + `Result`; any other recognized companion is still
+/// interpreter-only and `compile_method_call` rejects it loudly. Grows as more
+/// `try_*` codegen arms land (`push_str`, `extend_from_slice`, the constructors,
+/// `clone`, the `Map`/`Set` `insert` forms — the last need fallible runtime FFI).
+pub const CODEGEN_FALLIBLE_INSTANCE_BASES: &[&str] = &[
+    "push",      // Vec.try_push
+    "push_back", // VecDeque.try_push_back (shares Vec storage / the push arm)
+];
+
+/// `true` when `method`'s instance `try_*` companion has codegen lowering today
+/// (its base is in [`CODEGEN_FALLIBLE_INSTANCE_BASES`]).
+pub fn instance_companion_has_codegen(method: &str) -> bool {
+    instance_companion_base(method).is_some_and(|b| CODEGEN_FALLIBLE_INSTANCE_BASES.contains(&b))
+}

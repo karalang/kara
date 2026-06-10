@@ -1420,7 +1420,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             let buf = self
                 .builder
-                .build_call(self.malloc_fn, &[alloc_bytes.into()], "with_cap.buf")
+                .build_call(
+                    self.alloc_or_panic_fn,
+                    &[alloc_bytes.into()],
+                    "with_cap.buf",
+                )
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()
@@ -1490,7 +1494,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             let buf = self
                 .builder
-                .build_call(self.malloc_fn, &[alloc_bytes.into()], "filled.buf")
+                .build_call(self.alloc_or_panic_fn, &[alloc_bytes.into()], "filled.buf")
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()
@@ -1703,7 +1707,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             let new_buf = self
                 .builder
-                .build_call(self.malloc_fn, &[alloc_bytes.into()], "from_slice.buf")
+                .build_call(
+                    self.alloc_or_panic_fn,
+                    &[alloc_bytes.into()],
+                    "from_slice.buf",
+                )
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()

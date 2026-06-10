@@ -55,31 +55,34 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned();
         self.emit_branch_cancel_check("mcall", callee_key.as_deref());
 
-        // Fallible-allocation instance companions (phase-8-stdlib-floor item 2)
-        // are interpreter-only in v1 — their codegen lowering (runtime
-        // allocator wrappers) is item 8 (Phase 7). Reject at `karac build` with
-        // a clear message when the receiver is a builtin collection. Gated on
-        // the collection side-tables so a user type's own `try_*` method (which
-        // dispatches through the qualified user-method path below) is never
-        // blocked. Non-identifier receivers fall through to the per-collection
-        // dispatcher's own "not yet supported in codegen" error.
+        // Fallible-allocation instance companions (phase-8-stdlib-floor item 8).
+        // Companions whose codegen lowering has landed
+        // (`CODEGEN_FALLIBLE_INSTANCE_BASES`, e.g. `try_push`) fall through to
+        // their dispatcher (`compile_vec_method`) and emit real fallible
+        // allocation + `Result`. The remaining companions are still
+        // interpreter-only; reject those at `karac build` with a clear message
+        // when the receiver is a builtin collection. Gated on the collection
+        // side-tables so a user type's own `try_*` method (which dispatches
+        // through the qualified user-method path below) is never blocked.
         if let Some(base) = crate::fallible_alloc::instance_companion_base(method) {
-            if let ExprKind::Identifier(name) = &object.kind {
-                let n = name.as_str();
-                let is_builtin_coll = self.vec_elem_types.contains_key(n)
-                    || self.map_key_types.contains_key(n)
-                    || self.set_elem_types.contains_key(n)
-                    || self
-                        .var_type_names
-                        .get(n)
-                        .is_some_and(|t| t == "String" || t.starts_with("String"));
-                if is_builtin_coll {
-                    return Err(format!(
-                        "codegen: fallible-allocation companion `.{method}(...)` is \
-                         interpreter-only in v1; its codegen lowering is phase-8-stdlib-floor \
-                         item 8. Run under `karac run`, or use the panicking `.{base}(...)` \
-                         base method under `karac build`."
-                    ));
+            if !crate::fallible_alloc::instance_companion_has_codegen(method) {
+                if let ExprKind::Identifier(name) = &object.kind {
+                    let n = name.as_str();
+                    let is_builtin_coll = self.vec_elem_types.contains_key(n)
+                        || self.map_key_types.contains_key(n)
+                        || self.set_elem_types.contains_key(n)
+                        || self
+                            .var_type_names
+                            .get(n)
+                            .is_some_and(|t| t == "String" || t.starts_with("String"));
+                    if is_builtin_coll {
+                        return Err(format!(
+                            "codegen: fallible-allocation companion `.{method}(...)` is \
+                             interpreter-only in v1; its codegen lowering is phase-8-stdlib-floor \
+                             item 8. Run under `karac run`, or use the panicking `.{base}(...)` \
+                             base method under `karac build`."
+                        ));
+                    }
                 }
             }
         }

@@ -984,6 +984,53 @@ fn main() {
     }
 
     #[test]
+    fn e2e_try_push_fallible_codegen() {
+        // phase-8-stdlib-floor item 8: `Vec.try_push` lowers to real fallible
+        // allocation (grow via `karac_alloc_fallible`, null → `Err(AllocError)`)
+        // and returns `Result[(), AllocError]`. The host never OOMs, so every
+        // push is `Ok`; verify the result is matchable AND the element is
+        // actually stored (the grow path runs: Vec.new starts cap 0, so the
+        // first push grows to cap 4).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 match v.try_push(10_i64) {\n\
+                     Ok(_) => println(\"ok1\"),\n\
+                     Err(_) => println(\"err1\"),\n\
+                 }\n\
+                 let _ = v.try_push(20_i64);\n\
+                 let _ = v.try_push(30_i64);\n\
+                 println(v.len());\n\
+                 println(v[0]);\n\
+                 println(v[2]);\n\
+             }",
+        ) {
+            assert_eq!(out, "ok1\n3\n10\n30\n");
+        }
+    }
+
+    #[test]
+    fn e2e_try_push_question_propagation_codegen() {
+        // `try_push` composes with `?` and `Ok(())` (Result[(), AllocError]).
+        if let Some(out) = run_program(
+            "fn fill(v: mut ref Vec[i64]) -> Result[(), AllocError] {\n\
+                 v.try_push(1_i64)?;\n\
+                 v.try_push(2_i64)?;\n\
+                 Ok(())\n\
+             }\n\
+             fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 match fill(v) {\n\
+                     Ok(_) => println(v.len()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n");
+        }
+    }
+
+    #[test]
     fn e2e_builtin_enum_eq_option_result() {
         // Built-in enum `==` is sound in codegen too (None/Ok unit + payload
         // words). Regression guard for the zero-init enum construction.
@@ -7741,14 +7788,16 @@ fn main() {
 
     #[test]
     fn test_try_companion_instance_codegen_rejected_cleanly() {
-        // Fallible-allocation `try_*` instance companions (phase-8-stdlib-floor
-        // item 2) are interpreter-only in v1; codegen lowering is item 8. The
-        // typechecker accepts them, so `karac build` must fail loud with the
-        // actionable item-8 message rather than mis-lower or silently miscompile.
+        // Fallible-allocation `try_*` companions whose codegen lowering has NOT
+        // landed yet (item 8 scoped the implemented set to `try_push` /
+        // `try_push_back`) are still interpreter-only; `karac build` must fail
+        // loud with the actionable item-8 message rather than mis-lower. Uses
+        // `try_clone` (a still-unimplemented companion) — `try_push` now
+        // compiles, so it would no longer be rejected.
         let mut parsed = karac::parse(
             "fn main() {\n\
-                 let mut v: Vec[i64] = Vec.new();\n\
-                 let _ = v.try_push(1_i64);\n\
+                 let v: Vec[i64] = [1_i64];\n\
+                 let _ = v.try_clone();\n\
              }",
         );
         assert!(
@@ -7760,14 +7809,14 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         assert!(
             typed.errors.is_empty(),
-            "try_push should typecheck: {:?}",
+            "try_clone should typecheck: {:?}",
             typed.errors
         );
         karac::lower(&mut parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("try_push codegen must fail loud (interpreter-only)");
+            .expect_err("try_clone codegen must fail loud (interpreter-only)");
         assert!(
-            err.contains("interpreter-only") && err.contains("item 8") && err.contains("try_push"),
+            err.contains("interpreter-only") && err.contains("item 8") && err.contains("try_clone"),
             "expected the actionable item-8 message, got: {err}"
         );
     }

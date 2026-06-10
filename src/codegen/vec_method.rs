@@ -247,7 +247,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 let buf = self
                     .builder
-                    .build_call(self.malloc_fn, &[new_len.into()], "ss.buf")
+                    .build_call(self.alloc_or_panic_fn, &[new_len.into()], "ss.buf")
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -386,7 +386,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 let new_data = self
                     .builder
-                    .build_call(self.malloc_fn, &[new_cap.into()], "spush.new_data")
+                    .build_call(self.alloc_or_panic_fn, &[new_cap.into()], "spush.new_data")
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -548,7 +548,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 let new_data = self
                     .builder
-                    .build_call(self.malloc_fn, &[alloc_bytes.into()], "new_data")
+                    .build_call(self.alloc_or_panic_fn, &[alloc_bytes.into()], "new_data")
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -593,6 +593,169 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(len_ptr, new_len).unwrap();
 
                 Ok(self.context.i64_type().const_int(0, false).into())
+            }
+            // `Vec.try_push(x)` / `VecDeque.try_push_back(x)` — fallible append
+            // (phase-8-stdlib-floor item 8). Identical to `push`/`push_back`
+            // except the grow allocation uses `karac_alloc_fallible`; a null
+            // result short-circuits to
+            // `Result.Err(AllocError.OutOfMemory{requested_bytes})` instead of
+            // aborting. On success the element is stored and `Result.Ok(())` is
+            // returned. The element type comes from the receiver binding, so —
+            // unlike `try_with_capacity` — there is no element-type-through-
+            // `Result` recovery problem.
+            "try_push" | "try_push_back" => {
+                if args.is_empty() {
+                    return Err("Vec.try_push requires an argument".to_string());
+                }
+                let elem_val = self.compile_expr(&args[0].value)?;
+                self.suppress_fstr_acc_if_moved_out(&args[0].value);
+                let elem_val = self.maybe_defensive_copy_param_arg(&args[0].value, elem_val);
+                self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "tpush.data.ptr")
+                    .unwrap();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "tpush.len.ptr")
+                    .unwrap();
+                let cap_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "tpush.cap.ptr")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "tpush.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "tpush.len")
+                    .unwrap()
+                    .into_int_value();
+                let cap = self
+                    .builder
+                    .build_load(i64_t, cap_ptr, "tpush.cap")
+                    .unwrap()
+                    .into_int_value();
+
+                let fn_val = self.current_fn.unwrap();
+                let grow_bb = self.context.append_basic_block(fn_val, "tpush.grow");
+                let grow_ok_bb = self.context.append_basic_block(fn_val, "tpush.grow.ok");
+                let oom_bb = self.context.append_basic_block(fn_val, "tpush.oom");
+                let store_bb = self.context.append_basic_block(fn_val, "tpush.store");
+                let merge_bb = self.context.append_basic_block(fn_val, "tpush.merge");
+
+                let needs_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, len, cap, "tpush.needs_grow")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(needs_grow, grow_bb, store_bb)
+                    .unwrap();
+
+                // Grow: new_cap = max(4, cap*2); bytes = new_cap * sizeof(elem);
+                // fallible alloc.
+                self.builder.position_at_end(grow_bb);
+                let two = i64_t.const_int(2, false);
+                let four = i64_t.const_int(4, false);
+                let doubled = self
+                    .builder
+                    .build_int_mul(cap, two, "tpush.doubled")
+                    .unwrap();
+                let cmp = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, four, "tpush.cmp")
+                    .unwrap();
+                let new_cap = self
+                    .builder
+                    .build_select(cmp, doubled, four, "tpush.new_cap")
+                    .unwrap()
+                    .into_int_value();
+                let elem_size = elem_ty.size_of().unwrap();
+                let alloc_bytes = self
+                    .builder
+                    .build_int_mul(new_cap, elem_size, "tpush.alloc_bytes")
+                    .unwrap();
+                let new_data = self
+                    .builder
+                    .build_call(
+                        self.alloc_fallible_fn,
+                        &[alloc_bytes.into()],
+                        "tpush.new_data",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                let is_null = self
+                    .builder
+                    .build_is_null(new_data, "tpush.is_null")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(is_null, oom_bb, grow_ok_bb)
+                    .unwrap();
+
+                // Grow succeeded: memcpy old → new, free old, update fields.
+                self.builder.position_at_end(grow_ok_bb);
+                let old_bytes = self
+                    .builder
+                    .build_int_mul(len, elem_size, "tpush.old_bytes")
+                    .unwrap();
+                self.builder
+                    .build_memcpy(new_data, 8, data, 8, old_bytes)
+                    .unwrap();
+                self.builder
+                    .build_call(self.free_fn, &[data.into()], "")
+                    .unwrap();
+                self.builder.build_store(data_ptr_ptr, new_data).unwrap();
+                self.builder.build_store(cap_ptr, new_cap).unwrap();
+                self.builder.build_unconditional_branch(store_bb).unwrap();
+
+                // OOM → Result.Err(AllocError.OutOfMemory{requested_bytes}).
+                self.builder.position_at_end(oom_bb);
+                let alloc_err = self.build_nonshared_enum_value(
+                    "AllocError",
+                    "OutOfMemory",
+                    &[alloc_bytes.into()],
+                )?;
+                let err_result = self.build_nonshared_enum_value("Result", "Err", &[alloc_err])?;
+                let oom_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Store element at data[len], len++, → Result.Ok(()).
+                self.builder.position_at_end(store_bb);
+                let cur_data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "tpush.cur_data")
+                    .unwrap()
+                    .into_pointer_value();
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, cur_data, &[len], "tpush.elem.ptr")
+                        .unwrap()
+                };
+                self.builder.build_store(elem_ptr, elem_val).unwrap();
+                let one = i64_t.const_int(1, false);
+                let new_len = self
+                    .builder
+                    .build_int_add(len, one, "tpush.new_len")
+                    .unwrap();
+                self.builder.build_store(len_ptr, new_len).unwrap();
+                let unit_val = i64_t.const_zero().into();
+                let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[unit_val])?;
+                let store_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Merge the two `Result` aggregates.
+                self.builder.position_at_end(merge_bb);
+                let phi = self
+                    .builder
+                    .build_phi(ok_result.get_type(), "tpush.result")
+                    .unwrap();
+                phi.add_incoming(&[(&ok_result, store_end), (&err_result, oom_end)]);
+                Ok(phi.as_basic_value())
             }
             // VecDeque codegen — `push_front` inserts at index 0,
             // shifting all existing elements right by 1. The
@@ -678,7 +841,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 let new_data = self
                     .builder
-                    .build_call(self.malloc_fn, &[alloc_bytes.into()], "new_data")
+                    .build_call(self.alloc_or_panic_fn, &[alloc_bytes.into()], "new_data")
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -1029,7 +1192,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 let new_data = self
                     .builder
-                    .build_call(self.malloc_fn, &[new_cap.into()], "new_data")
+                    .build_call(self.alloc_or_panic_fn, &[new_cap.into()], "new_data")
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -1306,7 +1469,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 let new_data = self
                     .builder
-                    .build_call(self.malloc_fn, &[new_alloc_bytes.into()], "efs.new_data")
+                    .build_call(
+                        self.alloc_or_panic_fn,
+                        &[new_alloc_bytes.into()],
+                        "efs.new_data",
+                    )
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
