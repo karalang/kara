@@ -304,6 +304,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         event_loop::karac_runtime_event_loop_start_background_thread,
         event_loop::karac_runtime_event_loop_take_wakeups,
         event_loop::karac_runtime_event_loop_shutdown_background_thread,
+        event_loop::karac_runtime_event_loop_register_timer,
+        event_loop::karac_runtime_event_loop_cancel_timer,
     );
     // Raw-fd registration + TCP + WS — additionally `unix`-gated: these
     // FFI fns are `#[cfg(unix)]` at their definitions (mio's `SourceFd`

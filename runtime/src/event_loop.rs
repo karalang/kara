@@ -37,7 +37,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::ffi::c_void;
 use std::io;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 // `AtomicU64` backs `HandshakeStats`, which is part of the TLS handshake
 // pool — gated behind the `tls` feature so the lean archive doesn't carry it.
 #[cfg(all(unix, feature = "tls"))]
@@ -1012,6 +1012,63 @@ pub extern "C" fn karac_runtime_event_loop_deregister_fd(raw_fd: i32, token: u64
     match ev.deregister(&mut source, RegistrationToken(local)) {
         Ok(()) => 0,
         Err(_) => -1,
+    }
+}
+
+/// Round-robin reactor shard for a *timer* registration. Unlike an fd
+/// (routed by `shard_of_fd`), a timer has no fd, so any shard delivers — every
+/// shard runs a poller that drives `run_once` and fires its own `timers` heap.
+/// Round-robin spreads timer load across shards rather than piling every sleep
+/// on one reactor.
+fn next_timer_shard() -> usize {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed) % shard_count()
+}
+
+/// Register a one-shot timer that fires `duration_nanos` from now, surfacing
+/// `parked` to the dispatcher (via `take_wakeups`) on expiry. The C ABI for
+/// the `suspends` async-sleep substrate (A2a-2).
+///
+/// No fd and no `epoll_ctl`: the registration lives in a reactor shard's timer
+/// min-heap (driving its poll-timeout cap + expiry, A2a-1) and in `by_token`
+/// (so the dispatcher claims it via the same `take_registration` as an fd
+/// wakeup — the resume path is identical). Returns a packed `shard|local`
+/// token (non-zero on success), or `0` if the shard count is somehow zero.
+/// Cancel before firing with [`karac_runtime_event_loop_cancel_timer`].
+/// `cancel` is the per-task cancel flag (null if unbound), stored like any
+/// other registration. `register_timer` itself wakes the shard reactor so a
+/// poller blocked in `run_once(None)` re-derives its timeout against the new
+/// deadline.
+#[no_mangle]
+pub extern "C" fn karac_runtime_event_loop_register_timer(
+    duration_nanos: u64,
+    parked: *mut c_void,
+    cancel: *const AtomicBool,
+) -> u64 {
+    let deadline = Instant::now() + Duration::from_nanos(duration_nanos);
+    let shard = next_timer_shard();
+    let ev = &event_loops()[shard];
+    let token = ev.register_timer(deadline, parked, cancel);
+    pack_token(shard, token.0)
+}
+
+/// Cancel a pending timer before it fires. Unpacks the `shard|local` token and
+/// claims the registration with `take_registration` (no fd / no `epoll_ctl`),
+/// dropping the parked pointer so the timer never surfaces; the stale heap
+/// entry is filtered lazily at the next expiry pop. Returns `0` if a live
+/// registration was claimed, `-1` if the timer had already fired or been
+/// cancelled (or the token's shard is out of range).
+#[no_mangle]
+pub extern "C" fn karac_runtime_event_loop_cancel_timer(token: u64) -> i32 {
+    let (shard, local) = unpack_token(token);
+    if shard >= shard_count() {
+        return -1;
+    }
+    let ev = &event_loops()[shard];
+    if ev.take_registration(RegistrationToken(local)).is_some() {
+        0
+    } else {
+        -1
     }
 }
 
@@ -5542,6 +5599,66 @@ mod tests {
         assert!(
             elapsed < Duration::from_millis(500),
             "should not wait much longer than 100ms, waited {elapsed:?}"
+        );
+    }
+
+    /// A2a-2: a timer registered through the C ABI fires through the real
+    /// background poller and surfaces via `take_wakeups`, carrying its packed
+    /// token + parked pointer, no earlier than the deadline. Exercises the full
+    /// production path register_timer → poller `run_once` expiry → queue →
+    /// take_wakeups (vs the A2a-1 unit tests that drive `run_once` directly).
+    #[test]
+    fn background_thread_delivers_timer_wakeup() {
+        let _guard = start_background_poller_for_test();
+        let marker: u64 = 0x713E_5117_713E_5117;
+        let parked = std::ptr::addr_of!(marker) as *mut c_void;
+
+        let start = Instant::now();
+        let token = karac_runtime_event_loop_register_timer(40_000_000, parked, std::ptr::null());
+        assert_ne!(token, 0, "register_timer returns a non-zero packed token");
+
+        let mut buf: [KaracWakeup; 4] = unsafe { std::mem::zeroed() };
+        let n = unsafe {
+            karac_runtime_event_loop_take_wakeups(buf.as_mut_ptr(), buf.len(), 2_000_000_000)
+        };
+        let elapsed = start.elapsed();
+        assert!(n >= 1, "expected the timer wakeup via the poller, got {n}");
+        assert_eq!(buf[0].token, token, "wakeup carries the timer's token");
+        assert_eq!(buf[0].parked, parked, "wakeup carries the parked pointer");
+        assert!(
+            elapsed >= Duration::from_millis(30),
+            "timer fired early ({elapsed:?} < ~40ms)"
+        );
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "timer fired late: {elapsed:?}"
+        );
+    }
+
+    /// A cancelled timer never surfaces a wakeup, and a second cancel no-ops.
+    #[test]
+    fn cancel_timer_prevents_wakeup() {
+        let _guard = start_background_poller_for_test();
+        let marker: u64 = 0xCA11_CA11_CA11_CA11;
+        let parked = std::ptr::addr_of!(marker) as *mut c_void;
+
+        let token = karac_runtime_event_loop_register_timer(60_000_000, parked, std::ptr::null());
+        assert_ne!(token, 0);
+        assert_eq!(
+            karac_runtime_event_loop_cancel_timer(token),
+            0,
+            "cancel claims the live timer"
+        );
+
+        let mut buf: [KaracWakeup; 4] = unsafe { std::mem::zeroed() };
+        let n = unsafe {
+            karac_runtime_event_loop_take_wakeups(buf.as_mut_ptr(), buf.len(), 200_000_000)
+        };
+        assert_eq!(n, 0, "a cancelled timer must never surface a wakeup");
+        assert_eq!(
+            karac_runtime_event_loop_cancel_timer(token),
+            -1,
+            "second cancel of an already-claimed timer is a no-op"
         );
     }
 
