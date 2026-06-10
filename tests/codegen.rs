@@ -2031,6 +2031,31 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_borrow_return_method_on_heap_result() {
+        // B-2026-06-10-5: direct-use of a borrow-returning call as a method
+        // receiver, on a HEAP (cap>0) source. `name_of(s).len()` after
+        // `push_str` previously crashed: the value-receiver `len` path
+        // materialized the loaded borrow as a "fresh owned temp" and queued a
+        // free of `s`'s buffer. Asserts the value AND post-use of `s` (a
+        // duplicate free would corrupt the second read or crash). The
+        // `test_e2e_borrow_return_direct_use` test covers the cap-0
+        // `String.from` case that masked this.
+        let out = run_program(
+            "fn name_of(u: ref String) -> ref String { u }\n\
+             fn main() {\n\
+             \x20   let mut s: String = \"\";\n\
+             \x20   s.push_str(\"hello\");\n\
+             \x20   println(name_of(s).len());\n\
+             \x20   println(name_of(s).is_empty());\n\
+             \x20   println(s);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5\nfalse\nhello");
+        }
+    }
+
+    #[test]
     fn test_e2e_borrow_return_call_into_ref_arg() {
         // B-2026-06-10-4: a borrow-returning call forwarded straight into a
         // `ref` parameter (`first(pick(v))`). The call result IS the borrow

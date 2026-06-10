@@ -3289,7 +3289,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let BasicValueEnum::StructValue(sv) = val else {
             return Ok(());
         };
-        let fresh = Self::expr_yields_fresh_owned_temp(value);
+        let fresh = self.expr_yields_fresh_owned_temp(value);
 
         for (idx, fname) in field_names.iter().enumerate() {
             let Some(field_te) = field_tes.get(idx).cloned() else {
@@ -3894,19 +3894,31 @@ impl<'ctx> super::Codegen<'ctx> {
     /// *owned* `Vec[T]` / `String` / `Map`/`Set` handle / shared-struct RC box
     /// transfers fresh storage to the caller (callee move-out);
     /// `materialize_owned_temp` then classifies the kind (Vec/String by LLVM
-    /// type, Map/RC via the `owned_temp_drops` hint table) and a
-    /// `ref`-returning callee yields a `ptr` value with no hint entry, so
-    /// borrows are excluded automatically. *Place* expressions (`Identifier`
-    /// / field / index) are deliberately excluded: their value reloads an
-    /// existing binding's storage, which a second free/dec would double-free.
-    /// Conservative by design — when unsure, leak (safe) rather than
-    /// double-free (UB). Discarded literals / operator results (`[1, 2, 3];`,
-    /// `"a" + "b";`) are rare and left to a later slice.
-    pub(super) fn expr_yields_fresh_owned_temp(expr: &Expr) -> bool {
+    /// type, Map/RC via the `owned_temp_drops` hint table). *Place* expressions
+    /// (`Identifier` / field / index) are deliberately excluded: their value
+    /// reloads an existing binding's storage, which a second free/dec would
+    /// double-free. Conservative by design — when unsure, leak (safe) rather
+    /// than double-free (UB). Discarded literals / operator results
+    /// (`[1, 2, 3];`, `"a" + "b";`) are rare and left to a later slice.
+    ///
+    /// **Borrow-returning free-fn calls are excluded** (`name_of(s)` where
+    /// `name_of(_) -> ref T`): their result aliases the borrow source, not a
+    /// fresh allocation, so freeing it double-frees the source. The original
+    /// design relied on a borrow callee yielding a bare `ptr` value (no
+    /// `owned_temp_drops` entry → auto-excluded), but a *direct-use* consumer
+    /// (`name_of(s).len()`, `match name_of(s) { … }`) first routes the call
+    /// through `compile_call`'s value-position relaxation, which LOADS the
+    /// pointee into a `{ptr,len,cap}` struct — defeating the ptr-shape
+    /// auto-exclusion and re-classifying it as an owned String/Vec
+    /// (B-2026-06-10-5). So we exclude it explicitly here. (Borrow-returning
+    /// *method* receivers used directly — `u.name().len()` — are rejected
+    /// upstream by the `user_ref_method_names` gate in `compile_method_call`,
+    /// so the free-fn check suffices.)
+    pub(super) fn expr_yields_fresh_owned_temp(&self, expr: &Expr) -> bool {
         matches!(
             &expr.kind,
             ExprKind::Call { .. } | ExprKind::MethodCall { .. }
-        )
+        ) && !self.is_borrow_returning_call_expr(expr)
     }
 
     /// General owned-temp tracking, slice 5 (see

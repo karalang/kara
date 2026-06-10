@@ -1542,7 +1542,7 @@ impl<'ctx> super::Codegen<'ctx> {
         pattern: &Pattern,
         val: BasicValueEnum<'ctx>,
     ) -> Option<(PointerValue<'ctx>, String)> {
-        if !Self::expr_yields_fresh_owned_temp(scrutinee) {
+        if !self.expr_yields_fresh_owned_temp(scrutinee) {
             return None;
         }
         let BasicValueEnum::StructValue(sv) = val else {
@@ -1605,7 +1605,7 @@ impl<'ctx> super::Codegen<'ctx> {
         patterns: &[&Pattern],
         val: BasicValueEnum<'ctx>,
     ) {
-        if !Self::expr_yields_fresh_owned_temp(scrutinee) {
+        if !self.expr_yields_fresh_owned_temp(scrutinee) {
             return;
         }
         let BasicValueEnum::StructValue(sv) = val else {
@@ -1672,7 +1672,7 @@ impl<'ctx> super::Codegen<'ctx> {
         pattern: &Pattern,
         val: BasicValueEnum<'ctx>,
     ) {
-        if !Self::expr_yields_fresh_owned_temp(scrutinee) {
+        if !self.expr_yields_fresh_owned_temp(scrutinee) {
             return;
         }
         let BasicValueEnum::StructValue(sv) = val else {

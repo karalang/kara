@@ -1751,7 +1751,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // double-free; `expr_yields_fresh_owned_temp` excludes
                     // those (and the `cap > 0` guard in `FreeVecBuffer` keeps
                     // a non-owning / borrowed value safe regardless).
-                    if Self::expr_yields_fresh_owned_temp(object) {
+                    if self.expr_yields_fresh_owned_temp(object) {
                         self.materialize_owned_temp(
                             recv_val,
                             (object.span.offset, object.span.length),

@@ -1036,6 +1036,55 @@ mod runtime_confirmation {
         );
     }
 
+    // B-2026-06-10-5: the HEAP-source variant of the above. `String.from(..)`
+    // alone yields `cap == 0` (static-backed), so a spurious free on the
+    // direct-use borrow temp is a no-op and the cap-0 version above stayed
+    // green even while this crashed. Growing `s` via `push_str` forces
+    // `cap > 0`, exposing the double-free: `name_of(s).len()` routed the
+    // borrow through the value-receiver `len` path, which materialized the
+    // loaded `{ptr,len,cap}` as a "fresh owned temp" (any Call qualified) and
+    // queued a `FreeVecBuffer` against `s`'s buffer. The fix excludes
+    // borrow-returning calls from `expr_yields_fresh_owned_temp`. Post-use of
+    // `s` confirms its buffer is freed exactly once (by its own binding).
+    #[test]
+    fn asan_direct_use_method_on_heap_result() {
+        assert_accepted_program_is_asan_clean(
+            "fn name_of(u: ref String) -> ref String { u }\n\
+             fn main() {\n\
+                 let mut s: String = \"\";\n\
+                 s.push_str(\"hello\");\n\
+                 println(name_of(s).len());\n\
+                 println(s);\n\
+             }",
+            "asan_direct_use_method_on_heap_result",
+        );
+    }
+
+    // B-2026-06-10-5 sibling (same root cause, different consuming position):
+    // a borrow-returning call as a `match` SCRUTINEE with a heap-payload enum.
+    // The fresh-temp-enum-scrutinee drop path also keyed on
+    // `expr_yields_fresh_owned_temp` (any Call), so `match pick(e) { … }` —
+    // `pick(_) -> ref E` — would materialize + free the loaded enum's `String`
+    // payload that `e` still owns. The fix lives in the shared helper, so this
+    // is covered too. (`E.A`'s payload is heap via push_str → cap>0.)
+    #[test]
+    fn asan_direct_use_match_scrutinee_on_heap_enum() {
+        assert_accepted_program_is_asan_clean(
+            "enum E { A(String), B }\n\
+             fn pick(e: ref E) -> ref E { e }\n\
+             fn main() {\n\
+                 let mut s: String = \"\";\n\
+                 s.push_str(\"payload\");\n\
+                 let e: E = E.A(s);\n\
+                 match pick(e) {\n\
+                     A(_) => println(\"is-a\"),\n\
+                     _ => println(\"is-b\"),\n\
+                 }\n\
+             }",
+            "asan_direct_use_match_scrutinee_on_heap_enum",
+        );
+    }
+
     // Vec borrow forwarded straight into another `ref Vec` parameter — the
     // strictest double-free path (heap buffer, `cap > 0`). If the
     // materialization at the ref-arg site freed the forwarded copy, the
