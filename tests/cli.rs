@@ -12130,6 +12130,77 @@ fn wasm_build_strips_debug_info_by_default() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Two concurrent `karac build` invocations with the SAME source stem must
+/// not clobber each other's scratch intermediates. Before the PID-scoped
+/// scratch-path fix, `cmd_build` keyed them on the stem alone
+/// (`/tmp/karac_<stem>.{o,core.wasm}`), so parallel builds raced — flaky
+/// parallel `cargo test` wasm runs, and broken `make -j`. With the fix this
+/// passes deterministically (distinct PIDs ⇒ distinct scratch paths); a
+/// regression makes it fail probabilistically. Same-stem sources in separate
+/// dirs, built simultaneously on two threads.
+#[test]
+fn concurrent_same_stem_wasm_builds_do_not_collide() {
+    let prep = |tag: &str| {
+        let dir = wasm_test_dir(tag);
+        let src = dir.join("collide.kara"); // identical stem in both dirs
+        std::fs::write(&src, "fn main() { println(\"x\"); }\n").unwrap();
+        (dir, src)
+    };
+    let (d1, s1) = prep("collide-a");
+    let (d2, s2) = prep("collide-b");
+
+    // Probe build first so a missing archive / wasm-tools / linker skips
+    // cleanly rather than failing as a "collision".
+    let probe = karac_bin()
+        .args(["build", s1.to_str().unwrap(), "--target=wasm_wasi"])
+        .current_dir(&d1)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    if let Some(reason) = wasm_build_skip_reason(&String::from_utf8_lossy(&probe.stderr)) {
+        eprintln!("skip: concurrent_same_stem_wasm_builds_do_not_collide — {reason}");
+        let _ = std::fs::remove_dir_all(&d1);
+        let _ = std::fs::remove_dir_all(&d2);
+        return;
+    }
+
+    let build = |src: std::path::PathBuf, dir: std::path::PathBuf| {
+        std::thread::spawn(move || {
+            karac_bin()
+                .args(["build", src.to_str().unwrap(), "--target=wasm_wasi"])
+                .current_dir(&dir)
+                .env_remove("KARAC_RUNTIME")
+                .output()
+                .unwrap()
+        })
+    };
+    let h1 = build(s1, d1.clone());
+    let h2 = build(s2, d2.clone());
+    let o1 = h1.join().unwrap();
+    let o2 = h2.join().unwrap();
+
+    assert!(
+        o1.status.success(),
+        "concurrent build 1 failed: {}",
+        String::from_utf8_lossy(&o1.stderr)
+    );
+    assert!(
+        o2.status.success(),
+        "concurrent build 2 failed: {}",
+        String::from_utf8_lossy(&o2.stderr)
+    );
+    assert!(
+        d1.join("collide.wasm").exists(),
+        "build 1 produced no .wasm"
+    );
+    assert!(
+        d2.join("collide.wasm").exists(),
+        "build 2 produced no .wasm"
+    );
+    let _ = std::fs::remove_dir_all(&d1);
+    let _ = std::fs::remove_dir_all(&d2);
+}
+
 /// The `Vector[T, N]` program the WASM SIMD-128 tests share (phase-10
 /// "WASM SIMD-128 lowering"). The `a` lane inputs flow from function
 /// params so the ops survive at `KARAC_OPT_LEVEL=0` (constant inputs

@@ -5301,7 +5301,17 @@ fn cmd_build(
 
         // Output executable name — the stem derived before the
         // component-bindings setup above.
-        let obj_path = format!("/tmp/karac_{exe_name}.o");
+        // Scratch object path: `temp_dir()` + PID + stem, mirroring the
+        // project-mode build (`cmd_build_project`). Keying on the stem alone
+        // (`/tmp/karac_<stem>.o`) let two concurrent `karac build` invocations
+        // with the same stem clobber each other's intermediate — a real race
+        // for parallel build systems (`make -j`) and the cause of flaky
+        // parallel `cargo test` wasm runs. PID disambiguates concurrent
+        // processes (each invocation is its own process).
+        let obj_path = std::env::temp_dir()
+            .join(format!("karac_{}_{exe_name}.o", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         let exe_path = if is_wasm {
             // WASI command module — the artifact is loaded by a wasm
             // host, never exec'd directly, so it always carries the
@@ -5341,7 +5351,10 @@ fn cmd_build(
         // intermediate — link the C-ABI core module to a scratch path,
         // then lift it into the single component at `exe_path` below.
         let link_out = if wasm_tools.is_some() {
-            format!("/tmp/karac_{exe_name}.core.wasm")
+            std::env::temp_dir()
+                .join(format!("karac_{}_{exe_name}.core.wasm", std::process::id()))
+                .to_string_lossy()
+                .into_owned()
         } else {
             exe_path.clone()
         };
@@ -5404,6 +5417,8 @@ fn cmd_build(
                 // fallback module on disk first.
                 let threads_glue_cfg = if wasm_threads {
                     let threads_filename = format!("{exe_name}.threads.wasm");
+                    let threads_obj = std::env::temp_dir()
+                        .join(format!("karac_{}_{exe_name}.threads.o", std::process::id()));
                     let cfg = emit_wasm_threads_artifact(
                         &pipeline.parsed.program,
                         pipeline.ownership.as_ref(),
@@ -5411,7 +5426,7 @@ fn cmd_build(
                         Some(filename),
                         Some(&source),
                         release,
-                        &format!("/tmp/karac_{exe_name}.threads.o"),
+                        &threads_obj.to_string_lossy(),
                         std::path::Path::new(&threads_filename),
                         &threads_filename,
                         manifest_wasm_knobs_for(filename, output),
