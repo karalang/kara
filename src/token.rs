@@ -34,7 +34,18 @@ pub enum FloatSuffix {
 #[derive(Debug, PartialEq, Clone)]
 pub enum InterpolationPart {
     Text(String),
-    Expr(String), // The raw string of the expression, parsing it is deferred to the parser
+    /// A `{...}` interpolation hole. `raw` is the verbatim expression source
+    /// (parsing is deferred to the parser); `offset` is the absolute byte
+    /// offset in the original source of `raw`'s first byte. The parser uses
+    /// `offset` to rebase the re-parsed sub-expression's spans to absolute
+    /// source coordinates — without it, every interpolation expr would carry
+    /// spans relative to the synthetic `fn __interp__() { … }` re-parse
+    /// wrapper, colliding across distinct f-strings in the `(offset, length)`
+    /// SpanKey that codegen/typecheck side-tables key on (B-2026-06-09-1).
+    Expr {
+        raw: String,
+        offset: usize,
+    },
 }
 
 /// A token with its source location.

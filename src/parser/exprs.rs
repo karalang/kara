@@ -545,7 +545,19 @@ impl super::Parser {
                         crate::token::InterpolationPart::Text(t) => {
                             parsed_parts.push(crate::ast::ParsedInterpolationPart::Text(t));
                         }
-                        crate::token::InterpolationPart::Expr(raw) => {
+                        crate::token::InterpolationPart::Expr { raw, offset } => {
+                            // Re-parse the interpolation hole as a standalone
+                            // expression by wrapping it in a synthetic fn. The
+                            // prefix `fn __interp__() { ` is exactly 18 bytes,
+                            // so `raw` begins at wrapper offset 18; the lexer
+                            // recorded `offset` as `raw`'s absolute source
+                            // offset. Rebasing each sub-span by the difference
+                            // restores absolute coordinates so the
+                            // `(offset, length)` SpanKey is unique across
+                            // f-strings (B-2026-06-09-1) — without this, two
+                            // holes at the same syntactic position alias in
+                            // every codegen/typecheck span-keyed side-table.
+                            const WRAPPER_PREFIX_LEN: usize = "fn __interp__() { ".len();
                             let wrapper = format!("fn __interp__() {{ {}; }}", raw);
                             let result = crate::parse(&wrapper);
                             let expr = result.program.items.into_iter().find_map(|item| {
@@ -561,7 +573,9 @@ impl super::Parser {
                                     None
                                 }
                             });
-                            if let Some(e) = expr {
+                            if let Some(mut e) = expr {
+                                let delta = offset as isize - WRAPPER_PREFIX_LEN as isize;
+                                crate::span_visitor::shift_expr_offsets(&mut e, delta);
                                 parsed_parts
                                     .push(crate::ast::ParsedInterpolationPart::Expr(Box::new(e)));
                             } else {

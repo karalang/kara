@@ -1055,6 +1055,12 @@ impl<'a> Lexer<'a> {
                     current_text.clear();
                 }
                 self.advance(); // consume '{'
+                                // Absolute byte offset of the expression's first byte in the
+                                // original source — `expr_text` is a verbatim copy from here to
+                                // the matching `}`, so byte i of `raw` maps to source offset
+                                // `expr_start + i`. The parser uses this to rebase re-parse
+                                // spans to absolute coordinates (B-2026-06-09-1).
+                let expr_start = self.current;
                 let mut expr_text = String::new();
                 let mut brace_depth = 1;
                 while brace_depth > 0 && !self.is_at_end() {
@@ -1074,7 +1080,10 @@ impl<'a> Lexer<'a> {
                     }
                     expr_text.push(self.consume_codepoint());
                 }
-                parts.push(InterpolationPart::Expr(expr_text));
+                parts.push(InterpolationPart::Expr {
+                    raw: expr_text,
+                    offset: expr_start,
+                });
             } else if self.peek() == b'\\' {
                 self.advance(); // consume backslash
                 match self.peek() {

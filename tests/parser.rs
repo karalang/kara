@@ -10999,3 +10999,95 @@ fn test_range_pattern_bound_not_simple_rejected() {
         "expected E_RANGE_PATTERN_BOUND_NOT_SIMPLE, got: {errs:?}"
     );
 }
+
+// ── f-string interpolation span absoluteness (B-2026-06-09-1) ───────
+//
+// Interpolation holes are re-parsed inside a synthetic
+// `fn __interp__() { … }` wrapper. The fix shifts every resulting span
+// to absolute source coordinates so the `(offset, length)` SpanKey that
+// codegen/typecheck side-tables key on is unique per hole. Before the
+// fix, every hole at the same syntactic position carried a
+// wrapper-relative span (e.g. the left operand of `f"{a == b}"` was
+// always `(offset=18, length=1)`), so distinct holes of different types
+// aliased — silently mis-routing codegen (reading an int as a pointer).
+
+/// Walk a program's items and collect, in source order, the inner
+/// expression of every interpolation hole.
+fn collect_interp_hole_exprs(prog: &Program) -> Vec<&Expr> {
+    fn from_expr<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+        if let ExprKind::InterpolatedStringLit(parts) = &e.kind {
+            for p in parts {
+                if let ParsedInterpolationPart::Expr(inner) = p {
+                    out.push(inner);
+                    from_expr(inner, out);
+                }
+            }
+        }
+        // Only the surface needed by these tests: let-values and final
+        // exprs inside fn bodies host the f-strings under test.
+    }
+    let mut out = Vec::new();
+    for item in &prog.items {
+        if let Item::Function(f) = item {
+            for s in &f.body.stmts {
+                if let StmtKind::Let { value, .. } = &s.kind {
+                    from_expr(value, &mut out);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The span an interpolation hole's sub-expression carries must index
+/// back into the ORIGINAL source — `&source[span]` must equal the
+/// operand text. This is the property that fails under the old
+/// wrapper-relative spans (the slice would point 18 bytes into a
+/// nonexistent `fn __interp__()` prefix).
+#[test]
+fn test_fstring_interp_spans_are_absolute() {
+    let source = "fn main() { let s = f\"{alpha == beta}\"; }";
+    let prog = parse(source).program;
+    let holes = collect_interp_hole_exprs(&prog);
+    assert_eq!(holes.len(), 1, "expected exactly one interpolation hole");
+    let ExprKind::Binary { left, right, .. } = &holes[0].kind else {
+        panic!(
+            "expected a Binary expr in the hole, got {:?}",
+            holes[0].kind
+        );
+    };
+    let slice = |span: &karac::token::Span| &source[span.offset..span.offset + span.length];
+    assert_eq!(slice(&left.span), "alpha");
+    assert_eq!(slice(&right.span), "beta");
+}
+
+/// The collision case: two holes at the same syntactic position in
+/// different f-strings must get DISTINCT SpanKeys. Under the bug both
+/// left operands were `(offset=18, length=1)` and the second's codegen
+/// type overwrote the first's in every span-keyed table.
+#[test]
+fn test_fstring_interp_spans_distinct_across_strings() {
+    let source = "fn main() {\n  let a = f\"{x == y}\";\n  let b = f\"{p == q}\";\n}";
+    let prog = parse(source).program;
+    let holes = collect_interp_hole_exprs(&prog);
+    assert_eq!(holes.len(), 2, "expected two interpolation holes");
+
+    let left_span = |h: &Expr| {
+        let ExprKind::Binary { left, .. } = &h.kind else {
+            panic!("expected Binary, got {:?}", h.kind);
+        };
+        left.span.clone()
+    };
+    let first = left_span(holes[0]);
+    let second = left_span(holes[1]);
+
+    // Distinct absolute offsets — the property the SpanKey relies on.
+    assert_ne!(
+        (first.offset, first.length),
+        (second.offset, second.length),
+        "interpolation holes in different f-strings must not share a SpanKey"
+    );
+    // And each resolves to the right operand in the original source.
+    assert_eq!(&source[first.offset..first.offset + first.length], "x");
+    assert_eq!(&source[second.offset..second.offset + second.length], "p");
+}

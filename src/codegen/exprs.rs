@@ -389,15 +389,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             .or_else(|| self.enum_name_of_expr(right))
                         {
                             // Resolve the operands' instantiation, but only
-                            // trust one whose outer name matches `en` — a
-                            // span-fallback lookup can return a *different*
-                            // enum's type when spans collide across f-string
-                            // interpolations, and routing that to `compile_enum_eq`
-                            // would rebuild the payload at the wrong type. The
-                            // name guard plus the name-keyed `enum_inst_var_types`
-                            // (preferred for identifier operands) keep the heap
-                            // route sound; an unresolved/foreign inst simply
-                            // degrades to the word-wise path.
+                            // trust one whose outer name matches `en` — cheap
+                            // defense-in-depth so a stale/foreign span-table
+                            // entry can never route a different enum's type to
+                            // `compile_enum_eq` (which would rebuild the payload
+                            // at the wrong type). f-string interpolation spans
+                            // are now absolute (B-2026-06-09-1), so the former
+                            // cross-f-string collision no longer occurs; the
+                            // name-keyed `enum_inst_var_types` remains the
+                            // primary resolver for identifier operands. An
+                            // unresolved/foreign inst degrades to the word-wise
+                            // path.
                             let inst = self
                                 .enum_inst_type_of_expr(left)
                                 .or_else(|| self.enum_inst_type_of_expr(right))

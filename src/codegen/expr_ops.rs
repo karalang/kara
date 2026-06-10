@@ -2965,11 +2965,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// *generic* `Named` instantiation — `Option[String]`, `Result[i64,
     /// AllocError]`, generic user enums). For an **identifier** operand the
     /// answer comes from the name-keyed `enum_inst_var_types` (populated at
-    /// binding sites) — this is collision-free, the path that matters inside
-    /// f-string interpolations where the span-keyed table is unreliable. Other
-    /// operand forms (constructor calls, struct literals) fall back to the
-    /// span-keyed `enum_inst_type_exprs`; `None` when neither knows it (the
-    /// caller then keeps the bare-name `enum_has_heap_payload` routing).
+    /// binding sites): the lowering pass seeds `enum_inst_type_exprs` for
+    /// constructor / struct-literal forms, not bare-identifier use sites, so
+    /// the name table is the identifier's primary resolver. Other operand
+    /// forms fall back to the span-keyed `enum_inst_type_exprs`; `None` when
+    /// neither knows it (the caller then keeps the bare-name
+    /// `enum_has_heap_payload` routing). Both keys are now absolute even
+    /// inside f-string interpolations (B-2026-06-09-1 fixed the wrapper-
+    /// relative span collision at the parser).
     pub(super) fn enum_inst_type_of_expr(&self, expr: &Expr) -> Option<TypeExpr> {
         if let ExprKind::Identifier(name) = &expr.kind {
             if let Some(t) = self.enum_inst_var_types.get(name) {
@@ -2980,9 +2983,8 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Span-keyed instantiation lookup (the lowering pass's
-    /// `enum_inst_type_exprs`). Reliable only for **absolute** spans — the
-    /// binding sites that seed `enum_inst_var_types`, and use sites outside
-    /// f-string interpolations. See `enum_inst_type_of_expr`.
+    /// `enum_inst_type_exprs`), keyed on the now-absolute `(offset, length)`.
+    /// See `enum_inst_type_of_expr`.
     pub(super) fn enum_inst_type_from_span(&self, expr: &Expr) -> Option<TypeExpr> {
         self.enum_inst_type_exprs
             .get(&(expr.span.offset, expr.span.length))

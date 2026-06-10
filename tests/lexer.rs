@@ -649,7 +649,12 @@ fn test_interpolated_string_basic() {
     if let Token::InterpolatedStringLiteral(parts) = &tokens[0] {
         assert_eq!(parts.len(), 2);
         assert!(matches!(&parts[0], InterpolationPart::Text(s) if s == "hello "));
-        assert!(matches!(&parts[1], InterpolationPart::Expr(s) if s == "name"));
+        // `f"hello {name}"` — `f"hello {` is 9 bytes, so `name`'s first byte is
+        // at source offset 9. The parser relies on this absolute offset to
+        // rebase the re-parsed expr's spans (B-2026-06-09-1).
+        assert!(
+            matches!(&parts[1], InterpolationPart::Expr { raw, offset } if raw == "name" && *offset == 9)
+        );
     }
 }
 
@@ -658,9 +663,14 @@ fn test_interpolated_string_multiple_exprs() {
     let tokens = tokens_only(r#"f"{a} and {b}""#);
     if let Token::InterpolatedStringLiteral(parts) = &tokens[0] {
         assert_eq!(parts.len(), 3);
-        assert!(matches!(&parts[0], InterpolationPart::Expr(s) if s == "a"));
+        // `f"{a} and {b}"`: `a` at source offset 3, `b` at offset 11.
+        assert!(
+            matches!(&parts[0], InterpolationPart::Expr { raw, offset } if raw == "a" && *offset == 3)
+        );
         assert!(matches!(&parts[1], InterpolationPart::Text(s) if s == " and "));
-        assert!(matches!(&parts[2], InterpolationPart::Expr(s) if s == "b"));
+        assert!(
+            matches!(&parts[2], InterpolationPart::Expr { raw, offset } if raw == "b" && *offset == 11)
+        );
     }
 }
 
@@ -1533,7 +1543,11 @@ fn test_interpolated_string_preserves_non_ascii() {
     };
     assert_eq!(parts.len(), 3);
     assert!(matches!(&parts[0], InterpolationPart::Text(s) if s == "hi "));
-    assert!(matches!(&parts[1], InterpolationPart::Expr(s) if s == "名前"));
+    // `名前` begins at byte offset 6 (`f"hi {` is 6 ASCII bytes), confirming the
+    // recorded offset is a byte index, not a char count.
+    assert!(
+        matches!(&parts[1], InterpolationPart::Expr { raw, offset } if raw == "名前" && *offset == 6)
+    );
     assert!(matches!(&parts[2], InterpolationPart::Text(s) if s == " 日本語"));
 }
 

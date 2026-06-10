@@ -561,6 +561,363 @@ fn visit_field_pattern(fp: &FieldPattern, visit: &mut impl FnMut(&Span)) {
     }
 }
 
+// ── Mutable span shift (f-string interpolation rebase) ─────────
+//
+// `shift_expr_offsets` rebases every `Span.offset` reachable from an
+// expression by a constant `delta`. The parser uses it after re-parsing
+// an f-string interpolation hole inside the synthetic
+// `fn __interp__() { … }` wrapper: the re-parse produces spans relative
+// to that wrapper string, so distinct interpolation exprs at the same
+// syntactic position alias in the `(offset, length)` SpanKey that every
+// codegen/typecheck side-table keys on (B-2026-06-09-1). Shifting by
+// `delta = source_offset_of_hole - wrapper_prefix_len` makes them
+// absolute, eliminating the collision. Only `offset` is touched —
+// SpanKey ignores line/column, so they stay wrapper-relative (a
+// pre-existing, harmless residual for diagnostics that point into a
+// hole).
+//
+// This mirrors the immutable `visit_*` walkers above over the
+// expression-reachable surface; keep the two in lockstep when the AST
+// grows a node — a missed arm leaves a stale span, which is exactly the
+// collision class this fixes.
+pub fn shift_expr_offsets(e: &mut Expr, delta: isize) {
+    if delta == 0 {
+        return;
+    }
+    visit_expr_spans_mut(e, &mut |s| {
+        s.offset = (s.offset as isize + delta) as usize;
+    });
+}
+
+fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut e.span);
+    match &mut e.kind {
+        ExprKind::Integer(_, _)
+        | ExprKind::Float(_, _)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::MultiStringLit(_)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::Bool(_)
+        | ExprKind::Identifier(_)
+        | ExprKind::Path { .. }
+        | ExprKind::SelfValue
+        | ExprKind::SelfType
+        | ExprKind::PipePlaceholder
+        | ExprKind::Continue { .. }
+        | ExprKind::Error => {}
+        ExprKind::InterpolatedStringLit(parts) => {
+            for p in parts {
+                if let ParsedInterpolationPart::Expr(inner) = p {
+                    visit_expr_spans_mut(inner, visit);
+                }
+            }
+        }
+        ExprKind::Binary { left, right, .. } => {
+            visit_expr_spans_mut(left, visit);
+            visit_expr_spans_mut(right, visit);
+        }
+        ExprKind::Unary { operand, .. } => visit_expr_spans_mut(operand, visit),
+        ExprKind::Question(inner) => visit_expr_spans_mut(inner, visit),
+        ExprKind::OptionalChain { object, args, .. } => {
+            visit_expr_spans_mut(object, visit);
+            if let Some(a) = args {
+                for arg in a {
+                    visit_call_arg_spans_mut(arg, visit);
+                }
+            }
+        }
+        ExprKind::NilCoalesce { left, right } => {
+            visit_expr_spans_mut(left, visit);
+            visit_expr_spans_mut(right, visit);
+        }
+        ExprKind::Call { callee, args } => {
+            visit_expr_spans_mut(callee, visit);
+            for a in args {
+                visit_call_arg_spans_mut(a, visit);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            visit_expr_spans_mut(object, visit);
+            for a in args {
+                visit_call_arg_spans_mut(a, visit);
+            }
+        }
+        ExprKind::FieldAccess { object, .. } => visit_expr_spans_mut(object, visit),
+        ExprKind::TupleIndex { object, .. } => visit_expr_spans_mut(object, visit),
+        ExprKind::Index { object, index } => {
+            visit_expr_spans_mut(object, visit);
+            visit_expr_spans_mut(index, visit);
+        }
+        ExprKind::Block(b) => visit_block_spans_mut(b, visit),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            visit_expr_spans_mut(condition, visit);
+            visit_block_spans_mut(then_block, visit);
+            if let Some(e) = else_branch {
+                visit_expr_spans_mut(e, visit);
+            }
+        }
+        ExprKind::IfLet {
+            pattern,
+            value,
+            then_block,
+            else_branch,
+        } => {
+            visit_pattern_spans_mut(pattern, visit);
+            visit_expr_spans_mut(value, visit);
+            visit_block_spans_mut(then_block, visit);
+            if let Some(e) = else_branch {
+                visit_expr_spans_mut(e, visit);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            visit_expr_spans_mut(scrutinee, visit);
+            for arm in arms {
+                visit_match_arm_spans_mut(arm, visit);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            visit_expr_spans_mut(condition, visit);
+            visit_block_spans_mut(body, visit);
+        }
+        ExprKind::WhileLet {
+            pattern,
+            value,
+            body,
+            ..
+        } => {
+            visit_pattern_spans_mut(pattern, visit);
+            visit_expr_spans_mut(value, visit);
+            visit_block_spans_mut(body, visit);
+        }
+        ExprKind::For {
+            pattern,
+            iterable,
+            body,
+            ..
+        } => {
+            visit_pattern_spans_mut(pattern, visit);
+            visit_expr_spans_mut(iterable, visit);
+            visit_block_spans_mut(body, visit);
+        }
+        ExprKind::Loop { body, .. } => visit_block_spans_mut(body, visit),
+        ExprKind::LabeledBlock {
+            label_span, body, ..
+        } => {
+            visit(label_span);
+            visit_block_spans_mut(body, visit);
+        }
+        ExprKind::Closure {
+            params,
+            prefix_span,
+            body,
+            ..
+        } => {
+            if let Some(ps) = prefix_span {
+                visit(ps);
+            }
+            for cp in params {
+                visit_closure_param_spans_mut(cp, visit);
+            }
+            visit_expr_spans_mut(body, visit);
+        }
+        ExprKind::Return(opt) => {
+            if let Some(inner) = opt {
+                visit_expr_spans_mut(inner, visit);
+            }
+        }
+        ExprKind::Break { value, .. } => {
+            if let Some(v) = value {
+                visit_expr_spans_mut(v, visit);
+            }
+        }
+        ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) => {
+            for x in exprs {
+                visit_expr_spans_mut(x, visit);
+            }
+        }
+        ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for x in items {
+                visit_expr_spans_mut(x, visit);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            visit_expr_spans_mut(value, visit);
+            visit_expr_spans_mut(count, visit);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs {
+                visit_expr_spans_mut(k, visit);
+                visit_expr_spans_mut(v, visit);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                visit_field_init_spans_mut(f, visit);
+            }
+            if let Some(sp) = spread {
+                visit_expr_spans_mut(sp, visit);
+            }
+        }
+        ExprKind::Pipe { left, right } => {
+            visit_expr_spans_mut(left, visit);
+            visit_expr_spans_mut(right, visit);
+        }
+        ExprKind::Cast { expr, ty } => {
+            visit_expr_spans_mut(expr, visit);
+            visit(&mut ty.span);
+        }
+        ExprKind::OffsetOf { ty, field_path: _ } => {
+            visit(&mut ty.span);
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                visit_expr_spans_mut(s, visit);
+            }
+            if let Some(e) = end {
+                visit_expr_spans_mut(e, visit);
+            }
+        }
+        ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) | ExprKind::Par(b) => {
+            visit_block_spans_mut(b, visit);
+        }
+        ExprKind::Lock { body, .. } => visit_block_spans_mut(body, visit),
+        ExprKind::Providers { bindings, body } => {
+            for pb in bindings {
+                visit(&mut pb.resource_span);
+                visit_expr_spans_mut(&mut pb.value, visit);
+            }
+            visit_block_spans_mut(body, visit);
+        }
+    }
+}
+
+fn visit_block_spans_mut(b: &mut Block, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut b.span);
+    for s in &mut b.stmts {
+        visit_stmt_spans_mut(s, visit);
+    }
+    if let Some(fe) = &mut b.final_expr {
+        visit_expr_spans_mut(fe, visit);
+    }
+}
+
+fn visit_stmt_spans_mut(s: &mut Stmt, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut s.span);
+    match &mut s.kind {
+        StmtKind::Let {
+            pattern, ty, value, ..
+        } => {
+            visit_pattern_spans_mut(pattern, visit);
+            if let Some(t) = ty {
+                visit(&mut t.span);
+            }
+            visit_expr_spans_mut(value, visit);
+        }
+        StmtKind::LetUninit { name_span, ty, .. } => {
+            visit(name_span);
+            visit(&mut ty.span);
+        }
+        StmtKind::LetElse {
+            pattern,
+            ty,
+            value,
+            else_block,
+            ..
+        } => {
+            visit_pattern_spans_mut(pattern, visit);
+            if let Some(t) = ty {
+                visit(&mut t.span);
+            }
+            visit_expr_spans_mut(value, visit);
+            visit_block_spans_mut(else_block, visit);
+        }
+        StmtKind::Defer { body } => visit_block_spans_mut(body, visit),
+        StmtKind::ErrDefer { body, .. } => visit_block_spans_mut(body, visit),
+        StmtKind::Assign { target, value } => {
+            visit_expr_spans_mut(target, visit);
+            visit_expr_spans_mut(value, visit);
+        }
+        StmtKind::CompoundAssign { target, value, .. } => {
+            visit_expr_spans_mut(target, visit);
+            visit_expr_spans_mut(value, visit);
+        }
+        StmtKind::Expr(e) => visit_expr_spans_mut(e, visit),
+    }
+}
+
+fn visit_call_arg_spans_mut(a: &mut CallArg, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut a.span);
+    visit_expr_spans_mut(&mut a.value, visit);
+}
+
+fn visit_match_arm_spans_mut(a: &mut MatchArm, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut a.span);
+    visit_pattern_spans_mut(&mut a.pattern, visit);
+    if let Some(g) = &mut a.guard {
+        visit_expr_spans_mut(g, visit);
+    }
+    visit_expr_spans_mut(&mut a.body, visit);
+}
+
+fn visit_closure_param_spans_mut(cp: &mut ClosureParam, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut cp.span);
+    visit_pattern_spans_mut(&mut cp.pattern, visit);
+    if let Some(t) = &mut cp.ty {
+        visit(&mut t.span);
+    }
+}
+
+fn visit_field_init_spans_mut(f: &mut FieldInit, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut f.span);
+    visit_expr_spans_mut(&mut f.value, visit);
+}
+
+fn visit_pattern_spans_mut(p: &mut Pattern, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut p.span);
+    match &mut p.kind {
+        PatternKind::Wildcard
+        | PatternKind::Binding(_)
+        | PatternKind::Literal(_)
+        | PatternKind::RangePattern { .. } => {}
+        PatternKind::AtBinding { pattern, .. } => visit_pattern_spans_mut(pattern, visit),
+        PatternKind::Struct { fields, .. } => {
+            for fp in fields {
+                visit(&mut fp.span);
+                if let Some(inner) = &mut fp.pattern {
+                    visit_pattern_spans_mut(inner, visit);
+                }
+            }
+        }
+        PatternKind::TupleVariant { patterns, .. } | PatternKind::Tuple(patterns) => {
+            for inner in patterns {
+                visit_pattern_spans_mut(inner, visit);
+            }
+        }
+        PatternKind::Or(alts) => {
+            for inner in alts {
+                visit_pattern_spans_mut(inner, visit);
+            }
+        }
+        PatternKind::Slice {
+            prefix,
+            rest: _,
+            suffix,
+        } => {
+            for inner in prefix.iter_mut().chain(suffix.iter_mut()) {
+                visit_pattern_spans_mut(inner, visit);
+            }
+        }
+    }
+}
+
 // ── ModuleSpanTable ────────────────────────────────────────────
 
 /// Lookup key for cross-module span → file resolution. Pulls all four

@@ -1052,6 +1052,31 @@ fn main() {
     }
 
     #[test]
+    fn e2e_generic_enum_heap_eq_constructor_operand_in_fstring() {
+        // The residual gap B-2026-06-09-1's enum workaround did NOT close:
+        // *non-identifier* operands (direct constructor calls) compared inline
+        // inside f-strings. The name-keyed `enum_inst_var_types` only resolves
+        // identifiers, so a `Some(...)` operand had to fall back to the
+        // span-keyed table — which, under wrapper-relative spans, collided
+        // across f-strings and degraded to the word-wise pointer compare
+        // (distinct allocations → wrong `false` for equal content). With the
+        // parser fix (absolute interpolation spans) the constructor operand's
+        // span is unique and correctly keys `enum_inst_type_exprs`, so content
+        // comparison routes even for the inline-constructor form. The two
+        // f-strings put differently-typed comparisons at the SAME syntactic
+        // position to prove the former alias is gone.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println(f\"{Some(\"a\" + \"b\") == Some(\"ab\")}\");\n\
+                 println(f\"{Some(1) == Some(2)}\");\n\
+                 println(f\"{Some(\"a\" + \"b\") == Some(\"zz\")}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "true\nfalse\nfalse\n");
+        }
+    }
+
+    #[test]
     fn e2e_generic_enum_heap_eq_through_params() {
         // The instantiated-enum type of a *parameter* (`opt: Option[String]`)
         // is registered by name at function entry, so a heap-payload `==`
