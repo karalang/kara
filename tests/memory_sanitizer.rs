@@ -5470,6 +5470,63 @@ fn main() {
         );
     }
 
+    /// Mono-body owned-local cleanup (phase-11): a monomorphized
+    /// (shape-generic) body that binds an owned `Tensor` local must free it
+    /// exactly once at scope exit when it's dropped, and NOT free it when
+    /// it's moved out as the return value (the caller frees). Exercises both
+    /// in one program: `build_id` returns its `out` local (moved out → caller
+    /// frees once), `diag_then_drop` drops its `t` local (freed at the mono's
+    /// scope exit). Both have auto-par-eligible loops, so this also guards
+    /// the `branch_cancel_ptr` reset (a stale ptr would mis-compile, not
+    /// leak). A missing drain leaks `t` (Linux detect_leaks); a double-free
+    /// of a moved-out tensor trips ASAN everywhere.
+    #[test]
+    fn asan_mono_body_owned_tensor_local_clean() {
+        let label = "mono_body_owned_tensor_local";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn build_id[N](n: i64) -> Tensor[f64, [N, N]] {
+    let out: Tensor[f64, [?, ?]] = Tensor.zeros([n, n]);
+    for i in 0..n { out[i, i] = 1.0; }
+    out
+}
+fn diag_then_drop[N](n: i64) -> f64 {
+    let t: Tensor[f64, [?, ?]] = Tensor.zeros([n, n]);
+    for i in 0..n { t[i, i] = 2.0; }
+    let mut s = 0.0;
+    for i in 0..n { s = s + t[i, i]; }
+    s
+}
+fn main() {
+    let a = build_id(3);
+    println(a[2, 2]);
+    let b = build_id(2);
+    println(b[0, 0]);
+    println(diag_then_drop(4));
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check the mono-body FreeTensor drain (drop vs move-out)",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["1", "1", "8"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     // ── Owned Vec/String param moved into a local (kata-23, 2026-06-07) ──
     //
     // `let mut work = lists;` where `lists` is a bare by-value Vec/String

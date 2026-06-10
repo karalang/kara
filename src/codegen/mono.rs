@@ -138,6 +138,28 @@ impl<'ctx> super::Codegen<'ctx> {
             // re-seeded inside `compile_mono_function`) and restore below —
             // parallel to `variables` / `var_type_names`.
             let saved_tensor_infos = std::mem::take(&mut self.tensor_var_infos);
+            // The mono body manages its OWN scope-cleanup frame stack
+            // (pushed/drained in `compile_mono_function`, mirroring
+            // `compile_function`). Because the body compiles inline,
+            // mid-caller, its frames must not be appended to — or drained
+            // out of — the caller's live stack: a callee `let out` cleanup
+            // landing on the caller's frame would be emitted in the caller's
+            // scope where the callee's alloca doesn't dominate ("Instruction
+            // does not dominate all uses"). Swap to an empty stack for the
+            // body and restore the caller's below — parallel to `variables`.
+            let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
+            // A mono body is a top-level function, not a par branch — it must
+            // compile with `branch_cancel_ptr = None` so `compile_call`'s
+            // cooperative cancel check stays a no-op (the ptr names a par
+            // branch fn's cancel param, valid only inside that branch). The
+            // body compiles INLINE, so without this an auto-par branch
+            // emitted while lowering an EARLIER mono (whose loops
+            // parallelized) leaves `branch_cancel_ptr` set, and the NEXT
+            // mono's first call emits a cancel check against that stale ptr
+            // → "Referring to an argument in another function" + a `ret void`
+            // in a value-returning fn. Reset for the body, restore the
+            // caller's value below (re-entrant, like `variables`).
+            let saved_cancel_ptr = self.branch_cancel_ptr.take();
             let saved_loop_stack = std::mem::take(&mut self.loop_stack);
             let saved_subst = std::mem::replace(&mut self.type_subst, subst.clone());
             // Const generics slice 4: thread the const-arg substitution
@@ -168,6 +190,8 @@ impl<'ctx> super::Codegen<'ctx> {
             self.const_subst = saved_const_subst;
             self.type_subst = saved_subst;
             self.loop_stack = saved_loop_stack;
+            self.branch_cancel_ptr = saved_cancel_ptr;
+            self.scope_cleanup_actions = saved_cleanup;
             self.tensor_var_infos = saved_tensor_infos;
             self.var_type_names = saved_var_types;
             self.variables = saved_vars;
@@ -614,6 +638,17 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_fn = Some(fn_val);
         self.variables.clear();
         self.var_type_names.clear();
+        // Function-level scope-cleanup frame for owned locals (`Tensor` /
+        // `Vec` / `String` / `Map` lets needing drop), mirroring
+        // `compile_function`. The caller's frame stack was swapped out in
+        // `compile_generic_call`, so this is the body's sole, fresh stack;
+        // let-site registrations land here and drain at the tail return
+        // below. Without it, a mono body's `let out = Tensor.zeros(…)`
+        // FreeTensor cleanup leaked into the caller's frame and was emitted
+        // where the callee's alloca didn't dominate ("Instruction does not
+        // dominate all uses").
+        self.scope_cleanup_actions.clear();
+        self.scope_cleanup_actions.push(Vec::new());
         // Slice 10: reseed module-binding side-tables in monomorphised
         // bodies too (same reason as the `compile_function` path —
         // `var_type_names` is cleared per function).
@@ -676,12 +711,27 @@ impl<'ctx> super::Codegen<'ctx> {
             .get_terminator()
             .is_none()
         {
+            // Drain the function-level cleanup frame at the tail return,
+            // mirroring `compile_function`. Move-aware suppression first:
+            // when the body's tail is a bare Identifier naming an owned
+            // local that is moved out as the return value (`matmul`'s
+            // `out`), null its slot / flip its sentinel so the
+            // `FreeTensor` / `FreeVecBuffer` walk skips it — the caller now
+            // owns the value. (Early `return` statements drain via their
+            // own path in `compile_expr`; that path is reached only when
+            // the block left a terminator, so it's excluded here.)
+            self.suppress_cleanup_for_tail_return(&func.body);
+            self.emit_scope_cleanup();
             if let Some(val) = result {
                 self.builder.build_return(Some(&val)).unwrap();
             } else {
                 self.builder.build_return(None).unwrap();
             }
         }
+        // Leave the frame stack as the caller swapped it in
+        // (`compile_generic_call` restores its own); clearing keeps the
+        // post-body state tidy and matches `compile_function`'s exit.
+        self.scope_cleanup_actions.clear();
 
         Ok(())
     }

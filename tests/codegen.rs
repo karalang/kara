@@ -38367,6 +38367,85 @@ fn main() {
         );
     }
 
+    // ── Mono-body owned-local cleanup ────────────────────────────────
+    // A monomorphized body that binds an owned local needing drop (a
+    // `Tensor` / `Vec` / `String` local) now compiles: `compile_mono_function`
+    // pushes a function-level `scope_cleanup_actions` frame and drains it
+    // (with move-aware tail suppression) at the return, and
+    // `compile_generic_call` saves/restores that frame stack + the
+    // `branch_cancel_ptr` so the inline body is hermetic. Before this, a
+    // local's `FreeTensor` cleanup leaked into the caller's frame ("does
+    // not dominate all uses"), and an auto-par branch from an earlier mono
+    // left a stale cancel ptr that the next mono's first call referenced
+    // ("Referring to an argument in another function").
+
+    #[test]
+    fn test_e2e_mono_body_builds_and_returns_tensor() {
+        // Full matmul: the generic body builds its `out` result tensor
+        // (`Tensor.zeros` local), fills it in auto-par-eligible nested
+        // loops, and returns it — the returned local is moved out
+        // (tail-return suppression), the caller owns + frees it.
+        let out = run_program(
+            "fn matmul[M, K, N](a: Tensor[f64, [M, K]], b: Tensor[f64, [K, N]], m: i64, k: i64, n: i64) -> Tensor[f64, [M, N]] {\n\
+                 let out: Tensor[f64, [?, ?]] = Tensor.zeros([m, n]);\n\
+                 for i in 0..m {\n\
+                     for j in 0..n {\n\
+                         let mut acc = 0.0;\n\
+                         for p in 0..k { acc = acc + a[i, p] * b[p, j]; }\n\
+                         out[i, j] = acc;\n\
+                     }\n\
+                 }\n\
+                 out\n\
+             }\n\
+             fn main() {\n\
+                 let a: Tensor[f64, [2, 3]] = Tensor.from([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);\n\
+                 let b: Tensor[f64, [3, 2]] = Tensor.from([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]);\n\
+                 let c = matmul(a, b, 2, 3, 2);\n\
+                 println(c[0, 0]); println(c[0, 1]); println(c[1, 0]); println(c[1, 1]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "4\n5\n10\n11\n",
+                "matmul result (codegen must match karac run)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_mono_body_drops_tensor_local() {
+        // The generic body binds a `Tensor` local that is NOT returned — its
+        // `FreeTensor` must fire at the mono's scope exit (and not corrupt
+        // the function, which returns a scalar). Two generic fns where the
+        // first's auto-par'd loop previously left a stale cancel ptr for the
+        // second — the regression both fixes guard.
+        let out = run_program(
+            "fn build_id[N](n: i64) -> Tensor[f64, [N, N]] {\n\
+                 let out: Tensor[f64, [?, ?]] = Tensor.zeros([n, n]);\n\
+                 for i in 0..n { out[i, i] = 1.0; }\n\
+                 out\n\
+             }\n\
+             fn diag_then_drop[N](n: i64) -> f64 {\n\
+                 let t: Tensor[f64, [?, ?]] = Tensor.zeros([n, n]);\n\
+                 for i in 0..n { t[i, i] = 2.0; }\n\
+                 let mut s = 0.0;\n\
+                 for i in 0..n { s = s + t[i, i]; }\n\
+                 s\n\
+             }\n\
+             fn main() {\n\
+                 let a = build_id(3);\n\
+                 println(a[2, 2]);\n\
+                 println(diag_then_drop(4));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "1\n8\n",
+                "build_id diagonal + diag_then_drop sum (codegen must match karac run)"
+            );
+        }
+    }
+
     // ── Cross-argument `?`-dim asserts at a call boundary ────────────
     // design.md § Runtime equality check, the call-boundary flavor: two
     // `Tensor` params sharing a named `Dim` (the `K` in
