@@ -2851,6 +2851,284 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Resolve the enum type name of an operand expression for the common
+    /// shapes codegen can see without a full type oracle: a tracked variable,
+    /// an `Enum.Variant` path / unit-variant, a variant constructor call
+    /// (`Some(x)`), or an `Enum.Variant { … }` struct-variant literal. `None`
+    /// when it can't be determined (the caller then falls back to the word-wise
+    /// compare, which is sound for unit/scalar-payload enums).
+    pub(super) fn enum_name_of_expr(&self, expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Identifier(name) => self
+                .var_type_names
+                .get(name)
+                .filter(|n| self.enum_layouts.contains_key(n.as_str()))
+                .cloned(),
+            ExprKind::Path { segments, .. } => segments
+                .first()
+                .filter(|s| self.enum_layouts.contains_key(s.as_str()))
+                .cloned(),
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(n) => self.enum_name_for_variant_ctor(n),
+                ExprKind::Path { segments, .. } => segments
+                    .first()
+                    .filter(|s| self.enum_layouts.contains_key(s.as_str()))
+                    .cloned(),
+                _ => None,
+            },
+            ExprKind::StructLiteral { path, .. } if path.len() >= 2 => {
+                let en = &path[path.len() - 2];
+                self.enum_layouts.contains_key(en).then(|| en.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Enum owning a bare variant-constructor name (`Some` / `Ok` / a user
+    /// variant), preferring a user-declared enum over the seeded built-ins on
+    /// a name collision — same disambiguation as `try_compile_enum_variant`.
+    fn enum_name_for_variant_ctor(&self, variant: &str) -> Option<String> {
+        let mut user = None;
+        let mut seed = None;
+        for (en, l) in &self.enum_layouts {
+            if l.tags.contains_key(variant) {
+                if self.seeded_enum_names.contains(en) {
+                    seed.get_or_insert_with(|| en.clone());
+                } else {
+                    user.get_or_insert_with(|| en.clone());
+                }
+            }
+        }
+        user.or(seed)
+    }
+
+    /// Does any variant of `enum_name` carry a heap (`String`/`Vec`) payload
+    /// field? Such enums need the variant-aware `compile_enum_eq` (a raw word
+    /// compare of a `String` payload compares pointers, not content); pure
+    /// unit/scalar enums use the cheaper word-wise path, which is sound after
+    /// zero-init construction.
+    pub(super) fn enum_has_heap_payload(&self, enum_name: &str) -> bool {
+        self.enum_layouts.get(enum_name).is_some_and(|l| {
+            l.field_drop_kinds
+                .values()
+                .flatten()
+                .any(|k| matches!(k, super::state::EnumDropKind::VecOrString))
+        })
+    }
+
+    /// Per-variant `(tag, name, field-type-exprs)` for `enum_name`, scanning the
+    /// user program and the baked stdlib. Drives `compile_enum_eq`'s per-variant
+    /// typed payload comparison.
+    fn enum_variant_field_type_exprs(&self, enum_name: &str) -> Vec<(u64, String, Vec<TypeExpr>)> {
+        fn collect(items: &[Item], enum_name: &str) -> Option<Vec<(String, Vec<TypeExpr>)>> {
+            items.iter().find_map(|item| match item {
+                Item::EnumDef(e) if e.name == enum_name => Some(
+                    e.variants
+                        .iter()
+                        .map(|v| {
+                            let tys = match &v.kind {
+                                VariantKind::Unit => Vec::new(),
+                                VariantKind::Tuple(tys) => tys.clone(),
+                                VariantKind::Struct(fields) => {
+                                    fields.iter().map(|f| f.ty.clone()).collect()
+                                }
+                            };
+                            (v.name.clone(), tys)
+                        })
+                        .collect(),
+                ),
+                _ => None,
+            })
+        }
+        let variants = self
+            .program_snapshot
+            .as_ref()
+            .and_then(|p| collect(&p.items, enum_name))
+            .or_else(|| {
+                crate::prelude::STDLIB_PROGRAMS
+                    .iter()
+                    .find_map(|(_, p)| collect(&p.items, enum_name))
+            })
+            .unwrap_or_default();
+        let layout = self.enum_layouts.get(enum_name);
+        variants
+            .into_iter()
+            .filter_map(|(name, tys)| {
+                layout
+                    .and_then(|l| l.tags.get(&name).copied())
+                    .map(|tag| (tag, name, tys))
+            })
+            .collect()
+    }
+
+    /// Variant-aware enum equality. Compares the tag, then `switch`es on it and
+    /// compares only the active variant's payload **type-aware**: each field is
+    /// rebuilt from its payload words at the variant's `field_word_offsets` and
+    /// recursed through `compile_binop(Eq)` — so a `String`/`Vec` payload
+    /// compares by content (via `compile_string_binop`), not by pointer word.
+    /// Used for enums with heap-payload variants; unit/scalar enums keep the
+    /// cheaper word-wise path. (Nested-enum and >3-word payload fields fall back
+    /// to a word compare — see the per-field branch.)
+    pub(super) fn compile_enum_eq(
+        &mut self,
+        op: &BinOp,
+        enum_name: &str,
+        lhs: inkwell::values::StructValue<'ctx>,
+        rhs: inkwell::values::StructValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let l_tag = self
+            .builder
+            .build_extract_value(lhs, 0, "l.tag")
+            .unwrap()
+            .into_int_value();
+        let r_tag = self
+            .builder
+            .build_extract_value(rhs, 0, "r.tag")
+            .unwrap()
+            .into_int_value();
+        let tag_eq = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, l_tag, r_tag, "enum.tag.eq")
+            .unwrap();
+
+        let layout = self.enum_layouts[enum_name].clone();
+        let variants = self.enum_variant_field_type_exprs(enum_name);
+        let payload_variants: Vec<(u64, String, Vec<TypeExpr>)> = variants
+            .into_iter()
+            .filter(|(_, _, t)| !t.is_empty())
+            .collect();
+
+        // Pure unit (or no resolvable payloads): tag equality is the answer.
+        if payload_variants.is_empty() {
+            return Ok(self.finish_eq_bool(op, tag_eq));
+        }
+
+        let fn_val = self.current_fn.unwrap();
+        let entry_bb = self.builder.get_insert_block().unwrap();
+        let merge_bb = self.context.append_basic_block(fn_val, "enumeq.merge");
+        let default_bb = self.context.append_basic_block(fn_val, "enumeq.default");
+        let mut cases: Vec<(
+            inkwell::values::IntValue<'ctx>,
+            inkwell::basic_block::BasicBlock<'ctx>,
+        )> = Vec::new();
+        let mut incomings: Vec<(
+            inkwell::values::IntValue<'ctx>,
+            inkwell::basic_block::BasicBlock<'ctx>,
+        )> = Vec::new();
+
+        for (tag, vname, field_types) in &payload_variants {
+            let vbb = self
+                .context
+                .append_basic_block(fn_val, &format!("enumeq.{vname}"));
+            cases.push((i64_t.const_int(*tag, false), vbb));
+            self.builder.position_at_end(vbb);
+            let offsets = layout
+                .field_word_offsets
+                .get(vname)
+                .cloned()
+                .unwrap_or_default();
+            let mut peq = bool_t.const_int(1, false);
+            for (i, fty) in field_types.iter().enumerate() {
+                let (start, n) = offsets.get(i).copied().unwrap_or((i, 1));
+                let feq = if n <= 3 {
+                    // Rebuild the field from its ≤3 payload words at its declared
+                    // LLVM type, then recurse — String/Vec compare by content.
+                    let zero = i64_t.const_zero();
+                    let mut lw = [zero, zero, zero];
+                    let mut rw = [zero, zero, zero];
+                    for (j, slot) in lw.iter_mut().enumerate().take(n) {
+                        *slot = self
+                            .builder
+                            .build_extract_value(lhs, (start + 1 + j) as u32, "l.w")
+                            .unwrap()
+                            .into_int_value();
+                    }
+                    for (j, slot) in rw.iter_mut().enumerate().take(n) {
+                        *slot = self
+                            .builder
+                            .build_extract_value(rhs, (start + 1 + j) as u32, "r.w")
+                            .unwrap()
+                            .into_int_value();
+                    }
+                    let fty_llvm = self.llvm_type_for_type_expr(fty);
+                    let lv =
+                        self.rebuild_value_from_payload_words(fty_llvm, lw[0], lw[1], lw[2])?;
+                    let rv =
+                        self.rebuild_value_from_payload_words(fty_llvm, rw[0], rw[1], rw[2])?;
+                    self.compile_binop(&BinOp::Eq, lv, rv)?.into_int_value()
+                } else {
+                    // Wide payload (>3 words): best-effort word-wise compare.
+                    let mut acc = bool_t.const_int(1, false);
+                    for j in 0..n {
+                        let lw = self
+                            .builder
+                            .build_extract_value(lhs, (start + 1 + j) as u32, "l.w")
+                            .unwrap()
+                            .into_int_value();
+                        let rw = self
+                            .builder
+                            .build_extract_value(rhs, (start + 1 + j) as u32, "r.w")
+                            .unwrap()
+                            .into_int_value();
+                        let w_eq = self
+                            .builder
+                            .build_int_compare(IntPredicate::EQ, lw, rw, "w.eq")
+                            .unwrap();
+                        acc = self.builder.build_and(acc, w_eq, "w.and").unwrap();
+                    }
+                    acc
+                };
+                peq = self.builder.build_and(peq, feq, "peq").unwrap();
+            }
+            // compile_binop may have split the block (nested enum / string);
+            // record the *current* block for the phi incoming.
+            let cur_bb = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+            incomings.push((peq, cur_bb));
+        }
+
+        self.builder.position_at_end(default_bb);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        incomings.push((bool_t.const_int(1, false), default_bb));
+
+        // Terminate the entry block with the tag switch.
+        self.builder.position_at_end(entry_bb);
+        self.builder
+            .build_switch(l_tag, default_bb, &cases)
+            .unwrap();
+
+        // Merge: payload_eq = phi over the per-variant results; final = tag_eq && payload_eq.
+        self.builder.position_at_end(merge_bb);
+        let phi = self.builder.build_phi(bool_t, "enum.payload.eq").unwrap();
+        let incoming_dyn: Vec<(&dyn BasicValue, inkwell::basic_block::BasicBlock<'ctx>)> =
+            incomings
+                .iter()
+                .map(|(v, b)| (v as &dyn BasicValue, *b))
+                .collect();
+        phi.add_incoming(&incoming_dyn);
+        let payload_eq = phi.as_basic_value().into_int_value();
+        let eq = self
+            .builder
+            .build_and(tag_eq, payload_eq, "enum.eq")
+            .unwrap();
+        Ok(self.finish_eq_bool(op, eq))
+    }
+
+    /// Wrap a boolean equality result for `op` (negate for `!=`).
+    fn finish_eq_bool(
+        &self,
+        op: &BinOp,
+        eq: inkwell::values::IntValue<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        if matches!(op, BinOp::NotEq) {
+            self.builder.build_not(eq, "enum_ne").unwrap().into()
+        } else {
+            eq.into()
+        }
+    }
+
     pub(super) fn compile_string_binop(
         &self,
         op: &BinOp,

@@ -368,6 +368,29 @@ impl<'ctx> super::Codegen<'ctx> {
                             .contains(&(left.span.offset, left.span.length));
                         return self.compile_binop_typed(op, lhs, rhs, is_unsigned);
                     }
+                    // Heap-payload enum `==`/`!=`: route to the variant-aware
+                    // comparator so a `String`/`Vec` payload compares by content,
+                    // not by pointer word (the word-wise `compile_struct_eq` path
+                    // is only sound for unit/scalar-payload enums). Unresolvable
+                    // operands and scalar enums keep the cheaper path.
+                    if matches!(op, BinOp::Eq | BinOp::NotEq)
+                        && lhs.is_struct_value()
+                        && rhs.is_struct_value()
+                    {
+                        if let Some(en) = self
+                            .enum_name_of_expr(left)
+                            .or_else(|| self.enum_name_of_expr(right))
+                        {
+                            if self.enum_has_heap_payload(&en) {
+                                return self.compile_enum_eq(
+                                    op,
+                                    &en,
+                                    lhs.into_struct_value(),
+                                    rhs.into_struct_value(),
+                                );
+                            }
+                        }
+                    }
                     self.compile_binop(op, lhs, rhs)
                 }
             },

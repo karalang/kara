@@ -976,6 +976,35 @@ fn main() {
         }
     }
 
+    #[test]
+    fn e2e_enum_heap_payload_eq_compares_by_content() {
+        // A variant with a concrete `String` payload compares by *content*, not
+        // by pointer word — the variant-aware `compile_enum_eq` rebuilds the
+        // payload at its declared type and recurses (`Text("a"+"b")` is a
+        // distinct allocation from `Text("ab")` but must compare equal). Scalar
+        // and unit variants stay correct.
+        if let Some(out) = run_program(
+            "#[derive(Eq)]\n\
+             enum Msg { Text(String), Code(i64), Empty }\n\
+             fn main() {\n\
+                 let a = Msg.Text(\"a\" + \"b\");\n\
+                 let b = Msg.Text(\"ab\");\n\
+                 let c = Msg.Text(\"xy\");\n\
+                 let d = Msg.Code(5);\n\
+                 let e = Msg.Code(5);\n\
+                 let f = Msg.Empty;\n\
+                 println(f\"{a == b}\");\n\
+                 println(f\"{a == c}\");\n\
+                 println(f\"{d == e}\");\n\
+                 println(f\"{a == d}\");\n\
+                 println(f\"{f == f}\");\n\
+                 println(f\"{a == f}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "true\nfalse\ntrue\nfalse\ntrue\nfalse\n");
+        }
+    }
+
     /// Stdout + stderr capture. Used by tests that assert against trace
     /// output written to stderr by the runtime's atexit handler.
     struct CapturedRun {
