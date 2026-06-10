@@ -1180,6 +1180,30 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Tensor reductions: `sum` / `mean` / `prod` / `min` / `max` collapse
+        // the whole tensor to a scalar; `sum_axis(n)` / `mean_axis(n)` collapse
+        // one axis, yielding a tensor of rank-1 lower. `mean`/`mean_axis`
+        // always yield `f64`; the rest preserve the element type. Like the
+        // shape family these can't be expressed in the baked signatures, so
+        // they intercept before impl dispatch. Typing in
+        // `src/typechecker/expr_method_tensor.rs`.
+        if matches!(
+            method,
+            "sum" | "mean" | "prod" | "min" | "max" | "sum_axis" | "mean_axis"
+        ) {
+            let tensor_args = match &obj_ty {
+                Type::Named { name, args } if name == "Tensor" => Some(args),
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args } if name == "Tensor" => Some(args),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(tensor_args) = tensor_args.cloned() {
+                return self.infer_tensor_reduce(method, &tensor_args, args, span);
+            }
+        }
+
         // Iterator-source methods: `iter()` / `into_iter()` on any iterable
         // collection produce an `Iterator[Item = T]` value. Handled here in
         // one place so per-collection method handlers don't have to repeat

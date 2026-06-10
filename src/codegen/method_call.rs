@@ -151,6 +151,15 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(v);
         }
 
+        // Tensor reductions — `sum`/`mean`/`prod`/`min`/`max` (→ scalar) and
+        // `sum_axis`/`mean_axis` (→ rank-1-lower tensor), phase-11 line 47
+        // Slice B. Handled here so identifier / chained / value receivers
+        // route uniformly; `None` when the method isn't a reduce or the
+        // receiver isn't a tensor.
+        if let Some(v) = self.try_compile_tensor_reduce(object, method, args, call_span)? {
+            return Ok(v);
+        }
+
         // SIMD static constructor — `Vector[T, N].splat(x)` (design.md
         // § Portable SIMD). The receiver is the bare vector type-path, not a
         // value, so intercept before the receiver is compiled as an

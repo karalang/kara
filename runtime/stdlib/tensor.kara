@@ -162,6 +162,58 @@ impl[T, ...S] Tensor[T, S] {
     fn squeeze(ref self) -> Tensor[T, S] {
         Tensor { handle_id: 0 }
     }
+
+    // Reductions (phase-11 line 47, Slice B). Like the shape family these are
+    // surface-only — `mean` actually yields `f64` (not `T`), so the
+    // typechecker (`infer_tensor_reduce`) and interpreter (`eval_tensor_reduce`
+    // / `eval_tensor_axis_reduce`) intercept before these signatures are
+    // consulted. Codegen lowers identifier-receiver reductions
+    // (`compile_tensor_full_reduce` / `compile_tensor_axis_reduce`); a value /
+    // chained receiver (`(a + b).sum()`) stays on `karac run` — bind it to a
+    // `let` first. Reducing an empty tensor is a runtime error (`min`/`max`
+    // have no identity; the others' identity type is ambiguous in the
+    // dynamically-typed interpreter — a uniform trap keeps the layers in step).
+    // The `-> T` bodies are never-executed `loop {}` stubs (type Never), the
+    // `TaskGroup.join` pattern.
+
+    #[compiler_builtin]
+    fn sum(ref self) -> T {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn prod(ref self) -> T {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn min(ref self) -> T {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn max(ref self) -> T {
+        loop {}
+    }
+
+    // Average of every element as `f64` (integer tensors included).
+    #[compiler_builtin]
+    fn mean(ref self) -> f64 {
+        0.0
+    }
+
+    // Reduce along one axis, dropping that slot (NumPy `sum(axis=n)`). The
+    // result is a tensor of rank-1 lower (a rank-1 receiver reduces to a
+    // scalar). `mean_axis` yields `Tensor[f64, …]`. Surface-only return type.
+    #[compiler_builtin]
+    fn sum_axis(ref self, axis: i64) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
+
+    #[compiler_builtin]
+    fn mean_axis(ref self, axis: i64) -> Tensor[f64, S] {
+        Tensor { handle_id: 0 }
+    }
 }
 
 // Element-wise arithmetic on `Tensor[T, Shape]` (design.md § Numerical

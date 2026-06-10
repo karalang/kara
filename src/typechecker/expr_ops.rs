@@ -902,7 +902,7 @@ impl<'a> super::TypeChecker<'a> {
     /// the enclosing scope. Lets the operator checks treat `a + b` / `-a` on a
     /// `T: Numeric` parameter as valid numeric arithmetic — the bound
     /// guarantees `T` instantiates to a primitive numeric type.
-    fn type_param_has_numeric_bound(&self, ty: &Type) -> bool {
+    pub(super) fn type_param_has_numeric_bound(&self, ty: &Type) -> bool {
         let Type::TypeParam(name) = ty else {
             return false;
         };

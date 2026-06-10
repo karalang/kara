@@ -24,7 +24,7 @@
 use crate::ast::{CallArg, Expr, ExprKind};
 use crate::token::Span;
 
-use super::types::{is_integer, type_display, ConstArg, DimArg, Type};
+use super::types::{is_integer, is_numeric, type_display, ConstArg, DimArg, FloatSize, Type};
 use super::TypeErrorKind;
 
 /// The dims of `shape` when every entry is a concrete literal, else
@@ -179,6 +179,161 @@ impl<'a> super::TypeChecker<'a> {
         Type::Named {
             name: "Vec".to_string(),
             args: vec![item_ty],
+        }
+    }
+
+    /// Tensor reductions (phase-11 line 47, Slice B).
+    ///
+    /// - **Full reduce** `sum` / `prod` / `min` / `max` (no args) → the
+    ///   element type `T`; `mean` → `f64`.
+    /// - **Axis reduce** `sum_axis(n)` / `mean_axis(n)` → a tensor of rank-1
+    ///   lower (`mean_axis` element type is `f64`). A literal axis drops slot
+    ///   `n` exactly; a runtime axis degrades to rank-1 all-`?`. A rank-1
+    ///   receiver reduces to a scalar (rank-0 tensors aren't expressible).
+    ///
+    /// The element type must be numeric (or a `Numeric`-bounded param), and —
+    /// like the rest of the tensor surface — the rank must be statically known
+    /// (bare-`S` / splice rejected). Full reduce doesn't *need* the rank, but
+    /// codegen can't register a splice-shaped tensor param, so requiring it
+    /// keeps `karac run` and `karac build` in agreement.
+    pub(super) fn infer_tensor_reduce(
+        &mut self,
+        method: &str,
+        tensor_args: &[Type],
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let elem_ty = match tensor_args.first() {
+            Some(t) => t.clone(),
+            None => return Type::Error,
+        };
+        let is_mean = matches!(method, "mean" | "mean_axis");
+        let is_axis = matches!(method, "sum_axis" | "mean_axis");
+        // `mean` always yields f64; the others preserve the element type.
+        let scalar_result = if is_mean {
+            Type::Float(FloatSize::F64)
+        } else {
+            elem_ty.clone()
+        };
+
+        if !is_numeric(&elem_ty) && !self.type_param_has_numeric_bound(&elem_ty) {
+            self.type_error(
+                format!(
+                    "tensor reduction `{}` requires a numeric element type, found '{}'",
+                    method,
+                    type_display(&elem_ty)
+                ),
+                span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+
+        // Static rank required (splice-free `Shape`), for full and axis alike.
+        let shape = match tensor_args.get(1) {
+            Some(Type::Shape(dims))
+                if !dims
+                    .iter()
+                    .any(|d| matches!(d, DimArg::Splice(_) | DimArg::SpliceVar(_))) =>
+            {
+                dims.clone()
+            }
+            _ => {
+                self.type_error(
+                    format!(
+                        "{} requires the tensor's rank to be statically known; \
+                         a bare-`S` or splice-bearing shape isn't supported here \
+                         (rank-polymorphic reduction is v1.5 shape arithmetic)",
+                        method
+                    ),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                return Type::Error;
+            }
+        };
+
+        if !is_axis {
+            // Full reduce — no arguments.
+            if !args.is_empty() {
+                self.type_error(
+                    format!(
+                        "tensor reduction `{}` takes no arguments, found {}",
+                        method,
+                        args.len()
+                    ),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                return Type::Error;
+            }
+            return scalar_result;
+        }
+
+        // Axis reduce — exactly one (axis) argument.
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "{} takes exactly 1 argument (the axis), found {}",
+                    method,
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+        let rank = shape.len();
+        let literal_axis = match self.check_integer_arg(&args[0].value, &format!("{} axis", method))
+        {
+            IntArg::Literal(i) => {
+                if i < 0 || i as usize >= rank {
+                    self.type_error(
+                        format!("axis {} out of bounds for rank-{} tensor", i, rank),
+                        args[0].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                Some(i as usize)
+            }
+            IntArg::Runtime => None,
+            IntArg::Bad => return Type::Error,
+        };
+        // A rank-1 receiver reduces along its only axis to a scalar (rank-0
+        // tensors aren't expressible), mirroring `iter_axis`'s rank-1 yield.
+        if rank == 1 {
+            return scalar_result;
+        }
+        let item_dims: Vec<DimArg> = match literal_axis {
+            Some(n) => shape
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != n)
+                .map(|(_, d)| d.clone())
+                .collect(),
+            None => vec![DimArg::Dynamic; rank - 1],
+        };
+        let item_elem = if is_mean {
+            Type::Float(FloatSize::F64)
+        } else {
+            elem_ty
+        };
+        Type::Named {
+            name: "Tensor".to_string(),
+            args: vec![item_elem, Type::Shape(item_dims)],
         }
     }
 

@@ -39645,6 +39645,98 @@ fn main() {
         );
     }
 
+    #[test]
+    fn test_e2e_tensor_full_reduce() {
+        // sum / prod / min / max / mean → scalar. Means are exact decimals so
+        // the AOT float formatting matches the interpreter byte-for-byte.
+        // Receiver reuse after the reduce confirms it's read, not consumed.
+        let out = run_program(
+            "fn main() {\n\
+                 let a: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 println(a.sum());\n\
+                 println(a.prod());\n\
+                 println(a.min());\n\
+                 println(a.max());\n\
+                 println(a.mean());\n\
+                 let v: Tensor[f64, [4]] = Tensor.from([2.0, 4.0, 6.0, 8.0]);\n\
+                 println(v.sum());\n\
+                 println(v.mean());\n\
+                 println(a[0, 0]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "21\n720\n1\n6\n3.5\n20\n5\n1\n",
+                "tensor full-reduce AOT output must match the interpreter twin",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_axis_reduce() {
+        // sum_axis / mean_axis → rank-1-lower tensor; rank-1 → scalar.
+        let out = run_program(
+            "fn main() {\n\
+                 let a: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let s0 = a.sum_axis(0);\n\
+                 println(s0[0]); println(s0[1]); println(s0[2]);\n\
+                 let s1 = a.sum_axis(1);\n\
+                 println(s1[0]); println(s1[1]);\n\
+                 let m0 = a.mean_axis(0);\n\
+                 println(m0[0]); println(m0[2]);\n\
+                 let v: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);\n\
+                 println(v.sum_axis(0));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "5\n7\n9\n6\n15\n2.5\n4.5\n10\n",
+                "tensor axis-reduce AOT output must match the interpreter twin",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_reduce_runtime_axis_and_generic() {
+        // A runtime axis arg (no static slot to drop) + a `Numeric`-bounded
+        // generic full reduce with a concrete shape (the mono-body path).
+        let out = run_program(
+            "fn trace[T: Numeric](t: Tensor[T, [2, 2]]) -> T { t.sum() }\n\
+             fn main() {\n\
+                 let a: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let ax = 1;\n\
+                 let r = a.sum_axis(ax);\n\
+                 println(r[0]); println(r[1]);\n\
+                 let g: Tensor[i64, [2, 2]] = Tensor.from([[1, 2], [3, 4]]);\n\
+                 println(trace(g));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "6\n15\n10\n",
+                "runtime-axis reduce + generic full-reduce must match `karac run`",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_reduce_empty_traps() {
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let e: Tensor[f64, [0]] = Tensor.zeros([0]);\n\
+                 println(e.max());\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("cannot reduce an empty tensor"),
+                "expected the empty-reduce trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
     // ── Owned String/Vec parameter retention (kata-22 family, 2026-06-06) ──
     //
     // The call ABI passes owned String/Vec headers by value while the

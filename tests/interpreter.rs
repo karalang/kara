@@ -15263,6 +15263,63 @@ fn test_tensor_arithmetic_runtime_shape_mismatch_and_divzero() {
     );
 }
 
+#[test]
+fn test_tensor_full_reduce() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let a: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             println(a.sum());\n\
+             println(a.prod());\n\
+             println(a.min());\n\
+             println(a.max());\n\
+             println(a.mean());\n\
+             let v: Tensor[f64, [4]] = Tensor.from([2.0, 4.0, 6.0, 8.0]);\n\
+             println(v.sum());\n\
+             println(v.mean());\n\
+         }",
+    );
+    // mean of [1..6] = 3.5; mean of [2,4,6,8] = 5.0.
+    assert_eq!(out, "21\n720\n1\n6\n3.5\n20\n5\n");
+}
+
+#[test]
+fn test_tensor_axis_reduce() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let a: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let s0 = a.sum_axis(0);\n\
+             println(s0[0]); println(s0[1]); println(s0[2]);\n\
+             let s1 = a.sum_axis(1);\n\
+             println(s1[0]); println(s1[1]);\n\
+             let m0 = a.mean_axis(0);\n\
+             println(m0[0]); println(m0[2]);\n\
+             let v: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);\n\
+             println(v.sum_axis(0));\n\
+         }",
+    );
+    // sum_axis(0)=[5,7,9]; sum_axis(1)=[6,15]; mean_axis(0)=[2.5,3.5,4.5];
+    // rank-1 sum_axis -> scalar 10.
+    assert_eq!(out, "5\n7\n9\n6\n15\n2.5\n4.5\n10\n");
+}
+
+#[test]
+fn test_tensor_reduce_empty_traps() {
+    for m in ["sum", "prod", "min", "max", "mean"] {
+        let errors = runtime_errors(&format!(
+            "fn main() {{\n\
+                 let e: Tensor[i64, [0]] = Tensor.zeros([0]);\n\
+                 let r = e.{m}();\n\
+             }}",
+        ));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("cannot reduce an empty tensor")),
+            "{m}: {errors:?}",
+        );
+    }
+}
+
 // ── `ref name @ PATTERN` — explicit-ref @ bindings (design.md § @
 // Bindings): bindings borrow, scrutinee stays usable after ──────────
 

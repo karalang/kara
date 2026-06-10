@@ -40,7 +40,7 @@
 
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
-use inkwell::{AddressSpace, IntPredicate};
+use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
 use crate::ast::{BinOp, CallArg, Expr, ExprKind, GenericArg, ShapeDim, TypeExpr, TypeKind};
 use crate::token::Span;
@@ -120,6 +120,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> TensorVarInfo<'ctx> {
         TensorVarInfo {
             elem: self.llvm_type_for_type_expr(&ti.elem),
+            elem_unsigned: type_expr_is_unsigned_int(&ti.elem),
             dims: ti.dims.clone(),
         }
     }
@@ -140,11 +141,13 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let gargs = path.generic_args.as_ref()?;
         let mut elem: Option<BasicTypeEnum<'ctx>> = None;
+        let mut elem_unsigned = false;
         let mut dims: Option<Vec<Option<i64>>> = None;
         for ga in gargs {
             match ga {
                 GenericArg::Type(t) if elem.is_none() => {
                     elem = Some(self.llvm_type_for_type_expr(t));
+                    elem_unsigned = type_expr_is_unsigned_int(t);
                 }
                 GenericArg::Shape(shape) => {
                     let mut out = Vec::with_capacity(shape.dims.len());
@@ -167,6 +170,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         Some(TensorVarInfo {
             elem: elem?,
+            elem_unsigned,
             dims: dims?,
         })
     }
@@ -2462,6 +2466,489 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_call(self.free_fn, &[tptr.into()], "")
                 .unwrap();
         }
+        Ok(res.into())
+    }
+
+    // ── Reductions ──────────────────────────────────────────────
+
+    /// Dispatch a tensor reduction (`sum`/`mean`/`prod`/`min`/`max` →
+    /// scalar; `sum_axis`/`mean_axis` → rank-1-lower tensor), phase-11 line
+    /// 47 Slice B.
+    ///
+    /// **Identifier receivers only** (like `iter_axis`): the element type +
+    /// rank come from the name-keyed `tensor_var_infos`, which is immune to
+    /// the parser's postfix span reuse. A value / chained receiver
+    /// (`(a + b).sum()`, `a.reshape(..).sum()`) stamps the *call* span onto
+    /// the receiver, so the span-keyed side-table holds the reduce's *result*
+    /// type (a scalar, or the rank-1-lower axis tensor) at the receiver key —
+    /// the receiver's own element type is unrecoverable there. Those stay on
+    /// `karac run`; bind the receiver to a `let` first. `None` when the
+    /// method isn't a reduce or the receiver isn't a tensor identifier.
+    pub(super) fn try_compile_tensor_reduce(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        _call_span: &Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let is_full = matches!(method, "sum" | "mean" | "prod" | "min" | "max");
+        let is_axis = matches!(method, "sum_axis" | "mean_axis");
+        if !is_full && !is_axis {
+            return Ok(None);
+        }
+        let ExprKind::Identifier(name) = &object.kind else {
+            return Ok(None);
+        };
+        let Some(info) = self.tensor_var_infos.get(name.as_str()).cloned() else {
+            return Ok(None);
+        };
+        let t_ptr = self.tensor_ptr_for_var(name)?;
+        let result = if is_full {
+            self.compile_tensor_full_reduce(method, info.elem, info.elem_unsigned, t_ptr)?
+        } else {
+            self.compile_tensor_axis_reduce(
+                method,
+                info.elem,
+                info.elem_unsigned,
+                info.dims.len(),
+                t_ptr,
+                args,
+            )?
+        };
+        Ok(Some(result))
+    }
+
+    /// Full reduce → scalar. `sum`/`prod` fold via `compile_binop_typed`
+    /// (inheriting the int-overflow trap); `min`/`max` seed element 0 and
+    /// keep the extreme; `mean` is `sum / count` as `f64`. Empty tensor traps.
+    fn compile_tensor_full_reduce(
+        &mut self,
+        method: &str,
+        elem: BasicTypeEnum<'ctx>,
+        is_unsigned: bool,
+        t_ptr: PointerValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let rank = self.tensor_load_rank(t_ptr);
+        let count = self.tensor_count_runtime(t_ptr, rank);
+        let nonempty = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, count, i64_t.const_zero(), "t.red.ne")
+            .unwrap();
+        self.emit_tensor_guard(nonempty, "cannot reduce an empty tensor")?;
+        let data = self.tensor_data_ptr_dyn(t_ptr, rank, "t.red.data");
+        let acc = self.emit_scalar_reduce_loop(method, elem, is_unsigned, data, count)?;
+        if method == "mean" {
+            let sum_f = self.to_float(acc)?;
+            let count_f = self
+                .builder
+                .build_unsigned_int_to_float(count, self.context.f64_type(), "t.red.cf")
+                .unwrap();
+            let m = self
+                .builder
+                .build_float_div(sum_f, count_f, "t.red.mean")
+                .unwrap();
+            Ok(m.into())
+        } else {
+            Ok(acc)
+        }
+    }
+
+    /// The accumulate loop for a full reduce over `count` elements at `data`.
+    /// `sum`/`mean` seed 0 + Add; `prod` seeds 1 + Mul; `min`/`max` seed
+    /// `data[0]` and compare-select (NaN never displaces — the scalar `<`
+    /// posture). Returns the accumulator (for `mean`, the raw sum).
+    fn emit_scalar_reduce_loop(
+        &mut self,
+        method: &str,
+        elem: BasicTypeEnum<'ctx>,
+        is_unsigned: bool,
+        data: PointerValue<'ctx>,
+        count: IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let is_float = elem.is_float_type();
+        let load_at = |s: &Self, i: IntValue<'ctx>| -> BasicValueEnum<'ctx> {
+            let p = unsafe { s.builder.build_gep(elem, data, &[i], "t.red.ep").unwrap() };
+            s.builder.build_load(elem, p, "t.red.ev").unwrap()
+        };
+        // Seed + start index.
+        let (seed, start): (BasicValueEnum<'ctx>, u64) = match method {
+            "sum" | "mean" => (
+                if is_float {
+                    elem.into_float_type().const_zero().into()
+                } else {
+                    elem.into_int_type().const_zero().into()
+                },
+                0,
+            ),
+            "prod" => (
+                if is_float {
+                    elem.into_float_type().const_float(1.0).into()
+                } else {
+                    elem.into_int_type().const_int(1, false).into()
+                },
+                0,
+            ),
+            "min" | "max" => (load_at(self, i64_t.const_zero()), 1),
+            _ => unreachable!("emit_scalar_reduce_loop: '{method}'"),
+        };
+        let acc_slot = self.create_entry_alloca(fn_val, "t.red.acc", elem);
+        self.builder.build_store(acc_slot, seed).unwrap();
+        let iv = self.create_entry_alloca(fn_val, "t.red.i", i64_t.into());
+        self.builder
+            .build_store(iv, i64_t.const_int(start, false))
+            .unwrap();
+        let head = self.context.append_basic_block(fn_val, "t.red.head");
+        let body = self.context.append_basic_block(fn_val, "t.red.body");
+        let exit = self.context.append_basic_block(fn_val, "t.red.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, iv, "t.red.iv")
+            .unwrap()
+            .into_int_value();
+        let cont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, count, "t.red.cont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cont, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let x = load_at(self, i);
+        let acc = self.builder.build_load(elem, acc_slot, "t.red.a").unwrap();
+        let new = match method {
+            "sum" | "mean" => self.compile_binop_typed(&BinOp::Add, acc, x, is_unsigned)?,
+            "prod" => self.compile_binop_typed(&BinOp::Mul, acc, x, is_unsigned)?,
+            "min" | "max" => {
+                let is_min = method == "min";
+                let take = if is_float {
+                    let pred = if is_min {
+                        FloatPredicate::OLT
+                    } else {
+                        FloatPredicate::OGT
+                    };
+                    self.builder
+                        .build_float_compare(
+                            pred,
+                            x.into_float_value(),
+                            acc.into_float_value(),
+                            "t.red.cmp",
+                        )
+                        .unwrap()
+                } else {
+                    let pred = match (is_min, is_unsigned) {
+                        (true, false) => IntPredicate::SLT,
+                        (true, true) => IntPredicate::ULT,
+                        (false, false) => IntPredicate::SGT,
+                        (false, true) => IntPredicate::UGT,
+                    };
+                    self.builder
+                        .build_int_compare(
+                            pred,
+                            x.into_int_value(),
+                            acc.into_int_value(),
+                            "t.red.cmp",
+                        )
+                        .unwrap()
+                };
+                self.builder
+                    .build_select(take, x, acc, "t.red.sel")
+                    .unwrap()
+            }
+            _ => unreachable!(),
+        };
+        self.builder.build_store(acc_slot, new).unwrap();
+        let ni = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "t.red.ni")
+            .unwrap();
+        self.builder.build_store(iv, ni).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(exit);
+        Ok(self
+            .builder
+            .build_load(elem, acc_slot, "t.red.out")
+            .unwrap())
+    }
+
+    /// `sum_axis(n)` / `mean_axis(n)` → a fresh rank-1-lower tensor (rank-1
+    /// receiver → a scalar). The result element type is the receiver's for
+    /// `sum_axis`, `f64` for `mean_axis`. Reuses the `iter_axis`
+    /// outer/inner/n_axis decomposition (runtime axis OK); the result is
+    /// zero-init'd then each source element is added into its dropped-axis
+    /// cell, and `mean_axis` divides each cell by `dims[n]`. Empty tensor +
+    /// axis bounds trap at runtime.
+    fn compile_tensor_axis_reduce(
+        &mut self,
+        method: &str,
+        in_elem: BasicTypeEnum<'ctx>,
+        in_unsigned: bool,
+        rank: usize,
+        t_ptr: PointerValue<'ctx>,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "{method} takes exactly 1 argument (the axis), found {}",
+                args.len()
+            ));
+        }
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let is_mean = method == "mean_axis";
+        let res_elem: BasicTypeEnum<'ctx> = if is_mean {
+            self.context.f64_type().into()
+        } else {
+            in_elem
+        };
+        let res_elem_size = self.tensor_elem_size(res_elem)?;
+
+        let axis = self.compile_expr(&args[0].value)?.into_int_value();
+        let rank_const = i64_t.const_int(rank as u64, false);
+        let oob = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, axis, rank_const, "t.axr.oob")
+            .unwrap();
+        let ok = self.builder.build_not(oob, "t.axr.ok").unwrap();
+        self.emit_tensor_guard(ok, "axis reduce axis out of bounds")?;
+
+        let rdims: Vec<IntValue<'ctx>> =
+            (0..rank).map(|i| self.tensor_load_dim(t_ptr, i)).collect();
+        let src_data = self.tensor_data_ptr(t_ptr, rank, "t.axr.src");
+        let mut total = i64_t.const_int(1, false);
+        for d in &rdims {
+            total = self.builder.build_int_mul(total, *d, "t.axr.tot").unwrap();
+        }
+        let nonempty = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, total, i64_t.const_zero(), "t.axr.ne")
+            .unwrap();
+        self.emit_tensor_guard(nonempty, "cannot reduce an empty tensor")?;
+
+        if rank == 1 {
+            // Reduce the single axis to a scalar.
+            let acc =
+                self.emit_scalar_reduce_loop("sum", in_elem, in_unsigned, src_data, rdims[0])?;
+            if is_mean {
+                let sum_f = self.to_float(acc)?;
+                let n_f = self
+                    .builder
+                    .build_unsigned_int_to_float(rdims[0], self.context.f64_type(), "t.axr.nf")
+                    .unwrap();
+                return Ok(self
+                    .builder
+                    .build_float_div(sum_f, n_f, "t.axr.m")
+                    .unwrap()
+                    .into());
+            }
+            return Ok(acc);
+        }
+
+        // outer (i<axis), n_axis (i==axis), inner (i>axis) via runtime select.
+        let mut outer = i64_t.const_int(1, false);
+        let mut inner = i64_t.const_int(1, false);
+        let mut n_axis = i64_t.const_int(1, false);
+        for (i, &d) in rdims.iter().enumerate() {
+            let ci = i64_t.const_int(i as u64, false);
+            let lt = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, ci, axis, "t.axr.lt")
+                .unwrap();
+            let eq = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, ci, axis, "t.axr.eq")
+                .unwrap();
+            let gt = self
+                .builder
+                .build_int_compare(IntPredicate::UGT, ci, axis, "t.axr.gt")
+                .unwrap();
+            let om = self.builder.build_int_mul(outer, d, "t.axr.om").unwrap();
+            outer = self
+                .builder
+                .build_select(lt, om, outer, "t.axr.o")
+                .unwrap()
+                .into_int_value();
+            n_axis = self
+                .builder
+                .build_select(eq, d, n_axis, "t.axr.na")
+                .unwrap()
+                .into_int_value();
+            let im = self.builder.build_int_mul(inner, d, "t.axr.im").unwrap();
+            inner = self
+                .builder
+                .build_select(gt, im, inner, "t.axr.i")
+                .unwrap()
+                .into_int_value();
+        }
+        let sub_rank = rank - 1;
+        let sub_dims: Vec<IntValue<'ctx>> = (0..sub_rank)
+            .map(|k| {
+                let ck = i64_t.const_int(k as u64, false);
+                let lt = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, ck, axis, "t.axr.sdlt")
+                    .unwrap();
+                self.builder
+                    .build_select(lt, rdims[k], rdims[k + 1], "t.axr.sd")
+                    .unwrap()
+                    .into_int_value()
+            })
+            .collect();
+        let result_size = self
+            .builder
+            .build_int_mul(outer, inner, "t.axr.rsz")
+            .unwrap();
+
+        let sub_rank_val = i64_t.const_int(sub_rank as u64, false);
+        let (res, res_data) = self.tensor_alloc_runtime(sub_rank_val, result_size, res_elem_size);
+        for (k, dv) in sub_dims.iter().enumerate() {
+            let slot = self.tensor_header_slot(res, 1 + k as u64, &format!("t.axr.hd{k}"));
+            self.builder.build_store(slot, *dv).unwrap();
+        }
+        // Zero-init the result data (sum identity for int + float).
+        let zbytes = self
+            .builder
+            .build_int_mul(
+                result_size,
+                i64_t.const_int(res_elem_size, false),
+                "t.axr.zb",
+            )
+            .unwrap();
+        self.builder
+            .build_memset(res_data, 8, self.context.i8_type().const_zero(), zbytes)
+            .map_err(|e| format!("axis-reduce zero-init failed: {:?}", e))?;
+
+        // Accumulate: for f in 0..total, r = (f/(inner*n_axis))*inner + f%inner.
+        let inner_naxis = self
+            .builder
+            .build_int_mul(inner, n_axis, "t.axr.ina")
+            .unwrap();
+        let fv = self.create_entry_alloca(fn_val, "t.axr.f", i64_t.into());
+        self.builder.build_store(fv, i64_t.const_zero()).unwrap();
+        let head = self.context.append_basic_block(fn_val, "t.axr.head");
+        let body = self.context.append_basic_block(fn_val, "t.axr.body");
+        let exit = self.context.append_basic_block(fn_val, "t.axr.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let f = self
+            .builder
+            .build_load(i64_t, fv, "t.axr.fv")
+            .unwrap()
+            .into_int_value();
+        let cont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, f, total, "t.axr.cont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cont, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let inner_idx = self
+            .builder
+            .build_int_unsigned_rem(f, inner, "t.axr.ii")
+            .unwrap();
+        let outer_idx = self
+            .builder
+            .build_int_unsigned_div(f, inner_naxis, "t.axr.oi")
+            .unwrap();
+        let r = {
+            let oi_inner = self
+                .builder
+                .build_int_mul(outer_idx, inner, "t.axr.oii")
+                .unwrap();
+            self.builder
+                .build_int_add(oi_inner, inner_idx, "t.axr.r")
+                .unwrap()
+        };
+        let src_p = unsafe {
+            self.builder
+                .build_gep(in_elem, src_data, &[f], "t.axr.sp")
+                .unwrap()
+        };
+        let src_v = self.builder.build_load(in_elem, src_p, "t.axr.sv").unwrap();
+        let res_p = unsafe {
+            self.builder
+                .build_gep(res_elem, res_data, &[r], "t.axr.rp")
+                .unwrap()
+        };
+        let cur = self
+            .builder
+            .build_load(res_elem, res_p, "t.axr.cur")
+            .unwrap();
+        // `mean_axis` accumulates in f64 (the result type); `sum_axis` in the
+        // element type (with the overflow trap via compile_binop_typed).
+        let added = if is_mean {
+            let sv_f = self.to_float(src_v)?;
+            self.builder
+                .build_float_add(cur.into_float_value(), sv_f, "t.axr.add")
+                .unwrap()
+                .into()
+        } else {
+            self.compile_binop_typed(&BinOp::Add, cur, src_v, in_unsigned)?
+        };
+        self.builder.build_store(res_p, added).unwrap();
+        let nf = self
+            .builder
+            .build_int_add(f, i64_t.const_int(1, false), "t.axr.nf")
+            .unwrap();
+        self.builder.build_store(fv, nf).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(exit);
+
+        // `mean_axis`: divide each cell by n_axis.
+        if is_mean {
+            let n_axis_f = self
+                .builder
+                .build_unsigned_int_to_float(n_axis, self.context.f64_type(), "t.axr.naf")
+                .unwrap();
+            let dv = self.create_entry_alloca(fn_val, "t.axr.d", i64_t.into());
+            self.builder.build_store(dv, i64_t.const_zero()).unwrap();
+            let dh = self.context.append_basic_block(fn_val, "t.axr.dhead");
+            let db = self.context.append_basic_block(fn_val, "t.axr.dbody");
+            let de = self.context.append_basic_block(fn_val, "t.axr.dexit");
+            self.builder.build_unconditional_branch(dh).unwrap();
+            self.builder.position_at_end(dh);
+            let di = self
+                .builder
+                .build_load(i64_t, dv, "t.axr.div")
+                .unwrap()
+                .into_int_value();
+            let dcont = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, di, result_size, "t.axr.dcont")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(dcont, db, de)
+                .unwrap();
+            self.builder.position_at_end(db);
+            let cell_p = unsafe {
+                self.builder
+                    .build_gep(res_elem, res_data, &[di], "t.axr.cp")
+                    .unwrap()
+            };
+            let cell = self
+                .builder
+                .build_load(res_elem, cell_p, "t.axr.cv")
+                .unwrap()
+                .into_float_value();
+            let m = self
+                .builder
+                .build_float_div(cell, n_axis_f, "t.axr.dm")
+                .unwrap();
+            self.builder.build_store(cell_p, m).unwrap();
+            let dni = self
+                .builder
+                .build_int_add(di, i64_t.const_int(1, false), "t.axr.dni")
+                .unwrap();
+            self.builder.build_store(dv, dni).unwrap();
+            self.builder.build_unconditional_branch(dh).unwrap();
+            self.builder.position_at_end(de);
+        }
+
         Ok(res.into())
     }
 

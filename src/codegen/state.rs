@@ -38,6 +38,10 @@ pub(crate) struct VarSlot<'ctx> {
 #[derive(Clone)]
 pub(crate) struct TensorVarInfo<'ctx> {
     pub(crate) elem: BasicTypeEnum<'ctx>,
+    /// True iff the element type is an unsigned integer — the LLVM `IntType`
+    /// can't carry this, but reductions (`min`/`max` compare, `sum`/`prod`
+    /// overflow detection) need it. Set from the element `TypeExpr`.
+    pub(crate) elem_unsigned: bool,
     pub(crate) dims: Vec<Option<i64>>,
 }
 

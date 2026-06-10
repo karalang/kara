@@ -5436,6 +5436,54 @@ fn main() {
         );
     }
 
+    /// Tensor reduction heap lifecycle (phase-11 line 47, Slice B). Full
+    /// reduces return a scalar (no malloc); axis reduces malloc a fresh
+    /// rank-1-lower block that the let-binding `FreeTensor` must reclaim. A
+    /// chained `m.sum_axis(0)` on a let-bound axis-reduce result and receiver
+    /// reuse after the reduces pin that nothing is double-freed or read after
+    /// free.
+    #[test]
+    fn asan_tensor_reduce_lifecycle_clean() {
+        let label = "tensor_reduce_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let a: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    println(a.sum());
+    println(a.max());
+    let s0 = a.sum_axis(0);
+    println(s0[1]);
+    let s1 = a.sum_axis(1);
+    println(s1[0]);
+    let m = a.mean_axis(0);
+    println(m[2]);
+    let chained = m.sum_axis(0);
+    println(chained);
+    println(a[1, 2]);
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check the axis-reduce result FreeTensor / double-free paths",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["21", "6", "7", "6", "4.5", "10.5", "6"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Tensor shape-transform heap lifecycle (phase-11 follow-on slice):
     /// reshape / permute / slice / squeeze each malloc a fresh result
     /// block and copy the data; the receiver is borrowed (keeps its own

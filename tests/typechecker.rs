@@ -24876,6 +24876,63 @@ fn test_tensor_arithmetic_generic_receiver_rejected() {
     );
 }
 
+#[test]
+fn test_tensor_reduce_typing() {
+    // Full reduce: sum/prod/min/max -> T, mean -> f64 (even for an int
+    // tensor). Axis reduce: sum_axis -> rank-1-lower tensor, mean_axis ->
+    // Tensor[f64, ...]; a rank-1 axis reduce yields a scalar.
+    typecheck_ok(
+        "fn main() {\n\
+             let a: Tensor[i64, [2, 3]] = Tensor.zeros([2, 3]);\n\
+             let s: i64 = a.sum();\n\
+             let p: i64 = a.prod();\n\
+             let mn: i64 = a.min();\n\
+             let mx: i64 = a.max();\n\
+             let av: f64 = a.mean();\n\
+             let s0: Tensor[i64, [3]] = a.sum_axis(0);\n\
+             let s1: Tensor[i64, [2]] = a.sum_axis(1);\n\
+             let m0: Tensor[f64, [3]] = a.mean_axis(0);\n\
+             let v: Tensor[f64, [4]] = Tensor.zeros([4]);\n\
+             let vs: f64 = v.sum();\n\
+             let vsa: f64 = v.sum_axis(0);\n\
+         }\n",
+    );
+    // A `Numeric`-bounded element param with a *static* rank reduces fine
+    // (the element type need not be a concrete primitive).
+    typecheck_ok(
+        "fn trace[T: Numeric](t: Tensor[T, [2, 2]]) -> T { t.sum() }\n\
+         fn main() {}\n",
+    );
+}
+
+#[test]
+fn test_tensor_reduce_error_cases() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let a: Tensor[i64, [2, 3]] = Tensor.zeros([2, 3]);\n\
+             let bad3 = a.sum(1);\n\
+             let bad4 = a.sum_axis(7);\n\
+             let bad5: Tensor[bool, [2]] = Tensor.zeros([2]);\n\
+             let bad6 = bad5.sum();\n\
+         }\n\
+         fn axis_generic[T: Numeric, ...S](t: Tensor[T, S]) {\n\
+             let x = t.sum_axis(0);\n\
+         }\n",
+    );
+    for needle in [
+        "takes no arguments",
+        "axis 7 out of bounds for rank-2 tensor",
+        "requires a numeric element type",
+        // axis reduce needs a statically-known rank (the splice-generic case)
+        "requires the tensor's rank to be statically known",
+    ] {
+        assert!(
+            errors.iter().any(|e| e.message.contains(needle)),
+            "missing '{needle}' in {errors:?}",
+        );
+    }
+}
+
 // ── Effect-resource dispatch types untyped `let` bindings ─────────
 //
 // bugs.md "Untyped `let` from an effect-resource method call doesn't

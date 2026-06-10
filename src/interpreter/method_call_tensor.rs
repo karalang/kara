@@ -21,7 +21,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use crate::ast::{CallArg, Expr, ExprKind, TypeExpr, TypeKind};
+use crate::ast::{BinOp, CallArg, Expr, ExprKind, TypeExpr, TypeKind};
 use crate::interpreter::value::Value;
 use crate::token::Span;
 
@@ -193,6 +193,17 @@ pub(super) fn index_components(idx: &Value) -> Option<Vec<i64>> {
     }
 }
 
+/// Numeric value as `f64` — for `mean` / `mean_axis`, which always yield a
+/// float regardless of the element type. Non-numeric values (never reached
+/// for a typechecked reduce) fall back to `0.0`.
+fn value_to_f64(v: &Value) -> f64 {
+    match v {
+        Value::Int(i) => *i as f64,
+        Value::Float(f) => *f,
+        _ => 0.0,
+    }
+}
+
 impl<'a> super::Interpreter<'a> {
     /// Scalar fill `Value` for `Tensor.zeros` / `Tensor.ones`, picked
     /// from the element-type hint threaded off the enclosing `let`'s
@@ -328,7 +339,189 @@ impl<'a> super::Interpreter<'a> {
             "permute" => Some(self.eval_tensor_permute(dims, data, args, span)),
             "slice" => Some(self.eval_tensor_slice(dims, data, args, span)),
             "squeeze" => Some(self.eval_tensor_squeeze(dims, data, args, span)),
+            "sum" | "mean" | "prod" | "min" | "max" => {
+                Some(self.eval_tensor_reduce(method, data, span))
+            }
+            "sum_axis" | "mean_axis" => {
+                Some(self.eval_tensor_axis_reduce(method, dims, data, args, span))
+            }
             _ => None,
+        }
+    }
+
+    /// Full reduction `sum` / `mean` / `prod` / `min` / `max` → a scalar.
+    /// `sum`/`prod` fold via the scalar binop (inheriting overflow / the
+    /// element's Int-vs-Float arithmetic); `min`/`max` keep the extreme
+    /// element; `mean` is `sum / count` as `f64` (always — the decided rule).
+    /// An empty tensor is a runtime error for every reduce: `min`/`max` have
+    /// no identity, and the dynamically-typed tree-walk can't type the
+    /// identity of an empty `sum`/`prod` — a uniform trap keeps it in step
+    /// with codegen. (`run_program` bypasses typecheck, so this is the only
+    /// guard.)
+    fn eval_tensor_reduce(
+        &mut self,
+        method: &str,
+        data: &Arc<RwLock<Vec<Value>>>,
+        span: &Span,
+    ) -> Value {
+        let elems = data.read().unwrap().clone();
+        if elems.is_empty() {
+            return self.record_runtime_error(
+                format!(
+                    "cannot reduce an empty tensor (`{method}` has no value for zero elements)"
+                ),
+                span,
+            );
+        }
+        let count = elems.len();
+        match method {
+            "sum" => self.tensor_fold_reduce(&BinOp::Add, elems, span),
+            "prod" => self.tensor_fold_reduce(&BinOp::Mul, elems, span),
+            "min" => Self::tensor_minmax_reduce(true, elems),
+            "max" => Self::tensor_minmax_reduce(false, elems),
+            "mean" => {
+                let s = self.tensor_fold_reduce(&BinOp::Add, elems, span);
+                if self.pending_cf.is_some() {
+                    return Value::Unit;
+                }
+                Value::Float(value_to_f64(&s) / count as f64)
+            }
+            _ => unreachable!("eval_tensor_reduce: unrouted method '{method}'"),
+        }
+    }
+
+    /// Fold `elems` (non-empty) left-to-right through the scalar binop.
+    fn tensor_fold_reduce(&mut self, op: &BinOp, elems: Vec<Value>, span: &Span) -> Value {
+        let mut it = elems.into_iter();
+        let mut acc = it.next().expect("non-empty");
+        for x in it {
+            acc = self.eval_binary(op, acc, x, span);
+            if self.pending_cf.is_some() {
+                return Value::Unit;
+            }
+        }
+        acc
+    }
+
+    /// Keep the min (or max) element of a non-empty `elems`. NaN compares
+    /// false against everything, so it neither displaces nor is taken — the
+    /// scalar `<` posture; NaN propagation is a v1.5 refinement.
+    fn tensor_minmax_reduce(is_min: bool, elems: Vec<Value>) -> Value {
+        let mut it = elems.into_iter();
+        let mut acc = it.next().expect("non-empty");
+        for x in it {
+            let take = match (&acc, &x) {
+                (Value::Int(a), Value::Int(b)) => {
+                    if is_min {
+                        b < a
+                    } else {
+                        b > a
+                    }
+                }
+                (Value::Float(a), Value::Float(b)) => {
+                    if is_min {
+                        b < a
+                    } else {
+                        b > a
+                    }
+                }
+                _ => false,
+            };
+            if take {
+                acc = x;
+            }
+        }
+        acc
+    }
+
+    /// `t.sum_axis(n)` / `t.mean_axis(n)` — reduce along axis `n`, dropping
+    /// that slot (NumPy `sum(axis=n)` semantics). A rank-1 receiver reduces
+    /// to a scalar. `mean_axis` divides each summed cell by `dims[n]` as
+    /// `f64`. Empty tensor → runtime error (parity with `eval_tensor_reduce`).
+    /// Axis bounds re-checked here (the `run_program` bypass).
+    fn eval_tensor_axis_reduce(
+        &mut self,
+        method: &str,
+        dims: &[i64],
+        data: &Arc<RwLock<Vec<Value>>>,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Value {
+        let Some(axis_arg) = args.first() else {
+            return self.record_runtime_error(
+                format!("{method} takes exactly 1 argument (the axis)"),
+                span,
+            );
+        };
+        let axis_val = self.eval_expr_inner(&axis_arg.value);
+        let Value::Int(axis) = axis_val else {
+            return self.record_runtime_error(format!("{method} axis must be an integer"), span);
+        };
+        let rank = dims.len();
+        if axis < 0 || axis as usize >= rank {
+            return self.record_runtime_error(
+                format!("axis {} out of bounds for rank-{} tensor", axis, rank),
+                span,
+            );
+        }
+        let axis = axis as usize;
+        let elems = data.read().unwrap().clone();
+        if elems.is_empty() {
+            return self.record_runtime_error(
+                format!(
+                    "cannot reduce an empty tensor (`{method}` has no value for zero elements)"
+                ),
+                span,
+            );
+        }
+        let is_mean = method == "mean_axis";
+
+        if rank == 1 {
+            let s = self.tensor_fold_reduce(&BinOp::Add, elems.clone(), span);
+            if self.pending_cf.is_some() {
+                return Value::Unit;
+            }
+            return if is_mean {
+                Value::Float(value_to_f64(&s) / elems.len() as f64)
+            } else {
+                s
+            };
+        }
+
+        // result[outer*inner + inner_idx] = sum over the axis of input[f],
+        // where inner = product(dims right of axis), n_axis = dims[axis].
+        let inner: usize = dims[axis + 1..].iter().map(|&d| d as usize).product();
+        let n_axis = dims[axis] as usize;
+        let result_size = elems.len() / n_axis;
+        let zero = match elems.first() {
+            Some(Value::Int(_)) => Value::Int(0),
+            _ => Value::Float(0.0),
+        };
+        let mut acc: Vec<Value> = vec![zero; result_size];
+        for (f, v) in elems.iter().enumerate() {
+            let inner_idx = f % inner;
+            let outer_idx = f / (inner * n_axis);
+            let r = outer_idx * inner + inner_idx;
+            acc[r] = self.eval_binary(&BinOp::Add, acc[r].clone(), v.clone(), span);
+            if self.pending_cf.is_some() {
+                return Value::Unit;
+            }
+        }
+        if is_mean {
+            acc = acc
+                .iter()
+                .map(|s| Value::Float(value_to_f64(s) / n_axis as f64))
+                .collect();
+        }
+        let sub_dims: Vec<i64> = dims
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != axis)
+            .map(|(_, &d)| d)
+            .collect();
+        Value::Tensor {
+            dims: Arc::new(sub_dims),
+            data: Arc::new(RwLock::new(acc)),
         }
     }
 
