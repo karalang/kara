@@ -184,6 +184,14 @@ pub struct ProfileConfig {
     /// moot-flag pass rejects any whose guarded effect is already forbidden
     /// outright by `profile`. Empty at the substrate layer.
     pub guarded_knobs: Vec<ProfileKnob>,
+    /// `[profile] panic_on_alloc_failure` (phase-8-stdlib-floor item 3).
+    /// `None` = unset (the `true` default — panicking allocators allowed);
+    /// `Some(false)` = hard mode (the typechecker rejects every panicking-alloc
+    /// site, item 4, and requires the `try_*` companions, item 2). When the key
+    /// is present a [`ProfileKnob`] guarding `allocates(Heap)` is registered in
+    /// `guarded_knobs`, so the moot-flag pass rejects it on `embedded`/`kernel`
+    /// (heap already forbidden → the flag is meaningless).
+    pub panic_on_alloc_failure: Option<bool>,
 }
 
 impl ProfileConfig {
@@ -193,7 +201,15 @@ impl ProfileConfig {
         Self {
             profile,
             guarded_knobs: Vec::new(),
+            panic_on_alloc_failure: None,
         }
+    }
+
+    /// Effective `panic_on_alloc_failure` value — `true` (the default) unless
+    /// the manifest explicitly set it to `false`. The "hard mode" predicate the
+    /// typechecker's panicking-alloc rejection pass (item 4) gates on.
+    pub fn panics_on_alloc_failure(&self) -> bool {
+        self.panic_on_alloc_failure.unwrap_or(true)
     }
 
     /// Moot-flag rejection scaffold. A knob that toggles a runtime effect is
@@ -899,7 +915,7 @@ fn parse_profile_table(
     profile: CompileProfile,
     warnings: &mut Vec<ManifestWarning>,
 ) -> Result<ProfileConfig, ManifestError> {
-    let config = ProfileConfig::with_profile(profile);
+    let mut config = ProfileConfig::with_profile(profile);
     let Some(value) = table.get("profile") else {
         return Ok(config);
     };
@@ -910,15 +926,40 @@ fn parse_profile_table(
             key: "profile".to_string(),
             expected: "a table (e.g. `[profile]`)",
         })?;
-    // No knob keys recognised at the substrate layer — downstream entries
-    // add a recognised-key arm here and push the parsed value onto `config`.
-    for key in profile_table.keys() {
-        warnings.push(ManifestWarning {
-            line: None,
-            message: format!(
-                "unknown key `[profile].{key}` — ignored in v1 (reserved for a later release)"
-            ),
-        });
+    for (key, val) in profile_table {
+        match key.as_str() {
+            // `panic_on_alloc_failure` (phase-8-stdlib-floor item 3) — `bool`,
+            // default `true`. `false` is hard mode: the typechecker rejects
+            // every panicking-alloc site (item 4). Present-and-typed → record
+            // the value and register a `ProfileKnob` guarding `allocates(Heap)`
+            // so the moot-flag pass below rejects it on a heap-forbidding
+            // profile (`embedded`/`kernel`), where the flag is meaningless.
+            "panic_on_alloc_failure" => match val {
+                toml::Value::Boolean(b) => {
+                    config.panic_on_alloc_failure = Some(*b);
+                    config.guarded_knobs.push(ProfileKnob {
+                        name: "panic_on_alloc_failure".to_string(),
+                        guarded_verb: EffectVerbKind::Allocates,
+                        guarded_resource: "Heap".to_string(),
+                    });
+                }
+                _ => {
+                    return Err(ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: "profile.panic_on_alloc_failure".to_string(),
+                        expected: "a boolean (e.g. `panic_on_alloc_failure = false`)",
+                    });
+                }
+            },
+            // Unknown keys soft-warn (reserved for later `[profile]` knobs) —
+            // same drop-on-the-floor discipline as `[wasm]` / `[release]`.
+            other => warnings.push(ManifestWarning {
+                line: None,
+                message: format!(
+                    "unknown key `[profile].{other}` — ignored in v1 (reserved for a later release)"
+                ),
+            }),
+        }
     }
     // Moot-flag rejection scaffold (no-op until a knob registers a guarded
     // effect). Surface the first moot knob as a hard error.
@@ -3470,6 +3511,7 @@ max-memory-pages = 4096
             let cfg = ProfileConfig {
                 profile,
                 guarded_knobs: vec![knob.clone()],
+                ..Default::default()
             };
             let errs = cfg.moot_knob_errors();
             assert_eq!(errs.len(), 1, "{profile:?}");
@@ -3481,6 +3523,7 @@ max-memory-pages = 4096
         let cfg = ProfileConfig {
             profile: CompileProfile::Default,
             guarded_knobs: vec![knob],
+            ..Default::default()
         };
         assert!(cfg.moot_knob_errors().is_empty());
         // An empty knob set never produces a moot finding (the substrate
@@ -3493,6 +3536,67 @@ max-memory-pages = 4096
             assert!(ProfileConfig::with_profile(profile)
                 .moot_knob_errors()
                 .is_empty());
+        }
+    }
+
+    // ===== `panic_on_alloc_failure` knob (phase-8-stdlib-floor item 3) =====
+
+    #[test]
+    fn panic_on_alloc_failure_false_parsed_on_default() {
+        let src = "[package]\nname = \"hello\"\n\n[profile]\npanic_on_alloc_failure = false\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.profile_config.panic_on_alloc_failure, Some(false));
+        assert!(!m.profile_config.panics_on_alloc_failure());
+        // Present key registers the heap-guarding knob (not moot on default).
+        assert_eq!(m.profile_config.guarded_knobs.len(), 1);
+        assert_eq!(
+            m.profile_config.guarded_knobs[0].name,
+            "panic_on_alloc_failure"
+        );
+    }
+
+    #[test]
+    fn panic_on_alloc_failure_true_parsed_on_default() {
+        let src = "[package]\nname = \"hello\"\n\n[profile]\npanic_on_alloc_failure = true\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.profile_config.panic_on_alloc_failure, Some(true));
+        assert!(m.profile_config.panics_on_alloc_failure());
+    }
+
+    #[test]
+    fn panic_on_alloc_failure_absent_defaults_true() {
+        let m = parse_manifest(&p(), "[package]\nname = \"hello\"\n").unwrap();
+        assert_eq!(m.profile_config.panic_on_alloc_failure, None);
+        assert!(m.profile_config.panics_on_alloc_failure());
+    }
+
+    #[test]
+    fn panic_on_alloc_failure_moot_on_heap_forbidding_profiles() {
+        for prof in ["embedded", "kernel"] {
+            let src = format!(
+                "[package]\nname = \"hello\"\nprofile = \"{prof}\"\n\n[profile]\npanic_on_alloc_failure = false\n"
+            );
+            let err = parse_manifest(&p(), &src).unwrap_err();
+            match err {
+                ManifestError::ProfileKnobMoot { message, .. } => {
+                    assert!(message.contains("panic_on_alloc_failure"), "{message}");
+                    assert!(message.contains("allocates(Heap)"), "{message}");
+                    assert!(message.contains(prof), "{message}");
+                }
+                other => panic!("expected ProfileKnobMoot on {prof}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn panic_on_alloc_failure_non_bool_hard_errors() {
+        let src = "[package]\nname = \"hello\"\n\n[profile]\npanic_on_alloc_failure = \"yes\"\n";
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => {
+                assert_eq!(key, "profile.panic_on_alloc_failure");
+            }
+            other => panic!("expected InvalidFieldType, got {other:?}"),
         }
     }
 
