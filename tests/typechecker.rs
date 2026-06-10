@@ -24801,6 +24801,81 @@ fn test_tensor_shape_family_generic_receiver_rejected() {
     );
 }
 
+#[test]
+fn test_tensor_elementwise_arithmetic_typing() {
+    // `+ - * /` between same-shape tensors, scalar broadcast on either side
+    // (with an unsuffixed literal promoting to the element type), and unary
+    // negation — all yield a tensor of the same shape/element type.
+    typecheck_ok(
+        "fn main() {\n\
+             let a: Tensor[f64, [2, 2]] = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let b: Tensor[f64, [2, 2]] = Tensor.from([[5.0, 6.0], [7.0, 8.0]]);\n\
+             let c: Tensor[f64, [2, 2]] = a + b;\n\
+             let d: Tensor[f64, [2, 2]] = a - b;\n\
+             let e: Tensor[f64, [2, 2]] = a * b;\n\
+             let f: Tensor[f64, [2, 2]] = a / b;\n\
+             let g: Tensor[f64, [2, 2]] = a + 2.0;\n\
+             let h: Tensor[f64, [2, 2]] = 2.0 * a;\n\
+             let p: Tensor[f64, [2, 2]] = a + 2;\n\
+             let n: Tensor[f64, [2, 2]] = -a;\n\
+         }\n",
+    );
+    // Two `?`-dim operands: no static error — equality is deferred to a
+    // runtime guard (mirrors the shape-transform partially-dynamic posture).
+    typecheck_ok(
+        "fn add_dyn(a: Tensor[f64, [?]], b: Tensor[f64, [?]]) -> Tensor[f64, [?]] {\n\
+             a + b\n\
+         }\n\
+         fn main() {}\n",
+    );
+}
+
+#[test]
+fn test_tensor_arithmetic_error_cases() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let a: Tensor[f64, [2, 2]] = Tensor.zeros([2, 2]);\n\
+             let b: Tensor[f64, [2, 3]] = Tensor.zeros([2, 3]);\n\
+             let c = a + b;\n\
+             let d: Tensor[f64, [4]] = Tensor.zeros([4]);\n\
+             let e = a - d;\n\
+             let h: Tensor[i64, [2, 2]] = Tensor.zeros([2, 2]);\n\
+             let k = a * h;\n\
+             let g = a == b;\n\
+         }\n",
+    );
+    for needle in [
+        "shape dim 1 mismatch in element-wise tensor op",
+        "shape rank mismatch in element-wise tensor op",
+        "tensor operands must share an element type",
+        "this operator is not defined on Tensor",
+    ] {
+        assert!(
+            errors.iter().any(|e| e.message.contains(needle)),
+            "missing '{needle}' in {errors:?}",
+        );
+    }
+}
+
+#[test]
+fn test_tensor_arithmetic_generic_receiver_rejected() {
+    // Like the shape-transform family, element-wise arithmetic needs a
+    // statically-known rank — a bare-`S` operand inside a shape-generic fn
+    // gets the focused error.
+    let errors = typecheck_errors(
+        "fn twice[T, ...S](a: Tensor[T, S]) -> Tensor[T, S] {\n\
+             a + a\n\
+         }\n\
+         fn main() {}\n",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("requires the tensor's rank to be statically known")),
+        "{errors:?}",
+    );
+}
+
 // ── Effect-resource dispatch types untyped `let` bindings ─────────
 //
 // bugs.md "Untyped `let` from an effect-resource method call doesn't

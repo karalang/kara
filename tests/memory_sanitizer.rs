@@ -5384,6 +5384,58 @@ fn main() {
         );
     }
 
+    /// Tensor element-wise arithmetic heap lifecycle (phase-11 line 47):
+    /// every `+ - * /` / unary `-` mallocs a fresh result; operands are
+    /// borrowed (keep their own `FreeTensor`); a fresh-temp intermediate in
+    /// `a + b + c` / `(a + b) * (b + c)` / `-a + b` is freed after the copy
+    /// (the `tensor_operand_is_owned_fresh_temp` path) — a missing free leaks
+    /// (Linux detect_leaks), a wrong free double-frees (caught everywhere).
+    /// Operand reuse after the ops pins that nothing was wrongly consumed.
+    #[test]
+    fn asan_tensor_arithmetic_lifecycle_clean() {
+        let label = "tensor_arithmetic_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let a: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    let b: Tensor[i64, [3]] = Tensor.from([10, 20, 30]);
+    let c: Tensor[i64, [3]] = Tensor.from([100, 200, 300]);
+    let r = a + b + c;
+    println(r[0]);
+    let r2 = (a + b) * (b + c);
+    println(r2[1]);
+    let n = -a + b;
+    println(n[0]);
+    let s = a + 5;
+    println(s[2]);
+    let m = a * 3 - b;
+    println(m[1]);
+    println(a[0]);
+    println(b[2]);
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check the fresh-temp operand free / FreeTensor double-free paths",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["111", "4840", "9", "8", "-14", "1", "30"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Tensor shape-transform heap lifecycle (phase-11 follow-on slice):
     /// reshape / permute / slice / squeeze each malloc a fresh result
     /// block and copy the data; the receiver is borrowed (keeps its own

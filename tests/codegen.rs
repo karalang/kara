@@ -39526,6 +39526,125 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_tensor_elementwise_arithmetic() {
+        // + - * / between tensors, a chained `a * b - a`, scalar broadcast
+        // both sides (incl. int-literal promotion), and unary neg. Operand
+        // reuse afterward confirms borrow-not-move. Output verified vs
+        // `karac run`.
+        let out = run_program(
+            "fn main() {\n\
+                 let a: Tensor[f64, [2, 2]] = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+                 let b: Tensor[f64, [2, 2]] = Tensor.from([[10.0, 20.0], [30.0, 40.0]]);\n\
+                 let c = a + b;\n\
+                 println(c[0, 0]); println(c[1, 1]);\n\
+                 let d = a * b - a;\n\
+                 println(d[0, 1]);\n\
+                 let s = a + 100.0;\n\
+                 println(s[0, 0]);\n\
+                 let p = a + 2;\n\
+                 println(p[0, 0]);\n\
+                 let n = -a;\n\
+                 println(n[1, 0]);\n\
+                 let sl = 100.0 - a;\n\
+                 println(sl[0, 0]);\n\
+                 println(a[0, 0]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "11\n44\n38\n101\n3\n-3\n99\n1\n",
+                "tensor element-wise arithmetic AOT output must match the interpreter twin",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_int_arithmetic_chained() {
+        // Int tensors, chained `a + b + c` and `(a + b) * c` (the fresh-temp
+        // intermediate free path), integer division. Output vs `karac run`.
+        let out = run_program(
+            "fn main() {\n\
+                 let a: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);\n\
+                 let b: Tensor[i64, [3]] = Tensor.from([10, 20, 30]);\n\
+                 let c: Tensor[i64, [3]] = Tensor.from([100, 200, 300]);\n\
+                 let r = a + b + c;\n\
+                 println(r[0]); println(r[2]);\n\
+                 let r2 = (a + b) * c;\n\
+                 println(r2[1]);\n\
+                 let q = c / b;\n\
+                 println(q[1]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "111\n333\n4400\n10\n",
+                "tensor int arithmetic / chained AOT output must match the interpreter twin",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_arithmetic_runtime_shape_mismatch_traps() {
+        // Two `?`-dim tensors that differ at runtime — the static check can't
+        // prove inequality, so the codegen runtime shape guard traps.
+        let captured = run_program_capturing(
+            "fn mk(n: i64) -> Tensor[f64, [?]] {\n\
+                 let t: Tensor[f64, [?]] = Tensor.zeros([n]);\n\
+                 t\n\
+             }\n\
+             fn main() {\n\
+                 let a: Tensor[f64, [?]] = mk(3);\n\
+                 let b: Tensor[f64, [?]] = mk(4);\n\
+                 let c = a + b;\n\
+                 println(c[0]);\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout
+                    .contains("tensor shape mismatch in element-wise operator"),
+                "expected the element-wise shape-mismatch trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_arithmetic_shape_guard_static_elision() {
+        // Two fully-static identical shapes: the typechecker proved equality,
+        // so codegen emits NO runtime shape guard. A `?`-dim operand keeps it.
+        let concrete = ir_for(
+            "fn main() {\n\
+                 let a: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);\n\
+                 let b: Tensor[i64, [4]] = Tensor.from([5, 6, 7, 8]);\n\
+                 let c = a + b;\n\
+                 println(c[0]);\n\
+             }\n",
+        );
+        assert!(
+            !concrete.contains("t.bin.rankeq"),
+            "static-equal shapes should elide the runtime shape guard:\n{concrete}",
+        );
+        let dynamic = ir_for(
+            "fn mk(n: i64) -> Tensor[i64, [?]] {\n\
+                 let t: Tensor[i64, [?]] = Tensor.zeros([n]);\n\
+                 t\n\
+             }\n\
+             fn main() {\n\
+                 let a: Tensor[i64, [?]] = mk(4);\n\
+                 let b: Tensor[i64, [?]] = mk(4);\n\
+                 let c = a + b;\n\
+                 println(c[0]);\n\
+             }\n",
+        );
+        assert!(
+            dynamic.contains("t.bin.rankeq"),
+            "a `?`-dim operand must keep the runtime shape guard:\n{dynamic}",
+        );
+    }
+
     // ── Owned String/Vec parameter retention (kata-22 family, 2026-06-06) ──
     //
     // The call ABI passes owned String/Vec headers by value while the

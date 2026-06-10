@@ -42,10 +42,22 @@ use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate};
 
-use crate::ast::{CallArg, Expr, ExprKind, GenericArg, ShapeDim, TypeExpr, TypeKind};
+use crate::ast::{BinOp, CallArg, Expr, ExprKind, GenericArg, ShapeDim, TypeExpr, TypeKind};
 use crate::token::Span;
 
 use super::state::TensorVarInfo;
+
+/// True iff `te` names an unsigned integer primitive — drives the
+/// `is_unsigned` flag for per-element div/rem in the element-wise loop.
+fn type_expr_is_unsigned_int(te: &TypeExpr) -> bool {
+    let TypeKind::Path(p) = &te.kind else {
+        return false;
+    };
+    matches!(
+        p.segments.last().map(String::as_str),
+        Some("u8" | "u16" | "u32" | "u64" | "u128" | "usize")
+    )
+}
 
 impl<'ctx> super::Codegen<'ctx> {
     // ── Layout helpers ──────────────────────────────────────────
@@ -2076,6 +2088,381 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.build_unconditional_branch(join_bb).unwrap();
         self.builder.position_at_end(join_bb);
+    }
+
+    // ── Element-wise arithmetic ─────────────────────────────────
+
+    /// True iff `expr`'s result is a tensor (its span is in the lowering
+    /// side-table). Used to tell the tensor operand of a tensor⊕scalar op
+    /// from the scalar one.
+    fn expr_is_tensor_typed(&self, expr: &Expr) -> bool {
+        self.tensor_typed_exprs
+            .contains_key(&(expr.span.offset, expr.span.length))
+    }
+
+    /// Is a tensor *operand* of an element-wise op a fresh owned temporary
+    /// this op must free after copying out of it? `a + b + c`'s inner `a + b`
+    /// is malloc'd, owned by nothing else, and read once here. Tensor
+    /// arithmetic (`Binary`) and negation (`Unary`-`Neg`) always produce a
+    /// fresh owned block; everything else defers to the receiver rule (which
+    /// keeps borrowed identifier / `ref`-return operands un-freed).
+    fn tensor_operand_is_owned_fresh_temp(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Binary { .. } => true,
+            ExprKind::Unary {
+                op: crate::ast::UnaryOp::Neg,
+                ..
+            } => true,
+            _ => self.tensor_receiver_is_owned_fresh_temp(expr),
+        }
+    }
+
+    /// True iff both operand exprs have fully-static, identical tensor
+    /// shapes (every dim a known literal, same rank, same values). When so,
+    /// the typechecker has already proved shape agreement and the runtime
+    /// shape guard is dead. A `?` (runtime) dim on either side returns false.
+    fn tensor_operand_dims_statically_equal(&self, left: &Expr, right: &Expr) -> bool {
+        let lkey = (left.span.offset, left.span.length);
+        let rkey = (right.span.offset, right.span.length);
+        let (Some(l), Some(r)) = (
+            self.tensor_typed_exprs.get(&lkey),
+            self.tensor_typed_exprs.get(&rkey),
+        ) else {
+            return false;
+        };
+        l.dims.len() == r.dims.len()
+            && l.dims
+                .iter()
+                .zip(&r.dims)
+                .all(|(a, b)| matches!((a, b), (Some(x), Some(y)) if x == y))
+    }
+
+    /// Copy `rank` dim words from `src`'s header into `dst`'s (slot 1
+    /// onward). `dst`'s rank slot 0 is already written by
+    /// `tensor_alloc_runtime`.
+    fn tensor_copy_header_dims(
+        &mut self,
+        src: PointerValue<'ctx>,
+        dst: PointerValue<'ctx>,
+        rank_val: IntValue<'ctx>,
+    ) {
+        let i64_t = self.context.i64_type();
+        let src_dims = self.tensor_header_slot(src, 1, "t.cph.src");
+        let dst_dims = self.tensor_header_slot(dst, 1, "t.cph.dst");
+        let bytes = self
+            .builder
+            .build_int_mul(rank_val, i64_t.const_int(8, false), "t.cph.bytes")
+            .unwrap();
+        self.builder
+            .build_memcpy(dst_dims, 8, src_dims, 8, bytes)
+            .unwrap();
+    }
+
+    /// Runtime shape-equality guard between two tensors: rank then every
+    /// dim. The typechecker already proved concrete-vs-concrete dims equal;
+    /// this catches `?`-dim mismatches (and the `run_program` bypass). Traps
+    /// with the same message as the interpreter twin.
+    fn emit_tensor_shape_eq_guard(
+        &mut self,
+        a: PointerValue<'ctx>,
+        b: PointerValue<'ctx>,
+    ) -> Result<(), String> {
+        let i64_t = self.context.i64_type();
+        let ra = self.tensor_load_rank(a);
+        let rb = self.tensor_load_rank(b);
+        let rank_eq = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, ra, rb, "t.bin.rankeq")
+            .unwrap();
+        self.emit_tensor_guard(rank_eq, "tensor shape mismatch in element-wise operator")?;
+        // for i in 0..rank { assert a.dim[i] == b.dim[i] }
+        let fn_val = self.current_fn.unwrap();
+        let iv = self.create_entry_alloca(fn_val, "t.bin.di", i64_t.into());
+        self.builder
+            .build_store(iv, i64_t.const_int(0, false))
+            .unwrap();
+        let head = self.context.append_basic_block(fn_val, "t.bin.dhead");
+        let body = self.context.append_basic_block(fn_val, "t.bin.dbody");
+        let exit = self.context.append_basic_block(fn_val, "t.bin.dexit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, iv, "t.bin.div")
+            .unwrap()
+            .into_int_value();
+        let cont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, ra, "t.bin.dcont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cont, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let da = {
+            let slot = self.tensor_dim_slot_dyn(a, i, "t.bin.dap");
+            self.builder
+                .build_load(i64_t, slot, "t.bin.da")
+                .unwrap()
+                .into_int_value()
+        };
+        let db = {
+            let slot = self.tensor_dim_slot_dyn(b, i, "t.bin.dbp");
+            self.builder
+                .build_load(i64_t, slot, "t.bin.db")
+                .unwrap()
+                .into_int_value()
+        };
+        let dim_eq = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, da, db, "t.bin.dimeq")
+            .unwrap();
+        self.emit_tensor_guard(dim_eq, "tensor shape mismatch in element-wise operator")?;
+        let ni = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "t.bin.dni")
+            .unwrap();
+        self.builder.build_store(iv, ni).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(exit);
+        Ok(())
+    }
+
+    /// The per-element loop for an element-wise op. `a_data` is the left
+    /// (C-order) tensor's data. For tensor⊕tensor `b_data` is the right
+    /// tensor's data; for tensor⊕scalar `scalar` holds the broadcast value
+    /// (`scalar_on_left` puts it on the operator's left, e.g. `2 - t`). Each
+    /// element pair routes through `compile_binop_typed`, so the per-element
+    /// op inherits the exact scalar semantics — int overflow trap, div-by-
+    /// zero trap, signed/unsigned division — matching the interpreter.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_tensor_binop_loop(
+        &mut self,
+        op: &BinOp,
+        elem: BasicTypeEnum<'ctx>,
+        count: IntValue<'ctx>,
+        res_data: PointerValue<'ctx>,
+        a_data: PointerValue<'ctx>,
+        b_data: Option<PointerValue<'ctx>>,
+        scalar: Option<BasicValueEnum<'ctx>>,
+        is_unsigned: bool,
+        scalar_on_left: bool,
+    ) -> Result<(), String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let head = self.context.append_basic_block(fn_val, "t.bin.head");
+        let body = self.context.append_basic_block(fn_val, "t.bin.body");
+        let exit = self.context.append_basic_block(fn_val, "t.bin.exit");
+        let iv = self.create_entry_alloca(fn_val, "t.bin.i", i64_t.into());
+        self.builder
+            .build_store(iv, i64_t.const_int(0, false))
+            .unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, iv, "t.bin.iv")
+            .unwrap()
+            .into_int_value();
+        let cont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, count, "t.bin.cont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cont, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let a_val = {
+            let p = unsafe {
+                self.builder
+                    .build_gep(elem, a_data, &[i], "t.bin.ap")
+                    .unwrap()
+            };
+            self.builder.build_load(elem, p, "t.bin.av").unwrap()
+        };
+        let other = match (b_data, scalar) {
+            (Some(bd), _) => {
+                let p = unsafe { self.builder.build_gep(elem, bd, &[i], "t.bin.bp").unwrap() };
+                self.builder.build_load(elem, p, "t.bin.bv").unwrap()
+            }
+            (None, Some(s)) => s,
+            (None, None) => return Err("tensor binop loop: no second operand".to_string()),
+        };
+        let (lhs, rhs) = if scalar_on_left {
+            (other, a_val)
+        } else {
+            (a_val, other)
+        };
+        let r = self.compile_binop_typed(op, lhs, rhs, is_unsigned)?;
+        let rp = unsafe {
+            self.builder
+                .build_gep(elem, res_data, &[i], "t.bin.rp")
+                .unwrap()
+        };
+        self.builder.build_store(rp, r).unwrap();
+        let ni = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "t.bin.ni")
+            .unwrap();
+        self.builder.build_store(iv, ni).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(exit);
+        Ok(())
+    }
+
+    /// Element-wise `Tensor ⊕ Tensor` / `Tensor ⊕ scalar` for `+ - * /`.
+    /// Routed from `compile_expr`'s `Binary` arm when the result span is
+    /// tensor-typed. Mallocs a fresh value-semantics result; both operands
+    /// are read (a fresh-temp operand is freed after the copy so `a + b + c`
+    /// intermediates don't leak). The result's `FreeTensor` cleanup is
+    /// registered by the let-binding site from the same side-table entry.
+    pub(super) fn compile_tensor_binop(
+        &mut self,
+        op: &BinOp,
+        left: &Expr,
+        right: &Expr,
+        binary_span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let key = (binary_span.offset, binary_span.length);
+        let ti = self
+            .tensor_typed_exprs
+            .get(&key)
+            .ok_or_else(|| {
+                "tensor binary-op result type is not statically known \
+                 (missing lowering side-table entry)"
+                    .to_string()
+            })?
+            .clone();
+        let elem = self.llvm_type_for_type_expr(&ti.elem);
+        let elem_size = self.tensor_elem_size(elem)?;
+        let is_unsigned = type_expr_is_unsigned_int(&ti.elem);
+
+        let left_is_tensor = self.expr_is_tensor_typed(left);
+        let right_is_tensor = self.expr_is_tensor_typed(right);
+
+        let lhs_val = self.compile_expr(left)?;
+        let rhs_val = self.compile_expr(right)?;
+
+        let result = if left_is_tensor && right_is_tensor {
+            let lptr = lhs_val.into_pointer_value();
+            let rptr = rhs_val.into_pointer_value();
+            // Skip the runtime shape-equality guard when both operands have
+            // fully-static, identical shapes — the typechecker already proved
+            // them equal (E_SHAPE otherwise), so the guard would be dead. Any
+            // `?` dim on either side keeps the guard.
+            if !self.tensor_operand_dims_statically_equal(left, right) {
+                self.emit_tensor_shape_eq_guard(lptr, rptr)?;
+            }
+            let rank = self.tensor_load_rank(lptr);
+            let count = self.tensor_count_runtime(lptr, rank);
+            let (res, res_data) = self.tensor_alloc_runtime(rank, count, elem_size);
+            self.tensor_copy_header_dims(lptr, res, rank);
+            let l_data = self.tensor_data_ptr_dyn(lptr, rank, "t.bin.ld");
+            let r_data = self.tensor_data_ptr_dyn(rptr, rank, "t.bin.rd");
+            self.emit_tensor_binop_loop(
+                op,
+                elem,
+                count,
+                res_data,
+                l_data,
+                Some(r_data),
+                None,
+                is_unsigned,
+                false,
+            )?;
+            res
+        } else {
+            let (tptr, scalar, scalar_on_left) = if left_is_tensor {
+                (lhs_val.into_pointer_value(), rhs_val, false)
+            } else {
+                (rhs_val.into_pointer_value(), lhs_val, true)
+            };
+            let rank = self.tensor_load_rank(tptr);
+            let count = self.tensor_count_runtime(tptr, rank);
+            let (res, res_data) = self.tensor_alloc_runtime(rank, count, elem_size);
+            self.tensor_copy_header_dims(tptr, res, rank);
+            let t_data = self.tensor_data_ptr_dyn(tptr, rank, "t.bin.td");
+            self.emit_tensor_binop_loop(
+                op,
+                elem,
+                count,
+                res_data,
+                t_data,
+                None,
+                Some(scalar),
+                is_unsigned,
+                scalar_on_left,
+            )?;
+            res
+        };
+
+        // Free fresh-temporary operands (intermediates owned by nothing else).
+        if left_is_tensor && self.tensor_operand_is_owned_fresh_temp(left) {
+            self.builder
+                .build_call(self.free_fn, &[lhs_val.into_pointer_value().into()], "")
+                .unwrap();
+        }
+        if right_is_tensor && self.tensor_operand_is_owned_fresh_temp(right) {
+            self.builder
+                .build_call(self.free_fn, &[rhs_val.into_pointer_value().into()], "")
+                .unwrap();
+        }
+
+        Ok(result.into())
+    }
+
+    /// Element-wise negation `-t` — a fresh tensor with each element negated
+    /// (`0 - x` via the scalar binop, so int overflow on `i64::MIN` traps
+    /// like the interpreter's `checked_neg`). The operand is read; a fresh-
+    /// temp operand is freed after the copy.
+    pub(super) fn compile_tensor_neg(
+        &mut self,
+        operand: &Expr,
+        unary_span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let key = (unary_span.offset, unary_span.length);
+        let ti = self
+            .tensor_typed_exprs
+            .get(&key)
+            .ok_or_else(|| {
+                "tensor negation result type is not statically known \
+                 (missing lowering side-table entry)"
+                    .to_string()
+            })?
+            .clone();
+        let elem = self.llvm_type_for_type_expr(&ti.elem);
+        let elem_size = self.tensor_elem_size(elem)?;
+        let is_unsigned = type_expr_is_unsigned_int(&ti.elem);
+
+        let tptr = self.compile_expr(operand)?.into_pointer_value();
+        let rank = self.tensor_load_rank(tptr);
+        let count = self.tensor_count_runtime(tptr, rank);
+        let (res, res_data) = self.tensor_alloc_runtime(rank, count, elem_size);
+        self.tensor_copy_header_dims(tptr, res, rank);
+        let t_data = self.tensor_data_ptr_dyn(tptr, rank, "t.neg.td");
+        // `0 - x` per element — zero of the element type, broadcast on the left.
+        let zero: BasicValueEnum<'ctx> = if elem.is_float_type() {
+            elem.into_float_type().const_zero().into()
+        } else {
+            elem.into_int_type().const_zero().into()
+        };
+        self.emit_tensor_binop_loop(
+            &BinOp::Sub,
+            elem,
+            count,
+            res_data,
+            t_data,
+            None,
+            Some(zero),
+            is_unsigned,
+            true,
+        )?;
+        if self.tensor_operand_is_owned_fresh_temp(operand) {
+            self.builder
+                .build_call(self.free_fn, &[tptr.into()], "")
+                .unwrap();
+        }
+        Ok(res.into())
     }
 
     /// `for i in 0..count { data[i] = fill }`.

@@ -354,6 +354,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // don't fire when short-circuited.
                 BinOp::And | BinOp::Or => self.compile_short_circuit(op, left, right),
                 _ => {
+                    // Element-wise arithmetic on `Tensor[T, Shape]` — the
+                    // Binary's *result* span is tensor-typed (a fresh tensor).
+                    // Route to the tensor lowering, which compiles the operands
+                    // as borrows and mallocs a fresh value-semantics result.
+                    // Must precede the generic scalar operand compilation below
+                    // (two tensor pointers would choke `compile_binop`).
+                    if self
+                        .tensor_typed_exprs
+                        .contains_key(&(expr.span.offset, expr.span.length))
+                    {
+                        return self.compile_tensor_binop(op, left, right, &expr.span);
+                    }
                     let lhs = self.compile_expr(left)?;
                     let rhs = self.compile_expr(right)?;
                     // Vector binops aren't lowered to primitive method calls
@@ -445,6 +457,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 if matches!(op, UnaryOp::Neg) {
                     if let ExprKind::Integer(n, sfx) = &operand.kind {
                         return Ok(self.const_int_for_suffix(-*n, *sfx).into());
+                    }
+                    // Element-wise tensor negation — the result span is
+                    // tensor-typed; lower to a fresh negated tensor.
+                    if self
+                        .tensor_typed_exprs
+                        .contains_key(&(expr.span.offset, expr.span.length))
+                    {
+                        return self.compile_tensor_neg(operand, &expr.span);
                     }
                 }
                 let val = self.compile_expr(operand)?;

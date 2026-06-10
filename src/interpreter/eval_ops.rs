@@ -10,6 +10,8 @@
 //!
 //! Lives in a sibling `impl<'a> super::Interpreter<'a>` block.
 
+use std::sync::{Arc, RwLock};
+
 use crate::ast::*;
 use crate::token::Span;
 
@@ -26,6 +28,22 @@ impl<'a> super::Interpreter<'a> {
                 None => return self.record_integer_overflow(span),
             }),
             (UnaryOp::Neg, Value::Float(f)) => Value::Float(-f),
+            // Element-wise tensor negation — fold `-` over each element into a
+            // fresh value-semantics tensor (the operand is read, not moved).
+            (UnaryOp::Neg, Value::Tensor { dims, data }) => {
+                let elems = data.read().unwrap().clone();
+                let mut out = Vec::with_capacity(elems.len());
+                for x in elems {
+                    out.push(self.eval_unary(&UnaryOp::Neg, x, span));
+                    if self.pending_cf.is_some() {
+                        return Value::Unit;
+                    }
+                }
+                Value::Tensor {
+                    dims,
+                    data: Arc::new(RwLock::new(out)),
+                }
+            }
             (UnaryOp::Not, Value::Bool(b)) => Value::Bool(!b),
             (UnaryOp::BitNot, Value::Int(i)) => Value::Int(!i),
             // Integer-lane `Vector[T, N]` complement: `~v` folds `~` over each
@@ -102,6 +120,31 @@ impl<'a> super::Interpreter<'a> {
                     .map(|(x, y)| self.eval_binary(op, x, y, span))
                     .collect();
                 Value::Vector(lanes)
+            }
+
+            // Element-wise arithmetic on `Tensor[T, Shape]` (design.md
+            // § Numerical Types). Recurse per element so each element reuses
+            // the exact scalar Int/Float semantics (overflow / div-by-zero).
+            // Tensor⊕Tensor requires identical shapes — re-checked at runtime
+            // because `run_program` bypasses the typechecker. Tensor⊕scalar
+            // broadcasts the scalar across every element. The result is a
+            // fresh value-semantics tensor; both operands are read, not moved.
+            (
+                _,
+                Value::Tensor {
+                    dims: ad,
+                    data: ada,
+                },
+                Value::Tensor {
+                    dims: bd,
+                    data: bda,
+                },
+            ) => self.eval_tensor_tensor_binop(op, &ad, &ada, &bd, &bda, span),
+            (_, Value::Tensor { dims, data }, scalar @ (Value::Int(_) | Value::Float(_))) => {
+                self.eval_tensor_scalar_binop(op, &dims, &data, scalar, false, span)
+            }
+            (_, scalar @ (Value::Int(_) | Value::Float(_)), Value::Tensor { dims, data }) => {
+                self.eval_tensor_scalar_binop(op, &dims, &data, scalar, true, span)
             }
 
             // Arithmetic (Int). Computed at i64; when the typechecker types
@@ -258,6 +301,84 @@ impl<'a> super::Interpreter<'a> {
                  or the typechecker accepted an illegal operand combination",
                 op, span.line, span.column, left_variant, right_variant
             ),
+        }
+    }
+
+    /// Element-wise `Tensor ⊕ Tensor`. Runtime shape-equality re-check (the
+    /// `run_program` bypass), then a fresh tensor whose elements are the
+    /// per-position scalar results. Both buffers are cloned out before the
+    /// loop so `a + a` (an aliased data `Arc`) can't deadlock on two read
+    /// guards of one `RwLock`.
+    fn eval_tensor_tensor_binop(
+        &mut self,
+        op: &BinOp,
+        ad: &Arc<Vec<i64>>,
+        ada: &Arc<RwLock<Vec<Value>>>,
+        bd: &Arc<Vec<i64>>,
+        bda: &Arc<RwLock<Vec<Value>>>,
+        span: &Span,
+    ) -> Value {
+        if ad.as_ref() != bd.as_ref() {
+            return self.record_runtime_error(
+                format!(
+                    "tensor shape mismatch in element-wise operator: {:?} vs {:?} \
+                     (element-wise tensor arithmetic requires identical shapes)",
+                    ad.as_ref(),
+                    bd.as_ref()
+                ),
+                span,
+            );
+        }
+        let a = ada.read().unwrap().clone();
+        let b = bda.read().unwrap().clone();
+        let mut out = Vec::with_capacity(a.len());
+        for (x, y) in a.into_iter().zip(b) {
+            out.push(self.eval_binary(op, x, y, span));
+            if self.pending_cf.is_some() {
+                return Value::Unit;
+            }
+        }
+        Value::Tensor {
+            dims: ad.clone(),
+            data: Arc::new(RwLock::new(out)),
+        }
+    }
+
+    /// Element-wise `Tensor ⊕ scalar` (or `scalar ⊕ Tensor` when
+    /// `scalar_on_left`). Broadcasts the scalar across every element. An int
+    /// scalar is coerced to float when the element is float — the Q4
+    /// literal-promotion case (`t + 2` on a float tensor): codegen sees a
+    /// float literal via lowering's rewrite, and this keeps the interpreter
+    /// byte-for-byte in step.
+    fn eval_tensor_scalar_binop(
+        &mut self,
+        op: &BinOp,
+        dims: &Arc<Vec<i64>>,
+        data: &Arc<RwLock<Vec<Value>>>,
+        scalar: Value,
+        scalar_on_left: bool,
+        span: &Span,
+    ) -> Value {
+        let elems = data.read().unwrap().clone();
+        let mut out = Vec::with_capacity(elems.len());
+        for x in elems {
+            let s = match (&x, &scalar) {
+                (Value::Float(_), Value::Int(i)) => Value::Float(*i as f64),
+                _ => scalar.clone(),
+            };
+            let v = if scalar_on_left {
+                self.eval_binary(op, s, x, span)
+            } else {
+                self.eval_binary(op, x, s, span)
+            };
+            out.push(v);
+            if self.pending_cf.is_some() {
+                return Value::Unit;
+            }
+        }
+        Value::Tensor {
+            dims: dims.clone(),
+            data: Arc::new(RwLock::new(out)),
         }
     }
 

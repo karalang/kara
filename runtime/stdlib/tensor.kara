@@ -163,3 +163,25 @@ impl[T, ...S] Tensor[T, S] {
         Tensor { handle_id: 0 }
     }
 }
+
+// Element-wise arithmetic on `Tensor[T, Shape]` (design.md § Numerical
+// Types). Like every other operator in Kāra, `+ - * /` and unary `-` are
+// lowered structurally — there is no `impl Add for Tensor` block (no
+// built-in type has one); the typechecker
+// (`src/typechecker/expr_ops.rs::infer_tensor_binary` / the `Neg` arm of
+// `infer_unary`), the interpreter (`src/interpreter/eval_ops.rs`), and
+// codegen (`src/codegen/tensor.rs::compile_tensor_binop` /
+// `compile_tensor_neg`) intercept these forms directly. Semantics:
+//
+//   - `a + b` / `a - b` / `a * b` / `a / b` between two tensors require an
+//     *exact* shape match (concrete-dim mismatch is a compile-time E_SHAPE;
+//     a `?`-dim mismatch traps at runtime). Result is a fresh tensor of the
+//     same shape and element type; both operands are read, not moved.
+//     Broadcasting (mismatched-but-compatible shapes) is v1.5 — see the
+//     future `broadcast_add` / `broadcast_mul` methods.
+//   - `a + s` / `s + a` (and `- * /`) broadcast a scalar `s: T` across every
+//     element; an unsuffixed numeric literal promotes to `T`.
+//   - `-a` negates every element into a fresh tensor.
+//
+// The element type must be numeric. Per-element ops inherit the scalar
+// semantics exactly — integer overflow and divide-by-zero trap.

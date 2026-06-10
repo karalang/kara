@@ -15186,6 +15186,83 @@ fn test_tensor_reshape_of_permuted_data() {
     assert_eq!(out, "1\n4\n2\n6\n");
 }
 
+#[test]
+fn test_tensor_elementwise_arithmetic() {
+    // + - * /, scalar broadcast both sides (incl. int-literal promotion to
+    // a float element), unary neg; the operands stay usable afterward
+    // (borrow, not move).
+    let out = run_no_errors(
+        "fn main() {\n\
+             let a: Tensor[f64, [2, 2]] = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let b: Tensor[f64, [2, 2]] = Tensor.from([[10.0, 20.0], [30.0, 40.0]]);\n\
+             let c = a + b;\n\
+             println(c[0, 0]);\n\
+             println(c[1, 1]);\n\
+             let d = a * b;\n\
+             println(d[0, 1]);\n\
+             let s = a + 100.0;\n\
+             println(s[0, 0]);\n\
+             let p = a + 2;\n\
+             println(p[0, 0]);\n\
+             let n = -a;\n\
+             println(n[1, 0]);\n\
+             let sl = 100.0 - a;\n\
+             println(sl[0, 0]);\n\
+             println(a[0, 0]);\n\
+         }",
+    );
+    assert_eq!(out, "11\n44\n40\n101\n3\n-3\n99\n1\n");
+}
+
+#[test]
+fn test_tensor_int_arithmetic_integer_division() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let i: Tensor[i64, [3]] = Tensor.from([10, 20, 30]);\n\
+             let j: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);\n\
+             let k = i - j;\n\
+             println(k[2]);\n\
+             let q = i / j;\n\
+             println(q[1]);\n\
+         }",
+    );
+    assert_eq!(out, "27\n10\n");
+}
+
+#[test]
+fn test_tensor_arithmetic_runtime_shape_mismatch_and_divzero() {
+    // `?`-dim operands pass the typechecker; the interpreter re-checks shape
+    // equality at runtime (run_program bypasses typecheck).
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let a: Tensor[f64, [?]] = Tensor.zeros([3]);\n\
+             let b: Tensor[f64, [?]] = Tensor.zeros([4]);\n\
+             let c = a + b;\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("tensor shape mismatch in element-wise operator")),
+        "{errors:?}",
+    );
+    // Element-wise div-by-zero traps just like the scalar op.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let i: Tensor[i64, [2]] = Tensor.from([10, 20]);\n\
+             let z: Tensor[i64, [2]] = Tensor.from([2, 0]);\n\
+             let q = i / z;\n\
+             println(q[0]);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("division by zero")),
+        "{errors:?}",
+    );
+}
+
 // ── `ref name @ PATTERN` — explicit-ref @ bindings (design.md § @
 // Bindings): bindings borrow, scrutinee stays usable after ──────────
 

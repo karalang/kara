@@ -27,9 +27,57 @@ use crate::token::Span;
 
 use super::types::{
     is_integer, is_numeric, is_prelude_type_or_module_name, is_string_concat_operand,
-    strip_refinement, type_display, types_compatible, Type, UIntSize, VariantTypeInfo,
+    strip_refinement, type_display, types_compatible, ConstArg, DimArg, Type, UIntSize,
+    VariantTypeInfo,
 };
 use super::TypeErrorKind;
+
+/// The `[elem, shape]` generic-arg list of a `Tensor[T, Shape]` type,
+/// peeling one `ref` / `mut ref`. `None` for any non-tensor type. Used by
+/// `infer_binary` to route element-wise tensor arithmetic and by the
+/// element-wise scalar-broadcast path.
+fn tensor_named_args(ty: &Type) -> Option<&[Type]> {
+    let core = match ty {
+        Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+        other => other,
+    };
+    match core {
+        Type::Named { name, args } if name == "Tensor" && args.len() == 2 => Some(args),
+        _ => None,
+    }
+}
+
+/// True iff `ty` is a `Tensor[T, Shape]` (peeling one borrow).
+fn is_tensor_type(ty: &Type) -> bool {
+    tensor_named_args(ty).is_some()
+}
+
+/// Merge two shape dims for an element-wise tensor op. Concrete-vs-concrete
+/// must be equal (`Err` on mismatch — the static `E_SHAPE` case); a concrete
+/// literal paired with any non-literal wins (the codegen runtime-guards the
+/// `?` side); two equal non-literals (same param / `?`) survive; two distinct
+/// non-literals degrade to `?` (codegen runtime-guards). Mirrors the shipped
+/// cross-argument dim-assert flavors (phase-11 line 41).
+fn merge_tensor_dim(l: &DimArg, r: &DimArg) -> Result<DimArg, ()> {
+    match (l, r) {
+        (DimArg::Const(ConstArg::Literal(a)), DimArg::Const(ConstArg::Literal(b))) => {
+            if a == b {
+                Ok(DimArg::Const(ConstArg::Literal(*a)))
+            } else {
+                Err(())
+            }
+        }
+        (DimArg::Const(ConstArg::Literal(a)), _) => Ok(DimArg::Const(ConstArg::Literal(*a))),
+        (_, DimArg::Const(ConstArg::Literal(b))) => Ok(DimArg::Const(ConstArg::Literal(*b))),
+        _ => {
+            if l == r {
+                Ok(l.clone())
+            } else {
+                Ok(DimArg::Dynamic)
+            }
+        }
+    }
+}
 
 impl<'a> super::TypeChecker<'a> {
     /// Type-check `offset_of[T](field.path)`. Per `design.md § Field
@@ -618,6 +666,238 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Element-wise arithmetic on `Tensor[T, Shape]`. Only `+ - * /` are
+    /// defined (design.md § Numerical Types); the result is a fresh tensor.
+    ///
+    /// - **Tensor ⊕ Tensor:** exact shape match. Concrete-vs-concrete dim
+    ///   mismatch is a static `E_SHAPE`; rank mismatch likewise. `?` dims
+    ///   defer to a codegen runtime guard. Both element types must match and
+    ///   be numeric. Shape mismatch points at the `broadcast_*` methods
+    ///   (a future slice).
+    /// - **Tensor ⊕ scalar / scalar ⊕ Tensor:** the scalar is `T` (unsuffixed
+    ///   literals promote to `T` via the Q4 rule); result shape = the tensor's.
+    ///
+    /// Like the shape-transform family, the receiver's rank must be statically
+    /// known — bare-`S` / splice shapes get a focused error.
+    fn infer_tensor_binary(
+        &mut self,
+        op: &BinOp,
+        left_ty: &Type,
+        right_ty: &Type,
+        left: &Expr,
+        right: &Expr,
+        span: &Span,
+    ) -> Type {
+        if !matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div) {
+            self.type_error(
+                format!(
+                    "this operator is not defined on Tensor[T, Shape] — only \
+                     element-wise + - * / (and unary -) are supported; found \
+                     operands '{}' and '{}'",
+                    type_display(left_ty),
+                    type_display(right_ty)
+                ),
+                span.clone(),
+                TypeErrorKind::InvalidBinaryOp,
+            );
+            return Type::Error;
+        }
+
+        let left_args = tensor_named_args(left_ty).map(<[Type]>::to_vec);
+        let right_args = tensor_named_args(right_ty).map(<[Type]>::to_vec);
+
+        match (left_args, right_args) {
+            (Some(la), Some(ra)) => {
+                let Some((le, ls)) = self.tensor_static_shape(&la, "this binary operator", span)
+                else {
+                    return Type::Error;
+                };
+                let Some((re, rs)) = self.tensor_static_shape(&ra, "this binary operator", span)
+                else {
+                    return Type::Error;
+                };
+                if !is_numeric(&le) {
+                    self.type_error(
+                        format!(
+                            "element-wise tensor arithmetic requires a numeric element type, \
+                             found '{}'",
+                            type_display(&le)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                if le != re {
+                    self.type_error(
+                        format!(
+                            "tensor operands must share an element type; found '{}' and '{}'",
+                            type_display(&le),
+                            type_display(&re)
+                        ),
+                        right.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                if ls.len() != rs.len() {
+                    self.type_error(
+                        format!(
+                            "shape rank mismatch in element-wise tensor op: '{}' vs '{}' — \
+                             tensor-tensor arithmetic requires the same rank (broadcasting is \
+                             v1.5; see broadcast_add / broadcast_mul)",
+                            type_display(left_ty),
+                            type_display(right_ty)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                let mut merged = Vec::with_capacity(ls.len());
+                for (i, (l, r)) in ls.iter().zip(rs.iter()).enumerate() {
+                    match merge_tensor_dim(l, r) {
+                        Ok(d) => merged.push(d),
+                        Err(()) => {
+                            self.type_error(
+                                format!(
+                                    "shape dim {} mismatch in element-wise tensor op: '{}' vs \
+                                     '{}' — operands must have an identical shape (broadcasting \
+                                     is v1.5; see broadcast_add / broadcast_mul)",
+                                    i,
+                                    type_display(left_ty),
+                                    type_display(right_ty)
+                                ),
+                                span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            return Type::Error;
+                        }
+                    }
+                }
+                Type::Named {
+                    name: "Tensor".to_string(),
+                    args: vec![le, Type::Shape(merged)],
+                }
+            }
+            (Some(la), None) => {
+                let Some((te, ts)) = self.tensor_static_shape(&la, "this binary operator", span)
+                else {
+                    return Type::Error;
+                };
+                if !self.check_tensor_scalar(&te, right_ty, right, span) {
+                    return Type::Error;
+                }
+                Type::Named {
+                    name: "Tensor".to_string(),
+                    args: vec![te, Type::Shape(ts)],
+                }
+            }
+            (None, Some(ra)) => {
+                let Some((te, ts)) = self.tensor_static_shape(&ra, "this binary operator", span)
+                else {
+                    return Type::Error;
+                };
+                if !self.check_tensor_scalar(&te, left_ty, left, span) {
+                    return Type::Error;
+                }
+                Type::Named {
+                    name: "Tensor".to_string(),
+                    args: vec![te, Type::Shape(ts)],
+                }
+            }
+            (None, None) => {
+                // The caller only routes here when at least one side is a tensor.
+                unreachable!("infer_tensor_binary: neither operand is a tensor")
+            }
+        }
+    }
+
+    /// Extract `(elem, dims)` from a `Tensor[T, Shape]` generic-arg list,
+    /// requiring a statically-known, splice-free rank. Emits a focused error
+    /// and returns `None` for a bare-`S` / splice shape. `what` names the
+    /// operation in the diagnostic.
+    fn tensor_static_shape(
+        &mut self,
+        args: &[Type],
+        what: &str,
+        span: &Span,
+    ) -> Option<(Type, Vec<DimArg>)> {
+        match args {
+            [elem, Type::Shape(dims)]
+                if !dims
+                    .iter()
+                    .any(|d| matches!(d, DimArg::Splice(_) | DimArg::SpliceVar(_))) =>
+            {
+                Some((elem.clone(), dims.clone()))
+            }
+            _ => {
+                self.type_error(
+                    format!(
+                        "{} requires the tensor's rank to be statically known; \
+                         a bare-`S` or splice-bearing shape isn't supported here \
+                         (rank-polymorphic tensor arithmetic is v1.5 shape arithmetic)",
+                        what
+                    ),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                None
+            }
+        }
+    }
+
+    /// Validate the scalar operand of a `Tensor[T, Shape] ⊕ scalar` op. An
+    /// unsuffixed numeric literal promotes to the element type `T` (Q4 rule,
+    /// re-recording the literal's span); a typed scalar must already be `T`.
+    /// Returns `false` (after emitting a diagnostic) on mismatch.
+    fn check_tensor_scalar(
+        &mut self,
+        elem: &Type,
+        scalar_ty: &Type,
+        scalar: &Expr,
+        span: &Span,
+    ) -> bool {
+        if !is_numeric(elem) {
+            self.type_error(
+                format!(
+                    "element-wise tensor arithmetic requires a numeric element type, found '{}'",
+                    type_display(elem)
+                ),
+                span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return false;
+        }
+        let is_unsuffixed = matches!(
+            &scalar.kind,
+            ExprKind::Integer(_, None) | ExprKind::Float(_, None)
+        );
+        if is_unsuffixed {
+            // A float literal cannot promote to an integer element type.
+            let can_promote = !(matches!(&scalar.kind, ExprKind::Float(_, None))
+                && matches!(elem, Type::Int(_) | Type::UInt(_)));
+            if can_promote {
+                self.record_expr_type(&scalar.span, elem);
+                return true;
+            }
+        }
+        if scalar_ty == elem || types_compatible(scalar_ty, elem) {
+            return true;
+        }
+        self.type_error(
+            format!(
+                "scalar operand of element-wise tensor arithmetic must match the element \
+                 type '{}', found '{}'",
+                type_display(elem),
+                type_display(scalar_ty)
+            ),
+            scalar.span.clone(),
+            TypeErrorKind::TypeMismatch,
+        );
+        false
+    }
+
     /// True iff `ty` is a generic type parameter carrying a `Numeric` bound in
     /// the enclosing scope. Lets the operator checks treat `a + b` / `-a` on a
     /// `T: Numeric` parameter as valid numeric arithmetic — the bound
@@ -652,6 +932,16 @@ impl<'a> super::TypeChecker<'a> {
 
         if left_ty == Type::Error || right_ty == Type::Error {
             return Type::Error;
+        }
+
+        // Element-wise tensor arithmetic on `Tensor[T, Shape]` (design.md
+        // § Numerical Types — "Tensor-tensor requires exact shape match";
+        // scalar broadcast via the operator trait). Handled before literal
+        // promotion so the tensor path owns scalar-literal promotion to the
+        // element type itself. `Add`/`Sub`/`Mul`/`Div` + `Neg` only; reduces
+        // and broadcasting are separate slices (phase-11 line 47).
+        if is_tensor_type(&left_ty) || is_tensor_type(&right_ty) {
+            return self.infer_tensor_binary(op, &left_ty, &right_ty, left, right, span);
         }
 
         // Element-wise SIMD arithmetic on `Vector[T, N]` (design.md § Portable
@@ -944,6 +1234,33 @@ impl<'a> super::TypeChecker<'a> {
 
         match op {
             UnaryOp::Neg => {
+                // Element-wise negation of a `Tensor[T, Shape]` — result is a
+                // fresh tensor of the same shape (rank must be statically known,
+                // like the binary path). The element type must be numeric.
+                if let Some(args) = tensor_named_args(&ty) {
+                    let args = args.to_vec();
+                    let Some((elem, dims)) =
+                        self.tensor_static_shape(&args, "unary '-' on a tensor", span)
+                    else {
+                        return Type::Error;
+                    };
+                    if !is_numeric(&elem) {
+                        self.type_error(
+                            format!(
+                                "unary '-' on a tensor requires a numeric element type, \
+                                 found '{}'",
+                                type_display(&elem)
+                            ),
+                            span.clone(),
+                            TypeErrorKind::InvalidUnaryOp,
+                        );
+                        return Type::Error;
+                    }
+                    return Type::Named {
+                        name: "Tensor".to_string(),
+                        args: vec![elem, Type::Shape(dims)],
+                    };
+                }
                 if !is_numeric(&ty)
                     && !self.distinct_type_has_arithmetic(&ty)
                     && !self.type_param_has_numeric_bound(&ty)
