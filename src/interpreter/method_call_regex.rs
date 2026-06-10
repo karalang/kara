@@ -16,7 +16,7 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_regex_method(
         &mut self,
         method: &str,
-        obj: Value,
+        obj: &Value,
         args: &[CallArg],
         _span: &Span,
     ) -> Option<Value> {

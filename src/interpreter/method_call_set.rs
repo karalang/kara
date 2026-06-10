@@ -15,7 +15,7 @@ impl<'a> super::Interpreter<'a> {
         &mut self,
         method: &str,
         object: &Expr,
-        obj: Value,
+        obj: &Value,
         args: &[CallArg],
         _span: &Span,
     ) -> Option<Value> {
@@ -65,7 +65,7 @@ impl<'a> super::Interpreter<'a> {
                     .first()
                     .map(|a| self.eval_expr_inner(&a.value))
                     .unwrap_or(Value::Unit);
-                if let (Value::SortedSet(ref a_set), Value::SortedSet(ref b_set)) = (&obj, &other) {
+                if let (Value::SortedSet(ref a_set), Value::SortedSet(ref b_set)) = (obj, &other) {
                     #[allow(clippy::mutable_key_type)]
                     let mut result = a_set.clone();
                     for (k, _v) in b_set.iter() {
@@ -73,7 +73,7 @@ impl<'a> super::Interpreter<'a> {
                     }
                     return Some(Value::SortedSet(result));
                 }
-                if let (Value::Set(ref a_set), Value::Set(ref b_set)) = (&obj, &other) {
+                if let (Value::Set(ref a_set), Value::Set(ref b_set)) = (obj, &other) {
                     let mut result = a_set.clone();
                     for v in b_set {
                         if !result.contains(v) {
@@ -88,7 +88,7 @@ impl<'a> super::Interpreter<'a> {
                     .first()
                     .map(|a| self.eval_expr_inner(&a.value))
                     .unwrap_or(Value::Unit);
-                if let (Value::SortedSet(ref a_set), Value::SortedSet(ref b_set)) = (&obj, &other) {
+                if let (Value::SortedSet(ref a_set), Value::SortedSet(ref b_set)) = (obj, &other) {
                     #[allow(clippy::mutable_key_type)]
                     let result: BTreeMap<OrdValue, ()> = a_set
                         .iter()
@@ -97,7 +97,7 @@ impl<'a> super::Interpreter<'a> {
                         .collect();
                     return Some(Value::SortedSet(result));
                 }
-                if let (Value::Set(ref a_set), Value::Set(ref b_set)) = (&obj, &other) {
+                if let (Value::Set(ref a_set), Value::Set(ref b_set)) = (obj, &other) {
                     let result: Vec<Value> = a_set
                         .iter()
                         .filter(|v| b_set.contains(v))
@@ -111,7 +111,7 @@ impl<'a> super::Interpreter<'a> {
                     .first()
                     .map(|a| self.eval_expr_inner(&a.value))
                     .unwrap_or(Value::Unit);
-                if let (Value::SortedSet(ref a_set), Value::SortedSet(ref b_set)) = (&obj, &other) {
+                if let (Value::SortedSet(ref a_set), Value::SortedSet(ref b_set)) = (obj, &other) {
                     #[allow(clippy::mutable_key_type)]
                     let result: BTreeMap<OrdValue, ()> = a_set
                         .iter()
@@ -120,7 +120,7 @@ impl<'a> super::Interpreter<'a> {
                         .collect();
                     return Some(Value::SortedSet(result));
                 }
-                if let (Value::Set(ref a_set), Value::Set(ref b_set)) = (&obj, &other) {
+                if let (Value::Set(ref a_set), Value::Set(ref b_set)) = (obj, &other) {
                     let result: Vec<Value> = a_set
                         .iter()
                         .filter(|v| !b_set.contains(v))

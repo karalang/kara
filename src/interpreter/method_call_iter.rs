@@ -18,56 +18,73 @@ impl<'a> super::Interpreter<'a> {
         &mut self,
         method: &str,
         object: &Expr,
-        obj: Value,
+        obj: &Value,
         args: &[CallArg],
         span: &Span,
     ) -> Option<Value> {
-        match method {
-            "iter" | "into_iter" => {
-                // Snapshot the source elements eagerly into a Value::Iterator.
-                // Map yields (k, v) tuples; SortedSet flattens to ascending
-                // order; Set/Array yield elements in storage order. The
-                // tree-walk interpreter is type-erased so iter() and
-                // into_iter() are identical at this layer — the design.md
-                // borrow-vs-consume distinction is a typechecker concern.
-                //
-                // Iterator receivers (e.g. the redundant `(0..10).iter()`
-                // call shape now that Range evaluates to `Value::Iterator`)
-                // pass through unchanged — calling iter() on an iterator
-                // returns the iterator itself.
-                if matches!(&obj, Value::Iterator { .. }) {
-                    return Some(obj);
-                }
-                let items = match &obj {
-                    Value::Array(rc) => rc.read().unwrap().clone(),
-                    Value::Slice {
-                        storage,
-                        start,
-                        len,
-                        ..
-                    } => storage.read().unwrap()[*start..*start + *len].to_vec(),
-                    Value::Set(s) => s.clone(),
-                    Value::SortedSet(s) => s.keys().map(|k| k.0.clone()).collect(),
-                    Value::Map(m) => m
-                        .iter()
-                        .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
-                        .collect(),
-                    _ => unreachable!(
-                        "{}() receiver at {}:{} was Value::{}; \
-                         either an interpreter codepath produced the wrong receiver variant \
-                         or the typechecker accepted .{}() on a non-iterable type",
-                        method,
-                        span.line,
-                        span.column,
-                        obj.variant_name(),
-                        method
-                    ),
-                };
-                return Some(Value::Iterator {
-                    source: IteratorSource::Eager { items, cursor: 0 },
-                    steps: Vec::new(),
-                });
+        // `iter()`/`into_iter()` build an iterator from a COLLECTION receiver
+        // by borrowing it — never deep-clone the collection (this guard sits on
+        // the map-heavy dispatch hot path; B-2026-06-07-4). An Iterator
+        // receiver passes through.
+        if matches!(method, "iter" | "into_iter") {
+            // Snapshot the source elements eagerly into a Value::Iterator.
+            // Map yields (k, v) tuples; SortedSet flattens to ascending
+            // order; Set/Array yield elements in storage order. The
+            // tree-walk interpreter is type-erased so iter() and
+            // into_iter() are identical at this layer — the design.md
+            // borrow-vs-consume distinction is a typechecker concern.
+            //
+            // Iterator receivers (e.g. the redundant `(0..10).iter()`
+            // call shape now that Range evaluates to `Value::Iterator`)
+            // pass through unchanged — calling iter() on an iterator
+            // returns the iterator itself.
+            if matches!(obj, Value::Iterator { .. }) {
+                return Some(obj.clone());
             }
+            let items = match obj {
+                Value::Array(rc) => rc.read().unwrap().clone(),
+                Value::Slice {
+                    storage,
+                    start,
+                    len,
+                    ..
+                } => storage.read().unwrap()[*start..*start + *len].to_vec(),
+                Value::Set(s) => s.clone(),
+                Value::SortedSet(s) => s.keys().map(|k| k.0.clone()).collect(),
+                Value::Map(m) => m
+                    .iter()
+                    .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
+                    .collect(),
+                _ => unreachable!(
+                    "{}() receiver at {}:{} was Value::{}; \
+                     either an interpreter codepath produced the wrong receiver variant \
+                     or the typechecker accepted .{}() on a non-iterable type",
+                    method,
+                    span.line,
+                    span.column,
+                    obj.variant_name(),
+                    method
+                ),
+            };
+            return Some(Value::Iterator {
+                source: IteratorSource::Eager { items, cursor: 0 },
+                steps: Vec::new(),
+            });
+        }
+
+        // Every remaining adapter/terminal arm operates on an Iterator
+        // receiver and consumes it. A non-Iterator receiver (Map/Vec/Set/…) is
+        // not handled by this category — return None WITHOUT cloning, so a
+        // large collection is never deep-cloned merely to be rejected here.
+        // Each arm below already re-checks `matches!(obj, Value::Iterator)`;
+        // those guards are now always true (kept verbatim to minimise churn).
+        // The owned clone is of the confirmed (small) Iterator, taken once.
+        if !matches!(obj, Value::Iterator { .. }) {
+            return None;
+        }
+        let obj = obj.clone();
+
+        match method {
             "next" => {
                 // `Iterator.next()` — pull the next item via `iterator_step`,
                 // applying any adaptor closures registered in `steps`. When

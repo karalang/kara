@@ -31,8 +31,9 @@ use super::value::{try_write_or_panic, EnumData, Value};
 ///
 /// A new category guard added above an existing handler MUST either borrow
 /// the receiver (`&obj` — preferred when the `try_eval_*` only reads it, as
-/// the backpressure/process/tensor/pool guards now do) or clone through
-/// this helper. A raw `obj.clone()` is invisible to the gate.
+/// the iterator/http/regex/set/backpressure/process/tensor/pool guards now
+/// do) or clone through this helper. A raw `obj.clone()` is invisible to the
+/// gate.
 #[inline]
 fn clone_receiver(obj: &Value) -> Value {
     #[cfg(test)]
@@ -678,15 +679,13 @@ impl<'a> super::Interpreter<'a> {
         // Category dispatchers — each returns `Some(Value)` if `method`
         // matches one of its handled names and the receiver shape is
         // compatible; otherwise `None` and we fall through to the next.
-        if let Some(v) =
-            self.try_eval_iterator_method(method, object, clone_receiver(&obj), args, span)
-        {
+        if let Some(v) = self.try_eval_iterator_method(method, object, &obj, args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_http_method(method, clone_receiver(&obj), args, span) {
+        if let Some(v) = self.try_eval_http_method(method, &obj, args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_regex_method(method, clone_receiver(&obj), args, span) {
+        if let Some(v) = self.try_eval_regex_method(method, &obj, args, span) {
             return v;
         }
         if let Some(v) = self.try_eval_process_method(method, &obj, args, span) {
@@ -714,8 +713,7 @@ impl<'a> super::Interpreter<'a> {
         if let Some(v) = self.try_eval_bounded_channel_method(method, &obj, args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_set_method(method, object, clone_receiver(&obj), args, span)
-        {
+        if let Some(v) = self.try_eval_set_method(method, object, &obj, args, span) {
             return v;
         }
         if let Some(v) = self.try_eval_map_method(method, object, clone_receiver(&obj), args, span)
@@ -1077,19 +1075,21 @@ mod tests {
     /// kata's cost into 3 extra whole-map clones per operation.
     ///
     /// `get_or` is a map-specific read, so it falls through every guard
-    /// above `try_eval_map_method` (iterator / http / regex / set) before
-    /// the map handler accepts it. Each of those by-value guards clones the
-    /// receiver once via `clone_receiver`, so today's count is **5**
-    /// (4 fall-through guards + the accepting map handler).
+    /// above `try_eval_map_method` before the map handler accepts it. As of
+    /// B-2026-06-07-4a (the inline `iterator`/`http`/`regex`/`set` guards now
+    /// borrow `&obj` instead of cloning), the ONLY by-value clone a `Map`
+    /// receiver incurs is the accepting map handler's own, so the count is
+    /// **1**. This is the tight end-state: O(1) and independent of how many
+    /// category guards sit above the map handler.
     ///
     /// If this assertion fails:
     /// - count **went up** → a new category guard was added above the map
-    ///   handler that takes the receiver by value. Make it borrow (`&obj`)
-    ///   if its `try_eval_*` only reads the receiver — that is the fix, not
-    ///   bumping the ceiling. (See the `clone_receiver` doc comment.)
-    /// - count **went down** → the planned follow-on landed (converting the
-    ///   inline `iterator`/`http`/`regex`/`set` guards to `&obj`, residue of
-    ///   B-2026-06-07-4a). Good — lower `EXPECTED` to match. The O(1)
+    ///   handler that takes the receiver by value (cloning it via
+    ///   `clone_receiver`). Make it borrow (`&obj`) if its `try_eval_*` only
+    ///   reads the receiver — that is the fix, not bumping the ceiling. (See
+    ///   the `clone_receiver` doc comment.)
+    /// - count **went down** → the map handler itself stopped taking the
+    ///   receiver by value. Good — lower `EXPECTED` to match. The O(1)
     ///   property is what matters, not the exact constant.
     #[test]
     fn map_receiver_dispatch_clones_are_bounded() {
@@ -1102,7 +1102,7 @@ mod tests {
              let v = m.get_or(1, 0);\n\
              println(f\"{v}\")\n\
          }";
-        const EXPECTED: u32 = 5;
+        const EXPECTED: u32 = 1;
 
         // Drive the interpreter inline on THIS thread (mirroring
         // `run_program_full`'s pipeline). `crate::run_program` runs the
