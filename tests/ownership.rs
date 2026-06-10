@@ -7622,3 +7622,73 @@ fn test_borrow_return_method_move_receiver_while_live_errors() {
         }
     )));
 }
+
+// ── E_RC_FALLBACK_ALLOCATES_UNDER_FALLIBLE_PROFILE (item 6) ──
+// Under panic_on_alloc_failure = false, every auto-RC fallback site becomes a
+// hard error (the compiler would emit Rc.new/Arc.new, which may panic on OOM).
+
+fn ownership_hard_mode(source: &str) -> OwnershipCheckResult {
+    use karac::manifest::ProfileConfig;
+    let parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    let typed = typecheck(&parsed.program, &resolved);
+    assert!(typed.errors.is_empty(), "Type errors: {:?}", typed.errors);
+    let cfg = ProfileConfig {
+        panic_on_alloc_failure: Some(false),
+        ..Default::default()
+    };
+    karac::ownershipcheck_with_profile_config(&parsed.program, &typed, cfg)
+}
+
+const RC_FALLBACK_SOURCE: &str = "struct Owned { x: i64 }\n\
+     fn take(o: Owned) { }\n\
+     fn main() {\n\
+         let o = Owned { x: 1 };\n\
+         let _f = || take(o);\n\
+         let _u = o;\n\
+     }";
+
+#[test]
+fn test_hard_mode_rc_fallback_is_hard_error() {
+    let result = ownership_hard_mode(RC_FALLBACK_SOURCE);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| e.kind == OwnershipErrorKind::RcFallbackAllocatesUnderFallibleProfile)
+        .expect("expected RcFallbackAllocatesUnderFallibleProfile error");
+    assert!(err.message.contains("Rc.new(...)"), "{}", err.message);
+    assert!(err.message.contains("try_new"), "{}", err.message);
+}
+
+#[test]
+fn test_default_mode_rc_fallback_is_note_not_error() {
+    // With the flag unset (default), RC fallback is a perf note, not an error.
+    let parsed = parse(RC_FALLBACK_SOURCE);
+    let resolved = resolve(&parsed.program);
+    let typed = typecheck(&parsed.program, &resolved);
+    let result = ownershipcheck(&parsed.program, &typed);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::RcFallbackAllocatesUnderFallibleProfile),
+        "default mode must not emit the hard RC-fallback error"
+    );
+    assert!(
+        result
+            .rc_values
+            .get("main")
+            .is_some_and(|m| m.contains_key("o")),
+        "the RC fallback should still be recorded in default mode"
+    );
+}

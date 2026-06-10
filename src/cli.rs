@@ -1045,9 +1045,15 @@ impl Pipeline {
         if self.typed.is_none() {
             return;
         }
-        self.ownership = Some(crate::ownershipcheck(
+        // Thread the manifest's `[profile]`-table knob carrier (realigned to the
+        // active profile) so `panic_on_alloc_failure = false` turns auto-RC
+        // fallback into a hard error (phase-8-stdlib-floor item 6).
+        let mut profile_config = self.profile_config.clone();
+        profile_config.profile = self.profile;
+        self.ownership = Some(crate::ownershipcheck_with_profile_config(
             &self.parsed.program,
             self.typed.as_ref().unwrap(),
+            profile_config,
         ));
     }
 
@@ -3046,6 +3052,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                     "E_CONCURRENT_PLAIN_STRUCT"
                 }
                 crate::ownership::OwnershipErrorKind::BorrowReturnNotSourcePinned { .. } => "E0509",
+                crate::ownership::OwnershipErrorKind::RcFallbackAllocatesUnderFallibleProfile => {
+                    "E_RC_FALLBACK_ALLOCATES_UNDER_FALLIBLE_PROFILE"
+                }
             };
             let replacement_json = err.replacement.as_ref().map(|r| {
                 format!(

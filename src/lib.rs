@@ -305,6 +305,22 @@ pub fn ownershipcheck(
     checker.check()
 }
 
+/// Check ownership with the manifest's `[profile]`-table knob carrier
+/// (phase-8-stdlib-floor item 6). Under `panic_on_alloc_failure = false`, every
+/// auto-RC fallback site becomes a hard
+/// `E_RC_FALLBACK_ALLOCATES_UNDER_FALLIBLE_PROFILE` error. The `Pipeline` threads
+/// its `profile_config` here; in-process callers that don't need it keep using
+/// [`ownershipcheck`].
+pub fn ownershipcheck_with_profile_config(
+    program: &Program,
+    typecheck_result: &TypeCheckResult,
+    profile_config: impl Into<crate::manifest::ProfileConfig>,
+) -> OwnershipCheckResult {
+    let checker =
+        OwnershipChecker::new(program, typecheck_result).with_profile_config(profile_config);
+    checker.check()
+}
+
 /// Run the formal RC predicate pipeline (use classifier → CFG →
 /// dominator tree → predicate) over every function in `program`.
 /// Returns `function_key → binding → witness`, mirroring the shape

@@ -529,6 +529,14 @@ pub enum OwnershipErrorKind {
     BorrowReturnNotSourcePinned {
         shape: BorrowReturnShape,
     },
+    /// An auto-RC fallback site (the compiler would emit `Rc.new(...)` /
+    /// `Arc.new(...)`) appears under `panic_on_alloc_failure = false`
+    /// (phase-8-stdlib-floor item 6). The fallback allocation may panic on OOM
+    /// and there is no fallible form the compiler can synthesize, so it is a
+    /// hard error: the author restructures to remove the fallback or moves to
+    /// an explicit `Rc.try_new(...)?`. A profile-flag-gated transformation of
+    /// the existing RC-fallback records (`rc_values`) — no new dataflow.
+    RcFallbackAllocatesUnderFallibleProfile,
 }
 
 /// Why a `-> ref T` return failed the source-pinning check — selects the
@@ -855,6 +863,12 @@ pub struct OwnershipChecker<'a> {
     /// Function keys where RC notes are suppressed via `#[allow(rc_fallback)]`.
     /// Consulted after Phase 2 when emitting flavor-annotated notes.
     pub(crate) suppressed_rc_fn_keys: HashSet<String>,
+    /// Effective `panic_on_alloc_failure` (phase-8-stdlib-floor item 6). `true`
+    /// (the default) leaves RC fallback as a perf note; `false` (hard mode)
+    /// turns every RC-fallback site into a hard
+    /// `E_RC_FALLBACK_ALLOCATES_UNDER_FALLIBLE_PROFILE` error. Set via
+    /// [`Self::with_profile_config`]; defaulted `true` in [`Self::new`].
+    pub(crate) panic_on_alloc_failure: bool,
     /// RC elision phase A output — populated by `compute_elision`.
     pub(crate) elided_bindings: HashMap<String, HashSet<String>>,
     pub(crate) elision_blocked: HashMap<String, Vec<ElisionBlocked>>,
@@ -996,6 +1010,7 @@ impl<'a> OwnershipChecker<'a> {
             current_function: String::new(),
             suppress_rc_notes: false,
             suppressed_rc_fn_keys: HashSet::new(),
+            panic_on_alloc_failure: true,
             elided_bindings: HashMap::new(),
             elision_blocked: HashMap::new(),
             elided_clusters: HashMap::new(),
@@ -1021,6 +1036,20 @@ impl<'a> OwnershipChecker<'a> {
         }
     }
 
+    /// Attach the manifest's `[profile]`-table knob carrier
+    /// (phase-8-stdlib-floor item 6). Builder method, defaulted to "panicking
+    /// allocation allowed" in [`Self::new`]. Accepts a bare
+    /// [`crate::manifest::CompileProfile`] (via `From`) or the full
+    /// [`crate::manifest::ProfileConfig`], mirroring the effect-checker /
+    /// typechecker legs; only the `panic_on_alloc_failure` bit is retained.
+    pub fn with_profile_config(
+        mut self,
+        config: impl Into<crate::manifest::ProfileConfig>,
+    ) -> Self {
+        self.panic_on_alloc_failure = config.into().panics_on_alloc_failure();
+        self
+    }
+
     /// Check whether a type is Copy — primitives, or named types with #[derive(Copy)].
     fn is_copy_type(&self, ty: &Type) -> bool {
         is_copy_type(ty, self.typecheck_result)
@@ -1031,6 +1060,11 @@ impl<'a> OwnershipChecker<'a> {
         self.check_items();
         self.promote_rc_to_arc();
         self.emit_rc_fallback_notes();
+        // Fallible-allocation: under `panic_on_alloc_failure = false`, every
+        // RC-fallback site becomes a hard error (phase-8-stdlib-floor item 6).
+        // Runs after `emit_rc_fallback_notes` (and Rc→Arc promotion) so the
+        // `arc_values` flavor is settled; a no-op in the default mode.
+        self.emit_rc_fallback_fallible_profile_errors();
         self.enforce_no_rc_attrs();
         self.enforce_rc_budget();
         self.check_concurrent_shared_struct();

@@ -100,6 +100,53 @@ impl<'a> super::OwnershipChecker<'a> {
         self.notes.extend(notes);
     }
 
+    /// `E_RC_FALLBACK_ALLOCATES_UNDER_FALLIBLE_PROFILE` (phase-8-stdlib-floor
+    /// item 6). Under `panic_on_alloc_failure = false`, every recorded RC
+    /// fallback site (`rc_values`) becomes a hard error: the compiler would emit
+    /// `Rc.new(...)` / `Arc.new(...)`, which may panic on OOM, and there is no
+    /// fallible form it can synthesize. A pure profile-flag-gated transformation
+    /// of the existing records — no new dataflow. Unlike the perf note, this is
+    /// *not* silenced by `#[allow(rc_fallback)]`: accepting the RC for
+    /// performance is a different decision than accepting an OOM panic, so every
+    /// fallback site is reported regardless of the suppression set. No-op in the
+    /// default mode.
+    pub(crate) fn emit_rc_fallback_fallible_profile_errors(&mut self) {
+        if self.panic_on_alloc_failure {
+            return;
+        }
+        let mut errors = Vec::new();
+        for (fn_key, rc_map) in &self.rc_values {
+            let arc_set = self.arc_values.get(fn_key);
+            for (binding, entry) in rc_map {
+                let ctor = if arc_set.is_some_and(|s| s.contains(binding)) {
+                    "Arc"
+                } else {
+                    "Rc"
+                };
+                errors.push(OwnershipError {
+                    message: format!(
+                        "auto-RC fallback for '{}' at this site emits '{ctor}.new(...)' which may \
+                         panic on allocation failure; restructure to remove the fallback (a \
+                         `shared struct`/`shared enum`, a lifetime adjustment, or an ownership \
+                         reshape into a single ownership path) or use '{ctor}.try_new(...)?' with \
+                         explicit '?'-propagation",
+                        entry.binding,
+                    ),
+                    span: entry.other_use_span.clone(),
+                    kind: OwnershipErrorKind::RcFallbackAllocatesUnderFallibleProfile,
+                    suggestion: Some(
+                        "remove the RC fallback (single ownership path / `shared` type / lifetime \
+                         adjustment) or switch to explicit `try_new(...)?`"
+                            .to_string(),
+                    ),
+                    replacement: None,
+                    consume_span: Some(entry.consume_span.clone()),
+                });
+            }
+        }
+        self.errors.extend(errors);
+    }
+
     /// Find a closure inside function `fn_key` whose whole-root
     /// capture reasons name `binding`. Returns the closure span and
     /// its reason for that root — used by `emit_rc_fallback_notes`
