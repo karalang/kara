@@ -1,0 +1,18 @@
+// blocks_fanout_par.kara — the PAR CEILING rail for blocks_fanout.kara.
+//
+// Same four blocking `usleep` calls, but inside an explicit `par {}` so
+// the runtime fans them onto the thread pool unconditionally. This proves
+// the runtime *can* overlap blocking work (measured ~0.40s vs the 1.6s
+// serial floor) — the gap auto-par leaves on the table today. It is the
+// target the `auto` rail should reach once A1 lands.
+unsafe extern "C" { fn usleep(usecs: u32) -> i32; }
+
+fn main() {
+    par {
+        usleep(400000);
+        usleep(400000);
+        usleep(400000);
+        usleep(400000);
+    }
+    println(0);
+}

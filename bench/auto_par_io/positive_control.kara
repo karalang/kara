@@ -1,0 +1,56 @@
+// positive_control.kara — proves the harness can DETECT auto-par firing.
+//
+// This is the one shape auto-par reliably parallelizes today (the
+// parallax-lite shape): three bare calls, each writing a DISTINCT effect
+// resource (no conflict edge), through a TRAIT method (opaque to the
+// codegen cost estimator, so it clears the dispatch-cost gate). The
+// analyzer groups [0,1,2] and codegen emits `karac_par_run`.
+//
+// The harness checks the DETERMINISTIC signals here (plan grouped +
+// par_run symbol present), not wall-clock: the kernel's result isn't
+// observed, so LLVM is free to fold it — that's fine, the point is to
+// guard against a false-green where the rig simply can't see par_run at
+// all. If this probe ever stops emitting par_run, the blocks RED below
+// is meaningless.
+//
+// NOTE: there is deliberately NO auto-par WALL-CLOCK positive control,
+// because none is constructible today — auto-par can only fire on this
+// CPU shape (which folds), and it CANNOT fire on observable blocking
+// work (that is exactly the blocks+blocks bug A1 fixes). The absence is
+// the finding.
+trait MetricsRecorder {
+    fn record(mut ref self, value: i64);
+}
+effect resource MetricsA: MetricsRecorder;
+effect resource MetricsB: MetricsRecorder;
+effect resource MetricsC: MetricsRecorder;
+
+struct InMemoryMetrics { count: i64, accumulator: i64 }
+
+impl MetricsRecorder for InMemoryMetrics {
+    // `+`-only kernel: `%`/`/` would infer `panics`, and panics+panics
+    // self-conflicts in the analyzer, blocking the group (see
+    // examples/parallax_lite/src/resources.kara for the same constraint).
+    fn record(mut ref self, value: i64) {
+        let mut sum: i64 = 0;
+        let mut i: i64 = 0;
+        while i < value {
+            sum = sum + i;
+            i = i + 1;
+        }
+        self.accumulator = (self.accumulator + sum);
+        self.count = self.count + 1;
+    }
+}
+
+fn record_a() with writes(MetricsA) { MetricsA.record(1000); }
+fn record_b() with writes(MetricsB) { MetricsB.record(1000); }
+fn record_c() with writes(MetricsC) { MetricsC.record(1000); }
+
+fn process_request() with writes(MetricsA) writes(MetricsB) writes(MetricsC) {
+    record_a();
+    record_b();
+    record_c();
+}
+
+fn main() { process_request(); println(0); }
