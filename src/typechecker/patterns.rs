@@ -1214,6 +1214,28 @@ impl<'a> super::TypeChecker<'a> {
                 .insert(SpanKey::from_span(&pattern.span), "Tuple".to_string());
             return;
         }
+        // `Map[K, V]` / `Set[T]` payload binding (e.g.
+        // `match opt { Some(m) => m.len() }`): record the FULL collection
+        // `TypeExpr` — like the Tuple arm above, NOT the inner-element form
+        // used for Vec/Slice below — so codegen can route the binding through
+        // `register_var_from_type_expr`, which extracts the K/V (or elem) LLVM
+        // types into `map_key_types` / `map_val_types` / `set_elem_types`.
+        // Without this, a Map/Set bound by a match arm carries no dispatch
+        // side-tables and `m.len()` / `s.contains(x)` fails codegen with
+        // "no handler for method". The raw `Type` is stashed for
+        // `finalize_pattern_binding_inner_types` so a still-unsolved K/V/elem
+        // typevar re-resolves the same way the Vec arm's does.
+        if let Type::Named { name, args } = ty {
+            if (name == "Map" && args.len() == 2) || (name == "Set" && args.len() == 1) {
+                let key = SpanKey::from_span(&pattern.span);
+                self.pattern_binding_inner_types
+                    .insert(key, Self::type_to_type_expr(ty));
+                self.pattern_binding_inner_unresolved
+                    .insert(key, ty.clone());
+                self.pattern_binding_types.insert(key, name.clone());
+                return;
+            }
+        }
         let (elem, name): (Option<&Type>, Option<&'static str>) = match ty {
             // `VecDeque[T]` shares `Vec[T]`'s `{ptr, len, cap}` codegen
             // layout (see `extract_vec_elem_type`), so record it under

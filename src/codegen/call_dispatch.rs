@@ -1242,6 +1242,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `suppress_source_vec_cleanup_for_arg` for the
                 // shape-detection path.
                 self.suppress_source_vec_cleanup_for_arg(&arg.value);
+                // Map/Set sibling of the Vec suppression: a `Map`/`Set`
+                // local moved into this variant hands its handle to the
+                // enum payload, so drop the source's scope-exit
+                // `FreeMapHandle` — otherwise the source frees the handle
+                // the returned enum now carries downstream (the
+                // struct-literal UAF — phase-6 line 561 — for enum
+                // variants). Set/Map share `FreeMapHandle`; mirrors the
+                // struct-literal fix in `exprs.rs`.
+                if let ExprKind::Identifier(n) = &arg.value.kind {
+                    let n = n.clone();
+                    self.suppress_map_cleanup_for_tail_identifier(&n);
+                }
             }
             return Ok(Some(ptr.into()));
         }
@@ -1297,6 +1309,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // `cap` so its scope-exit `FreeVecBuffer` becomes a no-op.
             // The new enum binding owns the buffer.
             self.suppress_source_vec_cleanup_for_arg(&arg.value);
+            // Map/Set sibling of the Vec suppression — see the shared-enum
+            // branch above. A `Map`/`Set` local moved into this variant
+            // hands its handle to the enum payload, so drop the source's
+            // scope-exit `FreeMapHandle` (the struct-literal UAF for enum
+            // variants; Set/Map share `FreeMapHandle`).
+            if let ExprKind::Identifier(n) = &arg.value.kind {
+                let n = n.clone();
+                self.suppress_map_cleanup_for_tail_identifier(&n);
+            }
         }
 
         Ok(Some(agg.into()))

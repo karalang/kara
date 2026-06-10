@@ -3617,6 +3617,64 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_map_set_moved_into_returned_enum_variant_clean() {
+        // ASAN-cleanliness guard for the enum-variant sibling of
+        // `asan_map_local_moved_into_returned_struct_no_uaf` (phase-6 line
+        // 562): a `Map`/`Set` local moved into an enum variant (`Some(m)`)
+        // that the function returns must not free the handle at the source's
+        // scope exit (the move-suppression at the enum-variant constructor),
+        // and the match-arm leaf binding must dispatch `.len()`/`.contains()`
+        // (the new dispatch wiring). Looped to exercise per-iteration alloca
+        // reuse. This pins that the new dispatch + suppression paths stay
+        // ASAN-clean and never double-free.
+        //
+        // NOTE — this ASAN test is NOT the non-vacuous proof of the UAF fix.
+        // The bug here is a *single-free* UAF whose dangling read lands inside
+        // the (non-ASAN-instrumented) runtime archive's `karac_map_len`, and
+        // ASAN's free-quarantine preserves the freed bytes, so ASAN reads the
+        // intact data and reports clean with OR without the fix. The
+        // deterministic non-vacuous gate is the plain-build E2E
+        // `test_e2e_match_arm_map_set_method_dispatch` in tests/codegen.rs,
+        // which prints wrong/empty output without the suppression and `3\n2`
+        // with it. This test guards the memory-safety dimension (no NEW
+        // double-free introduced) and the looped dispatch path.
+        assert_clean_asan_run(
+            r#"
+fn make_map(x: i64) -> Option[Map[i64, i64]] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(x, x * 2);
+    return Some(m);
+}
+fn make_set(x: i64) -> Option[Set[i64]] {
+    let mut s: Set[i64] = Set.new();
+    s.insert(x);
+    s.insert(x + 100);
+    return Some(s);
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        match make_map(i) {
+            Some(m) => println(i + m.len()),
+            None => println(-1),
+        }
+        match make_set(i) {
+            Some(s) => {
+                if s.contains(i) { println(s.len()); } else { println(-1); }
+            }
+            None => println(-1),
+        }
+        i = i + 1;
+    }
+    println(99);
+}
+"#,
+            &["1", "2", "2", "2", "3", "2", "4", "2", "5", "2", "99"],
+            "map_set_moved_into_returned_enum_variant_clean",
+        );
+    }
+
     /// Oversized boxed enum payload — box-free double-free gate. A 4-word
     /// `Wide` exceeds Option's 3-word area, so `Some(Wide)` heap-boxes it
     /// (`coerce_to_payload_words`); the annotated `let o: Option[Wide]`

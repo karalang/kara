@@ -13069,6 +13069,100 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_match_arm_map_set_method_dispatch() {
+        // A `Map`/`Set` bound by a match arm must dispatch methods
+        // (`m.len()` / `s.contains()`). Before phase-6 line 562 only the Vec
+        // arm wired the match-binding dispatch side-tables, so a Map/Set
+        // match binding failed codegen with "no handler for method". The
+        // typechecker now records the full Map/Set `TypeExpr` for the
+        // binding and codegen routes it through `register_var_from_type_expr`.
+        let out = run_program(
+            r#"
+fn build_map() -> Option[Map[i64, i64]] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1, 10);
+    m.insert(2, 20);
+    m.insert(3, 30);
+    return Some(m);
+}
+fn build_set() -> Option[Set[i64]] {
+    let mut s: Set[i64] = Set.new();
+    s.insert(7);
+    s.insert(8);
+    return Some(s);
+}
+fn main() {
+    match build_map() {
+        Some(m) => println(m.len()),
+        None => println(-1),
+    }
+    match build_set() {
+        Some(s) => {
+            if s.contains(7) { println(s.len()); } else { println(-1); }
+        }
+        None => println(-1),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\n2");
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_set_moved_into_returned_enum_variant_no_uaf() {
+        // Non-vacuous UAF gate (phase-6 line 562): a `Map`/`Set` local moved
+        // into a returned enum variant (`return Some(m)`) must NOT be freed at
+        // the source function's scope exit. Without the enum-variant
+        // move-suppression, `make`'s scope exit frees the handle the returned
+        // Option carries, so the caller's `m.len()` reads a freed handle in
+        // the (non-instrumented) runtime → deterministically wrong/empty
+        // output on a plain build (ASAN's quarantine masks it — see the
+        // sibling `asan_..._clean` note). Looped to also exercise
+        // per-iteration alloca reuse. `return Some(m)` routes through the
+        // enum-variant arg suppression, not the return-stmt Identifier path
+        // (`Some(m)` is a constructor, not a bare Identifier).
+        let out = run_program(
+            r#"
+fn make_map(x: i64) -> Option[Map[i64, i64]] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(x, x * 2);
+    return Some(m);
+}
+fn make_set(x: i64) -> Option[Set[i64]] {
+    let mut s: Set[i64] = Set.new();
+    s.insert(x);
+    s.insert(x + 100);
+    return Some(s);
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 4 {
+        let mo: Option[Map[i64, i64]] = make_map(i);
+        match mo {
+            Some(m) => println(i + m.len()),
+            None => println(-1),
+        }
+        let so: Option[Set[i64]] = make_set(i);
+        match so {
+            Some(s) => {
+                if s.contains(i) { println(s.len()); } else { println(-1); }
+            }
+            None => println(-1),
+        }
+        i = i + 1;
+    }
+    println(99);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\n2\n2\n2\n3\n2\n4\n2\n99");
+        }
+    }
+
+    #[test]
     fn test_ir_struct_destructure_bound_field_freed() {
         // A bound heap field is freed via its binding's scope-exit cleanup.
         let src = format!(

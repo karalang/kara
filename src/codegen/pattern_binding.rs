@@ -254,6 +254,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.vec_elem_types.insert(name.clone(), u8_ty);
                         bound_vec_elem = Some(u8_ty);
                     }
+                    // Map[K,V] / Set[T] payload binding — register the
+                    // collection dispatch side-tables (map_key_types /
+                    // map_val_types / set_elem_types) off the full collection
+                    // `TypeExpr` the typechecker stored in
+                    // `pattern_binding_inner_types`, so `m.len()` /
+                    // `s.contains(x)` on a match-arm-bound Map/Set dispatches
+                    // like a let-bound one. Mirrors the Vec/Slice arm above,
+                    // but routes through the shared `register_var_from_type_expr`
+                    // helper (which extracts K/V/elem). Dispatch only: the
+                    // moved-in handle's scope-exit free is the binding owner's
+                    // concern, and a match-bound Map/Set is left un-tracked for
+                    // cleanup (a benign leak, never a double-free — tracked as a
+                    // deferred remainder in phase-6-runtime.md), so no
+                    // `track_map_var` here.
+                    if matches!(type_name.as_str(), "Map" | "Set") {
+                        if let Some(full_te) = self.pattern_binding_inner_types.get(&key).cloned() {
+                            self.register_var_from_type_expr(name, &full_te);
+                        }
+                    }
                     self.record_var_type_name(name.clone(), type_name);
                 }
                 // Register scope-exit cleanup for the heap-owning binding.
