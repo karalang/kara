@@ -1419,6 +1419,28 @@ fn test_enum_match_unit_variants() {
 }
 
 #[test]
+fn test_enum_match_dotted_unit_variants() {
+    // Regression: a *dotted* unit-variant pattern (`Side.Left`) was matched
+    // via an `env.get("Side.Left")` lookup that always failed (variants
+    // aren't keyed by dotted name), so the arm fell through to the catch-all
+    // "binds anything" and matched EVERY value — `Side.Right` silently took
+    // the `Side.Left` arm. Both arms must now select correctly. (Bare unit
+    // variants — `test_enum_match_unit_variants` — were unaffected and must
+    // keep working.)
+    assert_eq!(
+        run("enum Side { Left, Right }\n\
+             fn label(s: Side) -> i64 {\n\
+                 match s {\n\
+                     Side.Left => 1,\n\
+                     Side.Right => 2,\n\
+                 }\n\
+             }\n\
+             fn main() { println(label(Side.Left)); println(label(Side.Right)); }"),
+        "1\n2\n"
+    );
+}
+
+#[test]
 fn test_enum_match_tuple_variant() {
     assert_eq!(
         run("enum Shape { Circle(i64), Rect(i64, i64) }\n\

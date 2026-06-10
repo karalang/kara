@@ -55,15 +55,29 @@ impl<'a> super::Interpreter<'a> {
         match &pattern.kind {
             PatternKind::Wildcard => true,
             PatternKind::Binding(name) => {
-                // Check if this is actually an enum variant name (unit variant)
-                if let Some(Value::EnumVariant {
-                    variant,
-                    data: EnumData::Unit,
-                    ..
-                }) = self.env.get(name)
-                {
+                // A `Binding` node doubles as a unit-variant pattern. The name
+                // may be dotted (`Side.Left`) or bare (`Left`). A dotted name
+                // is unambiguously a variant — a real value binding can never
+                // contain `.` — so we strip the enum prefix and compare the
+                // last segment to the scrutinee's tag. A bare name is a
+                // variant only when one is in scope (otherwise it's a true
+                // binding that matches anything). Before this, dotted names
+                // failed the `env.get(name)` lookup and fell through to the
+                // catch-all `true`, so `Side.Left` matched EVERY value (a
+                // silent wrong-arm-selection bug for any enum with >1 unit
+                // variant matched by dotted name).
+                let variant_name = name.rsplit('.').next().unwrap_or(name);
+                let is_unit_variant = name.contains('.')
+                    || matches!(
+                        self.env.get(variant_name),
+                        Some(Value::EnumVariant {
+                            data: EnumData::Unit,
+                            ..
+                        })
+                    );
+                if is_unit_variant {
                     if let Value::EnumVariant { variant: v2, .. } = value {
-                        return variant == *v2;
+                        return variant_name == v2.as_str();
                     }
                     return false;
                 }
@@ -190,17 +204,22 @@ impl<'a> super::Interpreter<'a> {
         match &pattern.kind {
             PatternKind::Wildcard => {}
             PatternKind::Binding(name) => {
-                // Don't rebind if this is a unit variant name being used as a pattern
-                if let Some(existing) = self.env.get(name) {
-                    if matches!(
-                        existing,
-                        Value::EnumVariant {
+                // Don't create a binding for a unit-variant pattern (dotted
+                // `Side.Left`, or a bare name resolving to a unit variant in
+                // scope) — mirrors the detection in `try_match_pattern`. The
+                // dotted case previously fell through and defined a spurious
+                // `"Side.Left"` binding.
+                let variant_name = name.rsplit('.').next().unwrap_or(name);
+                let is_unit_variant = name.contains('.')
+                    || matches!(
+                        self.env.get(variant_name),
+                        Some(Value::EnumVariant {
                             data: EnumData::Unit,
                             ..
-                        }
-                    ) {
-                        return;
-                    }
+                        })
+                    );
+                if is_unit_variant {
+                    return;
                 }
                 self.env.define(name.clone(), value);
             }
