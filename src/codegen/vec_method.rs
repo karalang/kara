@@ -3117,6 +3117,260 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
+            // `String.contains(sub: String) -> bool` — substring search.
+            // Disambiguated from `Vec.contains` via `string_vars`
+            // membership, exactly like the `push` arm (String and Vec[u8]
+            // share the `{ptr, len, cap}` shape). Naive O(n*m) scan: for
+            // each start offset `i` where `i + sub.len <= recv.len`,
+            // `memcmp(recv.data + i, sub.data, sub.len) == 0`. An empty
+            // needle matches at i==0 (memcmp(.,.,0)==0), and a needle
+            // longer than the haystack never enters the loop — both match
+            // Rust's `str::contains` (and the interpreter's
+            // `method_call_seq.rs` arm). Surfaced by B-2026-06-10-1.
+            "contains" if self.string_vars.contains(var_name) => {
+                if args.is_empty() {
+                    return Err("String.contains requires a substring argument".to_string());
+                }
+                let bool_t = self.context.bool_type();
+                let i32_t = self.context.i32_type();
+                let i8_t = self.context.i8_type();
+
+                // Receiver {data, len}.
+                let recv_data_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "ct.recv.ptr.p")
+                    .unwrap();
+                let recv_data = self
+                    .builder
+                    .build_load(ptr_ty, recv_data_ptr, "ct.recv.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let recv_len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "ct.recv.len.p")
+                    .unwrap();
+                let recv_len = self
+                    .builder
+                    .build_load(i64_t, recv_len_ptr, "ct.recv.len")
+                    .unwrap()
+                    .into_int_value();
+
+                // Needle: evaluate the arg, extract {data, len}.
+                let needle_val = self.compile_expr(&args[0].value)?;
+                let needle_struct = needle_val.into_struct_value();
+                let needle_data = self
+                    .builder
+                    .build_extract_value(needle_struct, 0, "ct.needle.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let needle_len = self
+                    .builder
+                    .build_extract_value(needle_struct, 1, "ct.needle.len")
+                    .unwrap()
+                    .into_int_value();
+
+                let fn_val = self.current_fn.unwrap();
+                let head_bb = self.context.append_basic_block(fn_val, "ct.head");
+                let body_bb = self.context.append_basic_block(fn_val, "ct.body");
+                let found_bb = self.context.append_basic_block(fn_val, "ct.found");
+                let next_bb = self.context.append_basic_block(fn_val, "ct.next");
+                let done_bb = self.context.append_basic_block(fn_val, "ct.done");
+
+                let i_slot = self.create_entry_alloca(fn_val, "ct.i", i64_t.into());
+                let result_slot = self.create_entry_alloca(fn_val, "ct.result", bool_t.into());
+                self.builder
+                    .build_store(i_slot, i64_t.const_zero())
+                    .unwrap();
+                self.builder
+                    .build_store(result_slot, bool_t.const_zero())
+                    .unwrap();
+                self.builder.build_unconditional_branch(head_bb).unwrap();
+
+                // head: continue while `i + needle_len <= recv_len`.
+                self.builder.position_at_end(head_bb);
+                let i = self
+                    .builder
+                    .build_load(i64_t, i_slot, "ct.i.load")
+                    .unwrap()
+                    .into_int_value();
+                let i_end = self
+                    .builder
+                    .build_int_add(i, needle_len, "ct.i_end")
+                    .unwrap();
+                let in_range = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::ULE, i_end, recv_len, "ct.in_range")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(in_range, body_bb, done_bb)
+                    .unwrap();
+
+                // body: memcmp(recv_data + i, needle_data, needle_len) == 0?
+                self.builder.position_at_end(body_bb);
+                let window = unsafe {
+                    self.builder
+                        .build_gep(i8_t, recv_data, &[i], "ct.window")
+                        .unwrap()
+                };
+                let cmp = self
+                    .builder
+                    .build_call(
+                        self.memcmp_fn,
+                        &[window.into(), needle_data.into(), needle_len.into()],
+                        "ct.memcmp",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let is_match = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        cmp,
+                        i32_t.const_zero(),
+                        "ct.match",
+                    )
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(is_match, found_bb, next_bb)
+                    .unwrap();
+
+                // found: record true, exit.
+                self.builder.position_at_end(found_bb);
+                self.builder
+                    .build_store(result_slot, bool_t.const_int(1, false))
+                    .unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                // next: i++, loop.
+                self.builder.position_at_end(next_bb);
+                let i_next = self
+                    .builder
+                    .build_int_add(i, i64_t.const_int(1, false), "ct.i.next")
+                    .unwrap();
+                self.builder.build_store(i_slot, i_next).unwrap();
+                self.builder.build_unconditional_branch(head_bb).unwrap();
+
+                self.builder.position_at_end(done_bb);
+                let result = self
+                    .builder
+                    .build_load(bool_t, result_slot, "ct.load")
+                    .unwrap();
+                Ok(result)
+            }
+            // `Vec.contains(x) -> bool` / `Slice.contains(x) -> bool` —
+            // linear element scan. Each element is loaded and compared to
+            // the (once-evaluated) needle via the same `==` lowering the
+            // binary operator uses (`compile_binop(BinOp::Eq, ..)`), so
+            // scalar, String, and user-struct element types all work
+            // (the typechecker already enforces `arg : elem`). Mirrors the
+            // interpreter's `v.contains(&needle)`. Surfaced by
+            // B-2026-06-10-1.
+            "contains" => {
+                if args.is_empty() {
+                    return Err("Vec.contains requires an argument".to_string());
+                }
+                let bool_t = self.context.bool_type();
+
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "vct.data.ptr")
+                    .unwrap();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "vct.len.ptr")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "vct.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "vct.len")
+                    .unwrap()
+                    .into_int_value();
+
+                // Evaluate the needle once, before the loop.
+                let needle_val = self.compile_expr(&args[0].value)?;
+
+                let fn_val = self.current_fn.unwrap();
+                let head_bb = self.context.append_basic_block(fn_val, "vct.head");
+                let body_bb = self.context.append_basic_block(fn_val, "vct.body");
+                let found_bb = self.context.append_basic_block(fn_val, "vct.found");
+                let next_bb = self.context.append_basic_block(fn_val, "vct.next");
+                let done_bb = self.context.append_basic_block(fn_val, "vct.done");
+
+                let i_slot = self.create_entry_alloca(fn_val, "vct.i", i64_t.into());
+                let result_slot = self.create_entry_alloca(fn_val, "vct.result", bool_t.into());
+                self.builder
+                    .build_store(i_slot, i64_t.const_zero())
+                    .unwrap();
+                self.builder
+                    .build_store(result_slot, bool_t.const_zero())
+                    .unwrap();
+                self.builder.build_unconditional_branch(head_bb).unwrap();
+
+                // head: continue while `i < len`.
+                self.builder.position_at_end(head_bb);
+                let i = self
+                    .builder
+                    .build_load(i64_t, i_slot, "vct.i.load")
+                    .unwrap()
+                    .into_int_value();
+                let in_range = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::ULT, i, len, "vct.in_range")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(in_range, body_bb, done_bb)
+                    .unwrap();
+
+                // body: load data[i], compare to needle.
+                self.builder.position_at_end(body_bb);
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, data, &[i], "vct.elem.ptr")
+                        .unwrap()
+                };
+                let elem_val = self
+                    .builder
+                    .build_load(elem_ty, elem_ptr, "vct.elem")
+                    .unwrap();
+                let eq = self
+                    .compile_binop(&BinOp::Eq, elem_val, needle_val)?
+                    .into_int_value();
+                // `compile_binop` may have emitted its own blocks (e.g.
+                // struct element equality); branch from wherever it left
+                // the insert point, not the assumed `body_bb`.
+                self.builder
+                    .build_conditional_branch(eq, found_bb, next_bb)
+                    .unwrap();
+
+                // found: record true, exit.
+                self.builder.position_at_end(found_bb);
+                self.builder
+                    .build_store(result_slot, bool_t.const_int(1, false))
+                    .unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                // next: i++, loop.
+                self.builder.position_at_end(next_bb);
+                let i_next = self
+                    .builder
+                    .build_int_add(i, i64_t.const_int(1, false), "vct.i.next")
+                    .unwrap();
+                self.builder.build_store(i_slot, i_next).unwrap();
+                self.builder.build_unconditional_branch(head_bb).unwrap();
+
+                self.builder.position_at_end(done_bb);
+                let result = self
+                    .builder
+                    .build_load(bool_t, result_slot, "vct.load")
+                    .unwrap();
+                Ok(result)
+            }
             // No silent fall-through: a Vec/String method the typechecker
             // accepts but codegen has no arm for must fail the build loudly,
             // not return a stand-in `0` that masquerades as a no-op result

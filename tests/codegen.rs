@@ -1050,6 +1050,82 @@ fn main() {
     }
 
     #[test]
+    fn e2e_vec_contains_scalar_codegen() {
+        // B-2026-06-10-1: `Vec.contains(x)` lowers to a linear element scan
+        // (element `==` via `compile_binop`). Scalar element type.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut xs: Vec[i64] = Vec.new();\n\
+                 xs.push(10);\n\
+                 xs.push(20);\n\
+                 xs.push(30);\n\
+                 println(xs.contains(20));\n\
+                 println(xs.contains(25));\n\
+             }",
+        ) {
+            assert_eq!(out, "true\nfalse\n");
+        }
+    }
+
+    #[test]
+    fn e2e_vec_contains_string_elem_codegen() {
+        // `Vec[String].contains` routes element `==` through the struct/
+        // string-binop path (memcmp), not a scalar compare.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut names: Vec[String] = Vec.new();\n\
+                 names.push(\"alice\");\n\
+                 names.push(\"bob\");\n\
+                 println(names.contains(\"bob\"));\n\
+                 println(names.contains(\"carol\"));\n\
+             }",
+        ) {
+            assert_eq!(out, "true\nfalse\n");
+        }
+    }
+
+    #[test]
+    fn e2e_string_contains_substring_codegen() {
+        // `String.contains(sub)` lowers to a naive memcmp substring scan.
+        // Covers a hit, a miss, the empty-needle case (always true), and a
+        // needle longer than the haystack (always false) — the loop's
+        // boundary conditions.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s: String = \"hello world\";\n\
+                 println(s.contains(\"world\"));\n\
+                 println(s.contains(\"xyz\"));\n\
+                 println(s.contains(\"\"));\n\
+                 println(s.contains(\"hello world!\"));\n\
+             }",
+        ) {
+            assert_eq!(out, "true\nfalse\ntrue\nfalse\n");
+        }
+    }
+
+    #[test]
+    fn e2e_contains_on_borrow_local_codegen() {
+        // The borrow-local-method path (commit 2b9e2de3) that surfaced
+        // B-2026-06-10-1: `contains` on a `ref`-bound Vec/String receiver.
+        if let Some(out) = run_program(
+            "fn has(xs: ref Vec[i64], s: ref String) -> bool {\n\
+                 let found_num = xs.contains(2);\n\
+                 let found_sub = s.contains(\"ll\");\n\
+                 found_num and found_sub\n\
+             }\n\
+             fn main() {\n\
+                 let mut xs: Vec[i64] = Vec.new();\n\
+                 xs.push(1);\n\
+                 xs.push(2);\n\
+                 let s: String = \"hello\";\n\
+                 println(has(xs, s));\n\
+             }",
+        ) {
+            assert_eq!(out, "true\n");
+        }
+    }
+
+    #[test]
     fn e2e_try_push_front_fallible_codegen() {
         // `VecDeque.try_push_front` — fallible shift-insert at index 0.
         if let Some(out) = run_program(

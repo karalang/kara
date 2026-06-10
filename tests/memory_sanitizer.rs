@@ -6428,4 +6428,34 @@ fn main() {
             "map_string_key_clear_frees_heap_keys",
         );
     }
+
+    // B-2026-06-10-1: `Vec.contains` / `String.contains` codegen lowering.
+    // `contains` is read-only — it loads each element (or memcmp's a window)
+    // but never moves out of, frees, or aliases the receiver's buffer. This
+    // exercises both over genuinely heap-allocated sources (a Vec[String]
+    // whose elements are f-string heap buffers, and a heap String built via
+    // push_str) so a stray free / double-free / over-read in the scan would
+    // trip ASAN. The needle is also a heap f-string for the String case.
+    #[test]
+    fn asan_contains_heap_sources_no_uaf() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut names: Vec[String] = Vec.new();
+    let mut i = 0i64;
+    while i < 4 { names.push(f"name:{i}"); i = i + 1; }
+    println(names.contains(f"name:2"));
+    println(names.contains(f"name:9"));
+
+    let mut s: String = "";
+    s.push_str("hello ");
+    s.push_str("world");
+    println(s.contains(f"o w"));
+    println(s.contains(f"zzz"));
+}
+"#,
+            &["true", "false", "true", "false"],
+            "contains_heap_sources_no_uaf",
+        );
+    }
 }
