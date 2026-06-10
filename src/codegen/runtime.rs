@@ -14,7 +14,7 @@
 use crate::ast::*;
 
 use inkwell::types::{BasicType, BasicTypeEnum, StructType};
-use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, AtomicOrdering, AtomicRMWBinOp, IntPredicate};
 
 use super::state::{CleanupAction, VarSlot};
@@ -3458,12 +3458,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     val
                 };
-                let fmt_str = if is_float {
-                    self.builder
-                        .build_global_string_ptr("%g", "fst.fmt_f")
-                        .unwrap()
-                        .as_pointer_value()
-                } else if is_unsigned_int {
+                if is_float {
+                    // Shortest-round-trip via the runtime formatter (Rust `{}`),
+                    // matching the interpreter — not C `%g`'s 6 significant
+                    // figures. Uses its own 384-byte buffer (the 64-byte one
+                    // above is for the integer path).
+                    return self.format_f64_to_stack_buf(val.into_float_value());
+                }
+                let fmt_str = if is_unsigned_int {
                     self.builder
                         .build_global_string_ptr("%llu", "fst.fmt_u")
                         .unwrap()
@@ -3497,6 +3499,66 @@ impl<'ctx> super::Codegen<'ctx> {
                 (buf_ptr, len)
             }
         }
+    }
+
+    /// Lazily declare `karac_runtime_f64_to_str(double, ptr, i64) -> i64` —
+    /// the runtime helper that renders an `f64` with Rust's shortest-round-trip
+    /// `{}` formatting (matching the interpreter), replacing C `printf`'s `%g`.
+    pub(super) fn f64_to_str_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_f64_to_str") {
+            return f;
+        }
+        let i64_t = self.context.i64_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let f64_t = self.context.f64_type();
+        let fn_ty = i64_t.fn_type(&[f64_t.into(), ptr_t.into(), i64_t.into()], false);
+        self.module
+            .add_function("karac_runtime_f64_to_str", fn_ty, None)
+    }
+
+    /// Render `fv` (widened to `f64` first — varargs/ABI parity and the
+    /// formatter takes a `double`) into a fresh stack buffer via
+    /// `karac_runtime_f64_to_str`; returns `(buf_ptr, len_i64)` for the
+    /// `%.*s` / append-raw convention. The buffer is 384 bytes — Rust's `{}`
+    /// never uses scientific notation, so an extreme `f64` (`1e308`,
+    /// `5e-324`) expands to ~320 decimal digits; 384 covers the whole range
+    /// without truncation (the interpreter prints the full string too).
+    pub(super) fn format_f64_to_stack_buf(
+        &mut self,
+        fv: FloatValue<'ctx>,
+    ) -> (PointerValue<'ctx>, IntValue<'ctx>) {
+        let i64_t = self.context.i64_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+        let v = if fv.get_type() != self.context.f64_type() {
+            self.builder
+                .build_float_ext(fv, self.context.f64_type(), "f2d")
+                .unwrap()
+        } else {
+            fv
+        };
+        let buf = self.create_entry_alloca(
+            fn_val,
+            "fbuf",
+            self.context.i8_type().array_type(384).into(),
+        );
+        let buf_ptr = self
+            .builder
+            .build_pointer_cast(buf, ptr_t, "fbufp")
+            .unwrap();
+        let f = self.f64_to_str_fn();
+        let len = self
+            .builder
+            .build_call(
+                f,
+                &[v.into(), buf_ptr.into(), i64_t.const_int(384, false).into()],
+                "f2s",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        (buf_ptr, len)
     }
 
     /// Build an owning `String` value (`{ data, len, cap }`) holding a fresh

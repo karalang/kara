@@ -162,6 +162,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         clone::karac_string_encode_char,
         karac_string_cmp,
         karac_float_cmp,
+        karac_runtime_f64_to_str,
         karac_vec_sort_by,
         karac_vec_reverse,
     );
@@ -5976,6 +5977,34 @@ pub extern "C" fn karac_float_cmp(a: f64, b: f64) -> i64 {
         std::cmp::Ordering::Equal => 0,
         std::cmp::Ordering::Greater => 1,
     }
+}
+
+/// Format `val` the way Rust's `{}` does — the *shortest* decimal string that
+/// round-trips — into `buf` (up to `buf_len` bytes), returning the number of
+/// bytes written. This is exactly the tree-walk interpreter's float rendering
+/// (`Value::Float(v) => write!(f, "{}", v)` in `src/interpreter/value.rs`), so
+/// AOT-compiled `println` / interpolation / `Display` print floats identically
+/// to `karac run`. C's `printf("%g")` (6 significant figures, lowercase `nan`)
+/// is what this replaces and the source of the prior interp-vs-AOT mismatch.
+///
+/// # Safety
+/// `buf` must point to at least `buf_len` writable bytes (a stack buffer at
+/// the call site). A null `buf` or non-positive `buf_len` writes nothing and
+/// returns 0. The output is NOT NUL-terminated; the caller uses the returned
+/// length (the `%.*s` / append-raw convention).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_f64_to_str(val: f64, buf: *mut u8, buf_len: i64) -> i64 {
+    let s = format!("{val}");
+    let bytes = s.as_bytes();
+    let n = (bytes.len() as i64).min(buf_len.max(0));
+    if !buf.is_null() && n > 0 {
+        // SAFETY: caller guarantees `buf_len` writable bytes; `n <= buf_len`
+        // and `n <= bytes.len()`, and the regions don't overlap (distinct
+        // allocations — a fresh `String` vs the caller's buffer). `unsafe fn`
+        // body is itself an unsafe context (edition 2021).
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, n as usize);
+    }
+    n
 }
 
 // ── Slice 5 test stand-ins for slice 3 globals ─────────────────────────────

@@ -1501,6 +1501,40 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_float_shortest_roundtrip_formatting() {
+        // AOT floats render with Rust's shortest-round-trip `{}` (via
+        // `karac_runtime_f64_to_str`), matching the interpreter — not C
+        // `printf("%g")`'s 6 significant figures. Covers all four lowering
+        // sites: `println`, f-string interpolation, struct `Display`, plus
+        // the special values (`%g` rendered `nan` lowercase). Each line is
+        // exactly what `karac run` prints for the same program.
+        let out = run_program(
+            "struct P { a: f64, b: f32 }\n\
+             fn main() {\n\
+                 println(7.0 / 3.0);\n\
+                 println(1.0);\n\
+                 println(100.0);\n\
+                 println(0.1);\n\
+                 println(f\"x={2.0 / 3.0}\");\n\
+                 let p = P { a: 3.141592653589793, b: 1.5 };\n\
+                 println(f\"{p.a} {p.b}\");\n\
+                 let nan: f64 = 0.0 / 0.0;\n\
+                 println(nan);\n\
+                 let inf: f64 = 1.0 / 0.0;\n\
+                 println(inf);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "2.3333333333333335\n1\n100\n0.1\nx=0.6666666666666666\n\
+                 3.141592653589793 1.5\nNaN\ninf\n",
+                "AOT float formatting must match the interpreter's shortest-round-trip output",
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_borrow_return_let_bound() {
         // B-2026-06-07-5: returning a borrow (`-> ref T`) — a field reached
         // through a `ref` param (String + scalar) and a forwarded `ref`
@@ -21786,13 +21820,12 @@ fn main() {
 
     #[test]
     fn test_codegen_primitive_const_f64_nan() {
-        // Codegen routes float printing through C-style printf which
-        // renders NaN as lowercase "nan". The interpreter uses Rust's
-        // Display impl which renders "NaN". Cross-side parity is by
-        // semantic value (NaN-ness), not by string form.
+        // Float printing now uses `karac_runtime_f64_to_str` (Rust's `{}`),
+        // so AOT renders NaN as "NaN" — matching the interpreter's Display
+        // exactly (the old C `printf("%g")` path rendered lowercase "nan").
         let out = run_program("fn main() { let x = f64.NAN; println(x); }");
         if let Some(out) = out {
-            assert_eq!(out.trim(), "nan");
+            assert_eq!(out.trim(), "NaN");
         }
     }
 
@@ -21801,12 +21834,13 @@ fn main() {
         // f32 widths preserved through codegen. Confirms the
         // const_float emission picks f32_type rather than collapsing to
         // f64 (which would silently widen and lose the typing
-        // invariant). Codegen's runtime float formatter renders f32
-        // values in scientific notation (`3.40282e+38`) where the
-        // interpreter's Display impl renders the full decimal expansion.
+        // invariant). Float printing now goes through
+        // `karac_runtime_f64_to_str` (Rust's shortest-round-trip `{}`), so
+        // AOT renders the full decimal expansion identically to the
+        // interpreter — not the old C `%g` scientific form `3.40282e+38`.
         let out = run_program("fn main() { let x: f32 = f32.MAX; let y: f32 = x; println(y); }");
         if let Some(out) = out {
-            assert_eq!(out.trim(), "3.40282e+38");
+            assert_eq!(out.trim(), "340282346638528860000000000000000000000");
         }
     }
 
@@ -33949,7 +33983,9 @@ fn main() {
         );
         if let Some(out) = out {
             let lines: Vec<&str> = out.trim().lines().collect();
-            assert_eq!(lines, vec!["5", "-2", "1.2", "2.7", "3.5", "nan"]);
+            // NaN now prints "NaN" (Rust `{}` via karac_runtime_f64_to_str),
+            // matching the interpreter — was lowercase "nan" under C `%g`.
+            assert_eq!(lines, vec!["5", "-2", "1.2", "2.7", "3.5", "NaN"]);
         }
     }
 

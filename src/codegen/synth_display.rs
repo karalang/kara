@@ -120,7 +120,6 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
-        let f64_t = self.context.f64_type();
 
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
@@ -160,22 +159,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 let v64 = self.builder.build_int_z_extend(v, i64_t, "v64").unwrap();
                 self.disp_append_snprintf(acc, "%llu", v64.into());
             }
-            "f32" => {
+            "f32" | "f64" => {
+                // Render with Rust's shortest-round-trip `{}` (via the runtime
+                // formatter) so a struct's `Display` prints floats identically
+                // to the interpreter — not C `%g`. `format_f64_to_stack_buf`
+                // widens f32→f64 itself.
                 let v = self
                     .builder
                     .build_load(ty, val_ptr, "v")
                     .unwrap()
                     .into_float_value();
-                let v64 = self.builder.build_float_ext(v, f64_t, "v64").unwrap();
-                self.disp_append_snprintf(acc, "%g", v64.into());
-            }
-            "f64" => {
-                let v = self
-                    .builder
-                    .build_load(ty, val_ptr, "v")
-                    .unwrap()
-                    .into_float_value();
-                self.disp_append_snprintf(acc, "%g", v.into());
+                let (buf_ptr, len) = self.format_f64_to_stack_buf(v);
+                self.emit_string_append_raw(acc, buf_ptr, len);
             }
             "bool" => {
                 // Select "true"/"false" pointer AND length, then append.

@@ -702,30 +702,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
                 .unwrap();
         } else if val.is_float_value() {
-            // C default-argument promotion: a varargs `float` must be
-            // widened to `double` before the call (`synth_display.rs`'s
-            // f32 arm already does this). Native ABIs masked the missing
-            // fpext by register-passing accident; wasm32's args-buffer
-            // varargs lowering does not — printf's `%g` read 8 bytes
-            // where 4 were stored and rendered garbage (the f32 bit
-            // pattern reinterpreted as the low half of a double).
-            let mut fv = val.into_float_value();
-            if fv.get_type() != self.context.f64_type() {
-                fv = self
-                    .builder
-                    .build_float_ext(fv, self.context.f64_type(), "pf64")
-                    .unwrap();
-            }
+            // Render with Rust's shortest-round-trip `{}` formatting (via the
+            // runtime `karac_runtime_f64_to_str`) so AOT output matches
+            // `karac run` exactly — not C `printf`'s `%g` (6 significant
+            // figures, lowercase `nan`). `format_f64_to_stack_buf` widens
+            // f32→f64 and returns `(buf_ptr, len)`; print with `%.*s` and the
+            // trailing newline (`nl` is "" for `print`).
+            let (buf_ptr, len) = self.format_f64_to_stack_buf(val.into_float_value());
+            let len32 = self
+                .builder
+                .build_int_truncate(len, self.context.i32_type(), "ff.len32")
+                .unwrap();
             let fmt = self
                 .builder
-                .build_global_string_ptr(&format!("%g{nl}"), "ff")
+                .build_global_string_ptr(&format!("%.*s{nl}"), "ff")
                 .unwrap();
             self.builder
                 .build_call(
                     self.printf_fn,
                     &[
                         BasicMetadataValueEnum::from(fmt.as_pointer_value()),
-                        BasicMetadataValueEnum::from(fv),
+                        BasicMetadataValueEnum::from(len32),
+                        BasicMetadataValueEnum::from(buf_ptr),
                     ],
                     "printf",
                 )
