@@ -355,7 +355,24 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // 7c. Compile body and build return.
-        let result = self.compile_expr(body)?;
+        //
+        // A BLOCK body is compiled like a function body — via the raw
+        // `compile_block` (stmts + tail), NOT `compile_expr` (which routes
+        // a block through `compile_block_with_frame`, opening a *nested*
+        // scope whose cleanup runs INSIDE the body compilation). With the
+        // nested scope, a returned heap binding `|| { let s = mk(); s }`
+        // is freed by the block's scope-exit cleanup *before* the
+        // tail-return suppression below can zero its `cap`, so the closure
+        // hands back a dangling pointer (use-after-free / double-free).
+        // Compiling the block raw makes its statements register their
+        // cleanups in THIS closure's already-pushed frame, drained after
+        // suppression. Non-block bodies are single expressions.
+        let result = match &body.kind {
+            ExprKind::Block(block) | ExprKind::Seq(block) => self
+                .compile_block(block)?
+                .unwrap_or_else(|| self.context.i64_type().const_int(0, false).into()),
+            _ => self.compile_expr(body)?,
+        };
         if self
             .builder
             .get_insert_block()
@@ -363,16 +380,23 @@ impl<'ctx> super::Codegen<'ctx> {
             .get_terminator()
             .is_none()
         {
-            // Move-aware drain (mirrors `compile_function`): if the body is
-            // a block whose tail returns a tracked heap binding
-            // (Vec/String/Map/user-`Drop`), suppress that binding's cleanup
-            // so the drain doesn't free a value the closure is handing back
-            // to its caller. Non-block bodies that move an f-string into the
-            // return (e.g. `Result.Err(f"…")`) already had their accumulator
-            // cap zeroed by `suppress_fstr_acc_if_moved_out`, so their
+            // Move-aware drain (mirrors `compile_function`): suppress the
+            // cleanup of whatever the closure RETURNS so the frame drain
+            // below doesn't free the value handed back to the caller. For a
+            // block body, suppress the tail binding's cleanup
+            // (Vec/String/Map/user-`Drop`). For ANY returned f-string
+            // (`|| f"…"`, or a block tail `f"…"`, or one moved into
+            // `Result.Err(f"…")`), zero its accumulator `cap` so the
             // drained free is a runtime no-op.
-            if let ExprKind::Block(block) = &body.kind {
-                self.suppress_cleanup_for_tail_return(block);
+            let returned_tail: Option<&Expr> = match &body.kind {
+                ExprKind::Block(block) | ExprKind::Seq(block) => {
+                    self.suppress_cleanup_for_tail_return(block);
+                    block.final_expr.as_deref()
+                }
+                _ => Some(body),
+            };
+            if let Some(t) = returned_tail {
+                self.suppress_fstr_acc_if_moved_out(t);
             }
             // Drain the closure's own cleanup frame before returning, so its
             // f-string / heap-local cleanups are emitted in THIS fn
@@ -528,6 +552,10 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::CharLit(_) => self.context.i32_type().into(),
             ExprKind::ByteLit(_) => self.context.i8_type().into(),
             ExprKind::StringLit(_) => self.context.ptr_type(AddressSpace::default()).into(),
+            // An f-string evaluates to an owned `String` — the `{ptr, len,
+            // cap}` heap-string aggregate (distinct from a borrowed string
+            // *literal*, a bare `ptr` into rodata above).
+            ExprKind::InterpolatedStringLit(_) => self.vec_struct_type().into(),
             ExprKind::Identifier(name) => {
                 if let Some(&ty) = param_types.get(name) {
                     return ty;
@@ -569,6 +597,33 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Cast { ty, .. } => self.llvm_type_for_type_expr(ty),
             ExprKind::Block(block) | ExprKind::Seq(block) => {
                 if let Some(final_expr) = &block.final_expr {
+                    // A bare-`Identifier` tail naming a body-local `let` is
+                    // not in `param_types`/`self.variables` at inference
+                    // time (the body hasn't been compiled), so resolve it
+                    // against the block's own `let` bindings: prefer the
+                    // let's type annotation, else infer from its value.
+                    if let ExprKind::Identifier(tail) = &final_expr.kind {
+                        if param_types.get(tail).is_none()
+                            && !self.variables.contains_key(tail.as_str())
+                        {
+                            for stmt in &block.stmts {
+                                if let StmtKind::Let {
+                                    pattern, ty, value, ..
+                                } = &stmt.kind
+                                {
+                                    if matches!(&pattern.kind, PatternKind::Binding(n) if n == tail)
+                                    {
+                                        return match ty {
+                                            Some(te) => self.llvm_type_for_type_expr(te),
+                                            None => {
+                                                self.infer_closure_return_type(value, param_types)
+                                            }
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                    }
                     self.infer_closure_return_type(final_expr, param_types)
                 } else {
                     self.context.i64_type().into()

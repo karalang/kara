@@ -393,6 +393,49 @@ fn main() {
         );
     }
 
+    // ── Closures that RETURN a heap value (closure-heap-return-cleanup) ──
+    //
+    // A closure whose body is a block returning a heap binding
+    // (`|| { let s = mk(); s }`) used to free that binding via the
+    // block's *nested* scope cleanup BEFORE the tail-return suppression
+    // could fire — handing back a dangling pointer (use-after-free, and a
+    // double-free / SIGABRT for the String-from-call case). The fix
+    // compiles the closure's block body like a function body (raw
+    // `compile_block`, no nested scope) so the suppression zeroes the
+    // returned binding's `cap` before the closure's own scope cleanup
+    // runs. This run exercises String (via f-string and via call),
+    // direct-f-string, and Vec returns — a stale free of any would trip
+    // ASAN's double-free / heap-use-after-free.
+
+    #[test]
+    fn asan_closure_returns_heap_value_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn mk() -> String { f"made" }
+fn compute() -> Vec[i64] { Vec[9, 8] }
+fn main() {
+    let f2: Fn() -> String = || { let s = f"hi"; s };
+    let f4: Fn() -> String = || { let s: String = mk(); s };
+    let f5: Fn() -> String = || f"direct";
+    let f1: Fn() -> Vec[i64] = || { let v: Vec[i64] = Vec[1, 2, 3]; v };
+    let f3: Fn() -> Vec[i64] = || { let w = compute(); w };
+    let r2: String = f2();
+    let r4: String = f4();
+    let r5: String = f5();
+    let r1: Vec[i64] = f1();
+    let r3: Vec[i64] = f3();
+    println(r2);
+    println(r4);
+    println(r5);
+    println(r1.len());
+    println(r3.len());
+}
+"#,
+            &["hi", "made", "direct", "3", "2"],
+            "closure_returns_heap_value",
+        );
+    }
+
     // ── `collect_all` heterogeneous tuple gather (phase-6) ────────
     //
     // Static-N sibling of collect_all_vec: each inline closure runs via
