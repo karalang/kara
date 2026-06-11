@@ -41317,6 +41317,70 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_map_param_deep_copy() {
+        // `Vec[Map[i64, i64]]` owned param tail-returned: the defensive
+        // copy must deep-clone each map handle, not alias it (Cluster 1).
+        // Value-correctness companion to the ASAN double-free pin — the
+        // cloned maps must carry the original entries.
+        let out = run_program(
+            r#"
+fn id(v: Vec[Map[i64, i64]]) -> Vec[Map[i64, i64]] {
+    v
+}
+
+fn main() {
+    let mut v: Vec[Map[i64, i64]] = Vec.new();
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1i64, 10i64);
+    m.insert(2i64, 20i64);
+    v.push(m);
+    let mut m2: Map[i64, i64] = Map.new();
+    m2.insert(3i64, 30i64);
+    v.push(m2);
+    let r = id(v);
+    println(r.len());
+    match r[0].get(1i64) { Some(x) => println(x), None => println(-1i64) }
+    match r[0].get(2i64) { Some(x) => println(x), None => println(-1i64) }
+    match r[1].get(3i64) { Some(x) => println(x), None => println(-1i64) }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2\n10\n20\n30");
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_map_returned_from_helper() {
+        // The headline `Vec[Map]` ownership bug (Cluster 1): a Map pushed
+        // into a Vec aliased a handle owned by the origin `m` binding, which
+        // freed it at the helper's scope exit — so the returned Vec dangled
+        // and the read in `main` saw a freed/reused handle (AOT printed
+        // `-1`, interp `777`). The fix transfers ownership to the Vec at the
+        // push and frees the handle at the Vec's drop. ASAN twin:
+        // `memory_sanitizer.rs::asan_vec_map_returned_from_helper_no_uaf`.
+        let out = run_program(
+            r#"
+fn make() -> Vec[Map[i64, i64]] {
+    let mut v: Vec[Map[i64, i64]] = Vec.new();
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1i64, 777i64);
+    v.push(m);
+    v
+}
+
+fn main() {
+    let v = make();
+    match v[0].get(1i64) { Some(x) => println(x), None => println(-1i64) }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "777");
+        }
+    }
+
+    #[test]
     fn test_e2e_owned_string_param_tail_return() {
         // `fn id(s: String) -> String { s }` — the returned value must
         // be a copy: the caller that passed `s` frees its buffer AND the

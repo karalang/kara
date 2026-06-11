@@ -240,6 +240,27 @@ pub(crate) struct SoaLayout {
 
 // ── Scope cleanup action ────────────────────────────────────────
 
+/// Per-element drop classification for a `Vec[Map[K,V]]` / `Vec[Set[T]]`
+/// whose elements are opaque map handles. Carries the same K/V flags as
+/// [`CleanupAction::FreeMapHandle`] so the `FreeVecBuffer` drop loop can
+/// free each element handle exactly as a standalone Map binding would
+/// (`emit_free_one_map_handle`). A Map handle is a bare `ptr`, so the
+/// element LLVM type alone can't signal "this is a map" — this struct
+/// (set only when the element TypeExpr is `Map`/`Set`) carries the intent,
+/// mirroring `FreeVecBuffer::elem_is_tensor`.
+#[derive(Clone)]
+pub(crate) struct MapElemDrop<'ctx> {
+    /// KEY half follows the Vec/String `{ptr,len,cap}` layout.
+    pub(crate) key_is_vec: bool,
+    /// VALUE half follows the Vec/String layout (always `false` for Set).
+    pub(crate) val_is_vec: bool,
+    /// Heap-struct type for a shared-struct/enum VALUE (per-bucket rc_dec).
+    pub(crate) val_shared_heap_type: Option<StructType<'ctx>>,
+    /// Heap-struct type for a shared-struct/enum KEY (or `Set[shared T]`
+    /// element).
+    pub(crate) key_shared_heap_type: Option<StructType<'ctx>>,
+}
+
 /// Tagged kind for per-scope destructor actions emitted at scope exit.
 /// The `scope_cleanup_actions` stack holds one `Vec` per scope frame;
 /// each frame accumulates these in push order and drains in reverse.
@@ -340,6 +361,17 @@ pub(crate) enum CleanupAction<'ctx> {
         /// this flag carries the intent. Mutually exclusive with the
         /// vec-struct recursive-drop path.
         elem_is_tensor: bool,
+        /// `Some` when the elements are `Map`/`Set` handles — each live
+        /// element is freed via `emit_free_one_map_handle` (same K/V drop
+        /// classification a standalone Map binding uses) before the outer
+        /// buffer is released. A Map handle is a bare `ptr` indistinguishable
+        /// by LLVM type from a tensor block or borrow, so the element
+        /// TypeExpr (not the type) drives this — set by `track_vec_of_maps_var`.
+        /// Mutually exclusive with `elem_is_tensor` and the vec-struct
+        /// recursive-drop path. Closes the `Vec[Map]` premature-free / UAF
+        /// (Cluster 1): a Map moved into a Vec transfers ownership to the
+        /// Vec, which must free the handle on drop.
+        elem_map_drop: Option<MapElemDrop<'ctx>>,
     },
     /// Free an owned `Tensor[T, Shape]`'s single heap block at scope
     /// exit. The binding's slot holds one pointer to the

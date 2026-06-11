@@ -1622,32 +1622,41 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_source_vec_cleanup_for_arg_ex(arg_expr, true);
     }
 
-    /// Map tail-return cleanup suppression — drop any
-    /// `FreeMapHandle` from the current scope's cleanup queue whose
-    /// `map_alloca` matches the named binding's slot. Called from
-    /// `suppress_cleanup_for_tail_return` when the function's tail
-    /// expression is an `Identifier(name)`. Map's cleanup is
-    /// queue-driven (no in-slot sentinel like Vec/String's `cap = 0`
-    /// to flip and have the cleanup walker no-op against), so we
-    /// mutate the queue directly. The `track_map_var` call site is
-    /// `compile_map_new_stmt` (direct `Map.new()`) or the fresh-
-    /// handle method-call branch in the let-stmt arm — both push
-    /// onto `scope_cleanup_actions.last()`, which is what the tail
-    /// suppression now reaches. Set bindings track via the same
-    /// `FreeMapHandle` action (Set lowers to `Map[T, ()]`), so this
+    /// Map move-out cleanup suppression — drop any `FreeMapHandle` whose
+    /// `map_alloca` matches the named binding's slot, so a `Map`/`Set`
+    /// binding that has been MOVED (tail return, enum-variant capture,
+    /// `v.push(m)` into a `Vec[Map]`) is no longer freed by its origin
+    /// binding. Map cleanup is queue-driven (no in-slot sentinel like
+    /// Vec/String's `cap = 0` for the walker to skip), so the queue is
+    /// edited directly. The `track_map_var` call site is
+    /// `compile_map_new_stmt` (direct `Map.new()`) or the fresh-handle
+    /// method-call branch in the let-stmt arm. Set bindings track via the
+    /// same `FreeMapHandle` action (Set lowers to `Map[T, ()]`), so this
     /// helper covers both surfaces.
     ///
-    /// Only mutates the innermost (function-body-top) frame. Inner
-    /// scopes that already drained their queue via
-    /// `emit_scope_cleanup` are gone by the time
-    /// `suppress_cleanup_for_tail_return` runs, so there's nothing
-    /// to suppress there.
+    /// Scans EVERY live frame — at a mid-function move (`v.push(m)`) a
+    /// transient arg/method-call frame sits on top of the frame that owns
+    /// the moved binding's `FreeMapHandle`, so filtering only `last()`
+    /// would leave it armed (double-free against the consumer that now owns
+    /// the handle). For tail-return callers the inner scopes have already
+    /// drained, so only the function-body frame remains and the all-frames
+    /// scan is equivalent to the old top-frame-only behavior.
     pub(super) fn suppress_map_cleanup_for_tail_identifier(&mut self, name: &str) {
         let slot_ptr = match self.variables.get(name) {
             Some(s) => s.ptr,
             None => return,
         };
-        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+        // Scan EVERY live frame, not just the innermost. A move site
+        // (`v.push(m)`, enum-variant capture, tail return) can fire while a
+        // transient inner scope sits on top of the frame that owns the
+        // moved binding's `FreeMapHandle` — at a `v.push(m)` statement the
+        // arg/method-call evaluation pushes an inner frame, so `m`'s
+        // `FreeMapHandle` lives one frame below `last`. Filtering only the
+        // top frame left it armed, double-freeing the handle the Vec now
+        // owns (`Vec[Map]` element drop). Removing it from whichever frame
+        // holds it is correct for all callers: the binding has been moved,
+        // so its origin must never free the handle regardless of frame.
+        for frame in self.scope_cleanup_actions.iter_mut() {
             frame.retain(|action| match action {
                 crate::codegen::state::CleanupAction::FreeMapHandle { map_alloca, .. } => {
                     *map_alloca != slot_ptr

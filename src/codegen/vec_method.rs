@@ -552,6 +552,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // source's `cap` so its cleanup's `cap > 0` guard skips
                 // — the container becomes the unique owner.
                 self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                // Map/Set source moved into the Vec: the Vec now owns the
+                // handle and frees it via the `Vec[Map]` element drop
+                // (`track_vec_of_maps_var`), so drop the source binding's
+                // `FreeMapHandle` — otherwise both free the same handle
+                // (double-free) or, if the Vec escapes the source's scope,
+                // the source frees a handle the Vec still points at
+                // (premature-free / UAF, Cluster 1). No-op when the arg is
+                // not a tracked map/set identifier. The Map sibling of the
+                // `suppress_source_vec_cleanup_for_arg` cap-zeroing above;
+                // mirrors the enum-variant move path in `call_dispatch.rs`.
+                if let ExprKind::Identifier(n) = &args[0].value.kind {
+                    let n = n.clone();
+                    self.suppress_map_cleanup_for_tail_identifier(&n);
+                }
 
                 // Load current vec fields.
                 let data_ptr_ptr = self
@@ -680,6 +694,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_fstr_acc_if_moved_out(&args[0].value);
                 let elem_val = self.maybe_defensive_copy_param_arg(&args[0].value, elem_val);
                 self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                // Map/Set source moved into the Vec: the Vec now owns the
+                // handle and frees it via the `Vec[Map]` element drop
+                // (`track_vec_of_maps_var`), so drop the source binding's
+                // `FreeMapHandle` — otherwise both free the same handle
+                // (double-free) or, if the Vec escapes the source's scope,
+                // the source frees a handle the Vec still points at
+                // (premature-free / UAF, Cluster 1). No-op when the arg is
+                // not a tracked map/set identifier. The Map sibling of the
+                // `suppress_source_vec_cleanup_for_arg` cap-zeroing above;
+                // mirrors the enum-variant move path in `call_dispatch.rs`.
+                if let ExprKind::Identifier(n) = &args[0].value.kind {
+                    let n = n.clone();
+                    self.suppress_map_cleanup_for_tail_identifier(&n);
+                }
 
                 let data_ptr_ptr = self
                     .builder
@@ -848,6 +876,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // scope-exit cleanup skips — the deque owns the buffer now
                 // (mirrors the "push" arm; push_front was missing it).
                 self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                // Map/Set source moved into the Vec: the Vec now owns the
+                // handle and frees it via the `Vec[Map]` element drop
+                // (`track_vec_of_maps_var`), so drop the source binding's
+                // `FreeMapHandle` — otherwise both free the same handle
+                // (double-free) or, if the Vec escapes the source's scope,
+                // the source frees a handle the Vec still points at
+                // (premature-free / UAF, Cluster 1). No-op when the arg is
+                // not a tracked map/set identifier. The Map sibling of the
+                // `suppress_source_vec_cleanup_for_arg` cap-zeroing above;
+                // mirrors the enum-variant move path in `call_dispatch.rs`.
+                if let ExprKind::Identifier(n) = &args[0].value.kind {
+                    let n = n.clone();
+                    self.suppress_map_cleanup_for_tail_identifier(&n);
+                }
 
                 let data_ptr_ptr = self
                     .builder
@@ -971,6 +1013,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_fstr_acc_if_moved_out(&args[0].value);
                 let elem_val = self.maybe_defensive_copy_param_arg(&args[0].value, elem_val);
                 self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                // Map/Set source moved into the Vec: the Vec now owns the
+                // handle and frees it via the `Vec[Map]` element drop
+                // (`track_vec_of_maps_var`), so drop the source binding's
+                // `FreeMapHandle` — otherwise both free the same handle
+                // (double-free) or, if the Vec escapes the source's scope,
+                // the source frees a handle the Vec still points at
+                // (premature-free / UAF, Cluster 1). No-op when the arg is
+                // not a tracked map/set identifier. The Map sibling of the
+                // `suppress_source_vec_cleanup_for_arg` cap-zeroing above;
+                // mirrors the enum-variant move path in `call_dispatch.rs`.
+                if let ExprKind::Identifier(n) = &args[0].value.kind {
+                    let n = n.clone();
+                    self.suppress_map_cleanup_for_tail_identifier(&n);
+                }
 
                 let data_ptr_ptr = self
                     .builder

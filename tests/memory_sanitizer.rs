@@ -2849,6 +2849,211 @@ fn main() {
         );
     }
 
+    // ── Vec[Map] / Vec[Set] owned-param defensive copy recurses into
+    //    map/set handles (Cluster 1) ──
+    // `emit_vecstr_defensive_copy` deep-copies the OUTER buffer of an owned
+    // `Vec` param at a retaining consume site, then rewrites each element to
+    // own its own heap. It recursed String/Vec elements but FLAT-COPIED
+    // Map/Set elements — the copy and the source aliased the same opaque map
+    // handles, so both the source's and the copy's scope-exit
+    // `karac_map_free_with_drop_vec` freed the same map (double-free). Map
+    // handles aren't LLVM-type-sniffable, but the element TypeExpr is
+    // available, so the fix routes Map/Set elements through the synthesized
+    // `karac_clone_<T>` deep-clone per element. Tail-returning the owned
+    // `Vec[Map]` param is the canonical retaining site: the caller frees the
+    // moved-in original AND the returned copy.
+
+    #[test]
+    fn asan_vec_map_param_deep_copy_no_double_free() {
+        // `Vec[Map[i64, i64]]` owned param tail-returned. Pre-fix the
+        // returned copy's element handles aliased the original's maps; both
+        // freed at main scope exit → double-free. The read-backs prove the
+        // cloned maps carry the same entries.
+        assert_clean_asan_run(
+            r#"
+fn id(v: Vec[Map[i64, i64]]) -> Vec[Map[i64, i64]] {
+    v
+}
+
+fn main() {
+    let mut v: Vec[Map[i64, i64]] = Vec.new();
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1i64, 10i64);
+    m.insert(2i64, 20i64);
+    v.push(m);
+    let mut m2: Map[i64, i64] = Map.new();
+    m2.insert(3i64, 30i64);
+    v.push(m2);
+    let r = id(v);
+    println(r.len());
+    match r[0].get(1i64) { Some(x) => println(x), None => println(-1i64) }
+    match r[1].get(3i64) { Some(x) => println(x), None => println(-1i64) }
+}
+"#,
+            &["2", "10", "30"],
+            "vec_map_param_deep_copy_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_vec_set_param_deep_copy_no_double_free() {
+        // `Vec[Set[i64]]` sibling — Set lowers to `Map[T, ()]`, so the same
+        // handle-aliasing double-free applies; the clone routes through
+        // `emit_map_clone_fn` with the unit value half.
+        assert_clean_asan_run(
+            r#"
+fn id(v: Vec[Set[i64]]) -> Vec[Set[i64]] {
+    v
+}
+
+fn main() {
+    let mut v: Vec[Set[i64]] = Vec.new();
+    let mut s: Set[i64] = Set.new();
+    s.insert(1i64);
+    s.insert(2i64);
+    v.push(s);
+    let r = id(v);
+    println(r.len());
+    println(r[0].contains(1i64));
+    println(r[0].contains(9i64));
+}
+"#,
+            &["1", "true", "false"],
+            "vec_set_param_deep_copy_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_vec_map_string_value_param_deep_copy_no_double_free() {
+        // `Vec[Map[i64, String]]` — the cloned maps must additionally
+        // deep-copy their String VALUES (recursion lands in
+        // `emit_map_clone_fn`'s val-clone). Catches an aliased inner String
+        // buffer surviving the handle clone.
+        assert_clean_asan_run(
+            r#"
+fn id(v: Vec[Map[i64, String]]) -> Vec[Map[i64, String]] {
+    v
+}
+
+fn main() {
+    let mut v: Vec[Map[i64, String]] = Vec.new();
+    let mut m: Map[i64, String] = Map.new();
+    let mut s = String.new();
+    s.push_str("payload-in-nested-map");
+    m.insert(7i64, s);
+    v.push(m);
+    let r = id(v);
+    println(r.len());
+    match r[0].get(7i64) { Some(g) => println(g), None => println("missing") }
+}
+"#,
+            &["1", "payload-in-nested-map"],
+            "vec_map_string_value_param_deep_copy_no_double_free",
+        );
+    }
+
+    // ── Vec[Map] ownership: a Map moved into a Vec transfers ownership
+    //    to the Vec (Cluster 1) ──
+    // The headline bug: a `Map` pushed into a `Vec` aliased a handle still
+    // owned (and freed at scope exit) by the origin `m` binding, while the
+    // Vec's own drop never freed map elements. So a `Vec[Map]` built from a
+    // local map and RETURNED dangled — the local's `FreeMapHandle` freed the
+    // handle the returned Vec still pointed at (use-after-free on the next
+    // read; AOT printed `-1` vs interp's correct value). The fix makes the
+    // Vec OWN its map elements: the push suppresses the source's
+    // `FreeMapHandle` (ownership transfer) and the Vec drop frees each
+    // element handle (`track_vec_of_maps_var`). Both halves are required —
+    // either alone is a leak or a double-free.
+
+    #[test]
+    fn asan_vec_map_returned_from_helper_no_uaf() {
+        // `make()` builds a `Vec[Map]` from a local map and returns it; the
+        // read in `main` walks the returned map. Pre-fix the local's
+        // scope-exit `FreeMapHandle` freed the handle inside `make`, so the
+        // read in `main` is a heap-use-after-free (allocation churn between
+        // forces the freed chunk's reuse). The value-correctness twin is
+        // `tests/codegen.rs::test_e2e_vec_map_returned_from_helper`.
+        assert_clean_asan_run(
+            r#"
+fn make() -> Vec[Map[i64, i64]] {
+    let mut v: Vec[Map[i64, i64]] = Vec.new();
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1i64, 777i64);
+    v.push(m);
+    v
+}
+
+fn main() {
+    let v = make();
+    let mut churn: Vec[Map[i64, i64]] = Vec.new();
+    let mut i = 0i64;
+    while i < 16i64 {
+        let mut c: Map[i64, i64] = Map.new();
+        c.insert(99i64, 1i64);
+        churn.push(c);
+        i = i + 1i64;
+    }
+    match v[0].get(1i64) { Some(x) => println(x), None => println(-1i64) }
+}
+"#,
+            &["777"],
+            "vec_map_returned_from_helper_no_uaf",
+        );
+    }
+
+    #[test]
+    fn asan_vec_map_push_then_read_same_scope_single_free() {
+        // `v.push(m)` then a same-scope read + scope exit. The Vec now owns
+        // the handle (push suppressed the source `m`'s `FreeMapHandle`); on
+        // scope exit ONLY the Vec's element drop frees it. A missing
+        // suppression here is a double-free (both `m` and the Vec free the
+        // same handle) — this pins the all-frames suppression scan (the
+        // moved binding's `FreeMapHandle` can sit one frame below the
+        // push's transient arg frame).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[Map[i64, i64]] = Vec.new();
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1i64, 777i64);
+    v.push(m);
+    match v[0].get(1i64) { Some(x) => println(x), None => println(-1i64) }
+}
+"#,
+            &["777"],
+            "vec_map_push_then_read_same_scope_single_free",
+        );
+    }
+
+    #[test]
+    fn asan_vec_map_loop_built_returned_no_uaf() {
+        // Loop-built `Vec[Map]` (the realistic scope-stack shape) returned
+        // and indexed — exercises N>1 element handles through the drop loop.
+        assert_clean_asan_run(
+            r#"
+fn make() -> Vec[Map[i64, i64]] {
+    let mut v: Vec[Map[i64, i64]] = Vec.new();
+    let mut i = 0i64;
+    while i < 5i64 {
+        let mut m: Map[i64, i64] = Map.new();
+        m.insert(i, i * 100i64);
+        v.push(m);
+        i = i + 1i64;
+    }
+    v
+}
+
+fn main() {
+    let v = make();
+    println(v.len());
+    match v[3].get(3i64) { Some(x) => println(x), None => println(-1i64) }
+}
+"#,
+            &["5", "300"],
+            "vec_map_loop_built_returned_no_uaf",
+        );
+    }
+
     // ── Struct field drop synthesis (2026-05-14, slice γ) ────────
     // `track_struct_var` + `emit_struct_drop_synthesis` emit a per-struct
     // `__karac_drop_struct_<Name>` function that frees each heap-owning

@@ -349,8 +349,17 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned()
             .map(|et| self.tensor_var_info_from_type_expr(&et).is_some())
             .unwrap_or(false);
+        let map_elem_drop = self
+            .var_elem_type_exprs
+            .get(synth.as_str())
+            .cloned()
+            .and_then(|et| self.vec_elem_map_drop_for_type_expr(&et));
         if is_tensor_elem {
             self.track_vec_of_tensors_var(alloca);
+        } else if let Some(map_drop) = map_elem_drop {
+            // `Vec[Map]` / `Vec[Set]` iterable temp: the Vec owns its map
+            // elements (Cluster 1) — free each handle on drop.
+            self.track_vec_of_maps_var(alloca, map_drop);
         } else if let Some(&elem_ty) = self.vec_elem_types.get(synth.as_str()) {
             self.track_vec_var(alloca, Some(elem_ty));
         }

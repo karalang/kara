@@ -741,6 +741,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 vec_alloca,
                 elem_ty,
                 elem_is_tensor: false,
+                elem_map_drop: None,
+            });
+        }
+    }
+
+    /// Track a `Vec[Map[K,V]]` / `Vec[Set[T]]` alloca for scope-exit
+    /// cleanup: free each live element's map handle (via
+    /// `emit_free_one_map_handle`, the same K/V-classified drop a standalone
+    /// Map binding uses), then the outer buffer (guarded by `cap > 0` so a
+    /// moved-out Vec skips both). A Map handle is a bare `ptr`; the
+    /// `elem_map_drop` payload (not the LLVM type) carries the intent, exactly
+    /// as `track_vec_of_tensors_var` does for tensor elements. This is what
+    /// makes the Vec the OWNER of its map elements — the precondition for the
+    /// move-into-Vec ownership transfer (`suppress_map_cleanup_for_tail_identifier`
+    /// at the push site) to be leak-free rather than a premature-free / UAF.
+    pub(super) fn track_vec_of_maps_var(
+        &mut self,
+        vec_alloca: PointerValue<'ctx>,
+        map_elem_drop: crate::codegen::state::MapElemDrop<'ctx>,
+    ) {
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeVecBuffer {
+                vec_alloca,
+                elem_ty: Some(self.context.ptr_type(AddressSpace::default()).into()),
+                elem_is_tensor: false,
+                elem_map_drop: Some(map_elem_drop),
             });
         }
     }
@@ -759,7 +785,46 @@ impl<'ctx> super::Codegen<'ctx> {
                 vec_alloca,
                 elem_ty: Some(self.context.ptr_type(AddressSpace::default()).into()),
                 elem_is_tensor: true,
+                elem_map_drop: None,
             });
+        }
+    }
+
+    /// Free a single live map/set handle with its K/V drop classification —
+    /// the shared single-handle free shared by the `FreeMapHandle` cleanup
+    /// (one map binding) and the `Vec[Map]`/`Vec[Set]` element-drop loop
+    /// (`elem_map_drop`). Runs the shared-half rc_dec walks (which read live
+    /// bucket bytes and so MUST precede the bucket-storage release) then
+    /// routes to `karac_map_free_with_drop_vec` when either half owns
+    /// Vec/String heap, else plain `karac_map_free`. May split the current
+    /// block (the shared-half walk is a bucket loop); callers that emit after
+    /// it should re-read the insertion block.
+    pub(super) fn emit_free_one_map_handle(
+        &self,
+        handle: PointerValue<'ctx>,
+        drop: &crate::codegen::state::MapElemDrop<'ctx>,
+    ) {
+        if let Some(heap_ty) = drop.val_shared_heap_type {
+            self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, true);
+        }
+        if let Some(heap_ty) = drop.key_shared_heap_type {
+            self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, false);
+        }
+        if drop.key_is_vec || drop.val_is_vec {
+            let i32_t = self.context.i32_type();
+            let key_flag = i32_t.const_int(if drop.key_is_vec { 1 } else { 0 }, false);
+            let val_flag = i32_t.const_int(if drop.val_is_vec { 1 } else { 0 }, false);
+            self.builder
+                .build_call(
+                    self.karac_map_free_with_drop_vec_fn,
+                    &[handle.into(), key_flag.into(), val_flag.into()],
+                    "",
+                )
+                .unwrap();
+        } else {
+            self.builder
+                .build_call(self.karac_map_free_fn, &[handle.into()], "")
+                .unwrap();
         }
     }
 
@@ -861,6 +926,34 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         None
+    }
+
+    /// When `elem_te` is a `Map[K, V]` / `Set[T]` element TypeExpr (the
+    /// element type of an enclosing `Vec`), build the per-element drop
+    /// classification so the Vec's scope-exit cleanup can free each handle
+    /// (`track_vec_of_maps_var`). Returns `None` for any non-map element —
+    /// callers fall back to the plain `track_vec_var` path. The K/V
+    /// classification is the same `map_temp_cleanup_parts` derivation a
+    /// standalone Map binding uses.
+    pub(super) fn vec_elem_map_drop_for_type_expr(
+        &self,
+        elem_te: &TypeExpr,
+    ) -> Option<crate::codegen::state::MapElemDrop<'ctx>> {
+        let head = match &elem_te.kind {
+            TypeKind::Path(p) => p.segments.first().map(|s| s.as_str())?,
+            _ => return None,
+        };
+        if head != "Map" && head != "Set" {
+            return None;
+        }
+        let (key_is_vec, val_is_vec, key_shared_heap_type, val_shared_heap_type) =
+            self.map_temp_cleanup_parts(elem_te);
+        Some(crate::codegen::state::MapElemDrop {
+            key_is_vec,
+            val_is_vec,
+            val_shared_heap_type,
+            key_shared_heap_type,
+        })
     }
 
     /// Derive the four `track_map_var` classification args for a `Map[K, V]`
@@ -1043,12 +1136,27 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value();
         self.builder.build_memcpy(buf, 1, data, 1, bytes).unwrap();
 
-        // Recursive case: heap-owning elements (String / Vec[...]) get
-        // their own buffers — rewrite each copied header in place.
+        // Recursive case: heap-owning elements get their own buffers —
+        // rewrite each copied element in place.
+        //   - String / Vec[...] elements are {ptr,len,cap}-shaped: recurse
+        //     `emit_vecstr_defensive_copy` on each (stride = vec_ty).
+        //   - Map / Set elements are opaque handles (a single `ptr`, NOT a
+        //     vec struct): the outer memcpy aliased the source's handles, so
+        //     both the source and this copy would free the same map
+        //     (double-free). Deep-clone each handle via the synthesized
+        //     `karac_clone_<Map|Set>` fn (stride = elem_ty = ptr).
         if let Some(inner_te) = elem_te {
-            let inner_is_heap = self.is_string_type_expr(inner_te)
+            let inner_is_string_or_vec = self.is_string_type_expr(inner_te)
                 || self.extract_vec_elem_type(inner_te).is_some();
-            if inner_is_heap {
+            let inner_is_map_or_set = matches!(
+                &inner_te.kind,
+                TypeKind::Path(p)
+                    if matches!(
+                        p.segments.first().map(String::as_str),
+                        Some("Map") | Some("Set")
+                    )
+            );
+            if inner_is_string_or_vec {
                 let inner_elem_ty: BasicTypeEnum<'ctx> = if self.is_string_type_expr(inner_te) {
                     self.context.i8_type().into()
                 } else {
@@ -1099,6 +1207,54 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.builder.build_unconditional_branch(loop_bb).unwrap();
                 idx_phi.add_incoming(&[(&next, body_end)]);
+
+                self.builder.position_at_end(exit_bb);
+            } else if inner_is_map_or_set {
+                // The clone fn `void karac_clone_<T>(*const handle, *mut
+                // handle)` loads `*src` once up front then iterates the OLD
+                // map to build a fresh one, only storing the new handle to
+                // `*dst` at the end — so a slot->slot clone (src == dst) is
+                // sound: the alias in the copied buffer is read before it's
+                // overwritten. This composes with the Vec recursion above
+                // (a `Vec[Vec[Map]]` recurses to the inner `Vec[Map]`, whose
+                // element is then a Map handled here).
+                let clone_fn = self.emit_clone_fn_for_type_expr(inner_te);
+
+                let loop_bb = self.context.append_basic_block(fn_val, "dcopy.map.loop");
+                let body_bb = self.context.append_basic_block(fn_val, "dcopy.map.body");
+                let exit_bb = self.context.append_basic_block(fn_val, "dcopy.map.exit");
+                let pre_bb = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+                self.builder.position_at_end(loop_bb);
+                let idx_phi = self.builder.build_phi(i64_t, "dcopy.map.i").unwrap();
+                idx_phi.add_incoming(&[(&i64_t.const_int(0, false), pre_bb)]);
+                let idx = idx_phi.as_basic_value().into_int_value();
+                let in_range = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::ULT, idx, len, "dcopy.map.cmp")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(in_range, body_bb, exit_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(body_bb);
+                // Each slot holds one `elem_ty`-sized handle (`ptr`), so the
+                // gep strides by `elem_ty`, not the 24-byte `vec_ty`.
+                let slot = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, buf, &[idx], "dcopy.map.slot")
+                        .unwrap()
+                };
+                self.builder
+                    .build_call(clone_fn, &[slot.into(), slot.into()], "")
+                    .unwrap();
+                let next = self
+                    .builder
+                    .build_int_add(idx, i64_t.const_int(1, false), "dcopy.map.next")
+                    .unwrap();
+                self.builder.build_unconditional_branch(loop_bb).unwrap();
+                idx_phi.add_incoming(&[(&next, body_bb)]);
 
                 self.builder.position_at_end(exit_bb);
             }
@@ -2252,6 +2408,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 vec_alloca,
                 elem_ty,
                 elem_is_tensor,
+                elem_map_drop,
             } => {
                 let cap_ptr = self
                     .builder
@@ -2594,6 +2751,79 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.position_at_end(tafter_bb);
                 }
 
+                // Map/Set-element drop: each element is an opaque map handle
+                // (a single `ptr`). Free each live element exactly as a
+                // standalone Map binding would (shared-half rc_dec walks +
+                // `karac_map_free[_with_drop_vec]`, via `emit_free_one_map_handle`)
+                // before releasing the outer buffer. The Vec OWNS its map
+                // elements — the move-into-Vec push transferred ownership by
+                // suppressing the source's `FreeMapHandle`; without this free
+                // they'd leak, and *with* the suppression a missing free here
+                // would be a premature-free / UAF (Cluster 1). Every slot in
+                // `[0, len)` holds a real handle (push stores one per element),
+                // so no per-element null guard — and `karac_map_free` is not
+                // null-tolerant anyway.
+                if let Some(map_drop) = elem_map_drop {
+                    let map_drop = map_drop.clone();
+                    let len_ptr = self
+                        .builder
+                        .build_struct_gep(vec_ty, *vec_alloca, 1, "cleanup.mdrop.len.ptr")
+                        .unwrap();
+                    let len = self
+                        .builder
+                        .build_load(i64_t, len_ptr, "cleanup.mdrop.len")
+                        .unwrap()
+                        .into_int_value();
+                    let counter = self.create_entry_alloca(fn_val, "cleanup.mdrop.i", i64_t.into());
+                    self.builder.build_store(counter, zero).unwrap();
+                    let mcond_bb = self
+                        .context
+                        .append_basic_block(fn_val, "cleanup.mdrop.cond");
+                    let mbody_bb = self
+                        .context
+                        .append_basic_block(fn_val, "cleanup.mdrop.body");
+                    let mafter_bb = self
+                        .context
+                        .append_basic_block(fn_val, "cleanup.mdrop.after");
+                    self.builder.build_unconditional_branch(mcond_bb).unwrap();
+                    self.builder.position_at_end(mcond_bb);
+                    let cur = self
+                        .builder
+                        .build_load(i64_t, counter, "cleanup.mdrop.cur")
+                        .unwrap()
+                        .into_int_value();
+                    let lt = self
+                        .builder
+                        .build_int_compare(IntPredicate::ULT, cur, len, "cleanup.mdrop.lt")
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(lt, mbody_bb, mafter_bb)
+                        .unwrap();
+                    self.builder.position_at_end(mbody_bb);
+                    let elem_pp = unsafe {
+                        self.builder
+                            .build_gep(ptr_ty, data, &[cur], "cleanup.mdrop.elem.pp")
+                            .unwrap()
+                    };
+                    let handle = self
+                        .builder
+                        .build_load(ptr_ty, elem_pp, "cleanup.mdrop.handle")
+                        .unwrap()
+                        .into_pointer_value();
+                    self.emit_free_one_map_handle(handle, &map_drop);
+                    // `emit_free_one_map_handle` may have split the block
+                    // (shared-half rc_dec walk) — reload the current block as
+                    // the loop back-edge source.
+                    let one = i64_t.const_int(1, false);
+                    let next = self
+                        .builder
+                        .build_int_add(cur, one, "cleanup.mdrop.next")
+                        .unwrap();
+                    self.builder.build_store(counter, next).unwrap();
+                    self.builder.build_unconditional_branch(mcond_bb).unwrap();
+                    self.builder.position_at_end(mafter_bb);
+                }
+
                 self.builder
                     .build_call(self.free_fn, &[data.into()], "")
                     .unwrap();
@@ -2842,48 +3072,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(ptr_ty, *map_alloca, "cleanup.map.handle")
                     .unwrap()
                     .into_pointer_value();
-                // Shared-half rc_dec walks MUST run before the runtime
-                // helper releases the bucket storage — they read each
-                // live slot's bytes from `kv[]`. Closes the `Map[K,
-                // shared T]` leak (2026-05-16) on the value side, and
-                // the `Map[shared K, V]` / `Set[shared T]` leak on the
-                // key side. Both fire when both K and V are shared.
-                // Type-erased runtime can't decrement refcounts itself
-                // because it doesn't know each half's heap layout;
-                // codegen does, so the dec is open-coded per-
-                // instantiation against the matching
-                // `SharedTypeInfo.heap_type`.
-                if let Some(heap_ty) = val_shared_heap_type {
-                    self.emit_map_shared_half_rc_dec_walk(handle, *heap_ty, true);
-                }
-                if let Some(heap_ty) = key_shared_heap_type {
-                    self.emit_map_shared_half_rc_dec_walk(handle, *heap_ty, false);
-                }
-                // When either the key or value type follows the Vec/String
-                // `{ptr, len, cap}` layout, route through the recursive-
-                // drop runtime helper so each live entry's heap content
-                // is freed before the bucket array is deallocated. Plain
-                // `karac_map_free` is correct only when both sides own
-                // no heap. Closes the 2026-05-13 bucket leak (LeetCode
-                // #3629 `Map[i64, Vec[i64]]`) and the 2026-05-14
-                // `Set[String]` / `Map[String, V]` leaks (slice α /
-                // β of the recursive-drop work).
-                if *key_is_vec || *val_is_vec {
-                    let i32_t = self.context.i32_type();
-                    let key_flag = i32_t.const_int(if *key_is_vec { 1 } else { 0 }, false);
-                    let val_flag = i32_t.const_int(if *val_is_vec { 1 } else { 0 }, false);
-                    self.builder
-                        .build_call(
-                            self.karac_map_free_with_drop_vec_fn,
-                            &[handle.into(), key_flag.into(), val_flag.into()],
-                            "",
-                        )
-                        .unwrap();
-                } else {
-                    self.builder
-                        .build_call(self.karac_map_free_fn, &[handle.into()], "")
-                        .unwrap();
-                }
+                // Single-handle free shared with the `Vec[Map]`/`Vec[Set]`
+                // element-drop loop. The shared-half rc_dec walks run first
+                // (they read live bucket bytes, before the storage release);
+                // then `karac_map_free_with_drop_vec` when either half owns
+                // Vec/String heap, else plain `karac_map_free`. Closes the
+                // 2026-05-13/14/16 map leaks; see `emit_free_one_map_handle`.
+                let drop = crate::codegen::state::MapElemDrop {
+                    key_is_vec: *key_is_vec,
+                    val_is_vec: *val_is_vec,
+                    val_shared_heap_type: *val_shared_heap_type,
+                    key_shared_heap_type: *key_shared_heap_type,
+                };
+                self.emit_free_one_map_handle(handle, &drop);
             }
             // Phase 8 `File` handle slice F4b — close the file fd at
             // scope exit. Load the handle from its alloca, hand it to

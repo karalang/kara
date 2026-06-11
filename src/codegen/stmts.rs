@@ -2362,14 +2362,23 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // recursive-drop only reaches vec-struct /
                                 // Map elements, so route to the
                                 // tensor-element cleanup instead.
-                                let is_tensor_elem = self
-                                    .var_elem_type_exprs
-                                    .get(var_name.as_str())
-                                    .cloned()
-                                    .map(|te| self.tensor_var_info_from_type_expr(&te).is_some())
+                                let elem_te =
+                                    self.var_elem_type_exprs.get(var_name.as_str()).cloned();
+                                let is_tensor_elem = elem_te
+                                    .as_ref()
+                                    .map(|te| self.tensor_var_info_from_type_expr(te).is_some())
                                     .unwrap_or(false);
+                                let map_elem_drop = elem_te
+                                    .as_ref()
+                                    .and_then(|te| self.vec_elem_map_drop_for_type_expr(te));
                                 if is_tensor_elem {
                                     self.track_vec_of_tensors_var(slot.ptr);
+                                } else if let Some(map_drop) = map_elem_drop {
+                                    // `Vec[Map]` / `Vec[Set]`: elements are
+                                    // opaque handles the Vec now owns (the
+                                    // move-into-Vec push transferred ownership);
+                                    // free each on drop (Cluster 1).
+                                    self.track_vec_of_maps_var(slot.ptr, map_drop);
                                 } else {
                                     self.track_vec_var(slot.ptr, Some(elem_ty));
                                 }
