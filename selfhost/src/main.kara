@@ -10,10 +10,14 @@
 // #5 (String method on a field receiver), #6 (`struct Span` vs stdlib
 // `std.tracing` Span collision), and #7 (untyped int literal in an if-branch
 // not coerced to the branch's narrow type) are all FIXED — this now BUILDS,
-// RUNS, and LEXES CORRECTLY via `karac build`: `(ab, 12)` tokenizes to
-// OP( / IDENT ab / OP, / INT 12 / OP) / EOF with exact byte-offset spans.
-// NEXT: stand up the differential oracle (tests/selfhost_lexer.rs) vs the
-// Rust src/lexer.rs, then expand to the full token set.
+// RUNS via `karac build`, and lexes `(ab, 12)` correctly on a clean run
+// (OP( / IDENT ab / OP, / INT 12 / OP) / EOF, exact byte-offset spans).
+// The differential oracle (tests/selfhost_lexer.rs) is BUILT and PASSES (vs
+// the Rust src/lexer.rs). It immediately caught #8: an auto-par SOUNDNESS bug
+// — the sequentially-dependent scan loops (each iter reads+writes self.pos)
+// get auto-parallelized and race, so an auto-par build mis-spans ~13% of runs
+// (NONDETERMINISTIC). KARAC_AUTO_PAR=0 is deterministic+correct, so the oracle
+// builds with auto-par off. NEXT: fix #8, then expand to the full token set.
 
 struct Span {
     line: i64,
