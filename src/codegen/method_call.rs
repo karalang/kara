@@ -55,6 +55,53 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned();
         self.emit_branch_cancel_check("mcall", callee_key.as_deref());
 
+        // `process.exit(code: i32) -> !` — lower to libc `exit`. The typechecker
+        // registers `process.exit` as a dotted free function and the interpreter
+        // (eval_call.rs) handles it as a path-call, but the parser hands codegen a
+        // method call with `process` as a (pseudo-variable) identifier receiver.
+        // Match the interpreter's semantics: evaluate the code as i32, call libc
+        // `exit` (declared `void exit(i32)` in `Codegen::new`), and terminate the
+        // block with `unreachable` — the call is `Never`, so no value flows out.
+        // Gated on `process` not being a real local (mirrors the ambient-resource
+        // guard below) so a user binding named `process` is never hijacked.
+        if method == "exit" {
+            if let ExprKind::Identifier(name) = &object.kind {
+                if name == "process" && !self.variables.contains_key("process") {
+                    let i32_ty = self.context.i32_type();
+                    // Default code is 0 (matches the interpreter's no-arg path).
+                    let code = match args.first() {
+                        Some(arg) => {
+                            let iv = self.compile_expr(&arg.value)?.into_int_value();
+                            let w = iv.get_type().get_bit_width();
+                            match w.cmp(&32) {
+                                std::cmp::Ordering::Greater => self
+                                    .builder
+                                    .build_int_truncate(iv, i32_ty, "exit.code.tr")
+                                    .unwrap(),
+                                std::cmp::Ordering::Less => self
+                                    .builder
+                                    .build_int_s_extend(iv, i32_ty, "exit.code.sx")
+                                    .unwrap(),
+                                std::cmp::Ordering::Equal => iv,
+                            }
+                        }
+                        None => i32_ty.const_int(0, false),
+                    };
+                    let exit_fn = self
+                        .module
+                        .get_function("exit")
+                        .expect("libc `exit` extern declared in Codegen::new");
+                    self.builder
+                        .build_call(exit_fn, &[code.into()], "process_exit")
+                        .unwrap();
+                    self.builder.build_unreachable().unwrap();
+                    // Block is terminated; this placeholder is never read (every
+                    // value-consuming caller respects the terminator guard).
+                    return Ok(self.context.i64_type().const_int(0, false).into());
+                }
+            }
+        }
+
         // Fallible-allocation instance companions (phase-8-stdlib-floor item 8).
         // Companions whose codegen lowering has landed
         // (`CODEGEN_FALLIBLE_INSTANCE_BASES`, e.g. `try_push`) fall through to

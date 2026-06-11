@@ -41719,6 +41719,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_process_exit_sets_status_code() {
+        // phase-12 Cluster-2: `process.exit(code)` codegen lowering. Under
+        // `karac build`, `process.exit` previously aborted codegen with
+        // "no handler for method 'exit' on variable 'process'" (it works under
+        // the interpreter as a dotted path-call). The new dispatcher arm lowers
+        // it to libc `exit(i32)` + an `unreachable` terminator. The exit code is
+        // the unforgeable proof: output before the call must flush, and the
+        // process must exit with exactly the requested code.
+        let out = run_program_capturing(
+            r#"
+fn main() {
+    println("before exit");
+    process.exit(42);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.stdout.trim(), "before exit");
+            assert_eq!(
+                out.status.code(),
+                Some(42),
+                "process.exit(42) must terminate with status 42; got {:?}",
+                out.status
+            );
+        }
+    }
+
+    #[test]
     fn e2e_channel_send_recv_tryrecv_clone() {
         // Phase 6 "Channel AOT codegen lowering": `Channel.new()` destructure,
         // `Sender.send` / `Sender.clone`, `Receiver.recv` / `Receiver.try_recv`
