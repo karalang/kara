@@ -801,16 +801,21 @@ fn test_vec_len_used_as_i64_ok() {
 
 #[test]
 fn test_vec_read_accessor_return_types_ok() {
-    // Each accessor resolves to its true type (i64 / bool / Option[T]).
+    // Each accessor resolves to its true type. The read accessors
+    // `get`/`first`/`last` return a borrow `Option[ref T]` (the
+    // B-2026-06-07-5 `Option[ref T]` flip — a zero-copy aliasing read, not
+    // an owning clone); `binary_search` returns an owned `Option[i64]` (the
+    // found index, not an element borrow); `len`/`is_empty`/`contains`
+    // resolve to the scalar `i64`/`bool`.
     typecheck_ok(
         "fn main() {\n\
              let mut v: Vec[i64] = Vec.new();\n\
              v.push(1);\n\
              let _n: i64 = v.len();\n\
              let _e: bool = v.is_empty();\n\
-             let _g: Option[i64] = v.get(0);\n\
-             let _f: Option[i64] = v.first();\n\
-             let _l: Option[i64] = v.last();\n\
+             let _g: Option[ref i64] = v.get(0);\n\
+             let _f: Option[ref i64] = v.first();\n\
+             let _l: Option[ref i64] = v.last();\n\
              let _c: bool = v.contains(1);\n\
              let _b: Option[i64] = v.binary_search(1);\n\
          }",
