@@ -2418,6 +2418,114 @@ impl<'ctx> super::Codegen<'ctx> {
                             .unwrap();
 
                         self.builder.position_at_end(drop_after_bb);
+                    } else if let Some(field_idxs) = self.struct_owned_vec_field_indices(*et) {
+                        // Element is a tuple / struct whose fields include
+                        // owned Vec/String buffers (`Vec[(i64, String)]`,
+                        // B-2026-06-10-5). The vec-struct fast path above
+                        // only frees an element that is ITSELF a Vec/String;
+                        // a heap field nested in a tuple element leaks.
+                        // Iterate `len` elements and free each live heap
+                        // field's data buffer before releasing the outer
+                        // buffer. One level into the element — symmetric with
+                        // the one-level Vec recursion above; a heap field that
+                        // is itself a tuple / Map / nested collection still
+                        // leaks (same deeper-nesting limitation).
+                        let elem_struct = (*et).into_struct_type();
+                        let vs = self.vec_struct_type();
+                        let len_ptr = self
+                            .builder
+                            .build_struct_gep(vec_ty, *vec_alloca, 1, "cleanup.tup.len.ptr")
+                            .unwrap();
+                        let len = self
+                            .builder
+                            .build_load(i64_t, len_ptr, "cleanup.tup.len")
+                            .unwrap()
+                            .into_int_value();
+                        let counter =
+                            self.create_entry_alloca(fn_val, "cleanup.tup.i", i64_t.into());
+                        self.builder.build_store(counter, zero).unwrap();
+                        let cond_bb = self.context.append_basic_block(fn_val, "cleanup.tup.cond");
+                        let body_bb = self.context.append_basic_block(fn_val, "cleanup.tup.body");
+                        let after_bb = self.context.append_basic_block(fn_val, "cleanup.tup.after");
+                        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                        self.builder.position_at_end(cond_bb);
+                        let cur = self
+                            .builder
+                            .build_load(i64_t, counter, "cleanup.tup.cur")
+                            .unwrap()
+                            .into_int_value();
+                        let lt = self
+                            .builder
+                            .build_int_compare(IntPredicate::ULT, cur, len, "cleanup.tup.lt")
+                            .unwrap();
+                        self.builder
+                            .build_conditional_branch(lt, body_bb, after_bb)
+                            .unwrap();
+
+                        self.builder.position_at_end(body_bb);
+                        let elem_ptr = unsafe {
+                            self.builder
+                                .build_gep(elem_struct, data, &[cur], "cleanup.tup.elem")
+                                .unwrap()
+                        };
+                        for &fidx in &field_idxs {
+                            let field_ptr = self
+                                .builder
+                                .build_struct_gep(elem_struct, elem_ptr, fidx, "cleanup.tup.field")
+                                .unwrap();
+                            let fcap_ptr = self
+                                .builder
+                                .build_struct_gep(vs, field_ptr, 2, "cleanup.tup.field.cap.ptr")
+                                .unwrap();
+                            let fcap = self
+                                .builder
+                                .build_load(i64_t, fcap_ptr, "cleanup.tup.field.cap")
+                                .unwrap()
+                                .into_int_value();
+                            let fheap = self
+                                .builder
+                                .build_int_compare(
+                                    IntPredicate::UGT,
+                                    fcap,
+                                    zero,
+                                    "cleanup.tup.field.heap",
+                                )
+                                .unwrap();
+                            let ffree_bb = self
+                                .context
+                                .append_basic_block(fn_val, "cleanup.tup.field.free");
+                            let fskip_bb = self
+                                .context
+                                .append_basic_block(fn_val, "cleanup.tup.field.skip");
+                            self.builder
+                                .build_conditional_branch(fheap, ffree_bb, fskip_bb)
+                                .unwrap();
+                            self.builder.position_at_end(ffree_bb);
+                            let fdata_ptr = self
+                                .builder
+                                .build_struct_gep(vs, field_ptr, 0, "cleanup.tup.field.data.ptr")
+                                .unwrap();
+                            let fdata = self
+                                .builder
+                                .build_load(ptr_ty, fdata_ptr, "cleanup.tup.field.data")
+                                .unwrap()
+                                .into_pointer_value();
+                            self.builder
+                                .build_call(self.free_fn, &[fdata.into()], "")
+                                .unwrap();
+                            self.builder.build_unconditional_branch(fskip_bb).unwrap();
+                            self.builder.position_at_end(fskip_bb);
+                        }
+                        let one = i64_t.const_int(1, false);
+                        let next = self
+                            .builder
+                            .build_int_add(cur, one, "cleanup.tup.next")
+                            .unwrap();
+                        self.builder.build_store(counter, next).unwrap();
+                        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                        self.builder.position_at_end(after_bb);
                     }
                 }
 

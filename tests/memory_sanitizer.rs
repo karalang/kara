@@ -6842,4 +6842,113 @@ fn main() {
             "try_clone_vec_tuple_scalar_deep_free",
         );
     }
+
+    #[test]
+    fn asan_vec_tuple_heap_element_push_read() {
+        // B-2026-06-10-5 (core UAF): pushing a tuple with an inline f-string
+        // heap field into a `Vec[(i64, String)]` and reading it back. Before
+        // the fix `compile_tuple` left the f-string accumulator's
+        // `FreeVecBuffer` armed; it freed the String buffer right after the
+        // push, leaving the Vec element dangling (heap-use-after-free on the
+        // read / scope-exit). The fix suppresses the inline-f-string acc as
+        // the tuple takes ownership, and the Vec's scope-exit drain recurses
+        // into the tuple element's owned String field (one free, at scope
+        // exit). Multiple pushes exercise the grow path too.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut src: Vec[(i64, String)] = Vec.new();
+    src.push((1i64, f"p{1}"));
+    src.push((2i64, f"q{2}"));
+    println(src[0].1);
+    println(src[1].1);
+    println(src.len());
+}
+"#,
+            &["p1", "q2", "2"],
+            "vec_tuple_heap_element_push_read",
+        );
+    }
+
+    #[test]
+    fn asan_vec_tuple_heap_element_string_var_push() {
+        // Sibling of the push-read case where the String field arrives as an
+        // IDENTIFIER (an owned binding) rather than an inline f-string. The
+        // tuple-construction move-suppression (identifier source) + the Vec
+        // scope-exit recursive drop must keep this single-free clean.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut src: Vec[(i64, String)] = Vec.new();
+    let s = f"p{1}";
+    src.push((1i64, s));
+    println(src[0].1);
+    println(src.len());
+}
+"#,
+            &["p1", "1"],
+            "vec_tuple_heap_element_string_var_push",
+        );
+    }
+
+    #[test]
+    fn asan_vec_tuple_heap_element_clone_deep_free() {
+        // B-2026-06-10-5 (the headline `.clone()` repro): build a
+        // `Vec[(i64, String)]` by pushing inline-f-string tuples, then
+        // `.clone()` it. The reported UAF (`karac_string_clone` reading a
+        // freed pointer) was NOT a shallow clone — `emit_vec_clone_fn`
+        // already deep-clones per element. The real cause was upstream: the
+        // push left each inline f-string accumulator's `FreeVecBuffer` armed,
+        // so it freed the source String right after the push; `clone` then
+        // read that freed buffer. The fix suppresses the inline-f-string acc
+        // at tuple construction (source valid for clone) and recurses the
+        // Vec scope-exit drain into the tuple element's String (one free per
+        // Vec). Source and clone own independent buffers; each frees once.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut src: Vec[(i64, String)] = Vec.new();
+    src.push((1i64, f"p{1}"));
+    src.push((2i64, f"q{2}"));
+    let c = src.clone();
+    println(c[0].1);
+    println(c[1].1);
+    println(src.len());
+}
+"#,
+            &["p1", "q2", "2"],
+            "vec_tuple_heap_element_clone_deep_free",
+        );
+    }
+
+    #[test]
+    fn asan_vec_tuple_heap_element_try_clone_deep_free() {
+        // B-2026-06-10-5 closes the original tracker's deferred coverage:
+        // `Vec[(i64, String)].try_clone()` (the fallible sibling of the
+        // `.clone()` case above) over a heap tuple element. Same root cause
+        // and fix; source + the `Ok`-bound clone each free their own buffers
+        // exactly once. The scalar-tuple variant
+        // (`asan_try_clone_vec_tuple_scalar_deep_free`) guarded the non-heap
+        // path; this guards the heap-element path it deferred.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut src: Vec[(i64, String)] = Vec.new();
+    src.push((1i64, f"p{1}"));
+    src.push((2i64, f"q{2}"));
+    match src.try_clone() {
+        Ok(c) => {
+            println(c[0].1);
+            println(c[1].1);
+            println(c.len());
+        }
+        Err(_) => println("err"),
+    }
+    println(src.len());
+}
+"#,
+            &["p1", "q2", "2", "2"],
+            "vec_tuple_heap_element_try_clone_deep_free",
+        );
+    }
 }

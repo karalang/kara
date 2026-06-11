@@ -354,6 +354,42 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// When `ty` is a by-value aggregate (tuple / user struct) stored as a
+    /// `Vec` element and at least one of its fields is an owned Vec / String
+    /// (`vec_struct_type`-shaped `{ptr, len, cap}`), return those field
+    /// indices; `None` otherwise (including when `ty` IS the Vec/String
+    /// struct — that case is the `llvm_ty_is_vec_struct` fast path).
+    ///
+    /// Drives the `FreeVecBuffer` drain's recursion into a heap-bearing
+    /// tuple element (`Vec[(i64, String)]`, B-2026-06-10-5): the vec-struct
+    /// fast path only frees an element that is ITSELF a Vec/String, so a
+    /// String nested in a tuple element leaks. A Vec element is always owned
+    /// (borrows are never stored owned in a Vec), so every vec-struct-shaped
+    /// field is an owned buffer to free. One level into the element — a heap
+    /// field that is itself a tuple / Map / nested collection is not reached
+    /// (same deeper-nesting limitation as the one-level Vec recursion).
+    pub(super) fn struct_owned_vec_field_indices(
+        &self,
+        ty: BasicTypeEnum<'ctx>,
+    ) -> Option<Vec<u32>> {
+        let st = match ty {
+            BasicTypeEnum::StructType(st) => st,
+            _ => return None,
+        };
+        if st == self.vec_struct_type() {
+            return None;
+        }
+        let vec_ty: BasicTypeEnum<'ctx> = self.vec_struct_type().into();
+        let idxs: Vec<u32> = (0..st.count_fields())
+            .filter(|&i| st.get_field_type_at_index(i) == Some(vec_ty))
+            .collect();
+        if idxs.is_empty() {
+            None
+        } else {
+            Some(idxs)
+        }
+    }
+
     /// Slice[T] and `mut Slice[T]` runtime layout: `{ ptr data, i64 len }`.
     /// Mutability is a type-system concept — the physical layout is identical
     /// for read-only and mutable slices. 16 bytes on 64-bit platforms.

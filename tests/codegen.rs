@@ -4251,6 +4251,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_tuple_heap_element_push_clone() {
+        // B-2026-06-10-5: `Vec[(i64, String)]` — pushing tuples with heap
+        // String fields, reading them back, and `.clone()`-ing the Vec. This
+        // pins OUTPUT correctness for the push-read and deep-clone shapes (the
+        // memory-safety side — no UAF/double-free/leak — is pinned by
+        // `tests/memory_sanitizer.rs::asan_vec_tuple_heap_element_*` + the O0
+        // `leaks` check). Before the fix the inline f-string field was freed
+        // right after the push, so a read printed garbage / crashed.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut src: Vec[(i64, String)] = Vec.new();
+    src.push((1i64, f"p{1}"));
+    src.push((2i64, f"q{2}"));
+    let c = src.clone();
+    println(c[0].1);
+    println(c[1].1);
+    println(src[0].1);
+    println(src.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["p1", "q2", "p1", "2"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_match_at_binding_or() {
         // `@` + or-pattern composition: the alias binds from the first
         // alternative and the condition ORs each alternative's test.

@@ -19,27 +19,44 @@ use inkwell::{FloatPredicate, IntPredicate};
 
 impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn compile_tuple(&mut self, elems: &[Expr]) -> Result<BasicValueEnum<'ctx>, String> {
-        let vals: Vec<BasicValueEnum<'ctx>> = elems
-            .iter()
-            .map(|e| self.compile_expr(e))
-            .collect::<Result<_, _>>()?;
         // Move-aware: tuple construction takes ownership of each
-        // element. For Vec / String / shared-RC / Vec-bearing-struct
-        // elements that arrive as identifiers, suppress the source
-        // binding's scope-exit cleanup the same way function-call
-        // arg passing does (`suppress_source_vec_cleanup_for_arg`,
-        // `call_dispatch.rs:1033`). Without this, a Vec passed into a
-        // tuple keeps its cap word non-zero — the original binding's
-        // `CleanupAction::FreeVecBuffer` fires at scope exit and
-        // free()s the same buffer that the *consumer* of the tuple
-        // (enum payload, destructure binding, helper function) now
-        // owns. Surfaces under LLJIT as `_BUG_IN_CLIENT_OF_LIBMALLOC_
-        // POINTER_BEING_FREED_WAS_NOT_ALLOCATED` (bug 2 of N from
-        // phase-7 L560 W3.3 routing); AOT masks via post-codegen O2
-        // passes that elide the redundant free, but the bug is real
-        // and a future codegen perturbation would re-expose it.
+        // element. Two element shapes register an independent scope-exit
+        // cleanup that must be suppressed once the tuple owns the buffer,
+        // or both that cleanup and the tuple's owner's recursive drop free
+        // the same pointer (UAF / double-free).
+        //
+        // (a) Vec / String / shared-RC / Vec-bearing-struct elements that
+        //     arrive as identifiers — suppress the source binding's
+        //     scope-exit cleanup the same way function-call arg passing
+        //     does (`suppress_source_vec_cleanup_for_arg`,
+        //     `call_dispatch.rs:1033`). Without this, a Vec passed into a
+        //     tuple keeps its cap word non-zero — the original binding's
+        //     `CleanupAction::FreeVecBuffer` fires at scope exit and
+        //     free()s the same buffer that the *consumer* of the tuple
+        //     (enum payload, destructure binding, helper function) now
+        //     owns. Surfaces under LLJIT as `_BUG_IN_CLIENT_OF_LIBMALLOC_
+        //     POINTER_BEING_FREED_WAS_NOT_ALLOCATED` (bug 2 of N from
+        //     phase-7 L560 W3.3 routing); AOT masks via post-codegen O2
+        //     passes that elide the redundant free, but the bug is real
+        //     and a future codegen perturbation would re-expose it.
+        // (b) an inline f-string element (`(1i64, f"p{n}")`) — its
+        //     accumulator queues a `FreeVecBuffer` and stages
+        //     `last_fstr_acc`. Suppress it HERE, right after compiling the
+        //     element, while `last_fstr_acc` still holds THIS element's acc
+        //     (the single slot is overwritten by the next element). The
+        //     tuple now owns the buffer; the tuple value's owner — a
+        //     let-bound tuple's drop, or the Vec's scope-exit recursive
+        //     drop when the tuple is pushed — frees it exactly once.
+        //     Without this the acc cleanup frees the buffer right after the
+        //     push, leaving the container holding a dangling pointer
+        //     (heap-use-after-free in `karac_string_clone` / on read —
+        //     B-2026-06-10-5, the inline-f-string-in-tuple case).
+        let mut vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(elems.len());
         for elem_expr in elems {
+            let v = self.compile_expr(elem_expr)?;
+            self.suppress_fstr_acc_if_moved_out(elem_expr);
             self.suppress_source_vec_cleanup_for_arg(elem_expr);
+            vals.push(v);
         }
         let types: Vec<BasicTypeEnum<'ctx>> = vals.iter().map(|v| v.get_type()).collect();
         let st = self.context.struct_type(&types, false);
