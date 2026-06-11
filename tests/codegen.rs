@@ -4169,6 +4169,41 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_option_inline_payload_drop_paths() {
+        // B-2026-06-10-6: an inline-heap `Option[String]` dropped without
+        // being destructured must free its payload (no leak), and a
+        // `match`/`if let` that binds the payload must NOT double-free it.
+        // This test pins OUTPUT correctness across the let-unused, discard,
+        // match-consume, and if-let-consume shapes (the memory-safety side
+        // is pinned by `tests/memory_sanitizer.rs::asan_option_*`). A wrong
+        // suppression would manifest here as a corrupted/empty print or a
+        // crash before the expected lines.
+        let out = run_program(
+            r#"
+fn mk(n: i64) -> Option[String] { Some(f"v{n}") }
+fn main() {
+    let unused = mk(1);          // freed at scope exit, never read
+    mk(2);                        // discarded temp, freed at `;`
+    let bound = mk(3);
+    match bound {                 // arm binds payload → source free suppressed
+        Some(s) => { println(s); }
+        None => { println("none"); }
+    };
+    let cond = mk(4);
+    if let Some(s) = cond {       // if-let binding → source free suppressed
+        println(s);
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["v3", "v4", "end"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_match_at_binding_or() {
         // `@` + or-pattern composition: the alias binds from the first
         // alternative and the condition ORs each alternative's test.

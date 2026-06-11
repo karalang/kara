@@ -223,6 +223,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                 } else {
                     self.suppress_destructured_enum_payload_cleanup(scrutinee, &arm.pattern);
+                    // B-2026-06-10-6 companion: the erased-`Option` drop
+                    // switch can't classify an inline `String`/`Vec` payload,
+                    // so the suppression above no-ops for it. Zero the source
+                    // `Option`'s `cap` here when an arm binds the `Some`
+                    // payload out — its `FreeInlineOptionPayload` scope-exit
+                    // free would otherwise double-free against the binding.
+                    self.suppress_inline_option_payload_cleanup(scrutinee, &arm.pattern);
                 }
             }
 
@@ -1522,6 +1529,56 @@ impl<'ctx> super::Codegen<'ctx> {
             ) {
                 let _ = self.builder.build_store(cap_ptr, zero);
             }
+        }
+    }
+
+    /// B-2026-06-10-6 companion to
+    /// [`Self::suppress_destructured_enum_payload_cleanup`] for inline-heap
+    /// `Option[String]` / `Option[Vec[_]]` scrutinees. The `Option` layout
+    /// is type-erased, so it carries no static `VecOrString` field kind and
+    /// the generic suppression above can't fire for it. When the scrutinee
+    /// is an identifier whose binding registered a
+    /// `FreeInlineOptionPayload` (tracked in `inline_option_payload_vars`)
+    /// and the arm binds the `Some` payload out, zero the source `Option`'s
+    /// `cap` word (option field index 3 = the `cap` of the `{ptr,len,cap}`
+    /// payload at words w0/w1/w2) so the scope-exit free's `cap > 0` guard
+    /// skips — the bound payload's own cleanup frees it exactly once. A
+    /// `Some(_)` / `None` arm binds nothing, so the source free must still
+    /// fire and no suppression happens.
+    pub(super) fn suppress_inline_option_payload_cleanup(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return;
+        };
+        if !self.inline_option_payload_vars.contains(name.as_str()) {
+            return;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        if path.last().map(|s| s.as_str()) != Some("Some") {
+            return;
+        }
+        if !patterns.iter().any(pattern_consumes_field) {
+            return;
+        }
+        let Some(slot) = self.variables.get(name.as_str()) else {
+            return;
+        };
+        let Some(layout) = self.enum_layouts.get("Option") else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        // cap word of the `{ptr,len,cap}` payload: tag(0) + w0(1) + w1(2) +
+        // w2/cap(3).
+        if let Ok(cap_ptr) =
+            self.builder
+                .build_struct_gep(layout.llvm_type, slot.ptr, 3, "optpl.suppress.cap")
+        {
+            let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
         }
     }
 

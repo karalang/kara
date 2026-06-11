@@ -2425,6 +2425,35 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-06-10-6: a let-bound `Option[String]` /
+                // `Option[Vec[_]]` whose payload is never destructured leaks
+                // its inline heap — the type-erased `Option` `track_enum_var`
+                // above is a no-op for it (its drop switch can't free a
+                // payload that's a buffer for `Option[String]` but a scalar
+                // for `Option[i64]`). Register a concrete-typed scope-exit
+                // free keyed on the RHS's instantiated type. Gated to
+                // Call-shaped RHS (variant constructors `Some(..)` + user-fn
+                // returns) — exactly the forms that leak today. Method-call
+                // results are deliberately excluded: `pop` is already freed
+                // via the binding's Vec machinery (a second free would
+                // double-free), and `get`/`first`/`last` return a borrow
+                // (`Option[ref T]`, which `option_inline_payload_elem`
+                // rejects anyway).
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if matches!(value.kind, ExprKind::Call { .. }) {
+                        let opt_te = self
+                            .enum_inst_type_exprs
+                            .get(&(value.span.offset, value.span.length))
+                            .cloned()
+                            .or_else(|| ty.clone())
+                            .or_else(|| self.untyped_let_boxed_enum_te(value));
+                        if let Some(te) = opt_te {
+                            if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
+                                self.track_inline_option_payload_var(var_name, slot.ptr, &te);
+                            }
+                        }
+                    }
+                }
                 // Slice γ (2026-05-14): track value-type struct bindings
                 // for scope-exit drop-fn invocation. Mirrors the enum
                 // tracking above. The drop fn frees per-field heap
@@ -2644,7 +2673,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 // already-sent chains).
                 self.free_discarded_request_builder_temp(expr, val);
                 if let Some(tail) = tail {
-                    self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
+                    // B-2026-06-10-6: a discarded inline-`Option` temp
+                    // (`v.pop();`, `make_opt();`) leaks its `String`/`Vec`
+                    // payload — the erased Option drop switch can't free it
+                    // and there's no binding to. Free it here, but NOT when
+                    // the producer returns a borrow (`get`/`first`/`last`/
+                    // `Map.get` alias the container's storage — freeing would
+                    // corrupt it). Falls back to the generic owned-temp
+                    // chokepoint (Vec/String/Map/RC) for everything else.
+                    let handled_option = !self.scrutinee_is_borrow_call(tail)
+                        && self.try_track_discarded_inline_option(tail, val);
+                    if !handled_option {
+                        self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
+                    }
                     self.drain_top_frame_with_emit();
                 }
                 Ok(())

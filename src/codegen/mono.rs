@@ -638,6 +638,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_fn = Some(fn_val);
         self.variables.clear();
         self.var_type_names.clear();
+        self.inline_option_payload_vars.clear();
         // Function-level scope-cleanup frame for owned locals (`Tensor` /
         // `Vec` / `String` / `Map` lets needing drop), mirroring
         // `compile_function`. The caller's frame stack was swapped out in

@@ -81,6 +81,11 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
         }
+        // B-2026-06-10-6: a variable `Option[String]`/`Option[Vec]` scrutinee
+        // with a `FreeInlineOptionPayload` needs its source `cap` zeroed when
+        // this arm binds the payload out, else x's scope-exit free doubles
+        // the binding's. No-op for temp / non-inline scrutinees.
+        self.suppress_inline_option_payload_cleanup(value, pattern);
         self.tail_ret_inner = tail;
         let then_val = self.compile_block(then_block)?;
         let then_terminated = self
@@ -221,6 +226,9 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
         }
+        // B-2026-06-10-6: variable inline-`Option` scrutinee source-cap
+        // suppression (see `compile_if_let`). No-op for temp / non-inline.
+        self.suppress_inline_option_payload_cleanup(value, pattern);
         self.compile_block(body)?;
         let body_has_terminator = self
             .builder
@@ -318,6 +326,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
         }
+        // B-2026-06-10-6: variable inline-`Option` scrutinee — `s` binds into
+        // the enclosing scope where x's `FreeInlineOptionPayload` also lives,
+        // so zero x's source `cap` to avoid a double-free at that scope's exit.
+        self.suppress_inline_option_payload_cleanup(value, pattern);
         Ok(())
     }
 

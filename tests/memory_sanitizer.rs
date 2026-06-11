@@ -833,6 +833,156 @@ fn main() {
         );
     }
 
+    // ── B-2026-06-10-6: inline-heap `Option[T]` payload drop ──────
+    //
+    // An `Option[String]` / `Option[Vec[_]]` dropped WITHOUT being
+    // destructured leaks its inline heap payload — the type-erased `Option`
+    // layout's drop switch can't free a payload that's a buffer for
+    // `Option[String]` but a scalar for `Option[i64]`, so a concrete-typed
+    // `FreeInlineOptionPayload` is registered at the binding / discard site.
+    // On Linux these run under LeakSanitizer (the leak itself is caught); on
+    // macOS LSan is off, so these primarily guard the DOUBLE-FREE risk — a
+    // `match`/`if let` arm binds the payload (its own cleanup frees it) AND
+    // the source `Option`'s scope-exit free must be suppressed (source `cap`
+    // zeroed), else the buffer is freed twice. Runtime/non-foldable payloads
+    // (`f"..{n}.."`) so the heap allocation actually happens (a constant
+    // concat folds to a static string and hides the path).
+
+    #[test]
+    fn asan_option_string_let_unused_freed() {
+        // `let x = mk(42)` never destructured → the scope-exit
+        // FreeInlineOptionPayload must free the `Some` String. (Linux LSan
+        // catches the leak; macOS confirms no spurious double-free.)
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> Option[String] { Some(f"value-{n}-runtime-heap") }
+fn main() {
+    let x = mk(42);
+    println("done");
+}
+"#,
+            &["done"],
+            "option_string_let_unused_freed",
+        );
+    }
+
+    #[test]
+    fn asan_option_string_let_then_match_no_double_free() {
+        // `let x = mk(); match x { Some(s) => ... }`: the arm binding `s`
+        // frees the payload; the source `Option`'s scope-exit free must be
+        // suppressed (cap zeroed) or this double-frees the same buffer.
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> Option[String] { Some(f"value-{n}-runtime-heap") }
+fn main() {
+    let x = mk(42);
+    match x {
+        Some(s) => { println(s); }
+        None => { println("none"); }
+    };
+}
+"#,
+            &["value-42-runtime-heap"],
+            "option_string_let_then_match_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_option_string_let_then_if_let_no_double_free() {
+        // `if let Some(s) = x` companion to the match double-free guard.
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> Option[String] { Some(f"v-{n}-runtime-heap-payload") }
+fn main() {
+    let x = mk(7);
+    if let Some(s) = x {
+        println(s);
+    } else {
+        println("none");
+    }
+}
+"#,
+            &["v-7-runtime-heap-payload"],
+            "option_string_let_then_if_let_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_option_string_discarded_freed() {
+        // Discarded `mk();` statement temp — no binding, unconditional free.
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> Option[String] { Some(f"discarded-{n}-runtime-heap") }
+fn main() {
+    mk(3);
+    println("done");
+}
+"#,
+            &["done"],
+            "option_string_discarded_freed",
+        );
+    }
+
+    #[test]
+    fn asan_option_pop_discarded_freed() {
+        // `v.pop();` discards an `Option[String]` temp (the popped element).
+        // Borrow accessors (`get`) are excluded; `pop` owns its result.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("he" + "llo");
+    v.push("wor" + "ld");
+    v.pop();
+    println(v[0]);
+}
+"#,
+            &["hello"],
+            "option_pop_discarded_freed",
+        );
+    }
+
+    #[test]
+    fn asan_option_vec_let_unused_freed() {
+        // `Option[Vec[i64]]` let-unused: the payload Vec's element buffer
+        // must be freed by the scope-exit FreeInlineOptionPayload.
+        assert_clean_asan_run(
+            r#"
+fn mk() -> Option[Vec[i64]] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1); v.push(2); v.push(3);
+    Some(v)
+}
+fn main() {
+    let x = mk();
+    println("done");
+}
+"#,
+            &["done"],
+            "option_vec_let_unused_freed",
+        );
+    }
+
+    #[test]
+    fn asan_option_string_some_wildcard_arm_freed() {
+        // `Some(_)` binds nothing, so the source free must STILL fire (the
+        // payload isn't moved out) — and exactly once (no double-free).
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> Option[String] { Some(f"wild-{n}-runtime-heap") }
+fn main() {
+    let x = mk(9);
+    match x {
+        Some(_) => { println("some"); }
+        None => { println("none"); }
+    };
+}
+"#,
+            &["some"],
+            "option_string_some_wildcard_arm_freed",
+        );
+    }
+
     // ── Vec: owned heap buffer, scope-exit free ───────────────────
     // Exercises `emit_scope_vec_cleanup` — the Vec's data pointer must be
     // freed when `v` goes out of scope at the end of `main`.

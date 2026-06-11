@@ -661,6 +661,33 @@ pub(crate) enum CleanupAction<'ctx> {
         /// field 0).
         flag_ptr: PointerValue<'ctx>,
     },
+    /// Free the inline (non-boxed, non-RC) heap payload of an `Option[T]`
+    /// binding/temp at scope exit, where `T` is itself a heap-owning
+    /// `{ptr,len,cap}` value (`String` / `Vec[U]`). The type-erased
+    /// `Option` layout (one 4-word shape shared by `Option[i64]` /
+    /// `Option[String]` / …) carries no static drop kind for its payload,
+    /// so its `__karac_drop_Option` switch is a no-op and the payload
+    /// leaks unless freed here with the CONCRETE element type captured at
+    /// the registration site (B-2026-06-10-6). Tag-guarded (skips `None`)
+    /// AND cap-guarded (the payload's `cap` word is zeroed by any move-out
+    /// site — a `match`/`if let` arm that binds the `Some` payload — so a
+    /// moved-out payload is skipped here and freed once by the binding).
+    /// The `Some` payload's `{ptr,len,cap}` occupies words w0/w1/w2 (the
+    /// 3 words past the tag), so it overlays a plain Vec/String struct at
+    /// option field index 1; the free reuses `emit_free_vec_buffer_body`
+    /// (same recursive inner-element drop as `FreeVecBuffer`).
+    FreeInlineOptionPayload {
+        /// Alloca of the `Option` struct (`{tag, w0, w1, w2}`).
+        option_slot: PointerValue<'ctx>,
+        /// The `Option` struct's LLVM type (tag + payload GEPs).
+        option_ty: StructType<'ctx>,
+        /// Numeric `Some` tag from the seeded Option layout.
+        some_tag: u64,
+        /// `emit_free_vec_buffer_body` element type for the payload's
+        /// `{ptr,len,cap}`: `i8` for `String`, `llvm(U)` for `Vec[U]`
+        /// (a Vec-struct element type triggers the recursive inner free).
+        payload_elem_ty: Option<BasicTypeEnum<'ctx>>,
+    },
 }
 
 /// One let-binding hoisted out of an auto-par group via the slice-A return-

@@ -363,6 +363,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.coro_park_counter = 0;
         self.variables.clear();
         self.var_type_names.clear();
+        self.inline_option_payload_vars.clear();
         self.var_option_shared_heap.clear();
         self.ref_params.clear();
         self.owned_vecstr_params.clear();

@@ -889,6 +889,16 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) variables: HashMap<String, VarSlot<'ctx>>,
     /// Maps variable name → Kāra type name (for struct/enum field resolution).
     pub(crate) var_type_names: HashMap<String, String>,
+    /// Names of `Option[T]` bindings that registered a
+    /// `CleanupAction::FreeInlineOptionPayload` (T is an inline heap
+    /// `String`/`Vec`). A `match`/`if let` arm that binds the `Some`
+    /// payload out of such a variable must zero the variable's `cap` word
+    /// (option field 3) so the scope-exit free skips — the bound payload's
+    /// own cleanup frees it once. Without this gate the suppression can't
+    /// tell `Option[String]` (cap at w2, must suppress) from `Option[i64]`
+    /// (no heap payload, nothing to suppress): the `Option` layout is
+    /// type-erased. See B-2026-06-10-6.
+    pub(crate) inline_option_payload_vars: std::collections::HashSet<String>,
     /// Refinement type alias name → its base `TypeExpr` (`type Email =
     /// String where …` → the `String` type expr). Populated from the
     /// program's `Item::TypeAlias`es that carry a `where` predicate.
@@ -4299,6 +4309,7 @@ impl<'ctx> Codegen<'ctx> {
             builder,
             variables: HashMap::new(),
             var_type_names: HashMap::new(),
+            inline_option_payload_vars: std::collections::HashSet::new(),
             refinement_bases: HashMap::new(),
             distinct_bases: HashMap::new(),
             refinement_predicates: HashMap::new(),

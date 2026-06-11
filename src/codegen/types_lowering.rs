@@ -593,6 +593,48 @@ impl<'ctx> super::Codegen<'ctx> {
         None
     }
 
+    /// For an `Option[T]` type expr, return the `FreeVecBuffer`-style
+    /// element type used to free the inline `Some` payload's nested heap,
+    /// when `T` is a heap-owning `{ptr,len,cap}` value (`String` / `Vec[U]`
+    /// / `VecDeque[U]`). `Some(i8)` for `String` (free the char buffer, no
+    /// recursion); `Some(llvm(U))` for `Vec[U]` (a Vec-struct `U` triggers
+    /// the per-element inner free in the emitter). `None` for any other `T`
+    /// — scalar (`Option[i64]`), shared/RC, `Map`/`Set`, struct/tuple, or
+    /// oversized-boxed payloads (handled by other cleanup paths or out of
+    /// this slice) — and for any non-`Option` type. Drives
+    /// `CleanupAction::FreeInlineOptionPayload` registration; the erased
+    /// `Option` layout can't carry this per-instantiation choice itself.
+    /// See B-2026-06-10-6.
+    pub(super) fn option_inline_payload_elem(&self, te: &TypeExpr) -> Option<BasicTypeEnum<'ctx>> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Option") {
+            return None;
+        }
+        let arg0 = match p.generic_args.as_ref()?.first()? {
+            GenericArg::Type(t) => t,
+            _ => return None,
+        };
+        if self.is_string_type_expr(arg0) {
+            return Some(self.context.i8_type().into());
+        }
+        if let TypeKind::Path(ip) = &arg0.kind {
+            if matches!(
+                ip.segments.last().map(|s| s.as_str()),
+                Some("Vec") | Some("VecDeque")
+            ) {
+                // The Vec payload is itself `{ptr,len,cap}`; its element
+                // type drives the recursive inner free (a Vec-struct elem
+                // → per-element buffer free, a scalar → outer buffer only).
+                return self
+                    .extract_vec_elem_type(arg0)
+                    .or_else(|| Some(self.context.i8_type().into()));
+            }
+        }
+        None
+    }
+
     pub(super) fn is_string_type_expr(&self, te: &TypeExpr) -> bool {
         if let TypeKind::Path(path) = &te.kind {
             // "str" is the typechecker-internal spelling (`Type::Str` →
