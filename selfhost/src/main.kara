@@ -6,15 +6,15 @@
 //
 // BLOCKED on the self-hosting blocker chain (see
 // docs/implementation_checklist/phase-12-self-hosting.md § Self-hosting-surfaced
-// blockers). #1 (enum-in-struct-field), #4 (index a Vec field through self,
-// `self.bytes[self.current]`), and #5 (`self.src.substring(...)` — String
-// method on a field receiver) are FIXED. Sole remaining blocker before this
-// builds:
-//   #6 — `struct Span` collides with the always-injected stdlib `std.tracing`
-//        `Span`; codegen's flat struct_types map overwrites the user type
-//        (design decision pending: gate tracing vs DCE unused stdlib).
-// Once that lands, this builds + the differential oracle (tests/selfhost_lexer.rs)
-// comes online, then the full token set follows.
+// blockers). #1 (enum-in-struct-field), #4 (index a Vec field through self),
+// #5 (String method on a field receiver), and #6 (`struct Span` vs stdlib
+// `std.tracing` Span collision) are FIXED — this now BUILDS + RUNS via
+// `karac build`. It currently mis-lexes (single-char idents, dropped
+// whitespace) because of #7: an untyped int literal in an if-branch isn't
+// coerced to the branch's narrow type, so `peek()`'s
+// `if … { 0 } else { self.bytes[self.current] }` always returns 0. Once #7
+// lands, the differential oracle (tests/selfhost_lexer.rs) comes online, then
+// the full token set follows.
 
 struct Span {
     line: i64,

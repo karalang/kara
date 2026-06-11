@@ -1040,6 +1040,39 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_user_struct_shadows_stdlib_tracing_span() {
+        // Regression for self-hosting blocker #6: a user `struct Span` — the
+        // single most natural name for a lexer/compiler, and what every
+        // self-hosting stage uses — collided with the always-injected
+        // `std.tracing` `struct Span { name, span_id, parent_id, fields }`.
+        // codegen's `struct_types` is flat name-keyed, so `declare_stdlib_program`
+        // overwrote the user's `Span` and built the user's literal against the
+        // tracing layout → `Invalid InsertValueInst operands` at verification.
+        // Fix: skip declaring+compiling a real-source stdlib module (tracing)
+        // when the user redefines one of its exported type names. Here the user
+        // `Span { line, column, offset, length }` (constructed inside a method
+        // that returns it — the `make_spanned` shape that triggered the bug)
+        // must build and read back its fields correctly with tracing skipped.
+        if let Some(out) = run_program(
+            "struct Span { line: i64, column: i64, offset: i64, length: i64 }\n\
+             struct Lexer { start: i64, current: i64, line: i64 }\n\
+             impl Lexer {\n\
+                 fn span(ref self) -> Span {\n\
+                     Span { line: self.line, column: 1, offset: self.start,\n\
+                            length: self.current - self.start }\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let lx = Lexer { start: 2, current: 5, line: 1 };\n\
+                 let sp = lx.span();\n\
+                 println(f\"{sp.offset} {sp.length} {sp.line} {sp.column}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "2 3 1 1\n");
+        }
+    }
+
+    #[test]
     fn e2e_alloc_error_codegen() {
         // The `AllocError` prelude type (struct + unit variant) compiles: both
         // variants construct, `==` compares payload + tag, `match` binds the

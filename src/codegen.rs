@@ -421,6 +421,44 @@ fn compiled_stdlib_programs() -> [&'static Program; 1] {
     [ordering_stdlib_program()]
 }
 
+/// A real-source stdlib module (`std.tracing`, `Ordering`) is SKIPPED at
+/// codegen — neither layout-declared nor body-compiled — when the user
+/// program defines a struct/enum whose name collides with a type that module
+/// exports. codegen's `struct_types` / `enum_layouts` are flat name-keyed
+/// maps, so declaring the stdlib type would overwrite the user's same-named
+/// type (or vice-versa) and the user's literals/returns would build against
+/// the WRONG layout and fail module verification — self-hosting blocker #6:
+/// the lexer's `struct Span { line, column, offset, length }` collided with
+/// `std.tracing`'s `struct Span { name, span_id, parent_id, fields }`.
+///
+/// Skipping the WHOLE module (not just the colliding type) is required for
+/// soundness: the module's own method bodies reference its types through the
+/// same shared maps, so declaring its `Span` while the user's is live would
+/// miscompile those bodies. A program that redefines a module's public type
+/// name therefore cannot also use that module — an unambiguous, acceptable
+/// trade (you redefined its surface), and an unused module's bodies are
+/// dead-stripped at link anyway, so there's no size cost to keeping it when
+/// there's no collision. The module surface is derived from its own items,
+/// so this stays correct as the baked stdlib grows. The declare-pass and the
+/// body-compile pass MUST gate on this identically (declaring a module whose
+/// bodies are skipped would leave undefined method symbols, and vice-versa).
+fn user_redefines_stdlib_type(user: &Program, stdlib: &Program) -> bool {
+    fn type_name(item: &Item) -> Option<&str> {
+        match item {
+            Item::StructDef(s) => Some(s.name.as_str()),
+            Item::EnumDef(e) => Some(e.name.as_str()),
+            _ => None,
+        }
+    }
+    let user_types: std::collections::HashSet<&str> =
+        user.items.iter().filter_map(type_name).collect();
+    stdlib
+        .items
+        .iter()
+        .filter_map(type_name)
+        .any(|n| user_types.contains(n))
+}
+
 /// Variant of [`compile_to_ir_with_options`] that accepts the
 /// phase-7 line-5 `--enable-hot-swap` flag. When `true`, the codegen
 /// emits PLT-style indirection through `@karac_hotswap_table` for every
@@ -5443,12 +5481,19 @@ impl<'ctx> Codegen<'ctx> {
         // a `tracer.export_event(...)` / `LogEvent.info(...)` call site in
         // a user body resolves its `Type.method` symbol. Bodies are
         // compiled by the sibling pass after the user impl-body loop.
-        self.declare_stdlib_program(tracing_stdlib_program())?;
+        // Skip a real-source stdlib module whose type name the user redefines
+        // (flat-map collision — see `user_redefines_stdlib_type`). Gated
+        // identically here and at the body-compile pass below.
+        if !user_redefines_stdlib_type(program, tracing_stdlib_program()) {
+            self.declare_stdlib_program(tracing_stdlib_program())?;
+        }
         // 889 slice 1: declare the other compiled stdlib modules' layouts +
         // non-builtin impl-method signatures so user-body call sites resolve
         // their `Type.method` symbols (e.g. `ordering_value.is_lt()`).
         for tp in compiled_stdlib_programs() {
-            self.declare_stdlib_program(tp)?;
+            if !user_redefines_stdlib_type(program, tp) {
+                self.declare_stdlib_program(tp)?;
+            }
         }
 
         // Theme 6: emit static vtables for impls of provider traits.
@@ -5584,13 +5629,19 @@ impl<'ctx> Codegen<'ctx> {
         // Compile the baked `std.tracing` impl-method bodies whose
         // signatures were declared above. Mirrors the user impl-body
         // pass; the bodies use only general lowerings.
-        self.compile_stdlib_program(tracing_stdlib_program())?;
+        // Mirror the declare-pass gate exactly: a module skipped above was
+        // never declared, so its bodies must be skipped too (and vice-versa).
+        if !user_redefines_stdlib_type(program, tracing_stdlib_program()) {
+            self.compile_stdlib_program(tracing_stdlib_program())?;
+        }
         // 889 slice 1: compile the other stdlib modules' real impl bodies
         // (declared above). Each runs with its own span tables swapped in and
         // prunes its own zero-use functions, so an ordering-free binary stays
         // lean.
         for tp in compiled_stdlib_programs() {
-            self.compile_stdlib_program(tp)?;
+            if !user_redefines_stdlib_type(program, tp) {
+                self.compile_stdlib_program(tp)?;
+            }
         }
 
         // Slice c-repl.B.4: when this codegen pass is producing a
