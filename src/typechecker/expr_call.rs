@@ -879,6 +879,52 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `CStr.from_ptr(p: *const u8) -> ref CStr` — unsafe associated
+        // constructor that wraps a raw, caller-owned C string pointer
+        // (asserted non-null and NUL-terminated) as a borrowed `CStr`,
+        // computing `len` by an O(N) walk to the NUL at runtime (codegen
+        // lowers it via libc `strlen`; design.md § Linker Control
+        // Attributes / § C-String Literals — the runtime-constructed-`CStr`
+        // case). It is the inbound half of the LLVM-C FFI spike's outbound
+        // read path: `unsafe { CStr.from_ptr(p) }.to_string()` turns an
+        // LLVM-owned `char*` into an owned Kāra `String`
+        // (`docs/spikes/self-hosting-llvm-c-ffi.md` sub-q 4). The
+        // `unsafe`-context requirement is enforced by the
+        // `unsafe_op_in_unsafe_fn` lint (registry seed in `unsafe_lint.rs`),
+        // mirroring `ptr.from_exposed`; the interpreter rejects it (no
+        // raw-pointer representation under `karac run`). Joins the
+        // special-arm family for the same `resolve_path_type`-rejection
+        // reason as `String.new()` / `String.from(x)` above.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && segments[0] == "CStr"
+                && segments[1] == "from_ptr"
+                && args.len() == 1
+            {
+                let arg_ty = self.infer_expr(&args[0].value);
+                let expected = Type::Pointer {
+                    is_mut: false,
+                    inner: Box::new(Type::UInt(UIntSize::U8)),
+                };
+                if arg_ty != Type::Error && arg_ty != expected {
+                    self.type_error(
+                        format!(
+                            "CStr.from_ptr expects a `*const u8`, but got `{}`",
+                            type_display(&arg_ty)
+                        ),
+                        args[0].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                let ty = Type::Ref(Box::new(Type::Named {
+                    name: "CStr".to_string(),
+                    args: vec![],
+                }));
+                self.record_expr_type(span, &ty);
+                return ty;
+            }
+        }
+
         // Phase-11 Tensor literal constructor: `Tensor.from(nested array
         // literal)` — dims are inferred from the literal's nesting
         // structure at compile time (design.md § Numerical Types;

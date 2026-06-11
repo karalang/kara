@@ -266,6 +266,26 @@ impl<'a> super::Interpreter<'a> {
                         },
                     };
                 }
+                // `CStr.from_ptr(p: *const u8) -> ref CStr` — the inbound
+                // raw-pointer constructor. The tree-walk interpreter has no
+                // raw-pointer representation (the same reason `CStr.as_ptr()`
+                // rejects in `method_call_seq.rs`), so a meaningful `len`
+                // walk over `p` is impossible here. Evaluate the argument
+                // for effects, then reject loudly at the producer rather than
+                // fabricating a CStr from a value the interpreter cannot
+                // model. Real values flow through `karac build` (codegen
+                // lowers it to a libc `strlen` + `{ptr, len}` aggregate).
+                "CStr.from_ptr" => {
+                    if let Some(arg) = args.first() {
+                        let _ = self.eval_expr_inner(&arg.value);
+                    }
+                    return self.record_runtime_error(
+                        "CStr.from_ptr(...) is not supported under `karac run`: the tree-walk \
+                         interpreter has no raw-pointer representation. Compile with \
+                         `karac build` instead.",
+                        span,
+                    );
+                }
                 "Map.new" => {
                     return Value::Map(Vec::new());
                 }

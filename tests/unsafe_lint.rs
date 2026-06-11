@@ -715,6 +715,36 @@ fn test_ptr_from_exposed_mut_inside_unsafe_block_silent() {
     );
 }
 
+// ── CStr.from_ptr — the inbound raw-pointer C-string constructor ──────
+//
+// `CStr.from_ptr(p: *const u8)` wraps a raw, caller-owned NUL-terminated
+// pointer as a borrowed `CStr` (LLVM-C FFI spike sub-q 4 — the outbound
+// `char*` → owned-`String` read path). Seeded into the unsafe-fn registry
+// alongside `ptr.from_exposed`; the uppercase receiver parses as a
+// `Call { callee: Path(["CStr","from_ptr"]) }`, matched by the walker's
+// `Call`-arm dotted-name join.
+
+#[test]
+fn test_cstr_from_ptr_outside_unsafe_block_errors() {
+    let diags = lint_op("fn caller(p: *const u8) { let _c = CStr.from_ptr(p); } fn main() {}");
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("CStr.from_ptr") && d.level == LintLevel::Error),
+        "expected unsafe-op diagnostic naming `CStr.from_ptr`, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_cstr_from_ptr_inside_unsafe_block_silent() {
+    let diags =
+        lint_op("fn caller(p: *const u8) { let _c = unsafe { CStr.from_ptr(p) }; } fn main() {}");
+    assert!(
+        diags.iter().all(|d| !d.message.contains("CStr.from_ptr")),
+        "did not expect a CStr.from_ptr diagnostic inside an unsafe block, got: {diags:?}"
+    );
+}
+
 #[test]
 fn test_ptr_addr_safe_silent() {
     // `ptr.addr` is the safe counterpart — does not require unsafe { }.

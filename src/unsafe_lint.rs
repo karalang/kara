@@ -547,6 +547,15 @@ fn build_unsafe_fn_registry(program: &Program) -> UnsafeFnRegistry {
     top_level_unsafe.insert("ptr.from_exposed_mut".to_string());
     top_level_unsafe.insert("ptr.container_of".to_string());
     top_level_unsafe.insert("ptr.container_of_mut".to_string());
+    //   - `CStr.from_ptr(p)`: wrap a raw `*const u8` (asserted non-null
+    //     and NUL-terminated) as a borrowed `CStr`, walking to the NUL to
+    //     compute `len`. UB if `p` is null, not NUL-terminated, or does not
+    //     point at a live readable buffer. The uppercase receiver parses as
+    //     a `Call { callee: Path(["CStr","from_ptr"]) }`, so it is matched
+    //     by the `Call`-arm dotted-name join (not the `MethodCall` arm).
+    //     Spec: `design.md § Linker Control Attributes` (foreign-library
+    //     read path); LLVM-C FFI spike sub-q 4.
+    top_level_unsafe.insert("CStr.from_ptr".to_string());
     for item in &program.items {
         match item {
             Item::Function(f) if f.is_unsafe => {

@@ -19963,6 +19963,54 @@ fn cstr_as_ptr_feeds_pointer_param_extern_call() {
     );
 }
 
+// ── CStr.from_ptr — inbound raw-pointer constructor (LLVM-C FFI sub-q 4)
+
+#[test]
+fn cstr_from_ptr_takes_const_u8_and_returns_ref_cstr() {
+    // Round-trips a `*const u8` (here from `as_ptr`) back into a `CStr`
+    // whose borrowed methods are then callable — proves the return type is
+    // `ref CStr`, not an opaque value.
+    typecheck_ok(
+        "fn main() {\n\
+         \x20   let s = c\"hi\";\n\
+         \x20   let p = s.as_ptr();\n\
+         \x20   let c = unsafe { CStr.from_ptr(p) };\n\
+         \x20   let n: i64 = c.len();\n\
+         }",
+    );
+}
+
+#[test]
+fn cstr_from_ptr_rejects_non_pointer_argument() {
+    // A non-`*const u8` argument is a TypeMismatch — the constructor is the
+    // typed boundary between raw pointers and the CStr surface.
+    let errors = typecheck_errors("fn main() {\n    let c = unsafe { CStr.from_ptr(42) };\n}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::TypeMismatch && e.message.contains("CStr.from_ptr")),
+        "expected a TypeMismatch naming CStr.from_ptr, got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn cstr_from_ptr_accepts_mut_ptr_out_param_pattern() {
+    // The spike's `read_and_dispose` shape: an LLVM-owned `*const u8`
+    // (here a parameter) flows straight into `from_ptr`. No round-trip
+    // through `as_ptr` — the raw pointer is the direct input.
+    typecheck_ok(
+        "fn read(p: *const u8) -> i64 {\n\
+         \x20   let c = unsafe { CStr.from_ptr(p) };\n\
+         \x20   c.len()\n\
+         }\n\
+         fn main() {}",
+    );
+}
+
 // ── Raw pointer construction (line 573 / v60 item 19) ────────────
 //
 // `ptr.const(place)` / `ptr.mut(place)` — Slice 1b: typechecker

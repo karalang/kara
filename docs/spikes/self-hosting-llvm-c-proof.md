@@ -1,9 +1,12 @@
 # Minimal proof: Kāra `extern "C"` → LLVM-C → object file → link → run
 
-**Status:** SPEC — lift-and-run. This is the spike's [Definition of Done](self-hosting-llvm-c-ffi.md#definition-of-done-this-spike)
-minimal proof, written against the resolved design (sub-q 1–6). It **cannot build yet** —
-it is gated on the two surfaced prerequisites below. When they land, run the harness verbatim;
-this program is then the **seed of the Kāra codegen module**.
+**Status:** SPEC — **NOT yet lift-and-run** (the original "lift-and-run" claim was aspirational;
+a 2026-06-11 build attempt of the program below found it does not parse/compile verbatim — see
+the gate). This is the spike's [Definition of Done](self-hosting-llvm-c-ffi.md#definition-of-done-this-spike)
+minimal proof, written against the resolved design (sub-q 1–6). When the gate below clears it
+becomes the **seed of the Kāra codegen module**; until then it is a design artifact, not a
+runnable test. The `.kara` body below still needs the edits noted in the gate (statement
+terminators, PascalCase extern binding) before it will parse.
 
 The proof builds a trivial module — `i64 main() { ret i64 42 }` — verifies it, emits it to an
 object file via the host target machine, links that object into an executable, and runs it.
@@ -14,13 +17,37 @@ default triple + target-from-triple + create-target-machine + emit-to-file, and 
 
 ## Prerequisites gate (must be green first)
 
+A 2026-06-11 build of this program (project mode, `[link]` resolving `libLLVM-18`) enumerated the
+real gate — it is **longer than the original two-item list**. The list below is the corrected,
+build-verified set.
+
 - [x] **Native-library link directive (`kara.toml [link]`)** ✅ LANDED 2026-06-11 — the real blocker,
   now resolved: `[link] libs = ["LLVM-18"]` + `search-paths` append `-L`/`-l` to the native `cc`
   line. The `kara.toml` below works verbatim. ([spike Prerequisites](self-hosting-llvm-c-ffi.md#prerequisites-phase-8-floor) / phase-12 Cluster 2.)
-- [ ] **`CStr.from_ptr`** — used by `read_and_dispose` below to read LLVM's error/`char*` strings.
-  Refinement, not a hard gate (hand-rollable from `ptr.const` + `String.from_raw_parts`).
-- [ ] Phase-8 FFI floor: opaque foreign types ✅ (shipped), raw-ptr params/deref, `ptr.mut`
-  out-params ✅, `String.to_cstring` ✅, `c"..."` `CStr` ✅.
+- [x] **`CStr.from_ptr(*const u8) -> ref CStr`** ✅ LANDED 2026-06-11 — the inbound raw-pointer
+  C-string constructor used by `read_and_dispose`. Lowers to libc `strlen` + the `{ptr, len}`
+  aggregate (same shape a `c"..."` literal lowers to); `unsafe`-gated via the unsafe-fn registry,
+  interpreter-rejected. Tested across typechecker/codegen/unsafe-lint.
+- [ ] **`#[link_name]` honored on `unsafe extern` fn imports** *(NEW — build-surfaced, the biggest
+  remaining gate).* Kāra rejects PascalCase extern fn names (Value-class rule: `fn LLVMContextCreate`
+  → *"must be Value-class (snake_case)"*), and the entire LLVM-C API is PascalCase. `#[link_name]` is
+  a registered attribute but is **NOT** applied to extern imports — codegen emits the Kāra name as
+  the symbol (`#[link_name("strlen")] fn c_strlen` still links `_c_strlen`, undefined). Without
+  either honoring `#[link_name]` on externs *or* relaxing the name-class rule inside `unsafe extern`,
+  **no** LLVM-C symbol can be bound. → own tracker entry, [phase-12 Cluster 2](self-hosting-llvm-c-ffi.md#prerequisites-phase-8-floor).
+- [ ] **`CStr.to_string() -> Result[String, Utf8Error]`** *(NEW — build-surfaced).* `read_and_dispose`
+  converts the LLVM-owned `char*` to an owned Kāra `String`. The `Utf8Error` type exists
+  (`runtime/stdlib/utf8_error.kara`) but `CStr.to_string()` has no typecheck/codegen lowering, and
+  there is no runtime UTF-8 validator to reuse (`String.from_utf8` is interpreter-only). This is the
+  remaining half of the phase-8 *CString owning type + conversions* item (phase-8:774). Needed for
+  the proof to **compile** (the call is on an error path, never executed on the `exit=42` success
+  path, but must still typecheck + codegen). → own tracker entry.
+- [ ] **Proof-spec rewrite** *(this file).* The `.kara` body uses semicolon-free statements
+  (`let x = ...` newline) which do not parse — Kāra needs statement terminators here — and writes
+  PascalCase extern names directly. Rewrite to snake_case + `#[link_name]` (once that gate clears)
+  and add terminators. Mechanical, but the proof was never actually run, so it is listed explicitly.
+- [x] Phase-8 FFI floor: opaque foreign types ✅, raw-ptr params/deref ✅, `ptr.mut` out-params ✅,
+  `String.to_cstring` ✅, `c"..."` `CStr` ✅ (all confirmed present in the build attempt).
 
 ## Gotcha surfaced while writing this (real finding)
 

@@ -1770,6 +1770,46 @@ impl<'ctx> super::Codegen<'ctx> {
                 return self.compile_expr(&arg.value);
             }
         }
+        // `CStr.from_ptr(p: *const u8) -> ref CStr` — wrap a raw, caller-
+        // owned C string pointer as the same `{ptr, len}` aggregate a
+        // `c"..."` literal lowers to (`slice_struct_type`, see
+        // `exprs.rs` `CStringLit`): field 0 is the pointer verbatim,
+        // field 1 is `len` *excluding* the NUL, computed at runtime by
+        // libc `strlen` (declared in `Codegen::new`) — the O(N)-walk
+        // length the design describes for a runtime-constructed `CStr`.
+        // Unsafe: the caller asserts `p` is non-null and NUL-terminated;
+        // the `unsafe { ... }` wrap is enforced at the call site by the
+        // `unsafe_op_in_unsafe_fn` lint. Seeds the self-hosted codegen's
+        // outbound `char*` → owned-`String` read path (LLVM-C FFI spike
+        // sub-q 4): `unsafe { CStr.from_ptr(p) }.to_string()`.
+        if type_name == "CStr" && method == "from_ptr" && _args.len() == 1 {
+            let ptr_val = self.compile_expr(&_args[0].value)?;
+            let ptr = ptr_val.into_pointer_value();
+            let strlen_fn = self
+                .module
+                .get_function("strlen")
+                .expect("strlen declared in Codegen::new");
+            let len = self
+                .builder
+                .build_call(strlen_fn, &[ptr.into()], "cstr.from_ptr.len")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let slice_ty = self.slice_struct_type();
+            let mut agg = slice_ty.get_undef();
+            agg = self
+                .builder
+                .build_insert_value(agg, ptr, 0, "cstr.from_ptr.ptr")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, len, 1, "cstr.from_ptr.len")
+                .unwrap()
+                .into_struct_value();
+            return Ok(agg.into());
+        }
         // Qualified enum-variant constructor: `Enum.Variant(args)`.
         // The bare-name path (`Variant(args)`) is handled by
         // `try_compile_enum_variant` from `compile_call`; the qualified

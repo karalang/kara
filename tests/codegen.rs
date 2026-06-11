@@ -3851,6 +3851,38 @@ pub fn main() with writes(Console) {
     }
 
     #[test]
+    fn test_e2e_cstr_from_ptr_round_trips_len_and_bytes() {
+        // The inbound raw-pointer constructor (LLVM-C FFI spike sub-q 4):
+        // a c"..." literal -> as_ptr (raw *const u8) -> CStr.from_ptr
+        // (libc `strlen` recomputes the length) -> the borrowed surface
+        // (len / is_empty / as_bytes) reads the same bytes back. Proves the
+        // `{ptr, strlen(ptr)}` aggregate the assoc-call lowering builds is a
+        // well-formed CStr indistinguishable from the literal it came from.
+        let src = r#"
+fn main() {
+    let original = c"hello, world";
+    let p = original.as_ptr();
+    // Safety: `p` is a NUL-terminated rodata pointer from a c"..." literal.
+    let rebuilt = unsafe { CStr.from_ptr(p) };
+    println(rebuilt.len());
+    println(rebuilt.is_empty());
+    let bytes = rebuilt.as_bytes();
+    println(bytes[0]);
+    println(bytes[4]);
+    // An empty C string round-trips to len 0 / is_empty true.
+    let ep = c"".as_ptr();
+    let rebuilt_empty = unsafe { CStr.from_ptr(ep) };
+    println(rebuilt_empty.is_empty());
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            // len=12, not empty, bytes[0]='h'(104), bytes[4]='o'(111), empty=true
+            assert_eq!(out, "12\nfalse\n104\n111\ntrue\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_ptr_dangling_is_not_null() {
         // ptr.dangling() returns a non-null pointer; ptr.is_null
         // observes false.
