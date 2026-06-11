@@ -1,5 +1,7 @@
 # Design spike — general owned-temp tracking (codegen)
 
+> **[self-hosting: defer-to-backwards → [phase-12](../implementation_checklist/phase-12-self-hosting.md#triage-of-the-existing-backlog-2026-06-10)]** — the open **slice 4** (scrutinee sub-frame) is a *leak* in pattern-match scrutinee temps. The compiler pattern-matches constantly, so it's relevant — but it's memory pressure, not corruption; the port surfaces it. Fix early only if the self-hosted compiler balloons.
+
 **Status:** **slices 1–3 + 5 landed 2026-06-06/07**. Slice 1: chokepoint +
 statement-position discard (Vec/String). Slice 2 part A: the lowering-pass
 `owned_temp_drops` hint table + Map/Set-handle and shared-struct RC-box discard +
