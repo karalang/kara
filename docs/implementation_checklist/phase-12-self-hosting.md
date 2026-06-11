@@ -32,11 +32,36 @@ The port can't be written cleanly without these. The rest of the Phase 8 floor c
 - [ ] **Effect-polymorphic `Iterator.next()`** — loops over data. → [`phase-8-stdlib-floor.md`](phase-8-stdlib-floor.md).
 - [ ] **`Map.new()` / `Set.new()` initialisers + plain `insert` / `get` / `contains`** — core symbol-table / intern-table construction (module-scope `Map.new()` is the actual gap; local `Map.new()` + plain ops already work). The *fallible* `Map.try_insert` / `Set.try_insert` is **NOT** a prereq — the compiler aborts on OOM like rustc. → [`phase-8-stdlib-floor.md`](phase-8-stdlib-floor.md).
 
+## Lexer stdlib-floor slice (LANDED 2026-06-10)
+
+The byte-indexed lexer port needs `u8`/`char`/`String` primitives the stdlib lacked.
+Landed across typechecker + interpreter + codegen (each with unit + E2E tests), all
+gates green:
+
+- [x] **`String.substring(start, end)`** — two-arg byte-range slice (`token_text`, radix-prefix strip). Preserves the one-arg contract (negative/past-end → empty).
+- [x] **`u8.is_ascii_digit / is_ascii_alphabetic / is_ascii_hexdigit`** — value-receiver predicates on the bytes from `String.bytes()` (codegen = inline range checks, no extern). `is_alpha` composes as `b.is_ascii_alphabetic() or b == b'_'`.
+- [x] **`i64.from_str_radix(s, radix)`** — `Option[i64]`; hex/bin/oct literals. New `karac_runtime_parse_i64_radix` extern.
+- [x] **`f64.parse(s)`** — `Option[f64]`; float literals. New `karac_runtime_parse_f64` extern; properly typed in the typechecker (floats need it — see below).
+- [x] **`fix(codegen)` enum/tuple FLOAT payload binding** — pre-existing bug surfaced by `f64.parse`: enum float payloads (`Option[f64]`, the lexer's `Token::Float(f64,…)`) were bound/printed as raw i64 bits. `record_pattern_binding_surface_types` had no `Type::Float` arm → payload word never bitcast back to the float, binding type-tracked as i64. Fixed in typechecker (record `f64`/`f32`) + codegen `reconstruct_payload_value` (bitcast, single-word + tuple-element paths).
+
+(P7 `char.try_from(u32)` + `char` predicates deferred to the non-ASCII slice 2.)
+
+## Self-hosting-surfaced blockers (FIX-BEFORE the lexer can run)
+
+The lexer's natural shape — `struct SpannedToken { token: Token, span: Span }` lexed by
+`mut ref self` methods — surfaced two pre-existing compiler bugs. Both reproduce on clean
+`main`; neither is caused by the floor slice. The lexer (and all of self-hosting: every AST
+node nests enums in structs) is blocked until #1 is fixed.
+
+- [ ] ⚠ **#1 (CODEGEN, bootstrap-critical) — struct fields of a USER enum collapse to one `i64`, losing the payload.** Root cause: `compile_program` (`src/codegen.rs:~5059/5068`) runs `declare_structs` **before** `declare_enums`, so when a struct field references a user enum it isn't in `enum_layouts` yet and `llvm_type_for_name` falls through to `i64` (`src/codegen/types_lowering.rs:1212`). (Seeded `Option`/`Result` are exempt — seeded at 5051, which is why `Option` fields work.) Minimal repro: `enum Token { Ident(String), Eof } struct S { token: Token, span: i64 } fn f(s: S){ match s.token { Ident(name) => …, Eof => … } }` → IR lays `S` as `{ i64, i64 }`; codegen fails `Undefined variable 'name'` (tag silently reads 0, payload binding skipped). Interp is correct. **Fix direction:** two-pass declaration — (a) register struct *metadata* (field TypeExprs/names) for all structs, (b) build enum layouts (make `payload_word_count_for_type_expr` recurse via `struct_field_type_exprs` (AST) instead of `llvm_type_word_count(struct_types)` at `declarations.rs:3162` so it doesn't need struct LLVM types), (c) build struct LLVM types (now `enum_layouts` is populated). High blast radius (every struct/enum layout) — needs the full `--features llvm` + memory_sanitizer suite. → cross-ref [`phase-7-codegen.md`](phase-7-codegen.md).
+- [ ] **#2 (INTERP) — `mut ref self` method mutations don't persist.** A `mut ref self` method's writes to `self` are lost on return (direct field writes work; method-call writes don't). Repro: `struct C{n:i64} impl C{ fn inc(mut ref self){ self.n = self.n+1 } } let mut c=C{n:0}; c.inc(); // c.n still 0`. Codegen is correct. Pre-existing on `main`. Not on the lexer's critical path (the port runs under AOT, not interp), but it makes `karac run` unsound for any self-mutating method. → cross-ref [`phase-4-interpreter.md`](phase-4-interpreter.md).
+- [ ] **#3 (CODEGEN, minor) — f-string over a match-arm payload binding yields empty/garbage.** `match e { A(name) => f"…{name}…" }` compiles but prints empty (f-string span-collision family, B-2026-06-09-1). Workaround in the port: `push_str` + `to_string` instead of f-strings around match-bound vars. Low priority.
+
 ## Port sequencing
 
 Start at lexer → parser (need only the well-tested core; can begin before the full floor lands). Each stage is differential-tested against the Rust `karac` on the same inputs — including the compiler's own source.
 
-- [ ] **Lexer in Kāra** — tokens + spans; diff token stream vs Rust lexer.
+- [~] **Lexer in Kāra** — tokens + spans; diff token stream vs Rust lexer. **IN PROGRESS** (2026-06-10). Scan model decided: **byte-indexed** (index a `Vec[u8]` from `source.bytes()`, mirror `src/lexer.rs` near-line-for-line) — chosen over char-iterator so `(offset,length)` spans reproduce the Rust lexer bit-for-bit (exact differential oracle), the port stays mechanical, and lookahead stays O(1). Skeleton + scaffold live in `selfhost/` (root; NOT `bootstrap/`, which is the staging procedure). Harness pivoted from `karac run` (interp) to **`karac build` (AOT)** — the interpreter can't run the lexer (blocker #2 below) and AOT is the real bootstrap oracle anyway. **Blocked on two pre-existing compiler bugs surfaced by the port** (see § Self-hosting-surfaced blockers).
 - [ ] **Parser in Kāra** — AST + error recovery; diff AST + diagnostics.
 - [ ] **Resolver in Kāra** — name resolution, scopes, visibility.
 - [ ] **TypeChecker in Kāra** — inference, generics, trait bounds, exhaustiveness.
