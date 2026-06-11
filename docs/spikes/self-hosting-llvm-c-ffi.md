@@ -99,17 +99,17 @@ Kāra FFI is `extern "C"` (Phase 7, ✅). LLVM ships a stable **C API** (`llvm-c
 
 A decision record covering: chosen linking strategy + version-pin; the enumerated LLVM-C surface (from the `inkwell` call-site inventory); the handle-ownership model (which handles `Drop`); and a **minimal proof** — a Kāra program that `extern "C"`-calls LLVM-C to build → verify → emit a trivial module to an object file, linked and run. That proof is the seed of the Kāra codegen module.
 
-**Status:** decision record ✅ COMPLETE — all of sub-q 1–6 above resolved ([surface inventory](self-hosting-llvm-c-surface.md), linking, handles, marshaling, errors, bootstrapping). **Proof: NOT yet runnable**, but progressing — each build attempt peels off a gate and exposes the next. As of 2026-06-11, **four** prerequisites have landed; the front-end accepts the full LLVM-C binding shape and codegen no longer aborts — the proof now fails in the **ownership checker**:
+**Status:** decision record ✅ COMPLETE — all of sub-q 1–6 above resolved ([surface inventory](self-hosting-llvm-c-surface.md), linking, handles, marshaling, errors, bootstrapping). **Proof: handle chain RUNS against real libLLVM** — five prerequisites have landed and a `LLVMContextCreate` → `LLVMModuleCreateWithNameInContext(name, ctx)` → `LLVMContextDispose(ctx)` program now builds, links `libLLVM-18`, and runs (exit 0). This is the first time Kāra drives real libLLVM through this binding. What landed (2026-06-11):
 
 - ✅ **`kara.toml [link]` directive** (libLLVM-18 linkable).
 - ✅ **`CStr.from_ptr`** (inbound `char*`→`CStr`).
-- ✅ **`#[link_name]` honored on `unsafe extern` imports** — binds the PascalCase LLVM-C API to legal snake_case Kāra names; verified end-to-end on libc symbols (`getpid`/`strlen` link + run).
-- ✅ **Auto-par "Undefined variable" bug** — the `malloc`/`free` reproducer was an auto-parallelization capture bug (`refs_in_expr` didn't recurse into `unsafe {}`), not an FFI bug. Fixed by aligning it with the concurrency analyzer; a general-purpose correctness fix.
+- ✅ **`#[link_name]` honored on `unsafe extern` imports** — binds the PascalCase LLVM-C API to legal snake_case Kāra names.
+- ✅ **Auto-par "Undefined variable" bug** — the capture-set collector didn't recurse into `unsafe {}`; a general-purpose correctness fix.
+- ✅ **`*mut T` raw pointers are `Copy`** — a `*mut` handle passed to many FFI calls no longer fires a use-after-move (Rust parity; `is_copy_type` `Type::Pointer` arm). This is what made the handle chain run.
 
-Remaining gates (the corrected, build-verified list lives in the proof's *Prerequisites gate* section):
+Remaining gates to the **full** proof (build → verify → emit-object → link → exit 42):
 
-1. **`*mut T` raw pointers are not `Copy`** — the new critical path. With the auto-par bug fixed, the `LLVMContextCreate`→`LLVMContextDispose` proof now fails ownership: a `*mut` handle passed to a second FFI call reports *"value moved here, used again"*. `*const T` is `Copy`; `*mut T` is move-only. Every LLVM-C handle is a `*mut` passed to many builder/dispose calls, so this blocks the handle chain. Raw pointers should be `Copy` regardless of `const`/`mut` (Rust parity) — an ownership-checker fix.
-2. **`CStr.to_string() -> Result[String, Utf8Error]`** — the outbound `char*`→`String` half of the read path; no codegen lowering, no runtime UTF-8 validator to reuse. The remaining half of the phase-8 *CString conversions* item.
-3. **Proof-spec rewrite** — semicolon-free statements that don't parse + PascalCase extern names → snake_case + `#[link_name]` + terminators. Mechanical.
+1. **`CStr.to_string() -> Result[String, Utf8Error]`** — the outbound `char*`→`String` half of the read path (`read_and_dispose`). No codegen lowering, no runtime UTF-8 validator to reuse. The remaining half of the phase-8 *CString conversions* item. Needed for the proof to **compile** (used only on error paths, never on the `exit=42` success path — so a proof written to report errors *without* `to_string` could run sooner).
+2. **Proof-spec rewrite** — semicolon-free statements that don't parse + PascalCase extern names → snake_case + `#[link_name]` + terminators. Mechanical.
 
-The spike closes when the (rewritten) proof runs green (`exit=42`) under both bootstrap stages. Gate (1) is now the critical path.
+The spike closes when the (rewritten) proof runs green (`exit=42`) under both bootstrap stages. The hard FFI/ownership gates are now cleared; what remains is one stdlib method + a mechanical rewrite.

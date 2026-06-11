@@ -120,6 +120,43 @@ fn test_struct_moves() {
         .any(|e| e.kind == OwnershipErrorKind::UseAfterMove));
 }
 
+#[test]
+fn test_raw_mut_pointer_is_copy() {
+    // `*mut T` is Copy (Rust parity) — a raw pointer passed to an
+    // owned-param fn is *copied*, leaving the original binding usable. The
+    // pervasive FFI handle pattern — a `*mut` handle created once and passed
+    // to many calls (e.g. `LLVMContextRef` → builder/dispose) — must not
+    // fire a use-after-move. The inverse of `test_string_moves` above.
+    ownership_ok(
+        "unsafe extern \"C\" {\n\
+             fn make() -> *mut u8;\n\
+             fn consume(p: *mut u8);\n\
+         }\n\
+         fn main() {\n\
+             let h = unsafe { make() };\n\
+             unsafe { consume(h) };\n\
+             unsafe { consume(h) };\n\
+         }",
+    );
+}
+
+#[test]
+fn test_raw_const_pointer_is_copy() {
+    // `*const T` is Copy too — companion to the `*mut` case, locking in the
+    // uniform raw-pointer rule (both kinds Copy, regardless of const/mut).
+    ownership_ok(
+        "unsafe extern \"C\" {\n\
+             fn peek() -> *const u8;\n\
+             fn read(p: *const u8);\n\
+         }\n\
+         fn main() {\n\
+             let h = unsafe { peek() };\n\
+             unsafe { read(h) };\n\
+             unsafe { read(h) };\n\
+         }",
+    );
+}
+
 // ── Move Tracking ───────────────────────────────────────────────
 
 #[test]

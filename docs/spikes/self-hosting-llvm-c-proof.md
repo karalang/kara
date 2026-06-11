@@ -45,13 +45,14 @@ build-verified set.
   (added `Unsafe`/`Try`/`Par`/`Lock`/`Question`/`Pipe`/`NilCoalesce`/`OptionalChain` arms). Regression
   test in `tests/par_codegen.rs`; full codegen + par_codegen + concurrency + closures suites green. A
   general-purpose correctness fix (any auto-par branch reading a local through those forms).
-- [ ] **`*mut T` raw pointers are not `Copy` (moved on pass-by-value)** *(NEW critical-path gate —
-  surfaced once the auto-par fix unblocked the handle chain).* With the `Undefined variable` bug fixed,
-  the `LLVMContextCreate`→`LLVMContextDispose` proof now fails *ownership*: `let ctx = ...create();
-  module_create(name, ctx); context_dispose(ctx)` → *"value 'ctx' moved here, used again"*. `*const T`
-  is `Copy`, but `*mut T` is move-only. Every LLVM-C handle is a `*mut` passed to many builder/dispose
-  calls, so this blocks the handle chain. Raw pointers should be `Copy` regardless of `const`/`mut`
-  (Rust parity) — an ownership-checker fix. → own tracker entry, [phase-12 Cluster 2](self-hosting-llvm-c-ffi.md#prerequisites-phase-8-floor).
+- [x] **`*mut T` raw pointers are now `Copy`** ✅ FIXED 2026-06-11. The proof failed ownership once the
+  auto-par bug was cleared: a `*mut` handle passed to a second FFI call reported *"value moved here,
+  used again"* (`*const T` was already `Copy`; `*mut T` was move-only). Fixed with a `Type::Pointer
+  { .. } => true` arm in `ownership.rs::is_copy_type` (both raw-pointer kinds Copy, Rust parity; no
+  `Drop`, so no double-free). **This made the handle chain run end-to-end: `LLVMContextCreate` →
+  `LLVMModuleCreateWithNameInContext(name, ctx)` → `LLVMContextDispose(ctx)` builds, links `libLLVM-18`,
+  and runs (exit 0)** — the first time Kāra calls real libLLVM through this binding. Regression:
+  `tests/ownership.rs::test_raw_mut_pointer_is_copy` (+ `*const` companion).
 - [ ] **`CStr.to_string() -> Result[String, Utf8Error]`** *(NEW — build-surfaced).* `read_and_dispose`
   converts the LLVM-owned `char*` to an owned Kāra `String`. The `Utf8Error` type exists
   (`runtime/stdlib/utf8_error.kara`) but `CStr.to_string()` has no typecheck/codegen lowering, and

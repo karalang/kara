@@ -773,6 +773,17 @@ pub(crate) fn is_copy_type(ty: &Type, tc: &TypeCheckResult) -> bool {
         Type::Tuple(types) => types.iter().all(|t| is_copy_type(t, tc)),
         Type::Array { element, .. } => is_copy_type(element, tc),
         Type::Slice { mutable, .. } => !mutable,
+        // Raw pointers (`*const T` / `*mut T`) are `Copy`, regardless of
+        // `const`/`mut` — copying a pointer is a bitwise scalar copy that
+        // can never violate ownership (Rust parity: both raw-pointer kinds
+        // are `Copy`). The aliasing/validity hazards of *dereferencing* one
+        // live behind `unsafe`, not in the move checker. Without this,
+        // passing a `*mut T` value to an owned-param fn (the pervasive FFI
+        // handle pattern — `LLVMContextRef` created once, passed to many
+        // builder/dispose calls) fired a spurious use-after-move on the
+        // second use. `*const T` already behaved Copy via `ref`-mode param
+        // inference; this makes the rule uniform and explicit for both.
+        Type::Pointer { .. } => true,
         // RC-tier types — `shared struct S`, `Rc[T]`, `Arc[T]` — are
         // cheap-clone reference handles. A use does not consume the
         // originating binding; the runtime bumps the refcount. Without
