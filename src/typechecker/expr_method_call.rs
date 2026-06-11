@@ -733,6 +733,27 @@ impl<'a> super::TypeChecker<'a> {
                     SpanKey::from_span(span),
                     format!("{}.{}", type_name, method),
                 );
+                // `f64.parse(s: String) -> Option[f64]`. Unlike the integer
+                // parses (which ride the untyped-primitive-assoc passthrough —
+                // their payload is i64, so the Option element defaulting to i64
+                // happens to be correct), float parse MUST be typed: the some-
+                // payload holds the f64 bit pattern, and without an
+                // `Option[f64]` element type the match binding extracts those
+                // bits as an i64 and prints garbage. Phase-8 floor for the
+                // self-hosting lexer's float literals (f32.parse is deferred —
+                // its narrower payload width needs its own runtime path).
+                if method == "parse" && type_name == "f64" {
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    let f64_ty = self
+                        .primitive_type("f64")
+                        .expect("f64 is a known primitive");
+                    return Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![f64_ty],
+                    };
+                }
                 if method == "from" && args.len() == 1 {
                     let arg_ty = self.infer_expr(&args[0].value);
                     if arg_ty == Type::Error {

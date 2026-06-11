@@ -1081,6 +1081,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return self.compile_assoc_call(type_name.as_str(), method, args);
                 }
+                // `f64.parse(s) -> Option[f64]` — float parse; same delegation
+                // as int `parse` (impl in assoc_call.rs).
+                if method == "parse" && type_name.as_str() == "f64" {
+                    return self.compile_assoc_call(type_name.as_str(), method, args);
+                }
             }
         }
 

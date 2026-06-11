@@ -495,6 +495,32 @@ impl<'a> super::Interpreter<'a> {
                         data: EnumData::Unit,
                     };
                 }
+                // `f64.parse(s: String) -> Option[f64]`. Float parse via Rust's
+                // `str::parse`. The self-hosting lexer's float-literal path.
+                // (f32.parse is deferred — its narrower Option payload width
+                // needs its own runtime path; the lexer parses every float as
+                // f64 then attaches the suffix.)
+                if method == "parse" && target == "f64" {
+                    let make_none = || Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "None".to_string(),
+                        data: EnumData::Unit,
+                    };
+                    if let Some(arg) = args.first() {
+                        let s_val = self.eval_expr_inner(&arg.value);
+                        if let Value::String(s) = s_val {
+                            return match s.trim().parse::<f64>() {
+                                Ok(v) => Value::EnumVariant {
+                                    enum_name: "Option".to_string(),
+                                    variant: "Some".to_string(),
+                                    data: EnumData::Tuple(vec![Value::Float(v)]),
+                                },
+                                Err(_) => make_none(),
+                            };
+                        }
+                    }
+                    return make_none();
+                }
                 // `<int_type>.from_str_radix(s: String, radix: u32) ->
                 // Option[i64]`. Radix 2..=36 via Rust's `i64::from_str_radix`.
                 // The self-hosting lexer's hex/binary/octal literal path.

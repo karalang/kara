@@ -274,6 +274,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_http_request_query_val_at,
         karac_runtime_parse_i64,
         karac_runtime_parse_i64_radix,
+        karac_runtime_parse_f64,
     );
     // The serve loops themselves need the tokio/hyper substrate (`net`);
     // the request/response accessors above are plain FFI-struct reads and
@@ -3965,6 +3966,35 @@ pub unsafe extern "C" fn karac_runtime_parse_i64_radix(
     match i64::from_str_radix(s.trim(), radix) {
         Ok(n) => {
             *out = n;
+            1
+        }
+        Err(_) => 0,
+    }
+}
+
+/// Parse a UTF-8 byte slice as a 64-bit float (Rust's `f64::from_str`,
+/// which accepts decimal, scientific, `inf`, `nan`, leading sign).
+/// Returns `1` on success (parsed value written through `out`) or `0` on
+/// failure. Trims leading/trailing whitespace. Backs `f64.parse(s)` — the
+/// self-hosting lexer's float-literal path.
+///
+/// # Safety
+///
+/// `data` must point at `len` initialized UTF-8 bytes (or be null with
+/// `len == 0`). `out` must be a valid `*mut f64`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_parse_f64(data: *const u8, len: usize, out: *mut f64) -> u8 {
+    if data.is_null() || len == 0 || out.is_null() {
+        return 0;
+    }
+    let slice = std::slice::from_raw_parts(data, len);
+    let s = match std::str::from_utf8(slice) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    match s.trim().parse::<f64>() {
+        Ok(v) => {
+            *out = v;
             1
         }
         Err(_) => 0,

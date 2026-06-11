@@ -30065,6 +30065,28 @@ fn main() {
     // ──────────────────────────────────────────────────────────────────
 
     #[test]
+    fn e2e_enum_f64_payload_match_codegen() {
+        // Regression: enum float payloads were bound/printed as raw i64 bits
+        // (the payload word was never bitcast back to f64, and the binding was
+        // type-tracked as i64). Covers the single-word path (Option[f64]) and
+        // the tuple-payload path (`Float(f64, i64)` — the self-hosting lexer's
+        // Token::Float shape). Fixed via the float arm in
+        // record_pattern_binding_surface_types + the FloatType arms in
+        // reconstruct_payload_value.
+        let output = run_program(
+            "enum Tok { Float(f64, i64), Nil }\n\
+             fn main() {\n\
+                 match Some(3.14) { Some(x) => println(x), None => println(0.0) }\n\
+                 let o: Option[f64] = Some(1.5);\n\
+                 match o { Some(x) => println(x), None => println(0.0) }\n\
+                 match Tok.Float(2.5, 7) { Float(x, y) => { println(x); println(y); } Nil => println(0.0) }\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "3.14\n1.5\n2.5\n7\n");
+    }
+
+    #[test]
     fn test_e2e_i64_parse_basic() {
         let output = run_program(
             "fn main() {\n\
@@ -30111,6 +30133,41 @@ fn main() {
         assert!(
             ir.contains("call i8 @karac_runtime_parse_i64_radix"),
             "i64.from_str_radix should call the runtime extern:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_f64_parse_basic() {
+        // Float parse (decimal / scientific / negative / reject / integer-form)
+        // — the self-hosting lexer's float-literal path. Exercises the
+        // Option[f64] payload bitcast end-to-end.
+        let output = run_program(
+            "fn pr(o: Option[f64]) { match o { Some(x) => println(x), None => println(-1.0) } }\n\
+             fn main() {\n\
+                 pr(f64.parse(\"3.14\"));\n\
+                 pr(f64.parse(\"1e10\"));\n\
+                 pr(f64.parse(\"-2.5\"));\n\
+                 pr(f64.parse(\"notnum\"));\n\
+                 pr(f64.parse(\"42\"));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "3.14\n10000000000\n-2.5\n-1\n42\n");
+    }
+
+    #[test]
+    fn test_ir_f64_parse_calls_runtime_extern() {
+        let ir = ir_for(
+            "fn p(s: String) -> f64 {\n\
+                 match f64.parse(s) {\n\
+                     Some(x) => x,\n\
+                     None => -1.0,\n\
+                 }\n\
+             }",
+        );
+        assert!(
+            ir.contains("call i8 @karac_runtime_parse_f64"),
+            "f64.parse should call the runtime extern:\n{ir}"
         );
     }
 

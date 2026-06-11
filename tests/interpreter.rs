@@ -9188,6 +9188,38 @@ fn test_i64_from_str_radix_interpreter() {
 }
 
 #[test]
+fn test_f64_parse_interpreter() {
+    // Float parse: decimal / scientific / negative / reject / integer-form.
+    // The self-hosting lexer's float-literal path.
+    let output = run(
+        r#"fn pr(o: Option[f64]) { match o { Some(x) => println(x), None => println(-1.0), } }
+        fn main() {
+            pr(f64.parse("3.14"));
+            pr(f64.parse("1e10"));
+            pr(f64.parse("-2.5"));
+            pr(f64.parse("notnum"));
+            pr(f64.parse("42"));
+        }"#,
+    );
+    assert_eq!(output, "3.14\n10000000000\n-2.5\n-1\n42\n");
+}
+
+#[test]
+fn test_enum_f64_payload_match_interpreter() {
+    // Parallel to the codegen regression (e2e_enum_f64_payload_match_codegen):
+    // enum float payloads bind as floats, not raw bits. Covers Option[f64] and
+    // a tuple-payload enum (the lexer's Token::Float shape).
+    let output = run(r#"enum Tok { Float(f64, i64), Nil }
+        fn main() {
+            match Some(3.14) { Some(x) => println(x), None => println(0.0), }
+            let o: Option[f64] = Some(1.5);
+            match o { Some(x) => println(x), None => println(0.0), }
+            match Tok.Float(2.5, 7) { Float(x, y) => { println(x); println(y); } Nil => println(0.0), }
+        }"#);
+    assert_eq!(output, "3.14\n1.5\n2.5\n7\n");
+}
+
+#[test]
 fn test_string_chars_with_map_char_as_key() {
     // Locks down the LeetCode #3 idiom — chars feeding a Map[char, i64]
     // last-index map. The sliding-window kata is the natural-pull that

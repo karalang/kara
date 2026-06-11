@@ -2972,6 +2972,17 @@ impl<'ctx> Codegen<'ctx> {
             parse_i64_radix_type,
             Some(Linkage::External),
         );
+        // `karac_runtime_parse_f64(data: *const u8, len: usize, out: *mut f64)
+        //  -> u8`. Backs `f64.parse(s) -> Option[f64]` — the self-hosting
+        //  lexer's float-literal path.
+        let parse_f64_type = context
+            .i8_type()
+            .fn_type(&[ptr_type.into(), i64_type.into(), ptr_type.into()], false);
+        let _karac_runtime_parse_f64_fn = module.add_function(
+            "karac_runtime_parse_f64",
+            parse_f64_type,
+            Some(Linkage::External),
+        );
         let response_set_status_type = context
             .void_type()
             .fn_type(&[ptr_type.into(), context.i16_type().into()], false);

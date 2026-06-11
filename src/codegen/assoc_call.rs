@@ -663,6 +663,91 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             return Ok(agg);
         }
+        // `f64.parse(s: String) -> Option[f64]` — float parse via the
+        // `karac_runtime_parse_f64` extern. Mirrors the int `parse` arm; the
+        // some-payload is the parsed f64 (bitcast to a word by
+        // `coerce_to_payload_words`). The self-hosting lexer's float-literal
+        // path. (f32.parse deferred — its narrower payload needs its own path.)
+        if method == "parse" && type_name == "f64" {
+            if _args.is_empty() {
+                return Err(format!("{}.parse requires a String argument", type_name));
+            }
+            let i8_t = self.context.i8_type();
+            let f64_t = self.context.f64_type();
+
+            let s_val = self.compile_expr(&_args[0].value)?;
+            let s_struct = s_val.into_struct_value();
+            let s_data = self
+                .builder
+                .build_extract_value(s_struct, 0, "fparse.s.ptr")
+                .unwrap()
+                .into_pointer_value();
+            let s_len = self
+                .builder
+                .build_extract_value(s_struct, 1, "fparse.s.len")
+                .unwrap()
+                .into_int_value();
+
+            let fn_val = self
+                .current_fn
+                .ok_or_else(|| "f64.parse called outside fn".to_string())?;
+            let out_slot = self.create_entry_alloca(fn_val, "fparse.out", f64_t.into());
+
+            let parse_fn = self
+                .module
+                .get_function("karac_runtime_parse_f64")
+                .expect("karac_runtime_parse_f64 declared in Codegen::new");
+            let success = self
+                .builder
+                .build_call(
+                    parse_fn,
+                    &[s_data.into(), s_len.into(), out_slot.into()],
+                    "fparse.ok",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let is_ok = self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    success,
+                    i8_t.const_zero(),
+                    "fparse.ok.bool",
+                )
+                .unwrap();
+
+            let some_bb = self.context.append_basic_block(fn_val, "fparse.some");
+            let none_bb = self.context.append_basic_block(fn_val, "fparse.none");
+            let merge_bb = self.context.append_basic_block(fn_val, "fparse.merge");
+
+            self.builder
+                .build_conditional_branch(is_ok, some_bb, none_bb)
+                .unwrap();
+
+            self.builder.position_at_end(some_bb);
+            let parsed = self
+                .builder
+                .build_load(f64_t, out_slot, "fparse.value")
+                .unwrap();
+            let some_payload_words = self.coerce_to_payload_words(parsed, 3)?;
+            let some_end_bb = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            self.builder.position_at_end(none_bb);
+            let none_end_bb = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            self.builder.position_at_end(merge_bb);
+            let agg = self.build_option_some_via_phis(
+                &some_payload_words,
+                some_end_bb,
+                none_end_bb,
+                "fparse.opt",
+            );
+            return Ok(agg);
+        }
         // Lowered operator dispatch: `<Primitive>.<op>(args)` — synthesized
         // by the lowering pass. Reroute to the existing BinOp/UnaryOp
         // intrinsic compilation so we don't have to duplicate codegen logic.

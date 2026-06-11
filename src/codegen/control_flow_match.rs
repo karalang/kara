@@ -1196,14 +1196,37 @@ impl<'ctx> super::Codegen<'ctx> {
             // untouched.
             let key = (sub_pat.span.offset, sub_pat.span.length);
             if let Some(name) = self.pattern_binding_types.get(&key).cloned() {
-                if let BasicTypeEnum::IntType(it) = self.llvm_type_for_name(&name) {
-                    if it.get_bit_width() < 64 {
+                match self.llvm_type_for_name(&name) {
+                    BasicTypeEnum::IntType(it) if it.get_bit_width() < 64 => {
                         let narrowed = self
                             .builder
                             .build_int_truncate(w, it, "pat.int.tr")
                             .unwrap();
                         return Ok(narrowed.into());
                     }
+                    // Float-typed binding: the payload word carries the float's
+                    // bit pattern (packed via `coerce_to_i64`'s bitcast), so it
+                    // must be bitcast back — otherwise the binding is the raw
+                    // i64 bits and any use (println, arithmetic) reads garbage.
+                    // f64 bitcasts directly; f32's pattern sits in the low 32
+                    // bits, so truncate then bitcast. Without this, every enum
+                    // float payload (`Option[f64]`, the lexer's
+                    // `Token::Float(f64, …)`) is corrupt.
+                    BasicTypeEnum::FloatType(ft) => {
+                        if ft == self.context.f64_type() {
+                            let f = self.builder.build_bit_cast(w, ft, "pat.f64.bc").unwrap();
+                            return Ok(f);
+                        } else {
+                            let i32_t = self.context.i32_type();
+                            let lo = self
+                                .builder
+                                .build_int_truncate(w, i32_t, "pat.f32.tr")
+                                .unwrap();
+                            let f = self.builder.build_bit_cast(lo, ft, "pat.f32.bc").unwrap();
+                            return Ok(f);
+                        }
+                    }
+                    _ => {}
                 }
             }
             return Ok(w.into());
@@ -1247,6 +1270,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .unwrap()
                                 .into(),
                             BasicTypeEnum::IntType(_) => raw.into(),
+                            // Float tuple element: bitcast the payload word back
+                            // to the float (f64 direct; f32 from the low 32
+                            // bits). Mirrors the single-word float fix — needed
+                            // for any tuple-payload enum carrying a float, incl.
+                            // the lexer's `Token::Float(f64, …)`.
+                            BasicTypeEnum::FloatType(ft) if ft == self.context.f64_type() => {
+                                self.builder.build_bit_cast(raw, ft, "tup.f64.bc").unwrap()
+                            }
+                            BasicTypeEnum::FloatType(ft) => {
+                                let i32_t = self.context.i32_type();
+                                let lo = self
+                                    .builder
+                                    .build_int_truncate(raw, i32_t, "tup.f32.tr")
+                                    .unwrap();
+                                self.builder.build_bit_cast(lo, ft, "tup.f32.bc").unwrap()
+                            }
                             _ => raw.into(),
                         };
                         agg = self

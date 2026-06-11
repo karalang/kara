@@ -42,6 +42,18 @@ fn narrow_int_surface_name(ty: &Type) -> Option<String> {
     }
 }
 
+/// Surface name for a float-typed pattern binding. Recorded so codegen
+/// bitcasts the i64 payload word back to the float and tracks the binding as
+/// float (not i64) — without it, enum float payloads (`Option[f64]`, the
+/// lexer's `Token::Float(f64, …)`) bind/print as raw integer bits.
+fn float_surface_name(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Float(FloatSize::F32) => Some("f32".to_string()),
+        Type::Float(FloatSize::F64) => Some("f64".to_string()),
+        _ => None,
+    }
+}
+
 /// Map an integer-literal suffix to its concrete `Type` for range-bound
 /// type-matching. `None` (no suffix) returns `None` so the bound's width
 /// defers to the other bound / scrutinee.
@@ -477,6 +489,13 @@ impl<'a> super::TypeChecker<'a> {
             // `Some(b) => b == other_u8`).
             self.pattern_binding_types
                 .insert(SpanKey::from_span(&pattern.span), narrow);
+        } else if let Some(fname) = float_surface_name(expected) {
+            // Float payload binding (`Some(x)` over `Option[f64]`, the lexer's
+            // `Token::Float(f64, …)`): record `f64` / `f32` so codegen bitcasts
+            // the payload word back to the float and dispatches float-typed
+            // (println, arithmetic) rather than reading the raw i64 bits.
+            self.pattern_binding_types
+                .insert(SpanKey::from_span(&pattern.span), fname);
         }
         // PB sibling slice (2026-05-09): mirror
         // `bind_pattern_types`'s sibling-table write so direct
