@@ -196,7 +196,7 @@ LLVMGetModuleContext.
 
 | inkwell | sites | llvm-c |
 |---|---|---|
-| Target::initialize_native | 7 | LLVMInitializeNativeTarget + LLVMInitializeNativeAsmPrinter |
+| Target::initialize_native | 7 | *(see note)* LLVMInitialize{Arch}TargetInfo/Target/TargetMC/AsmPrinter |
 | Target::initialize_webassembly | 2 | LLVMInitializeWebAssembly{TargetInfo,Target,TargetMC,AsmPrinter} |
 | Target::from_triple | 3 | LLVMGetTargetFromTriple |
 | TargetMachine::get_default_triple | 1 | LLVMGetDefaultTargetTriple |
@@ -219,6 +219,13 @@ LLVMGetModuleContext.
 | create_compile_unit | — | LLVMDIBuilderCreateCompileUnit |
 | create_subroutine_type | 1 | LLVMDIBuilderCreateSubroutineType |
 | finalize | 1 | LLVMDIBuilderFinalize |
+
+**Note — `initialize_native` is not a single symbol.** `LLVMInitializeNativeTarget` /
+`LLVMInitializeNativeAsmPrinter` are `static inline` in `llvm-c/Target.h` (they expand to the
+host-arch concrete initializers), **not** exported `libLLVM` symbols — so the Kāra binding cannot
+`extern "C"` them. Declare and call the concrete per-arch quartet instead:
+`LLVMInitializeAArch64{TargetInfo,Target,TargetMC,AsmPrinter}` on Apple Silicon,
+`LLVMInitializeX86{…}` on x86-64. Surfaced while writing the [minimal proof](self-hosting-llvm-c-proof.md).
 
 JIT (`create_jit_execution_engine`, 1 site) is the lljit path — out of scope for the AOT
 codegen port per the spike; track separately if self-hosted REPL/JIT is in Phase 12 scope.

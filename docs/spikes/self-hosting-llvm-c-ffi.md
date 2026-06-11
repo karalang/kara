@@ -98,3 +98,5 @@ Kāra FFI is `extern "C"` (Phase 7, ✅). LLVM ships a stable **C API** (`llvm-c
 ## Definition of done (this spike)
 
 A decision record covering: chosen linking strategy + version-pin; the enumerated LLVM-C surface (from the `inkwell` call-site inventory); the handle-ownership model (which handles `Drop`); and a **minimal proof** — a Kāra program that `extern "C"`-calls LLVM-C to build → verify → emit a trivial module to an object file, linked and run. That proof is the seed of the Kāra codegen module.
+
+**Status:** decision record ✅ COMPLETE — all of sub-q 1–6 above resolved ([surface inventory](self-hosting-llvm-c-surface.md), linking, handles, marshaling, errors, bootstrapping). The minimal proof is **written and ready** as a lift-and-run spec — [`self-hosting-llvm-c-proof.md`](self-hosting-llvm-c-proof.md) — but is **gated** on the two surfaced prerequisites (the `kara.toml [link]` directive blocker + `CStr.from_ptr`). The spike closes the moment that proof runs green (`exit=42`) under both bootstrap stages.
