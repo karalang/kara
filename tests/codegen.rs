@@ -1104,6 +1104,28 @@ fn main() {
     }
 
     #[test]
+    fn e2e_string_substring_two_arg_codegen() {
+        // Two-arg `substring(start, end)` (byte range `[start, end)`): prefix /
+        // suffix / empty-when-equal / inverted-bounds (end<start) / end-clamped /
+        // negative-start (→ empty) — must match the interpreter
+        // (test_string_substring_two_arg_interpreter). The self-hosted lexer's
+        // AOT `token_text` path depends on this.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s: String = \"hello world\";\n\
+                 println(s.substring(0, 5));\n\
+                 println(s.substring(6, 11));\n\
+                 println(s.substring(3, 3));\n\
+                 println(s.substring(8, 2));\n\
+                 println(s.substring(2, 100));\n\
+                 println(s.substring(-2, 4));\n\
+             }",
+        ) {
+            assert_eq!(out, "hello\nworld\n\n\nllo world\n\n");
+        }
+    }
+
+    #[test]
     fn e2e_contains_on_borrow_local_codegen() {
         // The borrow-local-method path (commit 2b9e2de3) that surfaced
         // B-2026-06-10-1: `contains` on a `ref`-bound Vec/String receiver.

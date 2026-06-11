@@ -124,19 +124,39 @@ impl<'a> super::Interpreter<'a> {
                 return None;
             }
             "substring" => {
-                // `String.substring(start: i64) -> String`. Returns a
-                // fresh owned String of the receiver's bytes from byte
-                // offset `start` to the end. Out-of-range / negative
-                // starts saturate to an empty String.
-                if let (Value::String(s), [arg]) = (&obj, args) {
-                    let start_val = self.eval_expr_inner(&arg.value);
-                    if let Value::Int(start) = start_val {
-                        let len = s.len() as i64;
-                        if start < 0 || start >= len {
-                            return Some(Value::String(String::new()));
+                // `String.substring(start) -> String` — bytes from `start` to end.
+                // `String.substring(start, end) -> String` — bytes in `[start, end)`.
+                // Byte offsets (matching `bytes()`); out-of-range / negative /
+                // inverted bounds saturate to an empty String. Extraction is
+                // byte-level (from_utf8_lossy) so a non-boundary index never panics.
+                if let Value::String(s) = &obj {
+                    let len = s.len() as i64;
+                    let (start, end) = match args {
+                        [a] => {
+                            if let Value::Int(start) = self.eval_expr_inner(&a.value) {
+                                (start, len)
+                            } else {
+                                return None;
+                            }
                         }
-                        return Some(Value::String(s[start as usize..].to_string()));
+                        [a, b] => {
+                            let sa = self.eval_expr_inner(&a.value);
+                            let sb = self.eval_expr_inner(&b.value);
+                            if let (Value::Int(start), Value::Int(end)) = (sa, sb) {
+                                (start, end)
+                            } else {
+                                return None;
+                            }
+                        }
+                        _ => return None,
+                    };
+                    // One-arg contract: negative / past-end start → empty.
+                    if start < 0 || start > len {
+                        return Some(Value::String(String::new()));
                     }
+                    let end = end.clamp(start, len);
+                    let bytes = &s.as_bytes()[start as usize..end as usize];
+                    return Some(Value::String(String::from_utf8_lossy(bytes).into_owned()));
                 }
                 return None;
             }

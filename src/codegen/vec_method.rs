@@ -165,20 +165,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(result)
             }
-            // `String.substring(start: i64) -> String`. Returns a fresh
-            // owned String of the receiver's bytes from byte offset
-            // `start` to the end. Out-of-range / negative starts
-            // saturate to an empty String (route-prefix-friendly).
+            // `String.substring(start) -> String` — bytes from `start` to end.
+            // `String.substring(start, end) -> String` — bytes in `[start, end)`.
+            // Both indices are byte offsets (matching the `bytes()` view).
+            // Out-of-range / negative / inverted bounds saturate to an empty
+            // String, so the self-hosted lexer can do
+            // `source.substring(start, current)` for `token_text` and the
+            // `[2..]` hex/bin/oct prefix strip.
             //
             // Implementation:
             //   1. Load receiver `{data, len}`.
-            //   2. Evaluate `start`. If `start < 0 || start >= len`,
-            //      produce an empty String `{null, 0, 0}`.
-            //   3. Otherwise allocate `len - start` bytes via malloc,
-            //      memcpy from `data + start`, and assemble the result
-            //      String `{buf, len-start, len-start}`. cap == len so
-            //      the freshly-malloc'd buffer is freed at scope exit
-            //      (mirrors `compile_request_string_method`'s pattern).
+            //   2. Evaluate `start`, and `end` (= len if the one-arg form).
+            //   3. Clamp: `s = clamp(start, 0, len)`, `e = clamp(end, s, len)`,
+            //      `new_len = e - s`. If `new_len == 0`, produce an empty
+            //      String `{null, 0, 0}`.
+            //   4. Otherwise malloc `new_len` bytes, memcpy from `data + s`,
+            //      and assemble `{buf, new_len, new_len}` (cap == len so the
+            //      buffer is freed at scope exit).
             "substring" => {
                 if args.is_empty() {
                     return Err("String.substring requires a start index argument".to_string());
@@ -205,21 +208,72 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_int_value();
 
-                // Evaluate the start index (must be i64).
-                let start_val = self.compile_expr(&args[0].value)?;
-                let start = start_val.into_int_value();
+                // Evaluate start; end defaults to len for the one-arg form.
+                let start_raw = self.compile_expr(&args[0].value)?.into_int_value();
+                let end_raw = if args.len() >= 2 {
+                    self.compile_expr(&args[1].value)?.into_int_value()
+                } else {
+                    recv_len
+                };
 
-                // out_of_range = (start < 0) || (start >= len)
                 let zero64 = i64_t.const_zero();
-                let lt_zero = self
+                // smin/smax via select.
+                let smin = |b: &Self,
+                            a: inkwell::values::IntValue<'ctx>,
+                            c: inkwell::values::IntValue<'ctx>,
+                            n: &str| {
+                    let lt = b
+                        .builder
+                        .build_int_compare(inkwell::IntPredicate::SLT, a, c, "ss.min.cmp")
+                        .unwrap();
+                    b.builder
+                        .build_select(lt, a, c, n)
+                        .unwrap()
+                        .into_int_value()
+                };
+                let smax = |b: &Self,
+                            a: inkwell::values::IntValue<'ctx>,
+                            c: inkwell::values::IntValue<'ctx>,
+                            n: &str| {
+                    let gt = b
+                        .builder
+                        .build_int_compare(inkwell::IntPredicate::SGT, a, c, "ss.max.cmp")
+                        .unwrap();
+                    b.builder
+                        .build_select(gt, a, c, n)
+                        .unwrap()
+                        .into_int_value()
+                };
+                // Established one-arg contract: a `start` that is negative or
+                // past the end yields an empty String (not a clamp-to-0). Keep
+                // that for both forms. `start` is then in [0, len]; `end` is
+                // clamped to [start, len]; an empty range yields empty too.
+                let start = start_raw;
+                let end = smax(
+                    self,
+                    smin(self, end_raw, recv_len, "ss.e.min"),
+                    start,
+                    "ss.e",
+                );
+
+                // empty = (start < 0) || (start > len) || (end == start)
+                let start_lt0 = self
                     .builder
-                    .build_int_compare(inkwell::IntPredicate::SLT, start, zero64, "ss.lt_zero")
+                    .build_int_compare(inkwell::IntPredicate::SLT, start, zero64, "ss.s.lt0")
                     .unwrap();
-                let ge_len = self
+                let start_gt_len = self
                     .builder
-                    .build_int_compare(inkwell::IntPredicate::SGE, start, recv_len, "ss.ge_len")
+                    .build_int_compare(inkwell::IntPredicate::SGT, start, recv_len, "ss.s.gtlen")
                     .unwrap();
-                let out_of_range = self.builder.build_or(lt_zero, ge_len, "ss.oor").unwrap();
+                let empty_range = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, end, start, "ss.empty.cmp")
+                    .unwrap();
+                let oob = self
+                    .builder
+                    .build_or(start_lt0, start_gt_len, "ss.oob")
+                    .unwrap();
+                let out_of_range = self.builder.build_or(oob, empty_range, "ss.empty").unwrap();
 
                 let fn_val = self.current_fn.unwrap();
                 let copy_bb = self.context.append_basic_block(fn_val, "ss.copy");
@@ -258,7 +312,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.position_at_end(copy_bb);
                 let new_len = self
                     .builder
-                    .build_int_nsw_sub(recv_len, start, "ss.new_len")
+                    .build_int_nsw_sub(end, start, "ss.new_len")
                     .unwrap();
                 let buf = self
                     .builder

@@ -270,13 +270,16 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Bool
             }
             "substring" => {
-                // substring(start: i64) -> String. Returns a fresh owned
-                // String of the receiver's bytes from byte offset `start`
-                // to the end. Out-of-range / negative starts saturate to
-                // an empty String (route-prefix-friendly).
-                if args.len() != 1 {
+                // substring(start: i64) -> String  — bytes from `start` to end.
+                // substring(start: i64, end: i64) -> String — bytes in the
+                // half-open byte range `[start, end)`. Out-of-range / negative
+                // / inverted bounds saturate to an empty String. Both indices
+                // are byte offsets (matching the `bytes()` view), so the
+                // self-hosted lexer can extract `token_text` via
+                // `source.substring(start, current)`.
+                if args.len() != 1 && args.len() != 2 {
                     self.type_error(
-                        format!("'substring' expects 1 argument, found {}", args.len()),
+                        format!("'substring' expects 1 or 2 arguments, found {}", args.len()),
                         span.clone(),
                         TypeErrorKind::WrongNumberOfArgs,
                     );
@@ -284,16 +287,18 @@ impl<'a> super::TypeChecker<'a> {
                         self.infer_expr(&arg.value);
                     }
                 } else {
-                    let arg_ty = self.infer_expr(&args[0].value);
-                    if !matches!(arg_ty, Type::Int(_) | Type::Error) {
-                        self.type_error(
-                            format!(
-                                "'substring' expects an integer start index, found '{}'",
-                                type_display(&arg_ty)
-                            ),
-                            args[0].value.span.clone(),
-                            TypeErrorKind::TypeMismatch,
-                        );
+                    for arg in args {
+                        let arg_ty = self.infer_expr(&arg.value);
+                        if !matches!(arg_ty, Type::Int(_) | Type::Error) {
+                            self.type_error(
+                                format!(
+                                    "'substring' expects integer byte indices, found '{}'",
+                                    type_display(&arg_ty)
+                                ),
+                                arg.value.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
                     }
                 }
                 Type::Str

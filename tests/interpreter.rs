@@ -9100,6 +9100,24 @@ fn test_string_substring_interpreter() {
 }
 
 #[test]
+fn test_string_substring_two_arg_interpreter() {
+    // Two-arg `substring(start, end)` (byte range `[start, end)`): prefix /
+    // suffix / empty-when-equal / inverted-bounds (end<start) / end-clamped /
+    // negative-start (→ empty, matching the one-arg contract). Drives the
+    // self-hosted lexer's `token_text` extraction.
+    let output = run(r#"fn main() {
+            let s: String = "hello world";
+            println(s.substring(0, 5));
+            println(s.substring(6, 11));
+            println(s.substring(3, 3));
+            println(s.substring(8, 2));
+            println(s.substring(2, 100));
+            println(s.substring(-2, 4));
+        }"#);
+    assert_eq!(output, "hello\nworld\n\n\nllo world\n\n");
+}
+
+#[test]
 fn test_i64_parse_interpreter() {
     // Five cases mirror `/tmp/kara-probes/i64_parse_full_probe.kara`:
     // numeric / non-numeric / negative / whitespace-padded / empty.
