@@ -1413,6 +1413,16 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) soa_layouts: HashMap<String, SoaLayout>,
     /// Function parameter ref-ness (function name → vec of is_ref per param).
     pub(crate) fn_param_ref: HashMap<String, Vec<bool>>,
+    /// `unsafe extern` imports that carry `#[link_name("symbol")]`: maps the
+    /// Kāra fn identifier → the foreign symbol it actually binds. The import
+    /// is registered in the LLVM module under the *symbol* name, so call
+    /// sites must translate the Kāra name through this map before
+    /// `module.get_function(...)` (an LLVM function's name *is* its symbol).
+    /// Empty unless a program uses `#[link_name]`; the common case keeps the
+    /// Kāra name and never touches this map. Lets a snake_case Kāra fn bind a
+    /// PascalCase C symbol — the LLVM-C self-hosting binding's requirement
+    /// (`docs/spikes/self-hosting-llvm-c-ffi.md`).
+    pub(crate) extern_link_names: HashMap<String, String>,
     /// Function parameter slice element type (function name → per-param
     /// Some(elem_ty) if that param is Slice[T] / mut Slice[T], else None).
     /// Used at call sites to emit Array → Slice and Vec → Slice coercions.
@@ -4439,6 +4449,7 @@ impl<'ctx> Codegen<'ctx> {
             owned_vecstr_params: HashSet::new(),
             owned_struct_params: HashSet::new(),
             fn_param_ref: HashMap::new(),
+            extern_link_names: HashMap::new(),
             fn_return_type_names: HashMap::new(),
             fn_return_type_exprs: HashMap::new(),
             fn_ref_return_inner: HashMap::new(),

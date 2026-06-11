@@ -3884,6 +3884,36 @@ pub fn main() with writes(Console) {
     }
 
     #[test]
+    fn test_e2e_extern_link_name_binds_foreign_symbol() {
+        // `#[link_name("strlen")]` redirects the emitted symbol from the
+        // Kāra fn name (`measure`) to the foreign symbol (`strlen`), so a
+        // snake_case Kāra name can bind a differently-spelled C symbol —
+        // the mechanism the self-hosted LLVM-C binding needs to call the
+        // PascalCase `LLVMContextCreate` family
+        // (`docs/spikes/self-hosting-llvm-c-ffi.md` § Linking). `strlen`
+        // also exercises the dedup-against-a-codegen-builtin path (codegen
+        // pre-declares `strlen` in `Codegen::new`), proving the import
+        // reuses that symbol instead of emitting a renamed `strlen.1`.
+        let src = r#"
+unsafe extern "C" {
+    #[link_name("strlen")]
+    fn measure(s: *const u8) -> i64;
+}
+
+fn main() {
+    let s = c"hello, world";
+    // Safety: `c"..."` is NUL-terminated; strlen reads to the NUL.
+    let n = unsafe { measure(s.as_ptr()) };
+    println(n);
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "12"); // "hello, world" — 12 bytes
+        }
+    }
+
+    #[test]
     fn test_e2e_cstr_from_ptr_round_trips_len_and_bytes() {
         // The inbound raw-pointer constructor (LLVM-C FFI spike sub-q 4):
         // a c"..." literal -> as_ptr (raw *const u8) -> CStr.from_ptr

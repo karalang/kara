@@ -99,10 +99,16 @@ Kāra FFI is `extern "C"` (Phase 7, ✅). LLVM ships a stable **C API** (`llvm-c
 
 A decision record covering: chosen linking strategy + version-pin; the enumerated LLVM-C surface (from the `inkwell` call-site inventory); the handle-ownership model (which handles `Drop`); and a **minimal proof** — a Kāra program that `extern "C"`-calls LLVM-C to build → verify → emit a trivial module to an object file, linked and run. That proof is the seed of the Kāra codegen module.
 
-**Status:** decision record ✅ COMPLETE — all of sub-q 1–6 above resolved ([surface inventory](self-hosting-llvm-c-surface.md), linking, handles, marshaling, errors, bootstrapping). **Proof: NOT yet runnable.** Two prerequisites have landed (the `kara.toml [link]` directive + `CStr.from_ptr`, both 2026-06-11), but a build attempt of [`self-hosting-llvm-c-proof.md`](self-hosting-llvm-c-proof.md) on 2026-06-11 found the proof was **never actually run** — it surfaced **two more real compiler gates** plus a spec rewrite (the corrected gate now lives in the proof's *Prerequisites gate* section):
+**Status:** decision record ✅ COMPLETE — all of sub-q 1–6 above resolved ([surface inventory](self-hosting-llvm-c-surface.md), linking, handles, marshaling, errors, bootstrapping). **Proof: NOT yet runnable**, but progressing — each build attempt peels off a gate and exposes the next. As of 2026-06-11, **three** prerequisites have landed and the front-end now *accepts* the full LLVM-C binding shape (PascalCase symbols bound via `#[link_name]`, raw-pointer params, `c"..."`/`CStr.from_ptr`); the proof now fails further downstream in **codegen**:
 
-1. **`#[link_name]` honored on `unsafe extern` fn imports** — the biggest gate. Kāra rejects PascalCase extern fn names (Value-class rule) and the whole LLVM-C API is PascalCase; `#[link_name]` is registered but not applied to extern imports, so today **no** LLVM-C symbol can be bound. Needs its own slice.
+- ✅ **`kara.toml [link]` directive** (libLLVM-18 linkable).
+- ✅ **`CStr.from_ptr`** (inbound `char*`→`CStr`).
+- ✅ **`#[link_name]` honored on `unsafe extern` imports** — binds the PascalCase LLVM-C API to legal snake_case Kāra names; verified end-to-end on libc symbols (`getpid`/`strlen` link + run), and the `LLVMContextCreate` family is now accepted by the front-end.
+
+Remaining gates (the corrected, build-verified list lives in the proof's *Prerequisites gate* section):
+
+1. **Codegen "Undefined variable" for a `let`-bound `*mut T` FFI-return passed as an argument** — the new critical path. **Pre-existing** (reproduces on clean-main karac with a 6-line `malloc`/`free` program, no `#[link_name]`). Every LLVM-C handle is this shape (`*mut`-returning create → let-bind → pass to later calls), so it blocks the whole handle chain — the `LLVMContextCreate`→`LLVMContextDispose` proof can't reach the linker because of it. An ownership/codegen bug, not an FFI-surface gap.
 2. **`CStr.to_string() -> Result[String, Utf8Error]`** — the outbound `char*`→`String` half of the read path; no codegen lowering, no runtime UTF-8 validator to reuse. The remaining half of the phase-8 *CString conversions* item.
-3. **Proof-spec rewrite** — the `.kara` body uses semicolon-free statements that don't parse + PascalCase extern names; mechanical, but real.
+3. **Proof-spec rewrite** — semicolon-free statements that don't parse + PascalCase extern names → snake_case + `#[link_name]` + terminators. Mechanical.
 
-The spike closes the moment the (rewritten) proof runs green (`exit=42`) under both bootstrap stages. Gate (1) is the critical path — without extern symbol binding the LLVM-C call chain can't link at all.
+The spike closes when the (rewritten) proof runs green (`exit=42`) under both bootstrap stages. Gate (1) is now the critical path.

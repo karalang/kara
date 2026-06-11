@@ -28,13 +28,28 @@ build-verified set.
   C-string constructor used by `read_and_dispose`. Lowers to libc `strlen` + the `{ptr, len}`
   aggregate (same shape a `c"..."` literal lowers to); `unsafe`-gated via the unsafe-fn registry,
   interpreter-rejected. Tested across typechecker/codegen/unsafe-lint.
-- [ ] **`#[link_name]` honored on `unsafe extern` fn imports** *(NEW — build-surfaced, the biggest
-  remaining gate).* Kāra rejects PascalCase extern fn names (Value-class rule: `fn LLVMContextCreate`
-  → *"must be Value-class (snake_case)"*), and the entire LLVM-C API is PascalCase. `#[link_name]` is
-  a registered attribute but is **NOT** applied to extern imports — codegen emits the Kāra name as
-  the symbol (`#[link_name("strlen")] fn c_strlen` still links `_c_strlen`, undefined). Without
-  either honoring `#[link_name]` on externs *or* relaxing the name-class rule inside `unsafe extern`,
-  **no** LLVM-C symbol can be bound. → own tracker entry, [phase-12 Cluster 2](self-hosting-llvm-c-ffi.md#prerequisites-phase-8-floor).
+- [x] **`#[link_name]` honored on `unsafe extern` fn imports** ✅ LANDED 2026-06-11. Kāra rejects
+  PascalCase extern fn names (Value-class rule), and the entire LLVM-C API is PascalCase;
+  `#[link_name("LLVMContextCreate")]` on a snake_case Kāra fn now redirects the emitted LLVM symbol,
+  so the binding can name the C symbol while keeping a legal Kāra identifier. Codegen registers the
+  import under the foreign symbol (dedup-reusing any built-in of that name, e.g. `strlen`) and
+  translates the Kāra name → symbol at the call site. Verified: `getpid`/`strlen` bind + run; the
+  PascalCase `LLVMContextCreate` / `LLVMGetDefaultTargetTriple` / `LLVMModuleCreateWithNameInContext`
+  bindings are now **accepted by the front-end** (no parse/symbol error) — the proof gets past symbol
+  binding. E2E test in `tests/codegen.rs`.
+- [ ] **Codegen "Undefined variable" for a `let`-bound `*mut T` FFI-return passed as an argument**
+  *(NEW — surfaced by the libLLVM build, **pre-existing**, confirmed on clean-main karac, the real
+  next gate).* Minimal reproducer — no `#[link_name]` needed:
+  ```kara
+  unsafe extern "C" { fn malloc(n: i64) -> *mut u8; fn free(p: *mut u8); }
+  fn main() { let m = unsafe { malloc(8) }; unsafe { free(m) } }   // error: codegen failed: Undefined variable 'm'
+  ```
+  Every LLVM-C handle (`LLVMContextRef` = `*mut`) is exactly this shape — created by an FFI call,
+  let-bound, passed to later FFI calls — so this blocks the **entire** handle-passing chain (it is why
+  the `LLVMContextCreate` → `LLVMContextDispose` proof can't reach the linker). Related symptom: a
+  let-bound `*mut` handle is *moved* on pass-by-value in some positions (`*const T` is `Copy`, `*mut T`
+  inconsistently so). Needs an ownership/codegen investigation — likely a raw-`*mut`-pointer slot or
+  move-classification bug. → own tracker entry, [phase-12 Cluster 2](self-hosting-llvm-c-ffi.md#prerequisites-phase-8-floor).
 - [ ] **`CStr.to_string() -> Result[String, Utf8Error]`** *(NEW — build-surfaced).* `read_and_dispose`
   converts the LLVM-owned `char*` to an owned Kāra `String`. The `Utf8Error` type exists
   (`runtime/stdlib/utf8_error.kara`) but `CStr.to_string()` has no typecheck/codegen lowering, and

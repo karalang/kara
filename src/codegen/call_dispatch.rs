@@ -841,7 +841,16 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(call_result);
         }
 
-        let func = match self.module.get_function(&name) {
+        // An `unsafe extern` import declared with `#[link_name("symbol")]`
+        // was registered in the module under its foreign symbol, not its
+        // Kāra name — translate before lookup (no-op for every other call,
+        // since the map is empty unless `#[link_name]` is used).
+        let lookup_name = self
+            .extern_link_names
+            .get(&name)
+            .cloned()
+            .unwrap_or_else(|| name.clone());
+        let func = match self.module.get_function(&lookup_name) {
             Some(f) => f,
             None => {
                 // Unknown function — silently return 0 (e.g. stdlib builtins not yet codegen'd)

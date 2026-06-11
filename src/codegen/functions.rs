@@ -30,6 +30,33 @@ fn returns_self_or_type(return_type: Option<&TypeExpr>, type_name: &str) -> bool
 }
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// The `#[link_name("symbol")]` value carried by `attrs`, if any —
+    /// the C/foreign symbol an `unsafe extern` import binds to, distinct
+    /// from the Kāra identifier. Reads `string_value` first (the parser's
+    /// canonical slot) then falls back to scanning positional args for a
+    /// string literal, exactly as the `link_section` handler in
+    /// [`apply_linker_attrs`] does. Bare/non-string `#[link_name]` yields
+    /// `None` (the caller then keeps the Kāra name). This is what lets a
+    /// snake_case Kāra fn bind a PascalCase C symbol — the LLVM-C API
+    /// (`LLVMContextCreate`, …) is the motivating consumer
+    /// (`docs/spikes/self-hosting-llvm-c-ffi.md` § Linking).
+    pub(super) fn link_name_attr(attrs: &[Attribute]) -> Option<String> {
+        attrs.iter().find_map(|attr| {
+            if attr.path.len() != 1 || attr.path[0] != "link_name" {
+                return None;
+            }
+            attr.string_value.clone().or_else(|| {
+                attr.args.iter().find_map(|a| match a.value.as_ref() {
+                    Some(Expr {
+                        kind: ExprKind::StringLit(s),
+                        ..
+                    }) => Some(s.clone()),
+                    _ => None,
+                })
+            })
+        })
+    }
+
     pub(super) fn apply_linker_attrs(&mut self, fn_val: FunctionValue<'ctx>, attrs: &[Attribute]) {
         for attr in attrs {
             // Linker attributes are bare-name only; namespaced paths

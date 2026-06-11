@@ -4126,9 +4126,33 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         };
 
-        let fn_val = self
-            .module
-            .add_function(&ext.name, fn_type, Some(Linkage::External));
+        // `#[link_name("symbol")]` (per-item wins over block-level) redirects
+        // the emitted LLVM symbol from the Kāra identifier to the foreign
+        // symbol — the only way to bind a snake_case Kāra fn to a PascalCase
+        // C symbol like `LLVMContextCreate` (Kāra rejects PascalCase extern
+        // fn names). Absent the attribute, the symbol is the Kāra name and
+        // nothing changes.
+        let symbol_name = Self::link_name_attr(&ext.attributes)
+            .or_else(|| Self::link_name_attr(block_attrs))
+            .unwrap_or_else(|| ext.name.clone());
+        let fn_val = if symbol_name == ext.name {
+            self.module
+                .add_function(&symbol_name, fn_type, Some(Linkage::External))
+        } else {
+            // Reuse a symbol codegen may have already declared (e.g. the
+            // built-in `strlen`/`memcpy` in `Codegen::new`) rather than let
+            // LLVM auto-rename a duplicate to `strlen.1`, which would emit an
+            // undefined reference. The Kāra→symbol mapping lets the call site
+            // resolve `c_strlen(...)` to the `strlen` FunctionValue, since an
+            // LLVM function's name is its symbol and `get_function` keys on it.
+            let f = self.module.get_function(&symbol_name).unwrap_or_else(|| {
+                self.module
+                    .add_function(&symbol_name, fn_type, Some(Linkage::External))
+            });
+            self.extern_link_names
+                .insert(ext.name.clone(), symbol_name.clone());
+            f
+        };
         // `#[link_section]`, `#[no_mangle]`, `#[used]` attached to an
         // `extern` declaration apply to the symbol as imported. Block-
         // level attributes (when the extern is inside an
