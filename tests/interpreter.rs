@@ -9118,6 +9118,29 @@ fn test_string_substring_two_arg_interpreter() {
 }
 
 #[test]
+fn test_u8_ascii_predicates_interpreter() {
+    // ASCII byte-classification on the `u8` bytes from `String.bytes()`:
+    // is_ascii_digit / is_ascii_alphabetic / is_ascii_hexdigit. Phase-8 floor
+    // for the self-hosting lexer's byte-indexed scan.
+    let output = run(r#"fn main() {
+            let s: String = "aZ9_ f";
+            for b in s.bytes() {
+                println(f"{b.is_ascii_digit()} {b.is_ascii_alphabetic()} {b.is_ascii_hexdigit()}");
+            }
+        }"#);
+    // a:_/alpha/hex  Z:_/alpha/_  9:digit/_/hex  _:none  space:none  f:_/alpha/hex
+    assert_eq!(
+        output,
+        "false true true\n\
+         false true false\n\
+         true false true\n\
+         false false false\n\
+         false false false\n\
+         false true true\n"
+    );
+}
+
+#[test]
 fn test_i64_parse_interpreter() {
     // Five cases mirror `/tmp/kara-probes/i64_parse_full_probe.kara`:
     // numeric / non-numeric / negative / whitespace-padded / empty.

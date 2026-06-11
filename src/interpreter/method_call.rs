@@ -828,6 +828,27 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // ASCII byte-classification predicates on integer scalars (the `u8`
+        // bytes from `String.bytes()`): `is_ascii_digit` / `is_ascii_alphabetic`
+        // / `is_ascii_hexdigit` → bool. Phase-8 floor for the self-hosting lexer
+        // (typed in expr_method_call.rs; codegen lowers to inline range checks).
+        // The value is masked to a byte first so callers can pass an arbitrary
+        // integer without surprising sign/width behavior.
+        if args.is_empty() {
+            if let Value::Int(n) = &obj {
+                let b = *n as u8;
+                let r = match method {
+                    "is_ascii_digit" => Some(b.is_ascii_digit()),
+                    "is_ascii_alphabetic" => Some(b.is_ascii_alphabetic()),
+                    "is_ascii_hexdigit" => Some(b.is_ascii_hexdigit()),
+                    _ => None,
+                };
+                if let Some(r) = r {
+                    return Value::Bool(r);
+                }
+            }
+        }
+
         // Float→int conversion families (phase-8 § "Saturating float→int",
         // slice 2; typed in expr_method_call.rs):
         // `f.{saturating,wrapping,checked,trunc}_to_<intN>()`. Semantics live in

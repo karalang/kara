@@ -1126,6 +1126,31 @@ fn main() {
     }
 
     #[test]
+    fn e2e_u8_ascii_predicates_codegen() {
+        // ASCII byte-classification on `u8` (inline range checks): must match
+        // the interpreter (test_u8_ascii_predicates_interpreter). The
+        // self-hosting lexer's AOT byte-indexed scan depends on this.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s: String = \"aZ9_ f\";\n\
+                 for b in s.bytes() {\n\
+                     println(f\"{b.is_ascii_digit()} {b.is_ascii_alphabetic()} {b.is_ascii_hexdigit()}\");\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "false true true\n\
+                 false true false\n\
+                 true false true\n\
+                 false false false\n\
+                 false false false\n\
+                 false true true\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_contains_on_borrow_local_codegen() {
         // The borrow-local-method path (commit 2b9e2de3) that surfaced
         // B-2026-06-10-1: `contains` on a `ref`-bound Vec/String receiver.

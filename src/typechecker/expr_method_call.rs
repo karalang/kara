@@ -2027,6 +2027,23 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        // ASCII byte-classification predicates on integer scalars (notably the
+        // `u8` bytes yielded by `String.bytes()`): `b.is_ascii_digit()`,
+        // `b.is_ascii_alphabetic()`, `b.is_ascii_hexdigit()` → `bool`. Phase-8
+        // floor for the self-hosting lexer's byte-indexed scan
+        // (phase-12-self-hosting.md); mirror Rust's `u8::is_ascii_*`. Effect-free
+        // value-receiver methods (codegen lowers to inline range checks; no
+        // extern). `is_ascii_alpha`-vs-`_` (`is_alpha`) is composed in Kāra as
+        // `b.is_ascii_alphabetic() or b == b'_'`.
+        if args.is_empty()
+            && matches!(&receiver_for_lookup, Type::Int(_) | Type::UInt(_))
+            && matches!(
+                method,
+                "is_ascii_digit" | "is_ascii_alphabetic" | "is_ascii_hexdigit"
+            )
+        {
+            return Type::Bool;
+        }
         // Built-in `clone` / `to_string` on the scalar numeric + bool + char
         // primitives (all `Copy`). `clone` is identity → `Self`; `to_string`
         // renders the value → `String` (`Type::Str`). Like `abs`, these are

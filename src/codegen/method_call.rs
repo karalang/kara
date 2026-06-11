@@ -1120,6 +1120,63 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // ASCII byte-classification predicates on integer scalars (the `u8`
+        // bytes from `String.bytes()`): `is_ascii_digit` / `is_ascii_alphabetic`
+        // / `is_ascii_hexdigit` → bool (i1). Phase-8 floor for the self-hosting
+        // lexer's byte-indexed scan (phase-12-self-hosting.md). Lowered to inline
+        // unsigned range checks — no runtime extern. Unsigned predicates so a
+        // byte ≥ 0x80 never spuriously matches a signed range.
+        if args.is_empty()
+            && matches!(
+                method,
+                "is_ascii_digit" | "is_ascii_alphabetic" | "is_ascii_hexdigit"
+            )
+        {
+            let v = self.compile_expr(object)?;
+            if let BasicValueEnum::IntValue(iv) = v {
+                let ty = iv.get_type();
+                // in_range(lo, hi) = (iv >= lo) & (iv <= hi), unsigned.
+                let in_range = |s: &Self, lo: u64, hi: u64, tag: &str| {
+                    let ge = s
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::UGE,
+                            iv,
+                            ty.const_int(lo, false),
+                            &format!("{tag}.ge"),
+                        )
+                        .unwrap();
+                    let le = s
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::ULE,
+                            iv,
+                            ty.const_int(hi, false),
+                            &format!("{tag}.le"),
+                        )
+                        .unwrap();
+                    s.builder.build_and(ge, le, &format!("{tag}.in")).unwrap()
+                };
+                let digit = in_range(self, b'0' as u64, b'9' as u64, "ascii.d");
+                let r = match method {
+                    "is_ascii_digit" => digit,
+                    "is_ascii_alphabetic" => {
+                        let lower = in_range(self, b'a' as u64, b'z' as u64, "ascii.l");
+                        let upper = in_range(self, b'A' as u64, b'Z' as u64, "ascii.u");
+                        self.builder.build_or(lower, upper, "ascii.alpha").unwrap()
+                    }
+                    "is_ascii_hexdigit" => {
+                        let lower = in_range(self, b'a' as u64, b'f' as u64, "ascii.hl");
+                        let upper = in_range(self, b'A' as u64, b'F' as u64, "ascii.hu");
+                        let af = self.builder.build_or(lower, upper, "ascii.hex.af").unwrap();
+                        self.builder.build_or(digit, af, "ascii.hex").unwrap()
+                    }
+                    _ => unreachable!(),
+                };
+                return Ok(r.into());
+            }
+        }
+
         if method == "cmp" && args.len() == 1 {
             let lhs = self.compile_expr(object)?;
             let rhs = self.compile_expr(&args[0].value)?;
