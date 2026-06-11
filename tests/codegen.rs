@@ -1360,6 +1360,145 @@ fn main() {
     }
 
     #[test]
+    fn e2e_try_clone_vec_scalar_codegen() {
+        // phase-8-stdlib-floor item 8: `Vec[i64].try_clone()` — fallible deep
+        // clone returning `Result[Vec[T], AllocError]`. Scalar element → single
+        // fallible buffer alloc + memcpy-equivalent per-element copy. The clone
+        // is independent: mutating the source after cloning must not touch the
+        // clone (and vice-versa).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut src: Vec[i64] = Vec.new();\n\
+                 src.push(10_i64);\n\
+                 src.push(20_i64);\n\
+                 match src.try_clone() {\n\
+                     Ok(c) => {\n\
+                         let mut c2 = c;\n\
+                         src.push(30_i64);\n\
+                         c2.push(99_i64);\n\
+                         println(src.len()); println(c2.len());\n\
+                         println(c2[0]); println(c2[1]); println(c2[2]);\n\
+                     }\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n3\n10\n20\n99\n");
+        }
+    }
+
+    #[test]
+    fn e2e_try_clone_string_codegen() {
+        // `String.try_clone()` — fallible buffer alloc (len+1, NUL-terminated).
+        // The clone owns an independent buffer; the source's mutation does not
+        // alias it.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut s: String = \"hi\";\n\
+                 match s.try_clone() {\n\
+                     Ok(c) => {\n\
+                         s.push_str(\"!!\");\n\
+                         println(c); println(c.len()); println(s);\n\
+                     }\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "hi\n2\nhi!!\n");
+        }
+    }
+
+    #[test]
+    fn e2e_try_clone_vec_string_deep_codegen() {
+        // Heap-element receiver (`Vec[String]`) takes the per-element fallible
+        // clone loop: every String is deep-cloned into the new buffer, so the
+        // clone's strings are independent of the source's. Exercises the
+        // recursive fallible-clone path + Vec[String]-in-Result.Ok round-trip.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut src: Vec[String] = Vec.new();\n\
+                 src.push(\"ab\");\n\
+                 src.push(\"cd\");\n\
+                 match src.try_clone() {\n\
+                     Ok(c) => {\n\
+                         println(c.len()); println(c[0]); println(c[1]);\n\
+                     }\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "2\nab\ncd\n");
+        }
+    }
+
+    #[test]
+    fn e2e_try_clone_question_codegen() {
+        // `?`-form: `let c: Vec[i64] = v.try_clone()?` unwraps the cloned Vec
+        // out of the `Result`. Exercises the multi-word `?` Ok-payload
+        // reconstruction (the 3-word Vec unwrapped by `?`) on top of try_clone.
+        if let Some(out) = run_program(
+            "fn dup() -> Result[i64, AllocError] {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(3_i64);\n\
+                 v.push(4_i64);\n\
+                 let c: Vec[i64] = v.try_clone()?;\n\
+                 Ok(c[0] + c[1])\n\
+             }\n\
+             fn main() {\n\
+                 match dup() { Ok(n) => println(n), Err(_) => println(\"err\") }\n\
+             }",
+        ) {
+            assert_eq!(out, "7\n");
+        }
+    }
+
+    #[test]
+    fn e2e_try_clone_vecdeque_codegen() {
+        // `VecDeque[i64].try_clone()` rides the Vec fallible-clone arm (shared
+        // `{ptr,len,cap}` storage). The VecDeque payload round-trips through
+        // Result.Ok match-extraction (VecDeque-in-enum reconstruction).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut q: VecDeque[i64] = VecDeque.new();\n\
+                 q.push_back(1_i64);\n\
+                 q.push_back(2_i64);\n\
+                 match q.try_clone() {\n\
+                     Ok(c) => { println(c.len()); println(c[0]); println(c[1]); }\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n1\n2\n");
+        }
+    }
+
+    #[test]
+    fn e2e_try_clone_vec_tuple_scalar_codegen() {
+        // `Vec[(i64, i64)].try_clone()` — element is a non-heap tuple,
+        // exercising the tuple fallible-clone fn (per-field recursion) nested
+        // inside the Vec fallible-clone loop. (The tuple-WITH-heap-element
+        // variant `Vec[(i64, String)]` is pre-existing-broken even under the
+        // panicking `.clone()` — bugs.md B-2026-06-10-5 — so it is not covered.)
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut src: Vec[(i64, i64)] = Vec.new();\n\
+                 src.push((1_i64, 2_i64));\n\
+                 src.push((3_i64, 4_i64));\n\
+                 match src.try_clone() {\n\
+                     Ok(c) => {\n\
+                         println(c.len());\n\
+                         println(c[0].0); println(c[0].1);\n\
+                         println(c[1].0); println(c[1].1);\n\
+                     }\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n1\n2\n3\n4\n");
+        }
+    }
+
+    #[test]
     fn e2e_vecdeque_payload_in_option_match_codegen() {
         // B-2026-06-10-3 general fix: a VecDeque payload bound out of an
         // Option/Result via `match` was reconstructed with the 1-word default
@@ -8473,16 +8612,18 @@ fn main() {
 
     #[test]
     fn test_try_companion_instance_codegen_rejected_cleanly() {
-        // Fallible-allocation `try_*` companions whose codegen lowering has NOT
-        // landed yet (item 8 scoped the implemented set to `try_push` /
-        // `try_push_back`) are still interpreter-only; `karac build` must fail
-        // loud with the actionable item-8 message rather than mis-lower. Uses
-        // `try_clone` (a still-unimplemented companion) — `try_push` now
-        // compiles, so it would no longer be rejected.
+        // Fallible-allocation `try_*` companions whose codegen lowering is still
+        // blocked are interpreter-only; `karac build` must fail loud with the
+        // actionable item-8 message rather than mis-lower. The remaining blocked
+        // surface is the Map/Set/SortedSet family (it needs a fallible
+        // `karac_map_*` runtime API): both `try_insert` and `try_clone` on a Map
+        // hit the guard. `try_clone` on a Vec/String/VecDeque now compiles, so we
+        // exercise the guard through a `Map` receiver's `try_clone`.
         let mut parsed = karac::parse(
             "fn main() {\n\
-                 let v: Vec[i64] = [1_i64];\n\
-                 let _ = v.try_clone();\n\
+                 let mut m: Map[String, i64] = Map.new();\n\
+                 m.insert(\"k\", 1_i64);\n\
+                 let _ = m.try_clone();\n\
              }",
         );
         assert!(
@@ -8494,12 +8635,12 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         assert!(
             typed.errors.is_empty(),
-            "try_clone should typecheck: {:?}",
+            "Map.try_clone should typecheck: {:?}",
             typed.errors
         );
         karac::lower(&mut parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("try_clone codegen must fail loud (interpreter-only)");
+            .expect_err("Map.try_clone codegen must fail loud (interpreter-only)");
         assert!(
             err.contains("interpreter-only") && err.contains("item 8") && err.contains("try_clone"),
             "expected the actionable item-8 message, got: {err}"

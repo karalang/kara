@@ -2216,6 +2216,19 @@ pub(super) struct Codegen<'ctx> {
     /// provides both source and destination addresses, callee writes the
     /// cloned value into the destination slot. Mirror of `display_fn_cache`.
     pub(crate) clone_fn_cache: HashMap<String, FunctionValue<'ctx>>,
+    /// Per-type *fallible* clone function cache. Keyed by the canonical
+    /// type name (same scheme as `clone_fn_cache`). Each emitted fn has
+    /// signature `i1 karac_try_clone_<typename>(*const T, *mut T, *mut i64)`:
+    /// it clones `src` into `dst` using `karac_alloc_fallible`, returns
+    /// `true` on success, or `false` on the first allocation failure after
+    /// freeing any partially-cloned heap (so the caller leaks nothing) and
+    /// storing the failed allocation's byte count through the third
+    /// out-parameter. Backs `try_clone` codegen (phase-8-stdlib-floor item 8);
+    /// mirror of `clone_fn_cache`. Map/Set element shapes are NOT emitted
+    /// here — those need a fallible `karac_map_*` runtime API (item 8,
+    /// `try_insert` blocker) and are rejected at the dispatch guard before
+    /// any IR is emitted.
+    pub(crate) try_clone_fn_cache: HashMap<String, FunctionValue<'ctx>>,
     /// Per-type Drop function cache. Keyed by the canonical type name
     /// (e.g. `"i64"`, `"String"`, `"Vec_i64"`, `"Map_String_i64"`). Each
     /// emitted fn has signature `void karac_drop_<typename>(*mut T)` and
@@ -4477,6 +4490,7 @@ impl<'ctx> Codegen<'ctx> {
             karac_string_slice_fn,
             karac_string_slice_borrow_fn,
             clone_fn_cache: HashMap::new(),
+            try_clone_fn_cache: HashMap::new(),
             drop_fn_cache: HashMap::new(),
             map_mono_methods: HashMap::new(),
             display_fn_cache: HashMap::new(),

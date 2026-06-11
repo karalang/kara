@@ -6604,4 +6604,92 @@ fn main() {
             "contains_heap_sources_no_uaf",
         );
     }
+
+    #[test]
+    fn asan_try_clone_vec_string_deep_independent_free() {
+        // phase-8-stdlib-floor item 8: `Vec[String].try_clone()` deep-clones
+        // every element into a fresh buffer. Source and clone own independent
+        // String buffers, so both must free exactly once with no double-free /
+        // leak. Both go out of scope here (source + the `Ok`-bound clone).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut src: Vec[String] = Vec.new();
+    src.push(f"alpha{1}");
+    src.push(f"beta{2}");
+    match src.try_clone() {
+        Ok(c) => {
+            println(c.len());
+            println(c[0]);
+            println(c[1]);
+        }
+        Err(_) => println("err"),
+    }
+    src.push(f"gamma{3}");
+    println(src.len());
+}
+"#,
+            &["2", "alpha1", "beta2", "3"],
+            "try_clone_vec_string_deep_independent_free",
+        );
+    }
+
+    #[test]
+    fn asan_try_clone_question_unwrap_single_free() {
+        // The `?`-unwrap of a `try_clone` result yields an owned Vec the callee
+        // returns through; the source and the unwrapped clone each free once.
+        assert_clean_asan_run(
+            r#"
+fn dup() -> Result[i64, AllocError] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"x{1}");
+    v.push(f"y{2}");
+    let c: Vec[String] = v.try_clone()?;
+    Ok(c.len())
+}
+
+fn main() {
+    match dup() {
+        Ok(n) => println(n),
+        Err(_) => println("err"),
+    }
+}
+"#,
+            &["2"],
+            "try_clone_question_unwrap_single_free",
+        );
+    }
+
+    #[test]
+    fn asan_try_clone_vec_tuple_scalar_deep_free() {
+        // Non-heap tuple element (`Vec[(i64, i64)]`) routes through the tuple
+        // fallible-clone fn (per-field recursion) nested inside the Vec
+        // fallible-clone loop. No inner heap, so the only allocation is the
+        // buffer; source and clone free their buffers exactly once.
+        //
+        // The tuple-WITH-heap-element variant (`Vec[(i64, String)]`) is NOT
+        // covered: it UAFs identically under the *panicking* `.clone()` too —
+        // a pre-existing defect in the Vec-of-tuple-with-heap-element clone path
+        // (bugs.md B-2026-06-10-5), independent of `try_clone`.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut src: Vec[(i64, i64)] = Vec.new();
+    src.push((1i64, 2i64));
+    src.push((3i64, 4i64));
+    match src.try_clone() {
+        Ok(c) => {
+            println(c[0].0); println(c[0].1);
+            println(c[1].0); println(c[1].1);
+        }
+        Err(_) => println("err"),
+    }
+    src.push((5i64, 6i64));
+    println(src.len());
+}
+"#,
+            &["1", "2", "3", "4", "3"],
+            "try_clone_vec_tuple_scalar_deep_free",
+        );
+    }
 }

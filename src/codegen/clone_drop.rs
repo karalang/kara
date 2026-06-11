@@ -601,6 +601,629 @@ impl<'ctx> super::Codegen<'ctx> {
         clone_fn
     }
 
+    // ── Fallible (try_clone) fn framework (mirror of clone, but i1 + cleanup) ──
+
+    /// True when `te`'s type tree contains no `Map`/`Set`/`SortedSet` node —
+    /// i.e. every allocation in its deep clone is a plain buffer that
+    /// `karac_alloc_fallible` covers. `try_clone` codegen is emitted only for
+    /// supported trees; Map/Set-bearing types need a fallible `karac_map_*`
+    /// runtime API (phase-8-stdlib-floor item 8, the `try_insert` blocker) and
+    /// are rejected at the dispatch guard with the interpreter-only message
+    /// before any IR is emitted.
+    pub(super) fn type_expr_try_clone_supported(te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Tuple(elems) => elems.iter().all(Self::type_expr_try_clone_supported),
+            TypeKind::Path(p) => {
+                let head = p.segments.first().map(String::as_str);
+                match head {
+                    Some("Map") | Some("Set") | Some("SortedSet") => false,
+                    Some("Vec") | Some("VecDeque") => p
+                        .generic_args
+                        .as_ref()
+                        .and_then(|a| a.first())
+                        .map(|a| match a {
+                            GenericArg::Type(t) => Self::type_expr_try_clone_supported(t),
+                            _ => true,
+                        })
+                        .unwrap_or(true),
+                    _ => true,
+                }
+            }
+            _ => true,
+        }
+    }
+
+    /// Declare an `i1 karac_try_clone_<typename>(*const T, *mut T, *mut i64)`
+    /// shell with internal linkage. The third out-parameter receives the
+    /// failed allocation's byte count when the fn returns `false`.
+    fn declare_try_clone_fn(&self, fn_name: &str) -> FunctionValue<'ctx> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let bool_t = self.context.bool_type();
+        let fn_ty = bool_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        self.module
+            .add_function(fn_name, fn_ty, Some(Linkage::Internal))
+    }
+
+    /// Fallible analog of `emit_clone_fn_for_type_expr`. Emits (or fetches)
+    /// `i1 karac_try_clone_<typename>(*const T, *mut T, *mut i64)` — clones
+    /// `src` into `dst` via `karac_alloc_fallible`, returning `true` on
+    /// success or `false` (after freeing any partial heap + storing the
+    /// failed byte count through the out-param) on the first OOM. Routes by
+    /// shape: primitive (memcpy, always succeeds), String (fallible buffer
+    /// alloc), Vec[T] (fallible buffer + per-element recursion with
+    /// partial-clone cleanup on failure), Tuple (per-field recursion with
+    /// cleanup). Map/Set are unreachable — `type_expr_try_clone_supported`
+    /// gates them out at the dispatch site before emission.
+    pub(super) fn emit_try_clone_fn_for_type_expr(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
+        let type_name = Self::display_mangle_te(te);
+        if let Some(&f) = self.try_clone_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_try_clone_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.try_clone_fn_cache.insert(type_name, f);
+            return f;
+        }
+        match &te.kind {
+            TypeKind::Tuple(elems) if !elems.is_empty() => self.emit_tuple_try_clone_fn(elems),
+            TypeKind::Path(p) => {
+                let head = p.segments.first().map(String::as_str);
+                if head == Some("Vec") || head == Some("VecDeque") {
+                    if let Some(GenericArg::Type(elem_te)) =
+                        p.generic_args.as_ref().and_then(|a| a.first()).cloned()
+                    {
+                        return self.emit_vec_try_clone_fn(&elem_te);
+                    }
+                }
+                if head == Some("String") {
+                    return self.emit_string_try_clone_fn();
+                }
+                self.emit_primitive_try_clone_fn(&type_name, te)
+            }
+            _ => self.emit_primitive_try_clone_fn(&type_name, te),
+        }
+    }
+
+    /// Fallible clone of a primitive (Copy-by-memcpy) type: `*dst = *src`,
+    /// always returns `true` (no allocation, never fails).
+    pub(super) fn emit_primitive_try_clone_fn(
+        &mut self,
+        type_name: &str,
+        te: &TypeExpr,
+    ) -> FunctionValue<'ctx> {
+        let fn_name = format!("karac_try_clone_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.try_clone_fn_cache.insert(type_name.to_string(), f);
+            return f;
+        }
+        let val_ty = self.llvm_type_for_type_expr(te);
+        let bool_t = self.context.bool_type();
+        let saved_bb = self.builder.get_insert_block();
+        let f = self.declare_try_clone_fn(&fn_name);
+        self.try_clone_fn_cache.insert(type_name.to_string(), f);
+
+        let entry = self.context.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+        let src = f.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = f.get_nth_param(1).unwrap().into_pointer_value();
+        let v = self.builder.build_load(val_ty, src, "v").unwrap();
+        self.builder.build_store(dst, v).unwrap();
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        f
+    }
+
+    /// Fallible String clone — empty-source fast path (`{null, 0, 0}`),
+    /// else `karac_alloc_fallible(len + 1)`; null → store `len+1` to the
+    /// out-param and return `false`; success → memcpy `len`, NUL-terminate,
+    /// publish `{buf, len, len}`, return `true`. Inlines the buffer alloc
+    /// (rather than calling the panicking `karac_string_clone` runtime helper)
+    /// so the only allocation is fallible.
+    pub(super) fn emit_string_try_clone_fn(&mut self) -> FunctionValue<'ctx> {
+        let type_name = "String".to_string();
+        if let Some(&f) = self.try_clone_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = "karac_try_clone_String".to_string();
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.try_clone_fn_cache.insert(type_name, f);
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let vec_ty = self.vec_struct_type();
+        let saved_bb = self.builder.get_insert_block();
+        let f = self.declare_try_clone_fn(&fn_name);
+        self.try_clone_fn_cache.insert(type_name, f);
+
+        let entry = self.context.append_basic_block(f, "entry");
+        let empty_bb = self.context.append_basic_block(f, "empty");
+        let alloc_bb = self.context.append_basic_block(f, "alloc");
+        let oom_bb = self.context.append_basic_block(f, "oom");
+        let copy_bb = self.context.append_basic_block(f, "copy");
+
+        self.builder.position_at_end(entry);
+        let src = f.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = f.get_nth_param(1).unwrap().into_pointer_value();
+        let failed = f.get_nth_param(2).unwrap().into_pointer_value();
+
+        let src_data_pp = self
+            .builder
+            .build_struct_gep(vec_ty, src, 0, "s.data.pp")
+            .unwrap();
+        let src_len_p = self
+            .builder
+            .build_struct_gep(vec_ty, src, 1, "s.len.p")
+            .unwrap();
+        let src_data = self
+            .builder
+            .build_load(ptr_ty, src_data_pp, "s.data")
+            .unwrap()
+            .into_pointer_value();
+        let src_len = self
+            .builder
+            .build_load(i64_t, src_len_p, "s.len")
+            .unwrap()
+            .into_int_value();
+        let dst_data_pp = self
+            .builder
+            .build_struct_gep(vec_ty, dst, 0, "d.data.pp")
+            .unwrap();
+        let dst_len_p = self
+            .builder
+            .build_struct_gep(vec_ty, dst, 1, "d.len.p")
+            .unwrap();
+        let dst_cap_p = self
+            .builder
+            .build_struct_gep(vec_ty, dst, 2, "d.cap.p")
+            .unwrap();
+        let is_empty = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, src_len, i64_t.const_zero(), "s.empty")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_empty, empty_bb, alloc_bb)
+            .unwrap();
+
+        // Empty → {null, 0, 0}, true.
+        self.builder.position_at_end(empty_bb);
+        self.builder
+            .build_store(dst_data_pp, ptr_ty.const_null())
+            .unwrap();
+        self.builder
+            .build_store(dst_len_p, i64_t.const_zero())
+            .unwrap();
+        self.builder
+            .build_store(dst_cap_p, i64_t.const_zero())
+            .unwrap();
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        // Alloc len+1 fallibly.
+        self.builder.position_at_end(alloc_bb);
+        let alloc_bytes = self
+            .builder
+            .build_int_add(src_len, i64_t.const_int(1, false), "s.alloc.bytes")
+            .unwrap();
+        let new_data = self
+            .builder
+            .build_call(self.alloc_fallible_fn, &[alloc_bytes.into()], "s.new")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let is_null = self.builder.build_is_null(new_data, "s.null").unwrap();
+        self.builder
+            .build_conditional_branch(is_null, oom_bb, copy_bb)
+            .unwrap();
+
+        // OOM → store failed bytes, return false.
+        self.builder.position_at_end(oom_bb);
+        self.builder.build_store(failed, alloc_bytes).unwrap();
+        self.builder
+            .build_return(Some(&bool_t.const_int(0, false)))
+            .unwrap();
+
+        // Copy: memcpy len bytes, NUL-terminate, publish {new, len, len}, true.
+        self.builder.position_at_end(copy_bb);
+        self.builder
+            .build_memcpy(new_data, 1, src_data, 1, src_len)
+            .unwrap();
+        let nul_ptr = unsafe {
+            self.builder
+                .build_gep(i8_t, new_data, &[src_len], "s.nul")
+                .unwrap()
+        };
+        self.builder
+            .build_store(nul_ptr, i8_t.const_zero())
+            .unwrap();
+        self.builder.build_store(dst_data_pp, new_data).unwrap();
+        self.builder.build_store(dst_len_p, src_len).unwrap();
+        self.builder.build_store(dst_cap_p, src_len).unwrap();
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        f
+    }
+
+    /// Fallible `Vec[T]` clone. Empty-source fast path; else fallible buffer
+    /// alloc (null → store bytes, return false), then a `0..len` loop calling
+    /// the per-element fallible clone. If an element clone fails, drop the
+    /// `[0..i)` already-cloned elements (via the per-element drop fn), free
+    /// the buffer, and return false — the failed element's byte count is
+    /// already recorded by the recursive callee, so nothing leaks and the
+    /// `AllocError` carries the deepest failing allocation. Success publishes
+    /// `{buf, len, new_cap}` and returns true.
+    pub(super) fn emit_vec_try_clone_fn(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
+        let elem_name = Self::display_mangle_te(elem_te);
+        let type_name = format!("Vec_{elem_name}");
+        if let Some(&f) = self.try_clone_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_try_clone_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.try_clone_fn_cache.insert(type_name, f);
+            return f;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let vec_ty = self.vec_struct_type();
+        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+        // Recurse first — emit may switch the builder's insert block.
+        let elem_try_clone = self.emit_try_clone_fn_for_type_expr(elem_te);
+        let elem_drop = self.emit_drop_fn_for_type_expr(elem_te);
+
+        let saved_bb = self.builder.get_insert_block();
+        let f = self.declare_try_clone_fn(&fn_name);
+        self.try_clone_fn_cache.insert(type_name, f);
+
+        let entry = self.context.append_basic_block(f, "entry");
+        let empty_bb = self.context.append_basic_block(f, "empty");
+        let alloc_bb = self.context.append_basic_block(f, "alloc");
+        let oom_bb = self.context.append_basic_block(f, "oom");
+        let loop_hdr = self.context.append_basic_block(f, "loop.hdr");
+        let loop_bdy = self.context.append_basic_block(f, "loop.bdy");
+        let loop_nxt = self.context.append_basic_block(f, "loop.nxt");
+        let publish_bb = self.context.append_basic_block(f, "publish");
+        let cln_hdr = self.context.append_basic_block(f, "cleanup.hdr");
+        let cln_bdy = self.context.append_basic_block(f, "cleanup.bdy");
+        let cln_done = self.context.append_basic_block(f, "cleanup.done");
+
+        // Loop counters (entry-block allocas).
+        let i_alloca = self.create_entry_alloca(f, "i", i64_t.into());
+        let j_alloca = self.create_entry_alloca(f, "j", i64_t.into());
+
+        self.builder.position_at_end(entry);
+        let src = f.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = f.get_nth_param(1).unwrap().into_pointer_value();
+        let failed = f.get_nth_param(2).unwrap().into_pointer_value();
+
+        let src_data_pp = self
+            .builder
+            .build_struct_gep(vec_ty, src, 0, "src.data.pp")
+            .unwrap();
+        let src_len_p = self
+            .builder
+            .build_struct_gep(vec_ty, src, 1, "src.len.p")
+            .unwrap();
+        let src_cap_p = self
+            .builder
+            .build_struct_gep(vec_ty, src, 2, "src.cap.p")
+            .unwrap();
+        let src_data = self
+            .builder
+            .build_load(ptr_ty, src_data_pp, "src.data")
+            .unwrap()
+            .into_pointer_value();
+        let src_len = self
+            .builder
+            .build_load(i64_t, src_len_p, "src.len")
+            .unwrap()
+            .into_int_value();
+        let src_cap = self
+            .builder
+            .build_load(i64_t, src_cap_p, "src.cap")
+            .unwrap()
+            .into_int_value();
+
+        let dst_data_pp = self
+            .builder
+            .build_struct_gep(vec_ty, dst, 0, "dst.data.pp")
+            .unwrap();
+        let dst_len_p = self
+            .builder
+            .build_struct_gep(vec_ty, dst, 1, "dst.len.p")
+            .unwrap();
+        let dst_cap_p = self
+            .builder
+            .build_struct_gep(vec_ty, dst, 2, "dst.cap.p")
+            .unwrap();
+
+        let is_empty = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, src_len, i64_t.const_zero(), "is.empty")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_empty, empty_bb, alloc_bb)
+            .unwrap();
+
+        // Empty → {null, 0, 0}, true.
+        self.builder.position_at_end(empty_bb);
+        self.builder
+            .build_store(dst_data_pp, ptr_ty.const_null())
+            .unwrap();
+        self.builder
+            .build_store(dst_len_p, i64_t.const_zero())
+            .unwrap();
+        self.builder
+            .build_store(dst_cap_p, i64_t.const_zero())
+            .unwrap();
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        // Fallible buffer alloc.
+        self.builder.position_at_end(alloc_bb);
+        let raw_size = elem_ty
+            .size_of()
+            .unwrap_or_else(|| i64_t.const_int(8, false));
+        let elem_size = if raw_size.get_type().get_bit_width() == 64 {
+            raw_size
+        } else {
+            self.builder
+                .build_int_z_extend(raw_size, i64_t, "esz64")
+                .unwrap()
+        };
+        let cap_zero = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, src_cap, i64_t.const_zero(), "cap.zero")
+            .unwrap();
+        let new_cap = self
+            .builder
+            .build_select(cap_zero, src_len, src_cap, "new.cap")
+            .unwrap()
+            .into_int_value();
+        let alloc_bytes = self
+            .builder
+            .build_int_mul(new_cap, elem_size, "alloc.bytes")
+            .unwrap();
+        let buf = self
+            .builder
+            .build_call(self.alloc_fallible_fn, &[alloc_bytes.into()], "buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let buf_null = self.builder.build_is_null(buf, "buf.null").unwrap();
+        self.builder
+            .build_store(i_alloca, i64_t.const_zero())
+            .unwrap();
+        self.builder
+            .build_conditional_branch(buf_null, oom_bb, loop_hdr)
+            .unwrap();
+
+        // OOM (top-level buffer) → store bytes, return false.
+        self.builder.position_at_end(oom_bb);
+        self.builder.build_store(failed, alloc_bytes).unwrap();
+        self.builder
+            .build_return(Some(&bool_t.const_int(0, false)))
+            .unwrap();
+
+        // Per-element clone loop.
+        self.builder.position_at_end(loop_hdr);
+        let i_val = self
+            .builder
+            .build_load(i64_t, i_alloca, "i.val")
+            .unwrap()
+            .into_int_value();
+        let in_range = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i_val, src_len, "in.range")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(in_range, loop_bdy, publish_bb)
+            .unwrap();
+
+        self.builder.position_at_end(loop_bdy);
+        let off = self.builder.build_int_mul(i_val, elem_size, "off").unwrap();
+        let src_ep = unsafe {
+            self.builder
+                .build_gep(i8_t, src_data, &[off], "src.ep")
+                .unwrap()
+        };
+        let dst_ep = unsafe { self.builder.build_gep(i8_t, buf, &[off], "dst.ep").unwrap() };
+        let elem_ok = self
+            .builder
+            .build_call(
+                elem_try_clone,
+                &[src_ep.into(), dst_ep.into(), failed.into()],
+                "elem.ok",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        self.builder
+            .build_conditional_branch(elem_ok, loop_nxt, cln_hdr)
+            .unwrap();
+
+        self.builder.position_at_end(loop_nxt);
+        let i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "i.next")
+            .unwrap();
+        self.builder.build_store(i_alloca, i_next).unwrap();
+        self.builder.build_unconditional_branch(loop_hdr).unwrap();
+
+        // All elements cloned → publish.
+        self.builder.position_at_end(publish_bb);
+        self.builder.build_store(dst_data_pp, buf).unwrap();
+        self.builder.build_store(dst_len_p, src_len).unwrap();
+        self.builder.build_store(dst_cap_p, new_cap).unwrap();
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        // Element clone failed at index `i_val` — drop [0..i_val), free buf,
+        // return false (the failed byte count is already set by the callee).
+        self.builder.position_at_end(cln_hdr);
+        self.builder
+            .build_store(j_alloca, i64_t.const_zero())
+            .unwrap();
+        self.builder.build_unconditional_branch(cln_bdy).unwrap();
+        // cln_bdy guards the `j < i_val` loop at its top, dropping buf[j].
+        self.builder.position_at_end(cln_bdy);
+        let j_val = self
+            .builder
+            .build_load(i64_t, j_alloca, "j.val")
+            .unwrap()
+            .into_int_value();
+        let j_in_range = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, j_val, i_val, "j.in.range")
+            .unwrap();
+        let cln_drop = self.context.append_basic_block(f, "cleanup.drop");
+        self.builder
+            .build_conditional_branch(j_in_range, cln_drop, cln_done)
+            .unwrap();
+        self.builder.position_at_end(cln_drop);
+        let joff = self
+            .builder
+            .build_int_mul(j_val, elem_size, "joff")
+            .unwrap();
+        let j_ep = unsafe { self.builder.build_gep(i8_t, buf, &[joff], "j.ep").unwrap() };
+        self.builder
+            .build_call(elem_drop, &[j_ep.into()], "")
+            .unwrap();
+        let j_next = self
+            .builder
+            .build_int_add(j_val, i64_t.const_int(1, false), "j.next")
+            .unwrap();
+        self.builder.build_store(j_alloca, j_next).unwrap();
+        self.builder.build_unconditional_branch(cln_bdy).unwrap();
+
+        self.builder.position_at_end(cln_done);
+        self.builder
+            .build_call(self.free_fn, &[buf.into()], "")
+            .unwrap();
+        self.builder
+            .build_return(Some(&bool_t.const_int(0, false)))
+            .unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        f
+    }
+
+    /// Fallible n-tuple clone — per-field recursion. On field `i`'s failure,
+    /// drop the already-cloned fields `[0..i)` (statically unrolled, since the
+    /// field count is known) and return false; the failing byte count is set
+    /// by the recursive callee. All fields cloned → return true.
+    pub(super) fn emit_tuple_try_clone_fn(&mut self, elems: &[TypeExpr]) -> FunctionValue<'ctx> {
+        let elems_owned: Vec<TypeExpr> = elems.to_vec();
+        let parts: Vec<String> = elems_owned.iter().map(Self::display_mangle_te).collect();
+        let type_name = format!("tuple_{}", parts.join("_"));
+        if let Some(&f) = self.try_clone_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_try_clone_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.try_clone_fn_cache.insert(type_name, f);
+            return f;
+        }
+
+        let child_clones: Vec<FunctionValue<'ctx>> = elems_owned
+            .iter()
+            .map(|e| self.emit_try_clone_fn_for_type_expr(e))
+            .collect();
+        let child_drops: Vec<FunctionValue<'ctx>> = elems_owned
+            .iter()
+            .map(|e| self.emit_drop_fn_for_type_expr(e))
+            .collect();
+        let field_tys: Vec<BasicTypeEnum<'ctx>> = elems_owned
+            .iter()
+            .map(|e| self.llvm_type_for_type_expr(e))
+            .collect();
+        let tuple_ty = self.context.struct_type(&field_tys, false);
+        let bool_t = self.context.bool_type();
+
+        let saved_bb = self.builder.get_insert_block();
+        let f = self.declare_try_clone_fn(&fn_name);
+        self.try_clone_fn_cache.insert(type_name, f);
+
+        let entry = self.context.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+        let src = f.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = f.get_nth_param(1).unwrap().into_pointer_value();
+        let failed = f.get_nth_param(2).unwrap().into_pointer_value();
+
+        for (i, child) in child_clones.iter().enumerate() {
+            let src_field = self
+                .builder
+                .build_struct_gep(tuple_ty, src, i as u32, &format!("t.f{i}.s"))
+                .unwrap();
+            let dst_field = self
+                .builder
+                .build_struct_gep(tuple_ty, dst, i as u32, &format!("t.f{i}.d"))
+                .unwrap();
+            let ok = self
+                .builder
+                .build_call(
+                    *child,
+                    &[src_field.into(), dst_field.into(), failed.into()],
+                    &format!("t.f{i}.ok"),
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let next_bb = self.context.append_basic_block(f, &format!("t.f{i}.next"));
+            let fail_bb = self.context.append_basic_block(f, &format!("t.f{i}.fail"));
+            self.builder
+                .build_conditional_branch(ok, next_bb, fail_bb)
+                .unwrap();
+            // Failure: drop fields [0..i) (already cloned into dst), return false.
+            self.builder.position_at_end(fail_bb);
+            for (j, drop_fn) in child_drops.iter().enumerate().take(i) {
+                let dst_j = self
+                    .builder
+                    .build_struct_gep(tuple_ty, dst, j as u32, &format!("t.f{i}.cln.{j}"))
+                    .unwrap();
+                self.builder
+                    .build_call(*drop_fn, &[dst_j.into()], "")
+                    .unwrap();
+            }
+            self.builder
+                .build_return(Some(&bool_t.const_int(0, false)))
+                .unwrap();
+            self.builder.position_at_end(next_bb);
+        }
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        f
+    }
+
     // ── Drop fn framework (per-type drop emitters, mirror of clone) ──
 
     /// Emit (or fetch) `karac_drop_<typename>(value: *mut T)` for a given

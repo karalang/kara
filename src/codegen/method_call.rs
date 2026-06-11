@@ -953,6 +953,18 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `recv.try_clone() -> Result[Self, AllocError]` — the fallible
+        // companion of `clone` (phase-8-stdlib-floor item 8). Routed here
+        // (before the receiver-type dispatch below) so Vec/VecDeque/String
+        // share one lowering; Map/Set-bearing receivers are rejected loudly
+        // inside `try_compile_try_clone` (blocked on a fallible
+        // `karac_map_*` runtime API).
+        if method == "try_clone" && args.is_empty() {
+            if let Some(value) = self.try_compile_try_clone(object)? {
+                return Ok(value);
+            }
+        }
+
         // Scalar-primitive `x.to_string() -> String` (typed in
         // expr_method_call.rs). Render the value via the same path f-strings
         // use, then copy the bytes into an owning `String`. `char` lowers to

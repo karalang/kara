@@ -81,6 +81,7 @@ pub const CODEGEN_FALLIBLE_INSTANCE_BASES: &[&str] = &[
     "push_str",          // String.try_push_str
     "push_front",        // VecDeque.try_push_front
     "extend_from_slice", // Vec.try_extend_from_slice
+    "clone",             // Vec/VecDeque/String.try_clone (Map/Set rejected at dispatch)
 ];
 
 /// `true` when `method`'s instance `try_*` companion has codegen lowering today

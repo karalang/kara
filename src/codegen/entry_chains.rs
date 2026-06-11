@@ -1,7 +1,9 @@
-//! `<receiver>.clone()` dispatch and Map `entry()` chain compilation.
+//! `<receiver>.clone()` / `.try_clone()` dispatch and Map `entry()` chain compilation.
 //!
-//! Houses `try_compile_clone` (the identifier-bound collection clone
-//! dispatcher) and the Map `entry()` chain lowering family:
+//! Houses `receiver_collection_type_expr` (the shared side-table → `TypeExpr`
+//! reconstruction), `try_compile_clone` (the identifier-bound collection clone
+//! dispatcher), `try_compile_try_clone` (its fallible companion returning
+//! `Result[Self, AllocError]`), and the Map `entry()` chain lowering family:
 //! `try_compile_entry_chain` (dispatcher recognizing
 //! `m.entry(k).or_insert(...) / .or_insert_with(...) / .and_modify(...)`),
 //! `emit_entry_chain` / `emit_entry_and_modify` (per-arm emission),
@@ -18,29 +20,19 @@ use inkwell::AddressSpace;
 use super::state::VarSlot;
 
 impl<'ctx> super::Codegen<'ctx> {
-    /// Lower `<receiver>.clone()` for an identifier-bound collection
-    /// receiver (Vec[T], String, Map[K, V], Set[T]). Returns `Some(value)`
-    /// when the receiver is recognised; `None` otherwise (caller falls
-    /// through to the impl-block / generic dispatch so user `clone` impls
-    /// keep working).
+    /// Reconstruct an identifier receiver's collection `TypeExpr` from the
+    /// codegen side-tables. `Ok(None)` when `name` is not a builtin
+    /// collection (Set/Map/Vec/String); `Err` when a required side-table
+    /// entry is missing. Shared by `try_compile_clone` and
+    /// `try_compile_try_clone` so both derive the receiver type identically.
     ///
-    /// Synthesises a `TypeExpr` for the receiver from the codegen side-
-    /// tables (`vec_elem_types` / `var_elem_type_exprs` / `map_key_type_exprs`
-    /// / `set_elem_type_exprs`), routes through `emit_clone_fn_for_type_expr`,
-    /// and emits the `karac_clone_<typename>(src_slot, dst)` call. The
-    /// destination is a fresh stack alloca that the caller's let-binding
-    /// (or expression-statement) consumes. Scope-cleanup integration for
-    /// the cloned value lives in subtask 6 — at this layer the alloca is
-    /// just a temporary; the binding's slot inherits ownership when the
-    /// `let` stores into it.
-    pub(super) fn try_compile_clone(
-        &mut self,
-        object: &Expr,
-    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let ExprKind::Identifier(name) = &object.kind else {
-            return Ok(None);
-        };
-        let name_owned = name.clone();
+    /// Order matters — Set/Map come before Vec since Set's bucket is also
+    /// routed through `map_key_types` when lowered as `Map[T, ()]`, and a Vec
+    /// with elem=i8 overlaps with String at the LLVM-type level.
+    pub(super) fn receiver_collection_type_expr(
+        &self,
+        name: &str,
+    ) -> Result<Option<TypeExpr>, String> {
         let span_zero = crate::token::Span {
             line: 0,
             column: 0,
@@ -62,46 +54,58 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         };
 
-        // Build the receiver's TypeExpr from the side-tables. Order matters
-        // — Set/Map come before Vec since Set's bucket is also routed through
-        // map_key_types when lowered as Map[T, ()], and a Vec with elem=i8
-        // overlaps with String at the LLVM-type level.
-        let te: TypeExpr = if self.set_elem_types.contains_key(name_owned.as_str()) {
-            let elem = self
-                .set_elem_type_exprs
-                .get(name_owned.as_str())
-                .cloned()
-                .ok_or_else(|| {
-                    format!("clone: missing set_elem_type_exprs for '{}'", name_owned)
+        let te: TypeExpr =
+            if self.set_elem_types.contains_key(name) {
+                let elem =
+                    self.set_elem_type_exprs.get(name).cloned().ok_or_else(|| {
+                        format!("clone: missing set_elem_type_exprs for '{}'", name)
+                    })?;
+                mk_path("Set", vec![elem])
+            } else if self.map_key_types.contains_key(name) {
+                let k =
+                    self.map_key_type_exprs.get(name).cloned().ok_or_else(|| {
+                        format!("clone: missing map_key_type_exprs for '{}'", name)
+                    })?;
+                let v = self.var_elem_type_exprs.get(name).cloned().ok_or_else(|| {
+                    format!("clone: missing var_elem_type_exprs (val) for '{}'", name)
                 })?;
-            mk_path("Set", vec![elem])
-        } else if self.map_key_types.contains_key(name_owned.as_str()) {
-            let k = self
-                .map_key_type_exprs
-                .get(name_owned.as_str())
-                .cloned()
-                .ok_or_else(|| format!("clone: missing map_key_type_exprs for '{}'", name_owned))?;
-            let v = self
-                .var_elem_type_exprs
-                .get(name_owned.as_str())
-                .cloned()
-                .ok_or_else(|| {
-                    format!(
-                        "clone: missing var_elem_type_exprs (val) for '{}'",
-                        name_owned
-                    )
-                })?;
-            mk_path("Map", vec![k, v])
-        } else if self.vec_elem_types.contains_key(name_owned.as_str()) {
-            // Distinguish String from Vec[T]: String registers in
-            // `vec_elem_types` (so the str-method dispatch finds it) but
-            // skips `var_elem_type_exprs`. Vec[T] populates both.
-            if let Some(elem_te) = self.var_elem_type_exprs.get(name_owned.as_str()).cloned() {
-                mk_path("Vec", vec![elem_te])
+                mk_path("Map", vec![k, v])
+            } else if self.vec_elem_types.contains_key(name) {
+                // Distinguish String from Vec[T]: String registers in
+                // `vec_elem_types` (so the str-method dispatch finds it) but
+                // skips `var_elem_type_exprs`. Vec[T] populates both.
+                if let Some(elem_te) = self.var_elem_type_exprs.get(name).cloned() {
+                    mk_path("Vec", vec![elem_te])
+                } else {
+                    mk_path("String", vec![])
+                }
             } else {
-                mk_path("String", vec![])
-            }
-        } else {
+                return Ok(None);
+            };
+        Ok(Some(te))
+    }
+
+    /// Lower `<receiver>.clone()` for an identifier-bound collection
+    /// receiver (Vec[T], String, Map[K, V], Set[T]). Returns `Some(value)`
+    /// when the receiver is recognised; `None` otherwise (caller falls
+    /// through to the impl-block / generic dispatch so user `clone` impls
+    /// keep working).
+    ///
+    /// Derives the receiver `TypeExpr` via `receiver_collection_type_expr`,
+    /// routes through `emit_clone_fn_for_type_expr`, and emits the
+    /// `karac_clone_<typename>(src_slot, dst)` call. The destination is a
+    /// fresh stack alloca that the caller's let-binding (or
+    /// expression-statement) consumes; the binding's slot inherits ownership
+    /// when the `let` stores into it.
+    pub(super) fn try_compile_clone(
+        &mut self,
+        object: &Expr,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let ExprKind::Identifier(name) = &object.kind else {
+            return Ok(None);
+        };
+        let name_owned = name.clone();
+        let Some(te) = self.receiver_collection_type_expr(&name_owned)? else {
             return Ok(None);
         };
 
@@ -121,6 +125,105 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let dst_val = self.builder.build_load(llvm_ty, dst, "clone.val").unwrap();
         Ok(Some(dst_val))
+    }
+
+    /// Lower `recv.try_clone()` (phase-8-stdlib-floor item 8) — the fallible
+    /// allocation companion of `clone`. Returns `Result[Self, AllocError]`:
+    /// `Ok(cloned)` when every allocation succeeds, or
+    /// `Err(AllocError.OutOfMemory{bytes})` for the deepest failing
+    /// allocation. Emits a fresh dst slot + an `i64` `failed`-bytes out-slot,
+    /// calls the per-type fallible clone fn (`emit_try_clone_fn_for_type_expr`)
+    /// which writes `cloned` into dst on success / records the failing byte
+    /// count on OOM, then phi-merges the two `Result` aggregates.
+    ///
+    /// Map/Set/SortedSet-bearing receivers are interpreter-only in v1 (their
+    /// fallible clone needs a fallible `karac_map_*` runtime API, the same
+    /// blocker as `try_insert`); those are rejected loudly here.
+    pub(super) fn try_compile_try_clone(
+        &mut self,
+        object: &Expr,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let ExprKind::Identifier(name) = &object.kind else {
+            return Ok(None);
+        };
+        let name_owned = name.clone();
+        let Some(te) = self.receiver_collection_type_expr(&name_owned)? else {
+            return Ok(None);
+        };
+        if !Self::type_expr_try_clone_supported(&te) {
+            return Err(format!(
+                "codegen: `{name_owned}.try_clone()` on a Map/Set/SortedSet-bearing collection \
+                 is interpreter-only in v1; its codegen lowering is phase-8-stdlib-floor item 8 \
+                 (blocked on a fallible `karac_map_*` runtime API, shared with `try_insert`). \
+                 Run under `karac run`, or use the panicking `.clone()` under `karac build`."
+            ));
+        }
+
+        let try_clone_fn = self.emit_try_clone_fn_for_type_expr(&te);
+        let llvm_ty = self.llvm_type_for_type_expr(&te);
+        let i64_t = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "try_clone: no current function".to_string())?;
+        let dst = self.create_entry_alloca(fn_val, "try_clone.dst", llvm_ty);
+        let failed = self.create_entry_alloca(fn_val, "try_clone.failed", i64_t.into());
+        self.builder
+            .build_store(failed, i64_t.const_zero())
+            .unwrap();
+        let src_slot = self
+            .variables
+            .get(name_owned.as_str())
+            .copied()
+            .ok_or_else(|| format!("try_clone: unknown variable '{}'", name_owned))?;
+        let ok = self
+            .builder
+            .build_call(
+                try_clone_fn,
+                &[src_slot.ptr.into(), dst.into(), failed.into()],
+                "try_clone.ok",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        let ok_bb = self.context.append_basic_block(fn_val, "try_clone.ok.bb");
+        let oom_bb = self.context.append_basic_block(fn_val, "try_clone.oom.bb");
+        let merge_bb = self.context.append_basic_block(fn_val, "try_clone.merge");
+        self.builder
+            .build_conditional_branch(ok, ok_bb, oom_bb)
+            .unwrap();
+
+        // Success → Result.Ok(cloned). The cloned value is a Vec/String
+        // `{ptr,len,cap}` (3-word) which packs inline into the 5-word Result
+        // payload via the standard oversized-payload mechanism.
+        self.builder.position_at_end(ok_bb);
+        let cloned = self
+            .builder
+            .build_load(llvm_ty, dst, "try_clone.val")
+            .unwrap();
+        let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[cloned])?;
+        let ok_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        // OOM → Result.Err(AllocError.OutOfMemory{failed_bytes}).
+        self.builder.position_at_end(oom_bb);
+        let failed_bytes = self
+            .builder
+            .build_load(i64_t, failed, "try_clone.failed.bytes")
+            .unwrap()
+            .into_int_value();
+        let err_result = self.build_alloc_oom_result(failed_bytes)?;
+        let oom_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        let phi = self
+            .builder
+            .build_phi(ok_result.get_type(), "try_clone.result")
+            .unwrap();
+        phi.add_incoming(&[(&ok_result, ok_end), (&err_result, oom_end)]);
+        Ok(Some(phi.as_basic_value()))
     }
 
     /// Recognise the `Map.entry(k)` chain pattern and lower it as a single
