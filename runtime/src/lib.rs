@@ -275,6 +275,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_parse_i64,
         karac_runtime_parse_i64_radix,
         karac_runtime_parse_f64,
+        karac_runtime_cstr_to_string,
     );
     // The serve loops themselves need the tokio/hyper substrate (`net`);
     // the request/response accessors above are plain FFI-struct reads and
@@ -3998,6 +3999,145 @@ pub unsafe extern "C" fn karac_runtime_parse_f64(data: *const u8, len: usize, ou
             1
         }
         Err(_) => 0,
+    }
+}
+
+/// `CStr.to_string() -> Result[String, Utf8Error]` codegen backing
+/// (phase-12-self-hosting.md Cluster 2). Validates `[data, data+len)` as
+/// UTF-8 and, on success, allocates a heap `String` copy written into
+/// `*out_str` (the `{data, len, cap}` `RuntimeKaracString` shape, `cap == len`
+/// so Kāra-side `Drop` frees it via the matching allocator); on failure writes
+/// the `Utf8Error` variant tag into `*out_err`. Returns `true` (`Ok`) /
+/// `false` (`Err`).
+///
+/// Error mapping mirrors the `String.from_utf8` interpreter oracle
+/// (`eval_call.rs`): `Utf8Error::error_len()` is `None` for a truncated
+/// trailing multi-byte sequence (→ `IncompleteSequence`, tag 1) and `Some(_)`
+/// for an invalid byte at a known offset (→ `InvalidByte`, tag 0). Codegen
+/// owns the actual enum-tag assignment and selects the variant from this
+/// discriminant, keeping enum-layout knowledge on the codegen side.
+///
+/// # Safety
+/// `out_str` / `out_err` must be valid, writable pointers. `data` may be null
+/// only when `len == 0` (treated as the empty, valid-UTF-8 string).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_cstr_to_string(
+    data: *const u8,
+    len: usize,
+    out_str: *mut RuntimeKaracString,
+    out_err: *mut u8,
+) -> bool {
+    if out_str.is_null() || out_err.is_null() {
+        return false;
+    }
+    let empty = RuntimeKaracString {
+        data: std::ptr::null_mut(),
+        len: 0,
+        cap: 0,
+    };
+    let bytes: &[u8] = if data.is_null() || len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(data, len)
+    };
+    match std::str::from_utf8(bytes) {
+        Ok(s) => {
+            let sb = s.as_bytes();
+            if sb.is_empty() {
+                // Valid, empty string — still `Ok`.
+                (*out_str) = empty;
+                return true;
+            }
+            let str_layout = std::alloc::Layout::array::<u8>(sb.len()).unwrap();
+            let str_buf = std::alloc::alloc(str_layout);
+            if str_buf.is_null() {
+                std::alloc::handle_alloc_error(str_layout);
+            }
+            std::ptr::copy_nonoverlapping(sb.as_ptr(), str_buf, sb.len());
+            (*out_str) = RuntimeKaracString {
+                data: str_buf,
+                len: sb.len() as i64,
+                cap: sb.len() as i64,
+            };
+            true
+        }
+        Err(e) => {
+            *out_err = match e.error_len() {
+                None => 1,    // IncompleteSequence
+                Some(_) => 0, // InvalidByte
+            };
+            (*out_str) = empty;
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod cstr_to_string_tests {
+    use super::{karac_runtime_cstr_to_string, RuntimeKaracString};
+
+    /// Drive the extern; return (ok, copied-bytes-on-Ok, err-tag). Frees the
+    /// runtime-allocated buffer so the test itself is leak-clean.
+    unsafe fn run(input: &[u8]) -> (bool, Option<Vec<u8>>, u8) {
+        let mut out_str = RuntimeKaracString {
+            data: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        let mut out_err: u8 = 255;
+        let ok =
+            karac_runtime_cstr_to_string(input.as_ptr(), input.len(), &mut out_str, &mut out_err);
+        let bytes = if ok {
+            if out_str.data.is_null() {
+                Some(Vec::new())
+            } else {
+                let v = std::slice::from_raw_parts(out_str.data, out_str.len as usize).to_vec();
+                let layout = std::alloc::Layout::array::<u8>(out_str.len as usize).unwrap();
+                std::alloc::dealloc(out_str.data, layout);
+                Some(v)
+            }
+        } else {
+            None
+        };
+        (ok, bytes, out_err)
+    }
+
+    #[test]
+    fn valid_utf8_returns_ok_copy() {
+        unsafe {
+            let (ok, s, _) = run("héllo".as_bytes());
+            assert!(ok);
+            assert_eq!(s.as_deref(), Some("héllo".as_bytes()));
+        }
+    }
+
+    #[test]
+    fn empty_is_ok_empty() {
+        unsafe {
+            let (ok, s, _) = run(b"");
+            assert!(ok);
+            assert_eq!(s.as_deref(), Some(&b""[..]));
+        }
+    }
+
+    #[test]
+    fn invalid_byte_maps_to_tag_0() {
+        // 0xFF is never valid in UTF-8; error_len() == Some(_) → InvalidByte.
+        unsafe {
+            let (ok, _, tag) = run(&[0xFF]);
+            assert!(!ok);
+            assert_eq!(tag, 0, "InvalidByte");
+        }
+    }
+
+    #[test]
+    fn incomplete_sequence_maps_to_tag_1() {
+        // 0xE2 0x82 begins a 3-byte sequence but is truncated → error_len() None.
+        unsafe {
+            let (ok, _, tag) = run(&[0xE2, 0x82]);
+            assert!(!ok);
+            assert_eq!(tag, 1, "IncompleteSequence");
+        }
     }
 }
 

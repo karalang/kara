@@ -291,6 +291,13 @@ impl<'ctx> super::Codegen<'ctx> {
             ) {
                 return self.compile_cstr_method(object, method);
             }
+            // `CStr.to_string() -> Result[String, Utf8Error]` — the UTF-8-
+            // validating read of a C string (FFI/host-fn `char*` boundary).
+            // Unlike the borrowed-surface methods above, it allocates a heap
+            // String and builds a Result enum, so it has its own helper.
+            if key.as_str() == "CStr.to_string" {
+                return self.compile_cstr_to_string(object);
+            }
         }
 
         // Phase 6 line 17 — stdlib `TcpListener` / `TcpStream`
@@ -2151,6 +2158,145 @@ impl<'ctx> super::Codegen<'ctx> {
                 method
             )),
         }
+    }
+
+    /// Lower `CStr.to_string() -> Result[String, Utf8Error]` (phase-12
+    /// Cluster 2). The receiver is the `{ptr, i64}` slice-struct (field 0 the
+    /// NUL-terminated bytes, field 1 the source length). The runtime extern
+    /// `karac_runtime_cstr_to_string` validates UTF-8 and either writes a heap
+    /// `String` (`{ptr,len,cap}`) into an out-slot and returns `true`, or
+    /// writes the `Utf8Error` variant discriminant (0 = InvalidByte,
+    /// 1 = IncompleteSequence) into a second out-slot and returns `false`.
+    /// Codegen owns the enum-tag assignment: it builds `Result.Ok(String)` on
+    /// success and, on failure, *selects* the `Utf8Error` variant tag from the
+    /// runtime discriminant before wrapping it in `Result.Err`. Structural twin
+    /// of the `env.var -> Result[String, VarError]` lowering above.
+    fn compile_cstr_to_string(&mut self, object: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+        let recv = self.compile_expr(object)?;
+        let agg = recv.into_struct_value();
+        let data_ptr = self
+            .builder
+            .build_extract_value(agg, 0, "cstr.ts.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let data_len = self
+            .builder
+            .build_extract_value(agg, 1, "cstr.ts.len")
+            .unwrap()
+            .into_int_value();
+
+        let i64_t = self.context.i64_type();
+        let i8_t = self.context.i8_type();
+        let str_ty = self.vec_struct_type();
+
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "codegen: CStr.to_string called outside a function".to_string())?;
+        let out_str = self.create_entry_alloca(fn_val, "cstr.ts.outstr", str_ty.into());
+        let out_err = self.create_entry_alloca(fn_val, "cstr.ts.outerr", i8_t.into());
+
+        let f = self
+            .module
+            .get_function("karac_runtime_cstr_to_string")
+            .expect("karac_runtime_cstr_to_string declared in Codegen::new");
+        let ok = self
+            .builder
+            .build_call(
+                f,
+                &[
+                    data_ptr.into(),
+                    data_len.into(),
+                    out_str.into(),
+                    out_err.into(),
+                ],
+                "cstr.ts.ok",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        // Copy out the Result llvm-type and the two Utf8Error variant tags
+        // before any `&mut self` call (drops the `enum_layouts` borrow).
+        let result_ty = self
+            .enum_layouts
+            .get("Result")
+            .map(|l| l.llvm_type)
+            .ok_or_else(|| "codegen: Result enum layout missing (codegen bug)".to_string())?;
+        let (tag_invalid, tag_incomplete) = {
+            let utf8 = self.enum_layouts.get("Utf8Error").ok_or_else(|| {
+                "codegen: Utf8Error enum layout missing (codegen bug)".to_string()
+            })?;
+            let inv = *utf8.tags.get("InvalidByte").ok_or_else(|| {
+                "codegen: Utf8Error.InvalidByte missing (codegen bug)".to_string()
+            })?;
+            let inc = *utf8.tags.get("IncompleteSequence").ok_or_else(|| {
+                "codegen: Utf8Error.IncompleteSequence missing (codegen bug)".to_string()
+            })?;
+            (inv, inc)
+        };
+
+        let ok_bb = self.context.append_basic_block(fn_val, "cstr.ts.ok_bb");
+        let err_bb = self.context.append_basic_block(fn_val, "cstr.ts.err_bb");
+        let merge_bb = self.context.append_basic_block(fn_val, "cstr.ts.merge");
+        self.builder
+            .build_conditional_branch(ok, ok_bb, err_bb)
+            .unwrap();
+
+        // Ok arm: Result.Ok(<heap String the runtime wrote into out_str>).
+        self.builder.position_at_end(ok_bb);
+        let string_val = self
+            .builder
+            .build_load(str_ty, out_str, "cstr.ts.str")
+            .unwrap();
+        let ok_val = self.build_nonshared_enum_value("Result", "Ok", &[string_val])?;
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        let ok_end = self.builder.get_insert_block().unwrap();
+
+        // Err arm: Result.Err(Utf8Error.<runtime-selected variant>). Both
+        // candidate variants are unit-payload, so building a base aggregate for
+        // one and overwriting its tag word yields the other with no extra block.
+        self.builder.position_at_end(err_bb);
+        let err_tag = self
+            .builder
+            .build_load(i8_t, out_err, "cstr.ts.errtag")
+            .unwrap()
+            .into_int_value();
+        let is_invalid = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                err_tag,
+                i8_t.const_zero(),
+                "cstr.ts.is_invalid",
+            )
+            .unwrap();
+        let sel_tag = self
+            .builder
+            .build_select(
+                is_invalid,
+                i64_t.const_int(tag_invalid, false),
+                i64_t.const_int(tag_incomplete, false),
+                "cstr.ts.errsel",
+            )
+            .unwrap()
+            .into_int_value();
+        let base_err = self
+            .build_nonshared_enum_value("Utf8Error", "InvalidByte", &[])?
+            .into_struct_value();
+        let utf8_err = self
+            .builder
+            .build_insert_value(base_err, sel_tag, 0, "cstr.ts.utf8err")
+            .unwrap()
+            .into_struct_value();
+        let err_val = self.build_nonshared_enum_value("Result", "Err", &[utf8_err.into()])?;
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        let err_end = self.builder.get_insert_block().unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        let phi = self.builder.build_phi(result_ty, "cstr.ts.result").unwrap();
+        phi.add_incoming(&[(&ok_val, ok_end), (&err_val, err_end)]);
+        Ok(phi.as_basic_value())
     }
 
     /// Lower an ambient built-in resource method (`env.set`, `clock.now`).

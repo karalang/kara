@@ -3893,6 +3893,50 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_cstr_to_string_result() {
+        // `CStr.to_string() -> Result[String, Utf8Error]` (phase-12 Cluster 2).
+        // The outbound `char*` read: validate UTF-8, copy to a heap String on
+        // Ok, classify the failure on Err. Covers all four runtime arms —
+        // ASCII Ok, multi-byte Ok (the bytes round-trip), an invalid lead byte
+        // (`\xff` → InvalidByte), and a truncated 3-byte sequence (`\xe2\x82` →
+        // IncompleteSequence). Error mapping mirrors `String.from_utf8` /
+        // `std::str::from_utf8` (the interpreter oracle); tests/interpreter
+        // would render identically under `karac run`.
+        let src = r#"
+fn main() {
+    match c"hello".to_string() {
+        Ok(s) => println(s),
+        Err(_) => println("ERR"),
+    }
+    match c"héllo".to_string() {
+        Ok(s) => println(s),
+        Err(_) => println("ERR"),
+    }
+    match c"\xff".to_string() {
+        Ok(_) => println("OK?"),
+        Err(e) => match e {
+            Utf8Error.InvalidByte => println("INVALID"),
+            Utf8Error.IncompleteSequence => println("INCOMPLETE"),
+            Utf8Error.Other(m) => println(m),
+        },
+    }
+    match c"\xe2\x82".to_string() {
+        Ok(_) => println("OK?"),
+        Err(e) => match e {
+            Utf8Error.InvalidByte => println("INVALID"),
+            Utf8Error.IncompleteSequence => println("INCOMPLETE"),
+            Utf8Error.Other(m) => println(m),
+        },
+    }
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "hello\nhéllo\nINVALID\nINCOMPLETE\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_cstr_as_ptr_feeds_libc_puts() {
         // The design's flagship FFI example (§ C-String Literals "FFI
         // handoff"): pass a `c"..."` literal's pointer to libc `puts`

@@ -443,10 +443,29 @@ impl<'a> super::TypeChecker<'a> {
                     mutable: false,
                 }
             }
+            // `CStr.to_string() -> Result[String, Utf8Error]` — the outbound
+            // half of the `char*` read path (FFI/host-fn boundary; the LLVM-C
+            // self-hosting port reads `char*` error messages this way). Mirrors
+            // `String.from_utf8`'s return shape (UTF-8-validating). Codegen +
+            // the `karac_runtime_cstr_to_string` extern lower it for `karac
+            // build`; the interpreter validates via `String.from_utf8` semantics.
+            "to_string" => {
+                require_no_args(self, "to_string");
+                Type::Named {
+                    name: "Result".to_string(),
+                    args: vec![
+                        Type::Str,
+                        Type::Named {
+                            name: "Utf8Error".to_string(),
+                            args: vec![],
+                        },
+                    ],
+                }
+            }
             _ => self.require_known_method(
                 "CStr",
                 method,
-                &["as_bytes", "as_ptr", "is_empty", "len"],
+                &["as_bytes", "as_ptr", "is_empty", "len", "to_string"],
                 args,
                 span,
             ),

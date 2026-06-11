@@ -3031,6 +3031,26 @@ impl<'ctx> Codegen<'ctx> {
             parse_f64_type,
             Some(Linkage::External),
         );
+        // `karac_runtime_cstr_to_string(data: *const u8, len: usize,
+        //  out_str: *mut String, out_err: *mut u8) -> bool`. Backs
+        //  `CStr.to_string() -> Result[String, Utf8Error]` (phase-12 Cluster 2):
+        //  validates UTF-8, writes a heap String into `out_str` on Ok, or the
+        //  Utf8Error variant tag into `out_err` on Err. Codegen builds the
+        //  Result enum from the discriminant (enum-layout knowledge stays here).
+        let cstr_to_string_type = context.bool_type().fn_type(
+            &[
+                ptr_type.into(),
+                i64_type.into(),
+                ptr_type.into(),
+                ptr_type.into(),
+            ],
+            false,
+        );
+        let _karac_runtime_cstr_to_string_fn = module.add_function(
+            "karac_runtime_cstr_to_string",
+            cstr_to_string_type,
+            Some(Linkage::External),
+        );
         let response_set_status_type = context
             .void_type()
             .fn_type(&[ptr_type.into(), context.i16_type().into()], false);

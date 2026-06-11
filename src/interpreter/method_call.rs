@@ -703,6 +703,40 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // `CStr.to_string() -> Result[String, Utf8Error]` — UTF-8-validating,
+        // and MUST precede the generic Display `to_string` below (which returns
+        // a bare `String` and would mismatch the `Result` type the typechecker
+        // and codegen produce for a CStr receiver). Same oracle as
+        // `String.from_utf8` (eval_call.rs): `error_len()` distinguishes a
+        // truncated trailing sequence (`IncompleteSequence`) from a bad byte at
+        // a known offset (`InvalidByte`).
+        if method == "to_string" {
+            if let Value::CStr(ref b) = obj {
+                return match std::str::from_utf8(b) {
+                    Ok(s) => Value::EnumVariant {
+                        enum_name: "Result".to_string(),
+                        variant: "Ok".to_string(),
+                        data: EnumData::Tuple(vec![Value::String(s.to_string())]),
+                    },
+                    Err(e) => {
+                        let variant = match e.error_len() {
+                            None => "IncompleteSequence",
+                            Some(_) => "InvalidByte",
+                        };
+                        Value::EnumVariant {
+                            enum_name: "Result".to_string(),
+                            variant: "Err".to_string(),
+                            data: EnumData::Tuple(vec![Value::EnumVariant {
+                                enum_name: "Utf8Error".to_string(),
+                                variant: variant.to_string(),
+                                data: EnumData::Unit,
+                            }]),
+                        }
+                    }
+                };
+            }
+        }
+
         // `#[derive(Display)]` — `to_string()` on a unit enum variant.
         if method == "to_string" {
             if let Value::EnumVariant {
