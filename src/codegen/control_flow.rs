@@ -140,10 +140,12 @@ impl<'ctx> super::Codegen<'ctx> {
             (true, false) => Ok(else_val.unwrap_or(placeholder)),
             (false, true) => Ok(then_val.unwrap_or(placeholder)),
             (false, false) => {
-                if let (Some(tv), Some(ev)) = (&then_val, &else_val) {
+                if let (Some(tv), Some(ev)) = (then_val, else_val) {
+                    // Same suffixless-literal width reconciliation as `compile_if`.
+                    let (tv, ev) = self.unify_int_branch_widths(tv, ev);
                     if tv.get_type() == ev.get_type() {
                         let phi = self.builder.build_phi(tv.get_type(), "ifletval").unwrap();
-                        phi.add_incoming(&[(tv, then_end), (ev, else_end)]);
+                        phi.add_incoming(&[(&tv, then_end), (&ev, else_end)]);
                         return Ok(phi.as_basic_value());
                     }
                 }
@@ -838,15 +840,60 @@ impl<'ctx> super::Codegen<'ctx> {
             // otherwise the `if` is in statement position (unit value) — fall
             // back to the const-0 placeholder.
             (false, false) => {
-                if let (Some(tv), Some(ev)) = (&then_val, &else_val) {
+                if let (Some(tv), Some(ev)) = (then_val, else_val) {
+                    let (tv, ev) = self.unify_int_branch_widths(tv, ev);
                     if tv.get_type() == ev.get_type() {
                         let phi = self.builder.build_phi(tv.get_type(), "ifval").unwrap();
-                        phi.add_incoming(&[(tv, then_end_bb), (ev, else_end_bb)]);
+                        phi.add_incoming(&[(&tv, then_end_bb), (&ev, else_end_bb)]);
                         return Ok(phi.as_basic_value());
                     }
                 }
                 Ok(placeholder)
             }
+        }
+    }
+
+    /// Reconcile the LLVM int widths of an `if`/`if let`'s two branch values
+    /// before the phi. A suffixless integer literal (`0`) lowers at the
+    /// default `i64` width — `const_int_for_suffix` keys off the suffix only,
+    /// ignoring the typechecker's inferred type — so a branch that is just
+    /// `{ 0 }` produces an `i64` while the sibling branch carries its real
+    /// narrower type (`u8`, …). The typechecker has ALREADY unified both
+    /// branches to one type, so the only width mismatch reachable here is this
+    /// default-`i64`-literal-vs-narrower case, and the wider side is therefore
+    /// a compile-time constant the checker verified fits. Truncate it to the
+    /// narrower width so the phi's operands agree.
+    ///
+    /// Without this, the merge falls through to the const-`0` placeholder and
+    /// the WHOLE `if` evaluates to `0` (self-hosting #7: the lexer's
+    /// `fn peek(ref self) -> u8 { if … { 0 } else { self.bytes[self.current] } }`
+    /// always returned 0, so every scan loop exited immediately). Gated on
+    /// `is_const()` so a (typechecker-impossible) non-constant wide branch is
+    /// left untouched rather than lossily truncated — that case falls through
+    /// to the existing placeholder path, preserving prior behavior.
+    fn unify_int_branch_widths(
+        &self,
+        a: BasicValueEnum<'ctx>,
+        b: BasicValueEnum<'ctx>,
+    ) -> (BasicValueEnum<'ctx>, BasicValueEnum<'ctx>) {
+        let (BasicValueEnum::IntValue(av), BasicValueEnum::IntValue(bv)) = (a, b) else {
+            return (a, b);
+        };
+        let (aw, bw) = (av.get_type().get_bit_width(), bv.get_type().get_bit_width());
+        if aw > bw && av.is_const() {
+            let t = self
+                .builder
+                .build_int_truncate(av, bv.get_type(), "ifw.trunc")
+                .unwrap();
+            (t.into(), b)
+        } else if bw > aw && bv.is_const() {
+            let t = self
+                .builder
+                .build_int_truncate(bv, av.get_type(), "ifw.trunc")
+                .unwrap();
+            (a, t.into())
+        } else {
+            (a, b)
         }
     }
 

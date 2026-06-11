@@ -1073,6 +1073,42 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_if_branch_untyped_int_literal_narrow_width() {
+        // Regression for self-hosting blocker #7: an untyped integer literal
+        // in one branch of an `if` whose result type is narrower than i64
+        // (`u8`) was lowered at the default i64 width (`const_int_for_suffix`
+        // keys off the suffix only), so the phi-merge saw mismatched branch
+        // types (i64 vs i8) and silently fell through to a const-0 placeholder
+        // — the WHOLE `if` evaluated to 0. This made the self-hosted lexer's
+        // `fn peek(ref self) -> u8 { if … { 0 } else { self.bytes[i] } }`
+        // always return 0, so every scan loop exited immediately. Fix:
+        // `compile_if` truncates the wider (checker-verified-fitting constant)
+        // branch to the narrower width before the phi.
+        //
+        // Covers the literal in the else branch, in the (taken) then branch,
+        // and through a Vec[u8] index (the lexer's exact shape).
+        if let Some(out) = run_program(
+            "fn pick(c: bool, x: u8) -> u8 { if c { 0 } else { x } }\n\
+             fn peek(b: ref Vec[u8], i: i64) -> u8 {\n\
+                 if i >= b.len() { 0 } else { b[i] }\n\
+             }\n\
+             fn main() {\n\
+                 let a: u8 = if false { 0 } else { 97u8 };\n\
+                 println(a.to_string());            // 97\n\
+                 let t: u8 = if true { 97u8 } else { 0 };\n\
+                 println(t.to_string());            // 97 (taken branch typed)\n\
+                 println(pick(false, 5u8).to_string()); // 5\n\
+                 let mut v: Vec[u8] = Vec.new();\n\
+                 v.push(65u8); v.push(66u8);\n\
+                 println(peek(v, 0).to_string());   // 65 (was 0)\n\
+                 println(peek(v, 9).to_string());   // 0  (oob -> the literal arm)\n\
+             }",
+        ) {
+            assert_eq!(out, "97\n97\n5\n65\n0\n");
+        }
+    }
+
+    #[test]
     fn e2e_alloc_error_codegen() {
         // The `AllocError` prelude type (struct + unit variant) compiles: both
         // variants construct, `==` compares payload + tag, `match` binds the

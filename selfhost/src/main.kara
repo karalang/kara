@@ -7,14 +7,13 @@
 // BLOCKED on the self-hosting blocker chain (see
 // docs/implementation_checklist/phase-12-self-hosting.md § Self-hosting-surfaced
 // blockers). #1 (enum-in-struct-field), #4 (index a Vec field through self),
-// #5 (String method on a field receiver), and #6 (`struct Span` vs stdlib
-// `std.tracing` Span collision) are FIXED — this now BUILDS + RUNS via
-// `karac build`. It currently mis-lexes (single-char idents, dropped
-// whitespace) because of #7: an untyped int literal in an if-branch isn't
-// coerced to the branch's narrow type, so `peek()`'s
-// `if … { 0 } else { self.bytes[self.current] }` always returns 0. Once #7
-// lands, the differential oracle (tests/selfhost_lexer.rs) comes online, then
-// the full token set follows.
+// #5 (String method on a field receiver), #6 (`struct Span` vs stdlib
+// `std.tracing` Span collision), and #7 (untyped int literal in an if-branch
+// not coerced to the branch's narrow type) are all FIXED — this now BUILDS,
+// RUNS, and LEXES CORRECTLY via `karac build`: `(ab, 12)` tokenizes to
+// OP( / IDENT ab / OP, / INT 12 / OP) / EOF with exact byte-offset spans.
+// NEXT: stand up the differential oracle (tests/selfhost_lexer.rs) vs the
+// Rust src/lexer.rs, then expand to the full token set.
 
 struct Span {
     line: i64,
