@@ -1010,7 +1010,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.refs_in_expr(left, refs, defs);
                 self.refs_in_expr(right, refs, defs);
             }
-            ExprKind::Unary { operand, .. } => self.refs_in_expr(operand, refs, defs),
+            ExprKind::Unary { operand, .. } | ExprKind::Question(operand) => {
+                self.refs_in_expr(operand, refs, defs)
+            }
+            // `a | b` (pipe) and `a ?? b` (nil-coalesce) read both sides —
+            // without these, a piped/coalesced read of a captured local
+            // would be missed (same class as the `Unsafe` gap below).
+            ExprKind::Pipe { left, right } | ExprKind::NilCoalesce { left, right } => {
+                self.refs_in_expr(left, refs, defs);
+                self.refs_in_expr(right, refs, defs);
+            }
+            ExprKind::OptionalChain { object, args, .. } => {
+                self.refs_in_expr(object, refs, defs);
+                if let Some(args) = args {
+                    for a in args {
+                        self.refs_in_expr(&a.value, refs, defs);
+                    }
+                }
+            }
             ExprKind::Call { callee, args } => {
                 self.refs_in_expr(callee, refs, defs);
                 for a in args {
@@ -1041,9 +1058,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.refs_in_block(body, refs, defs);
             }
             ExprKind::Loop { body, .. } => self.refs_in_block(body, refs, defs),
-            ExprKind::Block(block) | ExprKind::Seq(block) => {
+            // Block-bearing expression forms — every one can hold a read of
+            // a captured outer local. `Unsafe` is the one that bit the
+            // FFI-handle pattern (`unsafe { free(m) }` in an auto-par branch
+            // left `m` out of the capture set → "Undefined variable 'm'"),
+            // but `Try` / `Par` / `Lock` are the same latent gap. Mirrors
+            // the concurrency analyzer's `collect_expr_reads`, which already
+            // recurses into all of these — keeping the capture-set collector
+            // and the dependency analyzer in agreement.
+            ExprKind::Block(block)
+            | ExprKind::Seq(block)
+            | ExprKind::Unsafe(block)
+            | ExprKind::Try(block)
+            | ExprKind::Par(block) => {
                 self.refs_in_block(block, refs, defs);
             }
+            ExprKind::Lock { body, .. } => self.refs_in_block(body, refs, defs),
             ExprKind::Return(Some(e)) => self.refs_in_expr(e, refs, defs),
             ExprKind::Return(None) => {}
             ExprKind::Break { value: Some(e), .. } => self.refs_in_expr(e, refs, defs),

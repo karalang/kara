@@ -37,19 +37,21 @@ build-verified set.
   PascalCase `LLVMContextCreate` / `LLVMGetDefaultTargetTriple` / `LLVMModuleCreateWithNameInContext`
   bindings are now **accepted by the front-end** (no parse/symbol error) — the proof gets past symbol
   binding. E2E test in `tests/codegen.rs`.
-- [ ] **Codegen "Undefined variable" for a `let`-bound `*mut T` FFI-return passed as an argument**
-  *(NEW — surfaced by the libLLVM build, **pre-existing**, confirmed on clean-main karac, the real
-  next gate).* Minimal reproducer — no `#[link_name]` needed:
-  ```kara
-  unsafe extern "C" { fn malloc(n: i64) -> *mut u8; fn free(p: *mut u8); }
-  fn main() { let m = unsafe { malloc(8) }; unsafe { free(m) } }   // error: codegen failed: Undefined variable 'm'
-  ```
-  Every LLVM-C handle (`LLVMContextRef` = `*mut`) is exactly this shape — created by an FFI call,
-  let-bound, passed to later FFI calls — so this blocks the **entire** handle-passing chain (it is why
-  the `LLVMContextCreate` → `LLVMContextDispose` proof can't reach the linker). Related symptom: a
-  let-bound `*mut` handle is *moved* on pass-by-value in some positions (`*const T` is `Copy`, `*mut T`
-  inconsistently so). Needs an ownership/codegen investigation — likely a raw-`*mut`-pointer slot or
-  move-classification bug. → own tracker entry, [phase-12 Cluster 2](self-hosting-llvm-c-ffi.md#prerequisites-phase-8-floor).
+- [x] **Codegen "Undefined variable" for a local read inside an `unsafe {}` block in an auto-par
+  branch** ✅ FIXED 2026-06-11. The `malloc`/`free` reproducer was an **auto-parallelization** bug, not
+  an FFI one: the auto-par capture-set collector `refs_in_expr` had no `ExprKind::Unsafe` arm, so a
+  local read inside `unsafe { free(m) }` was left out of the par-branch env struct → `Undefined
+  variable 'm'`. Fixed by aligning `refs_in_expr` with the concurrency analyzer's `collect_expr_reads`
+  (added `Unsafe`/`Try`/`Par`/`Lock`/`Question`/`Pipe`/`NilCoalesce`/`OptionalChain` arms). Regression
+  test in `tests/par_codegen.rs`; full codegen + par_codegen + concurrency + closures suites green. A
+  general-purpose correctness fix (any auto-par branch reading a local through those forms).
+- [ ] **`*mut T` raw pointers are not `Copy` (moved on pass-by-value)** *(NEW critical-path gate —
+  surfaced once the auto-par fix unblocked the handle chain).* With the `Undefined variable` bug fixed,
+  the `LLVMContextCreate`→`LLVMContextDispose` proof now fails *ownership*: `let ctx = ...create();
+  module_create(name, ctx); context_dispose(ctx)` → *"value 'ctx' moved here, used again"*. `*const T`
+  is `Copy`, but `*mut T` is move-only. Every LLVM-C handle is a `*mut` passed to many builder/dispose
+  calls, so this blocks the handle chain. Raw pointers should be `Copy` regardless of `const`/`mut`
+  (Rust parity) — an ownership-checker fix. → own tracker entry, [phase-12 Cluster 2](self-hosting-llvm-c-ffi.md#prerequisites-phase-8-floor).
 - [ ] **`CStr.to_string() -> Result[String, Utf8Error]`** *(NEW — build-surfaced).* `read_and_dispose`
   converts the LLVM-owned `char*` to an owned Kāra `String`. The `Utf8Error` type exists
   (`runtime/stdlib/utf8_error.kara`) but `CStr.to_string()` has no typecheck/codegen lowering, and

@@ -4919,4 +4919,41 @@ fn main() {
             );
         }
     }
+
+    /// Regression: an auto-par branch statement that reads an outer local
+    /// *inside an `unsafe { }` block* must include that local in the branch's
+    /// capture set. The capture-set collector (`refs_in_expr`) previously had
+    /// no `ExprKind::Unsafe` arm — it hit the catch-all `_ => {}` and never
+    /// saw `m` inside `unsafe { free(m) }`, so the env struct omitted `m` and
+    /// the branch fn faulted with "codegen failed: Undefined variable 'm'"
+    /// (the panic path in `run_program`). This is exactly the LLVM-C handle
+    /// shape — an FFI `*mut` created, let-bound, then passed to a later FFI
+    /// call inside `unsafe { }`. `malloc`/`free` (libc) stand in. The fix
+    /// aligned `refs_in_expr` with the concurrency analyzer's
+    /// `collect_expr_reads`, which already recurses into `Unsafe`/`Try`/
+    /// `Par`/`Lock`. A successful run (any stdout, including empty) means
+    /// codegen no longer aborts; a regression re-introduces the panic.
+    #[test]
+    fn test_auto_par_branch_captures_local_read_inside_unsafe_block_e2e() {
+        let out = run_program(
+            r#"
+unsafe extern "C" {
+    fn malloc(n: i64) -> *mut u8;
+    fn free(p: *mut u8);
+}
+fn main() {
+    let m = unsafe { malloc(8) };
+    unsafe { free(m) };
+    println("ok");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "ok\n",
+                "an auto-par branch reading an FFI handle inside `unsafe {{ }}` must \
+                 capture it — the program must compile and print `ok`"
+            );
+        }
+    }
 }
