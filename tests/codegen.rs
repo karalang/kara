@@ -964,6 +964,46 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_index_vec_field_through_self() {
+        // Regression for the self-hosting lexer index blocker: indexing a
+        // `Vec` field through the `self` receiver (`self.bytes[self.current]`)
+        // died with "Index operator applied to non-array type". The
+        // field-access-rooted index arm resolves the receiver through
+        // `lower_field_access_ptr`, whose `match` handled `Identifier` and
+        // `Index` inners but not `SelfValue` — so `self.field[i]` fell through
+        // to the generic tail and compiled the field to a Vec `{ptr,len,cap}`
+        // VALUE rather than indexing it. The identical access through a named
+        // `ref S` param (`s.field[i]`) already worked; `self` is registered
+        // under the name "self" in the same per-binding registries, so the fix
+        // routes `SelfValue` through the Identifier path with that name.
+        //
+        // Covers both `ref self` (read) and `mut ref self` (the lexer's
+        // `advance`) and a `u8` element (the lexer's byte buffer).
+        if let Some(out) = run_program(
+            "struct Buf { bytes: Vec[u8], pos: i64 }\n\
+             impl Buf {\n\
+                 fn peek(ref self) -> u8 { self.bytes[self.pos] }\n\
+                 fn advance(mut ref self) -> u8 {\n\
+                     let c = self.bytes[self.pos];\n\
+                     self.pos = self.pos + 1;\n\
+                     c\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut b: Vec[u8] = Vec.new();\n\
+                 b.push(65u8); b.push(66u8); b.push(67u8);\n\
+                 let mut buf = Buf { bytes: b, pos: 0 };\n\
+                 println(buf.peek().to_string());\n\
+                 let a = buf.advance();\n\
+                 println(a.to_string());\n\
+                 println(buf.peek().to_string());\n\
+             }",
+        ) {
+            assert_eq!(out, "65\n65\n66\n");
+        }
+    }
+
+    #[test]
     fn e2e_alloc_error_codegen() {
         // The `AllocError` prelude type (struct + unit variant) compiles: both
         // variants construct, `==` compares payload + tag, `match` binds the

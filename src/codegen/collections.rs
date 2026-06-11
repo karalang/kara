@@ -797,6 +797,29 @@ impl<'ctx> super::Codegen<'ctx> {
             field,
         } = &object.kind
         {
+            // `self.field[i]` — `self` parses as `SelfValue`, but
+            // `lower_field_access_ptr`'s receiver match only recognises
+            // `Identifier` / `Index` inners (SelfValue is deliberately left
+            // to return `Ok(None)` there so `self.field.method()` dispatch —
+            // e.g. atomic `self.count.fetch_add(...)` — keeps falling through
+            // to its dedicated handler, NOT the generic field-receiver path).
+            // `self` is registered under the name "self" in every per-binding
+            // registry, so for the INDEX path specifically we normalise the
+            // receiver to a synthetic `Identifier("self")` and resolve it via
+            // the Identifier arm. Scoped here (not in the shared helper) so
+            // the method-receiver path is byte-identical to before — without
+            // this, `self.bytes[self.current]` dies on "Index operator applied
+            // to non-array type" (self-hosting lexer).
+            let self_ident;
+            let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
+                self_ident = Expr {
+                    kind: ExprKind::Identifier("self".to_string()),
+                    span: inner.span.clone(),
+                };
+                &self_ident
+            } else {
+                inner
+            };
             if let Some((field_ptr, field_ll_ty, field_te)) =
                 self.lower_field_access_ptr(inner, field, "index expression")?
             {
