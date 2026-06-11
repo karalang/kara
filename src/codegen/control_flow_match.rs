@@ -230,6 +230,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // payload out — its `FreeInlineOptionPayload` scope-exit
                     // free would otherwise double-free against the binding.
                     self.suppress_inline_option_payload_cleanup(scrutinee, &arm.pattern);
+                    self.suppress_inline_result_payload_cleanup(scrutinee, &arm.pattern);
+                    self.suppress_inline_option_map_payload_cleanup(scrutinee, &arm.pattern);
                 }
             }
 
@@ -1618,6 +1620,222 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_struct_gep(layout.llvm_type, slot.ptr, 3, "optpl.suppress.cap")
         {
             let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
+        }
+    }
+
+    /// `Result[T, E]` sibling of `suppress_inline_option_payload_cleanup`.
+    /// When the scrutinee is an identifier whose binding registered a
+    /// `FreeInlineResultPayload` and the arm binds the `Ok`/`Err` payload
+    /// out, zero the source `Result`'s `cap` word (field index 3 — `Ok` and
+    /// `Err` payloads overlay the same `{ptr,len,cap}` at words w0/w1/w2) so
+    /// the scope-exit free skips on the taken arm; the bound payload's own
+    /// cleanup frees it once. The store lands in the arm's body block, so it
+    /// only fires at runtime when that arm (= the live variant) is taken — a
+    /// non-consuming `Ok(_)` / `Err(_)` / wildcard arm runs no suppression
+    /// and the source free fires for the live payload.
+    pub(super) fn suppress_inline_result_payload_cleanup(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return;
+        };
+        if !self.inline_result_payload_vars.contains(name.as_str()) {
+            return;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        let variant = path.last().map(|s| s.as_str());
+        if variant != Some("Ok") && variant != Some("Err") {
+            return;
+        }
+        if !patterns.iter().any(pattern_consumes_field) {
+            return;
+        }
+        let Some(slot) = self.variables.get(name.as_str()) else {
+            return;
+        };
+        let Some(layout) = self.enum_layouts.get("Result") else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        if let Ok(cap_ptr) =
+            self.builder
+                .build_struct_gep(layout.llvm_type, slot.ptr, 3, "respl.suppress.cap")
+        {
+            let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
+        }
+    }
+
+    /// `Option[Map]`/`Option[Set]` sibling of
+    /// `suppress_inline_option_payload_cleanup`. The inline handle payload
+    /// has no `cap` word to zero, so a `match`/`if let` arm that binds the
+    /// `Some` payload out instead overwrites the source tag with `None` —
+    /// the `FreeInlineOptionMapPayload` tag-guard then skips. The store lands
+    /// in the arm body (only fires when the consuming arm is taken). This
+    /// prevents a double-free when the bound map is re-moved into a
+    /// `Vec[Map]` (which then owns + frees it); a simple in-scope use of the
+    /// bound map keeps leaking — that's the separate deferred match-bound-Map
+    /// tracking gap, never a double-free.
+    pub(super) fn suppress_inline_option_map_payload_cleanup(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return;
+        };
+        if !self.inline_option_map_payload_vars.contains(name.as_str()) {
+            return;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        if path.last().map(|s| s.as_str()) != Some("Some") {
+            return;
+        }
+        if !patterns.iter().any(pattern_consumes_field) {
+            return;
+        }
+        let Some(slot) = self.variables.get(name.as_str()) else {
+            return;
+        };
+        let Some(layout) = self.enum_layouts.get("Option") else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        let none_tag = layout.tags.get("None").copied().unwrap_or(0);
+        if let Ok(tag_ptr) =
+            self.builder
+                .build_struct_gep(layout.llvm_type, slot.ptr, 0, "optmap.suppress.tag")
+        {
+            let _ = self
+                .builder
+                .build_store(tag_ptr, i64_t.const_int(none_tag, false));
+        }
+    }
+
+    /// Disarm the scope-exit inline-payload free of a `?`-operand binding.
+    /// `r?` CONSUMES `r` — on `Ok` the payload moves into the unwrap binding,
+    /// on `Err` it moves into the early-returned `Err` (the caller's) — so the
+    /// source's `FreeInlineResultPayload` / `FreeInlineOptionPayload` /
+    /// `FreeInlineOptionMapPayload` must not fire. `compile_question` already
+    /// captured the Result/Option VALUE into SSA before calling this, so the
+    /// extracted/reconstructed payload keeps the live buffer; zeroing the
+    /// slot's `cap` word (field 3 — Ok/Err/Some payloads overlay `{ptr,len,cap}`
+    /// at w0/w1/w2) or, for `Option[Map]`, the tag (→ `None`) only neutralizes
+    /// the cleanup. Without this the source frees a buffer the binding (Ok) or
+    /// the caller (Err) now owns — a double-free / UAF. The Option/Result
+    /// inline-payload registration (B-2026-06-10-6) made this `?`-site
+    /// suppression load-bearing; before it, no inline-payload free existed.
+    pub(super) fn suppress_question_source_inline_payload(&self, inner: &Expr) {
+        let ExprKind::Identifier(name) = &inner.kind else {
+            return;
+        };
+        let Some(slot) = self.variables.get(name.as_str()) else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        if self.inline_result_payload_vars.contains(name.as_str()) {
+            if let Some(layout) = self.enum_layouts.get("Result") {
+                if let Ok(cap_ptr) = self.builder.build_struct_gep(
+                    layout.llvm_type,
+                    slot.ptr,
+                    3,
+                    "q.respl.suppress.cap",
+                ) {
+                    let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
+                }
+            }
+        }
+        if self.inline_option_payload_vars.contains(name.as_str()) {
+            if let Some(layout) = self.enum_layouts.get("Option") {
+                if let Ok(cap_ptr) = self.builder.build_struct_gep(
+                    layout.llvm_type,
+                    slot.ptr,
+                    3,
+                    "q.optpl.suppress.cap",
+                ) {
+                    let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
+                }
+            }
+        }
+        if self.inline_option_map_payload_vars.contains(name.as_str()) {
+            if let Some(layout) = self.enum_layouts.get("Option") {
+                let none_tag = layout.tags.get("None").copied().unwrap_or(0);
+                if let Ok(tag_ptr) = self.builder.build_struct_gep(
+                    layout.llvm_type,
+                    slot.ptr,
+                    0,
+                    "q.optmap.suppress.tag",
+                ) {
+                    let _ = self
+                        .builder
+                        .build_store(tag_ptr, i64_t.const_int(none_tag, false));
+                }
+            }
+        }
+    }
+
+    /// True when `e`'s value is a FRESH-owned enum — a variant constructor /
+    /// free-fn-call result, or an `if`/`match`/block whose every leaf is one
+    /// — rather than a move/alias/borrow of an existing binding. Gates the
+    /// NON-`Call` let-RHS registration of inline-payload drops
+    /// (`let x = if c { Some(a) } else { None };`, B-2026-06-10-6's non-Call
+    /// follow-on): registering a free for a moved-in existing Option/Result
+    /// binding would double-free against the source's own free, and a borrow
+    /// payload aliases foreign storage. Conservative — anything not provably
+    /// fresh returns `false` (no registration → still leaks, never a
+    /// double-free). A bound `Identifier`/`Path` (in `self.variables`) is a
+    /// move → not fresh; a `None`-like nullary constructor (NOT a variable,
+    /// empty payload) is fresh-safe; `MethodCall` is excluded (matches the
+    /// existing Call-only gate — `pop` rides the Vec machinery, `get`/`first`
+    /// are borrows). The detectors themselves still reject borrow (`ref T`)
+    /// and non-heap payloads, so this only adds the move/alias guard.
+    pub(super) fn rhs_is_fresh_inline_enum(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Call { .. } => true,
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                then_block
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|t| self.rhs_is_fresh_inline_enum(t))
+                    && else_branch
+                        .as_deref()
+                        .is_some_and(|t| self.rhs_is_fresh_inline_enum(t))
+            }
+            ExprKind::Match { arms, .. } => {
+                !arms.is_empty() && arms.iter().all(|a| self.rhs_is_fresh_inline_enum(&a.body))
+            }
+            ExprKind::Block(b) | ExprKind::Seq(b) => b
+                .final_expr
+                .as_deref()
+                .is_some_and(|t| self.rhs_is_fresh_inline_enum(t)),
+            ExprKind::LabeledBlock { body, .. } => body
+                .final_expr
+                .as_deref()
+                .is_some_and(|t| self.rhs_is_fresh_inline_enum(t)),
+            // `None` / nullary variant constructor: not a tracked binding,
+            // empty payload → fresh-safe (a taken `None` leaf frees nothing).
+            // A bound identifier is a move/alias of an existing enum → NOT
+            // fresh (would double-free).
+            ExprKind::Identifier(n) => !self.variables.contains_key(n.as_str()),
+            ExprKind::Path { segments, .. } => segments
+                .last()
+                .map(|s| !self.variables.contains_key(s.as_str()))
+                .unwrap_or(false),
+            _ => false,
         }
     }
 

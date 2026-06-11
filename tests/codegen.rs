@@ -4546,6 +4546,72 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_result_inline_payload_drop_paths() {
+        // B-2026-06-10-6 Result follow-on: inline-heap `Result` payloads
+        // (`Ok(String)` / `Err(String)`) dropped undestructured must free
+        // (no leak), and a `match` binding the payload must not double-free.
+        // Pins OUTPUT across the Ok-heap, Err-heap, and consumed shapes (the
+        // memory side is pinned by `memory_sanitizer.rs::asan_result_*`).
+        let out = run_program(
+            r#"
+fn ok_s(n: i64) -> Result[String, i64] { Ok(f"ok{n}") }
+fn err_s(bad: bool) -> Result[i64, String] {
+    if bad { Err(f"e{9}") } else { Ok(1i64) }
+}
+fn main() {
+    let unused = ok_s(1);        // freed at scope exit, never read
+    let _e = err_s(true);        // Err-side heap freed at scope exit
+    let bound = ok_s(3);
+    match bound {                 // arm binds payload → source free suppressed
+        Ok(s) => { println(s); }
+        Err(_n) => { println("err"); }
+    };
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["ok3", "end"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_map_and_noncall_rhs_drop_paths() {
+        // B-2026-06-10-6 Option[Map] + non-Call-RHS follow-ons. Pins OUTPUT
+        // correctness: an `Option[Map]` built + read back through a match,
+        // and a non-`Call` `if`-RHS yielding a fresh inline Option that's
+        // read back. The memory side (no leak/double-free) is pinned by
+        // `memory_sanitizer.rs::{asan_option_map_undestructured_freed,
+        // asan_option_if_else_fresh_payload_freed}`.
+        let out = run_program(
+            r#"
+fn mk_map() -> Option[Map[i64, i64]] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1i64, 42i64);
+    Some(m)
+}
+fn main() {
+    let om = mk_map();
+    match om {
+        Some(m) => { match m.get(1i64) { Some(x) => println(x), None => println(-1i64) } }
+        None => { println(-2i64); }
+    };
+    let c = true;
+    let mut a = String.new();
+    a.push_str("fresh-if");
+    let x = if c { Some(a) } else { None };
+    match x { Some(s) => println(s), None => println("none") }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["42", "fresh-if"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_tuple_heap_element_push_clone() {
         // B-2026-06-10-5: `Vec[(i64, String)]` — pushing tuples with heap
         // String fields, reading them back, and `.clone()`-ing the Vec. This

@@ -652,10 +652,45 @@ impl<'ctx> super::Codegen<'ctx> {
             GenericArg::Type(t) => t,
             _ => return None,
         };
-        if self.is_string_type_expr(arg0) {
+        self.inline_heap_payload_elem(arg0)
+    }
+
+    /// For an `Option[Map[K,V]]` / `Option[Set[T]]` type expr, return the
+    /// per-half map drop classification for the inline handle payload (the
+    /// same `MapElemDrop` a standalone Map binding / `Vec[Map]` element uses).
+    /// `None` for any non-`Option`, or an `Option` whose arg isn't `Map`/`Set`
+    /// (those go through `option_inline_payload_elem` or leak nothing). The
+    /// erased `Option` layout can't carry this; drives
+    /// `CleanupAction::FreeInlineOptionMapPayload`. B-2026-06-10-6 follow-on.
+    pub(super) fn option_inline_map_payload(
+        &self,
+        te: &TypeExpr,
+    ) -> Option<crate::codegen::state::MapElemDrop<'ctx>> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Option") {
+            return None;
+        }
+        let arg0 = match p.generic_args.as_ref()?.first()? {
+            GenericArg::Type(t) => t,
+            _ => return None,
+        };
+        self.vec_elem_map_drop_for_type_expr(arg0)
+    }
+
+    /// The `FreeVecBuffer`-style element type for a single enum-payload type
+    /// argument `arg`, when `arg` is an inline heap `{ptr,len,cap}` value
+    /// (`String` / `Vec[U]` / `VecDeque[U]`). `Some(i8)` for `String`;
+    /// `Some(llvm(U))` for `Vec[U]` (a Vec-struct `U` triggers the per-
+    /// element inner free in the emitter). `None` for scalar / shared-RC /
+    /// Map/Set / struct/tuple / boxed payloads. Shared by the `Option` and
+    /// `Result` inline-payload detectors (B-2026-06-10-6).
+    pub(super) fn inline_heap_payload_elem(&self, arg: &TypeExpr) -> Option<BasicTypeEnum<'ctx>> {
+        if self.is_string_type_expr(arg) {
             return Some(self.context.i8_type().into());
         }
-        if let TypeKind::Path(ip) = &arg0.kind {
+        if let TypeKind::Path(ip) = &arg.kind {
             if matches!(
                 ip.segments.last().map(|s| s.as_str()),
                 Some("Vec") | Some("VecDeque")
@@ -664,11 +699,46 @@ impl<'ctx> super::Codegen<'ctx> {
                 // type drives the recursive inner free (a Vec-struct elem
                 // → per-element buffer free, a scalar → outer buffer only).
                 return self
-                    .extract_vec_elem_type(arg0)
+                    .extract_vec_elem_type(arg)
                     .or_else(|| Some(self.context.i8_type().into()));
             }
         }
         None
+    }
+
+    /// For a `Result[T, E]` type expr, return `(ok_elem, err_elem)` payload
+    /// element types for the `Ok`/`Err` inline-heap overlays — each `Some`
+    /// only when that half is an inline heap `{ptr,len,cap}` value. Returns
+    /// the outer `Some((..,..))` only when AT LEAST ONE half is heap (so a
+    /// fully-scalar `Result[i64, i32]` registers no cleanup). Drives
+    /// `CleanupAction::FreeInlineResultPayload`; the erased `Result` layout
+    /// can't carry these per-instantiation choices. B-2026-06-10-6 follow-on.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn result_inline_payload_elems(
+        &self,
+        te: &TypeExpr,
+    ) -> Option<(Option<BasicTypeEnum<'ctx>>, Option<BasicTypeEnum<'ctx>>)> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Result") {
+            return None;
+        }
+        let args = p.generic_args.as_ref()?;
+        let ok_arg = match args.first()? {
+            GenericArg::Type(t) => t,
+            _ => return None,
+        };
+        let err_arg = match args.get(1)? {
+            GenericArg::Type(t) => t,
+            _ => return None,
+        };
+        let ok_elem = self.inline_heap_payload_elem(ok_arg);
+        let err_elem = self.inline_heap_payload_elem(err_arg);
+        if ok_elem.is_none() && err_elem.is_none() {
+            return None;
+        }
+        Some((ok_elem, err_elem))
     }
 
     pub(super) fn is_string_type_expr(&self, te: &TypeExpr) -> bool {

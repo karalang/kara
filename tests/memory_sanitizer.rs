@@ -983,6 +983,112 @@ fn main() {
         );
     }
 
+    // ── B-2026-06-10-6 follow-ons: Result / Option[Map] / non-Call RHS ──
+    // The Option-core fix's three open follow-ons (each a leak on Linux LSan,
+    // a no-double-free guard on macOS): `Result[T,E]` inline Ok/Err payloads,
+    // `Option[Map]`/`Option[Set]` inline handle payloads, and non-`Call`
+    // let-RHS (`if`/`match`/block yielding a fresh inline Option/Result).
+
+    #[test]
+    fn asan_result_ok_string_undestructured_freed() {
+        // `Result[String, i64]` dropped without destructuring → the
+        // scope-exit `FreeInlineResultPayload` frees the `Ok` String.
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> Result[String, i64] { Ok(f"ok-value-{n}-runtime-heap") }
+fn main() {
+    let x = mk(42);
+    println("done");
+}
+"#,
+            &["done"],
+            "result_ok_string_undestructured_freed",
+        );
+    }
+
+    #[test]
+    fn asan_result_err_string_undestructured_freed() {
+        // `Result[i64, String]` — the heap is on the `Err` side; the cleanup
+        // reads the tag and frees the `Err` overlay.
+        assert_clean_asan_run(
+            r#"
+fn mk(bad: bool) -> Result[i64, String] {
+    if bad { Err(f"err-value-runtime-heap") } else { Ok(7i64) }
+}
+fn main() {
+    let x = mk(true);
+    println("done");
+}
+"#,
+            &["done"],
+            "result_err_string_undestructured_freed",
+        );
+    }
+
+    #[test]
+    fn asan_result_consumed_match_no_double_free() {
+        // `match r { Ok(v) => ... }` binds the payload out; the source
+        // `Result`'s scope-exit free must be suppressed (cap zeroed on the
+        // taken arm) or this double-frees the same buffer on macOS.
+        assert_clean_asan_run(
+            r#"
+fn mk() -> Result[String, i64] { Ok(f"consumed-ok-runtime-heap") }
+fn main() {
+    let r = mk();
+    match r {
+        Ok(v) => { println(v); }
+        Err(_e) => { println("err"); }
+    };
+}
+"#,
+            &["consumed-ok-runtime-heap"],
+            "result_consumed_match_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_option_map_undestructured_freed() {
+        // `Option[Map[i64,i64]]` dropped without destructuring → the
+        // scope-exit `FreeInlineOptionMapPayload` frees the `Some` handle
+        // (and its bucket storage) via `emit_free_one_map_handle`.
+        assert_clean_asan_run(
+            r#"
+fn mk() -> Option[Map[i64, i64]] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1i64, 10i64);
+    Some(m)
+}
+fn main() {
+    let om = mk();
+    println("done");
+}
+"#,
+            &["done"],
+            "option_map_undestructured_freed",
+        );
+    }
+
+    #[test]
+    fn asan_option_if_else_fresh_payload_freed() {
+        // Non-`Call` let-RHS: `let x = if c { Some(a) } else { None };`
+        // yields a FRESH inline Option — the let-path registration is
+        // broadened past `Call` to provably-fresh if/match/block tails
+        // (`rhs_is_fresh_inline_enum`). The `Some` String must be freed.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let c = true;
+    let mut a = String.new();
+    a.push_str("noncall-if-runtime-heap-payload");
+    let x = if c { Some(a) } else { None };
+    println("done");
+}
+"#,
+            &["done"],
+            "option_if_else_fresh_payload_freed",
+        );
+    }
+
     // ── Vec: owned heap buffer, scope-exit free ───────────────────
     // Exercises `emit_scope_vec_cleanup` — the Vec's data pointer must be
     // freed when `v` goes out of scope at the end of `main`.

@@ -1017,6 +1017,12 @@ impl<'ctx> super::Codegen<'ctx> {
         outer_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let val = self.compile_expr(inner)?;
+        // `r?` consumes `r` — disarm its scope-exit inline-payload free
+        // (registered by the B-2026-06-10-6 Option/Result work) now that the
+        // Result/Option VALUE has been captured into `val`; otherwise the
+        // source double-frees the payload the unwrap binding (Ok) or the
+        // caller (Err) takes ownership of. No-op for temp / non-inline operands.
+        self.suppress_question_source_inline_payload(inner);
         let i64_t = self.context.i64_type();
         // The early-return struct must match the enclosing function's
         // declared LLVM return type. Result keeps the legacy

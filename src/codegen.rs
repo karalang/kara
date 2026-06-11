@@ -937,6 +937,19 @@ pub(super) struct Codegen<'ctx> {
     /// (no heap payload, nothing to suppress): the `Option` layout is
     /// type-erased. See B-2026-06-10-6.
     pub(crate) inline_option_payload_vars: std::collections::HashSet<String>,
+    /// `Result[T, E]` sibling of `inline_option_payload_vars` — names of
+    /// `Result` bindings that registered a `FreeInlineResultPayload` (the Ok
+    /// and/or Err half is an inline heap `String`/`Vec`). A `match`/`if let`
+    /// arm binding the `Ok`/`Err` payload out zeros the variable's `cap`
+    /// word so the scope-exit free skips (the bound payload frees it once).
+    /// See B-2026-06-10-6's Result follow-on.
+    pub(crate) inline_result_payload_vars: std::collections::HashSet<String>,
+    /// `Option[Map]`/`Option[Set]` sibling — names of `Option` bindings that
+    /// registered a `FreeInlineOptionMapPayload`. A `match`/`if let` arm
+    /// binding the `Some` payload out sets the source tag to `None` (no `cap`
+    /// word to zero, unlike the Vec case) so the scope-exit free skips. See
+    /// B-2026-06-10-6's `Option[Map]` follow-on.
+    pub(crate) inline_option_map_payload_vars: std::collections::HashSet<String>,
     /// Refinement type alias name → its base `TypeExpr` (`type Email =
     /// String where …` → the `String` type expr). Populated from the
     /// program's `Item::TypeAlias`es that carry a `where` predicate.
@@ -4406,6 +4419,8 @@ impl<'ctx> Codegen<'ctx> {
             variables: HashMap::new(),
             var_type_names: HashMap::new(),
             inline_option_payload_vars: std::collections::HashSet::new(),
+            inline_result_payload_vars: std::collections::HashSet::new(),
+            inline_option_map_payload_vars: std::collections::HashSet::new(),
             refinement_bases: HashMap::new(),
             distinct_bases: HashMap::new(),
             refinement_predicates: HashMap::new(),

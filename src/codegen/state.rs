@@ -720,6 +720,49 @@ pub(crate) enum CleanupAction<'ctx> {
         /// (a Vec-struct element type triggers the recursive inner free).
         payload_elem_ty: Option<BasicTypeEnum<'ctx>>,
     },
+    /// `Result[T, E]` sibling of `FreeInlineOptionPayload`. Same erased-
+    /// layout problem (one `{tag, w0, w1, w2}` shape across instantiations),
+    /// but TWO heap-capable payload variants — `Ok(T)` and `Err(E)` — that
+    /// OVERLAY the same payload words, distinguished by the tag. The cleanup
+    /// reads the tag and frees whichever variant is live, keyed on that
+    /// variant's CONCRETE element type. Each side is independently `None`
+    /// when its half is scalar / non-inline-heap (`Result[String, i64]` →
+    /// only `ok_payload_elem_ty` is `Some`). Both being `None` means nothing
+    /// is registered (the registrar returns early). B-2026-06-10-6 follow-on.
+    FreeInlineResultPayload {
+        /// Alloca of the `Result` struct (`{tag, w0, w1, w2}`).
+        result_slot: PointerValue<'ctx>,
+        /// The `Result` struct's LLVM type (tag + payload GEPs).
+        result_ty: StructType<'ctx>,
+        /// Numeric `Ok` tag from the seeded Result layout.
+        ok_tag: u64,
+        /// Numeric `Err` tag from the seeded Result layout.
+        err_tag: u64,
+        /// Payload element type for the `Ok` overlay (`None` = scalar/non-heap).
+        ok_payload_elem_ty: Option<BasicTypeEnum<'ctx>>,
+        /// Payload element type for the `Err` overlay (`None` = scalar/non-heap).
+        err_payload_elem_ty: Option<BasicTypeEnum<'ctx>>,
+    },
+    /// `Option[Map[K,V]]` / `Option[Set[T]]` inline payload free. Unlike the
+    /// `{ptr,len,cap}` Vec/String payload, the `Some` payload is a single
+    /// opaque map handle (`ptr`) at word w0 (option field index 1), freed via
+    /// `emit_free_one_map_handle` (the same K/V-classified drop a standalone
+    /// Map binding uses), not the Vec overlay. Tag-guarded (skips `None`).
+    /// Move-out coordination differs from the Vec case: a `match`/`if let`
+    /// arm binding the `Some` payload out sets the source tag to `None`
+    /// (`suppress_inline_option_map_payload_cleanup`) so this free skips —
+    /// there's no `cap` word to zero. B-2026-06-10-6 follow-on.
+    FreeInlineOptionMapPayload {
+        /// Alloca of the `Option` struct (`{tag, w0, ...}`).
+        option_slot: PointerValue<'ctx>,
+        /// The `Option` struct's LLVM type.
+        option_ty: StructType<'ctx>,
+        /// Numeric `Some` tag from the seeded Option layout.
+        some_tag: u64,
+        /// K/V drop classification for the map handle (key/val Vec-ness,
+        /// shared-heap types) — same record the `Vec[Map]` element drop uses.
+        map_drop: MapElemDrop<'ctx>,
+    },
 }
 
 /// One let-binding hoisted out of an auto-par group via the slice-A return-

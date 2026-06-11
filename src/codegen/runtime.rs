@@ -1685,6 +1685,356 @@ impl<'ctx> super::Codegen<'ctx> {
         false
     }
 
+    /// `Result[T, E]` sibling of `track_inline_option_payload_var`. Registers
+    /// a scope-exit free of a `Result` binding's inline heap `Ok`/`Err`
+    /// payload keyed on the concrete per-variant element types — the erased
+    /// `Result` layout's drop switch can't free them (B-2026-06-10-6). No-op
+    /// when neither half is an inline heap Vec/String. Records the binding
+    /// name in `inline_result_payload_vars` so a `match`/`if let` arm that
+    /// binds the `Ok`/`Err` payload out can zero the source `cap` and avoid
+    /// a double-free (`suppress_inline_result_payload_cleanup`).
+    pub(super) fn track_inline_result_payload_var(
+        &mut self,
+        var_name: &str,
+        result_slot: PointerValue<'ctx>,
+        result_te: &TypeExpr,
+    ) {
+        let Some((ok_payload_elem_ty, err_payload_elem_ty)) =
+            self.result_inline_payload_elems(result_te)
+        else {
+            return;
+        };
+        let Some(layout) = self.enum_layouts.get("Result") else {
+            return;
+        };
+        let result_ty = layout.llvm_type;
+        let ok_tag = layout.tags.get("Ok").copied().unwrap_or(0);
+        let err_tag = layout.tags.get("Err").copied().unwrap_or(1);
+        // Nested-block let: zero the slot in the entry block so a not-taken
+        // path's `undef` tag can't spuriously match `Ok`/`Err` at a function-
+        // level drain. Mirrors the Option path.
+        let is_nested = self
+            .current_fn
+            .and_then(|f| f.get_first_basic_block())
+            .zip(self.builder.get_insert_block())
+            .map(|(entry, cur)| entry != cur)
+            .unwrap_or(false);
+        if is_nested {
+            self.zero_init_option_slot_in_entry_block(result_slot, result_ty);
+        }
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeInlineResultPayload {
+                result_slot,
+                result_ty,
+                ok_tag,
+                err_tag,
+                ok_payload_elem_ty,
+                err_payload_elem_ty,
+            });
+        }
+        self.inline_result_payload_vars.insert(var_name.to_string());
+    }
+
+    /// `Result[T, E]` sibling of `try_track_discarded_inline_option` — frees a
+    /// discarded inline-heap `Result` temporary in statement position. Same
+    /// borrow-exclusion obligation on the CALLER (`scrutinee_is_borrow_call`).
+    pub(super) fn try_track_discarded_inline_result(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> bool {
+        let key = (tail.span.offset, tail.span.length);
+        let Some(te) = self.enum_inst_type_exprs.get(&key).cloned() else {
+            return false;
+        };
+        let Some((ok_payload_elem_ty, err_payload_elem_ty)) = self.result_inline_payload_elems(&te)
+        else {
+            return false;
+        };
+        let Some(layout) = self.enum_layouts.get("Result") else {
+            return false;
+        };
+        let result_ty = layout.llvm_type;
+        let ok_tag = layout.tags.get("Ok").copied().unwrap_or(0);
+        let err_tag = layout.tags.get("Err").copied().unwrap_or(1);
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return false;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__owned_res_tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeInlineResultPayload {
+                result_slot: slot,
+                result_ty,
+                ok_tag,
+                err_tag,
+                ok_payload_elem_ty,
+                err_payload_elem_ty,
+            });
+            return true;
+        }
+        false
+    }
+
+    /// `Option[Map]` / `Option[Set]` sibling of
+    /// `track_inline_option_payload_var`. Registers a scope-exit free of the
+    /// `Some` handle payload via `FreeInlineOptionMapPayload`; no-op for any
+    /// other `Option` arg. Records the binding in
+    /// `inline_option_map_payload_vars` so a `match`/`if let` arm binding the
+    /// `Some` payload out sets the source tag to `None`
+    /// (`suppress_inline_option_map_payload_cleanup`) and the free skips.
+    pub(super) fn track_inline_option_map_payload_var(
+        &mut self,
+        var_name: &str,
+        option_slot: PointerValue<'ctx>,
+        option_te: &TypeExpr,
+    ) {
+        let Some(map_drop) = self.option_inline_map_payload(option_te) else {
+            return;
+        };
+        let Some(layout) = self.enum_layouts.get("Option") else {
+            return;
+        };
+        let option_ty = layout.llvm_type;
+        let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
+        let is_nested = self
+            .current_fn
+            .and_then(|f| f.get_first_basic_block())
+            .zip(self.builder.get_insert_block())
+            .map(|(entry, cur)| entry != cur)
+            .unwrap_or(false);
+        if is_nested {
+            self.zero_init_option_slot_in_entry_block(option_slot, option_ty);
+        }
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeInlineOptionMapPayload {
+                option_slot,
+                option_ty,
+                some_tag,
+                map_drop,
+            });
+        }
+        self.inline_option_map_payload_vars
+            .insert(var_name.to_string());
+    }
+
+    /// `Option[Map]`/`Option[Set]` sibling of
+    /// `try_track_discarded_inline_option` — frees a discarded inline-handle
+    /// `Option[Map]` temp in statement position. Same caller borrow-exclusion
+    /// obligation.
+    pub(super) fn try_track_discarded_inline_option_map(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> bool {
+        let key = (tail.span.offset, tail.span.length);
+        let Some(te) = self.enum_inst_type_exprs.get(&key).cloned() else {
+            return false;
+        };
+        let Some(map_drop) = self.option_inline_map_payload(&te) else {
+            return false;
+        };
+        let Some(layout) = self.enum_layouts.get("Option") else {
+            return false;
+        };
+        let option_ty = layout.llvm_type;
+        let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return false;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__owned_optmap_tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeInlineOptionMapPayload {
+                option_slot: slot,
+                option_ty,
+                some_tag,
+                map_drop,
+            });
+            return true;
+        }
+        false
+    }
+
+    /// Emit the cap-guarded free of an inline `{ptr,len,cap}` heap payload
+    /// that overlays the words of a tagged-union enum slot, starting at
+    /// payload field index 1 (the first word past the tag). Shared by the
+    /// `FreeInlineOptionPayload` (one `Some` variant) and
+    /// `FreeInlineResultPayload` (two `Ok`/`Err` variants) cleanups — the
+    /// caller has already tag-checked and positioned the builder at the
+    /// variant-taken block; this frees that variant's payload overlay and
+    /// leaves the builder positioned at its internal skip block (a no-op
+    /// `cap == 0` for string-literal / empty payloads). `payload_elem_ty`
+    /// drives the one-level recursive inner free for a Vec-struct element
+    /// (`Option[Vec[String]]` / `Result[_, Vec[U]]`), mirroring
+    /// `FreeVecBuffer`. `label` disambiguates the emitted block names so a
+    /// two-variant Result emits distinct `respl.ok.*` / `respl.err.*` blocks.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn emit_free_inline_payload_overlay(
+        &self,
+        enum_slot: PointerValue<'ctx>,
+        enum_ty: StructType<'ctx>,
+        payload_elem_ty: Option<BasicTypeEnum<'ctx>>,
+        fn_val: FunctionValue<'ctx>,
+        vec_ty: StructType<'ctx>,
+        ptr_ty: inkwell::types::PointerType<'ctx>,
+        i64_t: inkwell::types::IntType<'ctx>,
+        label: &str,
+    ) {
+        let zero = i64_t.const_int(0, false);
+        let payload_base = self
+            .builder
+            .build_struct_gep(enum_ty, enum_slot, 1, &format!("{label}.payload"))
+            .unwrap();
+        let cap_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, payload_base, 2, &format!("{label}.cap.ptr"))
+            .unwrap();
+        let cap = self
+            .builder
+            .build_load(i64_t, cap_ptr, &format!("{label}.cap"))
+            .unwrap()
+            .into_int_value();
+        let is_heap = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, cap, zero, &format!("{label}.is_heap"))
+            .unwrap();
+        let free_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{label}.free"));
+        let skip_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{label}.skip"));
+        self.builder
+            .build_conditional_branch(is_heap, free_bb, skip_bb)
+            .unwrap();
+        self.builder.position_at_end(free_bb);
+        let data_ptr_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, payload_base, 0, &format!("{label}.data.ptr"))
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_ptr_ptr, &format!("{label}.data"))
+            .unwrap()
+            .into_pointer_value();
+        // One-level recursive inner free for a Vec-struct payload element
+        // (`Vec[String]` / `Vec[Vec[_]]`): each live element owns its own
+        // data buffer. Same shape as `FreeVecBuffer`'s inner loop; `i8`
+        // (String) / primitive elements skip it. Deeper nesting still leaks
+        // the innermost buffers (the documented `FreeVecBuffer` limitation).
+        if let Some(et) = payload_elem_ty {
+            if self.llvm_ty_is_vec_struct(et) {
+                let vstruct = self.vec_struct_type();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, payload_base, 1, &format!("{label}.len.ptr"))
+                    .unwrap();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, &format!("{label}.len"))
+                    .unwrap()
+                    .into_int_value();
+                let counter = self.create_entry_alloca(fn_val, &format!("{label}.i"), i64_t.into());
+                self.builder.build_store(counter, zero).unwrap();
+                let cond_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("{label}.drop.cond"));
+                let body_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("{label}.drop.body"));
+                let after_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("{label}.drop.after"));
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+                self.builder.position_at_end(cond_bb);
+                let cur = self
+                    .builder
+                    .build_load(i64_t, counter, &format!("{label}.drop.cur"))
+                    .unwrap()
+                    .into_int_value();
+                let lt = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, cur, len, &format!("{label}.drop.lt"))
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(lt, body_bb, after_bb)
+                    .unwrap();
+                self.builder.position_at_end(body_bb);
+                let inner = unsafe {
+                    self.builder
+                        .build_gep(vstruct, data, &[cur], &format!("{label}.drop.elem"))
+                        .unwrap()
+                };
+                let inner_cap_ptr = self
+                    .builder
+                    .build_struct_gep(vstruct, inner, 2, &format!("{label}.drop.inner.cap.ptr"))
+                    .unwrap();
+                let inner_cap = self
+                    .builder
+                    .build_load(i64_t, inner_cap_ptr, &format!("{label}.drop.inner.cap"))
+                    .unwrap()
+                    .into_int_value();
+                let inner_is_heap = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::UGT,
+                        inner_cap,
+                        zero,
+                        &format!("{label}.drop.inner.is_heap"),
+                    )
+                    .unwrap();
+                let inner_free_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("{label}.drop.inner.free"));
+                let inner_skip_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("{label}.drop.inner.skip"));
+                self.builder
+                    .build_conditional_branch(inner_is_heap, inner_free_bb, inner_skip_bb)
+                    .unwrap();
+                self.builder.position_at_end(inner_free_bb);
+                let inner_data_ptr = self
+                    .builder
+                    .build_struct_gep(vstruct, inner, 0, &format!("{label}.drop.inner.data.ptr"))
+                    .unwrap();
+                let inner_data = self
+                    .builder
+                    .build_load(ptr_ty, inner_data_ptr, &format!("{label}.drop.inner.data"))
+                    .unwrap()
+                    .into_pointer_value();
+                self.builder
+                    .build_call(self.free_fn, &[inner_data.into()], "")
+                    .unwrap();
+                self.builder
+                    .build_unconditional_branch(inner_skip_bb)
+                    .unwrap();
+                self.builder.position_at_end(inner_skip_bb);
+                let one = i64_t.const_int(1, false);
+                let next = self
+                    .builder
+                    .build_int_add(cur, one, &format!("{label}.drop.next"))
+                    .unwrap();
+                self.builder.build_store(counter, next).unwrap();
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+                self.builder.position_at_end(after_bb);
+            }
+        }
+        self.builder
+            .build_call(self.free_fn, &[data.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(skip_bb).unwrap();
+        self.builder.position_at_end(skip_bb);
+    }
+
     /// Track a non-shared struct alloca for scope-exit drop-fn invocation.
     /// Mirrors `track_enum_var` but for struct types. The per-struct drop
     /// fn is lazily synthesized by `emit_struct_drop_synthesis`; if the
@@ -2857,147 +3207,143 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_conditional_branch(is_some, some_bb, done_bb)
                     .unwrap();
                 self.builder.position_at_end(some_bb);
-                // The `Some` payload's `{ptr,len,cap}` occupies words
-                // w0/w1/w2 — the three words past the tag, i.e. option
-                // field index 1. A pointer to w0 overlays a plain
-                // Vec/String struct, so `vec_ty` field 0 = data (=w0),
-                // field 2 = cap (=w2). Mirrors `FreeVecBuffer`'s cap-guard
-                // + recursive inner-element free, applied to that overlay.
-                let payload_base = self
+                // The `Some` payload's `{ptr,len,cap}` overlays words
+                // w0/w1/w2 (option field index 1). The shared helper emits
+                // the cap-guarded recursive free of that overlay and leaves
+                // the builder at its internal skip block.
+                self.emit_free_inline_payload_overlay(
+                    *option_slot,
+                    *option_ty,
+                    *payload_elem_ty,
+                    fn_val,
+                    vec_ty,
+                    ptr_ty,
+                    i64_t,
+                    "optpl",
+                );
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+                self.builder.position_at_end(done_bb);
+            }
+            CleanupAction::FreeInlineResultPayload {
+                result_slot,
+                result_ty,
+                ok_tag,
+                err_tag,
+                ok_payload_elem_ty,
+                err_payload_elem_ty,
+            } => {
+                // `Result[T, E]` shares the tagged-union layout `{tag, w0,
+                // w1, w2}` — the `Ok` and `Err` payloads OVERLAY the same
+                // words, distinguished only by the tag. Free whichever
+                // variant is live, keyed on its concrete payload elem type
+                // (the erased layout can't carry it — B-2026-06-10-6's
+                // `Result` follow-on). Each side is independently `None` for
+                // a scalar/non-heap half (`Result[String, i64]` frees only
+                // the Ok side; `Result[i64, String]` only the Err side).
+                let tag_ptr = self
                     .builder
-                    .build_struct_gep(*option_ty, *option_slot, 1, "optpl.payload")
+                    .build_struct_gep(*result_ty, *result_slot, 0, "respl.tag.ptr")
                     .unwrap();
-                let cap_ptr = self
+                let tag = self
                     .builder
-                    .build_struct_gep(vec_ty, payload_base, 2, "optpl.cap.ptr")
-                    .unwrap();
-                let cap = self
-                    .builder
-                    .build_load(i64_t, cap_ptr, "optpl.cap")
+                    .build_load(i64_t, tag_ptr, "respl.tag")
                     .unwrap()
                     .into_int_value();
-                let zero = i64_t.const_int(0, false);
-                let is_heap = self
+                let done_bb = self.context.append_basic_block(fn_val, "respl.done");
+                // Ok arm.
+                if ok_payload_elem_ty.is_some() {
+                    let ok_c = i64_t.const_int(*ok_tag, false);
+                    let is_ok = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, tag, ok_c, "respl.is_ok")
+                        .unwrap();
+                    let ok_bb = self.context.append_basic_block(fn_val, "respl.ok");
+                    let after_ok_bb = self.context.append_basic_block(fn_val, "respl.after_ok");
+                    self.builder
+                        .build_conditional_branch(is_ok, ok_bb, after_ok_bb)
+                        .unwrap();
+                    self.builder.position_at_end(ok_bb);
+                    self.emit_free_inline_payload_overlay(
+                        *result_slot,
+                        *result_ty,
+                        *ok_payload_elem_ty,
+                        fn_val,
+                        vec_ty,
+                        ptr_ty,
+                        i64_t,
+                        "respl.ok",
+                    );
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+                    self.builder.position_at_end(after_ok_bb);
+                }
+                // Err arm.
+                if err_payload_elem_ty.is_some() {
+                    let err_c = i64_t.const_int(*err_tag, false);
+                    let is_err = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, tag, err_c, "respl.is_err")
+                        .unwrap();
+                    let err_bb = self.context.append_basic_block(fn_val, "respl.err");
+                    let after_err_bb = self.context.append_basic_block(fn_val, "respl.after_err");
+                    self.builder
+                        .build_conditional_branch(is_err, err_bb, after_err_bb)
+                        .unwrap();
+                    self.builder.position_at_end(err_bb);
+                    self.emit_free_inline_payload_overlay(
+                        *result_slot,
+                        *result_ty,
+                        *err_payload_elem_ty,
+                        fn_val,
+                        vec_ty,
+                        ptr_ty,
+                        i64_t,
+                        "respl.err",
+                    );
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+                    self.builder.position_at_end(after_err_bb);
+                }
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+                self.builder.position_at_end(done_bb);
+            }
+            CleanupAction::FreeInlineOptionMapPayload {
+                option_slot,
+                option_ty,
+                some_tag,
+                map_drop,
+            } => {
+                // Tag-guard: only `Some` carries a handle. The handle is a
+                // single `ptr` at word w0 (option field index 1); free it
+                // exactly as a standalone Map binding (`emit_free_one_map_handle`).
+                let tag_ptr = self
                     .builder
-                    .build_int_compare(IntPredicate::UGT, cap, zero, "optpl.is_heap")
+                    .build_struct_gep(*option_ty, *option_slot, 0, "optmap.tag.ptr")
                     .unwrap();
-                let free_bb = self.context.append_basic_block(fn_val, "optpl.free");
-                let skip_bb = self.context.append_basic_block(fn_val, "optpl.skip");
+                let tag = self
+                    .builder
+                    .build_load(i64_t, tag_ptr, "optmap.tag")
+                    .unwrap()
+                    .into_int_value();
+                let some_c = i64_t.const_int(*some_tag, false);
+                let is_some = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, tag, some_c, "optmap.is_some")
+                    .unwrap();
+                let some_bb = self.context.append_basic_block(fn_val, "optmap.some");
+                let done_bb = self.context.append_basic_block(fn_val, "optmap.done");
                 self.builder
-                    .build_conditional_branch(is_heap, free_bb, skip_bb)
+                    .build_conditional_branch(is_some, some_bb, done_bb)
                     .unwrap();
-                self.builder.position_at_end(free_bb);
-                let data_ptr_ptr = self
+                self.builder.position_at_end(some_bb);
+                let handle_ptr = self
                     .builder
-                    .build_struct_gep(vec_ty, payload_base, 0, "optpl.data.ptr")
+                    .build_struct_gep(*option_ty, *option_slot, 1, "optmap.handle.ptr")
                     .unwrap();
-                let data = self
+                let handle = self
                     .builder
-                    .build_load(ptr_ty, data_ptr_ptr, "optpl.data")
+                    .build_load(ptr_ty, handle_ptr, "optmap.handle")
                     .unwrap()
                     .into_pointer_value();
-                // One-level recursive drop for a Vec-struct payload element
-                // (`Option[Vec[String]]` / `Option[Vec[Vec[_]]]`): each live
-                // element owns its own data buffer. Same shape as
-                // `FreeVecBuffer`'s inner loop; `i8` (String) / primitive
-                // elements skip it. Deeper nesting still leaks the innermost
-                // buffers (the documented `FreeVecBuffer` limitation).
-                if let Some(et) = payload_elem_ty {
-                    if self.llvm_ty_is_vec_struct(*et) {
-                        let vstruct = self.vec_struct_type();
-                        let len_ptr = self
-                            .builder
-                            .build_struct_gep(vec_ty, payload_base, 1, "optpl.len.ptr")
-                            .unwrap();
-                        let len = self
-                            .builder
-                            .build_load(i64_t, len_ptr, "optpl.len")
-                            .unwrap()
-                            .into_int_value();
-                        let counter = self.create_entry_alloca(fn_val, "optpl.i", i64_t.into());
-                        self.builder.build_store(counter, zero).unwrap();
-                        let cond_bb = self.context.append_basic_block(fn_val, "optpl.drop.cond");
-                        let body_bb = self.context.append_basic_block(fn_val, "optpl.drop.body");
-                        let after_bb = self.context.append_basic_block(fn_val, "optpl.drop.after");
-                        self.builder.build_unconditional_branch(cond_bb).unwrap();
-                        self.builder.position_at_end(cond_bb);
-                        let cur = self
-                            .builder
-                            .build_load(i64_t, counter, "optpl.drop.cur")
-                            .unwrap()
-                            .into_int_value();
-                        let lt = self
-                            .builder
-                            .build_int_compare(IntPredicate::ULT, cur, len, "optpl.drop.lt")
-                            .unwrap();
-                        self.builder
-                            .build_conditional_branch(lt, body_bb, after_bb)
-                            .unwrap();
-                        self.builder.position_at_end(body_bb);
-                        let inner = unsafe {
-                            self.builder
-                                .build_gep(vstruct, data, &[cur], "optpl.drop.elem")
-                                .unwrap()
-                        };
-                        let inner_cap_ptr = self
-                            .builder
-                            .build_struct_gep(vstruct, inner, 2, "optpl.drop.inner.cap.ptr")
-                            .unwrap();
-                        let inner_cap = self
-                            .builder
-                            .build_load(i64_t, inner_cap_ptr, "optpl.drop.inner.cap")
-                            .unwrap()
-                            .into_int_value();
-                        let inner_is_heap = self
-                            .builder
-                            .build_int_compare(
-                                IntPredicate::UGT,
-                                inner_cap,
-                                zero,
-                                "optpl.drop.inner.is_heap",
-                            )
-                            .unwrap();
-                        let inner_free_bb = self
-                            .context
-                            .append_basic_block(fn_val, "optpl.drop.inner.free");
-                        let inner_skip_bb = self
-                            .context
-                            .append_basic_block(fn_val, "optpl.drop.inner.skip");
-                        self.builder
-                            .build_conditional_branch(inner_is_heap, inner_free_bb, inner_skip_bb)
-                            .unwrap();
-                        self.builder.position_at_end(inner_free_bb);
-                        let inner_data_ptr = self
-                            .builder
-                            .build_struct_gep(vstruct, inner, 0, "optpl.drop.inner.data.ptr")
-                            .unwrap();
-                        let inner_data = self
-                            .builder
-                            .build_load(ptr_ty, inner_data_ptr, "optpl.drop.inner.data")
-                            .unwrap()
-                            .into_pointer_value();
-                        self.builder
-                            .build_call(self.free_fn, &[inner_data.into()], "")
-                            .unwrap();
-                        self.builder
-                            .build_unconditional_branch(inner_skip_bb)
-                            .unwrap();
-                        self.builder.position_at_end(inner_skip_bb);
-                        let one = i64_t.const_int(1, false);
-                        let next = self
-                            .builder
-                            .build_int_add(cur, one, "optpl.drop.next")
-                            .unwrap();
-                        self.builder.build_store(counter, next).unwrap();
-                        self.builder.build_unconditional_branch(cond_bb).unwrap();
-                        self.builder.position_at_end(after_bb);
-                    }
-                }
-                self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
-                    .unwrap();
-                self.builder.build_unconditional_branch(skip_bb).unwrap();
-                self.builder.position_at_end(skip_bb);
+                self.emit_free_one_map_handle(handle, map_drop);
                 self.builder.build_unconditional_branch(done_bb).unwrap();
                 self.builder.position_at_end(done_bb);
             }

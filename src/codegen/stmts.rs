@@ -2449,7 +2449,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (`Option[ref T]`, which `option_inline_payload_elem`
                 // rejects anyway).
                 if let PatternKind::Binding(var_name) = &pattern.kind {
-                    if matches!(value.kind, ExprKind::Call { .. }) {
+                    // Call-shaped RHS (constructors `Some(..)`/`Ok(..)` +
+                    // user-fn returns) OR a non-Call RHS that still yields a
+                    // FRESH-owned enum — `let x = if c { Some(a) } else
+                    // { None };` and match/block tails of the same
+                    // (B-2026-06-10-6's non-Call follow-on). `rhs_is_fresh_inline_enum`
+                    // excludes moves/aliases of existing bindings and borrows
+                    // (which would double-free), so the broadening only adds
+                    // provably-fresh shapes; the detectors still reject
+                    // non-heap / borrow payloads.
+                    if matches!(value.kind, ExprKind::Call { .. })
+                        || self.rhs_is_fresh_inline_enum(value)
+                    {
                         let opt_te = self
                             .enum_inst_type_exprs
                             .get(&(value.span.offset, value.span.length))
@@ -2458,7 +2469,14 @@ impl<'ctx> super::Codegen<'ctx> {
                             .or_else(|| self.untyped_let_boxed_enum_te(value));
                         if let Some(te) = opt_te {
                             if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
+                                // `te` is an `Option[Vec/String]`,
+                                // `Option[Map/Set]`, or a `Result[..,..]`;
+                                // each registrar no-ops for the other shapes.
+                                // Same Call-gated leaking forms (constructors
+                                // + user-fn returns).
                                 self.track_inline_option_payload_var(var_name, slot.ptr, &te);
+                                self.track_inline_result_payload_var(var_name, slot.ptr, &te);
+                                self.track_inline_option_map_payload_var(var_name, slot.ptr, &te);
                             }
                         }
                     }
@@ -2690,9 +2708,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `Map.get` alias the container's storage — freeing would
                     // corrupt it). Falls back to the generic owned-temp
                     // chokepoint (Vec/String/Map/RC) for everything else.
-                    let handled_option = !self.scrutinee_is_borrow_call(tail)
-                        && self.try_track_discarded_inline_option(tail, val);
-                    if !handled_option {
+                    // Same treatment for a discarded inline-`Result` temp
+                    // (`Result` follow-on); the two registrars are mutually
+                    // exclusive on the producer's instantiated type.
+                    let not_borrow = !self.scrutinee_is_borrow_call(tail);
+                    let handled_option =
+                        not_borrow && self.try_track_discarded_inline_option(tail, val);
+                    let handled_result = !handled_option
+                        && not_borrow
+                        && self.try_track_discarded_inline_result(tail, val);
+                    let handled_option_map = !handled_option
+                        && !handled_result
+                        && not_borrow
+                        && self.try_track_discarded_inline_option_map(tail, val);
+                    if !handled_option && !handled_result && !handled_option_map {
                         self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
                     }
                     self.drain_top_frame_with_emit();
