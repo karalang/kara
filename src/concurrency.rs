@@ -1590,6 +1590,15 @@ impl<'a> ConcurrencyChecker<'a> {
             ExprKind::Identifier(name) => {
                 defines.insert(name.clone());
             }
+            // The receiver of a mutating `self.method()` call, and the root of a
+            // `self.field = …` / `self.field[i] = …` write, is `self` — record it
+            // under the canonical name "self" (matched by `collect_expr_reads`'s
+            // SelfValue arm). Without this, a `mut ref self` method call recorded
+            // no write and a `self.field` assignment defined nothing, so the
+            // data-dependency check missed every self-mutation (self-hosting #8).
+            ExprKind::SelfValue => {
+                defines.insert("self".to_string());
+            }
             ExprKind::FieldAccess { object, .. } => {
                 // a.field = ... defines the root variable
                 self.collect_assign_target_defines(object, defines);
@@ -1620,6 +1629,17 @@ impl<'a> ConcurrencyChecker<'a> {
         match &expr.kind {
             ExprKind::Identifier(name) => {
                 reads.insert(name.clone());
+            }
+            // `self` (a `ref self`/`mut ref self` receiver) reads through the
+            // canonical name "self" — the same name `collect_assign_target_defines`
+            // records for a `self.field = …` write and a mutating `self.method()`
+            // call. Without this arm a `self.field` read recorded nothing, so a
+            // statement reading `self` after a `mut ref self` method mutated it
+            // showed "no data dependency" and the auto-parallelizer raced the
+            // two (self-hosting #8: the lexer's `skip_whitespace()` then
+            // `self.start = self.pos`).
+            ExprKind::SelfValue => {
+                reads.insert("self".to_string());
             }
             ExprKind::Binary { left, right, .. } | ExprKind::Pipe { left, right } => {
                 self.collect_expr_reads(left, reads);
@@ -1800,7 +1820,9 @@ impl<'a> ConcurrencyChecker<'a> {
             | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
-            | ExprKind::SelfValue
+            // NOTE: `ExprKind::SelfValue` is handled explicitly above (records
+            // the read of "self") — it is intentionally NOT in this no-op leaf
+            // group (self-hosting #8).
             | ExprKind::SelfType
             | ExprKind::Continue { .. }
             | ExprKind::Return(None)

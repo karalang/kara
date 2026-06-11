@@ -128,6 +128,68 @@ fn test_effect_conflict_serializes() {
     );
 }
 
+// ── self-mutation forces serialization (self-hosting #8) ───────
+
+#[test]
+fn test_self_field_writes_serialize() {
+    // Regression for self-hosting blocker #8: the auto-par analyzer dropped a
+    // `self` (SelfValue) receiver from both its read collector
+    // (`collect_expr_reads`) and its write collector
+    // (`collect_assign_target_defines`), so two statements that both touch
+    // `self` showed "no data dependency" and got parallelized — racing on the
+    // struct's state (nondeterministic). The lexer's
+    // `skip_whitespace(); self.start = self.pos` was the live case. Both
+    // self-field writes here read+write `self`, so they MUST serialize.
+    let analysis = analyze(
+        r#"
+        struct S { pos: i64, start: i64 }
+        impl S {
+            fn step(mut ref self) -> i64 {
+                self.start = self.pos;
+                self.pos = self.start + 1;
+                self.pos
+            }
+        }
+        fn main() { let mut s = S { pos: 0, start: 0 }; let n = s.step(); }
+        "#,
+    );
+    let step_fc = get_function(&analysis, "S.step");
+    assert!(
+        step_fc.parallel_groups.is_empty(),
+        "self-field writes must serialize (auto-par #8), got {:?}",
+        step_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_mut_ref_self_method_call_serializes_with_self_read() {
+    // The method-call half of #8: a `mut ref self` method call writes `self`
+    // (its effects imply receiver mutation), so a following `self.field` read
+    // depends on it. Before the fix the receiver's `self` was dropped, so
+    // `self.bump(); self.start = self.pos` parallelized and raced.
+    let analysis = analyze(
+        r#"
+        effect resource Tape;
+        struct S { pos: i64, start: i64 }
+        impl S {
+            fn bump(mut ref self) writes(Tape) { self.pos = self.pos + 1; }
+            fn step(mut ref self) -> i64 {
+                self.bump();
+                self.start = self.pos;
+                self.start
+            }
+        }
+        fn main() { let mut s = S { pos: 0, start: 0 }; let n = s.step(); }
+        "#,
+    );
+    let step_fc = get_function(&analysis, "S.step");
+    assert!(
+        step_fc.parallel_groups.is_empty(),
+        "a mut-ref-self method call + self read must serialize (auto-par #8), got {:?}",
+        step_fc.parallel_groups
+    );
+}
+
 // ── Independent blocking calls parallelize (A1) ────────────────
 
 #[test]

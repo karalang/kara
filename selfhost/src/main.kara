@@ -13,11 +13,11 @@
 // RUNS via `karac build`, and lexes `(ab, 12)` correctly on a clean run
 // (OP( / IDENT ab / OP, / INT 12 / OP) / EOF, exact byte-offset spans).
 // The differential oracle (tests/selfhost_lexer.rs) is BUILT and PASSES (vs
-// the Rust src/lexer.rs). It immediately caught #8: an auto-par SOUNDNESS bug
-// — the sequentially-dependent scan loops (each iter reads+writes self.pos)
-// get auto-parallelized and race, so an auto-par build mis-spans ~13% of runs
-// (NONDETERMINISTIC). KARAC_AUTO_PAR=0 is deterministic+correct, so the oracle
-// builds with auto-par off. NEXT: fix #8, then expand to the full token set.
+// the Rust src/lexer.rs) with auto-par ON. It immediately caught #8 (now
+// FIXED): an auto-par soundness bug where the analyzer dropped the `self`
+// receiver from its read/write collectors, so self-mutating statements
+// (skip_whitespace() then self.start = self.pos) were seen as independent and
+// raced (~13% of runs mis-spanned). NEXT: expand to the full token set.
 
 struct Span {
     line: i64,

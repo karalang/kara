@@ -20,12 +20,11 @@
 //! corpus order. Each input's EOF carries its own byte-offset, so the streams
 //! stay self-aligning across the join.
 //!
-//! The Kāra lexer is built with `KARAC_AUTO_PAR=0` (auto-parallelization off):
-//! self-hosting blocker #8 (phase-12) is an auto-par *soundness* bug — the
-//! lexer's sequentially-dependent scan loops get parallelized and race, so an
-//! auto-par build mis-spans ~13% of runs. Auto-par off is deterministic and
-//! correct; this oracle validates the (sequential) lexer logic against the Rust
-//! seed. Remove the `KARAC_AUTO_PAR=0` build env once #8 lands.
+//! The Kāra lexer is built with auto-parallelization ON (the default). It used
+//! to require `KARAC_AUTO_PAR=0` to dodge self-hosting blocker #8 (the analyzer
+//! parallelized the sequentially-dependent scan loops and raced); #8 is fixed
+//! (the auto-par dependency analyzer now tracks `self` reads/writes), so the
+//! oracle exercises the real default build path.
 //!
 //! Gated on `--features llvm` and soft-skips when the runtime archive isn't
 //! present (the same vacuous-pass contract as the codegen E2E suite). A
@@ -115,15 +114,6 @@ fn selfhost_lexer_matches_rust_lexer() {
         .current_dir(&tmp)
         .args(["build", "lex.kara"])
         .env_remove("KARAC_RUNTIME")
-        // Build with auto-parallelization OFF: self-hosting blocker #8 is an
-        // auto-par *soundness* bug — the lexer's sequentially-dependent scan
-        // loops (each iteration reads+writes `self.pos`) get parallelized and
-        // race, so an auto-par build mis-spans ~13% of runs (nondeterministic).
-        // With auto-par off the sequential lexer is deterministic and correct,
-        // which is exactly what this oracle validates against the Rust lexer.
-        // Drop this `env` once #8 lands (the auto-par dep-analysis must decline
-        // these loops, or its capture-set must cover self-field-index reads).
-        .env("KARAC_AUTO_PAR", "0")
         .output()
         .expect("spawn karac build");
     let berr = String::from_utf8_lossy(&build.stderr);
