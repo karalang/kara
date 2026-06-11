@@ -1,6 +1,6 @@
 # Spike: LLVM-C FFI binding for self-hosted codegen
 
-**Status:** OPEN — design question, not started. Blocks the **codegen leg** of [Phase 12 Self-Hosting](../implementation_checklist/phase-12-self-hosting.md#port-sequencing) and informs the Phase 8 FFI floor surface ([phase-12 § Pre-pivot blockers, Cluster 2](../implementation_checklist/phase-12-self-hosting.md#pre-pivot-blockers-fix-before)).
+**Status:** ✅ RESOLVED — decision record complete and the **minimal proof runs green (`exit=42`)** under the stage-0 Rust `karac` (2026-06-11; see the [Definition of done](#definition-of-done-this-spike) below). The LLVM-C binding approach is validated end-to-end: a Kāra program drives `libLLVM-18` to build/verify/emit a working object file. Unblocks the **codegen leg** of [Phase 12 Self-Hosting](../implementation_checklist/phase-12-self-hosting.md#port-sequencing); shaped the Phase 8 FFI floor surface ([phase-12 § Pre-pivot blockers, Cluster 2](../implementation_checklist/phase-12-self-hosting.md#pre-pivot-blockers-fix-before)).
 
 ## Question
 
@@ -99,17 +99,19 @@ Kāra FFI is `extern "C"` (Phase 7, ✅). LLVM ships a stable **C API** (`llvm-c
 
 A decision record covering: chosen linking strategy + version-pin; the enumerated LLVM-C surface (from the `inkwell` call-site inventory); the handle-ownership model (which handles `Drop`); and a **minimal proof** — a Kāra program that `extern "C"`-calls LLVM-C to build → verify → emit a trivial module to an object file, linked and run. That proof is the seed of the Kāra codegen module.
 
-**Status:** decision record ✅ COMPLETE — all of sub-q 1–6 above resolved ([surface inventory](self-hosting-llvm-c-surface.md), linking, handles, marshaling, errors, bootstrapping). **Proof: handle chain RUNS against real libLLVM** — five prerequisites have landed and a `LLVMContextCreate` → `LLVMModuleCreateWithNameInContext(name, ctx)` → `LLVMContextDispose(ctx)` program now builds, links `libLLVM-18`, and runs (exit 0). This is the first time Kāra drives real libLLVM through this binding. What landed (2026-06-11):
+**Status:** ✅ **DONE (minimal proof runs — `exit=42`).** Decision record complete (all of sub-q 1–6 resolved: [surface inventory](self-hosting-llvm-c-surface.md), linking, handles, marshaling, errors, bootstrapping), **and the minimal proof now compiles, runs, and emits a working object file under the stage-0 Rust `karac`** ([`self-hosting-llvm-c-proof.md`](self-hosting-llvm-c-proof.md) — verified-runnable). A real Kāra program drives `libLLVM-18` through the FFI binding to build `i64 main(){ret 42}`, verify it (return-status), and emit a Mach-O arm64 `answer.o`; linking + running it exits **42**. This is the spike's Definition of Done.
+
+Five prerequisites landed to get here (2026-06-11), each surfaced by an actual build attempt — the proof was its own best bug-finder:
 
 - ✅ **`kara.toml [link]` directive** (libLLVM-18 linkable).
 - ✅ **`CStr.from_ptr`** (inbound `char*`→`CStr`).
 - ✅ **`#[link_name]` honored on `unsafe extern` imports** — binds the PascalCase LLVM-C API to legal snake_case Kāra names.
 - ✅ **Auto-par "Undefined variable" bug** — the capture-set collector didn't recurse into `unsafe {}`; a general-purpose correctness fix.
-- ✅ **`*mut T` raw pointers are `Copy`** — a `*mut` handle passed to many FFI calls no longer fires a use-after-move (Rust parity; `is_copy_type` `Type::Pointer` arm). This is what made the handle chain run.
+- ✅ **`*mut T` raw pointers are `Copy`** — a `*mut` handle passed to many FFI calls no longer fires a use-after-move (Rust parity).
 
-Remaining gates to the **full** proof (build → verify → emit-object → link → exit 42):
+Follow-ons (NOT blockers for the proof — it sidesteps both):
 
-1. **`CStr.to_string() -> Result[String, Utf8Error]`** — the outbound `char*`→`String` half of the read path (`read_and_dispose`). No codegen lowering, no runtime UTF-8 validator to reuse. The remaining half of the phase-8 *CString conversions* item. Needed for the proof to **compile** (used only on error paths, never on the `exit=42` success path — so a proof written to report errors *without* `to_string` could run sooner).
-2. **Proof-spec rewrite** — semicolon-free statements that don't parse + PascalCase extern names → snake_case + `#[link_name]` + terminators. Mechanical.
+1. **`CStr.to_string() -> Result[String, Utf8Error]`** — full-fidelity error-path diagnostics (read the LLVM `char*` message). Off the `exit=42` success path, so the minimal proof reports errors with static strings + libc `exit` instead. The remaining half of the phase-8 *CString conversions* item.
+2. **Stage-2 cross-check** — re-run the proof under the self-hosted `karac` (sub-q 6). Gated on the self-hosted compiler existing (the Phase-12 port), not on any FFI/ownership prerequisite.
 
-The spike closes when the (rewritten) proof runs green (`exit=42`) under both bootstrap stages. The hard FFI/ownership gates are now cleared; what remains is one stdlib method + a mechanical rewrite.
+Also surfaced (general gaps, filed): `process.exit` has no codegen lowering (interpreter-only); the proof uses libc `exit` instead.

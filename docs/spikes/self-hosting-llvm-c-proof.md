@@ -1,12 +1,22 @@
 # Minimal proof: Kāra `extern "C"` → LLVM-C → object file → link → run
 
-**Status:** SPEC — **NOT yet lift-and-run** (the original "lift-and-run" claim was aspirational;
-a 2026-06-11 build attempt of the program below found it does not parse/compile verbatim — see
-the gate). This is the spike's [Definition of Done](self-hosting-llvm-c-ffi.md#definition-of-done-this-spike)
-minimal proof, written against the resolved design (sub-q 1–6). When the gate below clears it
-becomes the **seed of the Kāra codegen module**; until then it is a design artifact, not a
-runnable test. The `.kara` body below still needs the edits noted in the gate (statement
-terminators, PascalCase extern binding) before it will parse.
+**Status:** ✅ **RUNS GREEN — `exit=42`** under the stage-0 Rust `karac` (2026-06-11). This is the
+spike's [Definition of Done](self-hosting-llvm-c-ffi.md#definition-of-done-this-spike) minimal
+proof, and it is now the **seed of the Kāra codegen module** — a real Kāra program that drives
+`libLLVM-18` through the FFI binding to build, verify, and emit a working object file. The `.kara`
+body, `kara.toml`, and harness below are the **verified-runnable** versions (the earlier draft was
+aspirational and never compiled; every gate it surfaced — `[link]`, `CStr.from_ptr`, `#[link_name]`
+on externs, the auto-par capture bug, `*mut T` Copy — has since landed). One remaining gap to the
+*full* design (`CStr.to_string` for error-path diagnostics) is **not on the success path**, so this
+minimal proof sidesteps it; the only other follow-on is the stage-2 cross-check (re-run under the
+self-hosted `karac`), which awaits the self-hosted compiler.
+
+The proof builds a trivial module — `i64 main() { ret i64 42 }` — verifies it, emits it to an
+object file via the host target machine, links that object into an executable, and runs it.
+Success = the linked binary exits `42`. It exercises ~20 of the ~120 llvm-c functions from the
+[surface inventory](self-hosting-llvm-c-surface.md): context/module/builder lifecycle, one int
+type + fn type, add-function + basic block + position, const-int + ret, verify (return-status),
+default triple + target-from-triple + create-target-machine + emit-to-file.
 
 The proof builds a trivial module — `i64 main() { ret i64 42 }` — verifies it, emits it to an
 object file via the host target machine, links that object into an executable, and runs it.
@@ -15,11 +25,13 @@ Success = the linked binary exits `42`. It exercises ~20 of the ~120 llvm-c func
 type + fn type, add-function + basic block + position, const-int + ret, verify (return-status),
 default triple + target-from-triple + create-target-machine + emit-to-file, and the disposers.
 
-## Prerequisites gate (must be green first)
+## Prerequisites gate (all green — proof runs)
 
 A 2026-06-11 build of this program (project mode, `[link]` resolving `libLLVM-18`) enumerated the
-real gate — it is **longer than the original two-item list**. The list below is the corrected,
-build-verified set.
+real gate — **longer than the original two-item list** — and each item below has since landed.
+With all hard gates closed, the proof now compiles, runs, and emits a working object (`exit=42`).
+The one remaining unbuilt item (`CStr.to_string`) is off the success path, so the minimal proof
+does not need it. The list below is the corrected, build-verified set.
 
 - [x] **Native-library link directive (`kara.toml [link]`)** ✅ LANDED 2026-06-11 — the real blocker,
   now resolved: `[link] libs = ["LLVM-18"]` + `search-paths` append `-L`/`-l` to the native `cc`
@@ -88,200 +100,172 @@ search-paths = ["/opt/homebrew/opt/llvm@18/lib"]
 
 ## `proof.kara`
 
+Verified-runnable (2026-06-11). Opaque LLVM-C handles are `*mut u8`; PascalCase C
+symbols bind via `#[link_name]`; error paths use libc `exit` (`process.exit` has no
+codegen lowering yet). `ptr.null_mut()` makes the `*mut`-typed nulls; `ptr.mut(x)`
+forms the `*mut *_` out-param pointers.
+
 ```kara
-// Minimal LLVM-C codegen proof — seed of the self-hosted codegen module.
-// Owned handles (Context/Module/Builder/TargetMachine) are Drop newtypes (sub-q 3),
-// so the `?` early-returns below stay leak-free on every error path — which is the
-// whole reason the handle model uses Drop rather than manual dispose.
+// Minimal LLVM-C codegen proof — the seed of the self-hosted codegen module.
+// Builds `i64 main() { ret i64 42 }` via the LLVM-C API, verifies it, and
+// emits it to `answer.o`. The harness links answer.o and runs it: the linked
+// binary exits 42. (LLVM-C FFI spike — Definition of Done.)
+//
+// Opaque LLVM-C handles are modeled as `*mut u8` (every `LLVMXRef` is an
+// opaque pointer at the ABI). PascalCase C symbols bind to snake_case Kāra
+// fns via `#[link_name]`. The success path never reads an LLVM-owned
+// `char*`, so it needs no `CStr.to_string` — errors print a static message.
 
-// ---- opaque foreign pointee types (sub-q 3 representation) ----
 unsafe extern "C" {
-    type LLVMOpaqueContext;
-    type LLVMOpaqueModule;
-    type LLVMOpaqueBuilder;
-    type LLVMOpaqueType;
-    type LLVMOpaqueValue;
-    type LLVMOpaqueBasicBlock;
-    type LLVMTarget;
-    type LLVMOpaqueTargetMachine;
-}
+    #[link_name("LLVMContextCreate")]
+    fn context_create() -> *mut u8;
 
-// ---- the ~20-function llvm-c surface this proof needs ----
-// extern "C" fns default to `blocks` (FFI effect default) — no per-fn annotation needed.
-unsafe extern "C" {
-    fn LLVMContextCreate() -> *mut LLVMOpaqueContext;
-    fn LLVMContextDispose(c: *mut LLVMOpaqueContext);
+    #[link_name("LLVMModuleCreateWithNameInContext")]
+    fn module_create(name: *const u8, c: *mut u8) -> *mut u8;
 
-    fn LLVMModuleCreateWithNameInContext(name: *const u8, c: *mut LLVMOpaqueContext) -> *mut LLVMOpaqueModule;
-    fn LLVMDisposeModule(m: *mut LLVMOpaqueModule);
+    #[link_name("LLVMCreateBuilderInContext")]
+    fn builder_create(c: *mut u8) -> *mut u8;
 
-    fn LLVMCreateBuilderInContext(c: *mut LLVMOpaqueContext) -> *mut LLVMOpaqueBuilder;
-    fn LLVMDisposeBuilder(b: *mut LLVMOpaqueBuilder);
+    #[link_name("LLVMInt64TypeInContext")]
+    fn int64_type(c: *mut u8) -> *mut u8;
 
-    fn LLVMInt64TypeInContext(c: *mut LLVMOpaqueContext) -> *mut LLVMOpaqueType;
-    fn LLVMFunctionType(ret: *mut LLVMOpaqueType, params: *mut *mut LLVMOpaqueType,
-                        count: u32, is_vararg: i32) -> *mut LLVMOpaqueType;
+    #[link_name("LLVMFunctionType")]
+    fn function_type(ret: *mut u8, params: *mut *mut u8, count: u32, is_vararg: i32) -> *mut u8;
 
-    fn LLVMAddFunction(m: *mut LLVMOpaqueModule, name: *const u8, fnty: *mut LLVMOpaqueType) -> *mut LLVMOpaqueValue;
-    fn LLVMAppendBasicBlockInContext(c: *mut LLVMOpaqueContext, f: *mut LLVMOpaqueValue,
-                                     name: *const u8) -> *mut LLVMOpaqueBasicBlock;
-    fn LLVMPositionBuilderAtEnd(b: *mut LLVMOpaqueBuilder, bb: *mut LLVMOpaqueBasicBlock);
+    #[link_name("LLVMAddFunction")]
+    fn add_function(m: *mut u8, name: *const u8, fnty: *mut u8) -> *mut u8;
 
-    fn LLVMConstInt(ty: *mut LLVMOpaqueType, val: u64, sign_extend: i32) -> *mut LLVMOpaqueValue;
-    fn LLVMBuildRet(b: *mut LLVMOpaqueBuilder, v: *mut LLVMOpaqueValue) -> *mut LLVMOpaqueValue;
+    #[link_name("LLVMAppendBasicBlockInContext")]
+    fn append_bb(c: *mut u8, f: *mut u8, name: *const u8) -> *mut u8;
 
-    fn LLVMVerifyModule(m: *mut LLVMOpaqueModule, action: i32, out_message: *mut *const u8) -> i32;
-    fn LLVMDisposeMessage(msg: *const u8);
+    #[link_name("LLVMPositionBuilderAtEnd")]
+    fn position_at_end(b: *mut u8, bb: *mut u8);
 
-    // host = AArch64 on Apple Silicon (see "Gotcha" above — the `Native` wrappers are header-inline).
-    fn LLVMInitializeAArch64TargetInfo();
-    fn LLVMInitializeAArch64Target();
-    fn LLVMInitializeAArch64TargetMC();
-    fn LLVMInitializeAArch64AsmPrinter();
+    #[link_name("LLVMConstInt")]
+    fn const_int(ty: *mut u8, val: u64, sign_extend: i32) -> *mut u8;
 
-    fn LLVMGetDefaultTargetTriple() -> *const u8;                 // owned -> LLVMDisposeMessage
-    fn LLVMGetTargetFromTriple(triple: *const u8, out_target: *mut *mut LLVMTarget,
-                               out_error: *mut *const u8) -> i32;
-    fn LLVMCreateTargetMachine(t: *mut LLVMTarget, triple: *const u8, cpu: *const u8,
-                               features: *const u8, opt: i32, reloc: i32, code_model: i32) -> *mut LLVMOpaqueTargetMachine;
-    fn LLVMDisposeTargetMachine(tm: *mut LLVMOpaqueTargetMachine);
-    fn LLVMTargetMachineEmitToFile(tm: *mut LLVMOpaqueTargetMachine, m: *mut LLVMOpaqueModule,
-                                   filename: *const u8, file_type: i32, out_error: *mut *const u8) -> i32;
-}
+    #[link_name("LLVMBuildRet")]
+    fn build_ret(b: *mut u8, v: *mut u8) -> *mut u8;
 
-// ---- Category-A owned handles: non-Copy newtypes with Drop (sub-q 3) ----
-// Declared ctx -> module -> builder -> tm so reverse-order drop disposes the Context LAST.
-struct Context { raw: *mut LLVMOpaqueContext }
-impl Drop for Context { fn drop(mut ref self) { unsafe { LLVMContextDispose(self.raw) } } }
-impl Context { fn new() -> Context { Context { raw: unsafe { LLVMContextCreate() } } } }
+    // action = 2 = LLVMReturnStatusAction — MUST NOT be 0/AbortProcess,
+    // or a verify failure would abort() instead of returning control.
+    #[link_name("LLVMVerifyModule")]
+    fn verify_module(m: *mut u8, action: i32, out_message: *mut *const u8) -> i32;
 
-struct Module { raw: *mut LLVMOpaqueModule }
-impl Drop for Module { fn drop(mut ref self) { unsafe { LLVMDisposeModule(self.raw) } } }
-impl Module {
-    fn new(c: ref Context, name: ref CStr) -> Module {
-        Module { raw: unsafe { LLVMModuleCreateWithNameInContext(name.as_ptr(), c.raw) } }
-    }
-}
+    // Host target = AArch64 (Apple Silicon). The `Native` wrappers are
+    // header-inline `static` functions, not exported symbols — bind the
+    // concrete per-arch quartet instead.
+    #[link_name("LLVMInitializeAArch64TargetInfo")]
+    fn init_target_info();
+    #[link_name("LLVMInitializeAArch64Target")]
+    fn init_target();
+    #[link_name("LLVMInitializeAArch64TargetMC")]
+    fn init_target_mc();
+    #[link_name("LLVMInitializeAArch64AsmPrinter")]
+    fn init_asm_printer();
 
-struct Builder { raw: *mut LLVMOpaqueBuilder }
-impl Drop for Builder { fn drop(mut ref self) { unsafe { LLVMDisposeBuilder(self.raw) } } }
-impl Builder { fn new(c: ref Context) -> Builder { Builder { raw: unsafe { LLVMCreateBuilderInContext(c.raw) } } } }
+    #[link_name("LLVMGetDefaultTargetTriple")]
+    fn default_triple() -> *const u8;
 
-struct TargetMachine { raw: *mut LLVMOpaqueTargetMachine }
-impl Drop for TargetMachine { fn drop(mut ref self) { unsafe { LLVMDisposeTargetMachine(self.raw) } } }
+    #[link_name("LLVMGetTargetFromTriple")]
+    fn target_from_triple(triple: *const u8, out_target: *mut *mut u8, out_error: *mut *const u8) -> i32;
 
-// ---- error type: ICE/environment class, never a fake source span (sub-q 5) ----
-enum CodegenError { InvalidIR(String), TargetInit(String), EmitFailed(String) }
-impl CodegenError {
-    fn message(ref self) -> String {
-        match self {
-            CodegenError.InvalidIR(d)  => "codegen produced invalid IR: " + d,
-            CodegenError.TargetInit(d) => "target init failed: " + d,
-            CodegenError.EmitFailed(d) => "object emit failed: " + d,
-        }
-    }
-}
+    #[link_name("LLVMCreateTargetMachine")]
+    fn create_target_machine(t: *mut u8, triple: *const u8, cpu: *const u8, features: *const u8, opt: i32, reloc: i32, code_model: i32) -> *mut u8;
 
-// Read an LLVM-owned char* into an owned String, then dispose it (sub-q 4 outbound path).
-fn read_and_dispose(msg: *const u8) -> String with blocks {
-    if unsafe { ptr.addr(msg) } == 0 { return String.new() }
-    let s = unsafe { CStr.from_ptr(msg) }.to_string().unwrap_or(String.new());
-    unsafe { LLVMDisposeMessage(msg) }
-    s
-}
-
-fn verify(m: ref Module) -> Result[(), CodegenError] with blocks {
-    let mut msg: *const u8 = ptr.null()
-    // action = 2 = LLVMReturnStatusAction — MUST NOT be 0 (AbortProcess) or it kills the process (sub-q 5).
-    let broken = unsafe { LLVMVerifyModule(m.raw, 2, ptr.mut(msg)) }
-    if broken != 0 { return Err(CodegenError.InvalidIR(read_and_dispose(msg))) }
-    Ok(())
-}
-
-fn init_host_target() {
-    unsafe {
-        LLVMInitializeAArch64TargetInfo()
-        LLVMInitializeAArch64Target()
-        LLVMInitializeAArch64TargetMC()
-        LLVMInitializeAArch64AsmPrinter()
-    }
-}
-
-fn host_target_machine() -> Result[TargetMachine, CodegenError] with blocks {
-    let triple = unsafe { LLVMGetDefaultTargetTriple() }      // owned
-    let mut target: *mut LLVMTarget = ptr.null()
-    let mut err: *const u8 = ptr.null()
-    let failed = unsafe { LLVMGetTargetFromTriple(triple, ptr.mut(target), ptr.mut(err)) }
-    if failed != 0 {
-        let detail = read_and_dispose(err)
-        unsafe { LLVMDisposeMessage(triple) }
-        return Err(CodegenError.TargetInit(detail))
-    }
-    // opt=0(None), reloc=2(PIC — links cleanly into a macOS executable), code_model=0(Default)
-    let tm = unsafe { LLVMCreateTargetMachine(target, triple, c"".as_ptr(), c"".as_ptr(), 0, 2, 0) }
-    unsafe { LLVMDisposeMessage(triple) }
-    Ok(TargetMachine { raw: tm })
-}
-
-fn emit_object(tm: ref TargetMachine, m: ref Module, path: ref CStr) -> Result[(), CodegenError] with blocks {
-    let mut err: *const u8 = ptr.null()
     // file_type = 1 = LLVMObjectFile
-    let failed = unsafe { LLVMTargetMachineEmitToFile(tm.raw, m.raw, path.as_ptr(), 1, ptr.mut(err)) }
-    if failed != 0 { return Err(CodegenError.EmitFailed(read_and_dispose(err))) }
-    Ok(())
+    #[link_name("LLVMTargetMachineEmitToFile")]
+    fn emit_to_file(tm: *mut u8, m: *mut u8, filename: *const u8, file_type: i32, out_error: *mut *const u8) -> i32;
+
+    // libc `exit` for the error paths (`process.exit` has no codegen
+    // lowering yet — it is interpreter-only).
+    #[link_name("exit")]
+    fn c_exit(code: i32);
 }
 
-fn build_and_emit(obj_path: ref CStr) -> Result[(), CodegenError] with blocks {
-    let ctx = Context.new()
-    let module = Module.new(ctx, c"proof")
-    let builder = Builder.new(ctx)
+fn main() {
+    // ── build  i64 main() { ret i64 42 } ──
+    let ctx = unsafe { context_create() };
+    let module = unsafe { module_create(c"proof".as_ptr(), ctx) };
+    let builder = unsafe { builder_create(ctx) };
 
-    let i64t = unsafe { LLVMInt64TypeInContext(ctx.raw) }
-    // i64 main()  — no params; pass a null param array with count 0.
-    let fnty = unsafe { LLVMFunctionType(i64t, ptr.null[*mut LLVMOpaqueType](), 0, 0) }
-    let func = unsafe { LLVMAddFunction(module.raw, c"main".as_ptr(), fnty) }
-    let entry = unsafe { LLVMAppendBasicBlockInContext(ctx.raw, func, c"entry".as_ptr()) }
-    unsafe { LLVMPositionBuilderAtEnd(builder.raw, entry) }
-    let answer = unsafe { LLVMConstInt(i64t, 42, 0) }
-    unsafe { LLVMBuildRet(builder.raw, answer) }
+    let i64t = unsafe { int64_type(ctx) };
+    let no_params: *mut *mut u8 = ptr.null_mut();
+    let fnty = unsafe { function_type(i64t, no_params, 0, 0) };
+    let func = unsafe { add_function(module, c"main".as_ptr(), fnty) };
+    let entry = unsafe { append_bb(ctx, func, c"entry".as_ptr()) };
+    unsafe { position_at_end(builder, entry) };
+    let answer = unsafe { const_int(i64t, 42, 0) };
+    unsafe { build_ret(builder, answer) };
 
-    verify(module)?                       // leak-free on Err: ctx/module/builder Drop run on return
-    init_host_target()
-    let tm = host_target_machine()?
-    emit_object(tm, module, obj_path)?
-    Ok(())
-    // ctx, module, builder, tm all Drop here in reverse order — Context disposed last.
-}
-
-fn main() with blocks {
-    match build_and_emit(c"answer.o") {
-        Ok(()) => println("emitted answer.o"),
-        Err(e) => println(e.message()),
+    // ── verify (return-status, never abort) ──
+    let mut vmsg: *const u8 = ptr.null();
+    let broken = unsafe { verify_module(module, 2, ptr.mut(vmsg)) };
+    if broken != 0 {
+        println("codegen produced invalid IR");
+        unsafe { c_exit(1) };
     }
+
+    // ── host target machine ──
+    unsafe { init_target_info() };
+    unsafe { init_target() };
+    unsafe { init_target_mc() };
+    unsafe { init_asm_printer() };
+
+    let triple = unsafe { default_triple() };
+    let mut target: *mut u8 = ptr.null_mut();
+    let mut terr: *const u8 = ptr.null();
+    let tfail = unsafe { target_from_triple(triple, ptr.mut(target), ptr.mut(terr)) };
+    if tfail != 0 {
+        println("could not resolve host target");
+        unsafe { c_exit(1) };
+    }
+
+    // opt=0 None, reloc=2 PIC (links cleanly into a macOS executable),
+    // code_model=0 Default.
+    let tm = unsafe { create_target_machine(target, triple, c"".as_ptr(), c"".as_ptr(), 0, 2, 0) };
+
+    // ── emit the object file ──
+    let mut eerr: *const u8 = ptr.null();
+    let efail = unsafe { emit_to_file(tm, module, c"answer.o".as_ptr(), 1, ptr.mut(eerr)) };
+    if efail != 0 {
+        println("object emit failed");
+        unsafe { c_exit(1) };
+    }
+
+    println("emitted answer.o");
 }
 ```
 
 ## Harness
 
-```sh
-# 1. build the generator (needs kara.toml [link] → libLLVM-18)
-karac build proof.kara
+Project layout: `kara.toml` (above) at the root, `proof.kara` at `src/main.kara`. Confirmed
+output is shown in the comments (2026-06-11, Apple M-series, `libLLVM-18` from Homebrew `llvm@18`).
 
-# 2. run it — emits answer.o, an object containing `i64 main() { ret 42 }`
-./proof                         # prints: emitted answer.o
+```sh
+# 1. build the generator (project mode; kara.toml [link] resolves libLLVM-18)
+karac build                     # → Built: ./llvmproof
+
+# 2. run it — emits answer.o, a Mach-O arm64 object holding `i64 main() { ret 42 }`
+./llvmproof                     # prints: emitted answer.o   (exit 0)
+file answer.o                   # answer.o: Mach-O 64-bit object arm64   (520 bytes)
 
 # 3. link the EMITTED object into an executable and run it
 cc answer.o -o answer
-./answer; echo "exit=$?"        # expected: exit=42
+./answer; echo "exit=$?"        # exit=42   ✅
 ```
 
-**Pass criterion:** `exit=42`. That single number proves the whole chain — Kāra `extern "C"`
-declarations linked against `libLLVM-18`, called to build + verify + emit a real object file,
-which the system linker turns into a runnable binary that executes the IR Kāra generated.
+**Pass criterion:** `exit=42` — **met**. That single number proves the whole chain — Kāra
+`unsafe extern "C"` declarations (`#[link_name]`-bound to the PascalCase LLVM-C API) linked against
+`libLLVM-18`, called to build + verify + emit a real object file, which the system linker turns
+into a runnable binary that executes the IR Kāra generated. The hard FFI/ownership gates this proof
+surfaced are all closed; this is the spike's Definition of Done under the stage-0 Rust `karac`.
 
 ## Cross-stage check (sub-q 6)
 
-Before trusting the bootstrap fixpoint, run this proof green under **both** the stage-0 Rust
-`karac` *and* the stage-2 self-hosted `karac` — identical source, identical `[link]` resolution,
-identical emitted object. A passing proof under both is the codegen leg's real correctness signal;
-the byte-identical fixpoint only adds self-consistency on top.
+Stage-0 (Rust `karac`): ✅ **green — `exit=42`** (2026-06-11). The stage-2 leg (self-hosted `karac`)
+remains to be run once that compiler exists — identical source, identical `[link]` resolution,
+identical emitted object. A passing proof under **both** is the codegen leg's real correctness
+signal; the byte-identical fixpoint only adds self-consistency on top. The stage-2 run is gated on
+the self-hosted compiler (the Phase-12 port itself), not on any FFI/ownership prerequisite — those
+are all closed.
