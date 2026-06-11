@@ -735,11 +735,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Preserve key-before-val compile order on the owned path
                 // (the borrowed path already compiled the sliced object above).
                 let key_val = if borrowed_key.is_none() {
-                    Some(self.compile_expr(&args[0].value)?)
+                    let kv = self.compile_expr(&args[0].value)?;
+                    // Consume-site ownership pair, identical to `Vec.push`:
+                    // an f-string key (`m.insert(f"…", v)`) moves its buffer
+                    // in — disarm the staged accumulator's scope-exit free;
+                    // an owned String/Vec PARAM key deep-copies — the Map
+                    // takes ownership of a private copy while the caller
+                    // retains the original buffer's free under the by-value
+                    // header ABI (kata-22 owned-param UAF family). Applied
+                    // immediately after compiling the key so a later
+                    // f-string VALUE arg can't clobber the key's accumulator.
+                    self.suppress_fstr_acc_if_moved_out(&args[0].value);
+                    Some(self.maybe_defensive_copy_param_arg(&args[0].value, kv))
                 } else {
                     None
                 };
                 let val_val = self.compile_expr(&args[1].value)?;
+                // Same consume-site pair for the value argument.
+                self.suppress_fstr_acc_if_moved_out(&args[1].value);
+                let val_val = self.maybe_defensive_copy_param_arg(&args[1].value, val_val);
                 // Move semantics — same shape as `Vec.push`. When the
                 // key OR value argument is a tracked Vec/String binding,
                 // the bucket bit-copies its `{ptr, len, cap}` and the

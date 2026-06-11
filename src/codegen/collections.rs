@@ -92,6 +92,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("Set.insert requires a value argument".to_string());
                 }
                 let elem_val = self.compile_expr(&args[0].value)?;
+                // Consume-site ownership pair, identical to `Vec.push` /
+                // `Map.insert`: an f-string element (`s.insert(f"…")`) moves
+                // its buffer in — disarm the staged accumulator's scope-exit
+                // free; an owned String/Vec PARAM element deep-copies — the
+                // Set takes ownership of a private copy while the caller
+                // retains the original buffer's free under the by-value
+                // header ABI (kata-22 owned-param UAF family).
+                self.suppress_fstr_acc_if_moved_out(&args[0].value);
+                let elem_val = self.maybe_defensive_copy_param_arg(&args[0].value, elem_val);
                 // Move semantics for tracked Vec/String elements: the
                 // bucket bit-copies the element's `{ptr, len, cap}` and
                 // the `karac_map_free_with_drop_vec` cleanup (when

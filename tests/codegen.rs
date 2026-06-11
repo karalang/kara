@@ -41211,6 +41211,68 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_map_insert_owned_string_param_value() {
+        // `m.insert(k, v)` where `v: String` is an owned PARAM and the map
+        // outlives the callee (passed `mut ref`): the Map must store a
+        // private deep copy, not an alias into the caller's buffer, or the
+        // caller's scope-exit free and the Map's bucket free double-hit the
+        // same buffer (kata-22 owned-param UAF family, Cluster 1). The read
+        // back through `m.get` proves the value buffer survives.
+        let out = run_program(
+            r#"
+fn store(m: mut ref Map[i64, String], v: String) {
+    m.insert(7i64, v);
+}
+
+fn main() {
+    let mut m: Map[i64, String] = Map.new();
+    let mut s = String.new();
+    s.push_str("payload");
+    store(mut m, s);
+    println(m.len());
+    match m.get(7i64) { Some(g) => println(g), None => println("missing") }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\npayload");
+        }
+    }
+
+    #[test]
+    fn test_e2e_set_insert_owned_string_param() {
+        // `s.insert(v)` where `v: String` is an owned PARAM and the set
+        // outlives the callee: same defensive-copy requirement as
+        // `Map.insert`'s value side (Set lowers to `Map[T, ()]`, the
+        // element is the bucket key). The `contains` reads prove the keys
+        // survive past the caller's frees.
+        let out = run_program(
+            r#"
+fn add(set: mut ref Set[String], v: String) {
+    set.insert(v);
+}
+
+fn main() {
+    let mut s: Set[String] = Set.new();
+    let mut a = String.new();
+    a.push_str("apple");
+    add(mut s, a);
+    let mut b = String.new();
+    b.push_str("banana");
+    add(mut s, b);
+    println(s.len());
+    println(s.contains("apple"));
+    println(s.contains("banana"));
+    println(s.contains("cherry"));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2\ntrue\ntrue\nfalse");
+        }
+    }
+
+    #[test]
     fn test_e2e_owned_string_param_tail_return() {
         // `fn id(s: String) -> String { s }` — the returned value must
         // be a copy: the caller that passed `s` frees its buffer AND the

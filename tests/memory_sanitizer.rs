@@ -2722,6 +2722,133 @@ fn main() {
         );
     }
 
+    // ── Owned String/Vec PARAM moved into Map/Set insert (Cluster 1) ──
+    // `m.insert(k, v)` / `set.insert(v)` where the key/value/element is an
+    // owned `String`/`Vec` PARAMETER of the current function. Under the
+    // by-value header ABI the CALLER retains the buffer's scope-exit free,
+    // so a bucket that bit-copies the param's `{ptr,len,cap}` aliases the
+    // caller's buffer — both the caller's `FreeVecBuffer` and the Map's
+    // `karac_map_free_with_drop_vec` then free the same allocation
+    // (double-free), and a post-call read of the bucket walks freed memory
+    // (UAF). The fix wires `maybe_defensive_copy_param_arg` into the insert
+    // arms so the collection owns a private copy. Same family as the
+    // already-covered `Vec.push` / enum-payload / struct-field consume
+    // sites (kata-22, 2026-06-06); these are the Map/Set siblings.
+
+    #[test]
+    fn asan_map_insert_owned_string_param_value() {
+        // `Map[i64, String]`, VALUE side. The helper takes the String by
+        // value (owned param) and inserts it; `m` lives in main and is
+        // passed `mut ref`, so its bucket free and main's free of the
+        // moved-in source double-hit the same buffer pre-fix. Allocation
+        // churn between insert and read-back exposes a UAF if the bucket
+        // aliased a freed buffer.
+        assert_clean_asan_run(
+            r#"
+fn store(m: mut ref Map[i64, String], v: String) {
+    m.insert(7i64, v);
+}
+
+fn main() {
+    let mut m: Map[i64, String] = Map.new();
+    let mut s = String.new();
+    s.push_str("payload-string-value");
+    store(mut m, s);
+    let mut churn: Vec[String] = Vec.new();
+    let mut i = 0i64;
+    while i < 16i64 {
+        let mut t = String.new();
+        t.push_str("xxxxxxxxxxxxxxxxxxxx");
+        churn.push(t);
+        i = i + 1i64;
+    }
+    match m.get(7i64) { Some(g) => println(g), None => println("missing") }
+}
+"#,
+            &["payload-string-value"],
+            "map_insert_owned_string_param_value",
+        );
+    }
+
+    #[test]
+    fn asan_map_insert_owned_string_param_key() {
+        // `Map[String, i64]`, KEY side. The owned String param is the
+        // bucket key; the recursive-drop helper frees each live key, so an
+        // aliased key buffer double-frees against the caller's source.
+        assert_clean_asan_run(
+            r#"
+fn store(m: mut ref Map[String, i64], k: String) {
+    m.insert(k, 1i64);
+}
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut a = String.new();
+    a.push_str("alpha-key-string");
+    store(mut m, a);
+    let mut b = String.new();
+    b.push_str("beta-key-string");
+    store(mut m, b);
+    println(m.len());
+}
+"#,
+            &["2"],
+            "map_insert_owned_string_param_key",
+        );
+    }
+
+    #[test]
+    fn asan_set_insert_owned_string_param() {
+        // `Set[String]` (lowers to `Map[T, ()]`), element side. Owned
+        // String param moved into a `mut ref` Set living in main.
+        assert_clean_asan_run(
+            r#"
+fn add(set: mut ref Set[String], v: String) {
+    set.insert(v);
+}
+
+fn main() {
+    let mut s: Set[String] = Set.new();
+    let mut a = String.new();
+    a.push_str("apple-element");
+    add(mut s, a);
+    let mut b = String.new();
+    b.push_str("banana-element");
+    add(mut s, b);
+    println(s.len());
+}
+"#,
+            &["2"],
+            "set_insert_owned_string_param",
+        );
+    }
+
+    #[test]
+    fn asan_map_insert_fstring_value() {
+        // F-string sibling of the owned-param path: `m.insert(k, f"…")`.
+        // The f-string's staged accumulator must be disarmed at the insert
+        // (the bucket takes the buffer) — otherwise the acc's scope-exit
+        // free and the Map's bucket free double-hit it. Covers the
+        // `suppress_fstr_acc_if_moved_out` half of the fix.
+        assert_clean_asan_run(
+            r#"
+fn store(m: mut ref Map[i64, String], n: i64) {
+    m.insert(n, f"value-{n}-suffix");
+}
+
+fn main() {
+    let mut m: Map[i64, String] = Map.new();
+    store(mut m, 1i64);
+    store(mut m, 2i64);
+    println(m.len());
+    match m.get(1i64) { Some(g) => println(g), None => println("missing") }
+}
+"#,
+            &["2", "value-1-suffix"],
+            "map_insert_fstring_value",
+        );
+    }
+
     // ── Struct field drop synthesis (2026-05-14, slice γ) ────────
     // `track_struct_var` + `emit_struct_drop_synthesis` emit a per-struct
     // `__karac_drop_struct_<Name>` function that frees each heap-owning
