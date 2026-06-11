@@ -442,6 +442,22 @@ pub(super) fn link_executable_impl(
         "-lpthread",
         "-ldl",
     ]);
+    // External native libraries from `kara.toml`'s `[link]` table
+    // (`docs/spikes/self-hosting-llvm-c-ffi.md` § Linking). Search paths
+    // (`-L`) precede the `-l` flags so the linker can resolve each lib
+    // against them, and both follow the karac-emitted object on the line so
+    // the object's undefined symbols pull from these libraries. The
+    // motivating consumer is the self-hosted codegen leg linking
+    // `libLLVM-18`; absent a `[link]` table this loop is empty and the line
+    // is byte-identical to before.
+    if let Some(link) = crate::target::native_link_config() {
+        for dir in &link.search_paths {
+            cmd.arg(format!("-L{dir}"));
+        }
+        for lib in &link.libs {
+            cmd.arg(format!("-l{lib}"));
+        }
+    }
     // Binary-size phase 2: cross-archive DCE. The runtime exports HTTP /
     // JSON / par / map / etc. entry points unconditionally as `#[no_mangle]`,
     // and any program statically links the full archive even if it never

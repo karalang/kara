@@ -14,8 +14,9 @@ default triple + target-from-triple + create-target-machine + emit-to-file, and 
 
 ## Prerequisites gate (must be green first)
 
-- [ ] **Native-library link directive (`kara.toml [link]`)** — the real blocker; without it the
-  generator can't link `libLLVM`. ([spike Prerequisites](self-hosting-llvm-c-ffi.md#prerequisites-phase-8-floor) / phase-12 Cluster 2.)
+- [x] **Native-library link directive (`kara.toml [link]`)** ✅ LANDED 2026-06-11 — the real blocker,
+  now resolved: `[link] libs = ["LLVM-18"]` + `search-paths` append `-L`/`-l` to the native `cc`
+  line. The `kara.toml` below works verbatim. ([spike Prerequisites](self-hosting-llvm-c-ffi.md#prerequisites-phase-8-floor) / phase-12 Cluster 2.)
 - [ ] **`CStr.from_ptr`** — used by `read_and_dispose` below to read LLVM's error/`char*` strings.
   Refinement, not a hard gate (hand-rollable from `ptr.const` + `String.from_raw_parts`).
 - [ ] Phase-8 FFI floor: opaque foreign types ✅ (shipped), raw-ptr params/deref, `ptr.mut`

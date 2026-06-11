@@ -12200,6 +12200,16 @@ The attributes above operate at the per-symbol level. Two related concerns opera
 
 **Panic strategy and unwinding tables.** `panic = "abort"` in the runtime crate's release profile drops `__eh_frame` and `__unwind_info` sections (~114 KB on a representative binary). Default for `embedded` / `kernel` / `isr` / `gpu` profiles, where unwinding is forbidden anyway. App / lib profiles use `panic = "unwind"` by default to preserve `catch_panic` semantics; users can switch to `panic = "abort"` per-build for additional binary-size savings, accepting the loss of `catch_panic` (which becomes a compile error under `abort`).
 
+**Foreign-library linking — the `[link]` table.** The per-symbol attributes above name *symbols*; linking against an external native library names a *library* and *where it lives*, which is a project/environment fact, not a source-level assertion. A `kara.toml` `[link]` table supplies both:
+
+```toml
+[link]
+libs = ["LLVM-18"]                              # → -lLLVM-18
+search-paths = ["/opt/homebrew/opt/llvm@18/lib"] # → -L/opt/homebrew/opt/llvm@18/lib
+```
+
+`libs` are bare linker stems (`"LLVM-18"`, not `"libLLVM-18.dylib"`), appended to the native `cc` link line as `-l<name>`; `search-paths` are appended as `-L<path>` and precede the `-l` flags so the linker resolves each library against them. Both follow the karac-emitted object and the runtime archive on the line, so the object's undefined foreign symbols (declared in an `unsafe extern "C" { ... }` block — see [FFI](#ffi)) pull from these libraries. The split is deliberate: the `unsafe extern {}` block says *what symbols* the program imports (source-level, soundness-bearing); the manifest says *where the library is* (build-time, environment-resolved — typically from `llvm-config --libdir` or `pkg-config`). An absent or empty `[link]` table leaves the link line untouched. This is the mechanism the self-hosted compiler uses to link `libLLVM-18` for its LLVM-C codegen backend (see [`spikes/self-hosting-llvm-c-ffi.md`](spikes/self-hosting-llvm-c-ffi.md) § Linking). The directive applies to native targets only — wasm builds link via `wasm-ld`, which ignores it. The library's *existence* is not validated at manifest-parse time (the compiler never probes the filesystem there); a missing library or path surfaces as an ordinary linker error at build time.
+
 These flags are profile-driven, not per-symbol. Soundness obligations stay at the symbol level via the `#[unsafe(...)]` attributes above. The build-profile flags are a separate layer concerned with binary footprint and panic-strategy uniformity, not with symbol-name uniqueness or section validity. Implementation tracking lives in [`implementation_checklist/phase-7-codegen.md`](implementation_checklist/phase-7-codegen.md).
 
 **Cross-references:** § Project Profiles (where `panic = "abort"` defaults are set per profile); § Panic Strategy (the unwind / abort semantic split); § Catching Panics (`catch_panic[T]` requires `panic = "unwind"`).

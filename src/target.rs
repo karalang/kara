@@ -177,6 +177,37 @@ pub fn target_features_override() -> Option<&'static str> {
     TARGET_FEATURES_OVERRIDE.get().map(|s| s.as_str())
 }
 
+/// External native-library link directive resolved from `kara.toml`'s
+/// `[link]` table (`docs/spikes/self-hosting-llvm-c-ffi.md` § Linking).
+/// `search_paths` become `-L<path>` and `libs` become `-l<name>` on the
+/// `cc` line in [`crate::codegen::driver::link_executable_impl`]. Lives here
+/// — plain strings, no LLVM types — alongside the other build-wide codegen
+/// knobs set once at CLI startup, so it is reachable from non-llvm cfg and
+/// the codegen-containment invariant holds. The native link is the only
+/// reader; wasm builds (wasm-ld) ignore it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NativeLinkConfig {
+    pub libs: Vec<String>,
+    pub search_paths: Vec<String>,
+}
+
+/// Build-wide native-library link directive for this process. `OnceLock` so
+/// first-set wins (the `set_target_cpu_override` posture — one artifact per
+/// invocation). Unset (the common case) leaves the link line untouched.
+static NATIVE_LINK_CONFIG: std::sync::OnceLock<NativeLinkConfig> = std::sync::OnceLock::new();
+
+/// Install the resolved `[link]` directive. First-set wins; a no-op second
+/// call mirrors [`set_target_cpu_override`]. Setting an all-empty config is
+/// harmless — the link line then gains no flags.
+pub fn set_native_link_config(libs: Vec<String>, search_paths: Vec<String>) {
+    let _ = NATIVE_LINK_CONFIG.set(NativeLinkConfig { libs, search_paths });
+}
+
+/// The native-library link directive for this process, if any was set.
+pub fn native_link_config() -> Option<&'static NativeLinkConfig> {
+    NATIVE_LINK_CONFIG.get()
+}
+
 /// Is WASM SIMD-128 effectively enabled for the active wasm target?
 /// `+simd128` is the wasm default feature (design.md § Portable SIMD —
 /// "WebAssembly SIMD-128 is a first-class lowering target"; phase-10

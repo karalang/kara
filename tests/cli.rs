@@ -1410,6 +1410,153 @@ fn test_build_release_project_mode_strips_contracts_e2e() {
     }
 }
 
+// ── `kara.toml` `[link]` native-library directive ───────────────────
+//
+// The `[link]` table appends `-L<search-path>` / `-l<lib>` to the native
+// `cc` line (`src/codegen/driver.rs` `link_executable_impl`). It is the
+// self-hosting prerequisite that lets the Kāra-written codegen module link
+// `libLLVM-18` to call the LLVM-C API
+// (`docs/spikes/self-hosting-llvm-c-ffi.md` § Linking). Both tests are
+// gated on `--features llvm` (no native link without codegen) and
+// soft-skip when the no-llvm fallback fires.
+
+/// Negative proof that the `-l<lib>` flag actually reaches the linker: a
+/// `[link]` table naming a library that cannot exist makes the build fail
+/// at link, and the linker's "library not found" error names that exact
+/// library. That the linker even saw the name is the proof the directive
+/// injected `-lkarac_link_directive_absent_xyz` onto the `cc` line. (A
+/// missing runtime archive would fail the link for an unrelated reason
+/// *without* naming our library — so the lib-name check both proves
+/// injection and distinguishes it from an environment gap, which
+/// soft-skips.)
+#[cfg(feature = "llvm")]
+#[test]
+fn test_link_directive_injects_lib_flag_e2e() {
+    const ABSENT_LIB: &str = "karac_link_directive_absent_xyz";
+    let tmp = scratch_project("link-missing");
+    write(
+        &tmp.join("kara.toml"),
+        &format!("[package]\nname = \"linkprog\"\n\n[link]\nlibs = [\"{ABSENT_LIB}\"]\n"),
+    );
+    write(&tmp.join("src/main.kara"), "fn main() { println(1); }\n");
+
+    let build = karac_bin()
+        .current_dir(&tmp)
+        .args(["build"])
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let berr = String::from_utf8_lossy(&build.stderr);
+    let exe = tmp.join("linkprog");
+    if berr.contains("requires the llvm feature") {
+        eprintln!("skip: test_link_directive_injects_lib_flag_e2e — no llvm feature");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    // The named library cannot resolve, so the build must NOT produce a
+    // binary regardless of environment.
+    assert!(
+        !exe.exists(),
+        "a `[link]` lib that cannot exist must fail the build, but an executable was produced",
+    );
+    if berr.contains(ABSENT_LIB) {
+        // Proof: the directive's `-l<lib>` reached the system linker.
+        assert!(
+            !build.status.success(),
+            "build naming the missing library must exit nonzero",
+        );
+    } else {
+        // The link step never reached our flag (e.g. the runtime archive is
+        // absent in this environment) — nothing to prove here, skip.
+        eprintln!(
+            "skip: test_link_directive_injects_lib_flag_e2e — link did not reach the directive \
+             (likely missing runtime archive); stderr:\n{berr}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Positive proof through a real library: a program that calls
+/// `zlibVersion` (from the ubiquitous system zlib). That symbol resolves
+/// *only* when `-lz` is on the link line. The contrast is the proof — the
+/// same program builds and runs WITH `[link] libs = ["z"]` and fails to
+/// link WITHOUT it (undefined `zlibVersion`). The contrast attributes the
+/// resolution to the directive, not to the environment. Soft-skips when
+/// the "with" build can't link zlib at all (no zlib-dev present), so a bare
+/// CI box passes vacuously rather than failing on an unrelated cause.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_link_directive_resolves_real_library_e2e() {
+    let src = "unsafe extern \"C\" { fn zlibVersion() -> *const u8; }\n\
+               fn main() {\n\
+               \x20   let v = unsafe { zlibVersion() };\n\
+               \x20   if unsafe { ptr.addr(v) } != 0 { println(\"zlib-linked\") } else { println(\"null\") }\n\
+               }\n";
+
+    // Build (optionally with the `[link]` table) and run. Returns the run
+    // output, or None to soft-skip (no-llvm fallback, or the build produced
+    // no binary — including the legitimate "zlib not installed here" case).
+    let build_and_run = |with_link: bool| -> Option<(String, Option<i32>)> {
+        let tmp = scratch_project(if with_link {
+            "zlib-with"
+        } else {
+            "zlib-without"
+        });
+        let manifest = if with_link {
+            "[package]\nname = \"zprog\"\n\n[link]\nlibs = [\"z\"]\n"
+        } else {
+            "[package]\nname = \"zprog\"\n"
+        };
+        write(&tmp.join("kara.toml"), manifest);
+        write(&tmp.join("src/main.kara"), src);
+        let build = karac_bin()
+            .current_dir(&tmp)
+            .args(["build"])
+            .env_remove("KARAC_RUNTIME")
+            .output()
+            .unwrap();
+        let berr = String::from_utf8_lossy(&build.stderr).to_string();
+        let exe = tmp.join("zprog");
+        if berr.contains("requires the llvm feature") || !exe.exists() {
+            let _ = std::fs::remove_dir_all(&tmp);
+            return None;
+        }
+        let run = common::output_with_hang_watchdog(
+            std::process::Command::new(&exe),
+            std::time::Duration::from_secs(15),
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        let run = run?;
+        Some((
+            String::from_utf8_lossy(&run.stdout).to_string(),
+            run.status.code(),
+        ))
+    };
+
+    // The `[link]`-equipped build is the gate: only assert the contrast when
+    // zlib actually links here. If it doesn't (no zlib-dev), the whole test
+    // soft-skips — we never reach the "without" side.
+    let Some((out, code)) = build_and_run(true) else {
+        eprintln!("skip: test_link_directive_resolves_real_library_e2e — could not link zlib here");
+        return;
+    };
+    assert_eq!(
+        out.trim(),
+        "zlib-linked",
+        "the `[link]`-equipped build must resolve zlibVersion and run",
+    );
+    assert_eq!(code, Some(0), "the zlib-linked program exits cleanly");
+
+    // Contrast: without the directive the very same program must fail to
+    // link (undefined `zlibVersion`) — so `build_and_run(false)` produces no
+    // binary and returns None. A `Some` here would mean zlib was linked
+    // without the directive, which would falsify the attribution.
+    assert!(
+        build_and_run(false).is_none(),
+        "without `[link]`, `zlibVersion` is undefined and the build must not produce a binary",
+    );
+}
+
 // ── Theme 4: multi-file project-mode codegen ────────────────────
 //
 // Theme 4 wires `cmd_build_project` through the existing single-file

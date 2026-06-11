@@ -4585,6 +4585,37 @@ fn manifest_wasm_knobs_for(
     }
 }
 
+/// Resolve the `[link]` directive for a single-file build by walking up
+/// from the file's own directory (the [`manifest_release_field_for`]
+/// discovery rule). No manifest → two empty vecs. Manifest-only: unlike the
+/// CPU/features chains there is no CLI-flag or env tier, because a library
+/// search path is intrinsically a project/environment fact (it comes from
+/// `llvm-config --libdir`), not a per-invocation toggle. A malformed
+/// manifest is a hard error, same posture as the sibling walk-ups.
+#[cfg(feature = "llvm")]
+fn manifest_link_config_for(filename: &str, output: OutputMode) -> (Vec<String>, Vec<String>) {
+    let file_dir = std::path::Path::new(filename)
+        .parent()
+        .map(|p| {
+            if p.as_os_str().is_empty() {
+                std::path::PathBuf::from(".")
+            } else {
+                p.to_path_buf()
+            }
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    match manifest::discover_project_root(&file_dir) {
+        Some(root) => match manifest::load_from_root(&root) {
+            Ok(m) => (m.link_libs, m.link_search_paths),
+            Err(e) => {
+                emit_manifest_error(&e, output);
+                process::exit(1);
+            }
+        },
+        None => (Vec::new(), Vec::new()),
+    }
+}
+
 /// Default `--max-memory` for the threaded wasm module, in 64 KiB pages:
 /// 16384 pages = 1 GiB — rustc's own wasm32-wasip1-threads target
 /// default (shared memories must declare a maximum; the reservation is
@@ -4741,6 +4772,20 @@ fn apply_target_features_override(resolved: Option<String>) {
         process::exit(1);
     }
     crate::target::set_target_features_override(&features);
+}
+
+/// Install the resolved `[link]` directive process-wide for the native
+/// linker (`docs/spikes/self-hosting-llvm-c-ffi.md` § Linking). A no-op
+/// when both lists are empty so a `[link]`-free build never touches the
+/// global (and never differs from the pre-`[link]` link line). The codegen
+/// driver's `link_executable_impl` is the only reader; wasm-ld ignores it,
+/// so callers may skip this on wasm builds.
+#[cfg(feature = "llvm")]
+fn apply_native_link_config(libs: Vec<String>, search_paths: Vec<String>) {
+    if libs.is_empty() && search_paths.is_empty() {
+        return;
+    }
+    crate::target::set_native_link_config(libs, search_paths);
 }
 
 /// Normalize a rendered `DiagnosticJson` entry for cross-target
@@ -5132,6 +5177,14 @@ fn cmd_build(
             })
         }));
         let is_wasm = build_target == "wasm_wasi" || build_target == "wasm_browser";
+        // External native-library linking (`kara.toml` `[link]` table) —
+        // native targets only (wasm-ld ignores it). Manifest-only, no
+        // CLI/env tier; discovered by the same walk-up as the CPU/features
+        // chains. Set before codegen so the linker invocation sees it.
+        if !is_wasm {
+            let (link_libs, link_search_paths) = manifest_link_config_for(filename, output);
+            apply_native_link_config(link_libs, link_search_paths);
+        }
         let effective_bindings = resolve_effective_bindings(build_target, bindings);
         // Hot-swap requires dynamic symbol resolution at runtime; a wasm
         // module has none. Same gate as project mode (the wasm half of
@@ -5970,6 +6023,14 @@ fn cmd_build_project(
     );
     #[cfg(not(feature = "llvm"))]
     let _ = (target_cpu, target_features);
+
+    // External native-library linking (`[link]` table) — native targets
+    // only (wasm-ld ignores it). Read from the project's own manifest
+    // (already loaded), no walk-up. Installed before codegen runs.
+    #[cfg(feature = "llvm")]
+    if !is_wasm {
+        apply_native_link_config(mf.link_libs.clone(), mf.link_search_paths.clone());
+    }
 
     // Embedded-WIT component bindings — the single-file `cmd_build`
     // contract: resolve the external wasm-tools up front (failing fast

@@ -411,6 +411,25 @@ pub struct Manifest {
     /// always `ProfileConfig::with_profile(self.profile)` with an empty knob
     /// set; unknown `[profile]` keys soft-warn like the rest of the manifest.
     pub profile_config: ProfileConfig,
+    /// `[link] libs = [...]` — external native libraries the linker must
+    /// pull in for this package, appended to the `cc` line as `-l<name>`
+    /// after the runtime archive. The motivating consumer is the
+    /// self-hosted codegen leg, which links `libLLVM-18` to call the
+    /// LLVM-C API (`docs/spikes/self-hosting-llvm-c-ffi.md` § Linking);
+    /// the directive is general-purpose foreign-library linking. Names are
+    /// bare linker stems (`"LLVM-18"`, not `"libLLVM-18.dylib"`). Empty
+    /// when the `[link]` table or its `libs` key is absent. The manifest
+    /// says *which* libraries; `[link].search-paths` says *where* — the
+    /// split mirrors how `llvm-sys` separates source FFI from build-time
+    /// `llvm-config` discovery.
+    pub link_libs: Vec<String>,
+    /// `[link] search-paths = [...]` — directories the linker searches for
+    /// the `link_libs`, appended to the `cc` line as `-L<path>`. Typically
+    /// populated from `llvm-config --libdir` of the same LLVM prefix the
+    /// Rust stage pins (`LLVM_SYS_181_PREFIX`), which is environment-
+    /// specific and therefore a build/manifest concern, not a source-level
+    /// `extern` attribute. Empty when absent.
+    pub link_search_paths: Vec<String>,
     pub warnings: Vec<ManifestWarning>,
 }
 
@@ -858,6 +877,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     let (wasm_pool_size, wasm_fallback, wasm_max_memory_pages) =
         parse_wasm_table(path, &table, &mut warnings)?;
     let profile_config = parse_profile_table(path, &table, profile, &mut warnings)?;
+    let (link_libs, link_search_paths) = parse_link_table(path, &table, &mut warnings)?;
 
     // Stable order across package-key + dependency warnings — same sort key
     // (message string) used as before, but now applied after the full
@@ -888,6 +908,8 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         wasm_fallback,
         wasm_max_memory_pages,
         profile_config,
+        link_libs,
+        link_search_paths,
         warnings,
     })
 }
@@ -970,6 +992,93 @@ fn parse_profile_table(
         });
     }
     Ok(config)
+}
+
+/// Parse the `[link]` table when present — external native-library linking
+/// (design.md § Linker Control Attributes > Foreign-library linking). Two
+/// recognised keys, each an array of non-empty strings:
+///
+/// - `libs` — bare linker stems appended as `-l<name>` (`"LLVM-18"` →
+///   `-lLLVM-18`), *not* full filenames.
+/// - `search-paths` — directories appended as `-L<path>`, where the libs
+///   live (typically `llvm-config --libdir`).
+///
+/// The motivating consumer is the self-hosted codegen leg linking
+/// `libLLVM-18` (`docs/spikes/self-hosting-llvm-c-ffi.md` § Linking); the
+/// directive is general foreign-library linking. Unknown keys soft-warn
+/// (reserved for later link knobs, e.g. `frameworks`); a wrong-typed value
+/// or a non-string / empty-string array element hard-errors so a typo can't
+/// silently drop a library from the link line. Absent table → two empty
+/// vecs. The libdir is *not* validated here (the manifest layer never
+/// probes the filesystem) — a missing path surfaces as a linker error at
+/// build time, the same posture as a typo'd `-L` anywhere else.
+fn parse_link_table(
+    path: &Path,
+    table: &toml::Table,
+    warnings: &mut Vec<ManifestWarning>,
+) -> Result<(Vec<String>, Vec<String>), ManifestError> {
+    let Some(value) = table.get("link") else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let link_table = value
+        .as_table()
+        .ok_or_else(|| ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "link".to_string(),
+            expected: "a table (e.g. `[link]`)",
+        })?;
+    let mut libs = Vec::new();
+    let mut search_paths = Vec::new();
+    for (key, val) in link_table {
+        match key.as_str() {
+            "libs" => {
+                libs = parse_link_string_array(path, "link.libs", val)?;
+            }
+            "search-paths" => {
+                search_paths = parse_link_string_array(path, "link.search-paths", val)?;
+            }
+            other => warnings.push(ManifestWarning {
+                line: None,
+                message: format!(
+                    "unknown key `[link].{other}` — ignored in v1 (reserved for a later release)"
+                ),
+            }),
+        }
+    }
+    Ok((libs, search_paths))
+}
+
+/// Parse a `[link]`-table value that must be an array of non-empty strings.
+/// `key` is the dotted manifest key (`"link.libs"`) used in the error's
+/// `expected` clause. A non-array value, a non-string element, or an
+/// empty/whitespace-only element all hard-error — each would otherwise emit
+/// a malformed or meaningless `-l` / `-L` flag onto the `cc` line.
+fn parse_link_string_array(
+    path: &Path,
+    key: &'static str,
+    val: &toml::Value,
+) -> Result<Vec<String>, ManifestError> {
+    let arr = val
+        .as_array()
+        .ok_or_else(|| ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: key.to_string(),
+            expected: "an array of strings (e.g. `[\"LLVM-18\"]`)",
+        })?;
+    let mut out = Vec::with_capacity(arr.len());
+    for elem in arr {
+        match elem {
+            toml::Value::String(s) if !s.trim().is_empty() => out.push(s.trim().to_string()),
+            _ => {
+                return Err(ManifestError::InvalidFieldType {
+                    path: path.to_path_buf(),
+                    key: key.to_string(),
+                    expected: "an array of non-empty strings (e.g. `[\"LLVM-18\"]`)",
+                });
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Parse the `[release]` table when present. Recognised keys at v1:
@@ -3688,5 +3797,137 @@ http = "2.0"
 
     fn registry_dep(s: &str) -> DependencySpec {
         DependencySpec::Registry { version: req(s) }
+    }
+
+    #[test]
+    fn link_table_parses_libs_and_search_paths() {
+        // The motivating self-hosting case: link `libLLVM-18` from a pinned
+        // libdir (`docs/spikes/self-hosting-llvm-c-ffi.md` § Linking).
+        let src = r#"[package]
+name = "selfhost-codegen"
+
+[link]
+libs = ["LLVM-18"]
+search-paths = ["/opt/homebrew/opt/llvm@18/lib"]
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.link_libs, vec!["LLVM-18".to_string()]);
+        assert_eq!(
+            m.link_search_paths,
+            vec!["/opt/homebrew/opt/llvm@18/lib".to_string()]
+        );
+        assert!(m.warnings.is_empty());
+    }
+
+    #[test]
+    fn link_table_absent_is_empty() {
+        let m = parse_manifest(&p(), "[package]\nname = \"hello\"\n").unwrap();
+        assert!(m.link_libs.is_empty());
+        assert!(m.link_search_paths.is_empty());
+        // An empty `[link]` table is fine too — two empty vecs, no warning.
+        let m = parse_manifest(&p(), "[package]\nname = \"hello\"\n\n[link]\n").unwrap();
+        assert!(m.link_libs.is_empty());
+        assert!(m.link_search_paths.is_empty());
+        assert!(m.warnings.is_empty());
+    }
+
+    #[test]
+    fn link_table_accepts_multiple_entries_in_order() {
+        let src = r#"[package]
+name = "hello"
+
+[link]
+libs = ["LLVM-18", "z"]
+search-paths = ["/a", "/b"]
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.link_libs, vec!["LLVM-18".to_string(), "z".to_string()]);
+        assert_eq!(
+            m.link_search_paths,
+            vec!["/a".to_string(), "/b".to_string()]
+        );
+    }
+
+    #[test]
+    fn link_table_trims_whitespace() {
+        let src = r#"[package]
+name = "hello"
+
+[link]
+libs = ["  LLVM-18  "]
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.link_libs, vec!["LLVM-18".to_string()]);
+    }
+
+    #[test]
+    fn link_table_wrong_type_is_hard_error() {
+        // A non-array `libs`, a non-string element, or an empty/whitespace
+        // element must each hard-error — any of them would emit a malformed
+        // or meaningless `-l`/`-L` flag onto the `cc` line.
+        for (src, expected_key) in [
+            (
+                "[package]\nname = \"h\"\n\n[link]\nlibs = \"LLVM-18\"\n",
+                "link.libs",
+            ),
+            (
+                "[package]\nname = \"h\"\n\n[link]\nlibs = [42]\n",
+                "link.libs",
+            ),
+            (
+                "[package]\nname = \"h\"\n\n[link]\nlibs = [\"\"]\n",
+                "link.libs",
+            ),
+            (
+                "[package]\nname = \"h\"\n\n[link]\nlibs = [\"  \"]\n",
+                "link.libs",
+            ),
+            (
+                "[package]\nname = \"h\"\n\n[link]\nsearch-paths = \"/lib\"\n",
+                "link.search-paths",
+            ),
+            (
+                "[package]\nname = \"h\"\n\n[link]\nsearch-paths = [0]\n",
+                "link.search-paths",
+            ),
+        ] {
+            let err = parse_manifest(&p(), src).unwrap_err();
+            match err {
+                ManifestError::InvalidFieldType { key, .. } => assert_eq!(key, expected_key),
+                other => panic!("expected InvalidFieldType on `{expected_key}`, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn link_non_table_is_hard_error() {
+        // A top-level `link = 42` (a bare key before the first table header,
+        // so it's not swallowed into `[package]`) makes the `[link]` lookup
+        // resolve to a non-table value → hard error.
+        let err = parse_manifest(&p(), "link = 42\n\n[package]\nname = \"h\"\n").unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => assert_eq!(key, "link"),
+            other => panic!("expected InvalidFieldType on `link`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn link_unknown_key_soft_warns() {
+        let src = r#"[package]
+name = "hello"
+
+[link]
+libs = ["LLVM-18"]
+frameworks = ["CoreFoundation"]
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.link_libs, vec!["LLVM-18".to_string()]);
+        assert!(
+            m.warnings
+                .iter()
+                .any(|w| w.message.contains("unknown key `[link].frameworks`")),
+            "expected a soft warning for the unknown `[link]` key, got: {:?}",
+            m.warnings,
+        );
     }
 }

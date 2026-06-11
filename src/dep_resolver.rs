@@ -492,6 +492,8 @@ mod tests {
             wasm_fallback: None,
             wasm_max_memory_pages: None,
             profile_config: manifest::ProfileConfig::default(),
+            link_libs: Vec::new(),
+            link_search_paths: Vec::new(),
             warnings: Vec::new(),
         }
     }
