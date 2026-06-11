@@ -1155,7 +1155,41 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
 
+                // CICO write-back for a `mut ref self` receiver. The method
+                // ran against a by-value copy of the receiver bound to `self`
+                // in this scope; copy that (possibly mutated) value back to the
+                // call-site place before the scope is popped, mirroring the
+                // free-function `mut ref T` write-back in `eval_call.rs`. Gated
+                // strictly on `MutRef` so an owned (consuming) or `ref self`
+                // receiver is never written back. The place dispatch matches
+                // `StmtKind::Assign` (identifier / field / index), plus
+                // `SelfValue` so a nested self-method call (`self.adv()` inside
+                // `skip_ws`) propagates the mutation up the receiver chain.
+                let self_writeback = if matches!(
+                    self.method_self_param(&type_name, method),
+                    Some(crate::ast::SelfParam::MutRef)
+                ) {
+                    self.env.get("self")
+                } else {
+                    None
+                };
+
                 self.env.pop_scope();
+
+                if let Some(self_val) = self_writeback {
+                    match &object.kind {
+                        ExprKind::Identifier(name) => self.env.set(name, self_val),
+                        ExprKind::FieldAccess { object, field } => {
+                            self.set_field(object, field, self_val)
+                        }
+                        ExprKind::Index { object, index } => {
+                            self.set_index(object, index, self_val)
+                        }
+                        ExprKind::SelfValue => self.env.set("self", self_val),
+                        _ => {}
+                    }
+                }
+
                 if let Some(msg) = contract_fault {
                     return self.record_runtime_error(msg, span);
                 }

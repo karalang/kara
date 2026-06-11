@@ -632,6 +632,35 @@ impl<'a> Interpreter<'a> {
         })
     }
 
+    /// The receiver mode (`self` / `ref self` / `mut ref self`) of method
+    /// `method` on `type_name`, or `None` for an associated function (no
+    /// receiver) or an unknown method. Drives the CICO write-back on the
+    /// method-call dispatch path: only a `MutRef` receiver's post-body value
+    /// is copied back to the call-site place (mirrors the free-function
+    /// `mut ref T` write-back in `eval_call.rs`).
+    pub(crate) fn method_self_param(
+        &self,
+        type_name: &str,
+        method: &str,
+    ) -> Option<crate::ast::SelfParam> {
+        self.program.items.iter().find_map(|item| match item {
+            Item::ImplBlock(imp) => {
+                let target = match &imp.target_type.kind {
+                    TypeKind::Path(p) => p.segments.last().map(String::as_str),
+                    _ => None,
+                };
+                if target != Some(type_name) {
+                    return None;
+                }
+                imp.items.iter().find_map(|it| match it {
+                    ImplItem::Method(m) if m.name == method => m.self_param.clone(),
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
+    }
+
     /// Walk a contract expression and, for every `old(arg)` occurrence,
     /// evaluate `arg` *now* (function entry, pre-state) and record the value
     /// in `snap` keyed by the arg's span. Used to build the `old(...)`

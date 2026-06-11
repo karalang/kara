@@ -15795,3 +15795,106 @@ fn main() {
 "#);
     assert_eq!(output, "true\nfalse\nCapacityOverflow\noom:64\n");
 }
+
+// ── `mut ref self` receiver write-back (CICO) ──────────────────
+//
+// Regression for phase-12 self-hosting blocker #2: a `mut ref self`
+// method's mutations to `self` were dropped on return in the tree-walk
+// interpreter (the receiver was passed by value and never written back to
+// the call-site place), making `karac run` unsound for any self-mutating
+// method. Codegen was already correct; these pin the interpreter to the
+// same semantics. The fix mirrors the free-function `mut ref T` CICO
+// write-back: capture the post-body `self` and copy it back to the
+// receiver place, gated strictly on `SelfParam::MutRef`.
+
+#[test]
+fn test_mut_ref_self_method_mutation_persists() {
+    // The minimal repro from phase-12 §blocker #2.
+    let out = run_no_errors(
+        r#"
+struct C { n: i64 }
+impl C {
+    fn inc(mut ref self) { self.n = self.n + 1; }
+}
+fn main() {
+    let mut c = C { n: 0 };
+    c.inc();
+    c.inc();
+    println(c.n);
+}
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+#[test]
+fn test_mut_ref_self_nested_method_calls_propagate() {
+    // A `mut ref self` method that mutates `self` *through another
+    // self-method* (`self.inc()` inside `bump_twice`) — the inner call's
+    // write-back targets the `SelfValue` place so the mutation propagates up
+    // the receiver chain (the lexer's `skip_ws` → `self.adv()` shape).
+    let out = run_no_errors(
+        r#"
+struct Counter { n: i64 }
+impl Counter {
+    fn inc(mut ref self) { self.n = self.n + 1; }
+    fn bump_twice(mut ref self) { self.inc(); self.inc(); }
+    fn get(ref self) -> i64 { self.n }
+}
+fn main() {
+    let mut c = Counter { n: 0 };
+    c.bump_twice();
+    c.inc();
+    println(c.get());
+}
+"#,
+    );
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn test_mut_ref_self_field_and_index_rooted_receivers() {
+    // The write-back place dispatch covers field-rooted (`b.c.inc()`) and
+    // index-rooted (`v[1].inc()`) receivers, not just bare identifiers.
+    let out = run_no_errors(
+        r#"
+struct Counter { n: i64 }
+impl Counter {
+    fn inc(mut ref self) { self.n = self.n + 1; }
+}
+struct Box { c: Counter }
+fn main() {
+    let mut b = Box { c: Counter { n: 10 } };
+    b.c.inc();
+    b.c.inc();
+    println(b.c.n);
+    let mut v = [Counter { n: 100 }, Counter { n: 200 }];
+    v[1].inc();
+    v[1].inc();
+    println(v[1].n);
+}
+"#,
+    );
+    assert_eq!(out, "12\n202\n");
+}
+
+#[test]
+fn test_owned_self_method_is_not_written_back() {
+    // A consuming (owned) `self` receiver must NOT trigger write-back — the
+    // gate is `MutRef`-only. A `ref self` reader is likewise untouched.
+    let out = run_no_errors(
+        r#"
+struct Counter { n: i64 }
+impl Counter {
+    fn into_n(self) -> i64 { self.n }
+    fn peek(ref self) -> i64 { self.n }
+}
+fn main() {
+    let c = Counter { n: 7 };
+    println(c.peek());
+    println(c.into_n());
+}
+"#,
+    );
+    assert_eq!(out, "7\n7\n");
+}
