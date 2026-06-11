@@ -1004,6 +1004,42 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_string_method_on_self_field() {
+        // Regression for the self-hosting lexer blocker #5: a String/Vec
+        // method on a field accessed through `self`
+        // (`self.src.substring(self.start, self.current)`) died with "no
+        // handler for method 'substring' on non-identifier receiver". The
+        // field-receiver method helper resolves the receiver via
+        // `lower_field_access_ptr`, which leaves `SelfValue` at `Ok(None)` so
+        // the atomic-on-self path (`self.count.fetch_add(...)`) keeps its
+        // dedicated handler. For NON-atomic self-field receivers the
+        // FieldAccess dispatch arm now normalises `SelfValue` to a synthetic
+        // `Identifier("self")`; gated on `!is_atomic_receiver` so atomics are
+        // untouched (re-verified by the atomic_* suite).
+        //
+        // Covers `substring` (the lexer's `token_text`, with field-rooted
+        // args), `contains`, and `len` — all String methods on `self.src`.
+        if let Some(out) = run_program(
+            "struct Lexer { src: String, start: i64, current: i64 }\n\
+             impl Lexer {\n\
+                 fn token_text(ref self) -> String {\n\
+                     self.src.substring(self.start, self.current)\n\
+                 }\n\
+                 fn has_cd(ref self) -> bool { self.src.contains(\"cd\") }\n\
+                 fn srclen(ref self) -> i64 { self.src.len() }\n\
+             }\n\
+             fn main() {\n\
+                 let lx = Lexer { src: \"abcdef\", start: 1, current: 4 };\n\
+                 println(lx.token_text());\n\
+                 println(lx.has_cd().to_string());\n\
+                 println(lx.srclen().to_string());\n\
+             }",
+        ) {
+            assert_eq!(out, "bcd\ntrue\n6\n");
+        }
+    }
+
+    #[test]
     fn e2e_alloc_error_codegen() {
         // The `AllocError` prelude type (struct + unit variant) compiles: both
         // variants construct, `==` compares payload + tag, `match` binds the

@@ -878,6 +878,28 @@ impl<'ctx> super::Codegen<'ctx> {
             field,
         } = &object.kind
         {
+            // `self.field.method()` — `self` parses as `SelfValue`, which the
+            // shared `lower_field_access_ptr` (used by the helper below)
+            // deliberately leaves at `Ok(None)` so the atomic-on-self path
+            // (`self.count.fetch_add(...)`, dispatched further down via
+            // `is_atomic_receiver` → `compile_atomic_method`) keeps its
+            // dedicated handler. For NON-atomic self-field receivers we
+            // normalise to a synthetic `Identifier("self")` (self is registered
+            // under the name "self" in every per-binding registry) so String /
+            // Vec field methods dispatch through the field-receiver helper.
+            // Gated on `!is_atomic_receiver(object)` so the atomic fall-through
+            // is byte-identical. Self-hosting lexer: `self.src.substring(a, b)`.
+            let self_ident;
+            let inner: &Expr =
+                if matches!(inner.kind, ExprKind::SelfValue) && !self.is_atomic_receiver(object) {
+                    self_ident = Expr {
+                        kind: ExprKind::Identifier("self".to_string()),
+                        span: inner.span.clone(),
+                    };
+                    &self_ident
+                } else {
+                    inner
+                };
             if let Some(value) =
                 self.try_compile_field_receiver_method(inner, field, method, args, call_span)?
             {

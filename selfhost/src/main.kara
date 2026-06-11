@@ -6,14 +6,14 @@
 //
 // BLOCKED on the self-hosting blocker chain (see
 // docs/implementation_checklist/phase-12-self-hosting.md § Self-hosting-surfaced
-// blockers). #1 (enum-in-struct-field) + #4 (index a Vec field through self,
-// `self.bytes[self.current]`) are FIXED. Remaining before this builds:
-//   #5 — `self.src.substring(...)` (String method on a field receiver) has no
-//        codegen dispatcher arm (mechanical).
+// blockers). #1 (enum-in-struct-field), #4 (index a Vec field through self,
+// `self.bytes[self.current]`), and #5 (`self.src.substring(...)` — String
+// method on a field receiver) are FIXED. Sole remaining blocker before this
+// builds:
 //   #6 — `struct Span` collides with the always-injected stdlib `std.tracing`
 //        `Span`; codegen's flat struct_types map overwrites the user type
 //        (design decision pending: gate tracing vs DCE unused stdlib).
-// Once those land, this builds + the differential oracle (tests/selfhost_lexer.rs)
+// Once that lands, this builds + the differential oracle (tests/selfhost_lexer.rs)
 // comes online, then the full token set follows.
 
 struct Span {
