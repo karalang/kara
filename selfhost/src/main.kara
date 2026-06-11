@@ -1,0 +1,214 @@
+// main.kara — self-hosted Kāra lexer (phase-12 self-hosting, slice 1). WIP.
+//
+// MINIMAL SKELETON: validates the byte-indexed scan mechanics (Vec[u8] field,
+// self-mutating methods, the big `match` on a byte, struct return, enum-render)
+// before expanding to the full token set. Mirrors the Rust `src/lexer.rs`.
+//
+// BLOCKED: `karac build` currently miscompiles `match spanned.token { … }` —
+// struct fields of a user enum collapse to one i64, losing the payload (codegen
+// declare_structs-before-declare_enums ordering bug). See
+// docs/implementation_checklist/phase-12-self-hosting.md § Self-hosting-surfaced
+// blockers (#1). Once that lands, this builds + the differential oracle
+// (tests/selfhost_lexer.rs) comes online, then the full token set follows.
+
+struct Span {
+    line: i64,
+    column: i64,
+    offset: i64,
+    length: i64,
+}
+
+enum Token {
+    LParen,
+    RParen,
+    Comma,
+    Ident(String),
+    Int(i64),
+    Eof,
+    Bad,
+}
+
+struct SpannedToken {
+    token: Token,
+    span: Span,
+}
+
+struct Lexer {
+    src: String,
+    bytes: Vec[u8],
+    start: i64,
+    current: i64,
+    line: i64,
+    column: i64,
+    start_column: i64,
+}
+
+impl Lexer {
+    fn new(src: String) -> Lexer {
+        let mut bytes: Vec[u8] = Vec.new();
+        for b in src.bytes() {
+            bytes.push(b);
+        }
+        Lexer {
+            src: src,
+            bytes: bytes,
+            start: 0,
+            current: 0,
+            line: 1,
+            column: 1,
+            start_column: 1,
+        }
+    }
+
+    fn is_at_end(ref self) -> bool {
+        self.current >= self.bytes.len()
+    }
+
+    fn peek(ref self) -> u8 {
+        if self.current >= self.bytes.len() {
+            0
+        } else {
+            self.bytes[self.current]
+        }
+    }
+
+    fn advance(mut ref self) -> u8 {
+        let c = self.bytes[self.current];
+        self.current = self.current + 1;
+        self.column = self.column + 1;
+        c
+    }
+
+    fn make_spanned(ref self, token: Token) -> SpannedToken {
+        SpannedToken {
+            token: token,
+            span: Span {
+                line: self.line,
+                column: self.start_column,
+                offset: self.start,
+                length: self.current - self.start,
+            },
+        }
+    }
+
+    fn skip_whitespace(mut ref self) {
+        while not self.is_at_end() {
+            let c = self.peek();
+            if c == b' ' or c == b'\t' or c == b'\r' {
+                self.advance();
+            } else if c == b'\n' {
+                self.line = self.line + 1;
+                self.column = 0;
+                self.advance();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn next_token(mut ref self) -> SpannedToken {
+        self.skip_whitespace();
+        self.start = self.current;
+        self.start_column = self.column;
+
+        if self.is_at_end() {
+            return self.make_spanned(Token.Eof);
+        }
+
+        let c = self.advance();
+        match c {
+            b'(' => self.make_spanned(Token.LParen),
+            b')' => self.make_spanned(Token.RParen),
+            b',' => self.make_spanned(Token.Comma),
+            _ => {
+                if is_digit(c) {
+                    self.number()
+                } else if is_alpha(c) {
+                    self.identifier()
+                } else {
+                    self.make_spanned(Token.Bad)
+                }
+            }
+        }
+    }
+
+    fn number(mut ref self) -> SpannedToken {
+        while is_digit(self.peek()) {
+            self.advance();
+        }
+        let text = self.src.substring(self.start, self.current);
+        match i64.parse(text) {
+            Some(v) => self.make_spanned(Token.Int(v)),
+            None => self.make_spanned(Token.Bad),
+        }
+    }
+
+    fn identifier(mut ref self) -> SpannedToken {
+        while is_alpha(self.peek()) or is_digit(self.peek()) {
+            self.advance();
+        }
+        let text = self.src.substring(self.start, self.current);
+        self.make_spanned(Token.Ident(text))
+    }
+}
+
+fn is_alpha(c: u8) -> bool {
+    c.is_ascii_alphabetic() or c == b'_'
+}
+
+fn is_digit(c: u8) -> bool {
+    c.is_ascii_digit()
+}
+
+// Canonical one-line render of a token: `offset length line column KIND payload`.
+// Takes the token by value so match arms can bind non-Copy payloads (String).
+// Avoids f-strings around match-bound vars (codegen f-string/match-binding gap);
+// uses push_str + to_string instead.
+fn render(tok: SpannedToken) -> String {
+    let off = tok.span.offset;
+    let len = tok.span.length;
+    let ln = tok.span.line;
+    let col = tok.span.column;
+    let mut line = f"{off} {len} {ln} {col} ";
+    let tk = tok.token;
+    match tk {
+        LParen => line.push_str("OP ("),
+        RParen => line.push_str("OP )"),
+        Comma => line.push_str("OP ,"),
+        Ident(name) => {
+            line.push_str("IDENT ");
+            line.push_str(name);
+        }
+        Int(v) => {
+            line.push_str("INT ");
+            line.push_str(v.to_string());
+        }
+        Eof => line.push_str("EOF"),
+        Bad => line.push_str("ERROR"),
+    }
+    line
+}
+
+fn lex_all(src: String) -> Vec[SpannedToken] {
+    let mut lx = Lexer.new(src);
+    let mut out: Vec[SpannedToken] = Vec.new();
+    loop {
+        let t = lx.next_token();
+        let is_eof = match t.token {
+            Eof => true,
+            _ => false,
+        };
+        out.push(t);
+        if is_eof {
+            break;
+        }
+    }
+    out
+}
+
+fn main() {
+    let toks = lex_all("(ab, 12)");
+    for t in toks {
+        println(render(t));
+    }
+}
