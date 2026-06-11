@@ -495,6 +495,37 @@ impl<'a> super::Interpreter<'a> {
                         data: EnumData::Unit,
                     };
                 }
+                // `<int_type>.from_str_radix(s: String, radix: u32) ->
+                // Option[i64]`. Radix 2..=36 via Rust's `i64::from_str_radix`.
+                // The self-hosting lexer's hex/binary/octal literal path.
+                if method == "from_str_radix"
+                    && matches!(
+                        target,
+                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                    )
+                {
+                    let make_none = || Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "None".to_string(),
+                        data: EnumData::Unit,
+                    };
+                    if args.len() >= 2 {
+                        let s_val = self.eval_expr_inner(&args[0].value);
+                        let radix_val = self.eval_expr_inner(&args[1].value);
+                        if let (Value::String(s), Value::Int(radix)) = (s_val, radix_val) {
+                            if (2..=36).contains(&radix) {
+                                if let Ok(n) = i64::from_str_radix(s.trim(), radix as u32) {
+                                    return Value::EnumVariant {
+                                        enum_name: "Option".to_string(),
+                                        variant: "Some".to_string(),
+                                        data: EnumData::Tuple(vec![Value::Int(n)]),
+                                    };
+                                }
+                            }
+                        }
+                    }
+                    return make_none();
+                }
                 if let Some(result) = self.dispatch_lowered_op(method, args, span) {
                     return result;
                 }

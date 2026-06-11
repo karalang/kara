@@ -557,6 +557,112 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             return Ok(agg);
         }
+        // `<int_type>.from_str_radix(s: String, radix: u32) -> Option[i64]` —
+        // radix parse (2..=36) via the `karac_runtime_parse_i64_radix` extern.
+        // Mirrors the `parse` arm above; the self-hosting lexer's hex/binary/
+        // octal literal path (phase-12-self-hosting.md).
+        if method == "from_str_radix"
+            && matches!(
+                type_name,
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+            )
+        {
+            if _args.len() < 2 {
+                return Err(format!(
+                    "{}.from_str_radix requires a String and a radix argument",
+                    type_name
+                ));
+            }
+            let i64_t = self.context.i64_type();
+            let i8_t = self.context.i8_type();
+            let i32_t = self.context.i32_type();
+
+            // String arg → {data, len}.
+            let s_val = self.compile_expr(&_args[0].value)?;
+            let s_struct = s_val.into_struct_value();
+            let s_data = self
+                .builder
+                .build_extract_value(s_struct, 0, "radix.s.ptr")
+                .unwrap()
+                .into_pointer_value();
+            let s_len = self
+                .builder
+                .build_extract_value(s_struct, 1, "radix.s.len")
+                .unwrap()
+                .into_int_value();
+
+            // radix arg → i32 (the source value is i64-backed; truncate).
+            let radix_val = self.compile_expr(&_args[1].value)?.into_int_value();
+            let radix_i32 = self
+                .builder
+                .build_int_truncate(radix_val, i32_t, "radix.r")
+                .unwrap();
+
+            let fn_val = self
+                .current_fn
+                .ok_or_else(|| "T.from_str_radix called outside fn".to_string())?;
+            let out_slot = self.create_entry_alloca(fn_val, "radix.out", i64_t.into());
+
+            let parse_fn = self
+                .module
+                .get_function("karac_runtime_parse_i64_radix")
+                .expect("karac_runtime_parse_i64_radix declared in Codegen::new");
+            let success = self
+                .builder
+                .build_call(
+                    parse_fn,
+                    &[
+                        s_data.into(),
+                        s_len.into(),
+                        radix_i32.into(),
+                        out_slot.into(),
+                    ],
+                    "radix.ok",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let is_ok = self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    success,
+                    i8_t.const_zero(),
+                    "radix.ok.bool",
+                )
+                .unwrap();
+
+            let some_bb = self.context.append_basic_block(fn_val, "radix.some");
+            let none_bb = self.context.append_basic_block(fn_val, "radix.none");
+            let merge_bb = self.context.append_basic_block(fn_val, "radix.merge");
+
+            self.builder
+                .build_conditional_branch(is_ok, some_bb, none_bb)
+                .unwrap();
+
+            self.builder.position_at_end(some_bb);
+            let parsed = self
+                .builder
+                .build_load(i64_t, out_slot, "radix.value")
+                .unwrap();
+            let some_payload_words = self.coerce_to_payload_words(parsed, 3)?;
+            let some_end_bb = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            self.builder.position_at_end(none_bb);
+            let none_end_bb = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            self.builder.position_at_end(merge_bb);
+            let agg = self.build_option_some_via_phis(
+                &some_payload_words,
+                some_end_bb,
+                none_end_bb,
+                "radix.opt",
+            );
+            return Ok(agg);
+        }
         // Lowered operator dispatch: `<Primitive>.<op>(args)` — synthesized
         // by the lowering pass. Reroute to the existing BinOp/UnaryOp
         // intrinsic compilation so we don't have to duplicate codegen logic.

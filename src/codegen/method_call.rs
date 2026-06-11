@@ -1071,6 +1071,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return self.compile_assoc_call(type_name.as_str(), method, args);
                 }
+                // `<int_type>.from_str_radix(s, radix) -> Option[i64]` — radix
+                // parse; same delegation as `parse` (impl in assoc_call.rs).
+                if method == "from_str_radix"
+                    && matches!(
+                        type_name.as_str(),
+                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                    )
+                {
+                    return self.compile_assoc_call(type_name.as_str(), method, args);
+                }
             }
         }
 

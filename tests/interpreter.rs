@@ -9170,6 +9170,24 @@ fn test_i64_parse_interpreter() {
 }
 
 #[test]
+fn test_i64_from_str_radix_interpreter() {
+    // Radix parse for the self-hosting lexer's hex/binary/octal literals:
+    // hex / binary / octal / reject-bad-digit / hex-positive. Invalid radix
+    // (>36) and bad digits → None.
+    let output = run(
+        r#"fn pr(o: Option[i64]) { match o { Some(n) => println(n), None => println(-1), } }
+        fn main() {
+            pr(i64.from_str_radix("ff", 16));
+            pr(i64.from_str_radix("1010", 2));
+            pr(i64.from_str_radix("17", 8));
+            pr(i64.from_str_radix("zz", 16));
+            pr(i64.from_str_radix("7f", 16));
+        }"#,
+    );
+    assert_eq!(output, "255\n10\n15\n-1\n127\n");
+}
+
+#[test]
 fn test_string_chars_with_map_char_as_key() {
     // Locks down the LeetCode #3 idiom — chars feeding a Map[char, i64]
     // last-index map. The sliding-window kata is the natural-pull that

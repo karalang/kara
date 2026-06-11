@@ -273,6 +273,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_http_request_query_key_at,
         karac_runtime_http_request_query_val_at,
         karac_runtime_parse_i64,
+        karac_runtime_parse_i64_radix,
     );
     // The serve loops themselves need the tokio/hyper substrate (`net`);
     // the request/response accessors above are plain FFI-struct reads and
@@ -3928,6 +3929,40 @@ pub unsafe extern "C" fn karac_runtime_parse_i64(data: *const u8, len: usize, ou
         Err(_) => return 0,
     };
     match s.trim().parse::<i64>() {
+        Ok(n) => {
+            *out = n;
+            1
+        }
+        Err(_) => 0,
+    }
+}
+
+/// Parse a UTF-8 byte slice as a signed 64-bit integer in the given
+/// `radix` (2..=36). Returns `1` on success (parsed value written through
+/// `out`) or `0` on failure. Trims leading/trailing whitespace. A radix
+/// outside 2..=36 fails. Backs `i64.from_str_radix(s, radix)` — the
+/// self-hosting lexer's hex/binary/octal literal path.
+///
+/// # Safety
+///
+/// `data` must point at `len` initialized UTF-8 bytes (or be null with
+/// `len == 0`). `out` must be a valid `*mut i64`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_parse_i64_radix(
+    data: *const u8,
+    len: usize,
+    radix: u32,
+    out: *mut i64,
+) -> u8 {
+    if data.is_null() || len == 0 || out.is_null() || !(2..=36).contains(&radix) {
+        return 0;
+    }
+    let slice = std::slice::from_raw_parts(data, len);
+    let s = match std::str::from_utf8(slice) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    match i64::from_str_radix(s.trim(), radix) {
         Ok(n) => {
             *out = n;
             1

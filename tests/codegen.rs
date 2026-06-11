@@ -30080,6 +30080,41 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_i64_from_str_radix_basic() {
+        // Radix parse (hex/bin/oct + reject + invalid radix) — the
+        // self-hosting lexer's hex/binary/octal literal path. Must match the
+        // interpreter (test_i64_from_str_radix_interpreter).
+        let output = run_program(
+            "fn pr(o: Option[i64]) { match o { Some(n) => println(n), None => println(-1) } }\n\
+             fn main() {\n\
+                 pr(i64.from_str_radix(\"ff\", 16));\n\
+                 pr(i64.from_str_radix(\"1010\", 2));\n\
+                 pr(i64.from_str_radix(\"17\", 8));\n\
+                 pr(i64.from_str_radix(\"zz\", 16));\n\
+                 pr(i64.from_str_radix(\"7f\", 16));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "255\n10\n15\n-1\n127\n");
+    }
+
+    #[test]
+    fn test_ir_i64_from_str_radix_calls_runtime_extern() {
+        let ir = ir_for(
+            "fn h(s: String) -> i64 {\n\
+                 match i64.from_str_radix(s, 16) {\n\
+                     Some(n) => n,\n\
+                     None => -1,\n\
+                 }\n\
+             }",
+        );
+        assert!(
+            ir.contains("call i8 @karac_runtime_parse_i64_radix"),
+            "i64.from_str_radix should call the runtime extern:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_i64_parse_calls_runtime_extern() {
         let ir = ir_for(
             "fn parse_id(s: String) -> i64 {\n\

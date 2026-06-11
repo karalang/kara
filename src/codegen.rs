@@ -2955,6 +2955,23 @@ impl<'ctx> Codegen<'ctx> {
             parse_i64_type,
             Some(Linkage::External),
         );
+        // `karac_runtime_parse_i64_radix(data: *const u8, len: usize,
+        //  radix: u32, out: *mut i64) -> u8`. Backs `i64.from_str_radix(s,
+        //  radix)` — the self-hosting lexer's hex/binary/octal literal path.
+        let parse_i64_radix_type = context.i8_type().fn_type(
+            &[
+                ptr_type.into(),
+                i64_type.into(),
+                context.i32_type().into(),
+                ptr_type.into(),
+            ],
+            false,
+        );
+        let _karac_runtime_parse_i64_radix_fn = module.add_function(
+            "karac_runtime_parse_i64_radix",
+            parse_i64_radix_type,
+            Some(Linkage::External),
+        );
         let response_set_status_type = context
             .void_type()
             .fn_type(&[ptr_type.into(), context.i16_type().into()], false);
