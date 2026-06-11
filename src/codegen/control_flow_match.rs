@@ -248,6 +248,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 // tail-return is the canonical Option-unwrap shape
                 // `match opt { Some(v) => v, None => default() }`.
                 self.suppress_source_vec_cleanup_for_arg(&arm.body);
+                // Move-aware, f-string variant: when the arm's tail
+                // expression is an f-string (`Some(name) => f"[{name}]"`),
+                // `arm_val` is the loaded `{data, len, cap}` of the freshly
+                // built accumulator, but that acc was `track_vec_var`-
+                // registered for scope cleanup — the per-arm
+                // `drain_top_frame_with_emit()` below would `FreeVecBuffer`
+                // its `data` between the load and the merge, so the match's
+                // result (and any caller binding) sees an empty/dangling
+                // String. The caller now owns the buffer, so zero the acc's
+                // `cap` to no-op its cleanup — exactly the function-tail
+                // f-string-return handling (`compile_function`). The
+                // identifier-tail case above is covered by
+                // `suppress_source_vec_cleanup_for_arg`; this covers the
+                // direct- and block-tail f-string shapes it skips (its
+                // `ExprKind::Identifier`-only guard returns early for an
+                // `InterpolatedStringLit`).
+                if Self::expr_tail_is_fstring(&arm.body) {
+                    if let Some(acc) = self.last_fstr_acc.take() {
+                        self.zero_vec_alloca_cap(acc);
+                    }
+                }
                 self.drain_top_frame_with_emit();
                 // Re-read the current bb AFTER drain — the cleanup IR
                 // may have appended new basic blocks (e.g. `cleanup.free`
@@ -304,6 +325,25 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// Whether an expression's syntactic tail value is an f-string. A bare
+    /// `InterpolatedStringLit` is the tail; a block (`{ …; f"…" }`) recurses
+    /// into its `final_expr`. Used by `compile_match` to detect a match-arm
+    /// whose value is a freshly-built f-string accumulator, so the acc's
+    /// scope cleanup can be no-op'd (ownership transferred to the match
+    /// result). Conservative — an `if`/`match` tail whose branches are
+    /// f-strings is NOT unwrapped (the value flows through nested phis); not
+    /// matching there leaves the prior behavior, never a double-free.
+    fn expr_tail_is_fstring(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::InterpolatedStringLit(_) => true,
+            ExprKind::Block(b) => b
+                .final_expr
+                .as_deref()
+                .is_some_and(Self::expr_tail_is_fstring),
+            _ => false,
+        }
     }
 
     /// True when a match scrutinee expression's value aliases a container

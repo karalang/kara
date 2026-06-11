@@ -424,6 +424,51 @@ fn main() {
         );
     }
 
+    // ── Match arm whose VALUE is an f-string (phase-12 blocker #3) ──
+    //
+    // A direct-f-string match arm (`Some(name) => f"[{name}]"`) builds the
+    // f-string accumulator, which is `track_vec_var`-registered for the
+    // per-arm scope cleanup. Before the fix, the per-arm drain freed the
+    // acc's buffer between the value load and the merge phi, so the match
+    // result was an empty/dangling String. The fix zeroes the acc's `cap`
+    // when the arm tail is an f-string (ownership moves to the match result).
+    // This run exercises the consumed (let-bound / returned) AND discarded
+    // forms over non-foldable (concat-built) payloads — a stale free of the
+    // moved buffer trips ASAN's double-free, and the discarded form must
+    // still single-free via the expression-statement cleanup.
+
+    #[test]
+    fn asan_fstring_match_arm_value_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+enum E { A(String), B(i64) }
+fn describe(e: E) -> String {
+    match e {
+        E.A(name) => f"A[{name}]",
+        E.B(k) => f"B[{k}]",
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        let e = E.A("dyn" + "amic");
+        let s = describe(e);
+        println(s);
+        // discarded arm-f-string result — must single-free, no double-free
+        let d = E.A("tmp" + "val");
+        match d {
+            E.A(n) => f"[{n}]",
+            E.B(_) => "x",
+        };
+        i = i + 1;
+    }
+}
+"#,
+            &["A[dynamic]", "A[dynamic]", "A[dynamic]"],
+            "fstring_match_arm_value",
+        );
+    }
+
     // ── Closures that RETURN a heap value (closure-heap-return-cleanup) ──
     //
     // A closure whose body is a block returning a heap binding

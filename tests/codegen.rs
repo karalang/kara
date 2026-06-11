@@ -14352,6 +14352,56 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_fstring_match_arm_value() {
+        // phase-12 self-hosting blocker #3: an f-string that is a match
+        // arm's TAIL (value) expression, interpolating the arm's payload
+        // binding, compiled to empty under AOT. The f-string accumulator is
+        // an entry-block alloca registered for scope cleanup; the per-arm
+        // `drain_top_frame_with_emit` freed its buffer between the value load
+        // and the merge, so the match result (and any caller binding) saw an
+        // empty/dangling String. Fix: when the arm tail is an f-string, zero
+        // the acc's `cap` so its cleanup no-ops and the value escapes via the
+        // match phi (mirrors the function-tail f-string-return handling).
+        // Covers fn-return, let-bound, i64 payload, nested-into-outer, and a
+        // discarded result (must not double-free). NOTE: a brace-WRAPPED arm
+        // body (`=> { f"…" }` or `=> { let p = f"…"; p }`) routes through the
+        // separate, pre-existing block-expr-value heap-return bug and is NOT
+        // covered here (see bugs.md B-2026-06-11-2).
+        let out = run_program(
+            r#"
+enum E { A(String), B(i64) }
+fn describe(e: E) -> String {
+    match e {
+        E.A(name) => f"A[{name}]",
+        E.B(k) => f"B[{k}]",
+    }
+}
+fn main() {
+    println(describe(E.A("x" + "y")));
+    println(describe(E.B(99)));
+    let e = E.A("hi");
+    let s = match e {
+        E.A(name) => f"<{name}>",
+        E.B(_) => "none",
+    };
+    println(s);
+    let r = describe(E.A("a" + "b"));
+    println(f"outer:{r}");
+    let d = E.A("z");
+    match d {
+        E.A(n) => f"[{n}]",
+        E.B(_) => "x",
+    };
+    println("done");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "A[xy]\nB[99]\n<hi>\nouter:A[ab]\ndone\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_fstring_integer_interpolation() {
         let out = run_program(
             r#"
