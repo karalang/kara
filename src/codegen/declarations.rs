@@ -236,7 +236,68 @@ enum BinaryArithOp {
 impl<'ctx> super::Codegen<'ctx> {
     // ── Struct declaration pass ───────────────────────────────────
 
-    pub(super) fn declare_structs(&mut self, program: &Program) {
+    /// Declaration is split into two passes — `register_struct_metadata`
+    /// (this) and [`Self::build_struct_types`] — so that `declare_enums`
+    /// can run BETWEEN them. The cycle being broken: a struct field that
+    /// names a user enum needs `enum_layouts` populated to lower at the
+    /// right LLVM shape (otherwise it collapses to the `i64` fall-through
+    /// in `llvm_type_for_name`, silently losing the payload word — the
+    /// self-hosting bootstrap blocker `enum-in-struct-field`), while
+    /// `declare_enums` needs each struct's *field shape* to size enum
+    /// payloads. The metadata pass registers the AST-level field side
+    /// tables (no LLVM types), `declare_enums` sizes its payloads off
+    /// those (via `payload_word_count_for_type_expr`'s struct branch,
+    /// which recurses through `struct_field_type_exprs` rather than the
+    /// not-yet-built LLVM types), and `build_struct_types` then constructs
+    /// the LLVM struct types with `enum_layouts` already in place.
+    ///
+    /// This pass is layout-free — it only populates `struct_field_type_names`,
+    /// `struct_field_type_exprs`, and `struct_field_names`.
+    pub(super) fn register_struct_metadata(&mut self, program: &Program) {
+        for item in &program.items {
+            if let Item::StructDef(s) = item {
+                // Per-field user-type name (last path segment if the
+                // declared type is a `Path`; `None` otherwise). Lets
+                // chained field-access lowering resolve the inner type
+                // of `o.inner` so `o.inner.name` walks past the first
+                // hop into the nested struct's field registry. See
+                // `field_index_for` / `type_name_of_expr`.
+                let field_type_names: Vec<Option<String>> = s
+                    .fields
+                    .iter()
+                    .map(|f| match &f.ty.kind {
+                        TypeKind::Path(p) => p.segments.last().cloned(),
+                        _ => None,
+                    })
+                    .collect();
+                self.struct_field_type_names
+                    .insert(s.name.clone(), field_type_names);
+                // Full per-field TypeExpr for the field-receiver method
+                // dispatch path — generic args (`Vec[Node]`) are needed to
+                // populate the synth's element-type side tables via
+                // `register_var_from_type_expr`. Also consumed by
+                // `payload_word_count_for_type_expr` to size enum payloads
+                // before any struct LLVM type exists.
+                let field_type_exprs: Vec<TypeExpr> =
+                    s.fields.iter().map(|f| f.ty.clone()).collect();
+                self.struct_field_type_exprs
+                    .insert(s.name.clone(), field_type_exprs);
+                // Field names for field-index lookups — registered here for
+                // every struct shape (shared/par/owned alike) so the lookup
+                // tables are complete before either enum sizing or the LLVM
+                // type pass runs.
+                let names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
+                self.struct_field_names.insert(s.name.clone(), names);
+            }
+        }
+    }
+
+    /// Second struct declaration pass: construct the LLVM struct / shared
+    /// heap types. MUST run after [`Self::register_struct_metadata`] AND
+    /// after `declare_enums`, so enum-typed fields resolve through
+    /// `enum_layouts` instead of the `i64` fall-through. See
+    /// `register_struct_metadata` for the full ordering rationale.
+    pub(super) fn build_struct_types(&mut self, program: &Program) {
         // Pre-pass: collect names of all `shared struct`s in the program.
         // Needed before per-field niche-eligibility check because
         // self-referential / forward-reference shapes (`shared struct Node {
@@ -288,30 +349,6 @@ impl<'ctx> super::Codegen<'ctx> {
                     })
                     .collect();
                 let names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
-                // Per-field user-type name (last path segment if the
-                // declared type is a `Path`; `None` otherwise). Lets
-                // chained field-access lowering resolve the inner type
-                // of `o.inner` so `o.inner.name` walks past the first
-                // hop into the nested struct's field registry. See
-                // `field_index_for` / `type_name_of_expr`.
-                let field_type_names: Vec<Option<String>> = s
-                    .fields
-                    .iter()
-                    .map(|f| match &f.ty.kind {
-                        TypeKind::Path(p) => p.segments.last().cloned(),
-                        _ => None,
-                    })
-                    .collect();
-                self.struct_field_type_names
-                    .insert(s.name.clone(), field_type_names);
-                // Full per-field TypeExpr for the field-receiver method
-                // dispatch path — generic args (`Vec[Node]`) are needed to
-                // populate the synth's element-type side tables via
-                // `register_var_from_type_expr`.
-                let field_type_exprs: Vec<TypeExpr> =
-                    s.fields.iter().map(|f| f.ty.clone()).collect();
-                self.struct_field_type_exprs
-                    .insert(s.name.clone(), field_type_exprs);
 
                 if s.is_shared || s.is_par {
                     // Shared / par struct: identical heap layout
@@ -333,18 +370,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         s.name.clone(),
                         SharedTypeInfo {
                             heap_type,
-                            field_names: names.clone(),
+                            field_names: names,
                             is_enum: false,
                             niche_option_fields,
                             is_par: s.is_par,
                         },
                     );
-                    // Also register field names for field-index lookups.
-                    self.struct_field_names.insert(s.name.clone(), names);
                 } else {
                     let st = self.context.struct_type(&field_types, false);
                     self.struct_types.insert(s.name.clone(), st);
-                    self.struct_field_names.insert(s.name.clone(), names);
                 }
             }
         }
@@ -3159,15 +3193,36 @@ impl<'ctx> super::Codegen<'ctx> {
                             // *something* runnable rather than crashing
                             // out of the layout pass.
                             1
+                        } else if let Some(field_exprs) = self.struct_field_type_exprs.get(name) {
+                            // User struct — recurse through the *source* field
+                            // TypeExprs (registered by `register_struct_metadata`),
+                            // NOT the resolved LLVM `StructType`. Using the AST
+                            // makes enum-payload sizing independent of struct
+                            // LLVM-type construction, which is what lets enum
+                            // layouts be built BEFORE struct types — breaking the
+                            // struct↔enum field cycle (a struct field that names a
+                            // user enum needs `enum_layouts`, while this enum
+                            // payload sizing needs the struct's field shape; AST
+                            // recursion supplies the latter without forcing the
+                            // former). Word counts match the old
+                            // `llvm_type_word_count` path field-for-field
+                            // (i64→1, String→3, …).
+                            field_exprs
+                                .iter()
+                                .map(|fe| {
+                                    self.payload_word_count_for_type_expr(
+                                        fe,
+                                        outer_enum,
+                                        outer_variant,
+                                    )
+                                })
+                                .sum()
                         } else if let Some(struct_ty) = self.struct_types.get(name).copied() {
-                            // User struct — sum of LLVM field widths in i64 words.
-                            // We can't recurse through TypeExpr here (we lost
-                            // it after declare_structs); fall back to LLVM
-                            // field count, which is accurate for primitive-
-                            // and pointer-typed fields. Aggregate-typed
-                            // fields (a struct field that is itself a
-                            // String/Vec) inflate by their LLVM struct
-                            // arity automatically.
+                            // Seeded builtin struct with no AST metadata
+                            // (`seed_builtin_struct_types` registers LLVM types
+                            // but not field TypeExprs) — fall back to LLVM field
+                            // width, accurate for primitive/pointer/aggregate
+                            // fields.
                             Self::llvm_type_word_count(struct_ty.into())
                         } else {
                             // Unknown name (generic type param, builtin not yet

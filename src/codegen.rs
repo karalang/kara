@@ -5056,16 +5056,26 @@ impl<'ctx> Codegen<'ctx> {
         // program with `struct Response { ... }` (unlikely but legal)
         // can override the seeded shape.
         self.seed_builtin_struct_types();
-        self.declare_structs(program);
+        // Two-pass struct declaration with `declare_enums` interleaved, so a
+        // struct field that names a user enum lowers at the enum's real
+        // tagged-union shape instead of collapsing to the `i64` fall-through
+        // (the self-hosting `enum-in-struct-field` blocker). (1) register
+        // struct field metadata (AST, no LLVM types); (2) build enum layouts —
+        // their payload sizing recurses through that struct metadata, not the
+        // not-yet-built struct LLVM types; (3) build struct LLVM types, now
+        // that `enum_layouts` is populated. See
+        // `declarations.rs::register_struct_metadata` for the cycle rationale.
+        self.register_struct_metadata(program);
+        self.declare_enums(program);
+        self.build_struct_types(program);
         // Phase 5 line 569 slice 4: lower `#[repr(C)] union Foo { ... }`
         // declarations to LLVM storage types so `size_of[Foo]` /
         // `align_of[Foo]` resolve correctly and union literals /
         // field accesses can target the storage struct downstream.
-        // Runs after `declare_structs` so a union field whose type
+        // Runs after `build_struct_types` so a union field whose type
         // names a user struct resolves to the right LLVM aggregate
         // when computing primary-field alignment.
         self.declare_unions(program);
-        self.declare_enums(program);
         // A2 slice 2b.3: when the coroutine path is enabled, record which
         // network-boundary keys compile as coroutines — every
         // `state_struct_layouts` key that isn't generic (per-mono generic
@@ -5689,9 +5699,12 @@ impl<'ctx> Codegen<'ctx> {
         // enum layouts), no IR — so literals, field access, `match` on a
         // stdlib enum, and aggregate fields all lower at the right shape.
         // `declare_enums` is the addition over the original tracing-only pass
-        // (tracing has no enums; `Ordering` does).
-        self.declare_structs(tp);
+        // (tracing has no enums; `Ordering` does). Same metadata→enums→types
+        // ordering as `compile_program` so a stdlib struct field that names a
+        // stdlib enum resolves at the enum's tagged-union shape, not `i64`.
+        self.register_struct_metadata(tp);
         self.declare_enums(tp);
+        self.build_struct_types(tp);
         let mut declared: std::collections::HashSet<String> = std::collections::HashSet::new();
         for value_self_pass in [true, false] {
             for item in &tp.items {

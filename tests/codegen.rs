@@ -919,6 +919,50 @@ fn main() {
         }
     }
 
+    // ── A struct field whose type is a USER enum (self-hosting blocker) ──
+
+    #[test]
+    fn test_e2e_user_enum_field_in_struct() {
+        // Regression for the self-hosting `enum-in-struct-field` codegen
+        // blocker: `declare_structs` ran before `declare_enums`, so a struct
+        // field naming a user enum wasn't in `enum_layouts` yet and
+        // `llvm_type_for_name` collapsed it to the `i64` fall-through —
+        // losing the payload word. The match arm then bound nothing
+        // (`Undefined variable 'name'` at codegen). Fixed by a two-pass
+        // struct declaration (metadata → declare_enums → struct LLVM types).
+        //
+        // Exercises the load-bearing details: a WIDE payload variant
+        // (`Pair(i64, String)` — multi-word, so a mis-sized enum slot would
+        // corrupt layout), and a scalar field AFTER the enum field (`end`)
+        // whose correct read proves the enum field is sized exactly right
+        // (neither collapsed to i64 nor over-wide).
+        if let Some(out) = run_program(
+            "enum Token { Ident(String), Num(i64), Pair(i64, String), Eof }\n\
+             struct Spanned { start: i64, tok: Token, end: i64 }\n\
+             fn show(sp: Spanned) {\n\
+                 print(f\"{sp.start}:\");\n\
+                 match sp.tok {\n\
+                     Ident(name) => { print(\"Id(\"); print(name); print(\")\"); }\n\
+                     Num(n) => { print(f\"Num({n})\"); }\n\
+                     Pair(a, s) => { print(\"Pair(\"); print(f\"{a},\"); print(s); print(\")\"); }\n\
+                     Eof => { print(\"Eof\"); }\n\
+                 }\n\
+                 println(f\":{sp.end}\");\n\
+             }\n\
+             fn main() {\n\
+                 show(Spanned { start: 0, tok: Token.Ident(\"foo\"), end: 3 });\n\
+                 show(Spanned { start: 3, tok: Token.Num(42), end: 5 });\n\
+                 show(Spanned { start: 5, tok: Token.Pair(7, \"bar\"), end: 9 });\n\
+                 show(Spanned { start: 9, tok: Token.Eof, end: 9 });\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "0:Id(foo):3\n3:Num(42):5\n5:Pair(7,bar):9\n9:Eof:9\n"
+            );
+        }
+    }
+
     #[test]
     fn e2e_alloc_error_codegen() {
         // The `AllocError` prelude type (struct + unit variant) compiles: both

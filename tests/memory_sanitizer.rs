@@ -6951,4 +6951,41 @@ fn main() {
             "vec_tuple_heap_element_try_clone_deep_free",
         );
     }
+
+    #[test]
+    fn asan_user_enum_field_in_struct_heap_payload() {
+        // Memory-safety companion to the `enum-in-struct-field` codegen
+        // blocker fix (two-pass struct declaration). A struct field whose
+        // type is a user enum with a HEAP (String) payload, held in a Vec of
+        // such structs, matched + read, then dropped at scope exit. The fix
+        // makes the field lower at the enum's real tagged-union shape (not
+        // the i64 fall-through); this guards that the heap payload inside the
+        // enum inside the struct inside the Vec is freed exactly once — no
+        // UAF on the read, no double-free at scope exit. Non-foldable
+        // (loop-index) strings so the buffers are real heap allocations.
+        assert_clean_asan_run(
+            r#"
+enum Token { Ident(String), Eof }
+struct Spanned { start: i64, tok: Token }
+fn main() {
+    let mut toks: Vec[Spanned] = Vec.new();
+    let mut i = 0i64;
+    while i < 3i64 {
+        toks.push(Spanned { start: i, tok: Token.Ident(f"id-{i}") });
+        i = i + 1i64;
+    }
+    let mut j = 0;
+    while j < toks.len() {
+        match toks[j].tok {
+            Ident(name) => println(name),
+            Eof => println("eof"),
+        }
+        j = j + 1;
+    }
+}
+"#,
+            &["id-0", "id-1", "id-2"],
+            "user_enum_field_in_struct_heap_payload",
+        );
+    }
 }
