@@ -1391,6 +1391,23 @@ impl<'ctx> super::Codegen<'ctx> {
                             .const_int(at.len() as u64, false)
                             .into());
                     }
+                    // `as_ptr()` / `as_mut_ptr()` — the element-0 address of
+                    // the owned array's storage, handed out as the raw
+                    // pointer `*const T` / `*mut T` (raw pointers lower to a
+                    // genuine LLVM `ptr`; the typechecker types these in
+                    // `infer_method_call`'s Array arm). Mirrors `CStr.as_ptr`,
+                    // except the producer is a GEP to element 0 rather than a
+                    // struct field — `slot.ptr` points at the `[N x T]`
+                    // alloca, and `[0, 0]` is its first element.
+                    if method == "as_ptr" || method == "as_mut_ptr" {
+                        let zero = self.context.i32_type().const_zero();
+                        let elem0 = unsafe {
+                            self.builder
+                                .build_in_bounds_gep(at, slot.ptr, &[zero, zero], "arr.as_ptr")
+                                .map_err(|e| format!("Array.{method} gep: {e}"))?
+                        };
+                        return Ok(elem0.into());
+                    }
                 }
                 // Ref Array methods — ref_params has the inner type
                 if let Some(&BasicTypeEnum::ArrayType(at)) = self.ref_params.get(name.as_str()) {
@@ -1400,6 +1417,16 @@ impl<'ctx> super::Codegen<'ctx> {
                             .i64_type()
                             .const_int(at.len() as u64, false)
                             .into());
+                    }
+                    // `as_ptr()` / `as_mut_ptr()` on a `ref Array` — the ref
+                    // param already carries the data pointer (element-0), so
+                    // hand it out directly. Same `*const T` / `*mut T` result
+                    // as the owned arm above.
+                    if method == "as_ptr" || method == "as_mut_ptr" {
+                        let data = self.get_data_ptr(name).ok_or_else(|| {
+                            format!("Array.{method}: no data pointer for ref array '{name}'")
+                        })?;
+                        return Ok(data.into());
                     }
                 }
                 // SoA layout methods

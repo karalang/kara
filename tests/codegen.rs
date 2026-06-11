@@ -4026,6 +4026,62 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_array_as_ptr_feeds_cstr_from_ptr() {
+        // B-2026-06-11-1: `Array[u8, N].as_ptr()` / `.as_mut_ptr()` had no
+        // codegen handler (method dispatch fell through). The fix GEPs to
+        // element 0 of the owned array's storage and hands it out as the raw
+        // pointer `*const T` / `*mut T`. Here a NUL-terminated byte array's
+        // pointer feeds `CStr.from_ptr` (libc `strlen` recomputes the length),
+        // and the borrowed surface reads the bytes back — proving the pointer
+        // addresses the array's first element. `as_mut_ptr()` produces the
+        // same usable address (coerces to the `*const u8` param), confirming
+        // both arms emit the element-0 pointer.
+        let src = r#"
+fn main() {
+    let a: Array[u8, 4] = [104u8, 105u8, 0u8, 0u8];
+    // Safety: `a` is NUL-terminated within its 4 bytes (b"hi\0\0").
+    let s = unsafe { CStr.from_ptr(a.as_ptr()) };
+    println(s.len());
+    let bytes = s.as_bytes();
+    println(bytes[0]);
+    println(bytes[1]);
+    // `as_mut_ptr()` addresses the same first element.
+    let s2 = unsafe { CStr.from_ptr(a.as_mut_ptr()) };
+    println(s2.len());
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            // len=2 ("hi" before NUL), bytes[0]='h'(104), bytes[1]='i'(105)
+            assert_eq!(out, "2\n104\n105\n2\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_ref_array_as_ptr_feeds_cstr_from_ptr() {
+        // B-2026-06-11-1, the `ref Array` arm: a `ref Array[u8, N]` param
+        // carries the data pointer directly, so `as_ptr()` hands it out
+        // without a GEP. Passing an owned array to a `ref`-taking helper and
+        // reconstructing a `CStr` from `a.as_ptr()` inside reads the same
+        // bytes — exercising the `ref_params` branch of the dispatcher.
+        let src = r#"
+fn first_len(a: ref Array[u8, 4]) -> i64 {
+    let s = unsafe { CStr.from_ptr(a.as_ptr()) };
+    s.len()
+}
+
+fn main() {
+    let arr: Array[u8, 4] = [104u8, 105u8, 0u8, 0u8];
+    println(first_len(arr));
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2");
+        }
+    }
+
+    #[test]
     fn test_e2e_ptr_dangling_is_not_null() {
         // ptr.dangling() returns a non-null pointer; ptr.is_null
         // observes false.

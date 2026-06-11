@@ -1155,6 +1155,31 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `Array[T, N].as_ptr()` / `.as_mut_ptr()` — raw element-0 pointer
+        // producers (the language's FFI handoff; mirrors `CStr.as_ptr`).
+        // `as_ptr -> *const T`, `as_mut_ptr -> *mut T`. The codegen handler
+        // in `compile_method_call` GEPs to element 0 of the array storage.
+        // Without a precise arm here the call falls through to the
+        // permissive array-method path and binds `Type::Error`, losing the
+        // pointer type for downstream FFI / deref. Handles owned arrays and
+        // their `ref` / `mut ref` borrows.
+        if (method == "as_ptr" || method == "as_mut_ptr") && args.is_empty() {
+            let elem = match &obj_ty {
+                Type::Array { element, .. } => Some(*element.clone()),
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Array { element, .. } => Some(*element.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(el) = elem {
+                return Type::Pointer {
+                    is_mut: method == "as_mut_ptr",
+                    inner: Box::new(el),
+                };
+            }
+        }
+
         // `Slice[T]` and `mut Slice[T]` method dispatch. These types are not
         // `Type::Named` so they fall through the generic branch below; handle
         // them here before the named-type extraction.
