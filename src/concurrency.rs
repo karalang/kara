@@ -455,6 +455,17 @@ struct StmtInfo {
     /// communication primitives whose ordering auto-par must not disturb.
     /// See `stmt_has_channel_op` and the `find_parallel_groups` guards.
     has_channel_op: bool,
+    /// Whether this statement is a direct, pure `sleep_ms(...)` timer-park
+    /// call — the ONLY `suspends` form the auto-parallelizer overlaps (A2b).
+    /// `suspends` is an execution verb (placement, not conflict — design.md
+    /// :5907), but at the effect level a timer wait and a channel `recv` are
+    /// indistinguishable (both seed a bare `suspends`), and a channel recv is
+    /// NOT independent — it has a happens-before with its producer, so
+    /// relocating it into a `__par_branch` worker deadlocks. So the boundary
+    /// gate keeps *every* `suspends` stmt serial (conservative default) and
+    /// exempts only the ones proven to be a standalone timer park here. See
+    /// `stmt_is_timer_suspend` and the `find_parallel_groups` boundary guards.
+    is_timer_suspend: bool,
     /// Whether this statement is a constant-cost initializer — a
     /// `let`/`assign` of a literal or bare identifier, or a `let
     /// uninit`. These are O(1) and run in ~zero time. Used by the
@@ -486,12 +497,76 @@ struct StmtEffect {
 /// `__par_branch` worker double-drops any owned user-`Drop` arg (an fd
 /// double-close for a `WebSocket`), and the ramp+wait belongs to the async
 /// dispatcher, not the `karac_par_run` pool. See `find_parallel_groups`.
+///
+/// **`suspends` stays gated, except a standalone timer park (A2b, 2026-06-10).**
+/// At the effect level a channel `recv`, a network park, and `sleep_ms` all
+/// seed a bare `suspends` — indistinguishable here. A channel recv is NOT
+/// independent (it has a happens-before with its producer; relocating it into a
+/// `__par_branch` worker deadlocks — regression-pinned by
+/// `e2e_auto_par_channel_consumer_terminates`), so the conservative default is
+/// to keep every `suspends` stmt serial. The `find_parallel_groups` boundary
+/// guards then exempt only the stmts `stmt_is_timer_suspend` proves to be a
+/// standalone `sleep_ms` call — the one `suspends` form known to be independent
+/// (a bare timer wait, no by-value `Drop` params). The harder *network*
+/// coroutine fan-out (design.md:9044 `http_get` — true double-drop, wants
+/// dispatcher routing) stays gated pending A2b-2.
 fn effects_mark_coroutine_boundary(effects: &[StmtEffect]) -> bool {
     effects.iter().any(|e| {
         matches!(e.verb, EffectVerbKind::Suspends)
             || (matches!(e.verb, EffectVerbKind::Sends | EffectVerbKind::Receives)
                 && e.resource == "Network")
     })
+}
+
+/// True iff `stmt` is a direct, pure `sleep_ms(...)` timer-park call — the only
+/// `suspends` form the auto-parallelizer overlaps (A2b). `find_parallel_groups`
+/// exempts such statements from the `effects_mark_coroutine_boundary` gate so
+/// two independent timer waits overlap via the `karac_par_run` thread-block
+/// path, exactly like `blocks` (A1). It is deliberately conservative: the stmt
+/// must be exactly a `sleep_ms` call whose args contain no further call or
+/// method (which could itself suspend or touch a channel) — anything richer
+/// stays serial. A `sleep_ms` wrapper fn (`fn nap() { sleep_ms(..) }`) does NOT
+/// qualify (the call site sees only the wrapper's propagated `suspends`, not
+/// that it is timer-pure); supporting wrappers would need provenance on the
+/// effect and is left to A2b-2.
+fn stmt_is_timer_suspend(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Let { value, .. } | StmtKind::Expr(value) => expr_is_pure_sleep_ms_call(value),
+        _ => false,
+    }
+}
+
+/// `sleep_ms(<call-free args>)` — a `Call` to the bare `sleep_ms` path whose
+/// every argument is itself free of any nested call/method.
+fn expr_is_pure_sleep_ms_call(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Call { callee, args } => {
+            // A bare free-function callee is either an `Identifier` or a
+            // single-segment `Path`, depending on parse context.
+            let is_sleep_ms = match &callee.kind {
+                ExprKind::Identifier(name) => name == "sleep_ms",
+                ExprKind::Path { segments, .. } => segments.len() == 1 && segments[0] == "sleep_ms",
+                _ => false,
+            };
+            is_sleep_ms && args.iter().all(|a| expr_is_call_free(&a.value))
+        }
+        _ => false,
+    }
+}
+
+/// True iff `expr` contains no `Call` and no `MethodCall` anywhere — used to
+/// confirm a `sleep_ms` argument cannot itself suspend or touch a channel.
+fn expr_is_call_free(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::Closure { .. } => false,
+        ExprKind::Binary { left, right, .. } => expr_is_call_free(left) && expr_is_call_free(right),
+        ExprKind::Unary { operand, .. } => expr_is_call_free(operand),
+        ExprKind::Index { object, index } => expr_is_call_free(object) && expr_is_call_free(index),
+        ExprKind::FieldAccess { object, .. } => expr_is_call_free(object),
+        ExprKind::Cast { expr, .. } => expr_is_call_free(expr),
+        // Literals, paths, and other leaf forms carry no call.
+        _ => true,
+    }
 }
 
 // ── Checker ────────────────────────────────────────────────────
@@ -1068,6 +1143,7 @@ impl<'a> ConcurrencyChecker<'a> {
             is_seq,
             has_early_exit: stmt_has_early_exit(stmt),
             has_channel_op: stmt_has_channel_op(stmt),
+            is_timer_suspend: stmt_is_timer_suspend(stmt),
             is_constant_init: stmt_is_constant_init(stmt),
         };
 
@@ -1192,8 +1268,12 @@ impl<'a> ConcurrencyChecker<'a> {
     ///   - panics + panics = CONFLICT
     ///   - blocks + blocks = NO conflict — execution verb drives placement, not
     ///     conflict (A1, 2026-06-10; design.md:5907/:5920)
-    ///   - suspends + suspends = CONFLICT (serialized pending A2 — coroutine
-    ///     double-drop hazard; see `effects_mark_coroutine_boundary`)
+    ///   - suspends + suspends = NO conflict — execution verb, same as blocks
+    ///     (design.md:5907/:5920). Only matters for stmts the boundary gate lets
+    ///     through, i.e. standalone `sleep_ms` timer waits (A2b, 2026-06-10):
+    ///     two overlap via the par thread-block path. Channel `recv` / network
+    ///     parks also carry `suspends` but are excluded upstream by
+    ///     `effects_mark_coroutine_boundary` before this check is reached.
     ///   - Cross-category (e.g. reads + sends) = NO conflict even on same resource
     /// - Different resources = NO conflict regardless of verbs
     fn two_effects_conflict(&self, a: &StmtEffect, b: &StmtEffect) -> bool {
@@ -1235,10 +1315,22 @@ impl<'a> ConcurrencyChecker<'a> {
             // not conflict (design.md:5907/:5920) — two independent blocking
             // calls overlap on the blocking pool via the same `emit_par_run`
             // fan-out that explicit `par {}` uses. Lifted in A1 (2026-06-10);
-            // see phase-5-diagnostics.md and bench/auto_par_io/. `suspends`
-            // stays conflicting (below) pending A2's coroutine-aware lowering.
+            // see phase-5-diagnostics.md and bench/auto_par_io/.
             (Blocks, Blocks) => false,
-            (Suspends, Suspends) => true,
+            // suspends + suspends = NO conflict. Like `blocks`, `suspends` is an
+            // execution verb that answers PLACEMENT, not conflict
+            // (design.md:5907/:5920). This arm is reached ONLY for stmts that
+            // clear `effects_mark_coroutine_boundary` — i.e. standalone
+            // `sleep_ms` timer waits (`stmt_is_timer_suspend`), the one
+            // `suspends` form proven independent (a bare timer park, no by-value
+            // `Drop` params). Two of them overlap via the `emit_par_run`
+            // thread-block path exactly like `blocks` (A2b, 2026-06-10).
+            // Channel `recv` and network parks also carry `suspends` but never
+            // reach here — the boundary gate excludes them upstream (a channel
+            // recv has a happens-before with its producer; lifting it deadlocks,
+            // and a network coroutine owns + drops by-value params; the network
+            // fan-out is A2b-2).
+            (Suspends, Suspends) => false,
 
             // User-defined verbs: conflict if same verb on same resource
             (UserDefined(va), UserDefined(vb)) => va == vb,
@@ -1275,14 +1367,19 @@ impl<'a> ConcurrencyChecker<'a> {
                 continue;
             }
 
-            // A statement that calls a coroutine network-boundary fn must NOT
-            // be auto-parallelized into a `__par_branch` worker — the coroutine
-            // owns + drops its by-value params, but auto-par captures are
-            // shared-with-write-back, so a `__par_branch`-lifted call would
-            // double-drop an owned user-`Drop` arg (see
-            // `effects_mark_coroutine_boundary`). Keep it sequential (mirrors
-            // `has_early_exit`).
-            if effects_mark_coroutine_boundary(&infos[start].effects) {
+            // A statement that calls a coroutine network-boundary fn — or any
+            // `suspends` park that is not a standalone `sleep_ms` timer wait —
+            // must NOT be auto-parallelized into a `__par_branch` worker: a
+            // coroutine owns + drops its by-value params while auto-par captures
+            // are shared-with-write-back (a `__par_branch`-lifted call would
+            // double-drop an owned user-`Drop` arg), and a channel `recv` has a
+            // happens-before with its producer that a fan-out would deadlock.
+            // A direct `sleep_ms` timer park is the one independent `suspends`
+            // form, so it is exempted and overlaps like `blocks` (A2b). See
+            // `effects_mark_coroutine_boundary` / `stmt_is_timer_suspend`.
+            if effects_mark_coroutine_boundary(&infos[start].effects)
+                && !infos[start].is_timer_suspend
+            {
                 assigned[start] = true;
                 continue;
             }
@@ -1327,11 +1424,14 @@ impl<'a> ConcurrencyChecker<'a> {
                     break;
                 }
 
-                // A coroutine network-boundary statement is never auto-
-                // parallelized — it must not join a group seeded by a pure
-                // sibling either (see the seed-side guard above). End the group
-                // at this boundary.
-                if effects_mark_coroutine_boundary(&infos[candidate].effects) {
+                // A coroutine network-boundary statement (or a non-timer
+                // `suspends` park) is never auto-parallelized — it must not join
+                // a group seeded by a pure sibling either (see the seed-side
+                // guard above). A direct `sleep_ms` timer wait is exempt and may
+                // join. End the group at any other boundary.
+                if effects_mark_coroutine_boundary(&infos[candidate].effects)
+                    && !infos[candidate].is_timer_suspend
+                {
                     break;
                 }
 

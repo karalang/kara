@@ -161,23 +161,51 @@ fn test_independent_blocking_calls_parallelize() {
     assert!(main_fc.parallel_groups[0].statement_indices.contains(&1));
 }
 
-// ── Suspends still serializes (A2 pending) ─────────────────────
+// ── Timer suspends parallelizes; other suspends stays serial (A2b) ─
 
 #[test]
-fn test_independent_suspending_calls_still_serialize() {
-    // A1 deliberately scopes to `blocks`. `suspends` must stay serialized
-    // until A2 wires coroutine-aware lowering (the by-value-param double-drop
-    // hazard at concurrency.rs:483-488, plus routing to the async pool, not
-    // par_run). Two independent reads(Network) calls would group on their own
-    // (read+read is safe) — adding `suspends` must keep them serial. Pins the
-    // A1/A2 boundary: a premature suspends flip without the wiring fails here.
+fn test_independent_timer_suspends_parallelize() {
+    // A2b: a standalone `sleep_ms` timer wait is the one `suspends` form proven
+    // independent (a bare timer park, no by-value `Drop` params, no
+    // happens-before with a sibling). Two of them are an execution-verb pair
+    // (placement, not conflict — like `blocks`, A1) and overlap via the par
+    // thread-block path.
     let analysis = analyze(
         r#"
-        fn fetch_a() -> i64 with reads(Network) suspends { return 1; }
-        fn fetch_b() -> i64 with reads(Network) suspends { return 2; }
         fn main() {
-            let x = fetch_a();
-            let y = fetch_b();
+            sleep_ms(100);
+            sleep_ms(100);
+        }
+        "#,
+    );
+
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.parallel_groups.len(),
+        1,
+        "two independent sleep_ms timer waits should parallelize (A2b), got {:?}",
+        main_fc.parallel_groups
+    );
+    let g = &main_fc.parallel_groups[0];
+    assert!(g.statement_indices.contains(&0) && g.statement_indices.contains(&1));
+}
+
+#[test]
+fn test_nontimer_suspend_calls_serialize() {
+    // A2b is conservative: at the effect level a channel `recv`, a network park,
+    // and a user `with suspends` fn all seed a bare `suspends` — indistinguish-
+    // able from a timer wait, but NOT provably independent. Only a direct
+    // `sleep_ms` is exempted; everything else stays serial. This pins that a
+    // non-`sleep_ms` suspending call (here a user `with suspends` fn) does NOT
+    // parallelize — the guard that prevents a channel-`recv`-behind-a-call from
+    // being lifted into a `__par_branch` worker and deadlocking (regression
+    // for the channel producer/consumer hang found while building A2b).
+    let analysis = analyze(
+        r#"
+        fn work() -> i64 with suspends { return 1; }
+        fn main() {
+            let a = work();
+            let b = work();
         }
         "#,
     );
@@ -185,7 +213,37 @@ fn test_independent_suspending_calls_still_serialize() {
     let main_fc = get_function(&analysis, "main");
     assert!(
         main_fc.parallel_groups.is_empty(),
-        "suspends must stay serialized until A2, got {:?}",
+        "a non-timer suspending call must stay serial (A2b conservative gate), got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+// ── Network coroutine boundaries STILL serialize (A2b-2 pending) ─
+
+#[test]
+fn test_network_boundary_calls_still_serialize() {
+    // A2b lifts PLAIN suspends only. A `sends(Network)`/`receives(Network)`
+    // call is compiled into a dispatcher-driven coroutine that owns + drops
+    // its by-value params — lifting it into a `__par_branch` worker would
+    // double-drop an owned user-`Drop` arg. So network boundaries stay serial
+    // via `effects_mark_coroutine_boundary`'s network arm. Pins the A2b/A2b-2
+    // boundary: a premature network-fan-out flip without the coroutine-aware
+    // lowering fails here.
+    let analysis = analyze(
+        r#"
+        fn get_a() -> i64 with sends(Network) receives(Network) { return 1; }
+        fn get_b() -> i64 with sends(Network) receives(Network) { return 2; }
+        fn main() {
+            let x = get_a();
+            let y = get_b();
+        }
+        "#,
+    );
+
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.parallel_groups.is_empty(),
+        "network coroutine boundaries must stay serialized until A2b-2, got {:?}",
         main_fc.parallel_groups
     );
 }

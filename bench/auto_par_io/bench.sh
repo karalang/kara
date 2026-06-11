@@ -149,10 +149,12 @@ done
 echo "   (par scales in pool-bounded waves: ~ceil(K/cores)×D — that is the honest ceiling)"
 
 echo
-echo "## suspends fan-out, K-sweep  (K independent sleep_ms — the async-timer primitive)"
-echo "##   A2a-2.2 state: par OVERLAPS (timer wheel), auto still SERIAL (A2b lifts it)."
-printf '   %4s | %-8s | %7s | %7s | %7s | %s\n' K "grouped?" seq par auto "par<<seq?"
-printf '   %4s-+-%-8s-+-%7s-+-%7s-+-%7s-+-%s\n' "----" "--------" "-------" "-------" "-------" "--------"
+echo "## suspends fan-out, K-sweep  (K independent sleep_ms — want auto≈par at every K)"
+echo "##   A2b state: auto-par OVERLAPS standalone sleep_ms timer waits (par thread-block,"
+echo "##   like blocks). Only a direct sleep_ms is exempt; channel recv / network / user"
+echo "##   suspends wrappers stay serial (a channel recv lifted into a branch deadlocks)."
+printf '   %4s | %-8s | %7s | %7s | %7s | %s\n' K "grouped?" seq par auto verdict
+printf '   %4s-+-%-8s-+-%7s-+-%7s-+-%7s-+-%s\n' "----" "--------" "-------" "-------" "-------" "-------"
 for K in $KSWEEP; do
     gen_straight_suspends "$K" "suspends_K${K}.kara"
     gen_par_suspends      "$K" "suspends_par_K${K}.kara"
@@ -161,12 +163,13 @@ for K in $KSWEEP; do
     build_bin "suspends_par_K${K}.kara" "suspends_par_${K}"
     G=$(stmts_grouped "suspends_K${K}.kara.main" 0 1)
     S=$(median_real "suspends_seq_${K}"); P=$(median_real "suspends_par_${K}"); A=$(median_real "suspends_auto_${K}")
-    # The A2a-2.2 win: does the explicit-par rail overlap the naps (par << seq)?
-    V=$(awk -v s="$S" -v p="$P" 'BEGIN{print (p<=(s/1.5))?"YES":"no"}')
+    # A2b: auto should track the par ceiling (same OVERLAP verdict as blocks).
+    V=$(awk -v a="$A" -v s="$S" -v p="$P" 'BEGIN{print (a<=(s+p)/2)?"OVERLAP":"SERIAL"}')
     printf '   %4s | %-8s | %6ss | %6ss | %6ss | %s\n' "$K" "$G" "$S" "$P" "$A" "$V"
 done
-echo "   (grouped?=no + auto≈seq is EXPECTED pre-A2b; par<<seq proves sleep_ms overlaps"
-echo "    on the timer wheel — A2b then routes auto-par grouped suspends through it too.)"
+echo "   (A2b lifted (Suspends,Suspends) and exempts a standalone sleep_ms from the suspends"
+echo "    boundary gate: timer waits overlap via par_run, like blocks. Channel recv / network"
+echo "    parks / sleep_ms-wrapper fns stay serial. Network http_get fan-out is A2b-2.)"
 
 echo
 echo "## positive control  (positive_control.kara — distinct-resource shape)"

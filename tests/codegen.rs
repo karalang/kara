@@ -8107,6 +8107,64 @@ fn main() {
         }
     }
 
+    #[test]
+    fn e2e_auto_par_sleeps_run_correctly() {
+        // A2b: two independent `sleep_ms` timer waits AUTO-parallelize (no
+        // explicit `par {}` — the conflict model exempts a standalone `sleep_ms`
+        // from the `suspends` boundary gate and lifts `(Suspends,Suspends)`).
+        // They overlap on the par thread-block path; here we pin output
+        // correctness and termination (the timing win is the bench's job).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 sleep_ms(20);\n\
+                 sleep_ms(20);\n\
+                 println(\"done\");\n\
+             }",
+        ) {
+            assert_eq!(out, "done\n", "auto-par sleeps complete; got:\n{out}");
+        }
+    }
+
+    #[test]
+    fn e2e_auto_par_channel_consumer_terminates() {
+        // Regression (A2b): the producer/consumer channel program must TERMINATE
+        // under default auto-par. `consume(rx)` carries a `suspends` effect (from
+        // `rx.recv()`) that is indistinguishable at the effect level from a
+        // `sleep_ms` timer wait, but a channel recv has a happens-before with its
+        // producer — lifting `consume(rx)` into a `__par_branch` worker alongside
+        // the `spawn` deadlocks (the recv loop never observes the channel close).
+        // The conservative boundary gate keeps it serial (only direct `sleep_ms`
+        // is exempt). A regression here would HANG, not just misprint, so the
+        // test doubles as the deadlock guard.
+        if let Some(out) = run_program(
+            "fn producer(tx: Sender[i64]) -> i64 {\n\
+                 tx.send(10);\n\
+                 tx.send(20);\n\
+                 0\n\
+             }\n\
+             fn consume(rx: Receiver[i64]) -> i64 {\n\
+                 let mut sum = 0;\n\
+                 let mut go = true;\n\
+                 while go {\n\
+                     let v = rx.recv();\n\
+                     if v == 0 { go = false; } else { sum = sum + v; }\n\
+                 }\n\
+                 sum\n\
+             }\n\
+             fn main() {\n\
+                 let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
+                 let h: TaskHandle[i64] = spawn(|| producer(tx));\n\
+                 println(consume(rx));\n\
+                 h.join();\n\
+             }",
+        ) {
+            assert_eq!(
+                out, "30\n",
+                "channel consumer must terminate with 30; got:\n{out}"
+            );
+        }
+    }
+
     // ── Move-suppression for user-Drop bindings (let-rebind) ──
     //
     // `let g = f;` where `f` has a user `impl Drop` moves the value

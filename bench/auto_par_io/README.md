@@ -108,36 +108,53 @@ the table: **2.6× at K=4, 13× at K=64.**
 *every* K, and stmts 0 & 1 co-group. The existing `par_run` fan-out overlaps the
 blocking calls on the pool — no runtime/codegen change, only the conflict model.
 
-## `suspends` rail — A2a-2.2 ✅ (primitive overlaps; auto-grouping is A2b)
+## `suspends` rail — A2b ✅ (auto-par overlaps independent `sleep_ms` timer waits)
 
-The `suspends` K-sweep now runs against a real async-sleep primitive:
-`sleep_ms(ms)` (`std.time`, the leaf `suspends` verb), which parks on the
-reactor's timer wheel (`runtime/src/event_loop.rs::register_timer`) instead of
-pinning an OS thread. `bench.sh` generates the straight-line + `par {}` siblings
-exactly like the `blocks` rail, but with `sleep_ms($DMS)`.
+The `suspends` K-sweep runs against a real async-sleep primitive: `sleep_ms(ms)`
+(`std.time`, the leaf `suspends` verb, A2a-2.2), which parks on the reactor's
+timer wheel (`runtime/src/event_loop.rs::register_timer`). `bench.sh` generates
+the straight-line + `par {}` siblings exactly like the `blocks` rail.
 
-What it shows today (A2a-2.2 — the primitive + its codegen park-on-timer
-lowering shipped; the `(Suspends,Suspends)` conflict is NOT yet lifted):
+### Result — AFTER A2b (`suspends`) ✅ DONE 2026-06-10
+
+A2b lifted `(Suspends,Suspends) => false` in `two_effects_conflict`, so two
+independent timer waits overlap via the same `par_run` thread-block fan-out as
+`blocks`. Measured, M5 Pro, D=200ms:
 
 ```
-   K | grouped? |   seq   |   par   |  auto   | par<<seq?
-   4 | no       |  0.94s  |  0.42s  |  0.80s  | YES
+   K | grouped? |   seq   |   par   |  auto   | verdict   win
+   4 | yes      |  1.04s  |  0.42s  |  0.20s  | OVERLAP   5.2×
 ```
 
-- **`grouped?` = no** and **`auto ≈ seq`** is the *expected* pre-A2b state: the
-  conflict model still serializes two suspending calls (this is the A2b boundary,
-  by design — the A1 commit lifted only `blocks`).
-- **`par << seq`** is the A2a-2.2 win: `sleep_ms` genuinely overlaps. Two naps in
-  a `par {}` finish in ~one nap, proving the timer-wheel park composes with the
-  par runtime.
+`auto` migrated from the serial floor to the overlap ceiling — the same
+migration the `blocks` rail showed after A1.
 
-**A2b** then lifts `(Suspends,Suspends)` *and* routes auto-par'd suspending calls
-through the async dispatcher (park task, free thread) rather than `par_run` — at
-which point the `auto` column drops to the `par` ceiling here, the same migration
-the `blocks` rail shows after A1.
+### Conservative by design: only a standalone `sleep_ms` overlaps
 
-Caveat unchanged: this `par {}` rail overlaps suspends via *threads* (one worker
-blocked per nap on its completion slot — a pool-bounded ceiling, like `blocks`).
-The real suspends win — millions of tasks parked on a few threads — is the
-thread-free dispatcher path A2b unlocks, measured by a separate *scaling* bench,
-not this latency-overlap one.
+At the effect level a channel `recv`, a network park, and `sleep_ms` **all** seed
+a bare `suspends` — indistinguishable. But a channel `recv` is *not* independent:
+it has a happens-before with its producer, so lifting `consume(rx)` into a
+`__par_branch` worker alongside the producer's `spawn` **deadlocks** (the recv
+loop never sees the channel close). This bit during A2b development — the first
+cut narrowed the boundary gate to network-only and hung the channel
+producer/consumer test. The fix: keep *every* `suspends` stmt serial by default
+and exempt **only** statements proven to be a direct `sleep_ms` timer park
+(`concurrency.rs::stmt_is_timer_suspend`) — the one `suspends` form with no
+sibling happens-before and no by-value `Drop` params. So a channel `recv`, a
+network call, and even a user `with suspends` wrapper around `sleep_ms` all stay
+serial; only the bare timer wait overlaps. Regression-pinned by
+`tests/codegen.rs::e2e_auto_par_channel_consumer_terminates` (a HANG, not a
+misprint, if it ever regresses) and `tests/concurrency.rs::
+test_nontimer_suspend_calls_serialize`.
+
+### Still serial — network `http_get` fan-out (A2b-2)
+
+The harder, flagship case (design.md:9044 — three independent `http_get` calls)
+stays serialized: a `sends`/`receives(Network)` call IS compiled into a
+dispatcher-driven coroutine that owns + drops its by-value params, so lifting it
+into a `__par_branch` worker is a real double-drop (fd double-close). Closing it
+needs coroutine-aware capture (no by-value double-drop) and likely routing the
+fan-out through the async dispatcher (park task, free thread) rather than
+`par_run` — the thread-free *scaling* win (millions of tasks on a few threads),
+a separate bench from this latency-overlap one. Lifting the `sleep_ms`-wrapper
+restriction (propagate timer provenance through user fns) rides along with A2b-2.
