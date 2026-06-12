@@ -44,8 +44,10 @@ pub extern "C" fn karac_alloc_fallible(size: usize) -> *mut u8 {
 pub extern "C" fn karac_alloc_or_panic(size: usize) -> *mut u8 {
     let p = karac_alloc_fallible(size);
     if p.is_null() {
-        use std::io::Write;
-        let _ = std::io::stderr().write_all(b"panic: out of memory\n");
+        // Lean raw-`write(2)` diagnostic (see `fatal` / B-2026-06-11-8) — NOT
+        // `std::io::stderr()`, which would anchor ~250 KB of std-IO onto every
+        // Vec-using binary through this force-kept, hot-path symbol.
+        crate::fatal::write_stderr(b"panic: out of memory\n");
         std::process::abort();
     }
     p

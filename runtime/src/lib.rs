@@ -39,6 +39,7 @@ mod clone;
 mod emutls;
 #[cfg(feature = "net")]
 pub mod event_loop;
+mod fatal;
 mod file;
 mod map;
 mod mutex;

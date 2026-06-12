@@ -122,10 +122,12 @@ pub unsafe extern "C" fn karac_string_slice(
     end: i64,
 ) -> *mut u8 {
     if start < 0 || end < start || end > len {
-        eprintln!(
-            "runtime error: string slice bounds {}..{} out of range (len {})",
+        // Lean fatal print (raw write(2), no std-IO) — see `fatal` /
+        // B-2026-06-11-8; this symbol is on every String-slice program's path.
+        crate::fatal::eprint_fmt(format_args!(
+            "runtime error: string slice bounds {}..{} out of range (len {})\n",
             start, end, len
-        );
+        ));
         std::process::exit(1);
     }
     let len_us = len as usize;
@@ -141,11 +143,11 @@ pub unsafe extern "C" fn karac_string_slice(
     // `i == len_us` short-circuit keeps `bytes[i]` from indexing past the end.
     let is_boundary = |i: usize| i == 0 || i == len_us || (bytes[i] & 0xC0) != 0x80;
     if !is_boundary(start_us) || !is_boundary(end_us) {
-        eprintln!(
+        crate::fatal::eprint_fmt(format_args!(
             "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range \
-             {}..{} does not fall on UTF-8 char boundaries",
+             {}..{} does not fall on UTF-8 char boundaries\n",
             start, end
-        );
+        ));
         std::process::exit(1);
     }
     let n = end_us - start_us;
@@ -190,10 +192,12 @@ pub unsafe extern "C" fn karac_string_slice_borrow(
     end: i64,
 ) -> *const u8 {
     if start < 0 || end < start || end > len {
-        eprintln!(
-            "runtime error: string slice bounds {}..{} out of range (len {})",
+        // Lean fatal print (raw write(2), no std-IO) — see `fatal` /
+        // B-2026-06-11-8; this symbol is on every String-slice program's path.
+        crate::fatal::eprint_fmt(format_args!(
+            "runtime error: string slice bounds {}..{} out of range (len {})\n",
             start, end, len
-        );
+        ));
         std::process::exit(1);
     }
     let len_us = len as usize;
@@ -206,11 +210,11 @@ pub unsafe extern "C" fn karac_string_slice_borrow(
     };
     let is_boundary = |i: usize| i == 0 || i == len_us || (bytes[i] & 0xC0) != 0x80;
     if !is_boundary(start_us) || !is_boundary(end_us) {
-        eprintln!(
+        crate::fatal::eprint_fmt(format_args!(
             "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range \
-             {}..{} does not fall on UTF-8 char boundaries",
+             {}..{} does not fall on UTF-8 char boundaries\n",
             start, end
-        );
+        ));
         std::process::exit(1);
     }
     if end_us == start_us {

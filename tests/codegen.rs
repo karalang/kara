@@ -919,6 +919,68 @@ fn main() {
         }
     }
 
+    // ── Binary-size floor: Vec must not re-anchor the heavy runtime cluster ──
+
+    /// B-2026-06-11-8 regression guard. A `Vec`-using compute binary must
+    /// dead-strip to the lean floor (~33 KB), NOT drag in the ~250 KB
+    /// std-IO/fmt heavy-runtime cluster. The regression: `karac_alloc_or_panic`
+    /// (on every `Vec.push`/`filled`/`with_capacity` path, and force-kept) used
+    /// `std::io::stderr()` on its OOM diagnostic, which anchored that cluster
+    /// onto every Vec/String binary (33 KB → 285 KB). Fixed by routing fatal
+    /// paths through the `fatal` module's raw `write(2)` + heapless formatter.
+    /// Threshold 150 KB clears both the lean (~33 KB) and full (~81 KB) floors
+    /// while staying far below the 285 KB heavy floor the bug produced.
+    #[test]
+    fn e2e_vec_binary_stays_lean_no_heavy_runtime_floor() {
+        use karac::codegen::{compile_to_object_with_options, link_executable};
+        let src = "fn main() {\n\
+                   let mut v: Vec[i64] = Vec.filled(8, 0);\n\
+                   v[0] = 42;\n\
+                   println(f\"{v[0]}\");\n\
+                   }";
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "size-regression source must parse"
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+
+        let id = std::process::id();
+        let obj_path = format!("/tmp/karac_size_{}.o", id);
+        let exe_path = format!("/tmp/karac_size_{}", id);
+        if compile_to_object_with_options(
+            &parsed.program,
+            &obj_path,
+            Some(&ownership),
+            None,
+            None,
+            None,
+        )
+        .is_err()
+        {
+            panic!("codegen failed for Vec binary-size regression program");
+        }
+        // Soft-skip when the runtime archive / linker is unavailable (same
+        // policy as the run_program harness), so the test doesn't fail
+        // vacuously in environments without libkarac_runtime.a.
+        if link_executable(&obj_path, &exe_path).is_err() {
+            let _ = std::fs::remove_file(&obj_path);
+            return;
+        }
+        let bytes = std::fs::metadata(&exe_path).map(|m| m.len()).unwrap_or(0);
+        let _ = std::fs::remove_file(&obj_path);
+        let _ = std::fs::remove_file(&exe_path);
+        assert!(
+            bytes > 0 && bytes < 150_000,
+            "Vec compute binary is {bytes} B — expected < 150 KB (lean floor \
+             ~33 KB). A jump toward ~285 KB means a force-kept hot-path runtime \
+             symbol re-anchored the std-IO heavy cluster (B-2026-06-11-8)."
+        );
+    }
+
     // ── A struct field whose type is a USER enum (self-hosting blocker) ──
 
     #[test]
