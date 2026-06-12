@@ -2488,6 +2488,21 @@ impl<'ctx> super::Codegen<'ctx> {
                             let alloca = slot.ptr;
                             self.track_enum_var(&name, alloca);
                         }
+                        // #9: `let g = f` enum move — the aggregate is copied
+                        // into `g`'s slot (both slots alias the same heap
+                        // payload), and `g`'s freshly-tracked `EnumDrop` above is
+                        // the new owner. Suppress the SOURCE `f`'s `EnumDrop`
+                        // (cap-zero, via the enum arm in
+                        // `suppress_source_vec_cleanup_for_arg_ex`) so it no-ops;
+                        // otherwise both free the same buffer (double-free). The
+                        // struct-centric move-suppression below is gated on the
+                        // destination carrying a `var_type_names` entry, which an
+                        // unannotated enum `let g = f` need not have — so the
+                        // enum case is suppressed here, at its own track site.
+                        // No-op for a fresh-value RHS (constructor / call result).
+                        if matches!(&value.kind, ExprKind::Identifier(_)) {
+                            self.suppress_source_vec_cleanup_for_arg(value);
+                        }
                     }
                 }
                 // B-2026-06-11-4 part a: a let-bound TUPLE with heap fields

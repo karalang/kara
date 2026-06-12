@@ -11444,6 +11444,33 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_let_bound_enum_heap_payload_moved_out() {
+        // #9 (phase-12 self-hosting): a bare `let`-bound enum with a heap
+        // payload, moved out by `return`, must reach the consumer intact (the
+        // source's `EnumDrop` is suppressed so the payload isn't freed before
+        // use). Value-correctness twin of the ASAN regression — `make()`
+        // returns `let e = E.Id(...); e` and the caller reads the String back.
+        if let Some(out) = run_program(
+            r#"
+enum E { Id(String), N(i64) }
+fn make() -> E {
+    let e = E.Id("hello".to_string());
+    e
+}
+fn main() {
+    let r = make();
+    match r {
+        Id(s) => println(s),
+        N(n) => println(n.to_string()),
+    }
+}
+"#,
+        ) {
+            assert_eq!(out, "hello\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_enum_field_in_struct_display() {
         // A struct whose field is an all-unit enum renders the enum field as
         // its variant name (recursing through the struct Display path).

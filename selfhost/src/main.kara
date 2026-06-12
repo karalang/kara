@@ -27,10 +27,14 @@
 // #7, #8 are all FIXED — the byte-indexed scan core (Vec[u8] field,
 // self-mutating methods, struct return, enum render) builds, runs via
 // `karac build`, and lexes correctly with auto-par ON, guarded by the oracle.
-// #9 (OPEN, codegen move-suppression): a let-bound bare user-enum with a heap
-// payload double-frees that payload when moved out — `identifier()` uses the
-// inline `make_spanned(keyword_or_ident(text))` form to sidestep it pending
-// the fix (serialized behind the concurrent bugs.md drop work).
+// #9 (codegen move-suppression): a let-bound bare user-enum with a heap payload
+// double-freed when moved out. The RETURN-of-let-bound-enum and `let g = f`
+// cases are FIXED 2026-06-11 (enum cap-zero arm in
+// `suppress_source_vec_cleanup_for_arg_ex` + suppression at the enum track
+// site). The by-value-call-arg-then-transfer-out case (e.g.
+// `make_spanned(token)` re-wrapping into the returned `SpannedToken`) is the
+// distinct, more general blocker #14 (it affects structs identically) — so
+// `identifier()` keeps the inline `make_spanned(keyword_or_ident(text))` form.
 
 struct Span {
     line: i64,
@@ -1122,12 +1126,14 @@ impl Lexer {
             self.advance();
         }
         let text = self.src.substring(self.start, self.current);
-        // Inline (no intermediate `let token = …`): self-hosting blocker #9 —
-        // a let-bound bare user-enum with a heap payload double-frees that
-        // payload when moved out, so `let token = keyword_or_ident(text);
-        // self.make_spanned(token)` corrupts the Identifier's String. The
-        // inline form (and the struct-wrapped `let t = next_token()` in
-        // lex_all, which is unaffected) sidesteps it. See phase-12 blocker #9.
+        // Inline (no intermediate `let token = …`): blocker #14 — a by-value
+        // aggregate (enum/struct) binding MOVED into a call that transfers it
+        // out (here `make_spanned(token)` re-wraps it into the returned
+        // `SpannedToken`) double-frees, because the caller-retains by-value
+        // model frees the source binding too. The inline form has no source
+        // binding, so it sidesteps the gap. (#9's let-bound-enum-returned and
+        // `let g = f` cases ARE fixed; #14 is the distinct transfer-out gap,
+        // which affects structs identically — see phase-12 blocker #14.)
         self.make_spanned(keyword_or_ident(text))
     }
 

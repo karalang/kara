@@ -1921,6 +1921,51 @@ impl<'ctx> super::Codegen<'ctx> {
                 return;
             }
         }
+        // Value-type enum binding (#9, 2026-06-11): when the source is a
+        // tracked non-shared enum whose active variant carries a heap
+        // (`String`/`Vec`) payload, the `let`-site `track_enum_var` queued an
+        // `EnumDrop` that frees that payload at scope exit. On a move-out
+        // (tail return, `let g = f`, by-value arg, match-arm tail) the consumer
+        // now owns the payload — without suppression both the source's
+        // `EnumDrop` and the consumer free the same buffer (use-after-free /
+        // double-free; surfaced by the self-hosting lexer's
+        // `let token = keyword_or_ident(text); make_spanned(token)`). Zero the
+        // `cap` word of EVERY variant's `VecOrString` field: the synthesized
+        // drop switch's `cap > 0` guard then no-ops for whichever variant is
+        // live at runtime. Zeroing dead variants' overlay words is harmless —
+        // they are never read (the tag-switch enters only the live BB), and the
+        // consumer already holds an independent value copy (this runs AFTER the
+        // move loads the aggregate, identical ordering to the struct arm below,
+        // which is why returning a struct-with-Vec already frees exactly once).
+        // Mirrors `suppress_destructured_enum_payload_cleanup_at`'s cap-zeroing,
+        // but for a whole-value move where the active variant is a runtime fact.
+        if let Some(type_name) = self.var_type_names.get(var_name).cloned() {
+            if let Some(layout) = self.enum_layouts.get(type_name.as_str()).cloned() {
+                if !layout.is_shared {
+                    let zero = i64_t.const_int(0, false);
+                    for (variant, kinds) in &layout.field_drop_kinds {
+                        let Some(offsets) = layout.field_word_offsets.get(variant) else {
+                            continue;
+                        };
+                        for (kind, (start_word, num_words)) in kinds.iter().zip(offsets.iter()) {
+                            if *kind != super::state::EnumDropKind::VecOrString {
+                                continue;
+                            }
+                            let cap_index = (start_word + num_words) as u32;
+                            if let Ok(cap_ptr) = self.builder.build_struct_gep(
+                                layout.llvm_type,
+                                slot.ptr,
+                                cap_index,
+                                "move.enum.cap.p",
+                            ) {
+                                let _ = self.builder.build_store(cap_ptr, zero);
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
+        }
         // Struct binding (slice γ, 2026-05-14): when the source is a
         // tracked non-shared struct, walk its fields and zero each
         // Vec/String field's `cap`. The struct's `StructDrop` cleanup

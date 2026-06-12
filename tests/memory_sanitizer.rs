@@ -2678,6 +2678,64 @@ fn main() {
             "compound_enum_drop_handles_mixed_width_variants",
         );
     }
+
+    #[test]
+    fn asan_let_bound_enum_heap_payload_moved_out_no_double_free() {
+        // #9 (phase-12 self-hosting): a bare `let`-bound enum whose active
+        // variant carries a heap payload, moved OUT of the binding by `return`
+        // (`fn make() { let e = E.A(..); e }`) or by `let g = f`, transfers
+        // ownership — the source's `EnumDrop` is suppressed (cap-zeroed) so
+        // only the consumer frees. Without the fix the source double-frees the
+        // String buffer (use-after-free → SIGTRAP / ASAN double-free). Covers
+        // BOTH fixed move paths plus the non-heap `N` variant and a loop (to
+        // surface a missing source-suppression OR a missing consumer free).
+        // NOTE: the by-value-call-arg-then-transfer path (passing the enum to
+        // a fn that re-wraps it into its return) is the SEPARATE, general
+        // blocker #14 (it double-frees for structs too) and is NOT covered.
+        assert_clean_asan_run(
+            r#"
+enum E { A(String), B(i64, String), N(i64) }
+fn make(tag: i64) -> E {
+    if tag == 0 {
+        let e = E.A("alpha".to_string());
+        e
+    } else if tag == 1 {
+        let e = E.B(7, "beta".to_string());
+        e
+    } else {
+        let e = E.N(99);
+        e
+    }
+}
+fn main() {
+    // return-of-let-bound-enum, consumed by an INLINE match (not re-transferred
+    // through another call — that transfer path is #14, not covered here).
+    let r = make(0);
+    match r { A(s) => println(s), B(n, s) => { println(n.to_string()); println(s); } N(x) => println(x.to_string()) }
+    let r1 = make(1);
+    match r1 { A(s) => println(s), B(n, s) => { println(n.to_string()); println(s); } N(x) => println(x.to_string()) }
+    let r2 = make(2);
+    match r2 { A(s) => println(s), B(n, s) => { println(n.to_string()); println(s); } N(x) => println(x.to_string()) }
+    // `let g = f` enum move — g is the sole owner, f's drop suppressed.
+    let f = make(0);
+    let g = f;
+    match g { A(s) => println(s), B(n, s) => { println(n.to_string()); println(s); } N(x) => println(x.to_string()) }
+    // loop: each iteration's return-bound enum frees exactly once.
+    let mut i = 0;
+    while i < 3 {
+        let x = make(0);
+        match x { A(s) => println(s), B(n, s) => { println(n.to_string()); println(s); } N(y) => println(y.to_string()) }
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "alpha", "7", "beta", "99", "alpha", "alpha", "alpha", "alpha",
+            ],
+            "let_bound_enum_heap_payload_moved_out_no_double_free",
+        );
+    }
+
     #[test]
     fn asan_vec_clone_repeat_stresses_scope_cleanup() {
         // Clone in a fresh scope across multiple loop iterations —
