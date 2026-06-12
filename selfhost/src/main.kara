@@ -1,23 +1,27 @@
-// main.kara — self-hosted Kāra lexer (phase-12 self-hosting, slice 1). WIP.
+// main.kara — self-hosted Kāra lexer (phase-12 self-hosting). WIP.
 //
-// MINIMAL SKELETON: validates the byte-indexed scan mechanics (Vec[u8] field,
-// self-mutating methods, the big `match` on a byte, struct return, enum-render)
-// before expanding to the full token set. Mirrors the Rust `src/lexer.rs`.
+// Byte-indexed scan mirroring the Rust `src/lexer.rs` near-line-for-line, so
+// the differential oracle (tests/selfhost_lexer.rs) reproduces the Rust
+// lexer's `(offset, length)` spans bit-for-bit.
 //
-// BLOCKED on the self-hosting blocker chain (see
-// docs/implementation_checklist/phase-12-self-hosting.md § Self-hosting-surfaced
-// blockers). #1 (enum-in-struct-field), #4 (index a Vec field through self),
-// #5 (String method on a field receiver), #6 (`struct Span` vs stdlib
-// `std.tracing` Span collision), and #7 (untyped int literal in an if-branch
-// not coerced to the branch's narrow type) are all FIXED — this now BUILDS,
-// RUNS via `karac build`, and lexes `(ab, 12)` correctly on a clean run
-// (OP( / IDENT ab / OP, / INT 12 / OP) / EOF, exact byte-offset spans).
-// The differential oracle (tests/selfhost_lexer.rs) is BUILT and PASSES (vs
-// the Rust src/lexer.rs) with auto-par ON. It immediately caught #8 (now
-// FIXED): an auto-par soundness bug where the analyzer dropped the `self`
-// receiver from its read/write collectors, so self-mutating statements
-// (skip_whitespace() then self.start = self.pos) were seen as independent and
-// raced (~13% of runs mis-spanned). NEXT: expand to the full token set.
+// PORT SLICES (each shipped with the oracle green):
+//   A — delimiters, punctuation, single/multi-char operators, keyword table.
+//       (THIS SLICE.) The structural, non-literal core.
+//   B — comments (line/block skip + `///`/`//!` doc tokens).      [pending]
+//   C — number forms (hex/bin/octal, float, `_` separators, suffixes). [pending]
+//   D — string/char/byte/multi-string/interpolated/c-string literals. [pending]
+//   E — raw idents (`r#x`), non-ASCII recovery, reserved string prefixes,
+//       reserved fragment-specifier namespace.                     [pending]
+//
+// Bootstrap-blocker chain (see docs/implementation_checklist/
+// phase-12-self-hosting.md § Self-hosting-surfaced blockers): #1, #4, #5, #6,
+// #7, #8 are all FIXED — the byte-indexed scan core (Vec[u8] field,
+// self-mutating methods, struct return, enum render) builds, runs via
+// `karac build`, and lexes correctly with auto-par ON, guarded by the oracle.
+// #9 (OPEN, codegen move-suppression): a let-bound bare user-enum with a heap
+// payload double-frees that payload when moved out — `identifier()` uses the
+// inline `make_spanned(keyword_or_ident(text))` form to sidestep it pending
+// the fix (serialized behind the concurrent bugs.md drop work).
 
 struct Span {
     line: i64,
@@ -27,13 +31,167 @@ struct Span {
 }
 
 enum Token {
-    LParen,
-    RParen,
+    // Keywords — declarations
+    Fn,
+    Struct,
+    Union,
+    Enum,
+    Trait,
+    Marker,
+    Impl,
+    Mod,
+    Use,
+    Import,
+    Const,
+    Type,
+    Distinct,
+    // Visibility
+    Pub,
+    Private,
+    // Control flow
+    If,
+    Else,
+    Match,
+    While,
+    For,
+    In,
+    Loop,
+    Return,
+    Break,
+    Continue,
+    Defer,
+    ErrDefer,
+    Try,
+    Asm,
+    GlobalAsm,
+    // Bindings
+    Let,
+    Mut,
+    // Logical (keyword forms)
+    And,
+    Or,
+    Not,
+    // Ownership
+    Own,
+    Ref,
+    Weak,
+    Lock,
+    Move,
+    // Effects
+    Effect,
+    Resource,
+    Verb,
+    Reads,
+    Writes,
+    Sends,
+    Receives,
+    Allocates,
+    Panics,
+    Blocks,
+    Suspends,
+    With,
+    Transparent,
+    Stable,
+    Seq,
+    Par,
+    Yield,
+    // Type system
+    As,
+    Where,
+    Dyn,
+    // Contracts
+    Requires,
+    Ensures,
+    Invariant,
+    // Safety
+    Unsafe,
+    Extern,
+    Shared,
+    // Layout
+    Layout,
+    Group,
+    // Literals (keyword)
+    True,
+    False,
+    // Other keywords
+    Alias,
+    Independent,
+    SelfValue,
+    SelfType,
+    Underscore,
+
+    // Delimiters
+    LeftParen,
+    RightParen,
+    LeftBrace,
+    RightBrace,
+    LeftBracket,
+    RightBracket,
+
+    // Punctuation
+    Colon,
+    ColonColon,
     Comma,
-    Ident(String),
-    Int(i64),
+    Semicolon,
+    Dot,
+    DotDot,
+    DotDotEq,
+    DotDotDot,
+    QuestionDot,
+    QuestionQuestion,
+    Arrow,
+    FatArrow,
+    Question,
+    Pound,
+    At,
+
+    // Arithmetic
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+
+    // Comparison
+    EqualEqual,
+    BangEqual,
+    LessThan,
+    LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+
+    // Logical (legacy symbol forms)
+    AmpAmp,
+    PipePipe,
+    Bang,
+
+    // Bitwise
+    Amp,
+    Pipe,
+    PipeArrow,
+    Caret,
+    Tilde,
+    LessLess,
+    GreaterGreater,
+
+    // Assignment
+    Equal,
+    PlusEqual,
+    MinusEqual,
+    StarEqual,
+    SlashEqual,
+    PercentEqual,
+    AmpEqual,
+    PipeEqual,
+    CaretEqual,
+    LessLessEqual,
+    GreaterGreaterEqual,
+
+    // Literals / special
+    Identifier(String),
+    Integer(i64),
     Eof,
-    Bad,
+    Error(String),
 }
 
 struct SpannedToken {
@@ -80,11 +238,40 @@ impl Lexer {
         }
     }
 
+    fn peek_next(ref self) -> u8 {
+        if self.current + 1 >= self.bytes.len() {
+            0
+        } else {
+            self.bytes[self.current + 1]
+        }
+    }
+
+    fn peek_at(ref self, offset: i64) -> u8 {
+        let pos = self.current + offset;
+        if pos >= self.bytes.len() {
+            0
+        } else {
+            self.bytes[pos]
+        }
+    }
+
     fn advance(mut ref self) -> u8 {
         let c = self.bytes[self.current];
         self.current = self.current + 1;
         self.column = self.column + 1;
         c
+    }
+
+    fn match_char(mut ref self, expected: u8) -> bool {
+        if self.current >= self.bytes.len() {
+            false
+        } else if self.bytes[self.current] != expected {
+            false
+        } else {
+            self.current = self.current + 1;
+            self.column = self.column + 1;
+            true
+        }
     }
 
     fn make_spanned(ref self, token: Token) -> SpannedToken {
@@ -125,16 +312,187 @@ impl Lexer {
 
         let c = self.advance();
         match c {
-            b'(' => self.make_spanned(Token.LParen),
-            b')' => self.make_spanned(Token.RParen),
+            // Delimiters
+            b'(' => self.make_spanned(Token.LeftParen),
+            b')' => self.make_spanned(Token.RightParen),
+            b'{' => self.make_spanned(Token.LeftBrace),
+            b'}' => self.make_spanned(Token.RightBrace),
+            b'[' => self.make_spanned(Token.LeftBracket),
+            b']' => self.make_spanned(Token.RightBracket),
+
+            // Single-byte punctuation
             b',' => self.make_spanned(Token.Comma),
+            b';' => self.make_spanned(Token.Semicolon),
+            b'#' => self.make_spanned(Token.Pound),
+            b'@' => self.make_spanned(Token.At),
+            b'~' => self.make_spanned(Token.Tilde),
+
+            // Colon / ColonColon
+            b':' => {
+                if self.match_char(b':') {
+                    self.make_spanned(Token.ColonColon)
+                } else {
+                    self.make_spanned(Token.Colon)
+                }
+            }
+
+            // Dot / DotDot / DotDotEq / DotDotDot
+            b'.' => {
+                if self.match_char(b'.') {
+                    if self.match_char(b'=') {
+                        self.make_spanned(Token.DotDotEq)
+                    } else if self.match_char(b'.') {
+                        self.make_spanned(Token.DotDotDot)
+                    } else {
+                        self.make_spanned(Token.DotDot)
+                    }
+                } else {
+                    self.make_spanned(Token.Dot)
+                }
+            }
+
+            // Question / QuestionDot / QuestionQuestion
+            b'?' => {
+                if self.match_char(b'.') {
+                    self.make_spanned(Token.QuestionDot)
+                } else if self.match_char(b'?') {
+                    self.make_spanned(Token.QuestionQuestion)
+                } else {
+                    self.make_spanned(Token.Question)
+                }
+            }
+
+            // Arithmetic
+            b'+' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.PlusEqual)
+                } else {
+                    self.make_spanned(Token.Plus)
+                }
+            }
+            b'*' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.StarEqual)
+                } else {
+                    self.make_spanned(Token.Star)
+                }
+            }
+            b'/' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.SlashEqual)
+                } else {
+                    self.make_spanned(Token.Slash)
+                }
+            }
+            b'%' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.PercentEqual)
+                } else {
+                    self.make_spanned(Token.Percent)
+                }
+            }
+
+            // Minus / MinusEqual / Arrow
+            b'-' => {
+                if self.match_char(b'>') {
+                    self.make_spanned(Token.Arrow)
+                } else if self.match_char(b'=') {
+                    self.make_spanned(Token.MinusEqual)
+                } else {
+                    self.make_spanned(Token.Minus)
+                }
+            }
+
+            // Equal / EqualEqual / FatArrow
+            b'=' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.EqualEqual)
+                } else if self.match_char(b'>') {
+                    self.make_spanned(Token.FatArrow)
+                } else {
+                    self.make_spanned(Token.Equal)
+                }
+            }
+
+            // Bang / BangEqual
+            b'!' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.BangEqual)
+                } else {
+                    self.make_spanned(Token.Bang)
+                }
+            }
+
+            // Less / LessEqual / LessLess / LessLessEqual
+            b'<' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.LessThanOrEqual)
+                } else if self.match_char(b'<') {
+                    if self.match_char(b'=') {
+                        self.make_spanned(Token.LessLessEqual)
+                    } else {
+                        self.make_spanned(Token.LessLess)
+                    }
+                } else {
+                    self.make_spanned(Token.LessThan)
+                }
+            }
+
+            // Greater / GreaterEqual / GreaterGreater / GreaterGreaterEqual
+            b'>' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.GreaterThanOrEqual)
+                } else if self.match_char(b'>') {
+                    if self.match_char(b'=') {
+                        self.make_spanned(Token.GreaterGreaterEqual)
+                    } else {
+                        self.make_spanned(Token.GreaterGreater)
+                    }
+                } else {
+                    self.make_spanned(Token.GreaterThan)
+                }
+            }
+
+            // Amp / AmpAmp / AmpEqual
+            b'&' => {
+                if self.match_char(b'&') {
+                    self.make_spanned(Token.AmpAmp)
+                } else if self.match_char(b'=') {
+                    self.make_spanned(Token.AmpEqual)
+                } else {
+                    self.make_spanned(Token.Amp)
+                }
+            }
+
+            // Pipe / PipePipe / PipeArrow / PipeEqual
+            b'|' => {
+                if self.match_char(b'|') {
+                    self.make_spanned(Token.PipePipe)
+                } else if self.match_char(b'>') {
+                    self.make_spanned(Token.PipeArrow)
+                } else if self.match_char(b'=') {
+                    self.make_spanned(Token.PipeEqual)
+                } else {
+                    self.make_spanned(Token.Pipe)
+                }
+            }
+
+            // Caret / CaretEqual
+            b'^' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.CaretEqual)
+                } else {
+                    self.make_spanned(Token.Caret)
+                }
+            }
+
             _ => {
                 if is_digit(c) {
                     self.number()
                 } else if is_alpha(c) {
                     self.identifier()
                 } else {
-                    self.make_spanned(Token.Bad)
+                    self.make_spanned(Token.Error("Unexpected character".to_string()))
                 }
             }
         }
@@ -146,8 +504,8 @@ impl Lexer {
         }
         let text = self.src.substring(self.start, self.current);
         match i64.parse(text) {
-            Some(v) => self.make_spanned(Token.Int(v)),
-            None => self.make_spanned(Token.Bad),
+            Some(v) => self.make_spanned(Token.Integer(v)),
+            None => self.make_spanned(Token.Error("Invalid integer literal".to_string())),
         }
     }
 
@@ -156,7 +514,110 @@ impl Lexer {
             self.advance();
         }
         let text = self.src.substring(self.start, self.current);
-        self.make_spanned(Token.Ident(text))
+        // Inline (no intermediate `let token = …`): self-hosting blocker #9 —
+        // a let-bound bare user-enum with a heap payload double-frees that
+        // payload when moved out, so `let token = keyword_or_ident(text);
+        // self.make_spanned(token)` corrupts the Identifier's String. The
+        // inline form (and the struct-wrapped `let t = next_token()` in
+        // lex_all, which is unaffected) sidesteps it. See phase-12 blocker #9.
+        self.make_spanned(keyword_or_ident(text))
+    }
+}
+
+// Keyword lookup mirroring `src/lexer.rs::identifier`'s `match text`. A
+// non-keyword falls through to `Token.Identifier`. (Reserved-word and
+// reserved-fragment-specifier diagnostics are slice E.)
+fn keyword_or_ident(text: String) -> Token {
+    match text {
+        // Declarations
+        "fn" => Token.Fn,
+        "struct" => Token.Struct,
+        "union" => Token.Union,
+        "enum" => Token.Enum,
+        "trait" => Token.Trait,
+        "marker" => Token.Marker,
+        "impl" => Token.Impl,
+        "mod" => Token.Mod,
+        "use" => Token.Use,
+        "import" => Token.Import,
+        "const" => Token.Const,
+        "type" => Token.Type,
+        "distinct" => Token.Distinct,
+        // Visibility
+        "pub" => Token.Pub,
+        "private" => Token.Private,
+        // Control flow
+        "if" => Token.If,
+        "else" => Token.Else,
+        "match" => Token.Match,
+        "while" => Token.While,
+        "for" => Token.For,
+        "in" => Token.In,
+        "loop" => Token.Loop,
+        "return" => Token.Return,
+        "break" => Token.Break,
+        "continue" => Token.Continue,
+        "defer" => Token.Defer,
+        "errdefer" => Token.ErrDefer,
+        "try" => Token.Try,
+        "asm" => Token.Asm,
+        "global_asm" => Token.GlobalAsm,
+        // Bindings
+        "let" => Token.Let,
+        "mut" => Token.Mut,
+        // Logical
+        "and" => Token.And,
+        "or" => Token.Or,
+        "not" => Token.Not,
+        // Ownership
+        "own" => Token.Own,
+        "ref" => Token.Ref,
+        "weak" => Token.Weak,
+        "lock" => Token.Lock,
+        "move" => Token.Move,
+        // Effects
+        "effect" => Token.Effect,
+        "resource" => Token.Resource,
+        "verb" => Token.Verb,
+        "reads" => Token.Reads,
+        "writes" => Token.Writes,
+        "sends" => Token.Sends,
+        "receives" => Token.Receives,
+        "allocates" => Token.Allocates,
+        "panics" => Token.Panics,
+        "blocks" => Token.Blocks,
+        "suspends" => Token.Suspends,
+        "with" => Token.With,
+        "transparent" => Token.Transparent,
+        "stable" => Token.Stable,
+        "seq" => Token.Seq,
+        "par" => Token.Par,
+        "yield" => Token.Yield,
+        // Type system
+        "as" => Token.As,
+        "where" => Token.Where,
+        "dyn" => Token.Dyn,
+        // Contracts
+        "requires" => Token.Requires,
+        "ensures" => Token.Ensures,
+        "invariant" => Token.Invariant,
+        // Safety
+        "unsafe" => Token.Unsafe,
+        "extern" => Token.Extern,
+        "shared" => Token.Shared,
+        // Layout
+        "layout" => Token.Layout,
+        "group" => Token.Group,
+        // Literals
+        "true" => Token.True,
+        "false" => Token.False,
+        // Other
+        "alias" => Token.Alias,
+        "independent" => Token.Independent,
+        "self" => Token.SelfValue,
+        "Self" => Token.SelfType,
+        "_" => Token.Underscore,
+        _ => Token.Identifier(text),
     }
 }
 
@@ -169,9 +630,10 @@ fn is_digit(c: u8) -> bool {
 }
 
 // Canonical one-line render of a token: `offset length line column KIND payload`.
-// Takes the token by value so match arms can bind non-Copy payloads (String).
-// Avoids f-strings around match-bound vars (codegen f-string/match-binding gap);
-// uses push_str + to_string instead.
+// KIND is `OP`/`KW`/`IDENT`/`INT`/`EOF`/`ERROR`; the differential oracle's
+// `render_rust` reproduces this exactly. Takes the token by value so match arms
+// can bind non-Copy payloads (String). Avoids f-strings around match-bound vars
+// (codegen f-string/match-binding gap); uses push_str + to_string instead.
 fn render(tok: SpannedToken) -> String {
     let off = tok.span.offset;
     let len = tok.span.length;
@@ -180,19 +642,147 @@ fn render(tok: SpannedToken) -> String {
     let mut line = f"{off} {len} {ln} {col} ";
     let tk = tok.token;
     match tk {
-        LParen => line.push_str("OP ("),
-        RParen => line.push_str("OP )"),
+        // Keywords
+        Fn => line.push_str("KW fn"),
+        Struct => line.push_str("KW struct"),
+        Union => line.push_str("KW union"),
+        Enum => line.push_str("KW enum"),
+        Trait => line.push_str("KW trait"),
+        Marker => line.push_str("KW marker"),
+        Impl => line.push_str("KW impl"),
+        Mod => line.push_str("KW mod"),
+        Use => line.push_str("KW use"),
+        Import => line.push_str("KW import"),
+        Const => line.push_str("KW const"),
+        Type => line.push_str("KW type"),
+        Distinct => line.push_str("KW distinct"),
+        Pub => line.push_str("KW pub"),
+        Private => line.push_str("KW private"),
+        If => line.push_str("KW if"),
+        Else => line.push_str("KW else"),
+        Match => line.push_str("KW match"),
+        While => line.push_str("KW while"),
+        For => line.push_str("KW for"),
+        In => line.push_str("KW in"),
+        Loop => line.push_str("KW loop"),
+        Return => line.push_str("KW return"),
+        Break => line.push_str("KW break"),
+        Continue => line.push_str("KW continue"),
+        Defer => line.push_str("KW defer"),
+        ErrDefer => line.push_str("KW errdefer"),
+        Try => line.push_str("KW try"),
+        Asm => line.push_str("KW asm"),
+        GlobalAsm => line.push_str("KW global_asm"),
+        Let => line.push_str("KW let"),
+        Mut => line.push_str("KW mut"),
+        And => line.push_str("KW and"),
+        Or => line.push_str("KW or"),
+        Not => line.push_str("KW not"),
+        Own => line.push_str("KW own"),
+        Ref => line.push_str("KW ref"),
+        Weak => line.push_str("KW weak"),
+        Lock => line.push_str("KW lock"),
+        Move => line.push_str("KW move"),
+        Effect => line.push_str("KW effect"),
+        Resource => line.push_str("KW resource"),
+        Verb => line.push_str("KW verb"),
+        Reads => line.push_str("KW reads"),
+        Writes => line.push_str("KW writes"),
+        Sends => line.push_str("KW sends"),
+        Receives => line.push_str("KW receives"),
+        Allocates => line.push_str("KW allocates"),
+        Panics => line.push_str("KW panics"),
+        Blocks => line.push_str("KW blocks"),
+        Suspends => line.push_str("KW suspends"),
+        With => line.push_str("KW with"),
+        Transparent => line.push_str("KW transparent"),
+        Stable => line.push_str("KW stable"),
+        Seq => line.push_str("KW seq"),
+        Par => line.push_str("KW par"),
+        Yield => line.push_str("KW yield"),
+        As => line.push_str("KW as"),
+        Where => line.push_str("KW where"),
+        Dyn => line.push_str("KW dyn"),
+        Requires => line.push_str("KW requires"),
+        Ensures => line.push_str("KW ensures"),
+        Invariant => line.push_str("KW invariant"),
+        Unsafe => line.push_str("KW unsafe"),
+        Extern => line.push_str("KW extern"),
+        Shared => line.push_str("KW shared"),
+        Layout => line.push_str("KW layout"),
+        Group => line.push_str("KW group"),
+        True => line.push_str("KW true"),
+        False => line.push_str("KW false"),
+        Alias => line.push_str("KW alias"),
+        Independent => line.push_str("KW independent"),
+        SelfValue => line.push_str("KW self"),
+        SelfType => line.push_str("KW Self"),
+        Underscore => line.push_str("OP _"),
+        // Delimiters / punctuation / operators
+        LeftParen => line.push_str("OP ("),
+        RightParen => line.push_str("OP )"),
+        LeftBrace => line.push_str("OP {"),
+        RightBrace => line.push_str("OP }"),
+        LeftBracket => line.push_str("OP ["),
+        RightBracket => line.push_str("OP ]"),
+        Colon => line.push_str("OP :"),
+        ColonColon => line.push_str("OP ::"),
         Comma => line.push_str("OP ,"),
-        Ident(name) => {
+        Semicolon => line.push_str("OP ;"),
+        Dot => line.push_str("OP ."),
+        DotDot => line.push_str("OP .."),
+        DotDotEq => line.push_str("OP ..="),
+        DotDotDot => line.push_str("OP ..."),
+        QuestionDot => line.push_str("OP ?."),
+        QuestionQuestion => line.push_str("OP ??"),
+        Arrow => line.push_str("OP ->"),
+        FatArrow => line.push_str("OP =>"),
+        Question => line.push_str("OP ?"),
+        Pound => line.push_str("OP #"),
+        At => line.push_str("OP @"),
+        Plus => line.push_str("OP +"),
+        Minus => line.push_str("OP -"),
+        Star => line.push_str("OP *"),
+        Slash => line.push_str("OP /"),
+        Percent => line.push_str("OP %"),
+        EqualEqual => line.push_str("OP =="),
+        BangEqual => line.push_str("OP !="),
+        LessThan => line.push_str("OP <"),
+        LessThanOrEqual => line.push_str("OP <="),
+        GreaterThan => line.push_str("OP >"),
+        GreaterThanOrEqual => line.push_str("OP >="),
+        AmpAmp => line.push_str("OP &&"),
+        PipePipe => line.push_str("OP ||"),
+        Bang => line.push_str("OP !"),
+        Amp => line.push_str("OP &"),
+        Pipe => line.push_str("OP |"),
+        PipeArrow => line.push_str("OP |>"),
+        Caret => line.push_str("OP ^"),
+        Tilde => line.push_str("OP ~"),
+        LessLess => line.push_str("OP <<"),
+        GreaterGreater => line.push_str("OP >>"),
+        Equal => line.push_str("OP ="),
+        PlusEqual => line.push_str("OP +="),
+        MinusEqual => line.push_str("OP -="),
+        StarEqual => line.push_str("OP *="),
+        SlashEqual => line.push_str("OP /="),
+        PercentEqual => line.push_str("OP %="),
+        AmpEqual => line.push_str("OP &="),
+        PipeEqual => line.push_str("OP |="),
+        CaretEqual => line.push_str("OP ^="),
+        LessLessEqual => line.push_str("OP <<="),
+        GreaterGreaterEqual => line.push_str("OP >>="),
+        // Literals / special
+        Identifier(name) => {
             line.push_str("IDENT ");
             line.push_str(name);
         }
-        Int(v) => {
+        Integer(v) => {
             line.push_str("INT ");
             line.push_str(v.to_string());
         }
         Eof => line.push_str("EOF"),
-        Bad => line.push_str("ERROR"),
+        Error(msg) => line.push_str("ERROR"),
     }
     line
 }
@@ -215,7 +805,7 @@ fn lex_all(src: String) -> Vec[SpannedToken] {
 }
 
 fn main() {
-    let toks = lex_all("(ab, 12)");
+    let toks = lex_all("fn add(a: i64, b: i64) -> i64 { a + b }");
     for t in toks {
         println(render(t));
     }

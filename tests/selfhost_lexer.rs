@@ -7,11 +7,16 @@
 //! identically. This is the bootstrap oracle: as the port grows, any
 //! divergence from the Rust lexer fails here.
 //!
-//! Restricted to the skeleton's current token set: left/right paren, comma,
-//! identifiers, integers, whitespace, EOF. Inputs are single-line (so the
-//! reported line is always one) until both the port and the corpus grow
-//! newlines. Both lexers emit a trailing EOF, so the full streams (including
-//! EOF) are compared.
+//! Covers the port's slice-A token set: all delimiters, punctuation, single-
+//! and multi-char operators (maximal-munch forms like `<<=` / `..=` / `?.`),
+//! the full keyword table, identifiers, decimal integers, whitespace, and EOF.
+//! Deferred to later slices (and kept OUT of the corpus): comments, string /
+//! char / byte / interpolated / c-string literals, non-decimal and suffixed /
+//! float numbers, raw identifiers (`r#x`), non-ASCII, and the reserved-word /
+//! reserved-prefix error forms. Inputs are single-line (so the reported line
+//! is always one) until both the port and the corpus grow newlines. Both
+//! lexers emit a trailing EOF, so the full streams (including EOF) are
+//! compared.
 //!
 //! The corpus is lexed back-to-back with NO printed separator between inputs:
 //! a bare string-literal `println` was observed to interleave out of order
@@ -36,9 +41,13 @@
 use karac::token::{SpannedToken, Token};
 use std::path::PathBuf;
 
-/// Inputs exercising only the skeleton's token set. Plain ASCII, no quotes /
-/// backslashes / newlines (so they embed verbatim as Kāra string literals).
+/// Inputs exercising the slice-A token set. Plain ASCII, no quotes /
+/// backslashes / newlines (so they embed verbatim as Kāra string literals),
+/// and deliberately free of comments, string/char prefixes, and non-decimal
+/// numbers (those produce tokens later slices model). Operator lines space the
+/// forms apart so each is its own maximal-munch token.
 const CORPUS: &[&str] = &[
+    // Original skeleton inputs (regression).
     "(ab, 12)",
     "foo(1, 2, 3)",
     "  spaced   out  ",
@@ -49,25 +58,189 @@ const CORPUS: &[&str] = &[
     "1000000",
     ",,,",
     "trailing   ",
+    // Realistic code shapes.
+    "fn add(a: i64, b: i64) -> i64 { a + b }",
+    "let mut x = 1 + 2 * 3 - 4 / 5 % 6",
+    "if a == b and c != d or not e { return x }",
+    "for item in items { yield item }",
+    "match v { _ => x }",
+    "struct Foo { bar: Baz }",
+    "pub fn f() where T: Bound",
+    "arr[idx] = val",
+    "data |> transform |> collect",
+    "obj?.field ?? fallback",
+    "Self::method path::sep",
+    "true false self Self",
+    // Operator munch coverage.
+    "x <= y >= z < w > v",
+    "a && b || !c",
+    "p & q | r ^ s << t >> u ~ n",
+    "x += 1 ; y -= 2 ; z *= 3 ; w /= 4 ; v %= 5",
+    "a &= b ; c |= d ; e ^= f ; g <<= h ; i >>= j",
+    "lo 0 .. 10 ..= 20 ... 30",
+    "p -> q => r # s @ t",
+    // Keyword coverage (every keyword the lexer table emits).
+    "fn struct union enum trait marker impl mod use import const type distinct",
+    "pub private if else match while for in loop return break continue",
+    "defer errdefer try asm global_asm let mut and or not",
+    "own ref weak lock move effect resource verb reads writes sends receives",
+    "allocates panics blocks suspends with transparent stable seq par yield",
+    "as where dyn requires ensures invariant unsafe extern shared layout group",
+    "true false alias independent self Self",
 ];
 
 /// Render one Rust `SpannedToken` in the Kāra lexer's canonical one-line
 /// format: `offset length line column KIND payload` (see `render` in
-/// `selfhost/src/main.kara`).
+/// `selfhost/src/main.kara`). The KIND/lexeme strings here must match the
+/// Kāra `render` arms byte-for-byte — that equality is the whole oracle.
 fn render_rust(t: &SpannedToken) -> String {
     let s = &t.span;
     let body = match &t.token {
-        Token::LeftParen => "OP (".to_string(),
-        Token::RightParen => "OP )".to_string(),
-        Token::Comma => "OP ,".to_string(),
-        Token::Identifier { name, .. } => format!("IDENT {name}"),
-        Token::Integer(v, _) => format!("INT {v}"),
-        Token::EOF => "EOF".to_string(),
+        // Keywords → `KW <lexeme>`.
+        Token::Fn => "KW fn",
+        Token::Struct => "KW struct",
+        Token::Union => "KW union",
+        Token::Enum => "KW enum",
+        Token::Trait => "KW trait",
+        Token::Marker => "KW marker",
+        Token::Impl => "KW impl",
+        Token::Mod => "KW mod",
+        Token::Use => "KW use",
+        Token::Import => "KW import",
+        Token::Const => "KW const",
+        Token::Type => "KW type",
+        Token::Distinct => "KW distinct",
+        Token::Pub => "KW pub",
+        Token::Private => "KW private",
+        Token::If => "KW if",
+        Token::Else => "KW else",
+        Token::Match => "KW match",
+        Token::While => "KW while",
+        Token::For => "KW for",
+        Token::In => "KW in",
+        Token::Loop => "KW loop",
+        Token::Return => "KW return",
+        Token::Break => "KW break",
+        Token::Continue => "KW continue",
+        Token::Defer => "KW defer",
+        Token::ErrDefer => "KW errdefer",
+        Token::Try => "KW try",
+        Token::Asm => "KW asm",
+        Token::GlobalAsm => "KW global_asm",
+        Token::Let => "KW let",
+        Token::Mut => "KW mut",
+        Token::And => "KW and",
+        Token::Or => "KW or",
+        Token::Not => "KW not",
+        Token::Own => "KW own",
+        Token::Ref => "KW ref",
+        Token::Weak => "KW weak",
+        Token::Lock => "KW lock",
+        Token::Move => "KW move",
+        Token::Effect => "KW effect",
+        Token::Resource => "KW resource",
+        Token::Verb => "KW verb",
+        Token::Reads => "KW reads",
+        Token::Writes => "KW writes",
+        Token::Sends => "KW sends",
+        Token::Receives => "KW receives",
+        Token::Allocates => "KW allocates",
+        Token::Panics => "KW panics",
+        Token::Blocks => "KW blocks",
+        Token::Suspends => "KW suspends",
+        Token::With => "KW with",
+        Token::Transparent => "KW transparent",
+        Token::Stable => "KW stable",
+        Token::Seq => "KW seq",
+        Token::Par => "KW par",
+        Token::Yield => "KW yield",
+        Token::As => "KW as",
+        Token::Where => "KW where",
+        Token::Dyn => "KW dyn",
+        Token::Requires => "KW requires",
+        Token::Ensures => "KW ensures",
+        Token::Invariant => "KW invariant",
+        Token::Unsafe => "KW unsafe",
+        Token::Extern => "KW extern",
+        Token::Shared => "KW shared",
+        Token::Layout => "KW layout",
+        Token::Group => "KW group",
+        Token::True => "KW true",
+        Token::False => "KW false",
+        Token::Alias => "KW alias",
+        Token::Independent => "KW independent",
+        Token::SelfValue => "KW self",
+        Token::SelfType => "KW Self",
+        Token::Underscore => "OP _",
+        // Delimiters / punctuation / operators → `OP <lexeme>`.
+        Token::LeftParen => "OP (",
+        Token::RightParen => "OP )",
+        Token::LeftBrace => "OP {",
+        Token::RightBrace => "OP }",
+        Token::LeftBracket => "OP [",
+        Token::RightBracket => "OP ]",
+        Token::Colon => "OP :",
+        Token::ColonColon => "OP ::",
+        Token::Comma => "OP ,",
+        Token::Semicolon => "OP ;",
+        Token::Dot => "OP .",
+        Token::DotDot => "OP ..",
+        Token::DotDotEq => "OP ..=",
+        Token::DotDotDot => "OP ...",
+        Token::QuestionDot => "OP ?.",
+        Token::QuestionQuestion => "OP ??",
+        Token::Arrow => "OP ->",
+        Token::FatArrow => "OP =>",
+        Token::Question => "OP ?",
+        Token::Pound => "OP #",
+        Token::At => "OP @",
+        Token::Plus => "OP +",
+        Token::Minus => "OP -",
+        Token::Star => "OP *",
+        Token::Slash => "OP /",
+        Token::Percent => "OP %",
+        Token::EqualEqual => "OP ==",
+        Token::BangEqual => "OP !=",
+        Token::LessThan => "OP <",
+        Token::LessThanOrEqual => "OP <=",
+        Token::GreaterThan => "OP >",
+        Token::GreaterThanOrEqual => "OP >=",
+        Token::AmpAmp => "OP &&",
+        Token::PipePipe => "OP ||",
+        Token::Bang => "OP !",
+        Token::Amp => "OP &",
+        Token::Pipe => "OP |",
+        Token::PipeArrow => "OP |>",
+        Token::Caret => "OP ^",
+        Token::Tilde => "OP ~",
+        Token::LessLess => "OP <<",
+        Token::GreaterGreater => "OP >>",
+        Token::Equal => "OP =",
+        Token::PlusEqual => "OP +=",
+        Token::MinusEqual => "OP -=",
+        Token::StarEqual => "OP *=",
+        Token::SlashEqual => "OP /=",
+        Token::PercentEqual => "OP %=",
+        Token::AmpEqual => "OP &=",
+        Token::PipeEqual => "OP |=",
+        Token::CaretEqual => "OP ^=",
+        Token::LessLessEqual => "OP <<=",
+        Token::GreaterGreaterEqual => "OP >>=",
+        // Literals / special.
+        Token::Identifier { name, .. } => return body_with(s, &format!("IDENT {name}")),
+        Token::Integer(v, _) => return body_with(s, &format!("INT {v}")),
+        Token::EOF => "EOF",
         other => panic!(
-            "corpus input produced a token the lexer skeleton does not model \
-             ({other:?}); keep the corpus within `( ) , ident int ws`"
+            "corpus input produced a token the slice-A lexer does not model \
+             ({other:?}); keep the corpus within delimiters / punctuation / \
+             operators / keywords / ident / decimal-int / ws"
         ),
     };
+    body_with(s, body)
+}
+
+/// Prefix the span coordinates onto a rendered token body.
+fn body_with(s: &karac::token::Span, body: &str) -> String {
     format!("{} {} {} {} {}", s.offset, s.length, s.line, s.column, body)
 }
 
