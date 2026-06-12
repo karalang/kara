@@ -147,6 +147,43 @@ const CORPUS: &[&str] = &[
     r#"c"\x41\x42\x7e""#,
     r#"c"with \"quote\"""#,
     r#"let p = f"{a}" + c"x""#,
+    // Slice E: raw idents, reserved string prefixes / `#`-guarded strings,
+    // reserved future keywords, the `expr_<year>` fragment-specifier namespace,
+    // and single-codepoint non-ASCII recovery. Error tokens render as bare
+    // `ERROR`, so these assert SPAN parity (offset/length/line/column).
+    // Raw identifiers `r#NAME` — payload is bare NAME, span covers `r#NAME`.
+    "r#match r#type r#fn",
+    "r#x + r#y",
+    "let r#struct = 1",
+    // Structural markers are not reservable → Error.
+    "r#self r#mut r#ref",
+    // Reserved single-letter string prefixes (`x"…"`, `_"…"`, `r"…"`); `f`/`c`
+    // are the only recognized ones (covered in slice D-cont).
+    "x\"abc\"",
+    "_\"y\"",
+    "r\"raw\"",
+    "z\"esc \\\" end\"",
+    "a + b\"\" + c",
+    // Reserved `#`-guarded strings (Rust-style raw strings); `#[attr]` stays Pound.
+    "#\"raw\"#",
+    "##\"x\"##",
+    "#\"unterminated",
+    "#[derive]",
+    "a #\"s\"# b",
+    // Reserved future keywords (numeric types + reserved-for-future words).
+    "f16 bf16",
+    "gen async await comptime pure box",
+    "become do final override priv typeof virtual",
+    // Reserved `expr_<year>` fragment-specifier namespace vs ordinary idents.
+    "expr_2026 expr_2050 expr_2099 expr_2020",
+    "expr_2019 expr_2100 expr_abcd expr_99 express",
+    "let expr_2030 = 1",
+    // Single-codepoint non-ASCII recovery (each codepoint isolated by ASCII).
+    "€",
+    "π",
+    "x € y",
+    "1 + π",
+    "λ + 1",
 ];
 
 /// Render one Rust `SpannedToken` in the Kāra lexer's canonical one-line
@@ -335,12 +372,17 @@ fn render_rust(t: &SpannedToken) -> String {
         Token::ByteLiteral(b) => return body_with(s, &format!("BYTE {b}")),
         Token::DocComment(t) => return body_with(s, &format!("DOC {t}")),
         Token::ModuleDocComment(t) => return body_with(s, &format!("MODDOC {t}")),
+        // Error tokens (slice E: raw-ident structural markers, reserved string
+        // prefixes / `#`-guarded strings, reserved future keywords, reserved
+        // fragment-specifier idents, non-ASCII recovery). The Kāra `render`
+        // discards the message and emits a bare `ERROR`, so only the SPAN is
+        // compared — each error path must consume the identical byte extent.
+        Token::Error(_) => "ERROR",
         Token::EOF => "EOF",
-        other => panic!(
-            "corpus input produced a token the slice-A lexer does not model \
-             ({other:?}); keep the corpus within delimiters / punctuation / \
-             operators / keywords / ident / decimal-int / ws"
-        ),
+        // The match is now exhaustive over every Token the seed lexer emits — the
+        // port models the full token set (slices A–E). A new seed variant fails
+        // to compile here until rendered, which is a stronger guarantee than the
+        // former runtime catch-all panic.
     };
     body_with(s, body)
 }

@@ -10,10 +10,17 @@
 //   B — comments (line/block skip + `///`/`//!` doc tokens).        [DONE]
 //   C — number forms (hex/bin/octal, float, `_` separators, suffixes). [DONE]
 //   D — string / multi-string / char / byte literals (+ simple escapes). [DONE]
-//   D-cont — f-string interpolation (`f"…{e}…"`) + c-strings (`c"…"`).   [THIS SLICE]
+//   D-cont — f-string interpolation (`f"…{e}…"`) + c-strings (`c"…"`).   [DONE]
 //       `\u{…}` / `\0` escapes still deferred (gated on a codepoint→char builder).
-//   E — raw idents (`r#x`), non-ASCII recovery, reserved string prefixes,
-//       reserved fragment-specifier namespace.                     [pending]
+//   E — raw idents (`r#x`), reserved string prefixes (`x"…"`, `_"…"`),
+//       reserved `#`-guarded strings (`#"…"#`), reserved future keywords
+//       (`f16`/`gen`/…), the reserved `expr_<year>` fragment-specifier
+//       namespace, and single-codepoint non-ASCII recovery.        [THIS SLICE]
+//       The multi-codepoint non-ASCII *identifier* recovery (consuming a run
+//       of Unicode letters into one error) is deferred: it needs a Unicode
+//       `char.is_alphabetic` classifier in karac (tracked blocker #13). The
+//       single-codepoint "unexpected character" path is exact for any isolated
+//       non-ASCII byte sequence not immediately followed by an identifier char.
 //
 // Bootstrap-blocker chain (see docs/implementation_checklist/
 // phase-12-self-hosting.md § Self-hosting-surfaced blockers): #1, #4, #5, #6,
@@ -390,7 +397,16 @@ impl Lexer {
             // Single-byte punctuation
             b',' => self.make_spanned(Token.Comma),
             b';' => self.make_spanned(Token.Semicolon),
-            b'#' => self.make_spanned(Token.Pound),
+            // `#` is `Token.Pound` for the `#[attr]` form; a `#` followed by
+            // another `#` or a `"` opens the reserved `#`-guarded string syntax
+            // (Rust-style raw strings), which is reserved at v1.
+            b'#' => {
+                if self.peek() == b'#' or self.peek() == b'"' {
+                    self.reserved_hash_guarded_string()
+                } else {
+                    self.make_spanned(Token.Pound)
+                }
+            }
             b'@' => self.make_spanned(Token.At),
             b'~' => self.make_spanned(Token.Tilde),
 
@@ -594,8 +610,9 @@ impl Lexer {
 
             _ => {
                 // `b'A'` byte literal — checked before the identifier path since
-                // `b` is also an identifier start. (`f"…"` / `c"…"` prefixes are
-                // deferred to a later slice, so `f`/`c` fall through to idents.)
+                // `b` is also an identifier start. `f"…"` / `c"…"` are the
+                // recognized string prefixes; every OTHER single-letter prefix
+                // immediately before `"` is reserved (handled lower down).
                 if c == b'b' and self.peek() == b'\'' {
                     self.advance();
                     self.byte_char_literal()
@@ -605,10 +622,22 @@ impl Lexer {
                 } else if c == b'c' and self.peek() == b'"' {
                     self.advance();
                     self.c_string()
+                } else if c == b'r' and self.peek() == b'#' and is_alpha(self.peek_next()) {
+                    // Raw-identifier escape `r#NAME`. `r"` and `r#"…"#` are
+                    // reserved-string forms caught elsewhere; only `r#` + an
+                    // identifier-start byte enters this path.
+                    self.raw_identifier()
+                } else if (c.is_ascii_alphabetic() or c == b'_') and self.peek() == b'"' {
+                    // Reserved single-letter string prefix (`x"…"`, `_"…"`, `r"…"`).
+                    // `f"…"`/`c"…"` matched above; everything else is reserved.
+                    self.reserved_prefix_string()
                 } else if is_digit(c) {
                     self.number()
                 } else if is_alpha(c) {
                     self.identifier()
+                } else if c >= 0x80 {
+                    // Non-ASCII lead byte: emit one codepoint-spanning error.
+                    self.non_ascii_at_lead(c)
                 } else {
                     self.make_spanned(Token.Error("Unexpected character".to_string()))
                 }
@@ -1101,6 +1130,111 @@ impl Lexer {
         // lex_all, which is unaffected) sidesteps it. See phase-12 blocker #9.
         self.make_spanned(keyword_or_ident(text))
     }
+
+    // Raw-identifier escape `r#NAME` (design.md § Raw Identifiers). On entry the
+    // leading `r` is consumed and `peek()` is `#`. The keyword table is bypassed
+    // so reserved-for-future-use words flow through as ordinary identifiers; the
+    // span covers `r#NAME` but the payload is the bare `NAME`. Structural markers
+    // (`self`, `mut`, `ref`, …) are not reservable and are rejected.
+    fn raw_identifier(mut ref self) -> SpannedToken {
+        self.advance(); // consume `#`
+        let name_start = self.current;
+        while is_alpha(self.peek()) or is_digit(self.peek()) {
+            self.advance();
+        }
+        let name = self.src.substring(name_start, self.current);
+        if is_structural_marker(name) {
+            self.make_spanned(Token.Error("structural marker is not reservable".to_string()))
+        } else {
+            self.make_spanned(Token.Identifier(name))
+        }
+    }
+
+    // Reserved single-letter string-prefix syntax. The prefix letter (and, for
+    // `_"…"`, the underscore) is already consumed; `peek()` is the opening `"`.
+    // We consume the whole string body — handling `\`-escapes exactly like the
+    // regular string lexer — so the error token spans the entire construct, not
+    // just the prefix. `f"…"`/`c"…"` have dedicated arms and never reach here.
+    fn reserved_prefix_string(mut ref self) -> SpannedToken {
+        self.advance(); // consume opening `"`
+        while self.peek() != b'"' and not self.is_at_end() {
+            if self.peek() == b'\n' {
+                self.line = self.line + 1;
+                self.column = 0;
+            }
+            if self.peek() == b'\\' {
+                self.advance();
+                if not self.is_at_end() {
+                    self.advance();
+                }
+            } else {
+                self.advance();
+            }
+        }
+        if self.peek() == b'"' {
+            self.advance(); // closing quote
+        }
+        self.make_spanned(Token.Error("reserved string prefix".to_string()))
+    }
+
+    // Reserved `#`-guarded string syntax (Rust-style raw strings: `#"…"#`,
+    // `##"…"##`, …). The first `#` was consumed by the dispatch; count the
+    // remaining leading `#`s, then — if a `"` opens — scan to a matching `"`
+    // followed by the SAME number of `#`s (or to newline / EOF for recovery).
+    fn reserved_hash_guarded_string(mut ref self) -> SpannedToken {
+        let mut leading_hashes = 1; // the `#` consumed by the dispatch
+        while self.peek() == b'#' {
+            self.advance();
+            leading_hashes = leading_hashes + 1;
+        }
+        let consumed_string = self.peek() == b'"';
+        if consumed_string {
+            self.advance(); // opening `"`
+            loop {
+                if self.is_at_end() or self.peek() == b'\n' {
+                    break;
+                }
+                if self.peek() == b'"' {
+                    self.advance();
+                    let mut trailing = 0;
+                    while self.peek() == b'#' and trailing < leading_hashes {
+                        self.advance();
+                        trailing = trailing + 1;
+                    }
+                    if trailing == leading_hashes {
+                        break;
+                    }
+                } else if self.peek() == b'\\' {
+                    self.advance();
+                    if not self.is_at_end() {
+                        self.advance();
+                    }
+                } else {
+                    self.advance();
+                }
+            }
+        }
+        self.make_spanned(Token.Error("reserved hash-guarded string".to_string()))
+    }
+
+    // Non-ASCII lead byte (>= 0x80): consume the rest of the UTF-8 codepoint
+    // (advancing `current` by the byte length but NOT `column` — the lead's
+    // advance() already counted one codepoint) and emit a single "unexpected
+    // character" error spanning exactly that codepoint. The multi-codepoint
+    // non-ASCII *identifier* recovery (a run of Unicode letters folded into one
+    // error) is deferred pending a Unicode `char.is_alphabetic` in karac
+    // (blocker #13); for any isolated non-ASCII byte sequence this is exact.
+    fn non_ascii_at_lead(mut ref self, lead: u8) -> SpannedToken {
+        let len = utf8_byte_len(lead);
+        let mut i = 1;
+        while i < len {
+            if self.current < self.bytes.len() {
+                self.current = self.current + 1;
+            }
+            i = i + 1;
+        }
+        self.make_spanned(Token.Error("unexpected non-ASCII character".to_string()))
+    }
 }
 
 // Keyword lookup mirroring `src/lexer.rs::identifier`'s `match text`. A
@@ -1196,7 +1330,92 @@ fn keyword_or_ident(text: String) -> Token {
         "self" => Token.SelfValue,
         "Self" => Token.SelfType,
         "_" => Token.Underscore,
-        _ => Token.Identifier(text),
+        // Reserved future numeric type keywords — not available until Phase 7.
+        "f16" => Token.Error("'f16' is a reserved future numeric type".to_string()),
+        "bf16" => Token.Error("'bf16' is a reserved future numeric type".to_string()),
+        // Reserved-for-future-use keywords (design.md § Reserved-for-Future-Use).
+        "gen" => Token.Error("reserved keyword".to_string()),
+        "become" => Token.Error("reserved keyword".to_string()),
+        "do" => Token.Error("reserved keyword".to_string()),
+        "final" => Token.Error("reserved keyword".to_string()),
+        "override" => Token.Error("reserved keyword".to_string()),
+        "priv" => Token.Error("reserved keyword".to_string()),
+        "typeof" => Token.Error("reserved keyword".to_string()),
+        "virtual" => Token.Error("reserved keyword".to_string()),
+        "async" => Token.Error("reserved keyword".to_string()),
+        "await" => Token.Error("reserved keyword".to_string()),
+        "comptime" => Token.Error("reserved keyword".to_string()),
+        "pure" => Token.Error("reserved keyword".to_string()),
+        "box" => Token.Error("reserved keyword".to_string()),
+        _ => {
+            // Reserved `expr_<year>` fragment-specifier namespace; everything
+            // else is an ordinary identifier. (`r#expr_2026` bypasses this via
+            // raw_identifier, matching the Rust seed's structural exemption.)
+            if is_reserved_fragment_specifier_namespace(text) {
+                Token.Error("reserved fragment-specifier identifier".to_string())
+            } else {
+                Token.Identifier(text)
+            }
+        }
+    }
+}
+
+// Structural markers that `r#` cannot escape (they are not reservable keywords).
+// Mirrors the `matches!` guard in `src/lexer.rs::raw_identifier`.
+fn is_structural_marker(name: String) -> bool {
+    match name {
+        "self" => true,
+        "Self" => true,
+        "_" => true,
+        "super" => true,
+        "crate" => true,
+        "mod" => true,
+        "pub" => true,
+        "priv" => true,
+        "private" => true,
+        "mut" => true,
+        "ref" => true,
+        "own" => true,
+        _ => false,
+    }
+}
+
+// Reserved fragment-specifier identifier namespace (design.md § v60 item 62):
+// `expr_<NNNN>` where `NNNN` is a 4-digit year in 2020..=2099. Checked only on
+// the plain-identifier path; `r#expr_2026` bypasses it via raw_identifier.
+fn is_reserved_fragment_specifier_namespace(name: String) -> bool {
+    if name.len() != 9 {
+        return false;
+    }
+    if name.substring(0, 5) != "expr_" {
+        return false;
+    }
+    let digits = name.substring(5, 9);
+    for b in digits.bytes() {
+        if not b.is_ascii_digit() {
+            return false;
+        }
+    }
+    match i64.parse(digits) {
+        Some(y) => y >= 2020 and y <= 2099,
+        None => false,
+    }
+}
+
+// UTF-8 byte length implied by a lead byte (1–4), or 1 for an invalid lead
+// (matching the Rust seed's `.unwrap_or(1)`). Range comparisons rather than the
+// bit-mask form, to lean only on u8 comparison (no bitwise dependency).
+fn utf8_byte_len(lead: u8) -> i64 {
+    if lead < 0x80 {
+        1
+    } else if lead >= 0xC0 and lead <= 0xDF {
+        2
+    } else if lead >= 0xE0 and lead <= 0xEF {
+        3
+    } else if lead >= 0xF0 and lead <= 0xF7 {
+        4
+    } else {
+        1
     }
 }
 
