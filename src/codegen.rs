@@ -1942,6 +1942,23 @@ pub(super) struct Codegen<'ctx> {
     /// Heap struct type for each active RC-fallback binding in the current function.
     /// Cleared at each `compile_function` call. Key: binding name.
     pub(crate) rc_fallback_heap_types: HashMap<String, StructType<'ctx>>,
+    /// Synthesized "free the boxed value's heap fields" fn per RC-fallback
+    /// box heap type (`{i64 rc, value}`). When a non-shared aggregate
+    /// (tuple / struct with String/Vec fields) is RC-fallback-boxed, the box
+    /// free at `rc == 0` must recurse into the boxed value's heap fields
+    /// before releasing the box — otherwise those buffers leak
+    /// (B-2026-06-10-8). The fn takes the box pointer, GEPs to the value
+    /// field, and emits a `cap`-guarded `free` for every `{ptr,len,cap}`
+    /// (String/Vec) field, recursing into nested aggregates; it does NOT
+    /// free the box itself (`emit_rc_dec`'s fallback `free` does that after).
+    /// Keyed on the box heap type (module-stable, embeds the value type), so
+    /// bindings of the same boxed type share one fn. Module-level cache like
+    /// `drop_fn_cache` — not cleared per function. A `Vec` with linear
+    /// `StructType`-equality lookup (LLVM `StructType` is `PartialEq` but not
+    /// `Hash`/`Eq`, so it can't key a `HashMap`); the box-type count per
+    /// program is tiny, and `emit_rc_dec` already scans `shared_types` the
+    /// same way.
+    pub(crate) rc_fallback_box_drop_fns: Vec<(StructType<'ctx>, FunctionValue<'ctx>)>,
     /// Per-closure capture path modes sourced from
     /// `OwnershipCheckResult::closure_capture_path_modes` — line 353
     /// phase-5 checklist disjoint-capture slice 4. When a closure
@@ -4544,6 +4561,7 @@ impl<'ctx> Codegen<'ctx> {
             borrowed_param_skips: HashMap::new(),
             arc_fallback_fns: HashMap::new(),
             rc_fallback_heap_types: HashMap::new(),
+            rc_fallback_box_drop_fns: Vec::new(),
             closure_capture_paths: HashMap::new(),
             par_capture_modes: HashMap::new(),
             concurrency_decisions: HashMap::new(),

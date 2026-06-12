@@ -7436,6 +7436,86 @@ fn main() {
     }
 
     #[test]
+    fn asan_rc_fallback_tuple_heap_field_drop_no_leak() {
+        // B-2026-06-10-8: a let-bound tuple with a heap (String) field that
+        // the ownership checker routes to RC-fallback boxing leaked the
+        // field's buffer at scope exit — the box `{i64 rc, value}` was freed
+        // at rc==0 without recursing into the boxed value's heap fields. The
+        // fix synthesizes a per-box value-drop fn (`register_rc_fallback_box_drop`)
+        // that `emit_rc_dec` invokes before the box free. Non-foldable
+        // (loop-index) strings so each `t` is a real heap allocation; macOS
+        // ASAN proves no double-free, Linux `detect_leaks=1` proves no leak
+        // (the leak this closes was LSan-visible, invisible to macOS ASAN).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i = 0i64;
+    while i < 3i64 {
+        let t = (i, f"item-{i}");
+        println(t.1);
+        i = i + 1i64;
+    }
+}
+"#,
+            &["item-0", "item-1", "item-2"],
+            "rc_fallback_tuple_heap_field_drop",
+        );
+    }
+
+    #[test]
+    fn asan_rc_fallback_struct_heap_field_drop_no_leak() {
+        // B-2026-06-10-8, the non-shared-struct sibling of the tuple case: a
+        // let-bound `struct Pair { n: i64, s: String }` routed to RC-fallback
+        // boxing leaked its `String` field. The structural heap-field walk
+        // (`emit_aggregate_heap_field_frees`) handles tuples and structs
+        // uniformly — both lower to an LLVM struct whose String fields are
+        // `vec_struct_type()`-shaped.
+        assert_clean_asan_run(
+            r#"
+struct Pair { n: i64, s: String }
+fn main() {
+    let mut i = 0i64;
+    while i < 3i64 {
+        let t = Pair { n: i, s: f"item-{i}" };
+        println(t.s);
+        i = i + 1i64;
+    }
+}
+"#,
+            &["item-0", "item-1", "item-2"],
+            "rc_fallback_struct_heap_field_drop",
+        );
+    }
+
+    #[test]
+    fn asan_rc_fallback_tuple_moved_no_double_free() {
+        // B-2026-06-10-8 move-out safety: the new box value-drop recursion
+        // must fire exactly once for the binding's last owner. A returned
+        // boxed tuple (moved out of the producer), a whole-binding move
+        // (`let u = t`), and a partial field read (`let s = t.1`) each go
+        // through the refcounted box; the rc gates the field-free to rc==0,
+        // so none double-frees the String. macOS ASAN is the double-free
+        // oracle here (Linux additionally checks no leak).
+        assert_clean_asan_run(
+            r#"
+fn make(i: i64) -> (i64, String) { (i, f"made-{i}") }
+fn main() {
+    let r = make(7i64);
+    println(r.1);
+    let t = (1i64, f"x-{1}");
+    let u = t;
+    println(u.1);
+    let p = (2i64, f"y-{2}");
+    let s = p.1;
+    println(s);
+}
+"#,
+            &["made-7", "x-1", "y-2"],
+            "rc_fallback_tuple_moved",
+        );
+    }
+
+    #[test]
     fn asan_user_enum_field_in_struct_heap_payload() {
         // Memory-safety companion to the `enum-in-struct-field` codegen
         // blocker fix (two-pass struct declaration). A struct field whose

@@ -2094,6 +2094,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.builder.build_store(val_field, val).unwrap();
                         self.rc_fallback_heap_types
                             .insert(var_name.clone(), heap_type);
+                        // When the boxed value is an aggregate (tuple / struct)
+                        // with String/Vec fields, synthesize a value-drop fn so
+                        // the box free at rc==0 recurses into those buffers
+                        // instead of leaking them (B-2026-06-10-8). No-op for
+                        // scalar / heap-free boxed values.
+                        self.register_rc_fallback_box_drop(heap_type);
                         self.track_rc_var(var_name, heap_ptr, heap_type);
                         heap_ptr.into()
                     } else {

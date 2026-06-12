@@ -14615,6 +14615,36 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_rc_fallback_aggregate_heap_field_drop() {
+        // B-2026-06-10-8 value-correctness companion to the ASAN/leak
+        // regressions (`tests/memory_sanitizer.rs::asan_rc_fallback_*`): an
+        // RC-fallback-boxed tuple and struct, each with a `String` field
+        // consumed in one branch then read after, round-trip their heap
+        // content through the box. The leak/double-free is the ASAN/LSan
+        // story; this guards the observable value across the boxing path
+        // (run with the ownership result so `is_rc_fallback_binding` fires).
+        let out = run_program_with_ownership(
+            r#"
+struct Named { id: i64, label: String }
+fn sink_t(t: (i64, String)) { }
+fn sink_s(n: Named) { }
+fn main() {
+    let cond: bool = false;
+    let t = (1i64, f"tup-{1}");
+    if cond { sink_t(t); }
+    println(t.1);
+    let s = Named { id: 2, label: f"st-{2}" };
+    if cond { sink_s(s); }
+    println(s.label);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "tup-1\nst-2\n");
+        }
+    }
+
     // ── Atomic RC for par-block bindings ──────────────────────────
     //
     // The ownership pass produces `arc_values` (a per-function subset of

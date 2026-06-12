@@ -291,6 +291,22 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         if !dropped {
+            // RC-fallback box of an aggregate with heap fields: free the
+            // boxed value's String/Vec buffers before releasing the box
+            // (B-2026-06-10-8). When no such fn is registered for this box
+            // type, the boxed value owns no heap and the plain free below is
+            // correct. The refcount gates this whole block to `rc == 0`, so
+            // the field free runs exactly once for the binding's last owner —
+            // whole-binding moves (which inc/dec the box rc) never double-free.
+            if let Some(&(_, value_drop_fn)) = self
+                .rc_fallback_box_drop_fns
+                .iter()
+                .find(|(ty, _)| *ty == heap_type)
+            {
+                self.builder
+                    .build_call(value_drop_fn, &[ptr.into()], "")
+                    .unwrap();
+            }
             self.builder
                 .build_call(self.free_fn, &[ptr.into()], "")
                 .unwrap();
@@ -298,6 +314,135 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_unconditional_branch(done_bb).unwrap();
 
         self.builder.position_at_end(done_bb);
+    }
+
+    /// Recursively test whether `agg_ty` (a tuple / struct LLVM type) holds
+    /// any `{ptr,len,cap}` (String/Vec) field, directly or nested in a
+    /// sub-aggregate. Drives whether an RC-fallback box needs a value-drop
+    /// fn synthesized — false means the box free needs no field recursion
+    /// (no IR emitted, no map entry). A String/Vec field is recognized
+    /// structurally by `== vec_struct_type()`, the same signal
+    /// `FreeVecBuffer`'s recursive element drop uses.
+    pub(super) fn aggregate_has_heap_field(&self, agg_ty: StructType<'ctx>) -> bool {
+        let vec_ty = self.vec_struct_type();
+        (0..agg_ty.count_fields()).any(|i| match agg_ty.get_field_type_at_index(i) {
+            Some(BasicTypeEnum::StructType(st)) if st == vec_ty => true,
+            Some(BasicTypeEnum::StructType(st)) => self.aggregate_has_heap_field(st),
+            _ => false,
+        })
+    }
+
+    /// Emit a `cap`-guarded `free` for every String/Vec field of the
+    /// aggregate at `base_ptr`, recursing into nested tuples/structs. Frees
+    /// only the field buffers, never `base_ptr` itself (the box free is the
+    /// caller's job). A Vec field's own *elements* are not recursed — only
+    /// its outer buffer is freed, matching the one-level shape of the
+    /// tuple-element drain; `Vec[heap_T]` nested inside a boxed aggregate
+    /// leaks its elements (bounded remainder, never corruption).
+    pub(super) fn emit_aggregate_heap_field_frees(
+        &mut self,
+        base_ptr: PointerValue<'ctx>,
+        agg_ty: StructType<'ctx>,
+    ) {
+        let vec_ty = self.vec_struct_type();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        for i in 0..agg_ty.count_fields() {
+            match agg_ty.get_field_type_at_index(i) {
+                Some(BasicTypeEnum::StructType(st)) if st == vec_ty => {
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(agg_ty, base_ptr, i, "rcfb.heap.f")
+                        .unwrap();
+                    let data_pp = self
+                        .builder
+                        .build_struct_gep(vec_ty, field_ptr, 0, "rcfb.data.pp")
+                        .unwrap();
+                    let data = self
+                        .builder
+                        .build_load(ptr_ty, data_pp, "rcfb.data")
+                        .unwrap()
+                        .into_pointer_value();
+                    let cap_pp = self
+                        .builder
+                        .build_struct_gep(vec_ty, field_ptr, 2, "rcfb.cap.pp")
+                        .unwrap();
+                    let cap = self
+                        .builder
+                        .build_load(i64_t, cap_pp, "rcfb.cap")
+                        .unwrap()
+                        .into_int_value();
+                    self.emit_free_if_cap_positive(data, cap);
+                }
+                Some(BasicTypeEnum::StructType(st)) => {
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(agg_ty, base_ptr, i, "rcfb.nested.f")
+                        .unwrap();
+                    self.emit_aggregate_heap_field_frees(field_ptr, st);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Synthesize (once per box heap type) the "free the boxed value's heap
+    /// fields" fn for an RC-fallback box `{i64 rc, value}` whose `value` is
+    /// an aggregate carrying String/Vec fields. Registered in
+    /// `rc_fallback_box_drop_fns` and called by `emit_rc_dec` at `rc == 0`
+    /// *before* the box itself is freed. No-op (nothing registered) when the
+    /// boxed value owns no heap — the box free alone is then correct.
+    /// Closes B-2026-06-10-8: a let-bound tuple/struct routed to RC-fallback
+    /// boxing leaked its String/Vec field buffers at scope exit, because the
+    /// box free (`emit_rc_dec`'s fallback `free`) never recursed into them.
+    pub(super) fn register_rc_fallback_box_drop(&mut self, box_heap_type: StructType<'ctx>) {
+        if self
+            .rc_fallback_box_drop_fns
+            .iter()
+            .any(|(ty, _)| *ty == box_heap_type)
+        {
+            return;
+        }
+        let Some(BasicTypeEnum::StructType(value_ty)) = box_heap_type.get_field_type_at_index(1)
+        else {
+            return;
+        };
+        if !self.aggregate_has_heap_field(value_ty) {
+            return;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let fn_name = format!(
+            "__karac_rc_fb_value_drop_{}",
+            self.rc_fallback_box_drop_fns.len()
+        );
+        let drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self.module.add_function(
+            &fn_name,
+            drop_fn_ty,
+            Some(inkwell::module::Linkage::Internal),
+        );
+        // Register before emitting the body (idempotency / recursion guard).
+        self.rc_fallback_box_drop_fns.push((box_heap_type, drop_fn));
+
+        // The body uses `emit_free_if_cap_positive`, which appends basic
+        // blocks to `current_fn` — point it at the drop fn during synthesis.
+        self.current_fn = Some(drop_fn);
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        let box_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let value_ptr = self
+            .builder
+            .build_struct_gep(box_heap_type, box_ptr, 1, "rcfb.value")
+            .unwrap();
+        self.emit_aggregate_heap_field_frees(value_ptr, value_ty);
+        self.builder.build_return(None).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
     }
 
     /// Atomic counterpart to `emit_rc_inc` for `arc_values`-promoted bindings.
