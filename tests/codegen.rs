@@ -30827,6 +30827,29 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_parse_option_payload_method_dispatch() {
+        // #11 (phase-12): an UNANNOTATED builtin-parse result must carry its
+        // `Option[<int>]` element type so the match-bound `Some(v)` payload is
+        // a typed scalar for method dispatch. Previously `v.to_string()` (and
+        // any method on a value derived from `v`) failed codegen with "no
+        // handler for method 'to_string' on variable 'v'" because the integer
+        // parses rode the untyped passthrough; only the annotated form
+        // (`let o: Option[i64] = …`) worked. Now `<int>.parse` /
+        // `from_str_radix` are typed `Option[<int>]` in the typechecker.
+        let output = run_program(
+            "fn main() {\n\
+                 match i64.parse(\"42\") { Some(v) => println(v.to_string()), None => println(\"x\") }\n\
+                 let o = i64.parse(\"7\");\n\
+                 match o { Some(v) => { let w = v + 1; println(w.to_string()) } None => println(\"x\") }\n\
+                 match u8.parse(\"255\") { Some(v) => println(v.to_string()), None => println(\"x\") }\n\
+                 match i64.from_str_radix(\"ff\", 16) { Some(v) => println(v.to_string()), None => println(\"x\") }\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "42\n8\n255\n255\n");
+    }
+
+    #[test]
     fn test_e2e_i64_from_str_radix_basic() {
         // Radix parse (hex/bin/oct + reject + invalid radix) — the
         // self-hosting lexer's hex/binary/octal literal path. Must match the

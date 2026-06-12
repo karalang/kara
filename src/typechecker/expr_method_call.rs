@@ -754,6 +754,33 @@ impl<'a> super::TypeChecker<'a> {
                         args: vec![f64_ty],
                     };
                 }
+                // Integer `<int>.parse(s) -> Option[<int>]` and
+                // `<int>.from_str_radix(s, radix) -> Option[<int>]`. These rode
+                // the untyped-primitive-assoc passthrough (payload defaulting to
+                // i64 — value-correct), but an UNANNOTATED `let o = i64.parse(s)`
+                // then left the match-bound `Some(v)` without a concrete element
+                // type, so `v.to_string()` / further method dispatch on `v` fell
+                // through in codegen (the dispatch key is the typechecker-recorded
+                // receiver type — blocker #11). Typing the result explicitly
+                // (mirrors the `f64.parse` arm above) records `Option[<int>]` so
+                // the binding's element type reaches dispatch; the annotated form
+                // (`let o: Option[i64] = …`) already worked.
+                if (method == "parse" || method == "from_str_radix")
+                    && matches!(
+                        type_name.as_str(),
+                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                    )
+                {
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    if let Some(int_ty) = self.primitive_type(type_name.as_str()) {
+                        return Type::Named {
+                            name: "Option".to_string(),
+                            args: vec![int_ty],
+                        };
+                    }
+                }
                 if method == "from" && args.len() == 1 {
                     let arg_ty = self.infer_expr(&args[0].value);
                     if arg_ty == Type::Error {
