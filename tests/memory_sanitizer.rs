@@ -517,6 +517,43 @@ fn main() {
         );
     }
 
+    // ── Block-construct call argument owns its temp (no leak) ──
+    //
+    // B-2026-06-11-5 (residual of B-2026-06-11-2): a block passed DIRECTLY as
+    // a call argument (`take({ f"…" })`) had its tail acc suppressed by
+    // `suppress_block_tail_cleanup` so a binding/return consumer could own it —
+    // but a bare call argument has no owning consumer, so the temp orphaned and
+    // leaked (a DIRECT `take(f"…")` is caller-owned and clean). Fix:
+    // `materialize_owned_temp` the block-arg value into the caller scope, the
+    // same caller ownership a direct f-string arg gets. The loop builds a fresh
+    // heap String/Vec each iteration in argument position; on Linux LSan a
+    // leaked temp trips, and a double-free / UAF (if the temp were both
+    // materialized AND owned elsewhere) trips macOS ASAN too.
+    #[test]
+    fn asan_block_arg_temp_owned_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn take_s(s: String) { if s.len() > 99999 { println(s); } }
+fn take_v(v: Vec[i64]) { if v.len() > 99999 { println(v.len()); } }
+fn two(a: String, b: String) { if a.len() > 99999 { println(a); println(b); } }
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        take_s({ f"arg{i}-{i}" });
+        take_s({ let p = "x" + "y"; p });
+        take_v({ Vec[i, i, i] });
+        two({ f"p{i}" }, { f"q{i}" });
+        take_s(f"direct{i}");
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &["done"],
+            "block_arg_temp_owned",
+        );
+    }
+
     // ── Closures that RETURN a heap value (closure-heap-return-cleanup) ──
     //
     // A closure whose body is a block returning a heap binding

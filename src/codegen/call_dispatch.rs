@@ -1012,6 +1012,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.share_option_shared_field_ref_for_arg(&a.value, val);
             }
             compiled_args.push(BasicMetadataValueEnum::from(val));
+            // B-2026-06-11-5: a block-construct call argument
+            // (`take({ f"…" })`) had its tail acc suppressed by
+            // `suppress_block_tail_cleanup` (B-2026-06-11-2) so a binding /
+            // return consumer could own it — but a bare call argument has no
+            // owning consumer, so the temp orphaned and leaked. A DIRECT
+            // f-string arg is caller-owned (its acc stays armed in the caller
+            // frame and frees after the call); re-establish that same caller
+            // ownership for the block-wrapped form by materializing the temp
+            // into the caller's scope (`materialize_owned_temp` self-guards on
+            // Vec/String, so non-heap block args are a no-op). Single-tail
+            // blocks only — mirrors `discarded_owned_temp_tail`'s conservatism;
+            // a branching `if`/`match` arg whose tail is an aliased place would
+            // double-free, so those stay a (safe) leak for a later slice.
+            if matches!(
+                &a.value.kind,
+                ExprKind::Block(_)
+                    | ExprKind::Seq(_)
+                    | ExprKind::Unsafe(_)
+                    | ExprKind::LabeledBlock { .. }
+            ) {
+                self.materialize_owned_temp(val, (a.value.span.offset, a.value.span.length));
+            }
         }
 
         // Niche-ABI arg pack — see `pack_niche_abi_args`. Runs AFTER the
