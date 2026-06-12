@@ -129,11 +129,19 @@ jobs:
       - uses: actions/checkout@v4
 
       # inkwell `llvm18-1-prefer-dynamic` + llvm-sys `181` → LLVM 18.1, linked
-      # dynamically (so libLLVM-18.so must be present at build AND run time).
+      # dynamically (libLLVM-18.so must be present at build AND run time).
+      # ubuntu-latest ships LLVM 18.1 in apt — more deterministic than the
+      # install-action's prebuilt layout, whose tree the llvm-sys build script
+      # couldn't find `llvm-config` in. `llvm-18-dev` provides `llvm-config-18`
+      # + `libLLVM-18.so` + headers; export the prefix llvm-sys queries and the
+      # libdir the test binaries load the shared lib from (both job-wide via
+      # GITHUB_ENV).
       - name: Install LLVM 18
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "18.1"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev
+          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -153,12 +161,7 @@ jobs:
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
           cargo rustc -p karac-runtime --release --crate-type staticlib
 
-      # `prefer-dynamic`: point llvm-sys at the installed prefix and put
-      # libLLVM-18.so on the runtime search path for the test binaries.
       - name: Codegen E2E + interpreter + typechecker + self-host oracle
-        env:
-          LLVM_SYS_181_PREFIX: ${{ env.LLVM_PATH }}
-          LD_LIBRARY_PATH: ${{ env.LLVM_PATH }}/lib
         run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer
 
   cross:
