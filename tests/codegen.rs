@@ -31098,6 +31098,31 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_string_repeat() {
+        // `String.repeat(n)`: basic, single, zero, negative (-> empty),
+        // empty-receiver, multi-byte, and as a push_str argument (fresh-temp
+        // freed by the push_str arm). Surfaced by kata-katas #394 decode-string.
+        let output = run_program(
+            "fn main() {\n\
+                 let s: String = \"ab\";\n\
+                 println(s.repeat(3));\n\
+                 println(s.repeat(1));\n\
+                 println(s.repeat(0));\n\
+                 println(s.repeat(-2));\n\
+                 let e: String = \"\";\n\
+                 println(e.repeat(5));\n\
+                 let u: String = \"λ\";\n\
+                 println(u.repeat(3));\n\
+                 let mut out: String = \"x\";\n\
+                 out.push_str(s.repeat(2));\n\
+                 println(out);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "ababab\nab\n\n\n\nλλλ\nxabab\n");
+    }
+
+    #[test]
     fn test_e2e_string_substring_basic() {
         // In-range / start-zero / out-of-range / negative / empty-receiver.
         let output = run_program(

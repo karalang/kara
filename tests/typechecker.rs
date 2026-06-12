@@ -10570,6 +10570,28 @@ fn test_string_substring_returns_string() {
 }
 
 #[test]
+fn test_string_repeat_returns_string() {
+    // `String.repeat(n: i64) -> String`. Surfaced by kata-katas #394.
+    let result = typecheck_ok(
+        r#"fn f() -> String {
+            let s = "ab";
+            s.repeat(3)
+        }"#,
+    );
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+}
+
+#[test]
+fn test_string_repeat_rejects_non_int_arg() {
+    let errors = typecheck_errors(r#"fn f() { let s = "ab"; s.repeat("x"); }"#);
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "Expected TypeMismatch for repeat with String arg, got: {:?}",
+        errors
+    );
+}
+
+#[test]
 fn test_string_substring_rejects_zero_args() {
     let errors = typecheck_errors(r#"fn f() { let s = "x"; s.substring(); }"#);
     assert!(

@@ -160,6 +160,20 @@ impl<'a> super::Interpreter<'a> {
                 }
                 return None;
             }
+            "repeat" => {
+                // `String.repeat(n) -> String` — receiver concatenated `n`
+                // times; `n <= 0` yields empty. Mirrors Rust's `str::repeat`
+                // (and the codegen arm's malloc + n× memcpy).
+                if let Value::String(s) = &obj {
+                    if let [a] = args {
+                        if let Value::Int(n) = self.eval_expr_inner(&a.value) {
+                            let count = n.max(0) as usize;
+                            return Some(Value::String(s.repeat(count)));
+                        }
+                    }
+                }
+                return None;
+            }
             "as_slice" | "as_slice_mut" => {
                 // Slice 3 — produce a Value::Slice that shares the
                 // source's `Arc<RwLock<Vec<Value>>>` storage. Mutation

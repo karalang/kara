@@ -358,6 +358,167 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(result)
             }
+            // `String.repeat(n) -> String` — receiver bytes concatenated `n`
+            // times into one fresh allocation; `n <= 0` yields the empty String
+            // `{null, 0, 0}`. Single `malloc(n*len)` + an `n`-iteration memcpy
+            // loop (output-size work, fewer reallocs than a `push_str` loop).
+            // Surfaced by kata-katas #394 decode-string (the `k[encoded]` repeat
+            // storm). Mirrors `substring`'s malloc + struct-assembly shape.
+            "repeat" => {
+                if args.is_empty() {
+                    return Err("String.repeat requires a count argument".to_string());
+                }
+                let str_ty = self.vec_struct_type();
+                let fn_val = self.current_fn.unwrap();
+                let zero64 = i64_t.const_zero();
+
+                // Receiver {data, len}.
+                let recv_data_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "rep.recv.ptr.p")
+                    .unwrap();
+                let recv_data = self
+                    .builder
+                    .build_load(ptr_ty, recv_data_ptr, "rep.recv.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let recv_len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "rep.recv.len.p")
+                    .unwrap();
+                let recv_len = self
+                    .builder
+                    .build_load(i64_t, recv_len_ptr, "rep.recv.len")
+                    .unwrap()
+                    .into_int_value();
+
+                // count = max(0, arg).
+                let count_raw = self.compile_expr(&args[0].value)?.into_int_value();
+                let is_neg = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, count_raw, zero64, "rep.neg")
+                    .unwrap();
+                let count = self
+                    .builder
+                    .build_select(is_neg, zero64, count_raw, "rep.count")
+                    .unwrap()
+                    .into_int_value();
+                // total = count * len.
+                let total = self
+                    .builder
+                    .build_int_nsw_mul(count, recv_len, "rep.total")
+                    .unwrap();
+                let total_zero = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, total, zero64, "rep.total.z")
+                    .unwrap();
+
+                let fill_bb = self.context.append_basic_block(fn_val, "rep.fill");
+                let empty_bb = self.context.append_basic_block(fn_val, "rep.empty");
+                let cont_bb = self.context.append_basic_block(fn_val, "rep.cont");
+                let result_slot = self.create_entry_alloca(fn_val, "rep.result", str_ty.into());
+                self.builder
+                    .build_conditional_branch(total_zero, empty_bb, fill_bb)
+                    .unwrap();
+
+                // Empty branch: {null, 0, 0}.
+                self.builder.position_at_end(empty_bb);
+                let mut empty_agg = str_ty.get_undef();
+                empty_agg = self
+                    .builder
+                    .build_insert_value(empty_agg, ptr_ty.const_null(), 0, "rep.e.ptr")
+                    .unwrap()
+                    .into_struct_value();
+                empty_agg = self
+                    .builder
+                    .build_insert_value(empty_agg, zero64, 1, "rep.e.len")
+                    .unwrap()
+                    .into_struct_value();
+                empty_agg = self
+                    .builder
+                    .build_insert_value(empty_agg, zero64, 2, "rep.e.cap")
+                    .unwrap()
+                    .into_struct_value();
+                self.builder.build_store(result_slot, empty_agg).unwrap();
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                // Fill branch: malloc(total) + `count` memcpys of the receiver.
+                self.builder.position_at_end(fill_bb);
+                let buf = self
+                    .builder
+                    .build_call(self.alloc_or_panic_fn, &[total.into()], "rep.buf")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                let r_slot = self.create_entry_alloca(fn_val, "rep.r", i64_t.into());
+                self.builder.build_store(r_slot, zero64).unwrap();
+                let head_bb = self.context.append_basic_block(fn_val, "rep.head");
+                let body_bb = self.context.append_basic_block(fn_val, "rep.body");
+                let done_bb = self.context.append_basic_block(fn_val, "rep.done");
+                self.builder.build_unconditional_branch(head_bb).unwrap();
+
+                self.builder.position_at_end(head_bb);
+                let r = self
+                    .builder
+                    .build_load(i64_t, r_slot, "rep.r.load")
+                    .unwrap()
+                    .into_int_value();
+                let r_lt = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, r, count, "rep.r.lt")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(r_lt, body_bb, done_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(body_bb);
+                let off = self
+                    .builder
+                    .build_int_nsw_mul(r, recv_len, "rep.off")
+                    .unwrap();
+                let dest = unsafe {
+                    self.builder
+                        .build_gep(self.context.i8_type(), buf, &[off], "rep.dest")
+                        .unwrap()
+                };
+                self.builder
+                    .build_memcpy(dest, 1, recv_data, 1, recv_len)
+                    .unwrap();
+                let r_next = self
+                    .builder
+                    .build_int_nsw_add(r, i64_t.const_int(1, false), "rep.r.next")
+                    .unwrap();
+                self.builder.build_store(r_slot, r_next).unwrap();
+                self.builder.build_unconditional_branch(head_bb).unwrap();
+
+                self.builder.position_at_end(done_bb);
+                let mut fill_agg = str_ty.get_undef();
+                fill_agg = self
+                    .builder
+                    .build_insert_value(fill_agg, buf, 0, "rep.f.ptr")
+                    .unwrap()
+                    .into_struct_value();
+                fill_agg = self
+                    .builder
+                    .build_insert_value(fill_agg, total, 1, "rep.f.len")
+                    .unwrap()
+                    .into_struct_value();
+                fill_agg = self
+                    .builder
+                    .build_insert_value(fill_agg, total, 2, "rep.f.cap")
+                    .unwrap()
+                    .into_struct_value();
+                self.builder.build_store(result_slot, fill_agg).unwrap();
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                self.builder.position_at_end(cont_bb);
+                let result = self
+                    .builder
+                    .build_load(str_ty, result_slot, "rep.load")
+                    .unwrap();
+                Ok(result)
+            }
             // String.push(char): same {ptr,len,cap} layout as Vec but the
             // arg is a Unicode scalar that needs UTF-8 encoding before the
             // append. Routed here based on `string_vars` membership — the

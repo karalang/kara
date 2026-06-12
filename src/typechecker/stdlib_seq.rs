@@ -322,6 +322,38 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Str
             }
+            "repeat" => {
+                // repeat(n: i64) -> String — the receiver concatenated `n`
+                // times (`"ab".repeat(3) == "ababab"`); `n <= 0` yields an
+                // empty String. Analog of Rust's `str::repeat`. Surfaced by
+                // kata-katas #394 decode-string, whose `k[encoded]` decode is a
+                // repeat storm; the self-hosted lexer wants it for counted
+                // constructs too. Allocating String→String, same arg shape as
+                // `substring`'s indices.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'repeat' expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if !matches!(arg_ty, Type::Int(_) | Type::Error) {
+                        self.type_error(
+                            format!(
+                                "'repeat' expects an integer count, found '{}'",
+                                type_display(&arg_ty)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Str
+            }
             "push_str" => {
                 // push_str(other: String) -> (). Mutating append; receiver
                 // must be a mutable binding (ownership.rs classifies this
