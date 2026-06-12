@@ -7,17 +7,19 @@
 //! identically. This is the bootstrap oracle: as the port grows, any
 //! divergence from the Rust lexer fails here.
 //!
-//! Covers the port's slice-A+B+C token set: all delimiters, punctuation,
+//! Covers the port's slice-A+B+C+D token set: all delimiters, punctuation,
 //! single- and multi-char operators (maximal-munch forms like `<<=` / `..=` /
 //! `?.`), the full keyword table, identifiers, numbers (decimal, hex/bin/octal,
 //! float, `_` separators, int/float suffixes), whitespace, line and (nesting)
-//! block comments (skipped), `///` / `//!` doc-comment tokens, and EOF.
-//! Deferred to later slices (and kept OUT of the corpus): string / char /
-//! byte / interpolated / c-string literals, raw identifiers (`r#x`), non-ASCII,
-//! and the reserved-word / reserved-prefix error forms. Inputs are single-line
-//! (so the reported line is always one) until both the port and the corpus
-//! grow newlines. Both lexers emit a trailing EOF, so the full streams
-//! (including EOF) are compared.
+//! block comments (skipped), `///` / `//!` doc-comment tokens, string /
+//! multi-string / char / byte literals (with `\n \t \r \\ \" \'` escapes,
+//! rendered through a shared `escape_for_render`), and EOF. Deferred to later
+//! slices (and kept OUT of the corpus): f-string interpolation, c-strings,
+//! `\u{…}` / `\0` escapes, raw identifiers (`r#x`), non-ASCII, and the
+//! reserved-word / reserved-prefix error forms. Inputs are single-line (so the
+//! reported line is always one) until both the port and the corpus grow
+//! newlines. Both lexers emit a trailing EOF, so the full streams (including
+//! EOF) are compared.
 //!
 //! The corpus is lexed back-to-back with NO printed separator between inputs:
 //! a bare string-literal `println` was observed to interleave out of order
@@ -113,6 +115,23 @@ const CORPUS: &[&str] = &[
     "let n = 42 + 0xa * 2",
     "0 1 12 999 1000000",
     "5f64",
+    // Slice D: string / multi-string / char / byte literals (+ simple escapes).
+    // Raw Rust strings so the entry IS the verbatim lexer input (incl. `"`/`\`).
+    r#""hello""#,
+    r#""a b c" 42"#,
+    r#"x = "val" + "ue""#,
+    r#""with \"quote\" in it""#,
+    r#""tab\there" "ret\rurn""#,
+    r#""line\nbreak""#,
+    r#""back\\slash""#,
+    r#""""#,
+    r#""""triple quoted""""#,
+    r#""""has "" inner quotes""""#,
+    r#"'a' 'Z' '1' ' '"#,
+    r#"'\n' '\t' '\r' '\\' '\''"#,
+    r#"b'A' b'z' b'0' b'~'"#,
+    r#"b'\n' b'\t' b'\\' b'\'' b'"'"#,
+    r#"let s = "name: " + x"#,
 ];
 
 /// Render one Rust `SpannedToken` in the Kāra lexer's canonical one-line
@@ -259,6 +278,16 @@ fn render_rust(t: &SpannedToken) -> String {
         // formatter): 100.0→"100", 1.0e-5→"0.00001", etc. The suffix is
         // ignored on both sides (the port consumes but does not yet store it).
         Token::Float(v, _) => return body_with(s, &format!("FLOAT {v}")),
+        // String / char values go through escape_for_render (shared with the
+        // Kāra `render`) so control chars don't break the line-based compare.
+        Token::StringLiteral(v) => return body_with(s, &format!("STR {}", escape_for_render(v))),
+        Token::MultiStringLiteral(v) => {
+            return body_with(s, &format!("MSTR {}", escape_for_render(v)))
+        }
+        Token::CharLiteral(c) => {
+            return body_with(s, &format!("CHAR {}", escape_for_render(&c.to_string())))
+        }
+        Token::ByteLiteral(b) => return body_with(s, &format!("BYTE {b}")),
         Token::DocComment(t) => return body_with(s, &format!("DOC {t}")),
         Token::ModuleDocComment(t) => return body_with(s, &format!("MODDOC {t}")),
         Token::EOF => "EOF",
@@ -274,6 +303,34 @@ fn render_rust(t: &SpannedToken) -> String {
 /// Prefix the span coordinates onto a rendered token body.
 fn body_with(s: &karac::token::Span, body: &str) -> String {
     format!("{} {} {} {} {}", s.offset, s.length, s.line, s.column, body)
+}
+
+/// Escape a string/char value to a single-line, unambiguous form. MUST stay
+/// identical to `escape_for_render` in `selfhost/src/main.kara`.
+fn escape_for_render(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        match c {
+            '\n' => {
+                out.push('\\');
+                out.push('n');
+            }
+            '\t' => {
+                out.push('\\');
+                out.push('t');
+            }
+            '\r' => {
+                out.push('\\');
+                out.push('r');
+            }
+            '\\' => {
+                out.push('\\');
+                out.push('\\');
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 #[test]
@@ -300,11 +357,16 @@ fn selfhost_lexer_matches_rust_lexer() {
          fn main() {\n",
     );
     for input in CORPUS {
+        // Inputs may now contain `"` and `\` (string/char literal tests); they
+        // are escaped here so the embedded Kāra string literal reconstructs the
+        // exact input. Newlines still can't be embedded single-line, so the
+        // corpus stays newline-free until the newline slice.
         assert!(
-            !input.contains(['"', '\\', '\n']),
-            "corpus input must be plain ASCII (no quote/backslash/newline): {input:?}"
+            !input.contains('\n'),
+            "corpus input must be single-line (no newline): {input:?}"
         );
-        prog.push_str(&format!("    lex_and_print(\"{input}\");\n"));
+        let escaped = input.replace('\\', "\\\\").replace('"', "\\\"");
+        prog.push_str(&format!("    lex_and_print(\"{escaped}\");\n"));
     }
     prog.push_str("}\n");
 

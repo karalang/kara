@@ -8,8 +8,10 @@
 //   A — delimiters, punctuation, single/multi-char operators, keyword table.
 //       The structural, non-literal core.                           [DONE]
 //   B — comments (line/block skip + `///`/`//!` doc tokens).        [DONE]
-//   C — number forms (hex/bin/octal, float, `_` separators, suffixes). [THIS SLICE]
-//   D — string/char/byte/multi-string/interpolated/c-string literals. [pending]
+//   C — number forms (hex/bin/octal, float, `_` separators, suffixes). [DONE]
+//   D — string / multi-string / char / byte literals (+ simple escapes). [THIS SLICE]
+//       f-string interpolation, c-strings, and `\u{…}` / `\0` escapes are a
+//       follow-up (own structure; `\u{…}` gated on a codepoint→char builder).
 //   E — raw idents (`r#x`), non-ASCII recovery, reserved string prefixes,
 //       reserved fragment-specifier namespace.                     [pending]
 //
@@ -191,6 +193,10 @@ enum Token {
     Identifier(String),
     Integer(i64),
     Float(f64),
+    StringLiteral(String),
+    MultiStringLiteral(String),
+    CharLiteral(char),
+    ByteLiteral(u8),
     DocComment(String),
     ModuleDocComment(String),
     Eof,
@@ -548,8 +554,28 @@ impl Lexer {
                 }
             }
 
+            // String literals: `"""..."""` multi-line vs `"..."` single.
+            b'"' => {
+                if self.peek() == b'"' and self.peek_next() == b'"' {
+                    self.advance();
+                    self.advance();
+                    self.multi_string()
+                } else {
+                    self.string()
+                }
+            }
+
+            // Character literal.
+            b'\'' => self.char_literal(),
+
             _ => {
-                if is_digit(c) {
+                // `b'A'` byte literal — checked before the identifier path since
+                // `b` is also an identifier start. (`f"…"` / `c"…"` prefixes are
+                // deferred to a later slice, so `f`/`c` fall through to idents.)
+                if c == b'b' and self.peek() == b'\'' {
+                    self.advance();
+                    self.byte_char_literal()
+                } else if is_digit(c) {
                     self.number()
                 } else if is_alpha(c) {
                     self.identifier()
@@ -707,6 +733,174 @@ impl Lexer {
         }
     }
 
+    // `"..."` string literal. The opening `"` is consumed. Literal runs are
+    // appended via substring (so multi-byte UTF-8 copies through without a
+    // byte→char conversion); recognized escapes push the specific char. `\u{…}`
+    // and `\0` are DEFERRED (kept out of the corpus): the former needs a
+    // codepoint→char builder (see #10), the latter embeds a NUL in the value.
+    fn string(mut ref self) -> SpannedToken {
+        let mut value = "".to_string();
+        let mut run_start = self.current;
+        while self.peek() != b'"' and not self.is_at_end() {
+            if self.peek() == b'\\' {
+                value.push_str(self.src.substring(run_start, self.current));
+                self.advance();
+                if self.is_at_end() {
+                    return self.make_spanned(Token.Error("Unterminated string: trailing backslash".to_string()));
+                }
+                let e = self.peek();
+                if e == b'n' {
+                    value.push('\n');
+                    self.advance();
+                } else if e == b't' {
+                    value.push('\t');
+                    self.advance();
+                } else if e == b'r' {
+                    value.push('\r');
+                    self.advance();
+                } else if e == b'\\' {
+                    value.push('\\');
+                    self.advance();
+                } else if e == b'"' {
+                    value.push('"');
+                    self.advance();
+                } else {
+                    return self.make_spanned(Token.Error("Unknown escape sequence".to_string()));
+                }
+                run_start = self.current;
+            } else {
+                if self.peek() == b'\n' {
+                    self.line = self.line + 1;
+                    self.column = 0;
+                }
+                self.advance();
+            }
+        }
+        if self.is_at_end() {
+            return self.make_spanned(Token.Error("Unterminated string".to_string()));
+        }
+        value.push_str(self.src.substring(run_start, self.current));
+        self.advance();
+        self.make_spanned(Token.StringLiteral(value))
+    }
+
+    // `"""..."""` multi-line string. The opening `"""` is consumed. No escape
+    // processing (raw body) — value is the verbatim source slice.
+    fn multi_string(mut ref self) -> SpannedToken {
+        let content_start = self.current;
+        loop {
+            if self.is_at_end() {
+                return self.make_spanned(Token.Error("Unterminated multi-line string".to_string()));
+            }
+            if self.peek() == b'"' and self.peek_next() == b'"' and self.peek_at(2) == b'"' {
+                let value = self.src.substring(content_start, self.current);
+                self.advance();
+                self.advance();
+                self.advance();
+                return self.make_spanned(Token.MultiStringLiteral(value));
+            }
+            if self.peek() == b'\n' {
+                self.line = self.line + 1;
+                self.column = 0;
+            }
+            self.advance();
+        }
+    }
+
+    // `'c'` character literal. The opening `'` is consumed. ASCII / simple
+    // escapes only in this slice; multi-byte and `\u{…}` / `\0` are deferred.
+    fn char_literal(mut ref self) -> SpannedToken {
+        if self.is_at_end() {
+            return self.make_spanned(Token.Error("Unterminated character literal".to_string()));
+        }
+        // `mut` + if-STATEMENTS (not a value-if): an early `return` is typed `()`
+        // in Kāra, so it cannot share an if-expression with a `char` value arm.
+        let mut ch = '?';
+        if self.peek() == b'\\' {
+            self.advance();
+            if self.is_at_end() {
+                return self.make_spanned(Token.Error("Unterminated character literal".to_string()));
+            }
+            let e = self.peek();
+            self.advance();
+            if e == b'n' {
+                ch = '\n';
+            } else if e == b't' {
+                ch = '\t';
+            } else if e == b'r' {
+                ch = '\r';
+            } else if e == b'\\' {
+                ch = '\\';
+            } else if e == b'\'' {
+                ch = '\'';
+            } else {
+                return self.make_spanned(Token.Error("Unknown escape sequence in character literal".to_string()));
+            }
+        } else {
+            let cp_start = self.current;
+            self.advance();
+            ch = first_char(self.src.substring(cp_start, self.current));
+        }
+        if self.is_at_end() or self.peek() != b'\'' {
+            return self.make_spanned(Token.Error("Unterminated character literal".to_string()));
+        }
+        self.advance();
+        self.make_spanned(Token.CharLiteral(ch))
+    }
+
+    // `b'A'` byte char literal. The leading `b'` is consumed. One ASCII byte or
+    // a simple escape; `\u{…}` and multi-byte bodies are rejected (as in Rust).
+    fn byte_char_literal(mut ref self) -> SpannedToken {
+        if self.is_at_end() {
+            return self.make_spanned(Token.Error("Unterminated byte literal".to_string()));
+        }
+        if self.peek() == b'\'' {
+            self.advance();
+            return self.make_spanned(Token.Error("empty byte literal: `b''` must contain exactly one byte".to_string()));
+        }
+        let mut byte: u8 = 0;
+        if self.peek() == b'\\' {
+            self.advance();
+            if self.is_at_end() {
+                return self.make_spanned(Token.Error("Unterminated byte literal".to_string()));
+            }
+            let e = self.peek();
+            self.advance();
+            if e == b'n' {
+                byte = b'\n';
+            } else if e == b't' {
+                byte = b'\t';
+            } else if e == b'r' {
+                byte = b'\r';
+            } else if e == b'\\' {
+                byte = b'\\';
+            } else if e == b'\'' {
+                byte = b'\'';
+            } else if e == b'"' {
+                byte = b'"';
+            } else if e == b'0' {
+                byte = 0;
+            } else {
+                return self.make_spanned(Token.Error("Unknown escape sequence in byte literal".to_string()));
+            }
+        } else {
+            let b = self.peek();
+            if b >= 0x80 {
+                return self.make_spanned(Token.Error("non-ASCII character in byte literal".to_string()));
+            }
+            self.advance();
+            byte = b;
+        }
+        if self.is_at_end() {
+            return self.make_spanned(Token.Error("Unterminated byte literal".to_string()));
+        }
+        if self.peek() != b'\'' {
+            return self.make_spanned(Token.Error("byte literal must contain exactly one byte".to_string()));
+        }
+        self.advance();
+        self.make_spanned(Token.ByteLiteral(byte))
+    }
+
     fn identifier(mut ref self) -> SpannedToken {
         while is_alpha(self.peek()) or is_digit(self.peek()) {
             self.advance();
@@ -849,6 +1043,41 @@ fn strip_underscores(s: String) -> String {
     let mut out = "".to_string();
     for c in s.chars() {
         if c != '_' {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// First char of a non-empty string (used to read one ASCII char literal from
+// its source slice without a byte→char cast). Returns '?' for the empty input,
+// which the char lexer never produces.
+fn first_char(s: String) -> char {
+    for c in s.chars() {
+        return c;
+    }
+    '?'
+}
+
+// Escape a string/char value so it renders on a single line and round-trips
+// unambiguously through the oracle's line-based comparison. MUST stay identical
+// to `escape_for_render` in tests/selfhost_lexer.rs.
+fn escape_for_render(s: String) -> String {
+    let mut out = "".to_string();
+    for c in s.chars() {
+        if c == '\n' {
+            out.push('\\');
+            out.push('n');
+        } else if c == '\t' {
+            out.push('\\');
+            out.push('t');
+        } else if c == '\r' {
+            out.push('\\');
+            out.push('r');
+        } else if c == '\\' {
+            out.push('\\');
+            out.push('\\');
+        } else {
             out.push(c);
         }
     }
@@ -1010,6 +1239,24 @@ fn render(tok: SpannedToken) -> String {
         Float(v) => {
             line.push_str("FLOAT ");
             line.push_str(v.to_string());
+        }
+        StringLiteral(v) => {
+            line.push_str("STR ");
+            line.push_str(escape_for_render(v));
+        }
+        MultiStringLiteral(v) => {
+            line.push_str("MSTR ");
+            line.push_str(escape_for_render(v));
+        }
+        CharLiteral(c) => {
+            line.push_str("CHAR ");
+            let mut tmp = "".to_string();
+            tmp.push(c);
+            line.push_str(escape_for_render(tmp));
+        }
+        ByteLiteral(b) => {
+            line.push_str("BYTE ");
+            line.push_str(b.to_string());
         }
         DocComment(text) => {
             line.push_str("DOC ");
