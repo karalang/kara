@@ -382,6 +382,37 @@ fn main() {
         );
     }
 
+    // ── contains / starts_with of a fresh-owned String temp ───────
+    //
+    // `keyword.contains(s.substring(a, b))` / `name.starts_with(tok)` — the
+    // lexer's keyword-membership and prefix-check surface — pass a freshly-
+    // malloc'd String the method reads then discards. Codegen frees the temp
+    // at the post-scan merge block via the shared `free_fresh_owned_str_arg`
+    // helper (same as push_str). Pre-fix each leaked unbounded (~32 MiB at 2M
+    // iters); this run guards the frees against double-free / UAF.
+
+    #[test]
+    fn asan_contains_starts_with_substring_temp_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let hay: String = "fn let mut while return match";
+    let src: String = "returns_here_padded_xxxxxxxxxx";
+    let mut hits = 0i64;
+    let mut k = 0i64;
+    while k < 4i64 {
+        if hay.contains(src.substring(0i64, 6i64)) { hits = hits + 1i64; }
+        if src.starts_with(src.substring(0i64, 3i64)) { hits = hits + 1i64; }
+        k = k + 1i64;
+    }
+    println(f"{hits}");
+}
+"#,
+            &["8"],
+            "contains_starts_with_substring_temp",
+        );
+    }
+
     // ── `collect_all_vec` with capturing closures ─────────────────
     //
     // The canonical fan-out shape: each closure captures an outer

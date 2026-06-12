@@ -1112,6 +1112,70 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `ref_rvalue_arg` materialization in `call_dispatch.rs`, a later-slice
     /// migration candidate).
     ///
+    /// Free a fresh-owned `String` temporary passed *by borrow* to a method
+    /// that reads then discards it — `buffer.push_str(s.substring(a, b))`,
+    /// `keyword.contains(s.substring(a, b))`, `name.starts_with(tok)`. These
+    /// methods copy/scan the argument's bytes but take no ownership, so a
+    /// freshly-malloc'd argument (a `substring`, a `String`-returning call)
+    /// would leak its buffer once per call — unbounded in a loop. Emit a
+    /// `cap > 0`-guarded `free` of the argument's buffer at the *current*
+    /// insert position; the caller must first position the builder at the
+    /// post-use merge block so every read of the buffer dominates the free.
+    ///
+    /// Gated on `expr_yields_fresh_owned_temp` (Call / MethodCall, not
+    /// borrow-returning) so a string literal, a `ref String` identifier, a
+    /// place expression (`out[k]`), or a borrow-returning call is never freed —
+    /// those are owned elsewhere and a free here would double-free. The
+    /// `cap > 0` guard is a second backstop: a static-literal String has
+    /// `cap == 0` and owns no heap. A `String` buffer is flat bytes, so a
+    /// single `free` is the complete drop. Surfaced by kata-katas #722
+    /// remove-comments — the self-hosted lexer's `token_text` extraction and
+    /// keyword-membership surface.
+    pub(super) fn free_fresh_owned_str_arg(
+        &mut self,
+        arg: &crate::ast::Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        if !self.expr_yields_fresh_owned_temp(arg) || !self.llvm_ty_is_vec_struct(val.get_type()) {
+            return;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        let sv = val.into_struct_value();
+        let ptr = self
+            .builder
+            .build_extract_value(sv, 0, "freearg.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let cap = self
+            .builder
+            .build_extract_value(sv, 2, "freearg.cap")
+            .unwrap()
+            .into_int_value();
+        let heap = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::UGT,
+                cap,
+                i64_t.const_zero(),
+                "freearg.heap",
+            )
+            .unwrap();
+        let free_bb = self.context.append_basic_block(fn_val, "freearg.free");
+        let done_bb = self.context.append_basic_block(fn_val, "freearg.done");
+        self.builder
+            .build_conditional_branch(heap, free_bb, done_bb)
+            .unwrap();
+        self.builder.position_at_end(free_bb);
+        self.builder
+            .build_call(self.free_fn, &[ptr.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(done_bb).unwrap();
+        self.builder.position_at_end(done_bb);
+    }
+
     /// Caller obligation: only pass values that are genuinely *fresh-owned*.
     /// A value reloaded from an existing tracked binding (a place expression)
     /// must NOT be routed here — its storage is already owned by the
