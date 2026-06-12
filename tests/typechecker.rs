@@ -5140,6 +5140,24 @@ fn test_question_outside_defer_allowed() {
 // ── ? operator semantics (Step 5) ──────────────────────────────
 
 #[test]
+fn test_option_result_unwrap_or_types_as_inner() {
+    // B-2026-06-11-10: `unwrap_or(default)` types as the inner `T` (Option's
+    // element / Result's success type), so its result binds to a `T`-typed
+    // slot and feeds `T` operations. A regression to `Type::Error`/`Unit`
+    // would fail these annotated bindings + the arithmetic / concat use.
+    typecheck_ok(
+        "fn main() {\n\
+             let o: Option[i64] = Some(5);\n\
+             let x: i64 = o.unwrap_or(0);\n\
+             let _y: i64 = x + 1;\n\
+             let r: Result[String, i64] = Ok(\"hi\");\n\
+             let s: String = r.unwrap_or(\"def\");\n\
+             let _z: String = s + \"!\";\n\
+         }",
+    );
+}
+
+#[test]
 fn test_question_unwraps_result_ok_payload() {
     typecheck_ok(
         "fn produce() -> Result[i64, String] { Ok(7) }\n\

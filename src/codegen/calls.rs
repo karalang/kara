@@ -1087,6 +1087,101 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => {}
         }
 
+        // unwrap_or(default): eager fallback, NO panic. Compile the default
+        // once (matching Rust's eager `unwrap_or`, unlike `unwrap_or_else`),
+        // then branch on the tag — present (tag == 1) reconstitutes the
+        // payload from the words, absent yields the default — and phi the two.
+        // An int default is width-coerced to `T`'s LLVM shape so a literal
+        // `0` (i64) feeds a narrower `T` (e.g. `Option[i32]`) cleanly; the
+        // typechecker types this call as `T`, so non-int defaults already
+        // match the reconstituted shape.
+        if method == "unwrap_or" {
+            let default_arg = args.first().ok_or_else(|| {
+                "codegen: Option/Result.unwrap_or expects 1 argument, found 0".to_string()
+            })?;
+            let inner_ll = self.llvm_type_for_type_expr(&inner_te);
+            let mut default_val = self.compile_expr(&default_arg.value)?;
+            if let (BasicValueEnum::IntValue(dv), BasicTypeEnum::IntType(it)) =
+                (default_val, inner_ll)
+            {
+                let dw = dv.get_type().get_bit_width();
+                let tw = it.get_bit_width();
+                if dw != tw {
+                    default_val = if dw > tw {
+                        self.builder
+                            .build_int_truncate(dv, it, "uo.def.tr")
+                            .unwrap()
+                            .into()
+                    } else {
+                        self.builder
+                            .build_int_z_extend(dv, it, "uo.def.zx")
+                            .unwrap()
+                            .into()
+                    };
+                }
+            }
+
+            let fn_val = self.current_fn.unwrap();
+            let present_bb = self.context.append_basic_block(fn_val, "uo.present");
+            let absent_bb = self.context.append_basic_block(fn_val, "uo.absent");
+            let merge_bb = self.context.append_basic_block(fn_val, "uo.merge");
+            let one = i64_t.const_int(1, false);
+            let is_present = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, tag, one, "uo.is_present")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(is_present, present_bb, absent_bb)
+                .unwrap();
+
+            // Present: reconstitute the inner value from the payload words
+            // (same unbox-or-words logic as the unwrap path below).
+            self.builder.position_at_end(present_bb);
+            let w0 = self
+                .builder
+                .build_extract_value(recv_struct, 1, "uo.w0")
+                .map_err(|e| format!("codegen: extract unwrap_or payload w0: {:?}", e))?
+                .into_int_value();
+            let w1 = self
+                .builder
+                .build_extract_value(recv_struct, 2, "uo.w1")
+                .map_err(|e| format!("codegen: extract unwrap_or payload w1: {:?}", e))?
+                .into_int_value();
+            let w2 = self
+                .builder
+                .build_extract_value(recv_struct, 3, "uo.w2")
+                .map_err(|e| format!("codegen: extract unwrap_or payload w2: {:?}", e))?
+                .into_int_value();
+            let area = (recv_struct.get_type().count_fields() as usize).saturating_sub(1);
+            let present_val = if Self::llvm_type_word_count(inner_ll) > area {
+                let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+                let box_ptr = self
+                    .builder
+                    .build_int_to_ptr(w0, ptr_ty, "uo.box.p")
+                    .unwrap();
+                self.builder
+                    .build_load(inner_ll, box_ptr, "uo.box.ld")
+                    .unwrap()
+            } else {
+                self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?
+            };
+            let present_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // Absent: fall through to the default.
+            self.builder.position_at_end(absent_bb);
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // Merge: select present vs default.
+            self.builder.position_at_end(merge_bb);
+            let phi = self
+                .builder
+                .build_phi(inner_ll, "uo.val")
+                .map_err(|e| format!("codegen: unwrap_or phi: {:?}", e))?;
+            phi.add_incoming(&[(&present_val, present_end), (&default_val, absent_bb)]);
+            return Ok(Some(phi.as_basic_value()));
+        }
+
         // unwrap / expect: panic on tag == 0 (None/Err), otherwise
         // reconstitute the inner value from payload words. `expect` accepts
         // a single string-message arg; both methods otherwise produce the

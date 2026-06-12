@@ -1649,6 +1649,26 @@ fn test_option_some_unwrap() {
 }
 
 #[test]
+fn test_option_result_unwrap_or() {
+    // B-2026-06-11-10: `unwrap_or(default)` — eager fallback. Present
+    // (Some/Ok) yields the payload, absent (None/Err) the default. Interp
+    // oracle for the codegen E2E `test_e2e_option_result_unwrap_or`.
+    assert_eq!(
+        run("fn main() {\n\
+                 let a: Option[i64] = Some(5);\n\
+                 let b: Option[i64] = None;\n\
+                 println(a.unwrap_or(0));\n\
+                 println(b.unwrap_or(7));\n\
+                 let r: Result[String, i64] = Ok(\"got\");\n\
+                 let e: Result[String, i64] = Err(404);\n\
+                 println(r.unwrap_or(\"fb\"));\n\
+                 println(e.unwrap_or(\"fb\"));\n\
+             }"),
+        "5\n7\ngot\nfb\n"
+    );
+}
+
+#[test]
 fn test_option_none_nil_coalesce() {
     assert_eq!(run("fn main() { let x = None; println(x ?? 99); }"), "99\n");
 }

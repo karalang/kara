@@ -1129,7 +1129,7 @@ impl<'a> super::TypeChecker<'a> {
         let is_builtin_unwrap_family =
             matches!(
                 method,
-                "unwrap" | "expect" | "is_some" | "is_none" | "is_ok" | "is_err"
+                "unwrap" | "expect" | "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or"
             ) && matches!(callee_type_name.as_deref(), Some("Option") | Some("Result"));
         if !is_builtin_unwrap_family {
             if let Some(type_name) = callee_type_name {
@@ -1149,15 +1149,26 @@ impl<'a> super::TypeChecker<'a> {
 
         // Option/Result unwrap-family side-table: record the inner `T` /
         // success-`T` so codegen's `compile_method_call` arm for
-        // `unwrap`/`expect`/`is_*` knows the LLVM shape of the value to
-        // reconstitute from the Option/Result payload words. Sibling to
-        // `method_callee_types`; mirrors the per-MethodCall-span keying so
+        // `unwrap`/`expect`/`is_*`/`unwrap_or` knows the LLVM shape of the
+        // value to reconstitute from the Option/Result payload words. Sibling
+        // to `method_callee_types`; mirrors the per-MethodCall-span keying so
         // the lookup at codegen time is O(1). The `is_*` arms record T for
         // uniformity even though codegen only consumes the tag.
         if matches!(
             method,
-            "unwrap" | "expect" | "is_some" | "is_none" | "is_ok" | "is_err"
+            "unwrap" | "expect" | "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or"
         ) {
+            // `unwrap_or(default)` eagerly evaluates its fallback — infer it
+            // here (where `args` is still the method-call arg list, before the
+            // `Type::Named { args }` binding below shadows it) so the default's
+            // sub-expressions are typed for codegen. Kept permissive (no hard
+            // unify with `T`) to avoid a 722-style over-strict rejection of a
+            // coercible default; codegen width-coerces an int default to `T`.
+            if method == "unwrap_or" {
+                if let Some(a) = args.first() {
+                    let _ = self.infer_expr(&a.value);
+                }
+            }
             let receiver_named = match &obj_ty {
                 Type::Named { .. } => Some(&obj_ty),
                 Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
@@ -1185,7 +1196,7 @@ impl<'a> super::TypeChecker<'a> {
                     // resolution (field-access dispatch keys off
                     // `var_type_names` populated from `pattern_binding_types`).
                     return match method {
-                        "unwrap" | "expect" => resolved,
+                        "unwrap" | "expect" | "unwrap_or" => resolved,
                         "is_some" | "is_none" | "is_ok" | "is_err" => Type::Bool,
                         _ => unreachable!(),
                     };

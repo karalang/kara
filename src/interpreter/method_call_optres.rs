@@ -68,6 +68,26 @@ impl<'a> super::Interpreter<'a> {
                     other => other.clone(),
                 });
             }
+            "unwrap_or" => {
+                // `unwrap_or(default)` — eager fallback (the arg is always
+                // evaluated, matching Rust semantics, unlike `unwrap_or_else`).
+                // Present (`Some`/`Ok`) yields the payload; absent (`None`/
+                // `Err`) yields the default.
+                let default = args
+                    .first()
+                    .map(|a| self.eval_expr_inner(&a.value))
+                    .unwrap_or(Value::Unit);
+                return Some(match obj {
+                    Value::EnumVariant {
+                        variant,
+                        data: EnumData::Tuple(vals),
+                        ..
+                    } if variant == "Ok" || variant == "Some" => {
+                        vals.first().cloned().unwrap_or(default)
+                    }
+                    _ => default,
+                });
+            }
             "is_some" => {
                 return Some(match obj {
                     Value::EnumVariant { variant, .. } if variant == "Some" => Value::Bool(true),

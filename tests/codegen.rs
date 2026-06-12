@@ -1903,6 +1903,40 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_option_result_unwrap_or() {
+        // B-2026-06-11-10: `unwrap_or(default)` on Option/Result. The bug
+        // report mis-scoped this as a non-identifier-receiver dispatch gap; it
+        // was actually unimplemented across typecheck + interp + codegen. This
+        // pins the receiver-shape-agnostic codegen path: a chained call-result
+        // receiver (`m.get(k).unwrap_or(d)` — the original repro), a plain
+        // Option identifier, a width-mismatched default (i64 literal into an
+        // `i32` payload, exercising the codegen width-coerce), a `Result`, and
+        // a heap `String` payload (3-word reconstitution + default).
+        let output = run_program(
+            "fn rstr(o: Result[String, i64]) -> String { o.unwrap_or(\"fb\") }\n\
+             fn main() {\n\
+                 let mut m: Map[i64, i64] = Map.new();\n\
+                 m.insert(1, 2);\n\
+                 println(m.get(1).unwrap_or(0));\n\
+                 println(m.get(9).unwrap_or(-1));\n\
+                 let a: Option[i64] = Some(5);\n\
+                 let b: Option[i64] = None;\n\
+                 println(a.unwrap_or(0));\n\
+                 println(b.unwrap_or(7));\n\
+                 let mut n: Map[i64, i32] = Map.new();\n\
+                 n.insert(3, 30);\n\
+                 println(n.get(8).unwrap_or(-9));\n\
+                 println(rstr(Result.Ok(\"got\")));\n\
+                 println(rstr(Result.Err(404)));\n\
+                 let s: Option[String] = None;\n\
+                 println(s.unwrap_or(\"def\"));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "2\n-1\n5\n7\n-9\ngot\nfb\ndef\n");
+    }
+
+    #[test]
     fn e2e_enum_heap_payload_eq_compares_by_content() {
         // A variant with a concrete `String` payload compares by *content*, not
         // by pointer word — the variant-aware `compile_enum_eq` rebuilds the
