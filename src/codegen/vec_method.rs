@@ -1526,6 +1526,54 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.builder.build_store(len_ptr, updated_len).unwrap();
 
+                // Free a fresh-owned String temp argument now that its bytes are
+                // copied. `buffer.push_str(source.substring(start, cur))` — the
+                // lexer's token-text shape — passes a freshly-malloc'd String
+                // that nothing else owns; without this its heap buffer leaks
+                // once per call (kata-katas #722 bench measured ~48 bytes/iter,
+                // unbounded). Gated on `expr_yields_fresh_owned_temp` (Call /
+                // MethodCall, not borrow-returning — so a literal, a `ref
+                // String` identifier, or an `out[k]` place expr is excluded) and
+                // on cap > 0 (a static-literal String has cap == 0 and owns no
+                // heap). String buffers are flat bytes (no nested heap), so a
+                // single free is the complete drop. Immediate-free is safe
+                // because push_str has fully consumed the source by copy; doing
+                // it here (not via scope-deferred materialize_owned_temp) keeps
+                // a hot loop from accumulating temps until function exit.
+                if self.expr_yields_fresh_owned_temp(&args[0].value)
+                    && self.llvm_ty_is_vec_struct(src_val.get_type())
+                {
+                    let src_struct = src_val.into_struct_value();
+                    let src_cap = self
+                        .builder
+                        .build_extract_value(src_struct, 2, "src.cap")
+                        .unwrap()
+                        .into_int_value();
+                    let zero_cap = i64_t.const_int(0, false);
+                    let src_heap = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::UGT,
+                            src_cap,
+                            zero_cap,
+                            "src_heap",
+                        )
+                        .unwrap();
+                    let free_src_bb = self.context.append_basic_block(fn_val, "pstr.free_src");
+                    let src_done_bb = self.context.append_basic_block(fn_val, "pstr.src_done");
+                    self.builder
+                        .build_conditional_branch(src_heap, free_src_bb, src_done_bb)
+                        .unwrap();
+                    self.builder.position_at_end(free_src_bb);
+                    self.builder
+                        .build_call(self.free_fn, &[src_ptr.into()], "")
+                        .unwrap();
+                    self.builder
+                        .build_unconditional_branch(src_done_bb)
+                        .unwrap();
+                    self.builder.position_at_end(src_done_bb);
+                }
+
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
             // `String.try_push_str(s)` — fallible `push_str`

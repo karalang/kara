@@ -352,6 +352,36 @@ fn main() {
         );
     }
 
+    // ── push_str of a fresh-owned String temp (lexer token-text shape) ──
+    //
+    // `buffer.push_str(s.substring(a, b))` passes a freshly-malloc'd String
+    // to push_str, which copies its bytes then frees the temp immediately.
+    // Pre-fix the temp leaked ~48 bytes/call, unbounded (kata-katas #722
+    // bench: 93.6 MiB → 1.7 MiB at 2M iters). The new free() must not
+    // double-free the source buffer nor UAF a later read — looping the
+    // append a few times makes either trip ASAN.
+
+    #[test]
+    fn asan_push_str_substring_temp_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let s: String = "alpha beta gamma delta";
+    let mut acc: String = "";
+    let mut k = 0i64;
+    while k < 4i64 {
+        acc.push_str(s.substring(0i64, 5i64));
+        acc.push_str("-");
+        k = k + 1i64;
+    }
+    println(acc);
+}
+"#,
+            &["alpha-alpha-alpha-alpha-"],
+            "push_str_substring_temp",
+        );
+    }
+
     // ── `collect_all_vec` with capturing closures ─────────────────
     //
     // The canonical fan-out shape: each closure captures an outer
