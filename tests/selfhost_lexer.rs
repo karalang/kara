@@ -15,13 +15,12 @@
 //! multi-string / char / byte literals (with `\n \t \r \\ \" \'` escapes,
 //! rendered through a shared `escape_for_render`), f-string interpolation
 //! (`f"…{e}…"` → text/expr parts with absolute expr positions) and c-strings
-//! (`c"…"` → byte sequence + source length, incl. `\xHH`), and EOF. Deferred to
-//! later slices (and kept OUT of the corpus): `\u{…}` / `\0` escapes, raw
-//! identifiers (`r#x`), non-ASCII, and the reserved-word / reserved-prefix
-//! error forms. Inputs are single-line (so the
-//! reported line is always one) until both the port and the corpus grow
-//! newlines. Both lexers emit a trailing EOF, so the full streams (including
-//! EOF) are compared.
+//! (`c"…"` → byte sequence + source length, incl. `\xHH`), and EOF. The corpus
+//! now also covers `\u{…}` / `\0` escapes (L1/L5), raw identifiers, non-ASCII
+//! recovery, the reserved-word / reserved-prefix error forms, and — since L3 —
+//! genuine multi-line inputs (real newlines, so `line`/`column` advance is
+//! exercised, not pinned at line one). Both lexers emit a trailing EOF, so the
+//! full streams (including EOF) are compared.
 //!
 //! The corpus is lexed back-to-back with NO printed separator between inputs:
 //! a bare string-literal `println` was observed to interleave out of order
@@ -94,7 +93,7 @@ const CORPUS: &[&str] = &[
     "true false alias independent self Self",
     // Slice B: comments. Line/block comments skip (no token); `///` / `//!`
     // tokenize as DocComment / ModuleDocComment (body = rest of line, one
-    // optional leading space stripped). Single-line only until the newline slice.
+    // optional leading space stripped). Multi-line forms live in the L3 block below.
     "a // line comment here",
     "1 + 2 // trailing comment",
     "/// doc comment text",
@@ -105,6 +104,26 @@ const CORPUS: &[&str] = &[
     "let x = 1 /* inline */ + 2",
     "fn f() { /* body */ }",
     "p / q /= r",
+    // Slice L3: multi-line span coverage. REAL newlines (escaped to Kāra `\n`
+    // when embedded, decoded back to a newline byte before lexing) — exercises
+    // line/column advance across `\n`: ordinary tokens on later lines, leading
+    // newline, blank lines, indentation (column reset, not byte-offset), CRLF,
+    // line + block comments spanning a newline, and a triple-quoted string
+    // whose token `line` is its END line. The oracle compares
+    // `offset length line column` per token, so any port-vs-seed divergence in
+    // newline bookkeeping (line++ / column=0 / start_column) fails here.
+    "a\nb",
+    "\nx",
+    "a\n\n  b",
+    "let x = 1\nlet y = 2",
+    "foo\n    bar\n        baz",
+    "1 +\n2 *\n3",
+    "a // trailing\nb",
+    "/// doc\nx",
+    "x /* multi\nline */ y",
+    "/* a\n   b\n   c */ z",
+    "x\r\ny",
+    "\"\"\"raw\nmulti\nline\"\"\" tail",
     // Slice C: number forms — radix prefixes, floats, `_` separators, suffixes.
     "0xff 0x10 0xFF 0xdead",
     "0b1010 0b0 0b1111_0000",
@@ -470,15 +489,19 @@ fn selfhost_lexer_matches_rust_lexer() {
          fn main() {\n",
     );
     for input in CORPUS {
-        // Inputs may now contain `"` and `\` (string/char literal tests); they
-        // are escaped here so the embedded Kāra string literal reconstructs the
-        // exact input. Newlines still can't be embedded single-line, so the
-        // corpus stays newline-free until the newline slice.
-        assert!(
-            !input.contains('\n'),
-            "corpus input must be single-line (no newline): {input:?}"
-        );
-        let escaped = input.replace('\\', "\\\\").replace('"', "\\\"");
+        // Inputs may contain `"` / `\` (string/char tests) and, since the L3
+        // multi-line slice, real newlines / tabs / CRs. Escape all of them so
+        // the embedded Kāra string literal reconstructs the exact input bytes
+        // (the lexer then sees a genuine `\n`, exercising line/column advance).
+        // Backslash first — it doubles existing backslashes; the control-char
+        // replaces that follow introduce a single backslash that must NOT be
+        // re-doubled, so their order after the backslash pass is load-bearing.
+        let escaped = input
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t");
         prog.push_str(&format!("    lex_and_print(\"{escaped}\");\n"));
     }
     prog.push_str("}\n");
