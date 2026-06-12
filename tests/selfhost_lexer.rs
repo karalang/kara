@@ -7,12 +7,13 @@
 //! identically. This is the bootstrap oracle: as the port grows, any
 //! divergence from the Rust lexer fails here.
 //!
-//! Covers the port's slice-A token set: all delimiters, punctuation, single-
+//! Covers the port's slice-A+B token set: all delimiters, punctuation, single-
 //! and multi-char operators (maximal-munch forms like `<<=` / `..=` / `?.`),
-//! the full keyword table, identifiers, decimal integers, whitespace, and EOF.
-//! Deferred to later slices (and kept OUT of the corpus): comments, string /
-//! char / byte / interpolated / c-string literals, non-decimal and suffixed /
-//! float numbers, raw identifiers (`r#x`), non-ASCII, and the reserved-word /
+//! the full keyword table, identifiers, decimal integers, whitespace, line and
+//! (nesting) block comments (skipped), `///` / `//!` doc-comment tokens, and
+//! EOF. Deferred to later slices (and kept OUT of the corpus): string / char /
+//! byte / interpolated / c-string literals, non-decimal and suffixed / float
+//! numbers, raw identifiers (`r#x`), non-ASCII, and the reserved-word /
 //! reserved-prefix error forms. Inputs are single-line (so the reported line
 //! is always one) until both the port and the corpus grow newlines. Both
 //! lexers emit a trailing EOF, so the full streams (including EOF) are
@@ -87,6 +88,19 @@ const CORPUS: &[&str] = &[
     "allocates panics blocks suspends with transparent stable seq par yield",
     "as where dyn requires ensures invariant unsafe extern shared layout group",
     "true false alias independent self Self",
+    // Slice B: comments. Line/block comments skip (no token); `///` / `//!`
+    // tokenize as DocComment / ModuleDocComment (body = rest of line, one
+    // optional leading space stripped). Single-line only until the newline slice.
+    "a // line comment here",
+    "1 + 2 // trailing comment",
+    "/// doc comment text",
+    "///x",
+    "//! module doc comment",
+    "x /* block */ y",
+    "a /* /* nested */ */ b",
+    "let x = 1 /* inline */ + 2",
+    "fn f() { /* body */ }",
+    "p / q /= r",
 ];
 
 /// Render one Rust `SpannedToken` in the Kāra lexer's canonical one-line
@@ -229,6 +243,8 @@ fn render_rust(t: &SpannedToken) -> String {
         // Literals / special.
         Token::Identifier { name, .. } => return body_with(s, &format!("IDENT {name}")),
         Token::Integer(v, _) => return body_with(s, &format!("INT {v}")),
+        Token::DocComment(t) => return body_with(s, &format!("DOC {t}")),
+        Token::ModuleDocComment(t) => return body_with(s, &format!("MODDOC {t}")),
         Token::EOF => "EOF",
         other => panic!(
             "corpus input produced a token the slice-A lexer does not model \
@@ -332,9 +348,18 @@ fn selfhost_lexer_matches_rust_lexer() {
 
     // 4. Expected = the Rust lexer's render of every input, concatenated in
     //    corpus order (each input including its trailing EOF).
+    // `trim_end` on both sides (kara_lines is already trimmed above): a doc-
+    // comment body is the verbatim rest of the line, so a trailing space in the
+    // body would otherwise produce an asymmetric trailing space here. The corpus
+    // keeps doc bodies free of trailing whitespace, so this only guards against
+    // an accidental asymmetry — it does not mask a real token-text divergence.
     let mut rust_lines: Vec<String> = Vec::new();
     for input in CORPUS {
-        rust_lines.extend(karac::tokenize(input).iter().map(render_rust));
+        rust_lines.extend(
+            karac::tokenize(input)
+                .iter()
+                .map(|t| render_rust(t).trim_end().to_string()),
+        );
     }
 
     // Pinpoint the first divergence for a legible failure (the full vectors

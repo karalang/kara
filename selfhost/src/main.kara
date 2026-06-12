@@ -6,8 +6,8 @@
 //
 // PORT SLICES (each shipped with the oracle green):
 //   A — delimiters, punctuation, single/multi-char operators, keyword table.
-//       (THIS SLICE.) The structural, non-literal core.
-//   B — comments (line/block skip + `///`/`//!` doc tokens).      [pending]
+//       The structural, non-literal core.                           [DONE]
+//   B — comments (line/block skip + `///`/`//!` doc tokens).        [THIS SLICE]
 //   C — number forms (hex/bin/octal, float, `_` separators, suffixes). [pending]
 //   D — string/char/byte/multi-string/interpolated/c-string literals. [pending]
 //   E — raw idents (`r#x`), non-ASCII recovery, reserved string prefixes,
@@ -190,6 +190,8 @@ enum Token {
     // Literals / special
     Identifier(String),
     Integer(i64),
+    DocComment(String),
+    ModuleDocComment(String),
     Eof,
     Error(String),
 }
@@ -287,14 +289,48 @@ impl Lexer {
     }
 
     fn skip_whitespace(mut ref self) {
-        while not self.is_at_end() {
+        loop {
             let c = self.peek();
-            if c == b' ' or c == b'\t' or c == b'\r' {
+            if c == b' ' or c == b'\r' or c == b'\t' {
                 self.advance();
             } else if c == b'\n' {
                 self.line = self.line + 1;
                 self.column = 0;
                 self.advance();
+            } else if c == b'/' and self.peek_next() == b'/' {
+                // `//` line comment — UNLESS it is `///` / `//!`, which are doc
+                // comments that next_token tokenizes (peek_at(2) returns 0 past
+                // EOF, matching the Rust `current+2 < len && …` guard exactly).
+                let third = self.peek_at(2);
+                if third == b'/' or third == b'!' {
+                    break;
+                } else {
+                    while self.peek() != b'\n' and not self.is_at_end() {
+                        self.advance();
+                    }
+                }
+            } else if c == b'/' and self.peek_next() == b'*' {
+                // `/* … */` block comment, nesting-aware.
+                self.advance();
+                self.advance();
+                let mut depth = 1;
+                while depth > 0 and not self.is_at_end() {
+                    if self.peek() == b'/' and self.peek_next() == b'*' {
+                        self.advance();
+                        self.advance();
+                        depth = depth + 1;
+                    } else if self.peek() == b'*' and self.peek_next() == b'/' {
+                        self.advance();
+                        self.advance();
+                        depth = depth - 1;
+                    } else {
+                        if self.peek() == b'\n' {
+                            self.line = self.line + 1;
+                            self.column = 0;
+                        }
+                        self.advance();
+                    }
+                }
             } else {
                 break;
             }
@@ -378,7 +414,32 @@ impl Lexer {
                 }
             }
             b'/' => {
-                if self.match_char(b'=') {
+                // The leading `/` is already consumed, so peek() is the 2nd byte.
+                if self.peek() == b'/' and self.peek_next() == b'/' {
+                    self.advance();
+                    self.advance();
+                    if self.peek() == b' ' {
+                        self.advance();
+                    }
+                    let text_start = self.current;
+                    while self.peek() != b'\n' and not self.is_at_end() {
+                        self.advance();
+                    }
+                    let text = self.src.substring(text_start, self.current);
+                    self.make_spanned(Token.DocComment(text))
+                } else if self.peek() == b'/' and self.peek_next() == b'!' {
+                    self.advance();
+                    self.advance();
+                    if self.peek() == b' ' {
+                        self.advance();
+                    }
+                    let text_start = self.current;
+                    while self.peek() != b'\n' and not self.is_at_end() {
+                        self.advance();
+                    }
+                    let text = self.src.substring(text_start, self.current);
+                    self.make_spanned(Token.ModuleDocComment(text))
+                } else if self.match_char(b'=') {
                     self.make_spanned(Token.SlashEqual)
                 } else {
                     self.make_spanned(Token.Slash)
@@ -780,6 +841,14 @@ fn render(tok: SpannedToken) -> String {
         Integer(v) => {
             line.push_str("INT ");
             line.push_str(v.to_string());
+        }
+        DocComment(text) => {
+            line.push_str("DOC ");
+            line.push_str(text);
+        }
+        ModuleDocComment(text) => {
+            line.push_str("MODDOC ");
+            line.push_str(text);
         }
         Eof => line.push_str("EOF"),
         Error(msg) => line.push_str("ERROR"),
