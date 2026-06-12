@@ -26,7 +26,12 @@ use std::alloc::{GlobalAlloc, Layout};
 use std::ffi::c_void;
 
 extern "C" {
-    fn malloc(size: usize) -> *mut c_void;
+    // `*mut u8` (not `*mut c_void`) to match the `malloc` extern declared in
+    // `alloc.rs` / `lib.rs` — both are compiled on wasm, and a return-type
+    // mismatch trips the `clashing_extern_declarations` lint (the `-D warnings`
+    // wasm clippy gate, B-2026-06-11-9). `*mut u8` is the majority form (2 of 3
+    // decls); aligning this outlier removes the clash. ABI-identical regardless.
+    fn malloc(size: usize) -> *mut u8;
     fn calloc(nmemb: usize, size: usize) -> *mut c_void;
     fn aligned_alloc(alignment: usize, size: usize) -> *mut c_void;
     fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void;
@@ -41,7 +46,7 @@ struct LibcAlloc;
 unsafe impl GlobalAlloc for LibcAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if layout.align() <= MALLOC_ALIGN {
-            malloc(layout.size()) as *mut u8
+            malloc(layout.size())
         } else {
             // C11 `aligned_alloc` requires size to be a multiple of the
             // alignment; round up (the Layout API caps align at 2^29, so
@@ -89,7 +94,30 @@ static GLOBAL: LibcAlloc = LibcAlloc;
 #[no_mangle]
 pub extern "C" fn __karac_malloc64(size: u64) -> *mut c_void {
     let size = usize::try_from(size).unwrap_or(usize::MAX);
-    unsafe { malloc(size) }
+    unsafe { malloc(size) as *mut c_void }
+}
+
+/// 64-bit-size shims for the fallible / panicking allocation wrappers —
+/// the `size_t` twin of [`__karac_malloc64`] for B-2026-06-12-1.
+/// `karac_alloc_or_panic` / `karac_alloc_fallible` (`alloc.rs`) take
+/// `usize`, which is **i32 on wasm32**, but codegen passes i64 byte counts
+/// at every Vec/String growth site; a direct i64 call traps
+/// `signature_mismatch:karac_alloc_or_panic`. On wasm, codegen declares
+/// THESE i64 shims instead (see `driver.rs::c_alloc_or_panic_symbol` /
+/// `c_alloc_fallible_symbol`), which narrow the count (saturating to
+/// `usize::MAX` so a >4 GiB request fails cleanly via the wrapper's own
+/// null/OOM path) and call the real wrapper. Native targets keep calling
+/// the `usize`-as-i64 wrappers directly — no shim, no twin needed.
+#[no_mangle]
+pub extern "C" fn __karac_alloc_or_panic64(size: u64) -> *mut u8 {
+    let size = usize::try_from(size).unwrap_or(usize::MAX);
+    crate::alloc::karac_alloc_or_panic(size)
+}
+
+#[no_mangle]
+pub extern "C" fn __karac_alloc_fallible64(size: u64) -> *mut u8 {
+    let size = usize::try_from(size).unwrap_or(usize::MAX);
+    crate::alloc::karac_alloc_fallible(size)
 }
 
 /// Component Model **Canonical ABI** reallocation entry point (phase-10
@@ -124,7 +152,7 @@ pub extern "C" fn cabi_realloc(
     unsafe {
         if old_ptr.is_null() {
             if align <= MALLOC_ALIGN {
-                malloc(new_size)
+                malloc(new_size) as *mut c_void
             } else {
                 let size = new_size.next_multiple_of(align);
                 aligned_alloc(align, size)

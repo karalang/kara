@@ -2595,11 +2595,20 @@ impl<'ctx> Codegen<'ctx> {
         // Same `ptr fn(i64)` signature as `malloc`. `karac_alloc_fallible`
         // returns null on OOM (the `try_*` companions branch on it);
         // `karac_alloc_or_panic` aborts on OOM (the panicking collection
-        // methods route through it).
-        let alloc_fallible_fn =
-            module.add_function("karac_alloc_fallible", malloc_type, Some(Linkage::External));
-        let alloc_or_panic_fn =
-            module.add_function("karac_alloc_or_panic", malloc_type, Some(Linkage::External));
+        // methods route through it). On wasm these resolve to the i64 shims
+        // (`__karac_alloc_*64`) rather than the `usize`-param runtime wrappers —
+        // wasm32 `size_t` is i32 and a direct i64 call traps a signature
+        // mismatch, exactly like `malloc` → `__karac_malloc64` (B-2026-06-12-1).
+        let alloc_fallible_fn = module.add_function(
+            crate::codegen::driver::c_alloc_fallible_symbol(),
+            malloc_type,
+            Some(Linkage::External),
+        );
+        let alloc_or_panic_fn = module.add_function(
+            crate::codegen::driver::c_alloc_or_panic_symbol(),
+            malloc_type,
+            Some(Linkage::External),
+        );
         let free_type = context
             .void_type()
             .fn_type(&[BasicMetadataTypeEnum::from(ptr_type)], false);

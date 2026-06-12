@@ -681,6 +681,29 @@ pub(super) fn c_malloc_symbol_cstr() -> &'static std::ffi::CStr {
     }
 }
 
+/// Symbol for the panicking allocation wrapper. Native: the real
+/// `usize`-as-i64 `karac_alloc_or_panic`. wasm: the `__karac_alloc_or_panic64`
+/// i64 shim — wasm32's `size_t` is i32 and the runtime wrapper takes `usize`,
+/// so a direct i64 codegen call traps `signature_mismatch:karac_alloc_or_panic`
+/// (B-2026-06-12-1). Twin of [`c_malloc_symbol`]; see `runtime/src/wasm_alloc.rs`.
+pub(super) fn c_alloc_or_panic_symbol() -> &'static str {
+    if crate::target::active_target_is_wasm() {
+        "__karac_alloc_or_panic64"
+    } else {
+        "karac_alloc_or_panic"
+    }
+}
+
+/// Symbol for the fallible allocation wrapper — the `null`-on-OOM sibling of
+/// [`c_alloc_or_panic_symbol`], same wasm size_t-width rationale.
+pub(super) fn c_alloc_fallible_symbol() -> &'static str {
+    if crate::target::active_target_is_wasm() {
+        "__karac_alloc_fallible64"
+    } else {
+        "karac_alloc_fallible"
+    }
+}
+
 /// Dispatch on the active compilation target (phase-10 `--target`).
 /// `Codegen::new` routes the module's triple + datalayout through this,
 /// so swapping the target machine here re-points the whole emission
