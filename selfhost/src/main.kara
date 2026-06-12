@@ -9,9 +9,9 @@
 //       The structural, non-literal core.                           [DONE]
 //   B — comments (line/block skip + `///`/`//!` doc tokens).        [DONE]
 //   C — number forms (hex/bin/octal, float, `_` separators, suffixes). [DONE]
-//   D — string / multi-string / char / byte literals (+ simple escapes). [THIS SLICE]
-//       f-string interpolation, c-strings, and `\u{…}` / `\0` escapes are a
-//       follow-up (own structure; `\u{…}` gated on a codepoint→char builder).
+//   D — string / multi-string / char / byte literals (+ simple escapes). [DONE]
+//   D-cont — f-string interpolation (`f"…{e}…"`) + c-strings (`c"…"`).   [THIS SLICE]
+//       `\u{…}` / `\0` escapes still deferred (gated on a codepoint→char builder).
 //   E — raw idents (`r#x`), non-ASCII recovery, reserved string prefixes,
 //       reserved fragment-specifier namespace.                     [pending]
 //
@@ -30,6 +30,28 @@ struct Span {
     column: i64,
     offset: i64,
     length: i64,
+}
+
+// One `{…}` interpolation hole in an f-string: the verbatim expression source
+// plus the ABSOLUTE source position of its first byte (so the parser can rebase
+// the re-parsed sub-expression's spans — mirrors token.rs InterpolationPart::Expr).
+struct InterpExpr {
+    raw: String,
+    offset: i64,
+    line: i64,
+    column: i64,
+}
+
+enum InterpPart {
+    Text(String),
+    Expr(InterpExpr),
+}
+
+// Owning payload for a `c"…"` literal: the byte sequence (no trailing NUL —
+// codegen appends it) plus the textual body length.
+struct CStr {
+    bytes: Vec[u8],
+    source_len: i64,
 }
 
 enum Token {
@@ -195,6 +217,8 @@ enum Token {
     Float(f64),
     StringLiteral(String),
     MultiStringLiteral(String),
+    InterpolatedStringLiteral(Vec[InterpPart]),
+    CStringLiteral(CStr),
     CharLiteral(char),
     ByteLiteral(u8),
     DocComment(String),
@@ -575,6 +599,12 @@ impl Lexer {
                 if c == b'b' and self.peek() == b'\'' {
                     self.advance();
                     self.byte_char_literal()
+                } else if c == b'f' and self.peek() == b'"' {
+                    self.advance();
+                    self.interpolated_string()
+                } else if c == b'c' and self.peek() == b'"' {
+                    self.advance();
+                    self.c_string()
                 } else if is_digit(c) {
                     self.number()
                 } else if is_alpha(c) {
@@ -901,6 +931,163 @@ impl Lexer {
         self.make_spanned(Token.ByteLiteral(byte))
     }
 
+    // `f"…{expr}…"` interpolated string. The opening `f"` is consumed. Literal
+    // text accumulates (runs via substring + simple escapes); each `{…}` becomes
+    // an Expr part carrying the verbatim source and its absolute start position.
+    // `\u{…}` is deferred (kept out of the corpus).
+    fn interpolated_string(mut ref self) -> SpannedToken {
+        let mut parts: Vec[InterpPart] = Vec.new();
+        let mut text = "".to_string();
+        let mut run_start = self.current;
+        while self.peek() != b'"' and not self.is_at_end() {
+            if self.peek() == b'{' {
+                text.push_str(self.src.substring(run_start, self.current));
+                if text.len() > 0 {
+                    parts.push(InterpPart.Text(text));
+                    text = "".to_string();
+                }
+                self.advance();
+                let expr_start = self.current;
+                let expr_line = self.line;
+                let expr_column = self.column;
+                let mut depth = 1;
+                while depth > 0 and not self.is_at_end() {
+                    let bc = self.peek();
+                    if bc == b'{' {
+                        depth = depth + 1;
+                    } else if bc == b'}' {
+                        depth = depth - 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    if bc == b'\n' {
+                        self.line = self.line + 1;
+                        self.column = 0;
+                    }
+                    self.advance();
+                }
+                let raw = self.src.substring(expr_start, self.current);
+                self.advance();
+                parts.push(InterpPart.Expr(InterpExpr {
+                    raw: raw,
+                    offset: expr_start,
+                    line: expr_line,
+                    column: expr_column,
+                }));
+                run_start = self.current;
+            } else if self.peek() == b'\\' {
+                text.push_str(self.src.substring(run_start, self.current));
+                self.advance();
+                let e = self.peek();
+                if e == b'n' {
+                    text.push('\n');
+                    self.advance();
+                } else if e == b't' {
+                    text.push('\t');
+                    self.advance();
+                } else if e == b'r' {
+                    text.push('\r');
+                    self.advance();
+                } else if e == b'\\' {
+                    text.push('\\');
+                    self.advance();
+                } else if e == b'"' {
+                    text.push('"');
+                    self.advance();
+                } else if e == b'{' {
+                    text.push('{');
+                    self.advance();
+                } else if e == b'}' {
+                    text.push('}');
+                    self.advance();
+                } else {
+                    return self.make_spanned(Token.Error("Unknown escape sequence".to_string()));
+                }
+                run_start = self.current;
+            } else {
+                if self.peek() == b'\n' {
+                    self.line = self.line + 1;
+                    self.column = 0;
+                }
+                self.advance();
+            }
+        }
+        if self.is_at_end() {
+            return self.make_spanned(Token.Error("Unterminated interpolated string".to_string()));
+        }
+        text.push_str(self.src.substring(run_start, self.current));
+        self.advance();
+        if text.len() > 0 {
+            parts.push(InterpPart.Text(text));
+        }
+        self.make_spanned(Token.InterpolatedStringLiteral(parts))
+    }
+
+    // `c"…"` C-string literal. The opening `c"` is consumed. Accumulates a byte
+    // sequence (ASCII verbatim; `\n \t \r \\ \"` and `\xHH` escapes; interior NUL
+    // rejected). `\u{…}` and multi-byte bodies are deferred (kept out of corpus).
+    fn c_string(mut ref self) -> SpannedToken {
+        let body_start = self.current;
+        let mut bytes: Vec[u8] = Vec.new();
+        while self.peek() != b'"' and not self.is_at_end() {
+            if self.peek() == b'\\' {
+                self.advance();
+                if self.is_at_end() {
+                    return self.make_spanned(Token.Error("Unterminated C-string: trailing backslash".to_string()));
+                }
+                let e = self.peek();
+                if e == b'n' {
+                    bytes.push(b'\n');
+                    self.advance();
+                } else if e == b't' {
+                    bytes.push(b'\t');
+                    self.advance();
+                } else if e == b'r' {
+                    bytes.push(b'\r');
+                    self.advance();
+                } else if e == b'\\' {
+                    bytes.push(b'\\');
+                    self.advance();
+                } else if e == b'"' {
+                    bytes.push(b'"');
+                    self.advance();
+                } else if e == b'0' {
+                    return self.make_spanned(Token.Error("interior NUL bytes are not permitted in C-string literals".to_string()));
+                } else if e == b'x' {
+                    self.advance();
+                    let hi = hex_val(self.peek());
+                    let lo = hex_val(self.peek_at(1));
+                    if hi < 0 or lo < 0 {
+                        return self.make_spanned(Token.Error("\\xHH escape requires two hex digits".to_string()));
+                    }
+                    let v = hi * 16 + lo;
+                    if v == 0 {
+                        return self.make_spanned(Token.Error("interior NUL bytes are not permitted in C-string literals".to_string()));
+                    }
+                    self.advance();
+                    self.advance();
+                    bytes.push(byte_of(v));
+                } else {
+                    return self.make_spanned(Token.Error("Unknown escape sequence in C-string".to_string()));
+                }
+            } else {
+                let b = self.peek();
+                if b >= 0x80 {
+                    return self.make_spanned(Token.Error("multi-byte C-string bodies are deferred".to_string()));
+                }
+                bytes.push(b);
+                self.advance();
+            }
+        }
+        if self.is_at_end() {
+            return self.make_spanned(Token.Error("Unterminated C-string".to_string()));
+        }
+        let source_len = self.current - body_start;
+        self.advance();
+        self.make_spanned(Token.CStringLiteral(CStr { bytes: bytes, source_len: source_len }))
+    }
+
     fn identifier(mut ref self) -> SpannedToken {
         while is_alpha(self.peek()) or is_digit(self.peek()) {
             self.advance();
@@ -1024,6 +1211,23 @@ fn is_digit(c: u8) -> bool {
 // A byte that can follow `e`/`E` in a float exponent.
 fn is_exp_start(c: u8) -> bool {
     is_digit(c) or c == b'+' or c == b'-'
+}
+
+// Hex digit value 0–15, or -1 if `c` is not a hex digit.
+fn hex_val(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c as i64) - (b'0' as i64)
+    } else if c >= b'a' and c <= b'f' {
+        (c as i64) - (b'a' as i64) + 10
+    } else if c >= b'A' and c <= b'F' {
+        (c as i64) - (b'A' as i64) + 10
+    } else {
+        -1
+    }
+}
+
+fn byte_of(v: i64) -> u8 {
+    v as u8
 }
 
 fn is_radix_digit(c: u8, radix: i64) -> bool {
@@ -1247,6 +1451,35 @@ fn render(tok: SpannedToken) -> String {
         MultiStringLiteral(v) => {
             line.push_str("MSTR ");
             line.push_str(escape_for_render(v));
+        }
+        InterpolatedStringLiteral(parts) => {
+            line.push_str("FSTR");
+            for p in parts {
+                match p {
+                    Text(t) => {
+                        line.push_str(" T:");
+                        line.push_str(escape_for_render(t));
+                    }
+                    Expr(e) => {
+                        line.push_str(" E:");
+                        line.push_str(e.offset.to_string());
+                        line.push_str(":");
+                        line.push_str(e.line.to_string());
+                        line.push_str(":");
+                        line.push_str(e.column.to_string());
+                        line.push_str(":");
+                        line.push_str(escape_for_render(e.raw));
+                    }
+                }
+            }
+        }
+        CStringLiteral(cs) => {
+            line.push_str("CSTR ");
+            line.push_str(cs.source_len.to_string());
+            for b in cs.bytes {
+                line.push_str(" ");
+                line.push_str(b.to_string());
+            }
         }
         CharLiteral(c) => {
             line.push_str("CHAR ");

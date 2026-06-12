@@ -13,10 +13,12 @@
 //! float, `_` separators, int/float suffixes), whitespace, line and (nesting)
 //! block comments (skipped), `///` / `//!` doc-comment tokens, string /
 //! multi-string / char / byte literals (with `\n \t \r \\ \" \'` escapes,
-//! rendered through a shared `escape_for_render`), and EOF. Deferred to later
-//! slices (and kept OUT of the corpus): f-string interpolation, c-strings,
-//! `\u{…}` / `\0` escapes, raw identifiers (`r#x`), non-ASCII, and the
-//! reserved-word / reserved-prefix error forms. Inputs are single-line (so the
+//! rendered through a shared `escape_for_render`), f-string interpolation
+//! (`f"…{e}…"` → text/expr parts with absolute expr positions) and c-strings
+//! (`c"…"` → byte sequence + source length, incl. `\xHH`), and EOF. Deferred to
+//! later slices (and kept OUT of the corpus): `\u{…}` / `\0` escapes, raw
+//! identifiers (`r#x`), non-ASCII, and the reserved-word / reserved-prefix
+//! error forms. Inputs are single-line (so the
 //! reported line is always one) until both the port and the corpus grow
 //! newlines. Both lexers emit a trailing EOF, so the full streams (including
 //! EOF) are compared.
@@ -41,7 +43,7 @@
 
 #![cfg(feature = "llvm")]
 
-use karac::token::{SpannedToken, Token};
+use karac::token::{InterpolationPart, SpannedToken, Token};
 use std::path::PathBuf;
 
 /// Inputs exercising the slice-A token set. Plain ASCII, no quotes /
@@ -132,6 +134,19 @@ const CORPUS: &[&str] = &[
     r#"b'A' b'z' b'0' b'~'"#,
     r#"b'\n' b'\t' b'\\' b'\'' b'"'"#,
     r#"let s = "name: " + x"#,
+    // Slice D-cont: f-string interpolation + c-strings.
+    r#"f"hello {name}!""#,
+    r#"f"{a + b} and {c}""#,
+    r#"f"no holes""#,
+    r#"f"""#,
+    r#"f"nested {outer{inner}} done""#,
+    r#"f"tab\there {x} end""#,
+    r#"f"x={x[0]} y={obj.field}""#,
+    r#"c"hello""#,
+    r#"c"a\tb\n""#,
+    r#"c"\x41\x42\x7e""#,
+    r#"c"with \"quote\"""#,
+    r#"let p = f"{a}" + c"x""#,
 ];
 
 /// Render one Rust `SpannedToken` in the Kāra lexer's canonical one-line
@@ -283,6 +298,36 @@ fn render_rust(t: &SpannedToken) -> String {
         Token::StringLiteral(v) => return body_with(s, &format!("STR {}", escape_for_render(v))),
         Token::MultiStringLiteral(v) => {
             return body_with(s, &format!("MSTR {}", escape_for_render(v)))
+        }
+        Token::InterpolatedStringLiteral(parts) => {
+            let mut b = "FSTR".to_string();
+            for p in parts {
+                match p {
+                    InterpolationPart::Text(t) => {
+                        b.push_str(" T:");
+                        b.push_str(&escape_for_render(t));
+                    }
+                    InterpolationPart::Expr {
+                        raw,
+                        offset,
+                        line,
+                        column,
+                    } => {
+                        b.push_str(&format!(
+                            " E:{offset}:{line}:{column}:{}",
+                            escape_for_render(raw)
+                        ));
+                    }
+                }
+            }
+            return body_with(s, &b);
+        }
+        Token::CStringLiteral { bytes, source_len } => {
+            let mut b = format!("CSTR {source_len}");
+            for byte in bytes {
+                b.push_str(&format!(" {byte}"));
+            }
+            return body_with(s, &b);
         }
         Token::CharLiteral(c) => {
             return body_with(s, &format!("CHAR {}", escape_for_render(&c.to_string())))
