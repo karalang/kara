@@ -469,6 +469,54 @@ fn main() {
         );
     }
 
+    // ── Block expression used AS A VALUE returns a live (not freed) buffer ──
+    //
+    // B-2026-06-11-2: a block in value position (`let s = { …; tail }`, an
+    // `if`/`match` arm, a function-return block) whose tail is a
+    // scope-registered heap value — an f-string accumulator or a block-local
+    // `let`-bound String — was freed by the block frame's `drain_top_frame_
+    // with_emit` between the tail-value load and the value escaping. That left
+    // the consumer holding a dangling buffer (use-after-free) and, against the
+    // consumer's own owner cleanup, a double-free. Fix: suppress the tail
+    // value's cleanup before the block-frame drain so the consumer's binding is
+    // the sole owner. The loop builds a FRESH heap String each iteration in
+    // every consumer position with non-foldable (concat / f-string) sources, so
+    // a stale free of any trips ASAN's heap-use-after-free / double-free.
+
+    #[test]
+    fn asan_block_expr_value_heap_return_no_stale_free() {
+        assert_clean_asan_run(
+            r#"
+enum E { A(String), B }
+fn mk(n: i64) -> String { { f"r{n}" } }
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        let a = { f"a{i}" };
+        println(a);
+        let b = { let p = "x" + "y"; p };
+        println(b);
+        let c = if i < 5 { f"c{i}" } else { f"d{i}" };
+        println(c);
+        let e1 = E.A("m" + "m");
+        let d = match e1 { E.A(n) => { f"<{n}>" }, E.B => "z" };
+        println(d);
+        let e2 = E.A("k" + "k");
+        let g = match e2 { E.A(n) => { let p = f"[{n}]"; p }, E.B => "z" };
+        println(g);
+        println(mk(i));
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "a0", "xy", "c0", "<mm>", "[kk]", "r0", "a1", "xy", "c1", "<mm>", "[kk]", "r1",
+                "a2", "xy", "c2", "<mm>", "[kk]", "r2",
+            ],
+            "block_expr_value_heap_return",
+        );
+    }
+
     // ── Closures that RETURN a heap value (closure-heap-return-cleanup) ──
     //
     // A closure whose body is a block returning a heap binding

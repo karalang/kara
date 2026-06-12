@@ -14417,10 +14417,10 @@ fn main() {
         // the acc's `cap` so its cleanup no-ops and the value escapes via the
         // match phi (mirrors the function-tail f-string-return handling).
         // Covers fn-return, let-bound, i64 payload, nested-into-outer, and a
-        // discarded result (must not double-free). NOTE: a brace-WRAPPED arm
-        // body (`=> { f"…" }` or `=> { let p = f"…"; p }`) routes through the
-        // separate, pre-existing block-expr-value heap-return bug and is NOT
-        // covered here (see bugs.md B-2026-06-11-2).
+        // discarded result (must not double-free). The brace-WRAPPED arm body
+        // (`=> { f"…" }` / `=> { let p = f"…"; p }`) is the separate
+        // block-expr-value heap-return shape, fixed and covered by
+        // `test_e2e_block_expr_value_heap_return` (B-2026-06-11-2).
         let out = run_program(
             r#"
 enum E { A(String), B(i64) }
@@ -14452,6 +14452,53 @@ fn main() {
         );
         if let Some(out) = out {
             assert_eq!(out, "A[xy]\nB[99]\n<hi>\nouter:A[ab]\ndone\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_block_expr_value_heap_return() {
+        // B-2026-06-11-2: a block expression USED AS A VALUE whose tail is a
+        // scope-registered heap value (an f-string accumulator or a block-local
+        // `let`-bound String) lost the value under AOT — it printed empty. The
+        // block's `compile_block_with_frame` loaded the tail, then drained its
+        // own frame, freeing the tail's buffer between the load and the value
+        // escaping (a use-after-free). Fix: suppress the tail value's cleanup
+        // before the block-frame drain (mirrors `compile_function`'s tail
+        // handling) so the consumer's own binding is the sole owner. Covers
+        // every consumer the bug surfaced across: plain let-RHS (f-string and
+        // identifier tail), `if`-arm value, a block-`let` inside a loop, a
+        // brace-WRAPPED match arm (f-string and identifier tail), a nested
+        // block, a function-return block, and a struct-field initializer block.
+        let out = run_program(
+            r#"
+enum E { A(String), B }
+fn mk() -> String { { f"ret{1}" } }
+struct S { name: String }
+fn main() {
+    let a = { f"a{1}" };
+    println(a);
+    let b = { let p = "x" + "y"; p };
+    println(b);
+    let c = if true { f"yes{2}" } else { f"no{0}" };
+    println(c);
+    let mut i = 0i64;
+    while i < 2i64 { let v = { f"v{i}" }; println(v); i = i + 1i64; }
+    let e1 = E.A("m");
+    let d = match e1 { E.A(n) => { f"<{n}>" }, E.B => "z" };
+    println(d);
+    let e2 = E.A("k");
+    let g = match e2 { E.A(n) => { let p = f"[{n}]"; p }, E.B => "z" };
+    println(g);
+    let h = { { f"nest{3}" } };
+    println(h);
+    println(mk());
+    let s = S { name: { f"fld{4}" } };
+    println(s.name);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "a1\nxy\nyes2\nv0\nv1\n<m>\n[k]\nnest3\nret1\nfld4\n");
         }
     }
 

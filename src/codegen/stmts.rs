@@ -195,11 +195,61 @@ impl<'ctx> super::Codegen<'ctx> {
             .get_terminator()
             .is_some();
         if !body_has_terminator {
+            // The block is used AS A VALUE (`let s = { …; tail }`, an
+            // `if`/`match` arm, a call argument): its tail's heap buffer is
+            // loaded into `result` and escapes to the consumer, which becomes
+            // the buffer's owner (the let binding's own `track_vec_var`, the
+            // match result, …). Neutralize the tail value's cleanup BEFORE
+            // this frame drains so it isn't freed between the tail-value load
+            // and the value escaping (a use-after-free) and isn't double-freed
+            // against the consumer's owner cleanup (B-2026-06-11-2). Exactly
+            // the move-aware tail handling `compile_function` applies to a
+            // function's tail return.
+            if let Some(tail) = block.final_expr.as_deref() {
+                self.suppress_block_tail_cleanup(tail);
+            }
             self.drain_top_frame_with_emit();
         } else {
             self.scope_cleanup_actions.pop();
         }
         Ok(result)
+    }
+
+    /// Suppress the cleanup of a value-position block's tail expression before
+    /// its frame drains, so the escaping value survives to its consumer (which
+    /// owns it). Mirrors `compile_function`'s tail-return suppression:
+    ///   - an **f-string** tail zeroes the accumulator's `cap`
+    ///     (`zero_vec_alloca_cap`) so the queued `FreeVecBuffer` no-ops;
+    ///   - an **identifier** Vec/String/Map/struct tail routes through
+    ///     `suppress_source_vec_cleanup_for_arg` (the same move-out suppressor
+    ///     the `let b = a;` and tail-return paths use);
+    ///   - a **nested block / unsafe** tail recurses to its own tail.
+    ///
+    /// Without this, `let s = { …; tail }` (and the `if`/`match`-arm and
+    /// call-arg block shapes) freed the tail buffer at block-frame drain — a
+    /// use-after-free that printed empty (B-2026-06-11-2). The consumer's
+    /// binding remains the sole owner: it was loaded with the real `cap` before
+    /// the source's `cap` is zeroed here, and an `if`/`match` arm suppresses its
+    /// OWN tail per-arm, so a never-run arm's already-zero (entry-init'd) `cap`
+    /// stays harmless. A transient/fresh tail (concat, call result) has no
+    /// frame-registered cleanup, so this is a no-op there.
+    fn suppress_block_tail_cleanup(&mut self, tail: &Expr) {
+        match &tail.kind {
+            ExprKind::InterpolatedStringLit(_) => {
+                if let Some(acc) = self.last_fstr_acc {
+                    self.zero_vec_alloca_cap(acc);
+                }
+            }
+            ExprKind::Identifier(_) => {
+                self.suppress_source_vec_cleanup_for_arg(tail);
+            }
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
+                if let Some(inner) = b.final_expr.as_deref() {
+                    self.suppress_block_tail_cleanup(inner);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Compile a function's top-level body, dispatching inferred parallel
