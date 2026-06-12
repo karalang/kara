@@ -341,7 +341,89 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
-    /// Print a String value (`{data,len,cap}`) with `%.*s` + the newline `nl`,
+    /// Write exactly `len` bytes of `data` to stdout (or stderr) via `fwrite`,
+    /// followed by the newline `nl`. NUL-safe — unlike `printf("%.*s")`, which
+    /// stops at the first interior NUL even with a precision set (so a
+    /// length-prefixed String carrying `\0` would print truncated, L5).
+    /// `fwrite` shares libc's stdio buffer with the `printf` int/bool print
+    /// paths, so output ordering across mixed prints is preserved.
+    pub(super) fn emit_nul_safe_write(
+        &mut self,
+        data: inkwell::values::PointerValue<'ctx>,
+        len: inkwell::values::IntValue<'ctx>,
+        nl: &str,
+        to_stderr: bool,
+    ) {
+        let ptr_t = self.context.ptr_type(inkwell::AddressSpace::default());
+        // `fwrite`'s size args are `size_t` — i32 on wasm32, i64 natively
+        // (must match the extern declaration EXACTLY; wasm traps a mismatch).
+        let size_t = if crate::target::active_target_is_wasm() {
+            self.context.i32_type()
+        } else {
+            self.context.i64_type()
+        };
+        let one = size_t.const_int(1, false);
+        // Normalize the byte length to size_t (truncate a wider i64 on wasm,
+        // widen a narrower count like the char-codepoint path's byte count).
+        let len_st = {
+            let cur = len.get_type().get_bit_width();
+            let want = size_t.get_bit_width();
+            if cur == want {
+                len
+            } else if cur > want {
+                self.builder
+                    .build_int_truncate(len, size_t, "fw.len.st")
+                    .unwrap()
+            } else {
+                self.builder
+                    .build_int_z_extend(len, size_t, "fw.len.st")
+                    .unwrap()
+            }
+        };
+        let file_glob = if to_stderr {
+            self.stderr_global
+        } else {
+            self.stdout_global
+        };
+        let stream = self
+            .builder
+            .build_load(ptr_t, file_glob.as_pointer_value(), "fw.stream")
+            .unwrap();
+        self.builder
+            .build_call(
+                self.fwrite_fn,
+                &[
+                    BasicMetadataValueEnum::from(data),
+                    BasicMetadataValueEnum::from(one),
+                    BasicMetadataValueEnum::from(len_st),
+                    BasicMetadataValueEnum::from(stream),
+                ],
+                "fw",
+            )
+            .unwrap();
+        if !nl.is_empty() {
+            let nl_g = self.builder.build_global_string_ptr(nl, "fw.nl").unwrap();
+            let nl_len = size_t.const_int(nl.len() as u64, false);
+            let stream2 = self
+                .builder
+                .build_load(ptr_t, file_glob.as_pointer_value(), "fw.stream.nl")
+                .unwrap();
+            self.builder
+                .build_call(
+                    self.fwrite_fn,
+                    &[
+                        BasicMetadataValueEnum::from(nl_g.as_pointer_value()),
+                        BasicMetadataValueEnum::from(one),
+                        BasicMetadataValueEnum::from(nl_len),
+                        BasicMetadataValueEnum::from(stream2),
+                    ],
+                    "fw.nl.call",
+                )
+                .unwrap();
+        }
+    }
+
+    /// Print a String value (`{data,len,cap}`) NUL-safely + the newline `nl`,
     /// then free its heap buffer. Used by the collection-Display print arms,
     /// which render into a throwaway accumulator and must release it inline
     /// (no scope-tracking — avoids per-call buffer accumulation in loops).
@@ -357,25 +439,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_extract_value(sv, 1, "ps.len")
             .unwrap()
             .into_int_value();
-        let len32 = self
-            .builder
-            .build_int_truncate(len, self.context.i32_type(), "ps.len32")
-            .unwrap();
-        let fmt = self
-            .builder
-            .build_global_string_ptr(&format!("%.*s{nl}"), "ps.fmt")
-            .unwrap();
-        self.builder
-            .build_call(
-                self.printf_fn,
-                &[
-                    BasicMetadataValueEnum::from(fmt.as_pointer_value()),
-                    BasicMetadataValueEnum::from(len32),
-                    BasicMetadataValueEnum::from(data),
-                ],
-                "p",
-            )
-            .unwrap();
+        self.emit_nul_safe_write(data, len, nl, false);
         self.builder
             .build_call(self.free_fn, &[data.into()], "")
             .unwrap();
@@ -466,32 +530,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // arm below (an enum lowers to a tagged struct value).
         if let Some(ename) = self.expr_user_enum_name(&args[0].value) {
             let (data, len) = self.compile_unit_enum_display(&args[0].value, &ename)?;
-            let len_i32 = self
-                .builder
-                .build_int_truncate(len, self.context.i32_type(), "pe.len.i32")
-                .unwrap();
-            let fmt = self
-                .builder
-                .build_global_string_ptr(&format!("%.*s{nl}"), "pe.fmt")
-                .unwrap();
-            self.builder
-                .build_call(
-                    self.printf_fn,
-                    &[
-                        BasicMetadataValueEnum::from(fmt.as_pointer_value()),
-                        BasicMetadataValueEnum::from(len_i32),
-                        BasicMetadataValueEnum::from(data),
-                    ],
-                    "printf",
-                )
-                .unwrap();
+            self.emit_nul_safe_write(data, len, nl, false);
             return Ok(zero.into());
         }
 
         // User-struct arm — `#[derive(Display)]` / `impl Display` structs
         // render as `TypeName { field: value, … }` in declaration order
         // (matching the interpreter). Render to an owning String via the
-        // synthetic-f-string path, then print it with `%.*s`. Must precede
+        // synthetic-f-string path, then print it NUL-safely. Must precede
         // the value-kind arms below: a user struct lowers to a struct value
         // that is NOT the 3-field String layout, so without this it would hit
         // the String / raw-pointer arm and ICE / print an address.
@@ -509,25 +555,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_extract_value(s, 1, "pd.len")
                 .unwrap()
                 .into_int_value();
-            let len_i32 = self
-                .builder
-                .build_int_truncate(len, self.context.i32_type(), "pd.len.i32")
-                .unwrap();
-            let fmt = self
-                .builder
-                .build_global_string_ptr(&format!("%.*s{nl}"), "pd.fmt")
-                .unwrap();
-            self.builder
-                .build_call(
-                    self.printf_fn,
-                    &[
-                        BasicMetadataValueEnum::from(fmt.as_pointer_value()),
-                        BasicMetadataValueEnum::from(len_i32),
-                        BasicMetadataValueEnum::from(data),
-                    ],
-                    "printf",
-                )
-                .unwrap();
+            self.emit_nul_safe_write(data, len, nl, false);
             return Ok(zero.into());
         }
 
@@ -541,28 +569,9 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.expr_is_char(&args[0].value) {
             let val = self.compile_expr(&args[0].value)?;
             let (buf_ptr, byte_len) = self.emit_codepoint_to_utf8(val.into_int_value());
-            // printf reads the precision argument as `int`, so truncate
-            // the i64 length to i32 — codepoints are at most 4 bytes,
-            // well within i32.
-            let len_i32 = self
-                .builder
-                .build_int_truncate(byte_len, self.context.i32_type(), "u8.len.i32")
-                .unwrap();
-            let fmt = self
-                .builder
-                .build_global_string_ptr(&format!("%.*s{nl}"), "fc")
-                .unwrap();
-            self.builder
-                .build_call(
-                    self.printf_fn,
-                    &[
-                        BasicMetadataValueEnum::from(fmt.as_pointer_value()),
-                        BasicMetadataValueEnum::from(len_i32),
-                        BasicMetadataValueEnum::from(buf_ptr),
-                    ],
-                    "printf",
-                )
-                .unwrap();
+            // NUL-safe write: `'\0'` is a single 0x00 byte (byte_len 1) — a
+            // `%.*s` print would emit nothing; `fwrite` emits the NUL (L5).
+            self.emit_nul_safe_write(buf_ptr, byte_len, nl, false);
             return Ok(zero.into());
         }
 
@@ -655,26 +664,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         .to_string(),
                 );
             }
-            // String struct `{ ptr, i64, i64 }` (data, len, cap). The
-            // pre-fix path passed the data pointer to `%s` directly,
-            // which puts/printf treats as a NUL-terminated C string —
-            // and string-literal `cap = 0` storage happens to hit a
-            // NUL by luck (clang's `c"...\0"` global form), but
-            // heap-allocated Strings (concat result, `String + String`,
-            // any function return that allocates) carry `len` bytes
-            // with no terminator. A `%s` read then walks past the
-            // buffer, which AddressSanitizer flags as a 1-byte
-            // heap-buffer-overflow at puts (LLVM rewrites
-            // `printf("%s\n", str)` to `puts(str)` as a libc-call
-            // optimization — same shape either way).
-            //
-            // Fix: use `%.*s` with the explicit length from field 1,
-            // so printf reads exactly `len` bytes and never touches
-            // the byte past the buffer. Mirrors the char-codepoint
-            // arm above and the per-type Display synthesizer in
-            // `synth_display`. Precision is `int` per printf's
-            // varargs ABI, so truncate the i64 length to i32 — String
-            // lengths > 2 GiB are far outside v1's scope.
+            // String struct `{ ptr, i64, i64 }` (data, len, cap). An earlier
+            // fix moved this off a bare `%s` (which puts/printf treats as a
+            // NUL-terminated C string and walks past a non-terminated heap
+            // buffer — an ASAN 1-byte heap-buffer-overflow) onto `%.*s` with
+            // the explicit `len`. But `%.*s` ALSO stops at an interior NUL
+            // even with a precision, so a String carrying `\0` printed
+            // truncated. `emit_nul_safe_write` lowers to `fwrite`, which
+            // writes exactly `len` bytes regardless of NULs (L5) and still
+            // never reads past the buffer.
             let sv = val.into_struct_value();
             let str_ptr = self
                 .builder
@@ -686,25 +684,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_extract_value(sv, 1, "str.len")
                 .unwrap()
                 .into_int_value();
-            let len_i32 = self
-                .builder
-                .build_int_truncate(str_len, self.context.i32_type(), "str.len.i32")
-                .unwrap();
-            let fmt = self
-                .builder
-                .build_global_string_ptr(&format!("%.*s{nl}"), "fsp")
-                .unwrap();
-            self.builder
-                .build_call(
-                    self.printf_fn,
-                    &[
-                        BasicMetadataValueEnum::from(fmt.as_pointer_value()),
-                        BasicMetadataValueEnum::from(len_i32),
-                        BasicMetadataValueEnum::from(str_ptr),
-                    ],
-                    "printf",
-                )
-                .unwrap();
+            self.emit_nul_safe_write(str_ptr, str_len, nl, false);
         } else if val.is_pointer_value() {
             // Raw pointer (shared types, etc.) — pass directly to %s.
             let fmt = self
@@ -726,28 +706,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // runtime `karac_runtime_f64_to_str`) so AOT output matches
             // `karac run` exactly — not C `printf`'s `%g` (6 significant
             // figures, lowercase `nan`). `format_f64_to_stack_buf` widens
-            // f32→f64 and returns `(buf_ptr, len)`; print with `%.*s` and the
-            // trailing newline (`nl` is "" for `print`).
+            // f32→f64 and returns `(buf_ptr, len)`; written NUL-safely with
+            // the trailing newline (`nl` is "" for `print`). Float text never
+            // carries a NUL, but routing it through the same `fwrite` path
+            // keeps the print surface uniform (and buffer-shared with printf).
             let (buf_ptr, len) = self.format_f64_to_stack_buf(val.into_float_value());
-            let len32 = self
-                .builder
-                .build_int_truncate(len, self.context.i32_type(), "ff.len32")
-                .unwrap();
-            let fmt = self
-                .builder
-                .build_global_string_ptr(&format!("%.*s{nl}"), "ff")
-                .unwrap();
-            self.builder
-                .build_call(
-                    self.printf_fn,
-                    &[
-                        BasicMetadataValueEnum::from(fmt.as_pointer_value()),
-                        BasicMetadataValueEnum::from(len32),
-                        BasicMetadataValueEnum::from(buf_ptr),
-                    ],
-                    "printf",
-                )
-                .unwrap();
+            self.emit_nul_safe_write(buf_ptr, len, nl, false);
         }
         Ok(zero.into())
     }

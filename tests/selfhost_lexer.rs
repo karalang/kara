@@ -157,14 +157,16 @@ const CORPUS: &[&str] = &[
     r#""caf\u{e9} \u{1F44d}""#,
     r#"f"x \u{e9} {a} \u{1F600} end""#,
     r#"c"\u{41}\u{e9}\u{1F600}""#,
-    // NOTE: `\0`-in-payload corpus entries (`'\0'`, `"a\0b"`, `f"pre \0 post"`)
-    // are DEFERRED. The lexer handles `\0` correctly (the arms mirror the seed),
-    // but the oracle compares *rendered stdout*, and `println` truncates strings
-    // at an interior NUL (it lowers to `printf("%.*s")`, and `%s` stops at NUL
-    // even with a precision) — so a `CHAR \0` line prints as `CHAR `. Re-enable
-    // once the println NUL-truncation runtime/print bug is fixed (tracked as a
-    // phase-12 lexer follow-on). The c-string `\u{0}` interior-NUL *rejection*
-    // below is unaffected (it renders bare ERROR, no NUL in output).
+    // `\0`-in-payload entries (`'\0'`, `"a\0b"`, `f"pre \0 post"`). Previously
+    // DEFERRED because `println` truncated strings at an interior NUL (it lowered
+    // to `printf("%.*s")`, which stops at the first NUL even with a precision) —
+    // RE-ENABLED now that the print path uses NUL-safe `fwrite` and string
+    // literals/f-string text are stored as byte-array globals that preserve
+    // interior NULs (L5, phase-12). The c-string `\u{0}` interior-NUL *rejection*
+    // below is a separate path (renders bare ERROR, no NUL in output).
+    r#"'\0'"#,
+    r#""a\0b""#,
+    r#"f"pre \0 post""#,
     // Error-span parity (Error renders bare `ERROR`; offset/length must match).
     r#"'\u{D800}'"#,
     r#"'\u{110000}'"#,

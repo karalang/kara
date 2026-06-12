@@ -23128,15 +23128,20 @@ fn main() {
             );
         }
         // Sanity: the IR should print "disk full" through the proper
-        // String-payload destructure, not "wrong variant" via the `_`
-        // arm. Look for `%.*s\n` (the printf format for length-prefixed
-        // string output) — pre-fix the wrong path emitted `%lld\n`
-        // because the codegen mis-typed the payload as i64.
+        // String-payload destructure, not via an integer mis-read. The
+        // String path lowers to a NUL-safe `@fwrite` (L5); the wrong path
+        // (mis-typing the payload as i64) would lower `println(msg)` to a
+        // `printf("%lld\n")`. The discriminator is the `%lld\0A` format
+        // (with newline) — the module also carries `%lld\00` (no newline)
+        // f-string integer-format globals unconditionally, so a bare `%lld`
+        // check would false-positive; the `\0A`-terminated form is the
+        // `println`-of-integer fingerprint.
         assert!(
-            first.contains("\"%.*s\\0A\\00\""),
-            "expected IR to emit length-prefixed string printf for \
-             `Other(msg) => println(msg)`; got an integer-format-string \
-             instead (the wrong-enum-layout symptom)"
+            first.contains("@fwrite") && !first.contains("%lld\\0A"),
+            "expected IR to emit a length-prefixed string `fwrite` for \
+             `Other(msg) => println(msg)` with no `println`-of-integer \
+             format string; got the `%lld\\n` integer path (the \
+             wrong-enum-layout symptom)"
         );
     }
 
@@ -31147,6 +31152,31 @@ fn main() {
         )
         .expect("compile + run failed");
         assert_eq!(output, "A\na\n😀\nerr:55296\nerr:1114112\nerr:-1\n");
+    }
+
+    #[test]
+    fn test_e2e_println_preserves_interior_nul() {
+        // L5: `println`/`print` must emit interior NUL bytes, not truncate at
+        // the first NUL. Pre-fix TWO bugs compounded — the print path lowered
+        // to `printf("%.*s")` (stops at the first NUL even with a precision),
+        // AND string-literal / f-string-text storage used
+        // `LLVMBuildGlobalString` (C-string truncation, so the global lost
+        // everything past the NUL). The fix uses NUL-safe `fwrite` for the
+        // print and byte-array globals for the literals. Covers: a string
+        // literal with an interior NUL, the `'\0'` char, f-string text with
+        // `\0`, and a heap-concat result (memcpy-built, fed from a NUL literal).
+        let output = run_program(
+            "fn main() {\n\
+                 println(\"AB\\0CD\");\n\
+                 println('\\0');\n\
+                 println(f\"pre \\0 post\");\n\
+                 let a = \"AB\\0\";\n\
+                 print(a + \"CD\");\n\
+                 println(\"\");\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "AB\0CD\n\0\npre \0 post\nAB\0CD\n");
     }
 
     #[test]

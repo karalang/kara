@@ -3023,56 +3023,12 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_extract_value(sv, 1, "con.str.len")
             .unwrap()
             .into_int_value();
-        let len_i32 = self
-            .builder
-            .build_int_truncate(str_len, self.context.i32_type(), "con.len.i32")
-            .unwrap();
         let nl = if newline { "\n" } else { "" };
-        if to_stderr {
-            let i32_t = self.context.i32_type();
-            let ptr_t = self.context.ptr_type(AddressSpace::default());
-            // int dprintf(int fd, const char *fmt, ...)
-            let dprintf = match self.module.get_function("dprintf") {
-                Some(f) => f,
-                None => {
-                    let ty = i32_t.fn_type(&[i32_t.into(), ptr_t.into()], true);
-                    self.module.add_function("dprintf", ty, None)
-                }
-            };
-            let fmt = self
-                .builder
-                .build_global_string_ptr(&format!("%.*s{nl}"), "con.fmt.e")
-                .unwrap();
-            let fd2 = i32_t.const_int(2, false);
-            self.builder
-                .build_call(
-                    dprintf,
-                    &[
-                        fd2.into(),
-                        fmt.as_pointer_value().into(),
-                        len_i32.into(),
-                        str_ptr.into(),
-                    ],
-                    "dprintf",
-                )
-                .unwrap();
-        } else {
-            let fmt = self
-                .builder
-                .build_global_string_ptr(&format!("%.*s{nl}"), "con.fmt.o")
-                .unwrap();
-            self.builder
-                .build_call(
-                    self.printf_fn,
-                    &[
-                        fmt.as_pointer_value().into(),
-                        len_i32.into(),
-                        str_ptr.into(),
-                    ],
-                    "printf",
-                )
-                .unwrap();
-        }
+        // NUL-safe `fwrite` to the stdout / stderr `FILE*` (L5) — the old
+        // `printf`/`dprintf("%.*s")` form truncated a String at an interior
+        // NUL. stderr's `FILE*` is unbuffered by default, preserving the
+        // immediate-flush semantics the prior `dprintf(fd 2)` had.
+        self.emit_nul_safe_write(str_ptr, str_len, nl, to_stderr);
         Ok(())
     }
 

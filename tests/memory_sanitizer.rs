@@ -285,6 +285,33 @@ fn main() {
         );
     }
 
+    // ── L5: NUL-safe print over heap + literal storage ────────────
+    //
+    // The print path uses `fwrite(data, 1, len, stdout)` so interior NUL
+    // bytes are emitted, not truncated. ASAN guards the no-over-read
+    // property at the byte boundary: a heap String from concat (`a + b`) is
+    // `len`-prefixed and NOT NUL-terminated, so `fwrite` reading exactly
+    // `len` bytes must not touch the byte past the buffer (the prior `%s`
+    // path did, an ASAN heap-buffer-overflow). The literal `"AB\0"` global
+    // is sized `len + 1` and its interior NUL must survive the concat memcpy.
+
+    #[test]
+    fn asan_println_interior_nul_no_overflow() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let a = "AB\0";
+    let b = "CD";
+    let s = a + b;
+    println(s);
+    println('\0');
+}
+"#,
+            &["AB\u{0}CD", "\u{0}"],
+            "println_interior_nul_no_overflow",
+        );
+    }
+
     // ── `collect_all_vec` gather (phase-6 slice 1b) ───────────────
     //
     // Lowers a runtime Vec of closures into parallel `karac_par_run`

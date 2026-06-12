@@ -1125,6 +1125,17 @@ pub(super) struct Codegen<'ctx> {
     /// `int snprintf(char* buf, size_t n, const char* fmt, ...)` — used by f-string
     /// codegen to convert integers and floats to their decimal string forms.
     pub(crate) snprintf_fn: FunctionValue<'ctx>,
+    /// `size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream)` —
+    /// the NUL-safe string-print primitive (L5). Unlike `printf("%.*s")`, which
+    /// stops at the first interior NUL even with a precision, `fwrite` writes
+    /// exactly `len` bytes. It shares libc's stdio buffer with the `printf`
+    /// int/bool paths, so output ordering across mixed prints is preserved.
+    pub(crate) fwrite_fn: FunctionValue<'ctx>,
+    /// The libc `FILE*` globals for stdout / stderr, used as the `fwrite`
+    /// stream argument. The symbol name is platform-specific (`__stdoutp` /
+    /// `__stderrp` on Apple, `stdout` / `stderr` elsewhere, incl. wasi-libc).
+    pub(crate) stdout_global: inkwell::values::GlobalValue<'ctx>,
+    pub(crate) stderr_global: inkwell::values::GlobalValue<'ctx>,
     /// LLVM struct types for Kāra structs (struct name → LLVM type).
     pub(crate) struct_types: HashMap<String, StructType<'ctx>>,
     /// State-struct LLVM types for the network-event-loop state-machine
@@ -2524,6 +2535,48 @@ impl<'ctx> Codegen<'ctx> {
             true,
         );
         let snprintf_fn = module.add_function("snprintf", snprintf_type, Some(Linkage::External));
+
+        // `size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream)`
+        // — the NUL-safe print primitive (L5). `printf("%.*s")` truncates a
+        // length-prefixed String at an interior NUL; `fwrite` writes exactly
+        // `len` bytes. `FILE*` is opaque, so it lowers to `ptr`. `fwrite` is
+        // NOT varargs, so its signature must match libc EXACTLY or wasm traps
+        // the call (`signature_mismatch:fwrite`): `size_t` is i32 on wasm32
+        // (wasi-libc) and i64 natively — `emit_nul_safe_write` normalizes the
+        // length to this width at every call site. (Same size_t-width concern
+        // the `malloc` shim comment below addresses.)
+        let size_t_type = if crate::target::active_target_is_wasm() {
+            i32_type
+        } else {
+            i64_type
+        };
+        let fwrite_type = size_t_type.fn_type(
+            &[
+                BasicMetadataTypeEnum::from(ptr_type),
+                BasicMetadataTypeEnum::from(size_t_type),
+                BasicMetadataTypeEnum::from(size_t_type),
+                BasicMetadataTypeEnum::from(ptr_type),
+            ],
+            false,
+        );
+        let fwrite_fn = module.add_function("fwrite", fwrite_type, Some(Linkage::External));
+
+        // The libc `FILE*` globals for stdout / stderr, used as the `fwrite`
+        // stream. The symbol differs by platform: `__stdoutp` / `__stderrp` on
+        // Apple, `stdout` / `stderr` on glibc and wasi-libc. The active target
+        // (not the host) decides — a wasm cross-build wants the unprefixed
+        // names even on an Apple host; a native build's target IS the host.
+        let (stdout_sym, stderr_sym) = if crate::target::active_target_is_wasm() {
+            ("stdout", "stderr")
+        } else if cfg!(target_vendor = "apple") {
+            ("__stdoutp", "__stderrp")
+        } else {
+            ("stdout", "stderr")
+        };
+        let stdout_global = module.add_global(ptr_type, None, stdout_sym);
+        stdout_global.set_linkage(Linkage::External);
+        let stderr_global = module.add_global(ptr_type, None, stderr_sym);
+        stderr_global.set_linkage(Linkage::External);
 
         // Declare malloc and free for RC heap allocation. On wasm32 the
         // libc `malloc` takes `size_t` = i32, and wasm traps signature
@@ -4484,6 +4537,9 @@ impl<'ctx> Codegen<'ctx> {
             current_fn: None,
             printf_fn,
             snprintf_fn,
+            fwrite_fn,
+            stdout_global,
+            stderr_global,
             struct_types: HashMap::new(),
             state_struct_types: HashMap::new(),
             state_machine_poll_fns: HashMap::new(),

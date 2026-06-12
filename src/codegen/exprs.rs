@@ -58,7 +58,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 .const_int(u64::from(*b), false)
                 .into()),
             ExprKind::StringLit(s) => {
-                let global = self.builder.build_global_string_ptr(s, "str").unwrap();
+                // NUL-safe global (L5): `build_global_string_ptr` would
+                // truncate `s` at an interior NUL (C-string semantics); the
+                // byte-array global preserves all `s.len()` bytes.
+                let data_ptr = self.build_str_bytes_global(s.as_bytes(), "str");
                 let str_ty = self.vec_struct_type();
                 let i64_t = self.context.i64_type();
                 let len = i64_t.const_int(s.len() as u64, false);
@@ -66,7 +69,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let mut agg = str_ty.get_undef();
                 agg = self
                     .builder
-                    .build_insert_value(agg, global.as_pointer_value(), 0, "str.data")
+                    .build_insert_value(agg, data_ptr, 0, "str.data")
                     .unwrap()
                     .into_struct_value();
                 agg = self
@@ -193,12 +196,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         match part {
                             ParsedInterpolationPart::Text(text) => {
                                 if !text.is_empty() {
-                                    let gptr = self
-                                        .builder
-                                        .build_global_string_ptr(text, "fstr.text")
-                                        .unwrap();
+                                    // NUL-safe global (L5) — the memcpy below
+                                    // copies `text.len()` bytes, so the global
+                                    // must carry interior NULs verbatim.
+                                    let gptr =
+                                        self.build_str_bytes_global(text.as_bytes(), "fstr.text");
                                     let text_len = i64_t.const_int(text.len() as u64, false);
-                                    rendered.push((gptr.as_pointer_value(), text_len));
+                                    rendered.push((gptr, text_len));
                                 }
                             }
                             ParsedInterpolationPart::Expr(e) => {
@@ -256,16 +260,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         match part {
                             ParsedInterpolationPart::Text(text) => {
                                 if !text.is_empty() {
-                                    let gptr = self
-                                        .builder
-                                        .build_global_string_ptr(text, "fstr.text")
-                                        .unwrap();
+                                    // NUL-safe global (L5) — `emit_string_append_raw`
+                                    // copies `text.len()` bytes, so interior NULs
+                                    // must survive in the global.
+                                    let gptr =
+                                        self.build_str_bytes_global(text.as_bytes(), "fstr.text");
                                     let text_len = i64_t.const_int(text.len() as u64, false);
-                                    self.emit_string_append_raw(
-                                        acc,
-                                        gptr.as_pointer_value(),
-                                        text_len,
-                                    );
+                                    self.emit_string_append_raw(acc, gptr, text_len);
                                 }
                             }
                             ParsedInterpolationPart::Expr(e) => {
@@ -1362,6 +1363,31 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(name) => name == "None",
             _ => false,
         }
+    }
+
+    /// Materialize a string literal's bytes as an internal, NUL-terminated
+    /// constant byte-array global and return a pointer to its data. Unlike
+    /// `build_global_string_ptr` (which lowers to `LLVMBuildGlobalString` and
+    /// treats the value as a C string — truncating at the first interior
+    /// NUL), `const_string` preserves interior NUL bytes, so a length-prefixed
+    /// String literal like `"a\0b"` carries all its bytes through to the
+    /// `{ptr,len,cap}` value and the `len`-bounded `fwrite`/memcpy that read
+    /// it (L5). The trailing NUL terminator is harmless: the String's `len`
+    /// excludes it and `cap = 0` means the global is never freed, while
+    /// NUL-free literals remain valid C strings for any FFI that wants one.
+    pub(super) fn build_str_bytes_global(
+        &self,
+        bytes: &[u8],
+        name: &str,
+    ) -> inkwell::values::PointerValue<'ctx> {
+        let i8_ty = self.context.i8_type();
+        let arr_ty = i8_ty.array_type(bytes.len() as u32 + 1); // +1 trailing NUL
+        let data = self.context.const_string(bytes, true);
+        let g = self.module.add_global(arr_ty, None, name);
+        g.set_initializer(&data);
+        g.set_constant(true);
+        g.set_linkage(inkwell::module::Linkage::Internal);
+        g.as_pointer_value()
     }
 
     /// Slice 4 (Phase 7 § *defer / errdefer codegen*). For a syntactic
