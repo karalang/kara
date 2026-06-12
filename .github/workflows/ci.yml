@@ -111,6 +111,56 @@ jobs:
           cargo rustc -p karac-runtime --release --target wasm32-wasip1 --no-default-features --crate-type staticlib
           cargo rustc -p karac-runtime --release --target wasm32-wasip1-threads --no-default-features --features wasm-threads --crate-type staticlib
 
+  # The `--features llvm` codegen surface — the load-bearing correctness gate
+  # that, until now, ran ZERO times in CI (`test` runs `cargo test --all`, no
+  # `--features llvm`, so the real-binary codegen E2E + the self-hosting oracle
+  # were never gated; two wasm bugs drifted in through exactly this hole). Tier 1
+  # scope: the deterministic, dependency-light binaries — codegen E2E,
+  # interpreter, typechecker, and the differential self-host lexer oracle. The
+  # archives must exist or the E2E binaries vacuously skip, so build the native
+  # lean→full pair first (codegen links them). Deliberately NOT here yet:
+  # memory_sanitizer (needs an ASAN cc — Tier 2) and the wasm/component E2E
+  # (needs node + wasm-tools + the wasm archives — Tier 3, B-2026-06-12-2 leg 3).
+  codegen-e2e:
+    name: Codegen E2E (LLVM 18)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # inkwell `llvm18-1-prefer-dynamic` + llvm-sys `181` → LLVM 18.1, linked
+      # dynamically (so libLLVM-18.so must be present at build AND run time).
+      - name: Install LLVM 18
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "18.1"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: llvm-e2e
+
+      # Real-binary E2E + the self-host oracle build via `karac build` and link
+      # the runtime staticlib; without it they skip (vacuous pass). Lean first,
+      # copied to the `_min` sibling, THEN full overwrites the canonical name —
+      # the order matters (CLAUDE.md § "Four archives").
+      - name: Build runtime staticlib archives (lean → full)
+        run: |
+          cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
+          cargo rustc -p karac-runtime --release --crate-type staticlib
+
+      # `prefer-dynamic`: point llvm-sys at the installed prefix and put
+      # libLLVM-18.so on the runtime search path for the test binaries.
+      - name: Codegen E2E + interpreter + typechecker + self-host oracle
+        env:
+          LLVM_SYS_181_PREFIX: ${{ env.LLVM_PATH }}
+          LD_LIBRARY_PATH: ${{ env.LLVM_PATH }}/lib
+        run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer
+
   cross:
     name: Cross-compile (${{ matrix.target }})
     runs-on: ubuntu-latest
