@@ -286,6 +286,24 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             droppable.then(|| ((k.0, k.1), TypeChecker::type_to_type_expr(ty)))
         })
         .collect();
+    // Surface the pointee `TypeExpr` of every raw-pointer-typed expression
+    // (`*const T` / `*mut T` → `Type::Pointer { inner, .. }`). Codegen's
+    // unary-deref arm keys this by the *operand* span: a raw-pointer operand's
+    // value IS the address, so `*p` must emit a real `load` of `inner`, whereas
+    // a `ref T` / `mut ref T` operand (never `Type::Pointer`) is already the
+    // inner value after `load_variable`'s two-step deref and needs no entry.
+    // A missing entry degrades to the reference pass-through, which is correct
+    // for references and only wrong for raw pointers — exactly what this fills.
+    program.raw_pointer_pointee_types = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Pointer { inner, .. } => {
+                Some(((k.0, k.1), TypeChecker::type_to_type_expr(inner)))
+            }
+            _ => None,
+        })
+        .collect();
     // Surface the fully-instantiated `TypeExpr` of every *generic* `Named`
     // instantiation expression (`Option[String]`, `Result[i64, AllocError]`,
     // generic user enums). Codegen's heap-payload enum `==`

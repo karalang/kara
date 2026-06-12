@@ -7551,4 +7551,51 @@ fn main() {
             "user_enum_field_in_struct_heap_payload",
         );
     }
+
+    // ── Raw-pointer deref load/store (B-2026-06-11-3) ─────────────
+    //
+    // `unsafe { *p }` on a `*const T` / `*mut T` now emits a real `load`
+    // of the pointee (it previously yielded the address), and `*p = val`
+    // stores through the pointer (it previously clobbered the pointer
+    // variable's own alloca). Both addresses point into a live stack-owned
+    // `Array[u8, N]`, so a mis-emitted load/store (reading or writing the
+    // wrong address) would trip ASAN with a stack-buffer over/underflow.
+    // The loaded/stored value is a scalar `u8`, so there is no heap
+    // ownership to double-free; this guards the addressing, not a free.
+
+    #[test]
+    fn asan_raw_ptr_deref_load_no_bad_access() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let a: Array[u8, 3] = [65u8, 66u8, 67u8];
+    let p = a.as_ptr();
+    // Safety: `p` addresses element 0 of the live owned array.
+    let b: u8 = unsafe { *p };
+    println(b);
+}
+"#,
+            &["65"],
+            "raw_ptr_deref_load_no_bad_access",
+        );
+    }
+
+    #[test]
+    fn asan_raw_ptr_deref_store_no_bad_access() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut a: Array[u8, 3] = [65u8, 66u8, 67u8];
+    let p = a.as_mut_ptr();
+    // Safety: `p` addresses element 0 of the live mutable owned array.
+    unsafe { *p = 90u8; }
+    let b: u8 = unsafe { *p };
+    println(b);
+    println(a[0]);
+}
+"#,
+            &["90", "90"],
+            "raw_ptr_deref_store_no_bad_access",
+        );
+    }
 }

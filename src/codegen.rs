@@ -1747,6 +1747,13 @@ pub(super) struct Codegen<'ctx> {
     /// classification / RC heap layout). See
     /// `docs/spikes/general-owned-temp-tracking.md` (slice 2).
     pub(crate) owned_temp_drops: HashMap<(usize, usize), TypeExpr>,
+    /// Pointee surface `TypeExpr` per raw-pointer-typed (`*const T` / `*mut T`)
+    /// expression, keyed by span — populated from
+    /// `Program.raw_pointer_pointee_types`. The unary-deref arm keys this by the
+    /// operand span to `load` through a raw pointer (whose value is the address)
+    /// instead of returning the address; references are absent and take the
+    /// pass-through path.
+    pub(crate) raw_pointer_pointee_types: HashMap<(usize, usize), TypeExpr>,
     /// Fully-instantiated surface `TypeExpr` per *generic* `Named`
     /// instantiation expression (`Option[String]`, `Result[i64, AllocError]`,
     /// generic user enums) — populated from `Program.enum_inst_type_exprs`
@@ -4536,6 +4543,7 @@ impl<'ctx> Codegen<'ctx> {
             expr_struct_type_names: HashMap::new(),
             user_ord_typed_exprs: HashMap::new(),
             owned_temp_drops: HashMap::new(),
+            raw_pointer_pointee_types: HashMap::new(),
             enum_inst_type_exprs: HashMap::new(),
             enum_inst_var_types: HashMap::new(),
             pattern_binding_types: HashMap::new(),
@@ -5313,6 +5321,10 @@ impl<'ctx> Codegen<'ctx> {
         // Vec/String (with element type), Map/Set handles, and RC boxes.
         self.owned_temp_drops = program.owned_temp_drops.clone();
 
+        // Pointee TypeExpr per raw-pointer-typed expression. The unary-deref
+        // arm keys this by operand span to load through `*const T` / `*mut T`.
+        self.raw_pointer_pointee_types = program.raw_pointer_pointee_types.clone();
+
         // Fully-instantiated TypeExpr per generic Named instantiation
         // expression (`Option[String]`, `Result[i64, AllocError]`, …). Keyed
         // by span; `compile_enum_eq` consults it to recover the concrete type
@@ -5887,6 +5899,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_expr_struct_type_names = tp.expr_struct_type_names.clone();
         let mut t_user_ord_typed_exprs = tp.user_ord_typed_exprs.clone();
         let mut t_owned_temp_drops = tp.owned_temp_drops.clone();
+        let mut t_raw_pointer_pointee_types = tp.raw_pointer_pointee_types.clone();
         let mut t_enum_inst_type_exprs = tp.enum_inst_type_exprs.clone();
         let mut t_call_effect_subs = tp.call_effect_subs.clone();
         let mut t_method_unwrap_inner_types = tp.method_unwrap_inner_types.clone();
@@ -5911,6 +5924,10 @@ impl<'ctx> Codegen<'ctx> {
                 );
                 std::mem::swap(&mut self.user_ord_typed_exprs, &mut t_user_ord_typed_exprs);
                 std::mem::swap(&mut self.owned_temp_drops, &mut t_owned_temp_drops);
+                std::mem::swap(
+                    &mut self.raw_pointer_pointee_types,
+                    &mut t_raw_pointer_pointee_types,
+                );
                 std::mem::swap(&mut self.enum_inst_type_exprs, &mut t_enum_inst_type_exprs);
                 std::mem::swap(&mut self.call_effect_subs, &mut t_call_effect_subs);
                 std::mem::swap(

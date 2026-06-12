@@ -439,11 +439,27 @@ impl<'ctx> super::Codegen<'ctx> {
             },
             ExprKind::Unary { op, operand } => {
                 if matches!(op, UnaryOp::Deref) {
-                    // `*r` — load the value the reference points to.
-                    // `load_variable` already performs the two-step dereference
-                    // for ref/mut-ref params (load alloca → load through ptr),
-                    // so `compile_expr(operand)` already yields the inner value.
-                    // Just return it directly.
+                    // Raw-pointer deref (`*const T` / `*mut T`): the operand's
+                    // value IS the address, so we must emit a real `load` of the
+                    // pointee. The lowering pass records the pointee `TypeExpr`
+                    // keyed by the operand span for exactly the raw-pointer case
+                    // (`Type::Pointer`); references never land in this table.
+                    // Without this, `unsafe { *p }` returned the pointer value
+                    // itself (B-2026-06-11-3).
+                    let key = (operand.span.offset, operand.span.length);
+                    if let Some(pointee_te) = self.raw_pointer_pointee_types.get(&key).cloned() {
+                        let ptr_val = self.compile_expr(operand)?.into_pointer_value();
+                        let pointee_ty = self.llvm_type_for_type_expr(&pointee_te);
+                        let loaded = self
+                            .builder
+                            .build_load(pointee_ty, ptr_val, "rawptr.deref")
+                            .map_err(|e| e.to_string())?;
+                        return Ok(loaded);
+                    }
+                    // `*r` for a `ref T` / `mut ref T` — `load_variable` already
+                    // performs the two-step dereference (load alloca → load
+                    // through ptr), so `compile_expr(operand)` already yields the
+                    // inner value. Return it directly.
                     return self.compile_expr(operand);
                 }
                 // Negative integer literals parse as `Neg(Integer(n))` and

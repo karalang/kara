@@ -3150,10 +3150,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     operand,
                 } = &target.kind
                 {
-                    // `*r = val` — store through the mut-ref pointer.
-                    // get_data_ptr loads the raw pointer from the alloca (one
-                    // load, not two), giving us the address to store into.
-                    if let ExprKind::Identifier(name) = &operand.kind {
+                    // Raw-pointer store (`*p = val` with `p: *mut T`): the
+                    // operand's *value* is the address, so compile it and store
+                    // through it. `get_data_ptr`'s owned-local branch would hand
+                    // back `p`'s own alloca and clobber the pointer variable
+                    // instead of the pointee (B-2026-06-11-3 store side). The
+                    // lowering side-table flags exactly the raw-pointer operands;
+                    // mut-ref operands are absent and fall through below.
+                    let key = (operand.span.offset, operand.span.length);
+                    if self.raw_pointer_pointee_types.contains_key(&key) {
+                        let ptr = self.compile_expr(operand)?.into_pointer_value();
+                        self.builder.build_store(ptr, val).unwrap();
+                    } else if let ExprKind::Identifier(name) = &operand.kind {
+                        // `*r = val` — store through the mut-ref pointer.
+                        // get_data_ptr loads the raw pointer from the alloca (one
+                        // load, not two), giving us the address to store into.
                         if let Some(ptr) = self.get_data_ptr(name) {
                             self.builder.build_store(ptr, val).unwrap();
                         }

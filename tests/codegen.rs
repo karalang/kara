@@ -4058,6 +4058,60 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_raw_ptr_deref_reads_byte() {
+        // B-2026-06-11-3: `unsafe { *p }` on a `*const T` / `*mut T` used to
+        // yield the pointer value (the address) instead of loading through it.
+        // The deref arm now emits a real `load` of the pointee for raw-pointer
+        // operands (those the lowering pass flags in `raw_pointer_pointee_types`),
+        // while `ref T` / `mut ref T` keep the load_variable pass-through.
+        // Reads a byte back through both an `Array.as_ptr` and a `CStr.as_ptr`.
+        let src = r#"
+fn main() {
+    let a: Array[u8, 3] = [65u8, 66u8, 67u8];
+    let pa = a.as_ptr();
+    // Safety: `pa` addresses element 0 of the live owned array.
+    let ba: u8 = unsafe { *pa };
+    println(ba);
+    let s = c"hi";
+    let ps = s.as_ptr();
+    // Safety: `ps` addresses the first byte of the live c-string literal.
+    let bs: u8 = unsafe { *ps };
+    println(bs);
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            // a[0]=65, "hi"[0]='h'(104) — values, not addresses.
+            assert_eq!(out, "65\n104\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_raw_ptr_deref_store_round_trip() {
+        // B-2026-06-11-3 (store side): `*p = val` on a `*mut T` used to store
+        // into the pointer variable's own alloca (`get_data_ptr`'s owned-local
+        // branch) rather than through the pointer — clobbering `p` instead of
+        // the pointee. The store arm now compiles the raw-pointer operand to its
+        // address value and stores through it. Round-trip: write 90, read 90.
+        let src = r#"
+fn main() {
+    let mut a: Array[u8, 3] = [65u8, 66u8, 67u8];
+    let p = a.as_mut_ptr();
+    // Safety: `p` addresses element 0 of the live mutable owned array.
+    unsafe { *p = 90u8; }
+    let b: u8 = unsafe { *p };
+    println(b);
+    // The write lands in the array itself, observable via indexing.
+    println(a[0]);
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "90\n90\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_ref_array_as_ptr_feeds_cstr_from_ptr() {
         // B-2026-06-11-1, the `ref Array` arm: a `ref Array[u8, N]` param
         // carries the data pointer directly, so `as_ptr()` hands it out

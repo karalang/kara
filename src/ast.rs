@@ -313,6 +313,20 @@ pub type PatternBindingInnerTypesTable = std::collections::HashMap<(usize, usize
 pub type OwnedTempDropsTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
 /// Side-table populated by the lowering pass from the typechecker's
+/// `expr_types` map: for every expression whose Kāra type is a raw pointer
+/// (`Type::Pointer { inner, .. }` — `*const T` / `*mut T`), maps
+/// `(span.offset, span.length)` to the pointee's surface `TypeExpr`. Codegen's
+/// unary-deref arm keys this by the *operand* span to decide whether `*p` must
+/// emit a real `load` of the pointee (raw pointer — the operand value is the
+/// address itself) versus the no-op pass-through that already suffices for
+/// `ref T` / `mut ref T` (whose `load_variable` two-step deref has already
+/// produced the inner value). A missing entry degrades to the pass-through
+/// path, which stays correct for references. Mirrors the other TypeExpr-valued
+/// hint tables (e.g. [`OwnedTempDropsTable`]) so codegen stays free of a full
+/// `TypeCheckResult` dependency (codegen containment, CLAUDE.md).
+pub type RawPointerPointeeTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
+/// Side-table populated by the lowering pass from the typechecker's
 /// `expr_types` map: for every expression whose Kāra type is a *generic*
 /// `Named` type instantiation (`Type::Named { name, args }` with non-empty
 /// `args` — e.g. `Option[String]`, `Result[i64, AllocError]`), maps
@@ -534,6 +548,12 @@ pub struct Program {
     /// `materialize_owned_temp` to scope-drop unnamed temporaries. See
     /// [`OwnedTempDropsTable`].
     pub owned_temp_drops: OwnedTempDropsTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: pointee
+    /// `TypeExpr` per raw-pointer-typed (`*const T` / `*mut T`) expression,
+    /// keyed by span. Consumed by codegen's unary-deref arm to `load` through a
+    /// raw pointer rather than yield the address. See
+    /// [`RawPointerPointeeTypesTable`].
+    pub raw_pointer_pointee_types: RawPointerPointeeTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: surface
     /// `TypeExpr` per generic `Named` instantiation expression (`Option[String]`,
     /// `Result[i64, AllocError]`, …). Consumed by codegen's heap-payload enum
