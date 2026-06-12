@@ -147,6 +147,30 @@ const CORPUS: &[&str] = &[
     r#"c"\x41\x42\x7e""#,
     r#"c"with \"quote\"""#,
     r#"let p = f"{a}" + c"x""#,
+    // Slice L1: `\u{…}` Unicode escapes + `\0` NUL escape across string / char /
+    // c-string / f-string, plus `\u` rejection in byte literals. The `\u{…}`
+    // SOURCE is all-ASCII, so spans are unaffected; the decoded char only changes
+    // the payload, which both lexers render identically via `escape_for_render`.
+    r#"'\u{41}' '\u{7e}' '\u{e9}'"#,
+    r#"'\u{1F600}' '\u{2764}'"#,
+    r#""\u{41}\u{42}\u{43}""#,
+    r#""caf\u{e9} \u{1F44d}""#,
+    r#"f"x \u{e9} {a} \u{1F600} end""#,
+    r#"c"\u{41}\u{e9}\u{1F600}""#,
+    // NOTE: `\0`-in-payload corpus entries (`'\0'`, `"a\0b"`, `f"pre \0 post"`)
+    // are DEFERRED. The lexer handles `\0` correctly (the arms mirror the seed),
+    // but the oracle compares *rendered stdout*, and `println` truncates strings
+    // at an interior NUL (it lowers to `printf("%.*s")`, and `%s` stops at NUL
+    // even with a precision) — so a `CHAR \0` line prints as `CHAR `. Re-enable
+    // once the println NUL-truncation runtime/print bug is fixed (tracked as a
+    // phase-12 lexer follow-on). The c-string `\u{0}` interior-NUL *rejection*
+    // below is unaffected (it renders bare ERROR, no NUL in output).
+    // Error-span parity (Error renders bare `ERROR`; offset/length must match).
+    r#"'\u{D800}'"#,
+    r#"'\u{110000}'"#,
+    r#""\u{D800}""#,
+    r#"b'\u{41}'"#,
+    r#"c"\u{0}""#,
     // Slice E: raw idents, reserved string prefixes / `#`-guarded strings,
     // reserved future keywords, the `expr_<year>` fragment-specifier namespace,
     // and single-codepoint non-ASCII recovery. Error tokens render as bare
