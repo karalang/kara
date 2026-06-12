@@ -10,6 +10,25 @@ use crate::token::Span;
 use super::types::{type_display, IntSize, Type, UIntSize};
 use super::TypeErrorKind;
 
+/// A `String`-valued argument, possibly behind a `ref` / `mut ref` borrow.
+///
+/// String methods that read their argument's bytes (`push_str`, `contains`,
+/// `starts_with`) accept an owned `String` *or* a borrow of one — the callee
+/// only copies/scans the bytes, so there is no ownership reason to demand a
+/// move. This is squarely the self-hosted lexer's shape: it appends borrowed
+/// keyword/identifier text into an output buffer and prefix-checks against
+/// borrowed source slices, so a bare `Type::Str`-only check rejected the
+/// lexer's natural call sites (surfaced by kata-katas #722 remove-comments,
+/// whose `buffer.push_str(name)` with `name: ref String` was rejected by
+/// `karac build` while `karac run` only warned).
+fn is_str_like(ty: &Type) -> bool {
+    match ty {
+        Type::Str | Type::Error => true,
+        Type::Ref(inner) | Type::MutRef(inner) => matches!(**inner, Type::Str | Type::Error),
+        _ => false,
+    }
+}
+
 impl<'a> super::TypeChecker<'a> {
     /// Validate a `sort_by` / `sorted_by` comparator argument against the
     /// `Fn(elem, elem) -> Ordering` shape. Pushes the expected function
@@ -163,7 +182,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let arg_ty = self.infer_expr(&args[0].value);
-                    if !matches!(arg_ty, Type::Str | Type::Error) {
+                    if !is_str_like(&arg_ty) {
                         self.type_error(
                             format!(
                                 "'contains' expects a String substring, found '{}'",
@@ -256,7 +275,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let arg_ty = self.infer_expr(&args[0].value);
-                    if !matches!(arg_ty, Type::Str | Type::Error) {
+                    if !is_str_like(&arg_ty) {
                         self.type_error(
                             format!(
                                 "'starts_with' expects a String prefix, found '{}'",
@@ -321,7 +340,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let arg_ty = self.infer_expr(&args[0].value);
-                    if !matches!(arg_ty, Type::Str | Type::Error) {
+                    if !is_str_like(&arg_ty) {
                         self.type_error(
                             format!(
                                 "'push_str' expects a String argument, found '{}'",

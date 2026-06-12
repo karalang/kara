@@ -10523,6 +10523,24 @@ fn test_string_starts_with_rejects_non_string_arg() {
 }
 
 #[test]
+fn test_string_methods_accept_borrowed_str_arg() {
+    // `push_str` / `contains` / `starts_with` read their argument's bytes
+    // and must accept a `ref String` borrow, not just an owned `String` —
+    // the self-hosted lexer's natural shape is appending / prefix-checking
+    // borrowed keyword/source text. Regression for kata-katas #722
+    // remove-comments, whose `buffer.push_str(name)` with `name: ref String`
+    // was rejected by `karac build` (the `karac run` path only warned).
+    let result = typecheck_ok(
+        r#"fn use_borrowed(hay: ref String, arg: ref String) -> bool {
+            let mut out: String = "";
+            out.push_str(arg);
+            hay.contains(arg) and hay.starts_with(arg)
+        }"#,
+    );
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+}
+
+#[test]
 fn test_string_substring_returns_string() {
     let result = typecheck_ok(
         r#"fn f() -> String {
