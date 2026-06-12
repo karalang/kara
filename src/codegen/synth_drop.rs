@@ -290,6 +290,19 @@ impl<'ctx> super::Codegen<'ctx> {
             /// Recurse via `emit_aggregate_heap_field_frees` (which descends
             /// into nested aggregates, cap-guarding each Vec/String free).
             NestedAggregate,
+            /// #15 — a field whose declared type is a heap-bearing, non-shared
+            /// *user enum* (e.g. `tok: Token`). The name-based pass leaves it
+            /// `None` (its name isn't Vec/String/Map), and the nested-aggregate
+            /// pass misses it because an enum's LLVM layout is all-i64 payload
+            /// words (no `vec_struct_type` field), so `aggregate_has_heap_field`
+            /// returns false. Without this kind the live variant's String/Vec
+            /// payload leaks at the owning struct's scope exit. Freed by
+            /// invoking the enum's own `__karac_drop_<E>` switch on the field
+            /// ptr (`emit_enum_drop_switch`). `Option`/`Result` are excluded
+            /// (their inline payloads are handled by the let-binding inline-drop
+            /// machinery, not struct drop) — their struct-field payload leak is
+            /// a separate, still-bounded remainder.
+            EnumField,
         }
         let mut kinds: Vec<FieldDrop> = field_kinds
             .iter()
@@ -316,6 +329,34 @@ impl<'ctx> super::Codegen<'ctx> {
                     if fst != vec_ty && self.aggregate_has_heap_field(fst) {
                         *k = FieldDrop::NestedAggregate;
                     }
+                }
+            }
+        }
+        // #15 — enum-field detection: a field the passes above left `None`
+        // whose declared type name is a heap-bearing, non-shared user enum.
+        // Name-based (an enum's LLVM layout — all-i64 words — is invisible to
+        // the type-driven nested-aggregate pass). `Option`/`Result` are
+        // skipped: their inline payloads are dropped by the let-binding
+        // inline-drop machinery, and routing them through the enum drop switch
+        // here would risk double-freeing that path.
+        for (idx, k) in kinds.iter_mut().enumerate() {
+            if *k != FieldDrop::None {
+                continue;
+            }
+            let Some(Some(name)) = field_kinds.get(idx) else {
+                continue;
+            };
+            if name == "Option" || name == "Result" {
+                continue;
+            }
+            if let Some(layout) = self.enum_layouts.get(name) {
+                let heap_bearing = !layout.is_shared
+                    && layout
+                        .field_drop_kinds
+                        .values()
+                        .any(|kinds| kinds.iter().any(|dk| *dk != EnumDropKind::None));
+                if heap_bearing {
+                    *k = FieldDrop::EnumField;
                 }
             }
         }
@@ -599,6 +640,35 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.current_fn = Some(drop_fn);
                     self.emit_aggregate_heap_field_frees(field_ptr, fst);
                     self.current_fn = saved_fn;
+                }
+                FieldDrop::EnumField => {
+                    // #15 — the field is an inline user-enum value. GEP its
+                    // ptr within the parent struct and invoke the enum's own
+                    // `__karac_drop_<E>` switch, which tag-dispatches and frees
+                    // the live variant's heap payload (cap-guarded, then zeroes
+                    // the cap word so a re-entrant call no-ops). The enum name
+                    // is the field's declared type name.
+                    let Some(Some(enum_name)) = field_kinds.get(field_idx).cloned() else {
+                        continue;
+                    };
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            st,
+                            p_arg,
+                            field_idx as u32,
+                            &format!("drop.field{field_idx}.enum.p"),
+                        )
+                        .unwrap();
+                    // `emit_enum_drop_switch` builds its own function/blocks and
+                    // saves/restores the current builder block, so the call site
+                    // below resumes in this drop fn's body. Memoized — repeated
+                    // struct fields of the same enum reuse one switch.
+                    if let Some(enum_drop_fn) = self.emit_enum_drop_switch(&enum_name) {
+                        self.builder
+                            .build_call(enum_drop_fn, &[field_ptr.into()], "")
+                            .unwrap();
+                    }
                 }
             }
         }

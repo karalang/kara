@@ -233,6 +233,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.suppress_inline_result_payload_cleanup(scrutinee, &arm.pattern);
                     self.suppress_inline_option_map_payload_cleanup(scrutinee, &arm.pattern);
                 }
+                // #15: a struct-FIELD enum scrutinee (`match spanned.tok { … }`).
+                // Runs regardless of the identifier/fresh-temp split above —
+                // both neutralize only the scrutinee copy, never the enum field
+                // in the SOURCE struct, which the owning struct's drop now frees.
+                self.suppress_destructured_struct_field_enum_cleanup(scrutinee, &arm.pattern);
             }
 
             let arm_val = self.compile_tail_final_expr(&arm.body, tail)?;
@@ -1533,6 +1538,58 @@ impl<'ctx> super::Codegen<'ctx> {
             None => return,
         };
         self.suppress_destructured_enum_payload_cleanup_at(slot.ptr, &enum_name, pattern);
+    }
+
+    /// #15 companion: when a `match` scrutinee is a struct FIELD whose type is a
+    /// heap-bearing user enum (`match spanned.tok { Ident(name) => … }`, the
+    /// bootstrap's `SpannedToken` shape), the owning struct's synthesized drop
+    /// now frees that enum field (`emit_struct_drop_synthesis`'s `EnumField`
+    /// arm). For each payload field the arm's pattern *consumes*, cap-zero it
+    /// WITHIN the source struct's slot so the struct drop's `__karac_drop_<E>`
+    /// walk skips the buffer the binding now owns. Without this, the source
+    /// struct and the moved-out binding BOTH free the payload → double-free
+    /// (the failure was latent pre-#15 only because struct drop ignored enum
+    /// fields entirely). The identifier / fresh-temp suppression above
+    /// neutralizes only the scrutinee *copy*, never the field in the source
+    /// struct. Scoped to a simple `ident.field` scrutinee (the bootstrap
+    /// shape); a deeper base (`a.b.tok`) no-ops to the status quo.
+    pub(super) fn suppress_destructured_struct_field_enum_cleanup(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        let ExprKind::FieldAccess { object, field } = &scrutinee.kind else {
+            return;
+        };
+        let ExprKind::Identifier(obj_name) = &object.kind else {
+            return;
+        };
+        let Some(slot) = self.variables.get(obj_name.as_str()).copied() else {
+            return;
+        };
+        let Some(struct_ty_name) = self.var_type_names.get(obj_name.as_str()) else {
+            return;
+        };
+        let Some(&st) = self.struct_types.get(struct_ty_name.as_str()) else {
+            return;
+        };
+        let Some(field_idx) = self.field_index_for(object, field) else {
+            return;
+        };
+        // The field's declared type must be a (non-shared) user enum — the only
+        // kind `emit_struct_drop_synthesis` now frees as a struct field.
+        let Some(enum_name) = self.type_name_of_expr(scrutinee) else {
+            return;
+        };
+        if !self.enum_layouts.contains_key(&enum_name) {
+            return;
+        }
+        if let Ok(field_ptr) =
+            self.builder
+                .build_struct_gep(st, slot.ptr, field_idx, "match.sfield.enum.suppress.p")
+        {
+            self.suppress_destructured_enum_payload_cleanup_at(field_ptr, &enum_name, pattern);
+        }
     }
 
     /// Core of [`Self::suppress_destructured_enum_payload_cleanup`], keyed on

@@ -2792,6 +2792,84 @@ fn main() {
     }
 
     #[test]
+    fn asan_struct_with_direct_enum_field_no_leak_no_double_free() {
+        // #15 (phase-12 self-hosting): a non-shared struct's synthesized drop
+        // used to IGNORE enum-typed fields (an enum's LLVM layout is all-i64
+        // words, invisible to the type-driven nested-aggregate pass), leaking
+        // the live variant's String/Vec payload at the owning struct's scope
+        // exit. `emit_struct_drop_synthesis` now invokes the enum's own
+        // `__karac_drop_<E>` switch on a DIRECT enum field (Linux LSan catches a
+        // regression of the leak; the `Span` shape mirrors the bootstrap's
+        // `SpannedToken { tok: Token, .. }`).
+        //
+        // #15 is NOT coupled to a #14 double-free: under the caller-retains
+        // model, a by-value aggregate param is UNTRACKED in the callee, so only
+        // ONE tracked binding (the caller's source, or the transferred-out
+        // result) ever frees the enum payload — freeing the enum field at drop
+        // does not introduce an alias double-free. Verified empirically across
+        // direct-return transfer-out, read-then-reuse, and consume-and-drop.
+        // (The struct->struct->enum NESTED leak — `Wrap { sp: Span }` — is a
+        // pre-existing, deeper instance left to #18; it is deliberately NOT
+        // exercised here so Linux `detect_leaks=1` stays green.)
+        assert_clean_asan_run(
+            r#"
+enum Tok { Id(String), Int(i64) }
+struct Span { tok: Tok, off: i64 }
+fn wrap(s: Span) -> Span { s }
+fn make_spanned(t: Tok, o: i64) -> Span { Span { tok: t, off: o } }
+fn peek(s: Span) -> i64 { s.off }
+fn sink(s: String) -> i64 { s.len() }
+fn drop_only(s: Span) { if s.off > 99999 { println(s.off.to_string()); } }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 4 {
+        // Leak path: built, kept live (off read), dropped without destructure.
+        let a = Span { tok: Tok.Id(f"a-{i}"), off: i };
+        if a.off > 99999 { println("never"); }
+
+        // `match spanned.tok` that CONSUMES the bound payload (moves it into
+        // `sink`) — the bootstrap pattern. The owning struct's drop must skip
+        // the consumed field (the double-free #15 had to suppress); `sink`
+        // owning + struct drop freeing the same buffer would abort under ASAN.
+        let b = Span { tok: Tok.Id(f"b-{i}"), off: i };
+        let c = wrap(b);
+        match c.tok { Id(s) => { acc = acc + sink(s); } Int(n) => { acc = acc + n; } }
+
+        // The `make_spanned(token)` shape: a callee-owned enum param wrapped
+        // into a returned struct literal, then field-matched + consumed.
+        let t = Tok.Id(f"t-{i}");
+        let sp = make_spanned(t, i);
+        match sp.tok { Id(s) => { acc = acc + sink(s); } Int(n) => { acc = acc + n; } }
+
+        // Local struct, field-match + consume (no function in the path).
+        let d = Span { tok: Tok.Id(f"d-{i}"), off: i };
+        match d.tok { Id(s) => { acc = acc + sink(s); } Int(n) => { acc = acc + n; } }
+
+        // Read-then-reuse: forces caller-retains aliasing (the source must
+        // survive two by-value uses) — a missing entry-copy here would crash;
+        // #15 freeing the enum field must still free it exactly once.
+        let r = Span { tok: Tok.Id(f"r-{i}"), off: i };
+        let x = peek(r);
+        let y = peek(r);
+        if x + y > 99999 { println("never"); }
+
+        // Consume-and-drop (no transfer) of a struct-with-enum-field.
+        let e = Span { tok: Tok.Id(f"e-{i}"), off: i };
+        drop_only(e);
+
+        i = i + 1;
+    }
+    if acc > 99999 { println("never"); }
+    println("done");
+}
+"#,
+            &["done"],
+            "struct_with_direct_enum_field_no_leak_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_vec_clone_repeat_stresses_scope_cleanup() {
         // Clone in a fresh scope across multiple loop iterations —
         // verifies the scope-exit free fires for each loop-local clone

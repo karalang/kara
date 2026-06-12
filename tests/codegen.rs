@@ -11691,6 +11691,37 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_with_direct_enum_field_heap_payload() {
+        // #15 (phase-12 self-hosting): a struct whose field is a heap-bearing
+        // user enum (`Span { tok: Tok, .. }`, the bootstrap's `SpannedToken`
+        // shape). The enum payload (`Tok.Id(String)`) must survive being built,
+        // transferred out of a by-value param (`wrap`), and destructured — and
+        // the struct's synthesized drop must free the enum field exactly once
+        // (no double-free / corruption). Correctness is observed via the
+        // round-tripped String payloads; the leak itself is covered by the
+        // ASAN test on Linux.
+        if let Some(out) = run_program(
+            r#"
+enum Tok { Id(String), Int(i64) }
+struct Span { tok: Tok, off: i64 }
+fn wrap(s: Span) -> Span { s }
+fn main() {
+    let a = Span { tok: Tok.Id("hello".to_string()), off: 1 };
+    let b = wrap(a);
+    match b.tok { Id(s) => println(s), Int(n) => println(n.to_string()) }
+    let c = Span { tok: Tok.Int(42_i64), off: 2 };
+    match c.tok { Id(s) => println(s), Int(n) => println(n.to_string()) }
+    let d = Span { tok: Tok.Id("world".to_string()), off: 3 };
+    match d.tok { Id(s) => println(s), Int(n) => println(n.to_string()) }
+    println("ok");
+}
+"#,
+        ) {
+            assert_eq!(out, "hello\n42\nworld\nok\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_enum_field_in_struct_display() {
         // A struct whose field is an all-unit enum renders the enum field as
         // its variant name (recursing through the struct Display path).
