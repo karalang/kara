@@ -1206,6 +1206,31 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_unsigned_vec_elem_to_string_no_sign_extend() {
+        // Regression: a `for b in <Vec[u8]>` loop variable — whether the source
+        // is a plain Vec var or a struct field (`for b in c.bytes`, the
+        // self-hosted lexer's c-string-render shape) — had no recorded type
+        // name, so `expr_is_unsigned_int` returned false and `b.to_string()`
+        // SIGN-EXTENDED high bytes (195u8 printed as -61). A `let b: u8 = …`
+        // binding already recorded the type; the for-loop / destructured element
+        // path did not. Fixed by recording scalar integer primitive type names in
+        // `register_var_from_type_expr` (types_lowering.rs). Surfaced by the
+        // self-hosted lexer's c-string byte render of multi-byte `\u{…}` escapes.
+        if let Some(out) = run_program(
+            "struct C { bytes: Vec[u8] }\n\
+             fn main() {\n\
+                 let mut v: Vec[u8] = Vec.new();\n\
+                 v.push(195u8); v.push(233u8); v.push(127u8);\n\
+                 for b in v { println(b.to_string()); }        // plain Vec var\n\
+                 let c = C { bytes: v };\n\
+                 for b in c.bytes { println(b.to_string()); }  // struct-field Vec\n\
+             }",
+        ) {
+            assert_eq!(out, "195\n233\n127\n195\n233\n127\n");
+        }
+    }
+
+    #[test]
     fn e2e_alloc_error_codegen() {
         // The `AllocError` prelude type (struct + unit variant) compiles: both
         // variants construct, `==` compares payload + tag, `match` binds the

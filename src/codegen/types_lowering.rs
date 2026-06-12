@@ -1009,9 +1009,33 @@ impl<'ctx> super::Codegen<'ctx> {
         // type-name visibility as a `let x: Foo = ...` binding.
         if let TypeKind::Path(path) = &te.kind {
             if let Some(seg) = path.segments.last().cloned() {
+                // Scalar integer primitives are recorded too — without this, a
+                // `for b in vec_u8` loop var (or a destructured `u8`/`u16`/…
+                // element) has no recorded type name, so `expr_is_unsigned_int`
+                // can't pick unsigned formatting and `to_string`/print/coercion
+                // sign-extends (255u8 → -1). The `let b: u8 = …` path already
+                // records this (stmts.rs); this brings for-loop / destructured
+                // element bindings to parity. Surfaced by the self-hosted lexer's
+                // c-string byte render of multi-byte `\u{…}` escapes (2026-06-12):
+                // `for b in cs.bytes { …b.to_string() }` rendered 195 as -61.
+                let is_int_prim = matches!(
+                    seg.as_str(),
+                    "u8" | "u16"
+                        | "u32"
+                        | "u64"
+                        | "u128"
+                        | "usize"
+                        | "i8"
+                        | "i16"
+                        | "i32"
+                        | "i64"
+                        | "i128"
+                        | "isize"
+                );
                 if self.struct_types.contains_key(seg.as_str())
                     || self.shared_types.contains_key(seg.as_str())
                     || self.enum_layouts.contains_key(seg.as_str())
+                    || is_int_prim
                 {
                     self.record_var_type_name(var_name.to_string(), seg);
                 }
