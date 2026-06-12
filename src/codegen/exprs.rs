@@ -1685,6 +1685,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the source's data pointer; suppress the source's
                 // scope-exit free so the consumer can read through.
                 self.suppress_source_vec_cleanup_for_arg(&field_init.value);
+                // #14 — field-access peer: `S { f: obj.field }` moves a heap
+                // FIELD out of a tracked struct `obj`; cap-zero it so `obj`'s
+                // StructDrop skips it (the new literal is the sole owner). The
+                // whole-Identifier suppress above doesn't reach a FieldAccess.
+                self.suppress_struct_field_move_into_literal(&field_init.value);
                 // Map/Set sibling of the Vec suppression (see the shared-struct
                 // branch above): a moved-in `Map`/`Set` local's source free is
                 // dropped so the struct's owner is the sole freer.

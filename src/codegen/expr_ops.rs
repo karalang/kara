@@ -2981,8 +2981,12 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Per-variant `(tag, name, field-type-exprs)` for `enum_name`, scanning the
     /// user program and the baked stdlib. Drives `compile_enum_eq`'s per-variant
-    /// typed payload comparison.
-    fn enum_variant_field_type_exprs(&self, enum_name: &str) -> Vec<(u64, String, Vec<TypeExpr>)> {
+    /// typed payload comparison (and the #14 enum-param entry deep-copy, which
+    /// needs each VecOrString payload's element type to size the buffer copy).
+    pub(super) fn enum_variant_field_type_exprs(
+        &self,
+        enum_name: &str,
+    ) -> Vec<(u64, String, Vec<TypeExpr>)> {
         fn collect(items: &[Item], enum_name: &str) -> Option<Vec<(String, Vec<TypeExpr>)>> {
             items.iter().find_map(|item| match item {
                 Item::EnumDef(e) if e.name == enum_name => Some(

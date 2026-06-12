@@ -641,6 +641,17 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.track_rc_var(&param_name, ptr, info.heap_type);
                             }
                         }
+                        // #14 — an owned (bare Path, non-ref) by-value aggregate
+                        // (`struct` / `enum`) param: deep-copy its heap fields at
+                        // entry and register its scope-exit drop so it is
+                        // callee-owned. This closes the by-value-aggregate-param
+                        // transfer-out double-free without a caller-side move
+                        // (which Kāra's non-rejecting move-checker can't make
+                        // sound). No-op for shared / Map-bearing / enum-field
+                        // aggregates (left on caller-retains). See param_own.rs.
+                        if matches!(&param.ty.kind, TypeKind::Path(_)) {
+                            self.make_aggregate_param_callee_owned(type_name, alloca);
+                        }
                     }
                 }
                 // `Option[shared T]` parameter registration. The

@@ -11568,6 +11568,104 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_byvalue_aggregate_param_transferred_out_enum() {
+        // #14 (phase-12 self-hosting): an owned by-value ENUM param moved into a
+        // call that transfers it OUT (the callee returns it) must reach the
+        // consumer intact and free exactly once. `wrap(f)` returns its param;
+        // both the caller's source `f` and the result `g` previously aliased and
+        // double-freed the same payload buffer. The param is now entry
+        // deep-copied + callee-owned (param_own.rs), so the two own independent
+        // buffers.
+        if let Some(out) = run_program(
+            r#"
+enum E { A(String), N(i64) }
+fn wrap(e: E) -> E { e }
+fn main() {
+    let f = E.A("hi".to_string());
+    let g = wrap(f);
+    match g {
+        A(s) => println(s),
+        N(n) => println(n.to_string()),
+    }
+}
+"#,
+        ) {
+            assert_eq!(out, "hi\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_byvalue_aggregate_param_transferred_out_struct() {
+        // #14: the STRUCT half — proves the gap was never enum-specific. An owned
+        // by-value struct param consumed into a returned struct literal
+        // (`Wrap { t: t }`) previously double-freed the inner String buffer the
+        // caller's source `x` also frees.
+        if let Some(out) = run_program(
+            r#"
+struct Inner { s: String }
+struct Wrap { t: Inner }
+fn wrap(t: Inner) -> Wrap { Wrap { t: t } }
+fn main() {
+    let x = Inner { s: "hi".to_string() };
+    let w = wrap(x);
+    println(w.t.s);
+}
+"#,
+        ) {
+            assert_eq!(out, "hi\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_byvalue_enum_param_wrapped_into_struct_and_destructured() {
+        // #14: the bootstrap shape — an enum param moved into a returned struct
+        // literal (`Spanned { tok: t, .. }`, mirroring the self-hosted lexer's
+        // `make_spanned(token)`), then destructured by the caller. The flowed
+        // copy and the caller's source must be independent.
+        if let Some(out) = run_program(
+            r#"
+enum Token { Ident(String), Int(i64) }
+struct Spanned { tok: Token, off: i64 }
+fn make_spanned(t: Token, o: i64) -> Spanned { Spanned { tok: t, off: o } }
+fn main() {
+    let t = Token.Ident("hello".to_string());
+    let s = make_spanned(t, 3);
+    match s.tok {
+        Ident(name) => println(name),
+        Int(n) => println(n.to_string()),
+    }
+}
+"#,
+        ) {
+            assert_eq!(out, "hello\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_byvalue_aggregate_param_read_then_reused() {
+        // #14 guard: passing an owned aggregate by value to a function that only
+        // READS it must NOT break re-use of the source (`take(x); take(x)`).
+        // Entry deep-copy keeps this correct (each call copies at entry; the
+        // caller retains and frees its original once) — the reason the fix is
+        // entry-copy rather than a caller-side move (which would use-after-free
+        // here, since Kāra's move-checker does not reject double-consume).
+        if let Some(out) = run_program(
+            r#"
+struct S { s: String }
+fn take(v: S) { println(v.s) }
+fn main() {
+    let x = S { s: "hi".to_string() };
+    take(x);
+    take(x);
+    println(x.s);
+}
+"#,
+        ) {
+            assert_eq!(out, "hi\nhi\nhi\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_enum_field_in_struct_display() {
         // A struct whose field is an all-unit enum renders the enum field as
         // its variant name (recursing through the struct Display path).

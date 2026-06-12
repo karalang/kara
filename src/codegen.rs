@@ -58,6 +58,7 @@ mod method_call;
 mod module_bindings;
 mod mono;
 mod par_blocks;
+mod param_own;
 mod pattern_binding;
 mod provider;
 mod reduce;

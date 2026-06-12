@@ -28,13 +28,13 @@
 // self-mutating methods, struct return, enum render) builds, runs via
 // `karac build`, and lexes correctly with auto-par ON, guarded by the oracle.
 // #9 (codegen move-suppression): a let-bound bare user-enum with a heap payload
-// double-freed when moved out. The RETURN-of-let-bound-enum and `let g = f`
-// cases are FIXED 2026-06-11 (enum cap-zero arm in
-// `suppress_source_vec_cleanup_for_arg_ex` + suppression at the enum track
-// site). The by-value-call-arg-then-transfer-out case (e.g.
-// `make_spanned(token)` re-wrapping into the returned `SpannedToken`) is the
-// distinct, more general blocker #14 (it affects structs identically) — so
-// `identifier()` keeps the inline `make_spanned(keyword_or_ident(text))` form.
+// double-freed when moved out. RETURN-of-let-bound-enum and `let g = f` FIXED
+// 2026-06-11. The by-value-call-arg-then-transfer-out case (e.g.
+// `make_spanned(token)` re-wrapping into the returned `SpannedToken`) was the
+// distinct blocker #14 (it affected structs identically) — FIXED 2026-06-12 by
+// entry-deep-copying + callee-owning by-value aggregate params (src/codegen/
+// param_own.rs), so `identifier()` now uses the natural `let token = …;
+// self.make_spanned(token)` form.
 
 struct Span {
     line: i64,
@@ -1126,15 +1126,13 @@ impl Lexer {
             self.advance();
         }
         let text = self.src.substring(self.start, self.current);
-        // Inline (no intermediate `let token = …`): blocker #14 — a by-value
-        // aggregate (enum/struct) binding MOVED into a call that transfers it
-        // out (here `make_spanned(token)` re-wraps it into the returned
-        // `SpannedToken`) double-frees, because the caller-retains by-value
-        // model frees the source binding too. The inline form has no source
-        // binding, so it sidesteps the gap. (#9's let-bound-enum-returned and
-        // `let g = f` cases ARE fixed; #14 is the distinct transfer-out gap,
-        // which affects structs identically — see phase-12 blocker #14.)
-        self.make_spanned(keyword_or_ident(text))
+        // Natural form (#14 FIXED): the by-value aggregate param `token` is
+        // entry-deep-copied + callee-owned by `make_spanned`, so moving a
+        // let-bound enum into a call that transfers it out (re-wrapping it into
+        // the returned `SpannedToken`) no longer double-frees. See phase-12
+        // blocker #14 / src/codegen/param_own.rs.
+        let token = keyword_or_ident(text);
+        self.make_spanned(token)
     }
 
     // Raw-identifier escape `r#NAME` (design.md § Raw Identifiers). On entry the

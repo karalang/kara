@@ -2737,6 +2737,61 @@ fn main() {
     }
 
     #[test]
+    fn asan_byvalue_aggregate_param_transferred_out_no_double_free() {
+        // #14 (phase-12 self-hosting): an owned by-value aggregate (struct OR
+        // enum) param moved into a call that transfers it OUT (into the callee's
+        // return value) used to double-free — the caller's source binding and
+        // the returned value aliased the same heap buffer and BOTH freed it.
+        // The param is now entry-deep-copied + callee-owned (param_own.rs), so
+        // each owns an independent buffer. Covers, under a loop (per-iteration
+        // single-free):
+        //   * direct enum return (`wrap(e) -> E { e }`),
+        //   * struct consumed into a returned struct literal (`Wrap { t: t }`),
+        //   * the lexer's bootstrap shape — an enum param wrapped into a returned
+        //     struct then destructured (`make_spanned(token)`),
+        //   * read-then-reuse of the source (`take(x); take(x)`) — entry-copy
+        //     keeps the caller's binding live (the reason the fix is entry-copy,
+        //     not a caller-side move).
+        assert_clean_asan_run(
+            r#"
+enum E { A(String), N(i64) }
+struct Inner { s: String }
+struct Wrap { t: Inner }
+struct Spanned { tok: E, off: i64 }
+fn wrap_enum(e: E) -> E { e }
+fn wrap_struct(t: Inner) -> Wrap { Wrap { t: t } }
+fn make_spanned(t: E, o: i64) -> Spanned { Spanned { tok: t, off: o } }
+fn read_struct(v: Inner) { if v.s.len() > 99999 { println(v.s); } }
+fn main() {
+    let mut i: i64 = 0;
+    while i < 4 {
+        let f = E.A(f"a-{i}");
+        let g = wrap_enum(f);
+        match g { A(s) => { if s.len() > 99999 { println(s); } } N(n) => println(n.to_string()) }
+
+        let x = Inner { s: f"x-{i}" };
+        let w = wrap_struct(x);
+        if w.t.s.len() > 99999 { println(w.t.s); }
+
+        let t = E.A(f"t-{i}");
+        let sp = make_spanned(t, i);
+        match sp.tok { A(name) => { if name.len() > 99999 { println(name); } } N(n) => println(n.to_string()) }
+
+        let y = Inner { s: f"y-{i}" };
+        read_struct(y);
+        read_struct(y);
+
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &["done"],
+            "byvalue_aggregate_param_transferred_out_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_vec_clone_repeat_stresses_scope_cleanup() {
         // Clone in a fresh scope across multiple loop iterations —
         // verifies the scope-exit free fires for each loop-local clone
