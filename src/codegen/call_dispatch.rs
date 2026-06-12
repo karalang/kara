@@ -1025,13 +1025,48 @@ impl<'ctx> super::Codegen<'ctx> {
             // blocks only — mirrors `discarded_owned_temp_tail`'s conservatism;
             // a branching `if`/`match` arg whose tail is an aliased place would
             // double-free, so those stay a (safe) leak for a later slice.
-            if matches!(
+            //
+            // Two fresh-heap arg shapes share the same caller-scope
+            // materialization (`materialize_owned_temp` self-guards on
+            // Vec/String LLVM shape + the `owned_temp_drops` hint for Map/RC,
+            // so a non-heap arg is a no-op):
+            //
+            //  • a single-tail BLOCK construct (`take({ f"…" })`) — B-2026-06-11-5;
+            //  • #20: a heap String/Vec produced by a Call / MethodCall and passed
+            //    DIRECTLY by value (`sink(mk(i))`, `f(a + n.to_string())`). Owned
+            //    `String`/`Vec` by-value params are NOT freed by the callee (they
+            //    land in `owned_vecstr_params` for retaining-consume deep-copy,
+            //    never a callee-side `track_vec_var` — confirmed by
+            //    `let t = mk(i); sink(t)` being single-free), so the temp orphaned
+            //    and leaked one buffer per inline call. The #20 arm is restricted
+            //    to the Vec/String shape (`llvm_ty_is_vec_struct`) on purpose:
+            //    shared-RC / `Option[shared T]` call results are already balanced
+            //    by the callee's `track_rc_option_var`, so routing them through
+            //    `materialize_owned_temp` (a second `track_rc_var` dec) would
+            //    double-free. `expr_yields_fresh_owned_temp` is Call/MethodCall-
+            //    only and excludes borrow-returning calls (result aliases the
+            //    borrow source). `ref T` rvalue args never reach here — they
+            //    `continue` through `queue_ref_rvalue_arg_cleanup` above.
+            //
+            // Both arms peel only single-tail / direct shapes — a branching
+            // `if`/`match` arg whose tail is an aliased place would double-free,
+            // so those stay a (safe) leak for a later slice.
+            let is_block_arg = matches!(
                 &a.value.kind,
                 ExprKind::Block(_)
                     | ExprKind::Seq(_)
                     | ExprKind::Unsafe(_)
                     | ExprKind::LabeledBlock { .. }
-            ) {
+            );
+            // `rhs_stages_fstr_acc` excludes a struct/enum `.to_string()` arg:
+            // it lowers via the synthetic f-string, whose accumulator already
+            // owns a caller-scope cleanup — materializing it again would
+            // double-free. (A scalar/`String` `.to_string()` and a plain user-fn
+            // result do NOT stage the acc, so they still get materialized.)
+            let is_fresh_heap_call_arg = self.expr_yields_fresh_owned_temp(&a.value)
+                && self.llvm_ty_is_vec_struct(val.get_type())
+                && !self.rhs_stages_fstr_acc(&a.value);
+            if is_block_arg || is_fresh_heap_call_arg {
                 self.materialize_owned_temp(val, (a.value.span.offset, a.value.span.length));
             }
             // B-2026-06-11-4 part b: an aggregate LITERAL call argument

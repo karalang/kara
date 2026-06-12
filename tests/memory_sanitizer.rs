@@ -440,6 +440,64 @@ fn main() {
         );
     }
 
+    // ── #20: call / method result as an inline argument ──────────
+    //
+    // A heap String produced by a `Call` (`sink(mk(i))`) or `MethodCall`
+    // (`println(i.to_string())`) and passed DIRECTLY as a by-value argument
+    // is a fresh owned temp with no consuming binding. Owned String params
+    // are caller-freed (the callee never drops them), so the temp orphaned
+    // and leaked one buffer per call — unbounded in a loop, and a real
+    // accumulating leak in the lexer/parser's inline string building.
+    // Fixed by materializing the user-fn call-result arg into the caller
+    // scope (`materialize_owned_temp`) and freeing the `println` arg buffer
+    // via `free_fresh_owned_str_arg`. Both are Call/MethodCall-only and
+    // place-/literal-safe, so a `let`-bound arg (owned by its binding) is
+    // untouched — no double-free.
+
+    #[test]
+    fn asan_call_result_arg_temp_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn mk(i: i64) -> String {
+    let mut s = String.new();
+    s.push_str("v");
+    s.push_str(i.to_string());
+    s
+}
+fn sink(s: String) { if s.len() > 99999 { println(s); } }
+fn main() {
+    let mut i = 0i64;
+    while i < 5i64 {
+        sink(mk(i));
+        i = i + 1i64;
+    }
+    let t = mk(7i64);
+    sink(t);
+    println("ok");
+}
+"#,
+            &["ok"],
+            "call_result_arg_temp",
+        );
+    }
+
+    #[test]
+    fn asan_println_method_result_temp_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i = 0i64;
+    while i < 5i64 {
+        println(i.to_string());
+        i = i + 1i64;
+    }
+}
+"#,
+            &["0", "1", "2", "3", "4"],
+            "println_method_result_temp",
+        );
+    }
+
     // ── `collect_all_vec` with capturing closures ─────────────────
     //
     // The canonical fan-out shape: each closure captures an outer

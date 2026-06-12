@@ -685,6 +685,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap()
                 .into_int_value();
             self.emit_nul_safe_write(str_ptr, str_len, nl, false);
+            // #20: a fresh-owned String temp passed directly to `println` /
+            // `print` (`println(i.to_string())`, `print(a + b)`) has no
+            // consuming binding, so its heap buffer would leak once per call —
+            // unbounded in a loop. `free_fresh_owned_str_arg` is Call/MethodCall-
+            // only and `cap > 0`-guarded, so a place expression (identifier /
+            // field — owned by its binding) or a rodata literal is left
+            // untouched (no double-free). The builder is already at the
+            // post-write merge block, so every byte read dominates the free.
+            // `rhs_stages_fstr_acc` excludes a struct/enum `.to_string()`: it
+            // lowers via the synthetic f-string whose accumulator already owns a
+            // scope-exit cleanup, so freeing here too would double-free (a
+            // scalar/`String` `.to_string()` does NOT stage the acc and is still
+            // freed). A direct f-string arg is an `InterpolatedStringLit`, not a
+            // Call/MethodCall, so it is excluded upstream by
+            // `expr_yields_fresh_owned_temp` regardless.
+            if !self.rhs_stages_fstr_acc(&args[0].value) {
+                self.free_fresh_owned_str_arg(&args[0].value, val);
+            }
         } else if val.is_pointer_value() {
             // Raw pointer (shared types, etc.) — pass directly to %s.
             let fmt = self
