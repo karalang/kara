@@ -1171,6 +1171,41 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_diverging_branch_in_value_position() {
+        // Regression for self-hosting #12: a tail-less block whose body
+        // diverges (`{ return e; }`) now types as `Never` rather than
+        // `()`, so it can share an `if`/`match` value-expression with a
+        // real value arm. This test exercises the resulting codegen path:
+        // a diverging else branch must NOT contribute to the merge phi
+        // (it terminates the block), while the value branch flows through.
+        // Both the taken-value path and the taken-diverging path must
+        // produce correct output.
+        if let Some(out) = run_program(
+            "fn classify(n: i64) -> i64 {\n\
+                 // value path AND diverging path share the if-expression\n\
+                 let label = if n >= 0 { 'P' } else { return -1; };\n\
+                 label as i64\n\
+             }\n\
+             fn first_or_bail(v: ref Vec[i64]) -> i64 {\n\
+                 // match-arm-block diverging variant\n\
+                 let x = match v.len() { 0 => { return -7; }, _ => v[0] };\n\
+                 x * 2\n\
+             }\n\
+             fn main() {\n\
+                 println(classify(5).to_string());   // 'P' = 80\n\
+                 println(classify(-3).to_string());  // -1 via diverging else\n\
+                 let mut a: Vec[i64] = Vec.new();\n\
+                 a.push(21);\n\
+                 println(first_or_bail(a).to_string()); // 42\n\
+                 let empty: Vec[i64] = Vec.new();\n\
+                 println(first_or_bail(empty).to_string()); // -7 via diverging arm\n\
+             }",
+        ) {
+            assert_eq!(out, "80\n-1\n42\n-7\n");
+        }
+    }
+
+    #[test]
     fn e2e_alloc_error_codegen() {
         // The `AllocError` prelude type (struct + unit variant) compiles: both
         // variants construct, `==` compares payload + tag, `match` binds the

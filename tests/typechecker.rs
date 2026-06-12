@@ -273,6 +273,67 @@ fn test_if_else_type_mismatch() {
         .any(|e| e.kind == TypeErrorKind::BranchTypeMismatch));
 }
 
+// phase-12 #12 — a tail-less block whose body diverges (a trailing
+// `return x;` / `break;` / `continue;` / `unreachable(..);`) types as
+// `Never`, not `Unit`, so it can sit opposite a real value in an
+// `if`/`match` branch via the never-as-bottom coercion. Before the fix
+// `{ return e; }` typed `()` and these all failed with
+// `if/else branches have incompatible types: '<value>' and '()'`.
+#[test]
+fn test_diverging_else_block_is_never_not_unit() {
+    // Semicolon-terminated `return` in the else block (the bug shape).
+    typecheck_ok(
+        "enum Lex { Good(i64), Bad }\n\
+         fn f() -> Lex {\n\
+             let ch = if true { 'a' } else { return Lex.Bad; };\n\
+             Lex.Good(ch as i64)\n\
+         }",
+    );
+}
+
+#[test]
+fn test_diverging_match_arm_block_is_never() {
+    // A braced, semicolon-terminated diverging match arm shares the
+    // match value-expression with a real `char` arm.
+    typecheck_ok(
+        "enum Lex { Good(i64), Bad }\n\
+         fn f() -> Lex {\n\
+             let ch = match 1 { 0 => 'a', _ => { return Lex.Bad; } };\n\
+             Lex.Good(ch as i64)\n\
+         }",
+    );
+}
+
+#[test]
+fn test_diverging_block_type_based_not_syntactic() {
+    // Divergence is type-based: a `-> !` call (`unreachable`) in
+    // statement position diverges just like `return`, even though it is
+    // not a syntactic control-flow keyword. Also covers a multi-statement
+    // diverging block (the divergence need not be the only statement).
+    typecheck_ok(
+        "fn f() -> i64 {\n\
+             let ch = if true { 'a' } else { let _x = 1; unreachable(\"no\"); };\n\
+             ch as i64\n\
+         }",
+    );
+}
+
+#[test]
+fn test_nondiverging_tail_less_block_still_mismatches() {
+    // Guard against over-broadening: a tail-less block that does NOT
+    // diverge (`{ 5; }` completes and is `()`) must still mismatch a
+    // `char` value arm — the fix only rescues diverging blocks.
+    let errors = typecheck_errors(
+        "fn g() -> i64 {\n\
+             let ch = if true { 'a' } else { 5; };\n\
+             ch as i64\n\
+         }",
+    );
+    assert!(errors
+        .iter()
+        .any(|e| e.kind == TypeErrorKind::BranchTypeMismatch));
+}
+
 #[test]
 fn test_if_condition_must_be_bool() {
     let errors = typecheck_errors("fn main() { if 42 { } }");

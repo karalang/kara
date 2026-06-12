@@ -1525,11 +1525,15 @@ impl<'a> super::TypeChecker<'a> {
     /// sees the target.
     pub(super) fn check_block_against(&mut self, block: &Block, expected: &Type) -> Type {
         self.local_scope.push();
+        let mut diverged = false;
         for stmt in &block.stmts {
-            self.check_stmt(stmt);
+            diverged |= self.check_stmt(stmt) == Type::Never;
         }
         let ty = if let Some(ref expr) = block.final_expr {
             self.check_expr(expr, expected)
+        } else if diverged {
+            // Tail-less but diverging — bottom, not unit (see #12).
+            Type::Never
         } else {
             Type::Unit
         };
@@ -2258,11 +2262,16 @@ impl<'a> super::TypeChecker<'a> {
 
     pub(super) fn infer_block(&mut self, block: &Block) -> Type {
         self.local_scope.push();
+        let mut diverged = false;
         for stmt in &block.stmts {
-            self.check_stmt(stmt);
+            diverged |= self.check_stmt(stmt) == Type::Never;
         }
         let ty = if let Some(ref expr) = block.final_expr {
             self.infer_expr(expr)
+        } else if diverged {
+            // A tail-less block whose body diverges (e.g. `{ return e; }`)
+            // never falls through — it is bottom, not unit. See #12.
+            Type::Never
         } else {
             Type::Unit
         };
@@ -2319,7 +2328,20 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    pub(super) fn check_stmt(&mut self, stmt: &Stmt) {
+    /// Returns the statement's *flow type*: `Type::Never` when the
+    /// statement diverges (a trailing `return x;` / `break;` /
+    /// `continue;`, or a call to a `-> !` function like `panic(..)` /
+    /// `process.exit(..)` in statement position), else `Type::Unit`.
+    /// `infer_block` / `check_block_against` consume this so a tail-less
+    /// block whose last statement diverges types as `Never` rather than
+    /// `Unit` — letting `let x = if c { v } else { return e; };` and the
+    /// `match`-arm-block analog typecheck via the never-as-bottom
+    /// coercion (phase-12 #12). Only `StmtKind::Expr` can carry
+    /// divergence; every other statement form completes normally.
+    pub(super) fn check_stmt(&mut self, stmt: &Stmt) -> Type {
+        if let StmtKind::Expr(expr) = &stmt.kind {
+            return self.infer_expr(expr);
+        }
         match &stmt.kind {
             StmtKind::Let {
                 is_mut: _,
@@ -2481,10 +2503,10 @@ impl<'a> super::TypeChecker<'a> {
                 self.infer_expr(target);
                 self.infer_expr(value);
             }
-            StmtKind::Expr(expr) => {
-                self.infer_expr(expr);
-            }
+            // Handled by the early return above; kept for exhaustiveness.
+            StmtKind::Expr(_) => {}
         }
+        Type::Unit
     }
 
     /// `impl Trait` slice 4 — walk `return_ty` for every `TypeKind::ImplTrait`
