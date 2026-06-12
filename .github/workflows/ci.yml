@@ -64,6 +64,53 @@ jobs:
             exit 1
           fi
 
+  # Wasm runtime surface that the native `lint` / `test` jobs never see
+  # (B-2026-06-12-2). `cargo clippy --all` runs on the host target only, so a
+  # wasm-cfg'd lint — e.g. the `clashing_extern_declarations` malloc clash that
+  # drifted red unnoticed (B-2026-06-11-9) — is invisible to it; and the
+  # default build job never exercises the no-default-features wasm archives, so
+  # a wasm-only break (a non-wasm dep creeping into the default set, a cfg typo)
+  # slips through. This job gates both wasm clippy arms and both wasm staticlib
+  # archive builds (the CLAUDE.md § "Four archives" wasm legs). It needs neither
+  # LLVM nor node — the `--features llvm` wasm E2E run (which would also catch
+  # the codegen-side size_t-width trap class, B-2026-06-12-1) is gated on the
+  # broader "LLVM in CI" decision that keeps all codegen E2E out of CI today.
+  wasm:
+    name: WASM (clippy + archives)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1, wasm32-wasip1-threads
+          components: clippy
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+
+      # The sequential (net-free) archive's clippy surface. `-D warnings` is
+      # the gate the local CLAUDE.md recipe assumes but CI never ran.
+      - name: Clippy (wasm32-wasip1)
+        run: cargo clippy -p karac-runtime --target wasm32-wasip1 --no-default-features -- -D warnings
+
+      # The threaded sibling (wasi-threads ABI; its sysroot is the only one
+      # whose wasi-libc carries atomics). Separate cfg surface, separate lint.
+      - name: Clippy (wasm32-wasip1-threads)
+        run: cargo clippy -p karac-runtime --target wasm32-wasip1-threads --no-default-features --features wasm-threads -- -D warnings
+
+      # The two wasm staticlib legs of the four-archive recipe — proves they
+      # still build (a warn-level extern clash links but a real cfg/dep break
+      # would fail here, where the native build job can't see it).
+      - name: Build wasm staticlib archives
+        run: |
+          cargo rustc -p karac-runtime --release --target wasm32-wasip1 --no-default-features --crate-type staticlib
+          cargo rustc -p karac-runtime --release --target wasm32-wasip1-threads --no-default-features --features wasm-threads --crate-type staticlib
+
   cross:
     name: Cross-compile (${{ matrix.target }})
     runs-on: ubuntu-latest
