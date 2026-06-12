@@ -2958,6 +2958,90 @@ fn main() {
     }
 
     #[test]
+    fn asan_struct_nested_enum_leaf_no_leak_no_double_free() {
+        // #18 (phase-12 self-hosting): a struct whose only heap is TRANSITIVELY
+        // inside an enum nested under ANOTHER struct field — `Wrap { sp: Span }`
+        // where `Span { tok: Tok }` and `Tok` is heap-bearing. #15 freed only a
+        // DIRECT enum field; the nested path went through the type-driven
+        // `emit_aggregate_heap_field_frees`, which is enum-blind (an enum's
+        // layout is all-i64 words). `emit_struct_drop_synthesis` now routes a
+        // NAMED nested struct field through that struct's own
+        // `__karac_drop_struct_<S>` (which post-#15 frees its enum fields), so
+        // `Wrap`'s drop reaches `sp.tok`'s payload. Linux LSan catches a
+        // regression of the leak; ASAN everywhere catches the double-free the
+        // nested match-consume could introduce.
+        //
+        // Double-free coupling (mirrors #15's struct-field-match sub-fix, one
+        // level deeper): once `Wrap`'s drop frees `sp.tok`, a `match c.sp.tok`
+        // arm that CONSUMES the bound payload would double-free unless the match
+        // suppression cap-zeros the consumed field in the SOURCE struct.
+        // `suppress_destructured_struct_field_enum_cleanup` walks the full
+        // `ident.f1.f2…` field-access chain for exactly this case.
+        //
+        // All payloads are the `Id(String)` variant and every `Int`/numeric arm
+        // is guarded behind an impossible `> 99999`, so no `to_string` temp is
+        // ever materialized — keeping Linux `detect_leaks=1` green against the
+        // separate, pre-existing `println(x.to_string())` argument-temp leak.
+        assert_clean_asan_run(
+            r#"
+enum Tok { Id(String), Int(i64) }
+struct Span { tok: Tok, off: i64 }
+struct Wrap { sp: Span, hi: i64 }
+struct Deep { w: Wrap, tag: i64 }
+fn sink(s: String) -> i64 { s.len() }
+fn mk_wrap(n: i64) -> Wrap { Wrap { sp: Span { tok: Tok.Id(f"w-{n}"), off: n }, hi: n + 1 } }
+fn fwd(w: Wrap) -> Wrap { w }
+fn peek(w: Wrap) -> i64 { w.hi }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 4 {
+        // Nested leak path: Wrap built, kept live (hi read), dropped WITHOUT
+        // destructure — Wrap's drop must free sp.tok's payload (the #18 leak).
+        let a = Wrap { sp: Span { tok: Tok.Id(f"a-{i}"), off: i }, hi: i };
+        if a.hi > 99999 { println("never"); }
+
+        // Struct-literal MOVE: a Span local moved into a Wrap literal, then the
+        // Wrap dropped undestructured. The source `span` must not also free the
+        // enum payload (move-suppression vs the now-active nested drop).
+        let span = Span { tok: Tok.Id(f"s-{i}"), off: i };
+        let m = Wrap { sp: span, hi: i };
+        if m.hi > 99999 { println("never"); }
+
+        // Transfer-out + nested match-consume (the double-free risk): the bound
+        // String moves into `sink`; `c`'s drop must skip the consumed field.
+        let b = mk_wrap(i);
+        let c = fwd(b);
+        match c.sp.tok { Id(s) => { acc = acc + sink(s); } Int(n) => { if n > 99999 { println("never"); } } }
+
+        // Local nested match-consume (no function in the path).
+        let d = Wrap { sp: Span { tok: Tok.Id(f"d-{i}"), off: i }, hi: i };
+        match d.sp.tok { Id(s) => { acc = acc + sink(s); } Int(n) => { if n > 99999 { println("never"); } } }
+
+        // Read-then-reuse a Wrap (caller-retains aliasing), then drop it
+        // undestructured — the nested payload must be freed exactly once.
+        let r = mk_wrap(i);
+        let x = peek(r);
+        let y = peek(r);
+        if x + y > 99999 { println("never"); }
+
+        // Three-level nesting: Deep -> Wrap -> Span -> Tok, dropped
+        // undestructured — the recursive struct-drop routing must descend.
+        let deep = Deep { w: mk_wrap(i), tag: i };
+        if deep.tag > 99999 { println("never"); }
+
+        i = i + 1;
+    }
+    if acc > 99999 { println("never"); }
+    println("done");
+}
+"#,
+            &["done"],
+            "struct_nested_enum_leaf_no_leak_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_vec_clone_repeat_stresses_scope_cleanup() {
         // Clone in a fresh scope across multiple loop iterations —
         // verifies the scope-exit free fires for each loop-local clone

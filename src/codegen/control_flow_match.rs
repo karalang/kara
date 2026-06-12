@@ -1551,44 +1551,54 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (the failure was latent pre-#15 only because struct drop ignored enum
     /// fields entirely). The identifier / fresh-temp suppression above
     /// neutralizes only the scrutinee *copy*, never the field in the source
-    /// struct. Scoped to a simple `ident.field` scrutinee (the bootstrap
-    /// shape); a deeper base (`a.b.tok`) no-ops to the status quo.
+    /// struct. Handles an arbitrary-depth field-access chain (`ident.f1.f2…`)
+    /// rooted at a local binding via [`Self::field_chain_place_ptr`] — `s.tok`
+    /// (#15) and `w.sp.tok` (#18's nested `Wrap { sp: Span { tok } }`) alike. A
+    /// non-struct hop (mid-chain tuple index, call-rooted base, unresolved type)
+    /// no-ops to the status quo.
     pub(super) fn suppress_destructured_struct_field_enum_cleanup(
         &self,
         scrutinee: &Expr,
         pattern: &Pattern,
     ) {
-        let ExprKind::FieldAccess { object, field } = &scrutinee.kind else {
+        let ExprKind::FieldAccess { .. } = &scrutinee.kind else {
             return;
         };
-        let ExprKind::Identifier(obj_name) = &object.kind else {
-            return;
-        };
-        let Some(slot) = self.variables.get(obj_name.as_str()).copied() else {
-            return;
-        };
-        let Some(struct_ty_name) = self.var_type_names.get(obj_name.as_str()) else {
-            return;
-        };
-        let Some(&st) = self.struct_types.get(struct_ty_name.as_str()) else {
-            return;
-        };
-        let Some(field_idx) = self.field_index_for(object, field) else {
-            return;
-        };
-        // The field's declared type must be a (non-shared) user enum — the only
-        // kind `emit_struct_drop_synthesis` now frees as a struct field.
+        // The leaf field's declared type must be a (non-shared) user enum — the
+        // only kind `emit_struct_drop_synthesis` frees as a struct field.
         let Some(enum_name) = self.type_name_of_expr(scrutinee) else {
             return;
         };
         if !self.enum_layouts.contains_key(&enum_name) {
             return;
         }
-        if let Ok(field_ptr) =
-            self.builder
-                .build_struct_gep(st, slot.ptr, field_idx, "match.sfield.enum.suppress.p")
-        {
-            self.suppress_destructured_enum_payload_cleanup_at(field_ptr, &enum_name, pattern);
+        let Some(field_ptr) = self.field_chain_place_ptr(scrutinee) else {
+            return;
+        };
+        self.suppress_destructured_enum_payload_cleanup_at(field_ptr, &enum_name, pattern);
+    }
+
+    /// Compute the in-place pointer to a field-access place expression rooted at
+    /// a local binding (`ident`, `ident.f`, `ident.f.g`, …) or `self`, GEP'ing
+    /// through each intermediate struct. Returns `None` for any non-struct hop
+    /// (a tuple index in the middle, a call-rooted base, an unresolved type) so
+    /// callers no-op to the status quo. The leaf pointer addresses the field IN
+    /// PLACE within its owning slot — used by the #18 struct-field-enum match
+    /// suppression to reach a (possibly deeply nested) enum field in its source.
+    fn field_chain_place_ptr(&self, expr: &Expr) -> Option<PointerValue<'ctx>> {
+        match &expr.kind {
+            ExprKind::Identifier(name) => self.variables.get(name.as_str()).map(|s| s.ptr),
+            ExprKind::SelfValue => self.variables.get("self").map(|s| s.ptr),
+            ExprKind::FieldAccess { object, field } => {
+                let base_ptr = self.field_chain_place_ptr(object)?;
+                let obj_ty = self.type_name_of_expr(object)?;
+                let st = *self.struct_types.get(obj_ty.as_str())?;
+                let idx = self.field_index_for(object, field)?;
+                self.builder
+                    .build_struct_gep(st, base_ptr, idx, "match.chain.enum.p")
+                    .ok()
+            }
+            _ => None,
         }
     }
 

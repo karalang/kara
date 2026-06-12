@@ -2391,6 +2391,29 @@ impl<'ctx> super::Codegen<'ctx> {
                             value,
                             elem_ty,
                         );
+                        // #17 gap 2 / #16 — a Vec/String field moved OUT of an
+                        // OWNED tracked struct: a callee-owned by-value param
+                        // (#14 entry-copy + gap-1 band-aid retirement) or a LOCAL
+                        // struct this fn owns. NOT a caller-retains
+                        // `owned_struct_params` source — that's the deep-copy
+                        // above. The moved-out binding (`var_name`, tracked just
+                        // below) now owns the buffer, so cap-zero the source field
+                        // in the owning struct's slot; without it BOTH the owning
+                        // struct's drop and this binding free the same buffer
+                        // (the std.tracing `with_field` `let nf = self.fields`
+                        // shape, and the bare-local `let m = v.s` of #16).
+                        if let ExprKind::FieldAccess { object, .. } = &value.kind {
+                            let obj_name = match &object.kind {
+                                ExprKind::Identifier(obj) => Some(obj.as_str()),
+                                ExprKind::SelfValue => Some("self"),
+                                _ => None,
+                            };
+                            if let Some(obj) = obj_name {
+                                if !self.owned_struct_params.contains(obj) {
+                                    self.suppress_struct_field_move_into_literal(value);
+                                }
+                            }
+                        }
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             // Defensive guard against stale `vec_elem_types`
                             // entries for non-Vec slots — specifically, Array

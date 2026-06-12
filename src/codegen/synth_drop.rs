@@ -282,14 +282,31 @@ impl<'ctx> super::Codegen<'ctx> {
             /// handle into a runtime side-table; free it via the named
             /// extern (guarded on `handle != 0`) at scope exit.
             HttpHandleFree(&'static str),
-            /// A nested aggregate field — a non-shared struct or a tuple
-            /// whose own fields carry heap (Vec/String). The name-based
-            /// classifier above sees only the top-level field name (a struct
-            /// type name, or nothing for a tuple) and leaves it `None`, so its
-            /// inner String/Vec buffers leak on drop (B-2026-06-11-4 part c).
-            /// Recurse via `emit_aggregate_heap_field_frees` (which descends
-            /// into nested aggregates, cap-guarding each Vec/String free).
+            /// A nested *anonymous tuple* field whose own fields carry heap
+            /// (Vec/String). The name-based classifier above sees no type name
+            /// for a tuple and leaves it `None`, so its inner String/Vec
+            /// buffers leak on drop (B-2026-06-11-4 part c). Recurse via
+            /// `emit_aggregate_heap_field_frees` (which descends into nested
+            /// aggregates, cap-guarding each Vec/String free). *Named* nested
+            /// struct fields take the `NestedStruct` path instead — the
+            /// type-driven recursion here is enum- and Map-blind.
             NestedAggregate,
+            /// #18 — a field whose declared type is a *named* non-shared user
+            /// struct. Routed through that struct's own
+            /// `__karac_drop_struct_<S>` (synthesized on demand) rather than
+            /// the type-driven `emit_aggregate_heap_field_frees`. Strictly more
+            /// complete: the nested struct's drop fn frees its Vec/String
+            /// **and** its enum fields (post-#15) **and** its Map/Set fields —
+            /// none of which the LLVM-type-driven aggregate walk reaches (an
+            /// enum's layout is all-i64 words, a Map is a bare `ptr`; both are
+            /// invisible to `aggregate_has_heap_field`). Closes the canonical
+            /// leak `struct Wrap { sp: Span }` where `Span` holds a heap enum:
+            /// dropping a `Wrap` undestructured leaked `sp.tok`'s payload. The
+            /// struct name is the field's declared type name (read from
+            /// `field_kinds` at emit time). If the nested struct turns out to
+            /// need no drop, `emit_struct_drop_synthesis` returns `None` and
+            /// nothing is emitted.
+            NestedStruct,
             /// #15 — a field whose declared type is a heap-bearing, non-shared
             /// *user enum* (e.g. `tok: Token`). The name-based pass leaves it
             /// `None` (its name isn't Vec/String/Map), and the nested-aggregate
@@ -314,20 +331,55 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => FieldDrop::None,
             })
             .collect();
-        // Nested-aggregate detection: a field the name-based pass left `None`
-        // whose LLVM type is a heap-bearing struct/tuple (not the Vec struct,
-        // not a shared-struct pointer) needs its inner heap freed recursively.
+        // Nested-aggregate / nested-struct detection: a field the name-based
+        // pass left `None` whose LLVM type is a struct/tuple (not the Vec
+        // struct). A *named* non-shared user struct (#18) routes through its
+        // own `__karac_drop_struct_<S>` — which frees its Vec/String, enum
+        // (post-#15), and Map/Set fields, none reachable by the enum- and
+        // Map-blind type-driven walk. An *anonymous tuple* with direct
+        // Vec/String heap routes through `emit_aggregate_heap_field_frees`.
         {
             let vec_ty = self.vec_struct_type();
+            // Phase 1: classify the tuple case inline; defer named nested
+            // structs (their drop synth needs `&mut self`, which conflicts
+            // with `kinds.iter_mut()`).
+            let mut named_struct_fields: Vec<usize> = Vec::new();
             for (idx, k) in kinds.iter_mut().enumerate() {
                 if *k != FieldDrop::None {
                     continue;
                 }
-                if let Some(inkwell::types::BasicTypeEnum::StructType(fst)) =
+                let Some(inkwell::types::BasicTypeEnum::StructType(fst)) =
                     st.get_field_type_at_index(idx as u32)
-                {
-                    if fst != vec_ty && self.aggregate_has_heap_field(fst) {
-                        *k = FieldDrop::NestedAggregate;
+                else {
+                    continue;
+                };
+                if fst == vec_ty {
+                    continue;
+                }
+                // Named non-shared user struct -> NestedStruct (decided in
+                // phase 2 after synth, so a no-heap nested struct emits
+                // nothing). Note this PRECEDES the type-driven check: a named
+                // struct whose only heap is inside an enum has
+                // `aggregate_has_heap_field == false`, so the old path would
+                // misclassify it `None` and leak (the exact #18 bug).
+                if let Some(Some(name)) = field_kinds.get(idx) {
+                    if self.struct_types.contains_key(name) && !self.shared_types.contains_key(name)
+                    {
+                        named_struct_fields.push(idx);
+                        continue;
+                    }
+                }
+                // Anonymous tuple (no declared type name) with direct heap.
+                if self.aggregate_has_heap_field(fst) {
+                    *k = FieldDrop::NestedAggregate;
+                }
+            }
+            // Phase 2: synthesize each named nested struct's drop fn; mark
+            // `NestedStruct` only when one is actually needed (`Some`).
+            for idx in named_struct_fields {
+                if let Some(Some(name)) = field_kinds.get(idx).cloned() {
+                    if self.emit_struct_drop_synthesis(&name).is_some() {
+                        kinds[idx] = FieldDrop::NestedStruct;
                     }
                 }
             }
@@ -640,6 +692,35 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.current_fn = Some(drop_fn);
                     self.emit_aggregate_heap_field_frees(field_ptr, fst);
                     self.current_fn = saved_fn;
+                }
+                FieldDrop::NestedStruct => {
+                    // #18 — route the nested struct field through its own
+                    // `__karac_drop_struct_<S>` (synthesized during
+                    // classification, fetched here as a cache hit). That fn
+                    // frees the nested struct's Vec/String, enum (post-#15),
+                    // and Map/Set fields — the canonical case being
+                    // `Wrap { sp: Span }` where `Span` holds a heap enum, which
+                    // the enum-blind `emit_aggregate_heap_field_frees` leaked.
+                    let Some(Some(nested_name)) = field_kinds.get(field_idx).cloned() else {
+                        continue;
+                    };
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            st,
+                            p_arg,
+                            field_idx as u32,
+                            &format!("drop.field{field_idx}.nstruct.p"),
+                        )
+                        .unwrap();
+                    // Memoized — the synth in phase 2 of detection already
+                    // emitted it; this is a cache hit that touches no IR until
+                    // the call below.
+                    if let Some(nested_drop_fn) = self.emit_struct_drop_synthesis(&nested_name) {
+                        self.builder
+                            .build_call(nested_drop_fn, &[field_ptr.into()], "")
+                            .unwrap();
+                    }
                 }
                 FieldDrop::EnumField => {
                     // #15 — the field is an inline user-enum value. GEP its

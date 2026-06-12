@@ -1788,6 +1788,108 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (the tail-cursor builder `let mut tail = head; … tail = node;`,
     /// LeetCode #19 bench). Vec/String cap-zeroing and non-shared StructDrop
     /// handle-zeroing run regardless (those ARE needed at let-copy sites).
+    /// Zero the `cap` word of every variant's `VecOrString` payload field of the
+    /// non-shared enum value at `base_ptr`, so a synthesized `__karac_drop_<E>`
+    /// switch's `cap > 0` guard no-ops for whichever variant is live at runtime.
+    /// The move-out dual of `emit_enum_drop_switch` (and the whole-value sibling
+    /// of `suppress_destructured_enum_payload_cleanup_at`): used both for a
+    /// moved whole-enum binding and — post-#15/#19 — for an enum FIELD of a
+    /// moved struct (the struct's drop now frees its enum fields). Zeroing dead
+    /// variants' overlay words is harmless: only the live variant's BB is
+    /// entered by the drop switch. `&self` — pure IR emission.
+    pub(super) fn zero_enum_payload_caps(
+        &self,
+        base_ptr: PointerValue<'ctx>,
+        layout: &super::state::EnumLayout<'ctx>,
+    ) {
+        let zero = self.context.i64_type().const_int(0, false);
+        for (variant, kinds) in &layout.field_drop_kinds {
+            let Some(offsets) = layout.field_word_offsets.get(variant) else {
+                continue;
+            };
+            for (kind, (start_word, num_words)) in kinds.iter().zip(offsets.iter()) {
+                if *kind != super::state::EnumDropKind::VecOrString {
+                    continue;
+                }
+                let cap_index = (start_word + num_words) as u32;
+                if let Ok(cap_ptr) = self.builder.build_struct_gep(
+                    layout.llvm_type,
+                    base_ptr,
+                    cap_index,
+                    "move.enum.cap.p",
+                ) {
+                    let _ = self.builder.build_store(cap_ptr, zero);
+                }
+            }
+        }
+    }
+
+    /// Cap-zero the move-suppression caps of EVERY heap field of the non-shared
+    /// struct value at `base_ptr`, recursing into nested struct fields — the
+    /// move-out dual of `emit_struct_drop_synthesis`'s field walk. For a moved
+    /// struct (`return s`, `let g = f`, struct/enum-literal field, push/insert),
+    /// each Vec/String field's `cap` is zeroed, each ENUM field's live-variant
+    /// payload cap is zeroed (`zero_enum_payload_caps`, post-#15/#19), each
+    /// nested non-shared user STRUCT field is recursed into (the
+    /// `Wrap { sp: Span { tok } }` transfer shape, #18), and the HTTP side-table
+    /// handle is zeroed — so the source struct's `StructDrop` (which now frees
+    /// all of these transitively) no-ops and the consumer is the sole owner.
+    /// Value structs cannot be self-referential by value, so the recursion
+    /// terminates. `&self` — pure IR emission.
+    pub(super) fn zero_struct_move_caps(&self, base_ptr: PointerValue<'ctx>, struct_name: &str) {
+        let Some(&st) = self.struct_types.get(struct_name) else {
+            return;
+        };
+        let Some(field_names) = self.struct_field_type_names.get(struct_name).cloned() else {
+            return;
+        };
+        let vec_ty = self.vec_struct_type();
+        let zero = self.context.i64_type().const_int(0, false);
+        for (i, opt_name) in field_names.iter().enumerate() {
+            let fname = opt_name.as_deref().unwrap_or("");
+            let Ok(field_ptr) =
+                self.builder
+                    .build_struct_gep(st, base_ptr, i as u32, &format!("smv.f{i}.p"))
+            else {
+                continue;
+            };
+            if matches!(fname, "Vec" | "VecDeque" | "String") {
+                if let Ok(cap_ptr) =
+                    self.builder
+                        .build_struct_gep(vec_ty, field_ptr, 2, &format!("smv.f{i}.cap"))
+                {
+                    let _ = self.builder.build_store(cap_ptr, zero);
+                }
+            } else if fname != "Option" && fname != "Result" {
+                if let Some(layout) = self.enum_layouts.get(fname).cloned() {
+                    if !layout.is_shared {
+                        self.zero_enum_payload_caps(field_ptr, &layout);
+                    }
+                } else if self.struct_types.contains_key(fname)
+                    && !self.shared_types.contains_key(fname)
+                {
+                    self.zero_struct_move_caps(field_ptr, fname);
+                }
+            }
+        }
+        // HTTP side-table handle field (Response/RequestBuilder) — zero so the
+        // synthesized Drop (guarded on `handle != 0`) no-ops; the consumer owns
+        // the live handle. Idempotent runtime remove is the backstop.
+        let handle_field = match struct_name {
+            "Response" => Some(2u32),
+            "RequestBuilder" => Some(0u32),
+            _ => None,
+        };
+        if let Some(fidx) = handle_field {
+            if let Ok(field_ptr) = self
+                .builder
+                .build_struct_gep(st, base_ptr, fidx, "smv.handle.p")
+            {
+                let _ = self.builder.build_store(field_ptr, zero);
+            }
+        }
+    }
+
     pub(super) fn suppress_source_vec_cleanup_for_arg_ex(
         &self,
         arg_expr: &Expr,
@@ -1942,26 +2044,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(type_name) = self.var_type_names.get(var_name).cloned() {
             if let Some(layout) = self.enum_layouts.get(type_name.as_str()).cloned() {
                 if !layout.is_shared {
-                    let zero = i64_t.const_int(0, false);
-                    for (variant, kinds) in &layout.field_drop_kinds {
-                        let Some(offsets) = layout.field_word_offsets.get(variant) else {
-                            continue;
-                        };
-                        for (kind, (start_word, num_words)) in kinds.iter().zip(offsets.iter()) {
-                            if *kind != super::state::EnumDropKind::VecOrString {
-                                continue;
-                            }
-                            let cap_index = (start_word + num_words) as u32;
-                            if let Ok(cap_ptr) = self.builder.build_struct_gep(
-                                layout.llvm_type,
-                                slot.ptr,
-                                cap_index,
-                                "move.enum.cap.p",
-                            ) {
-                                let _ = self.builder.build_store(cap_ptr, zero);
-                            }
-                        }
-                    }
+                    self.zero_enum_payload_caps(slot.ptr, &layout);
                     return;
                 }
             }
@@ -1979,60 +2062,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // runtime change (filed under slice δ as the per-field K/V
         // type-info-aware drop work).
         if let Some(type_name) = self.var_type_names.get(var_name).cloned() {
-            if let Some(&st) = self.struct_types.get(&type_name) {
-                if let Some(field_names) = self.struct_field_type_names.get(&type_name) {
-                    for (i, opt_name) in field_names.iter().enumerate() {
-                        let is_vec_field = matches!(
-                            opt_name.as_deref(),
-                            Some("Vec") | Some("VecDeque") | Some("String")
-                        );
-                        if !is_vec_field {
-                            continue;
-                        }
-                        if let Ok(field_ptr) = self.builder.build_struct_gep(
-                            st,
-                            slot.ptr,
-                            i as u32,
-                            &format!("move.field{i}.p"),
-                        ) {
-                            if let Ok(cap_ptr) = self.builder.build_struct_gep(
-                                vec_ty,
-                                field_ptr,
-                                2,
-                                &format!("move.field{i}.cap.p"),
-                            ) {
-                                let zero = i64_t.const_int(0, false);
-                                let _ = self.builder.build_store(cap_ptr, zero);
-                            }
-                        }
-                    }
-                }
-                // Phase-8 line 39 follow-up — also zero the i64 side-table
-                // handle field of a moved HTTP `Response` / `RequestBuilder`
-                // so its synthesized Drop (guarded on `handle != 0`)
-                // no-ops; the consumer now owns the live handle. This is
-                // what makes the side-table-handle free move-safe across
-                // EVERY move site — this helper is the single suppression
-                // point invoked at `let g = f`, match-arm tail, `return f`,
-                // by-value arg, and struct/tuple field construction. The
-                // body String's `cap` is already zeroed by the loop above;
-                // this zeroes the handle the same way. (Idempotent runtime
-                // remove is the backstop if any move path is ever missed.)
-                let handle_field = match type_name.as_str() {
-                    "Response" => Some(2u32),
-                    "RequestBuilder" => Some(0u32),
-                    _ => None,
-                };
-                if let Some(fidx) = handle_field {
-                    if let Ok(field_ptr) =
-                        self.builder
-                            .build_struct_gep(st, slot.ptr, fidx, "move.handle.p")
-                    {
-                        let _ = self
-                            .builder
-                            .build_store(field_ptr, i64_t.const_int(0, false));
-                    }
-                }
+            if self.struct_types.contains_key(&type_name) {
+                // Recursive move-suppression: zero every transitive heap field's
+                // cap (Vec/String, enum payloads post-#15/#19, nested structs
+                // — #18's `Wrap { sp: Span { tok } }`) + the HTTP handle, so the
+                // source struct's `StructDrop` no-ops and the consumer (caller /
+                // new binding / struct or enum literal) is the sole owner.
+                self.zero_struct_move_caps(slot.ptr, &type_name);
             }
         }
         // Tuple / anonymous-aggregate binding (B-2026-06-11-4 part a): a moved

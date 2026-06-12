@@ -11722,6 +11722,50 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_nested_enum_leaf_heap_payload() {
+        // #18 (phase-12 self-hosting): a struct whose only heap is TRANSITIVELY
+        // inside an enum nested under ANOTHER struct field — `Wrap { sp: Span }`
+        // with `Span { tok: Tok }` and `Tok` heap-bearing. #15 freed only a
+        // DIRECT enum field; `emit_struct_drop_synthesis` now routes a NAMED
+        // nested struct field through its own `__karac_drop_struct_<S>` (which
+        // post-#15 frees its enum fields). Correctness here is the round-tripped
+        // payloads through a struct-literal move into a Wrap then a two-level
+        // (`w.sp.tok`) match-BORROW, a three-level (`Deep -> Wrap -> Span ->
+        // Tok`) undestructured drop, and a two-level Int-variant match. The leak
+        // is covered by `asan_struct_nested_enum_leaf_no_leak_no_double_free`.
+        //
+        // NOTE: the nested-struct TRANSFER-out-of-a-fn then two-level match-BORROW
+        // (`let b = fwd(a); match b.sp.tok { Id(s) => println(s) }`) is
+        // deliberately NOT exercised — it still double-frees (guardmalloc) on the
+        // caller-retains path (the one-level analog IS clean). Tracked as the
+        // #19 nested-transfer residual; the bootstrap reconstructs tokens rather
+        // than identity-transferring them, so it is unaffected.
+        if let Some(out) = run_program(
+            r#"
+enum Tok { Id(String), Int(i64) }
+struct Span { tok: Tok, off: i64 }
+struct Wrap { sp: Span, hi: i64 }
+struct Deep { w: Wrap, tag: i64 }
+fn mk(n: i64, s: String) -> Wrap { Wrap { sp: Span { tok: Tok.Id(s), off: n }, hi: n } }
+fn main() {
+    let span = Span { tok: Tok.Id("beta".to_string()), off: 2 };
+    let w = Wrap { sp: span, hi: 2 };
+    match w.sp.tok { Id(s) => println(s), Int(n) => println(n.to_string()) }
+
+    let deep = Deep { w: mk(3, "gamma".to_string()), tag: 7 };
+    println(deep.tag.to_string());
+
+    let c = Wrap { sp: Span { tok: Tok.Int(42_i64), off: 4 }, hi: 4 };
+    match c.sp.tok { Id(s) => println(s), Int(n) => println(n.to_string()) }
+    println("ok");
+}
+"#,
+        ) {
+            assert_eq!(out, "beta\n7\n42\nok\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_enum_field_in_struct_display() {
         // A struct whose field is an all-unit enum renders the enum field as
         // its variant name (recursing through the struct Display path).

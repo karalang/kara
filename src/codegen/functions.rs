@@ -647,10 +647,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         // callee-owned. This closes the by-value-aggregate-param
                         // transfer-out double-free without a caller-side move
                         // (which Kāra's non-rejecting move-checker can't make
-                        // sound). No-op for shared / Map-bearing / enum-field
-                        // aggregates (left on caller-retains). See param_own.rs.
-                        if matches!(&param.ty.kind, TypeKind::Path(_)) {
-                            self.make_aggregate_param_callee_owned(type_name, alloca);
+                        // sound). No-op for shared / Map-bearing aggregates
+                        // (left on caller-retains). See param_own.rs.
+                        if matches!(&param.ty.kind, TypeKind::Path(_))
+                            && self.make_aggregate_param_callee_owned(type_name, alloca)
+                        {
+                            // #17 gap 1 — the param is now a callee-owned local:
+                            // its heap fields are INDEPENDENT (entry-copied) and
+                            // its scope-exit struct drop is registered. The
+                            // caller-retains `owned_struct_params` field-move
+                            // band-aid (`deep_copy_owned_struct_param_field_move`,
+                            // stmts.rs) would now deep-copy a SECOND time on every
+                            // `let x = p.field` move-out AND suppress the
+                            // source-cap zeroing the normal local field-move-out
+                            // performs — so the callee-owned drop and the moved-out
+                            // binding both free the buffer. Retire the band-aid
+                            // entry so field move-out routes through the standard
+                            // local source-cap suppression.
+                            self.owned_struct_params.remove(&param_name);
                         }
                     }
                 }

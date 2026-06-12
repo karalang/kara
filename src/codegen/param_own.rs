@@ -74,21 +74,17 @@ impl<'ctx> super::Codegen<'ctx> {
         type_name: &str,
         slot: PointerValue<'ctx>,
     ) -> bool {
-        // Hand-tuned seeded stdlib builder value types (std.tracing's
-        // `LogEvent` / `Span` / `SpanField`). Their builder methods CHAIN
-        // by-value transfers (`info(..).with_field(..).with_field(..).in_span(..)`)
-        // and move individual `self` fields into returned literals, balanced
-        // for the caller-retains model via the `owned_struct_params` field-move
-        // band-aids. Making them callee-owned disturbs that balance (empties the
-        // chained fields). User code with the same chained-builder-on-aggregate
-        // shape is ALREADY broken under caller-retains (independent of #14), so
-        // excluding these is never a regression — it just preserves the tuned
-        // stdlib behavior. The general chained-by-value-transfer-of-aggregate
-        // fix is tracked as #17. (The self-hosting bootstrap uses SINGLE
-        // transfers — `make_spanned(token)` — which work; only chaining breaks.)
-        if matches!(type_name, "LogEvent" | "Span" | "SpanField") {
-            return false;
-        }
+        // #17 — the seeded std.tracing builder value types (`LogEvent` / `Span`
+        // / `SpanField`) used to be name-excluded here. Their chained builder
+        // methods (`info(..).with_field(..).with_field(..).in_span(..)`) move
+        // individual `self` fields into returned literals, and engaging
+        // entry-copy on top of the caller-retains `owned_struct_params` field-move
+        // band-aid double-copied / emptied the chained fields. That redundancy is
+        // now resolved generally: (gap 1) `compile_function` retires the
+        // `owned_struct_params` band-aid for a callee-owned param, and (gap 2)
+        // `compile_struct_init` cap-zeros a slot-sourced Vec/String/enum field
+        // moved into a returned literal. With both in place these types are
+        // callee-owned like any other aggregate — no name exclusion needed.
         // Non-shared user STRUCT.
         if self.struct_types.contains_key(type_name) && !self.shared_types.contains_key(type_name) {
             if !self.aggregate_param_copy_supported_struct(type_name, &mut Vec::new()) {
@@ -158,16 +154,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "BTreeSet" => false,
                     // HTTP side-table handle structs (see emit_struct_drop_synthesis).
                     "Response" | "RequestBuilder" => false,
-                    // Enum-like: the struct drop IGNORES enum-typed fields (#15),
-                    // so copying them would create an unfreed leak AND leave a
-                    // double-free path open. Bail to status quo.
+                    // Type-erased Option/Result: their payloads carry no static
+                    // VecOrString field kind, so `deep_copy_enum_heap_payload_in_place`
+                    // can't duplicate them — and the struct drop deliberately does
+                    // NOT free them (#15 excludes Option/Result), so there's no
+                    // double-free to guard. Bail to status quo (their own inline
+                    // machinery owns the payload).
                     "Option" | "Result" => false,
                     _ if is_primitive_type_name(head) => true,
                     _ if self.shared_types.contains_key(head) => false,
                     _ if self.struct_types.contains_key(head) => {
                         self.aggregate_param_copy_supported_struct(head, stack)
                     }
-                    // User enum field → struct drop ignores it (#15) → bail.
+                    // User enum field → bail to caller-retains (#19 OPEN). The
+                    // struct drop frees enum fields (post-#15), so entry-copy
+                    // would need `deep_copy_enum_heap_payload_in_place` to
+                    // duplicate the payload — but that path double-frees in the
+                    // bootstrap lexer's token flow (Vec[SpannedToken] iterate +
+                    // `render(t)` by-value), so enum-field structs stay on
+                    // caller-retains for now (their transfer+borrow double-free is
+                    // tracked as #19). The bootstrap's `SpannedToken { tok: Token }`
+                    // works on caller-retains.
                     _ if self.enum_layouts.contains_key(head) => false,
                     // Generic type param / unknown → conservative bail.
                     _ => false,
@@ -245,6 +252,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // (Nested user-ENUM field deep-copy intentionally NOT handled here — #19
+        // is OPEN: enabling enum-field entry-copy double-frees in the bootstrap
+        // lexer's token flow. Enum-field structs stay caller-retains; their drop
+        // still frees the enum field, and move-out sites cap-zero it via
+        // `zero_struct_move_caps` / `zero_enum_payload_caps`.)
         // Tuple field → recurse into each element.
         if let TypeKind::Tuple(elems) = &fte.kind {
             if !elems.is_empty() {
@@ -437,10 +449,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::FieldAccess { object, field } = &value.kind else {
             return;
         };
-        let ExprKind::Identifier(s) = &object.kind else {
-            return;
+        // The source root is either a named binding (`obj.field`) or the method
+        // receiver (`self.field`) — `self` is bound as an ordinary local named
+        // "self" by `compile_function`. The std.tracing builder bodies move
+        // `self.fields` / `self.message` out, so SelfValue must resolve here or
+        // the move-out suppression never fires (#17 gap 2).
+        let s: &str = match &object.kind {
+            ExprKind::Identifier(s) => s.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return,
         };
-        let Some(slot) = self.variables.get(s.as_str()).copied() else {
+        let Some(slot) = self.variables.get(s).copied() else {
             return;
         };
         let BasicTypeEnum::StructType(agg_ty) = slot.ty else {
@@ -450,7 +469,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if agg_ty == vec_ty {
             return;
         }
-        let Some(sname) = self.var_type_names.get(s.as_str()).cloned() else {
+        let Some(sname) = self.var_type_names.get(s).cloned() else {
             return;
         };
         let Some(idx) = self
