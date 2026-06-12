@@ -282,6 +282,14 @@ impl<'ctx> super::Codegen<'ctx> {
             /// handle into a runtime side-table; free it via the named
             /// extern (guarded on `handle != 0`) at scope exit.
             HttpHandleFree(&'static str),
+            /// A nested aggregate field — a non-shared struct or a tuple
+            /// whose own fields carry heap (Vec/String). The name-based
+            /// classifier above sees only the top-level field name (a struct
+            /// type name, or nothing for a tuple) and leaves it `None`, so its
+            /// inner String/Vec buffers leak on drop (B-2026-06-11-4 part c).
+            /// Recurse via `emit_aggregate_heap_field_frees` (which descends
+            /// into nested aggregates, cap-guarding each Vec/String free).
+            NestedAggregate,
         }
         let mut kinds: Vec<FieldDrop> = field_kinds
             .iter()
@@ -293,6 +301,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => FieldDrop::None,
             })
             .collect();
+        // Nested-aggregate detection: a field the name-based pass left `None`
+        // whose LLVM type is a heap-bearing struct/tuple (not the Vec struct,
+        // not a shared-struct pointer) needs its inner heap freed recursively.
+        {
+            let vec_ty = self.vec_struct_type();
+            for (idx, k) in kinds.iter_mut().enumerate() {
+                if *k != FieldDrop::None {
+                    continue;
+                }
+                if let Some(inkwell::types::BasicTypeEnum::StructType(fst)) =
+                    st.get_field_type_at_index(idx as u32)
+                {
+                    if fst != vec_ty && self.aggregate_has_heap_field(fst) {
+                        *k = FieldDrop::NestedAggregate;
+                    }
+                }
+            }
+        }
         // Phase-8 line 39 follow-up — the seeded HTTP handle-structs carry
         // an i64 side-table key (`Response.headers` / `RequestBuilder.handle`)
         // that leaks until process exit without an explicit free. Override
@@ -550,6 +576,29 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap();
                     self.builder.build_unconditional_branch(skip_bb).unwrap();
                     self.builder.position_at_end(skip_bb);
+                }
+                FieldDrop::NestedAggregate => {
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            st,
+                            p_arg,
+                            field_idx as u32,
+                            &format!("drop.field{field_idx}.nested.p"),
+                        )
+                        .unwrap();
+                    let fst = match st.get_field_type_at_index(field_idx as u32) {
+                        Some(inkwell::types::BasicTypeEnum::StructType(t)) => t,
+                        _ => continue,
+                    };
+                    // `emit_aggregate_heap_field_frees` appends cap-guard basic
+                    // blocks to `current_fn`; point it at this drop fn during
+                    // the recursion, then restore (same discipline as the
+                    // `MapOrSet` shared-half walk above).
+                    let saved_fn = self.current_fn;
+                    self.current_fn = Some(drop_fn);
+                    self.emit_aggregate_heap_field_frees(field_ptr, fst);
+                    self.current_fn = saved_fn;
                 }
             }
         }

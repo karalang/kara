@@ -1966,6 +1966,15 @@ pub(super) struct Codegen<'ctx> {
     /// program is tiny, and `emit_rc_dec` already scans `shared_types` the
     /// same way.
     pub(crate) rc_fallback_box_drop_fns: Vec<(StructType<'ctx>, FunctionValue<'ctx>)>,
+    /// Synthesized "free this aggregate's heap fields" drop fns for ANONYMOUS
+    /// aggregates — a let-bound tuple (`let t = (i, f"x")`) the named-struct
+    /// `track_struct_var` / `struct_drop_fns` path can't reach (a tuple has no
+    /// type name). Body is `emit_aggregate_heap_field_frees`. Keyed on the
+    /// aggregate LLVM type; same `Vec` + linear `StructType`-equality lookup
+    /// rationale as `rc_fallback_box_drop_fns` (`StructType` isn't `Hash`).
+    /// Registered as a `CleanupAction::StructDrop` by `track_tuple_var`
+    /// (B-2026-06-11-4 part a).
+    pub(crate) aggregate_drop_fns: Vec<(StructType<'ctx>, FunctionValue<'ctx>)>,
     /// Per-closure capture path modes sourced from
     /// `OwnershipCheckResult::closure_capture_path_modes` — line 353
     /// phase-5 checklist disjoint-capture slice 4. When a closure
@@ -4570,6 +4579,7 @@ impl<'ctx> Codegen<'ctx> {
             arc_fallback_fns: HashMap::new(),
             rc_fallback_heap_types: HashMap::new(),
             rc_fallback_box_drop_fns: Vec::new(),
+            aggregate_drop_fns: Vec::new(),
             closure_capture_paths: HashMap::new(),
             par_capture_modes: HashMap::new(),
             concurrency_decisions: HashMap::new(),

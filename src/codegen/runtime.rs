@@ -386,6 +386,48 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Zero the `cap` of every Vec/String field of an aggregate (recursing
+    /// into nested aggregates) — the move-out dual of
+    /// `emit_aggregate_heap_field_frees`. After a tuple/struct VALUE is moved
+    /// (`let u = t`, `return t`), the source's per-field `cap` is zeroed so its
+    /// synthesized aggregate drop's `cap > 0` guards all skip, leaving the
+    /// destination the sole owner (B-2026-06-11-4 part a). `&self` — pure IR
+    /// emission, no state writes.
+    pub(super) fn zero_aggregate_field_caps(
+        &self,
+        base_ptr: PointerValue<'ctx>,
+        agg_ty: StructType<'ctx>,
+    ) {
+        let vec_ty = self.vec_struct_type();
+        let i64_t = self.context.i64_type();
+        for i in 0..agg_ty.count_fields() {
+            match agg_ty.get_field_type_at_index(i) {
+                Some(BasicTypeEnum::StructType(st)) if st == vec_ty => {
+                    if let Ok(field_ptr) =
+                        self.builder
+                            .build_struct_gep(agg_ty, base_ptr, i, "movecap.f")
+                    {
+                        if let Ok(cap_ptr) =
+                            self.builder
+                                .build_struct_gep(vec_ty, field_ptr, 2, "movecap.cap")
+                        {
+                            let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
+                        }
+                    }
+                }
+                Some(BasicTypeEnum::StructType(st)) => {
+                    if let Ok(field_ptr) =
+                        self.builder
+                            .build_struct_gep(agg_ty, base_ptr, i, "movecap.nf")
+                    {
+                        self.zero_aggregate_field_caps(field_ptr, st);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Synthesize (once per box heap type) the "free the boxed value's heap
     /// fields" fn for an RC-fallback box `{i64 rc, value}` whose `value` is
     /// an aggregate carrying String/Vec fields. Registered in
@@ -442,6 +484,72 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_fn = saved_fn;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
+        }
+    }
+
+    /// Synthesize (once per aggregate LLVM type) a "free this aggregate's heap
+    /// fields" drop fn for an ANONYMOUS aggregate — a tuple binding the
+    /// named-struct `emit_struct_drop_synthesis` path can't reach (a tuple has
+    /// no type name). The body is `emit_aggregate_heap_field_frees`, which
+    /// recurses into nested aggregates and cap-guards each Vec/String free, so
+    /// a moved binding whose field caps were zeroed drops to a no-op. Returns
+    /// `None` (no fn, no cleanup) when the aggregate owns no heap. Cached in
+    /// `aggregate_drop_fns`.
+    pub(super) fn synthesize_aggregate_drop_fn(
+        &mut self,
+        agg_ty: StructType<'ctx>,
+    ) -> Option<FunctionValue<'ctx>> {
+        if !self.aggregate_has_heap_field(agg_ty) {
+            return None;
+        }
+        if let Some((_, f)) = self.aggregate_drop_fns.iter().find(|(t, _)| *t == agg_ty) {
+            return Some(*f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let fn_name = format!("__karac_drop_tuple_{}", self.aggregate_drop_fns.len());
+        let drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self.module.add_function(
+            &fn_name,
+            drop_fn_ty,
+            Some(inkwell::module::Linkage::Internal),
+        );
+        // Register before emitting the body (cache + recursion guard).
+        self.aggregate_drop_fns.push((agg_ty, drop_fn));
+        self.current_fn = Some(drop_fn);
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        let p = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        self.emit_aggregate_heap_field_frees(p, agg_ty);
+        self.builder.build_return(None).unwrap();
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(drop_fn)
+    }
+
+    /// Queue a scope-exit heap-field drop for an owned tuple binding
+    /// (`let t = (i, f"x")`). The named-struct `track_struct_var` can't cover a
+    /// tuple (no type name), so a let-bound tuple's String/Vec field had no
+    /// drop and leaked (B-2026-06-11-4 part a). Synthesizes (or reuses) the
+    /// aggregate drop fn and registers it via the existing `StructDrop` action
+    /// — so the move-suppression (`suppress_source_vec_cleanup_for_arg`) and
+    /// drain machinery treat a tuple binding exactly like a named-struct one.
+    /// No-op (nothing queued) when the tuple owns no heap.
+    pub(super) fn track_tuple_var(
+        &mut self,
+        tuple_alloca: PointerValue<'ctx>,
+        agg_ty: StructType<'ctx>,
+    ) {
+        if let Some(drop_fn) = self.synthesize_aggregate_drop_fn(agg_ty) {
+            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                frame.push(CleanupAction::StructDrop {
+                    struct_alloca: tuple_alloca,
+                    drop_fn,
+                });
+            }
         }
     }
 

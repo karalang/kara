@@ -2490,6 +2490,46 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-06-11-4 part a: a let-bound TUPLE with heap fields
+                // (`let t = (i, f"x")`) has no type name, so `track_struct_var`
+                // (named structs), the Vec/String/Map tracks, and `track_enum_var`
+                // above all skip it — its String/Vec field had no scope-exit drop
+                // and leaked. Register the anonymous-aggregate drop. Guard: the
+                // slot holds a heap-bearing struct VALUE that is NOT the Vec
+                // struct (those are String/Vec) and whose binding carries NO type
+                // name (named structs / enums do, and are tracked above; a tuple
+                // doesn't) — i.e. exactly a tuple. `track_tuple_var` no-ops when
+                // the aggregate owns no heap, and shared structs / Maps / tensors
+                // hold a pointer slot (not a struct value), so they're excluded.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    // A named struct (`struct_types`) is already `track_struct_var`'d
+                    // above, and a shared struct is RC-tracked; exclude both to
+                    // avoid double-free. A tuple binding carries the synthetic
+                    // type name "Tuple" (in neither set), so it passes — as does
+                    // any other anonymous heap aggregate.
+                    let named_aggregate =
+                        self.var_type_names.get(var_name.as_str()).is_some_and(|n| {
+                            self.struct_types.contains_key(n.as_str())
+                                || self.shared_types.contains_key(n.as_str())
+                        });
+                    if !named_aggregate {
+                        if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
+                            if let BasicTypeEnum::StructType(agg_ty) = slot.ty {
+                                if agg_ty != self.vec_struct_type()
+                                    && self.aggregate_has_heap_field(agg_ty)
+                                {
+                                    self.track_tuple_var(slot.ptr, agg_ty);
+                                    // `let u = t` tuple-to-tuple move: both slots
+                                    // alias the same buffers; zero the source's
+                                    // field caps so its drop no-ops and `u` owns
+                                    // (no-op for a fresh tuple-literal RHS, which
+                                    // isn't an Identifier).
+                                    self.suppress_source_vec_cleanup_for_arg(value);
+                                }
+                            }
+                        }
+                    }
+                }
                 // B-2026-06-10-6: a let-bound `Option[String]` /
                 // `Option[Vec[_]]` whose payload is never destructured leaks
                 // its inline heap — the type-erased `Option` `track_enum_var`

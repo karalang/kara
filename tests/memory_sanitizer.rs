@@ -554,6 +554,56 @@ fn main() {
         );
     }
 
+    // ── By-value aggregate (tuple / literal / nested) heap-field drops ──
+    //
+    // B-2026-06-11-4: by-value aggregates leaked their String/Vec fields across
+    // shapes the named-struct drop path didn't reach — a let-bound tuple (no
+    // type name → no `track_struct_var`), a tuple/struct LITERAL arg (no binding
+    // → no owner), and a nested-struct field (the synthesized struct drop didn't
+    // recurse). Fix: `track_tuple_var` (anonymous-aggregate drop at the let
+    // site), aggregate-literal materialization at the call site, and
+    // nested-aggregate recursion in `emit_struct_drop_synthesis`; tuple moves
+    // (`let u = t` / `return t`) suppress the source via `zero_aggregate_field_
+    // caps`. The loop builds a fresh heap aggregate each iteration in every
+    // shape; a leaked field trips Linux LSan, and a double-free (if a moved
+    // tuple or a materialized literal were owned twice) trips macOS ASAN.
+    #[test]
+    fn asan_by_value_aggregate_drops_single_free() {
+        assert_clean_asan_run(
+            r#"
+struct S { k: i64, name: String }
+struct Inner { name: String }
+struct Outer { id: i64, inner: Inner }
+fn show_tup(p: (i64, String)) { if p.0 > 99999 { println(p.1); } }
+fn fwd(p: (i64, String)) { show_tup(p); }
+fn show_s(s: S) { if s.k > 99999 { println(s.name); } }
+fn show_o(o: Outer) { if o.id > 99999 { println(o.inner.name); } }
+fn mk(n: i64) -> (i64, String) { (n, f"r-{n}") }
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let t = (i, f"let-{i}");
+        show_tup(t);
+        let u = (i, f"mv-{i}");
+        let w = u;
+        if w.0 > 99999 { println(w.1); }
+        let r = mk(i);
+        if r.0 > 99999 { println(r.1); }
+        fwd((i, f"fwd-{i}"));
+        show_tup((i, f"lit-{i}"));
+        show_s(S { k: i, name: f"slit-{i}" });
+        let o = Outer { id: i, inner: Inner { name: f"nest-{i}" } };
+        show_o(o);
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &["done"],
+            "by_value_aggregate_drops",
+        );
+    }
+
     // ── Closures that RETURN a heap value (closure-heap-return-cleanup) ──
     //
     // A closure whose body is a block returning a heap binding

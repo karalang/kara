@@ -1034,6 +1034,43 @@ impl<'ctx> super::Codegen<'ctx> {
             ) {
                 self.materialize_owned_temp(val, (a.value.span.offset, a.value.span.length));
             }
+            // B-2026-06-11-4 part b: an aggregate LITERAL call argument
+            // (`show((2, f"z"))` / `show(S { name: f"z" })`) is a fresh temp
+            // with NO consuming binding, so its String/Vec field had no owner
+            // and leaked. A let-bound aggregate is owned by its binding's drop
+            // (`track_tuple_var` / `track_struct_var`); give the literal arg the
+            // same caller-side ownership by spilling it to a temp alloca and
+            // registering that drop. By-value aggregate params are caller-freed
+            // (the callee gets a value copy and frees nothing), so this temp is
+            // the single owner.
+            if let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() {
+                if agg_ty != self.vec_struct_type()
+                    && self.aggregate_has_heap_field(agg_ty)
+                    && self.current_fn.is_some()
+                {
+                    let cur_fn = self.current_fn.unwrap();
+                    match &a.value.kind {
+                        ExprKind::Tuple(_) => {
+                            let slot =
+                                self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
+                            self.builder.build_store(slot, val).unwrap();
+                            self.track_tuple_var(slot, agg_ty);
+                        }
+                        ExprKind::StructLiteral { path, .. }
+                            if path
+                                .last()
+                                .is_some_and(|n| self.struct_types.contains_key(n.as_str())) =>
+                        {
+                            let name = path.last().unwrap().clone();
+                            let slot =
+                                self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
+                            self.builder.build_store(slot, val).unwrap();
+                            self.track_struct_var(&name, slot);
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
 
         // Niche-ABI arg pack — see `pack_niche_abi_args`. Runs AFTER the
@@ -1756,6 +1793,49 @@ impl<'ctx> super::Codegen<'ctx> {
         arg_expr: &Expr,
         apply_shared_transfer: bool,
     ) {
+        // Tuple field move-out (`let s = t.N`, `f(t.N)`, `return t.N`): the
+        // heap field is moved into the consumer, but the tuple `t` still carries
+        // its `track_tuple_var` drop (B-2026-06-11-4 part a), which would free
+        // the same buffer — a double-free. Zero that field's `cap` so the
+        // tuple's drop skips it (the consumer's own track is the sole owner).
+        // Only a non-boxed tuple (a struct VALUE slot) with a heap field at
+        // `index` is touched; an RC-fallback-boxed tuple has a pointer slot
+        // (the `StructType` guard fails) and is handled by the rc machinery.
+        if let ExprKind::TupleIndex { object, index } = &arg_expr.kind {
+            if let ExprKind::Identifier(t) = &object.kind {
+                if let Some(slot) = self.variables.get(t.as_str()).copied() {
+                    if let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty {
+                        let vec_ty = self.vec_struct_type();
+                        if agg_ty != vec_ty
+                            && matches!(
+                                agg_ty.get_field_type_at_index(*index as u32),
+                                Some(inkwell::types::BasicTypeEnum::StructType(fst)) if fst == vec_ty
+                            )
+                        {
+                            if let Ok(field_ptr) = self.builder.build_struct_gep(
+                                agg_ty,
+                                slot.ptr,
+                                *index as u32,
+                                "tupfld.move.p",
+                            ) {
+                                if let Ok(cap_ptr) = self.builder.build_struct_gep(
+                                    vec_ty,
+                                    field_ptr,
+                                    2,
+                                    "tupfld.move.cap",
+                                ) {
+                                    let _ = self.builder.build_store(
+                                        cap_ptr,
+                                        self.context.i64_type().const_int(0, false),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
         let var_name = match &arg_expr.kind {
             ExprKind::Identifier(n) => n.as_str(),
             _ => return,
@@ -1908,6 +1988,24 @@ impl<'ctx> super::Codegen<'ctx> {
                             .build_store(field_ptr, i64_t.const_int(0, false));
                     }
                 }
+            }
+        }
+        // Tuple / anonymous-aggregate binding (B-2026-06-11-4 part a): a moved
+        // tuple (`let u = t`, `return t`) shares its String/Vec buffers with the
+        // destination; zero each heap field's `cap` (recursing into nested
+        // aggregates) so the source's `track_tuple_var` StructDrop no-ops and
+        // the destination owns the buffers. The named-struct arm above handles
+        // the named case; this reaches the anonymous one its name-keyed walk
+        // can't. Guarded off named structs (already handled, and double-zeroing
+        // would be harmless but wasteful) and the Vec struct (String/Vec, the
+        // early arm above).
+        if let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty {
+            let named = self
+                .var_type_names
+                .get(var_name)
+                .is_some_and(|n| self.struct_types.contains_key(n.as_str()));
+            if !named && agg_ty != vec_ty && self.aggregate_has_heap_field(agg_ty) {
+                self.zero_aggregate_field_caps(slot.ptr, agg_ty);
             }
         }
     }

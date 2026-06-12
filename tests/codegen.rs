@@ -14503,6 +14503,47 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_by_value_aggregate_drops() {
+        // B-2026-06-11-4: by-value aggregates leaked their heap fields across
+        // several shapes the named-struct drop path didn't cover. This asserts
+        // the VALUE is correct (the heap field survives to its use) across all
+        // of them; the no-leak / single-free side is `tests/memory_sanitizer.rs
+        // ::asan_by_value_aggregate_drops_single_free`. Shapes: a let-bound
+        // tuple passed by value, a tuple-to-tuple move, a tuple returned from a
+        // fn, a tuple forwarded through two params, a tuple literal arg, a
+        // struct literal arg, and a nested-struct field.
+        let out = run_program(
+            r#"
+struct S { k: i64, name: String }
+struct Inner { name: String }
+struct Outer { id: i64, inner: Inner }
+fn show_tup(p: (i64, String)) { println(p.1); }
+fn fwd(p: (i64, String)) { show_tup(p); }
+fn show_s(s: S) { println(s.name); }
+fn show_o(o: Outer) { println(o.inner.name); }
+fn mk(n: i64) -> (i64, String) { (n, f"r-{n}") }
+fn main() {
+    let t = (1i64, f"let-{1}");
+    show_tup(t);
+    let u = (2i64, f"mv-{2}");
+    let w = u;
+    println(w.1);
+    let r = mk(3i64);
+    println(r.1);
+    fwd((4i64, f"fwd-{4}"));
+    show_tup((5i64, f"lit-{5}"));
+    show_s(S { k: 6i64, name: f"slit-{6}" });
+    let o = Outer { id: 7i64, inner: Inner { name: f"nest-{7}" } };
+    show_o(o);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "let-1\nmv-2\nr-3\nfwd-4\nlit-5\nslit-6\nnest-7\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_fstring_integer_interpolation() {
         let out = run_program(
             r#"
