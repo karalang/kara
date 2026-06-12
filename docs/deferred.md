@@ -38,6 +38,33 @@ The phase trackers under [`implementation_checklist/`](implementation_checklist/
 
 ## P1 — Decided, Non-Breaking
 
+### `select` Across Channels
+
+**Decision:** `select` ships in v1 (P1 — after MVP, before v1 GA). Wait on multiple channels at once (plus `after()` timers), taking the first ready arm. Promoted from P2 § Channel Combinators because it is the *first* wall a real concurrent server hits: a long-lived main loop routinely needs "a new message **or** a shutdown signal **or** a timeout," and the bounded `Channel[T]` surface (`recv` blocks on one channel) cannot express that. The other four channel combinators (recv/send timeout, unbounded, fan-out/fan-in, priority) stay P2.
+
+**Why P1, not P0:** The v1 channel MVP (`Channel[T]` / `Sender` / `Receiver`, AOT-lowered, `phase-6-runtime.md`) ships first and is independently useful for single-producer/single-consumer handoff. `select` is the next layer once a multi-channel consumer exists — it is not needed for the channel surface to be correct, only for the server main-loop shape.
+
+**Why non-breaking:** New syntax over existing channel ops; introduces no change to the `Channel[T]` / `Sender` / `Receiver` surface. Programs without `select` are unaffected.
+
+**Design shape:**
+
+```kara
+select {
+    msg = requests.recv()  => handle(msg),
+    _   = shutdown.recv()  => break,
+    _   = after(30s)       => tick(),
+    default                => idle(),   // optional; omit for blocking select
+}
+```
+
+A block expression. Each arm is a channel op (`recv` / `send`) or an `after(Duration)` timer, followed by `=>` and a handler. The first ready arm runs; with no `default`, `select` blocks (carries `blocks` / `suspends` per the channel-op effect surface) until one arm is ready. Arms are otherwise like `match` arms — the block's value is the chosen arm's value, all arms must agree on type.
+
+**Tracking:** v1 work is tracked at [`implementation_checklist/phase-6-runtime.md`](implementation_checklist/phase-6-runtime.md) (the channel-lowering home) — the `[ ]` `select` entry sits with the shipped `Channel[T]` / `BoundedChannel[T]` AOT lowering slices.
+
+**Cross-reference:** P2 § Channel Combinators (the four siblings that remain post-v1); design.md § Channels (the bounded v1 surface this extends); `implementation_checklist/phase-5-diagnostics.md` interleaved-pipeline entry (shares the "first real backend app" motivation).
+
+---
+
 ### Fine-Grained Conditional Compilation (`#[cfg]`)
 
 **Decision:** Defer `#[cfg]` annotations. Platform directories are the v1 mechanism for conditional compilation. `#[cfg]` may be added later if real programs show a need for per-item granularity.
@@ -1776,6 +1803,41 @@ impl[T] CircularBuffer[T] {
 ## P2 — Important Post-v1 Language Features
 
 Important features deferred from v1; the language author or the community will build them post-v1. Each entry has a committed design or design shape; for items where the mechanism is genuinely uncertain, the entry names the conditions under which the design would solidify (the *promotion gates*) so the entry doesn't become indefinitely deferred. Distinct from P3, where the may-or-may-not question is open.
+
+### Channel Combinators
+
+**Decision:** Defer advanced channel patterns to post-v1. The v1 channel surface is the bounded `Channel[T]` with blocking `Sender.send` / `Receiver.recv` (design.md § Channels), plus the shipped application-layer backpressure primitives `Semaphore` / `BoundedChannel[T]` (`OnFull::Block | OnFull::FailFast`) / `RateLimiter` (`implementation_checklist/phase-8-stdlib-floor.md`, shipped 2026-06-03). The combinators below are the next layer — each independently shippable. (**`select` across channels was the highest-value item here and has been promoted to P1 / in-v1 — see § P1 `select` Across Channels and `implementation_checklist/phase-6-runtime.md`.** The four below remain P2.)
+
+1. **`recv` / `send` timeout.** `Receiver.recv_timeout(Duration) -> Option[T]` and `Sender.send_timeout(value, Duration) -> Result[(), T]`. Precedent already exists — `RequestBuilder.timeout(ms)` (http.kara) and `Semaphore.acquire(timeout)` — this extends the same deadline shape to channels. Subsumed by the P1 `select`-with-`after` once that lands, but useful standalone before it.
+2. **Unbounded channels.** A `Channel[T]` constructor variant with no capacity; `send` never blocks. Deliberately **not** the default — bounded-with-blocking is the safe default because it propagates backpressure; unbounded is opt-in for producers provably rate-limited elsewhere.
+3. **Fan-out / fan-in combinators.** MPMC convenience over the existing `Sender: Clone` (fan-in is already expressible by cloning senders; fan-out needs a shared-receiver / work-stealing wrapper). Library-level, no language change.
+4. **Priority / selective receive — lowest priority.** Erlang-style "handle messages matching a pattern first." No committed design shape yet; likely a `PriorityChannel[T, Pri]` library type rather than a `recv` pattern-match, since arbitrary selective receive interacts badly with bounded buffers.
+
+**Why deferred:** None of the four block v1. The bounded blocking channel covers the common producer/consumer handoff; `seq` / `par` / `spawn` / `TaskGroup` cover structured concurrency; and `select` (P1) covers the multi-wait main loop. The exact shapes of these four are best fixed against a real concurrent Kāra application, not designed speculatively.
+
+**Why non-breaking:** All additive. `recv_timeout` / unbounded constructor / priority type are new APIs; none change the v1 `Channel[T]` surface.
+
+**Promotion gates (P2 → P1 — when to revisit):**
+1. **First real backend Kāra app with a long-lived concurrent main loop** — shared trigger with the interleaved-pipeline entry in `implementation_checklist/phase-5-diagnostics.md` and the application-layer backpressure entry in `phase-8-stdlib-floor.md`. The `select` promotion already fired on this trigger; these four follow as the same app exercises them (a timeout need, an unbounded producer, fan-out, or priority).
+2. A demo / kata where the absence of one of these four forces an awkward workaround.
+
+Cross-reference: § P1 `select` Across Channels (the promoted sibling); design.md § Channels (the bounded v1 surface this extends); `implementation_checklist/phase-8-stdlib-floor.md` (shipped backpressure primitives); `implementation_checklist/phase-5-diagnostics.md` interleaved-pipeline entry (shared "first real backend app" trigger).
+
+---
+
+### Par-Region Saturation Strategy Configuration
+
+**Decision:** Defer user-facing configuration of the `par` / worker-pool saturation strategy to post-v1. The design commits the *default*: when a `par` region's branches exceed the worker pool, excess work **queues** (Phase 1 default runtime); embedded runtimes may reject; GPU dispatch rejects at grid-size validation (design.md § par saturation sub-questions). What is deferred is a *user-selectable* policy (queue / fail-region / backpressure-to-caller / reject-at-spawn).
+
+**Why deferred:** The default (queue) satisfies the minimum invariants and is correct for the common case. A user-selectable strategy is only needed once a real workload demonstrates the default is wrong for it — at which point that workload fixes the shape of the config surface. This is explicitly "runtime configuration, not the language," so it does not touch `par` syntax.
+
+**Why non-breaking:** Additive runtime-config surface; the `par` block syntax and default behavior are unchanged.
+
+**Promotion gate (P2 → P1):** A real long-running Kāra service where the default queue-on-saturation causes unbounded queue growth or latency the author needs to bound — the same "first real backend app" trigger, observed specifically as saturation pressure. Until then the shipped `BoundedChannel[T]` (`OnFull::FailFast`) + `Semaphore` cover application-level admission control.
+
+Cross-reference: design.md § par saturation sub-questions; `implementation_checklist/phase-8-stdlib-floor.md` (application-layer backpressure primitives, shipped).
+
+---
 
 ### Lazy DataFrame Query Optimizer Expansion
 

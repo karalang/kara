@@ -9473,7 +9473,7 @@ impl Receiver[T] {
 
 **`ScopeLocal` does not apply.** `Sender[T]` and `Receiver[T]` follow standard ownership rules and may be moved across scope boundaries. This is required by the `after()` timer pattern, where a `Sender` is moved into a host callback closure that fires outside the creating scope.
 
-**Advanced channel patterns are deferred.** `select` across multiple channels, channel-based fan-out/fan-in combinators, and unbounded channels are Phase 6 — see [deferred.md § Channel Combinators](deferred.md#channel-combinators).
+**`select` across multiple channels ships in v1 (P1)** — see [deferred.md § P1 `select` Across Channels](deferred.md#select-across-channels). **The remaining advanced channel patterns are deferred (P2):** channel-based fan-out/fan-in combinators, unbounded channels, per-operation `recv`/`send` timeouts, and selective/priority receive — see [deferred.md § Channel Combinators](deferred.md#channel-combinators).
 
 ### Structured Concurrency Lifetime Guarantees
 
