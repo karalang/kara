@@ -7,17 +7,17 @@
 //! identically. This is the bootstrap oracle: as the port grows, any
 //! divergence from the Rust lexer fails here.
 //!
-//! Covers the port's slice-A+B token set: all delimiters, punctuation, single-
-//! and multi-char operators (maximal-munch forms like `<<=` / `..=` / `?.`),
-//! the full keyword table, identifiers, decimal integers, whitespace, line and
-//! (nesting) block comments (skipped), `///` / `//!` doc-comment tokens, and
-//! EOF. Deferred to later slices (and kept OUT of the corpus): string / char /
-//! byte / interpolated / c-string literals, non-decimal and suffixed / float
-//! numbers, raw identifiers (`r#x`), non-ASCII, and the reserved-word /
-//! reserved-prefix error forms. Inputs are single-line (so the reported line
-//! is always one) until both the port and the corpus grow newlines. Both
-//! lexers emit a trailing EOF, so the full streams (including EOF) are
-//! compared.
+//! Covers the port's slice-A+B+C token set: all delimiters, punctuation,
+//! single- and multi-char operators (maximal-munch forms like `<<=` / `..=` /
+//! `?.`), the full keyword table, identifiers, numbers (decimal, hex/bin/octal,
+//! float, `_` separators, int/float suffixes), whitespace, line and (nesting)
+//! block comments (skipped), `///` / `//!` doc-comment tokens, and EOF.
+//! Deferred to later slices (and kept OUT of the corpus): string / char /
+//! byte / interpolated / c-string literals, raw identifiers (`r#x`), non-ASCII,
+//! and the reserved-word / reserved-prefix error forms. Inputs are single-line
+//! (so the reported line is always one) until both the port and the corpus
+//! grow newlines. Both lexers emit a trailing EOF, so the full streams
+//! (including EOF) are compared.
 //!
 //! The corpus is lexed back-to-back with NO printed separator between inputs:
 //! a bare string-literal `println` was observed to interleave out of order
@@ -101,6 +101,18 @@ const CORPUS: &[&str] = &[
     "let x = 1 /* inline */ + 2",
     "fn f() { /* body */ }",
     "p / q /= r",
+    // Slice C: number forms — radix prefixes, floats, `_` separators, suffixes.
+    "0xff 0x10 0xFF 0xdead",
+    "0b1010 0b0 0b1111_0000",
+    "0o777 0o17 0o0",
+    "3.14 0.5 100.0 0.0",
+    "1.5e3 2e10 1.0e-5 1.25e2",
+    "1_000_000 0xff_ff 1_2_3",
+    "5i32 10u8 100i64 255u8 7u32 9i8",
+    "1.5f64 2.0f32 3.14f64",
+    "let n = 42 + 0xa * 2",
+    "0 1 12 999 1000000",
+    "5f64",
 ];
 
 /// Render one Rust `SpannedToken` in the Kāra lexer's canonical one-line
@@ -243,6 +255,10 @@ fn render_rust(t: &SpannedToken) -> String {
         // Literals / special.
         Token::Identifier { name, .. } => return body_with(s, &format!("IDENT {name}")),
         Token::Integer(v, _) => return body_with(s, &format!("INT {v}")),
+        // Display for f64 matches Kāra's f64.to_string (both use Rust's
+        // formatter): 100.0→"100", 1.0e-5→"0.00001", etc. The suffix is
+        // ignored on both sides (the port consumes but does not yet store it).
+        Token::Float(v, _) => return body_with(s, &format!("FLOAT {v}")),
         Token::DocComment(t) => return body_with(s, &format!("DOC {t}")),
         Token::ModuleDocComment(t) => return body_with(s, &format!("MODDOC {t}")),
         Token::EOF => "EOF",

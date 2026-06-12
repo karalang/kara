@@ -7,8 +7,8 @@
 // PORT SLICES (each shipped with the oracle green):
 //   A — delimiters, punctuation, single/multi-char operators, keyword table.
 //       The structural, non-literal core.                           [DONE]
-//   B — comments (line/block skip + `///`/`//!` doc tokens).        [THIS SLICE]
-//   C — number forms (hex/bin/octal, float, `_` separators, suffixes). [pending]
+//   B — comments (line/block skip + `///`/`//!` doc tokens).        [DONE]
+//   C — number forms (hex/bin/octal, float, `_` separators, suffixes). [THIS SLICE]
 //   D — string/char/byte/multi-string/interpolated/c-string literals. [pending]
 //   E — raw idents (`r#x`), non-ASCII recovery, reserved string prefixes,
 //       reserved fragment-specifier namespace.                     [pending]
@@ -190,6 +190,7 @@ enum Token {
     // Literals / special
     Identifier(String),
     Integer(i64),
+    Float(f64),
     DocComment(String),
     ModuleDocComment(String),
     Eof,
@@ -560,13 +561,149 @@ impl Lexer {
     }
 
     fn number(mut ref self) -> SpannedToken {
-        while is_digit(self.peek()) {
+        // Radix prefixes 0x / 0b / 0o (the leading digit is already consumed,
+        // so bytes[start] is it and peek() is the prefix letter).
+        if self.bytes[self.start] == b'0' and not self.is_at_end() {
+            let c0 = self.peek();
+            if c0 == b'x' or c0 == b'X' {
+                return self.radix_number(16);
+            } else if c0 == b'b' or c0 == b'B' {
+                return self.radix_number(2);
+            } else if c0 == b'o' or c0 == b'O' {
+                return self.radix_number(8);
+            }
+        }
+        while is_digit(self.peek()) or self.peek() == b'_' {
             self.advance();
         }
-        let text = self.src.substring(self.start, self.current);
-        match i64.parse(text) {
+        let mut is_float = false;
+        // Fractional part: `.DIGITS` and also `.eEXP` (e.g. `1.e10`).
+        if self.peek() == b'.' {
+            let after_dot = self.peek_next();
+            let is_exp_after_dot = (after_dot == b'e' or after_dot == b'E') and is_exp_start(self.peek_at(2));
+            if is_digit(after_dot) or is_exp_after_dot {
+                is_float = true;
+                self.advance();
+                while is_digit(self.peek()) or self.peek() == b'_' {
+                    self.advance();
+                }
+            }
+        }
+        // Exponent: e|E [+|-] DIGITS.
+        if self.peek() == b'e' or self.peek() == b'E' {
+            is_float = true;
+            self.advance();
+            if self.peek() == b'+' or self.peek() == b'-' {
+                self.advance();
+            }
+            if not is_digit(self.peek()) {
+                return self.make_spanned(Token.Error("exponent has no digits".to_string()));
+            }
+            while is_digit(self.peek()) or self.peek() == b'_' {
+                self.advance();
+            }
+        }
+        if is_float {
+            let text = strip_underscores(self.src.substring(self.start, self.current));
+            self.try_float_suffix();
+            match f64.parse(text) {
+                Some(v) => self.make_spanned(Token.Float(v)),
+                None => self.make_spanned(Token.Error("Invalid float literal".to_string())),
+            }
+        } else {
+            let text = strip_underscores(self.src.substring(self.start, self.current));
+            self.try_int_suffix();
+            match i64.parse(text) {
+                Some(v) => self.make_spanned(Token.Integer(v)),
+                None => self.make_spanned(Token.Error("Invalid integer literal".to_string())),
+            }
+        }
+    }
+
+    // Hex (16) / binary (2) / octal (8) literal. The leading `0` is consumed;
+    // peek() is the prefix letter. Captures the digit text (sans the `0x`/`_`)
+    // BEFORE consuming any type suffix, so make_spanned's span includes it.
+    fn radix_number(mut ref self, radix: i64) -> SpannedToken {
+        self.advance(); // the x / b / o
+        while is_radix_digit(self.peek(), radix) or self.peek() == b'_' {
+            self.advance();
+        }
+        let text = strip_underscores(self.src.substring(self.start + 2, self.current));
+        self.try_int_suffix();
+        match i64.from_str_radix(text, radix) {
             Some(v) => self.make_spanned(Token.Integer(v)),
-            None => self.make_spanned(Token.Error("Invalid integer literal".to_string())),
+            None => self.make_spanned(Token.Error("Invalid radix literal".to_string())),
+        }
+    }
+
+    // Consume `pat` at `current` iff it is present AND not followed by an
+    // identifier char (so `i32x` is not read as the `i32` suffix). Returns
+    // whether it consumed. Slice C captures suffixes for span-fidelity but does
+    // not yet STORE the suffix kind in the token (deferred to the parser slice).
+    fn try_consume_suffix(mut ref self, pat: String) -> bool {
+        let mut pb: Vec[u8] = Vec.new();
+        for b in pat.bytes() {
+            pb.push(b);
+        }
+        let n = pb.len();
+        let mut i = 0;
+        while i < n {
+            if self.peek_at(i) != pb[i] {
+                return false;
+            }
+            i = i + 1;
+        }
+        let after = self.peek_at(n);
+        if is_alpha(after) or is_digit(after) {
+            return false;
+        }
+        let mut j = 0;
+        while j < n {
+            self.advance();
+            j = j + 1;
+        }
+        true
+    }
+
+    fn try_int_suffix(mut ref self) {
+        if self.try_consume_suffix("i128") {
+            return;
+        }
+        if self.try_consume_suffix("i64") {
+            return;
+        }
+        if self.try_consume_suffix("i32") {
+            return;
+        }
+        if self.try_consume_suffix("i16") {
+            return;
+        }
+        if self.try_consume_suffix("i8") {
+            return;
+        }
+        if self.try_consume_suffix("u128") {
+            return;
+        }
+        if self.try_consume_suffix("u64") {
+            return;
+        }
+        if self.try_consume_suffix("u32") {
+            return;
+        }
+        if self.try_consume_suffix("u16") {
+            return;
+        }
+        if self.try_consume_suffix("u8") {
+            return;
+        }
+    }
+
+    fn try_float_suffix(mut ref self) {
+        if self.try_consume_suffix("f64") {
+            return;
+        }
+        if self.try_consume_suffix("f32") {
+            return;
         }
     }
 
@@ -688,6 +825,34 @@ fn is_alpha(c: u8) -> bool {
 
 fn is_digit(c: u8) -> bool {
     c.is_ascii_digit()
+}
+
+// A byte that can follow `e`/`E` in a float exponent.
+fn is_exp_start(c: u8) -> bool {
+    is_digit(c) or c == b'+' or c == b'-'
+}
+
+fn is_radix_digit(c: u8, radix: i64) -> bool {
+    if radix == 16 {
+        c.is_ascii_hexdigit()
+    } else if radix == 2 {
+        c == b'0' or c == b'1'
+    } else {
+        c >= b'0' and c <= b'7'
+    }
+}
+
+// Remove `_` digit separators before parsing. Iterates chars (not bytes) so we
+// can push each kept char directly — `b as char` and `char.try_from(b)` are
+// both unimplemented in codegen today (tracked self-hosting gaps).
+fn strip_underscores(s: String) -> String {
+    let mut out = "".to_string();
+    for c in s.chars() {
+        if c != '_' {
+            out.push(c);
+        }
+    }
+    out
 }
 
 // Canonical one-line render of a token: `offset length line column KIND payload`.
@@ -840,6 +1005,10 @@ fn render(tok: SpannedToken) -> String {
         }
         Integer(v) => {
             line.push_str("INT ");
+            line.push_str(v.to_string());
+        }
+        Float(v) => {
+            line.push_str("FLOAT ");
             line.push_str(v.to_string());
         }
         DocComment(text) => {
