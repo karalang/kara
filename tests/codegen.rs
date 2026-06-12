@@ -14544,6 +14544,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tuple_projection() {
+        // B-2026-06-11-7: a chained tuple index `t.1.1` failed to PARSE (the
+        // lexer ate `1.1` as a float). B-2026-06-11-6: a struct field read
+        // THROUGH a tuple element `t.1.name` compiled to the `i64 0` placeholder
+        // under AOT (interp was correct) because `type_name_of_expr` couldn't
+        // resolve the tuple element's struct type. Both fixed: the lexer treats
+        // a `.`-preceded number as a tuple index, and a tuple binding's element
+        // type names are recorded so the field access resolves. Covers nested
+        // tuple index, struct-through-tuple (multi-field), and an annotated tuple.
+        let out = run_program(
+            r#"
+struct Inner { name: String, age: i64 }
+fn main() {
+    let nt = (1i64, (2i64, 3i64));
+    println(nt.1.0);
+    println(nt.1.1);
+    let t = (9i64, Inner { name: f"in-{2}", age: 7i64 });
+    println(t.1.name);
+    println(t.1.age);
+    let a: (i64, Inner) = (5i64, Inner { name: f"ann-{4}", age: 8i64 });
+    println(a.1.name);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "2\n3\nin-2\n7\nann-4\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_fstring_integer_interpolation() {
         let out = run_program(
             r#"

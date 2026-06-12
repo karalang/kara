@@ -1580,6 +1580,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 let field_ty_names = self.struct_field_type_names.get(obj_ty.as_str())?;
                 field_ty_names.get(idx).and_then(|n| n.clone())
             }
+            // Struct field through a tuple element (`t.1.name`): resolve the
+            // element's struct type from the tuple binding's recorded element
+            // type names (B-2026-06-11-6). Only an Identifier-rooted tuple is
+            // covered — a deeper-nested base (`a.b.1`) isn't recorded.
+            ExprKind::TupleIndex { object, index } => {
+                if let ExprKind::Identifier(t) = &object.kind {
+                    self.tuple_var_elem_type_names
+                        .get(t.as_str())
+                        .and_then(|names| names.get(*index as usize))
+                        .and_then(|n| n.clone())
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }

@@ -705,6 +705,18 @@ fn test_tuple_expression() {
 }
 
 #[test]
+fn test_chained_tuple_index() {
+    // B-2026-06-11-7: a chained tuple index `t.1.1` failed to parse — the
+    // lexer consumed `1.1` (the two indices) as a float, and the parser
+    // couldn't recover the digits from the f64 to split it. The lexer now
+    // treats a `.`-preceded number as an integer tuple index, not a float.
+    parse_ok("fn main() { let t = (1, (2, 3)); let x = t.1.1; }");
+    parse_ok("fn main() { let t = (1, (2, (3, 4))); let x = t.1.1.0; }");
+    // A genuine float literal in value position is unaffected.
+    parse_ok("fn main() { let f = 1.5; let g = 2.0e2; }");
+}
+
+#[test]
 fn test_closure_expression() {
     parse_ok("fn main() { let f = |x| x + 1; }");
     parse_ok("fn main() { let f = |x, y| { x * y }; }");

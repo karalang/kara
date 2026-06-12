@@ -927,6 +927,16 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) variables: HashMap<String, VarSlot<'ctx>>,
     /// Maps variable name → Kāra type name (for struct/enum field resolution).
     pub(crate) var_type_names: HashMap<String, String>,
+    /// Per-element type names of a let-bound TUPLE binding (`let t = (i, Inner
+    /// { .. })` → `[None, Some("Inner")]`), so a struct-field access through a
+    /// tuple element (`t.1.name`) can resolve the element's struct type.
+    /// `type_name_of_expr` is structural (the parser shares spans across
+    /// chained postfix, so a span-keyed expr-type lookup can't distinguish
+    /// `t` / `t.1` / `t.1.name`); this records the element types at the
+    /// binding site from the annotation or the RHS tuple literal
+    /// (B-2026-06-11-6). `None` for a non-struct element (primitive / nested
+    /// tuple / unresolved RHS — those don't field-access into a struct).
+    pub(crate) tuple_var_elem_type_names: HashMap<String, Vec<Option<String>>>,
     /// Names of `Option[T]` bindings that registered a
     /// `CleanupAction::FreeInlineOptionPayload` (T is an inline heap
     /// `String`/`Vec`). A `match`/`if let` arm that binds the `Some`
@@ -4451,6 +4461,7 @@ impl<'ctx> Codegen<'ctx> {
             builder,
             variables: HashMap::new(),
             var_type_names: HashMap::new(),
+            tuple_var_elem_type_names: HashMap::new(),
             inline_option_payload_vars: std::collections::HashSet::new(),
             inline_result_payload_vars: std::collections::HashSet::new(),
             inline_option_map_payload_vars: std::collections::HashSet::new(),

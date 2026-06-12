@@ -2530,6 +2530,38 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-06-11-6: record a tuple binding's per-element type
+                // names so a struct-field access through a tuple element
+                // (`t.1.name`) resolves the element's struct type in
+                // `type_name_of_expr` (structural — span-keyed lookup can't
+                // distinguish `t` / `t.1` / `t.1.name`). Source: the type
+                // annotation if present, else the RHS tuple literal's elements.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    let elem_names: Option<Vec<Option<String>>> = ty
+                        .as_ref()
+                        .and_then(|te| match &te.kind {
+                            TypeKind::Tuple(elems) => Some(
+                                elems
+                                    .iter()
+                                    .map(|e| match &e.kind {
+                                        TypeKind::Path(p) => p.segments.first().cloned(),
+                                        _ => None,
+                                    })
+                                    .collect(),
+                            ),
+                            _ => None,
+                        })
+                        .or_else(|| match &value.kind {
+                            ExprKind::Tuple(elems) => {
+                                Some(elems.iter().map(|e| self.type_name_of(e)).collect())
+                            }
+                            _ => None,
+                        });
+                    if let Some(names) = elem_names {
+                        self.tuple_var_elem_type_names
+                            .insert(var_name.clone(), names);
+                    }
+                }
                 // B-2026-06-10-6: a let-bound `Option[String]` /
                 // `Option[Vec[_]]` whose payload is never destructured leaks
                 // its inline heap — the type-erased `Option` `track_enum_var`

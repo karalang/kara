@@ -441,9 +441,21 @@ impl<'a> Lexer<'a> {
 
         let mut is_float = false;
 
+        // A number whose immediately-preceding char is `.` is a TUPLE INDEX
+        // (`x.1`, and crucially the trailing `1` of `x.1.1`), never a float —
+        // its leading `.` was already lexed as a `Dot`. Without this, `x.1.1`
+        // lexes as `x . 1.1`(float), and the parser can't recover the original
+        // digits from the `f64` to split it back into two indices, so chained
+        // tuple indexing fails to parse (B-2026-06-11-7). A genuine float
+        // literal is never `.`-preceded — `.` after a value is always member
+        // access, and Kāra has no leading-dot float (`.5`); the `b'.'` lexer
+        // arm only produces `Dot`/`DotDot`. So suppress BOTH the fractional and
+        // exponent float parts in this position; the number lexes as an integer.
+        let tuple_index_ctx = self.start > 0 && self.source[self.start - 1] == b'.';
+
         // Consume decimal part if present.
         // Accept `N.DIGITS` and also `N.eEXP` (i.e., `1.e10` → `1.0e10`).
-        if self.peek() == b'.' {
+        if !tuple_index_ctx && self.peek() == b'.' {
             let after_dot = self.peek_next();
             let is_exp_after_dot =
                 (after_dot == b'e' || after_dot == b'E') && is_exp_start(self.peek_at(2));
@@ -457,7 +469,7 @@ impl<'a> Lexer<'a> {
         }
 
         // Consume exponent part if present: `e` | `E` followed by optional `+`/`-` and digits.
-        if self.peek() == b'e' || self.peek() == b'E' {
+        if !tuple_index_ctx && (self.peek() == b'e' || self.peek() == b'E') {
             is_float = true;
             self.advance(); // consume 'e'/'E'
             if self.peek() == b'+' || self.peek() == b'-' {
