@@ -30992,6 +30992,29 @@ fn main() {
     // ──────────────────────────────────────────────────────────────────
 
     #[test]
+    fn test_e2e_chained_slice_len_on_nonident_receiver() {
+        // `s.bytes().len()` / `.is_empty()` — the `.len()` receiver is a
+        // method-chain result yielding the `{ptr, i64}` slice header, not the
+        // `{ptr,len,cap}` Vec struct. Codegen's non-identifier len/is_empty
+        // handler only matched the Vec struct, so the chain fell through to
+        // the dispatch-fail error (interp handled it). Regression for the
+        // kata-katas #722 bench harness's `out[k].bytes().len()`.
+        let output = run_program(
+            "fn main() {\n\
+                 let v: Vec[String] = [\"abc\", \"de\"];\n\
+                 println(f\"{v[0].bytes().len()}\");\n\
+                 let s: String = \"hello\";\n\
+                 println(f\"{s.bytes().len()}\");\n\
+                 println(f\"{s.bytes().is_empty()}\");\n\
+                 let e: String = \"\";\n\
+                 println(f\"{e.bytes().is_empty()}\");\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "3\n5\nfalse\ntrue\n");
+    }
+
+    #[test]
     fn test_e2e_string_substring_basic() {
         // In-range / start-zero / out-of-range / negative / empty-receiver.
         let output = run_program(

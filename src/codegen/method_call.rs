@@ -2071,6 +2071,37 @@ impl<'ctx> super::Codegen<'ctx> {
                         _ => unreachable!(),
                     });
                 }
+                // Slice-header receiver — `s.bytes().len()`, `slice.len()`
+                // where the receiver is a method-chain result. `bytes()` (and
+                // the other zero-copy views) return the `{ptr, i64}` slice
+                // header, not the `{ptr,len,cap}` Vec struct, so the `vec_ty`
+                // branch above misses them and the chain fell through to the
+                // dispatch-fail error (B surfaced by kata-katas #722 bench
+                // harness's `out[k].bytes().len()`). A slice is a borrowed
+                // view that owns no buffer, so there is NO owned-temp drop
+                // here — just extract `len` (field 1, same index as the Vec).
+                if sv.get_type() == self.slice_struct_type() {
+                    let i64_t = self.context.i64_type();
+                    let len_val = self
+                        .builder
+                        .build_extract_value(sv, 1, "tmp.slice.len")
+                        .unwrap()
+                        .into_int_value();
+                    return Ok(match method {
+                        "len" => len_val.into(),
+                        "is_empty" => self
+                            .builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::EQ,
+                                len_val,
+                                i64_t.const_zero(),
+                                "tmp.slice.is_empty",
+                            )
+                            .unwrap()
+                            .into(),
+                        _ => unreachable!(),
+                    });
+                }
             }
         }
 
