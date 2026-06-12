@@ -552,6 +552,36 @@ impl<'a> super::Interpreter<'a> {
                     }
                     return make_none();
                 }
+                // `char.try_from(n: <int>) -> Result[char, i64]` (#10). Mirrors
+                // the codegen handler: valid Unicode scalar (`0..=0x10FFFF`,
+                // excluding the `0xD800..=0xDFFF` surrogate range) → `Ok(char)`;
+                // otherwise `Err(cp)` carrying the offending codepoint.
+                if method == "try_from" && target == "char" {
+                    let mut cp_opt: Option<i64> = None;
+                    if let Some(arg) = args.first() {
+                        if let Value::Int(cp) = self.eval_expr_inner(&arg.value) {
+                            cp_opt = Some(cp);
+                        }
+                    }
+                    let cp = cp_opt.unwrap_or(0);
+                    let ch = if (0..=0x10FFFF).contains(&cp) && !(0xD800..=0xDFFF).contains(&cp) {
+                        char::from_u32(cp as u32)
+                    } else {
+                        None
+                    };
+                    return match ch {
+                        Some(c) => Value::EnumVariant {
+                            enum_name: "Result".to_string(),
+                            variant: "Ok".to_string(),
+                            data: EnumData::Tuple(vec![Value::Char(c)]),
+                        },
+                        None => Value::EnumVariant {
+                            enum_name: "Result".to_string(),
+                            variant: "Err".to_string(),
+                            data: EnumData::Tuple(vec![Value::Int(cp)]),
+                        },
+                    };
+                }
                 if let Some(result) = self.dispatch_lowered_op(method, args, span) {
                     return result;
                 }

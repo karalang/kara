@@ -37,6 +37,105 @@ fn atomic_alignment_for(ty: BasicTypeEnum<'_>) -> u32 {
 }
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// `char.try_from(n) -> Result[char, i64]` (#10). Widen the codepoint arg
+    /// to i64 (sign- or zero-extend per the source's signedness, so a negative
+    /// signed input stays negative and fails the lower bound), validate it is a
+    /// Unicode scalar value (`0 <= cp <= 0x10FFFF` and NOT in the surrogate
+    /// range `0xD800..=0xDFFF`), then branch: `Ok(char)` with the codepoint
+    /// truncated to the i32 `char` repr, or `Err(cp)` carrying the offending
+    /// value. PHI-merge the two `Result` aggregates. Mirrors the branch+phi
+    /// shape of `Vec.try_from_slice`.
+    fn compile_char_try_from(&mut self, args: &[CallArg]) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "char.try_from expects 1 argument, got {}",
+                args.len()
+            ));
+        }
+        let i64_t = self.context.i64_type();
+        let i32_t = self.context.i32_type();
+        let raw = self.compile_expr(&args[0].value)?;
+        let iv = match raw {
+            BasicValueEnum::IntValue(iv) => iv,
+            _ => return Err("char.try_from expects an integer argument".to_string()),
+        };
+        let src_unsigned = self.expr_is_unsigned_int(&args[0].value);
+        let cp = if iv.get_type().get_bit_width() < 64 {
+            if src_unsigned {
+                self.builder
+                    .build_int_z_extend(iv, i64_t, "ctf.zx")
+                    .unwrap()
+            } else {
+                self.builder
+                    .build_int_s_extend(iv, i64_t, "ctf.sx")
+                    .unwrap()
+            }
+        } else {
+            iv
+        };
+        let zero = i64_t.const_int(0, false);
+        let max = i64_t.const_int(0x10FFFF, false);
+        let sur_lo = i64_t.const_int(0xD800, false);
+        let sur_hi = i64_t.const_int(0xDFFF, false);
+        let ge0 = self
+            .builder
+            .build_int_compare(IntPredicate::SGE, cp, zero, "ctf.ge0")
+            .unwrap();
+        let le_max = self
+            .builder
+            .build_int_compare(IntPredicate::SLE, cp, max, "ctf.lemax")
+            .unwrap();
+        let in_range = self.builder.build_and(ge0, le_max, "ctf.inrange").unwrap();
+        let ge_sur = self
+            .builder
+            .build_int_compare(IntPredicate::SGE, cp, sur_lo, "ctf.gesur")
+            .unwrap();
+        let le_sur = self
+            .builder
+            .build_int_compare(IntPredicate::SLE, cp, sur_hi, "ctf.lesur")
+            .unwrap();
+        let is_sur = self.builder.build_and(ge_sur, le_sur, "ctf.issur").unwrap();
+        let not_sur = self.builder.build_not(is_sur, "ctf.notsur").unwrap();
+        let valid = self
+            .builder
+            .build_and(in_range, not_sur, "ctf.valid")
+            .unwrap();
+
+        let cur_fn = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+            .ok_or("char.try_from outside a function context")?;
+        let ok_bb = self.context.append_basic_block(cur_fn, "ctf.ok");
+        let err_bb = self.context.append_basic_block(cur_fn, "ctf.err");
+        let merge_bb = self.context.append_basic_block(cur_fn, "ctf.merge");
+        self.builder
+            .build_conditional_branch(valid, ok_bb, err_bb)
+            .unwrap();
+
+        self.builder.position_at_end(ok_bb);
+        let ch = self
+            .builder
+            .build_int_truncate(cp, i32_t, "ctf.ch")
+            .unwrap();
+        let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[ch.into()])?;
+        let ok_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(err_bb);
+        let err_result = self.build_nonshared_enum_value("Result", "Err", &[cp.into()])?;
+        let err_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        let phi = self
+            .builder
+            .build_phi(ok_result.get_type(), "ctf.result")
+            .unwrap();
+        phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+        Ok(phi.as_basic_value())
+    }
+
     pub(super) fn compile_method_call(
         &mut self,
         object: &Expr,
@@ -1161,6 +1260,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // as int `parse` (impl in assoc_call.rs).
                 if method == "parse" && type_name.as_str() == "f64" {
                     return self.compile_assoc_call(type_name.as_str(), method, args);
+                }
+                // `char.try_from(n) -> Result[char, i64]` — fallible codepoint→
+                // char conversion (#10; the `E_INT_AS_CHAR` rejection of
+                // `n as char` redirects here). Validates the Unicode scalar
+                // range and returns `Ok(char)` / `Err(codepoint)`.
+                if method == "try_from" && type_name.as_str() == "char" {
+                    return self.compile_char_try_from(args);
                 }
             }
         }

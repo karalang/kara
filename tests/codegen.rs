@@ -30850,6 +30850,32 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_char_try_from() {
+        // #10: `char.try_from(n) -> Result[char, i64]` — fallible codepoint→
+        // char conversion (the `E_INT_AS_CHAR` rejection of `n as char` points
+        // here). Valid scalars → Ok(char); the surrogate range (0xD800..=0xDFFF),
+        // values above 0x10FFFF, and negatives → Err(codepoint). u8 (always
+        // valid), a BMP char, an astral char (emoji), and the three failure
+        // classes.
+        let output = run_program(
+            "fn show(r: Result[char, i64]) {\n\
+                 match r { Ok(ch) => println(ch.to_string()), Err(cp) => println(\"err:\" + cp.to_string()) }\n\
+             }\n\
+             fn main() {\n\
+                 let b: u8 = 65;\n\
+                 show(char.try_from(b));\n\
+                 show(char.try_from(97));\n\
+                 show(char.try_from(0x1F600));\n\
+                 show(char.try_from(0xD800));\n\
+                 show(char.try_from(0x110000));\n\
+                 show(char.try_from(-1));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "A\na\n😀\nerr:55296\nerr:1114112\nerr:-1\n");
+    }
+
+    #[test]
     fn test_e2e_i64_from_str_radix_basic() {
         // Radix parse (hex/bin/oct + reject + invalid radix) — the
         // self-hosting lexer's hex/binary/octal literal path. Must match the

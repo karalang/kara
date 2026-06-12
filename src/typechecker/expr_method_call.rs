@@ -781,6 +781,46 @@ impl<'a> super::TypeChecker<'a> {
                         };
                     }
                 }
+                // `char.try_from(n: <int>) -> Result[char, i64]` — fallible
+                // codepoint→char conversion (blocker #10; the
+                // `E_INT_AS_CHAR` rejection of `n as char` points here). Not
+                // every integer is a valid Unicode scalar (the surrogate range
+                // `0xD800..=0xDFFF` and values above `0x10FFFF` are rejected),
+                // so the result is a `Result`; the `Err` payload is the
+                // offending codepoint value (`i64`) — no dedicated error enum
+                // needed (the error type is unspecified at the language level).
+                if method == "try_from" && type_name == "char" {
+                    if args.len() != 1 {
+                        self.type_error(
+                            format!("char.try_from expects 1 argument, got {}", args.len()),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                        return Type::Error;
+                    }
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if !matches!(arg_ty, Type::Int(_) | Type::UInt(_) | Type::Error) {
+                        self.type_error(
+                            format!(
+                                "char.try_from expects an integer codepoint, got `{}`",
+                                type_display(&arg_ty)
+                            ),
+                            span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        return Type::Error;
+                    }
+                    let char_ty = self
+                        .primitive_type("char")
+                        .expect("char is a known primitive");
+                    let i64_ty = self
+                        .primitive_type("i64")
+                        .expect("i64 is a known primitive");
+                    return Type::Named {
+                        name: "Result".to_string(),
+                        args: vec![char_ty, i64_ty],
+                    };
+                }
                 if method == "from" && args.len() == 1 {
                     let arg_ty = self.infer_expr(&args[0].value);
                     if arg_ty == Type::Error {

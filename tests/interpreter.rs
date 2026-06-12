@@ -9188,6 +9188,26 @@ fn test_i64_from_str_radix_interpreter() {
 }
 
 #[test]
+fn test_char_try_from_interpreter() {
+    // #10: `char.try_from(n) -> Result[char, i64]`. Must match the codegen E2E
+    // (test_e2e_char_try_from) — valid scalars → Ok(char), surrogate / above-
+    // max / negative → Err(codepoint).
+    let output = run(
+        r#"fn show(r: Result[char, i64]) { match r { Ok(ch) => println(ch.to_string()), Err(cp) => println("err:" + cp.to_string()), } }
+        fn main() {
+            let b: u8 = 65;
+            show(char.try_from(b))
+            show(char.try_from(97))
+            show(char.try_from(0x1F600))
+            show(char.try_from(0xD800))
+            show(char.try_from(0x110000))
+            show(char.try_from(-1))
+        }"#,
+    );
+    assert_eq!(output, "A\na\n😀\nerr:55296\nerr:1114112\nerr:-1\n");
+}
+
+#[test]
 fn test_f64_parse_interpreter() {
     // Float parse: decimal / scientific / negative / reject / integer-form.
     // The self-hosting lexer's float-literal path.
