@@ -65,5 +65,11 @@ narrow bulk-data class.
   vectorization/aliasing is **not** the real-world lever (param `noalias` inert;
   `wrapping_*` was the actual autovec enabler; at Rust parity; alias-scope metadata
   deferred). This profiling spike is the follow-on that asks "then what *is* the lever?"
-- `roadmap.md` § Codegen Optimization (IR quality pass).
+- `roadmap.md` § Codegen Optimization (IR quality pass). This spike is the named
+  candidate-hunt + decision-rule vehicle for three deferred levers there, all gated on a
+  real kernel surfacing here: **alias-scope metadata** (needs an auto-vec-heavy
+  non-hand-vectorized or many-slice kernel), **non-temporal / streaming stores** (needs a
+  write-heavy bulk kernel that blows L2), and loop/kernel **fusion**. If this profile finds
+  the lexer is allocation/String-build bound (the hypothesis), none of those three is the
+  answer and the effort goes to the allocation/ownership path instead.
 - `feedback_optimize_for_production_not_kata`, `feedback_simulate_demand_dont_wait`.
