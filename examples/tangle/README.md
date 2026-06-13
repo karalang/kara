@@ -130,11 +130,13 @@ Follow-ons from this work:
 2. **Fixed.** The same miscompile in **codegen** is now fixed too (`47c0dff5`):
    `compile_field_store` GEPs to the nested place in-place, and `CompoundAssign`
    routes field/index targets through the place-store path. E2E regressions in
-   `tests/codegen.rs`; verified under ASAN (codegen 1547 / memory_sanitizer 220
-   green). One narrow sub-case remains tracked in
-   [`phase-7-codegen.md`](../../implementation_checklist/phase-7-codegen.md):
-   a `ref`/`mut ref`-param-rooted nested store (`p.inner.x = v`) still no-ops in
-   codegen (the interpreter handles it).
+   `tests/codegen.rs`; verified under ASAN. The one narrow sub-case that was left
+   tracked — a `ref`/`mut ref`-param-rooted nested store (`p.inner.x = v`,
+   `self.inner.x = v`) — is now **also fixed**: the nested-store path resolves
+   its base pointer through `nested_store_place_ptr`, which derefs a ref-param
+   root via `get_data_ptr` (the same deref the read path does), so the store
+   targets the caller's struct. Both backends now write through every nested
+   place shape.
 
 **Tooling gap surfaced *and fixed* by Tangle dogfooding.** The per-function
 query kinds (`ownership` / `effects` / `concurrency`) split their target with a

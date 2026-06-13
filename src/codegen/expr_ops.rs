@@ -854,18 +854,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // is pointer-based: GEP to the parent place in-place via the field-chain
         // walk, then GEP `field` and store. Without this the store fell through
         // to the no-op tail and was silently dropped (interpreter sibling fixed
-        // in 62a92b39; see phase-7-codegen.md). Excludes ref/mut-ref-param-
-        // rooted chains: `field_chain_place_ptr` resolves a ref-param root to
-        // its slot (a pointer-to-struct) without the deref, so a ref-param
-        // nested store would target the wrong address — those bail to the
-        // existing no-op rather than miscompile (rare; tracked as a follow-on).
+        // in 62a92b39; see phase-7-codegen.md). `nested_store_place_ptr` resolves
+        // a `ref`/`mut ref`-param root through `get_data_ptr` (loads the held
+        // caller pointer), so `self.inner.x = v` / `p.inner.x = v` target the
+        // caller's struct — owned roots resolve identically to the slot.
         if matches!(
             object.kind,
             ExprKind::FieldAccess { .. } | ExprKind::Index { .. }
-        ) && !self.place_chain_root_is_ref_param(object)
-        {
+        ) {
             if let (Some(base_ptr), Some(obj_ty)) = (
-                self.field_chain_place_ptr(object),
+                self.nested_store_place_ptr(object),
                 self.place_chain_type_name(object),
             ) {
                 if let (Some(&st), Some(names)) = (
@@ -1057,20 +1055,37 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
-    /// True if the root binding of a place chain (`ident`, `ident.f.g`,
-    /// `vec[i].f`, `self.f`) is a `ref` / `mut ref` parameter. Such roots are
-    /// stored as a pointer-to-struct in their slot; `field_chain_place_ptr`
-    /// returns that slot without the deref, so the nested-field-store path skips
-    /// them to avoid targeting the wrong address (it falls back to the existing
-    /// no-op). Owned locals / `self`-by-value resolve correctly and are handled.
-    fn place_chain_root_is_ref_param(&self, expr: &Expr) -> bool {
+    /// Place pointer for the parent of a nested field/index store
+    /// (`self.inner.x = v`, `p.inner.x = v`, `v[i].inner.x = v`). Mirrors
+    /// [`Self::field_chain_place_ptr`]'s field GEP walk but resolves an
+    /// Identifier / `self` root through [`Self::get_data_ptr`], which **loads
+    /// the held caller pointer for a `ref`/`mut ref` parameter** and returns the
+    /// alloca for an owned binding. So a ref-param-rooted nested store targets
+    /// the caller's struct rather than the pointer slot (the read path does the
+    /// same deref in `lower_field_access_ptr`); owned roots resolve identically
+    /// to `field_chain_place_ptr`. `Index` roots delegate to the shared helper
+    /// (its `vec[i]` element-pointer logic is already deref-correct). Kept
+    /// separate from `field_chain_place_ptr` so the drop-suppression callers —
+    /// which only pass owned / `vec[i]` roots — stay untouched.
+    fn nested_store_place_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
         match &expr.kind {
-            ExprKind::Identifier(name) => self.ref_params.contains_key(name.as_str()),
-            ExprKind::SelfValue => self.ref_params.contains_key("self"),
-            ExprKind::FieldAccess { object, .. } | ExprKind::Index { object, .. } => {
-                self.place_chain_root_is_ref_param(object)
+            ExprKind::Identifier(name) => self.get_data_ptr(name.as_str()),
+            ExprKind::SelfValue => self.get_data_ptr("self"),
+            ExprKind::Index { .. } => self.field_chain_place_ptr(expr),
+            ExprKind::FieldAccess { object, field } => {
+                let base_ptr = self.nested_store_place_ptr(object)?;
+                let obj_ty = self.place_chain_type_name(object)?;
+                let st = *self.struct_types.get(obj_ty.as_str())?;
+                let idx = self
+                    .struct_field_names
+                    .get(obj_ty.as_str())?
+                    .iter()
+                    .position(|n| n == field)? as u32;
+                self.builder
+                    .build_struct_gep(st, base_ptr, idx, "nested.store.chain.p")
+                    .ok()
             }
-            _ => false,
+            _ => None,
         }
     }
 

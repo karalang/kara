@@ -993,6 +993,73 @@ fn main() {
         }
     }
 
+    // ── Ref-param-rooted nested store (the codegen follow-on) ──
+    //
+    // `self.inner.x = v` / `p.inner.x = v` where the chain root is a `ref` /
+    // `mut ref` plain-struct parameter. The slot holds a pointer-to-struct, so
+    // the nested-store path must deref the root (via `get_data_ptr`) before
+    // GEPing the chain — otherwise the store targets the pointer slot and the
+    // write is silently dropped (the interpreter already handled this). Depth-1
+    // `self.x = v` / `p.x = v` always worked; this closes the depth >= 2 case.
+
+    #[test]
+    fn e2e_nested_store_through_mut_ref_param() {
+        if let Some(out) = run_program(
+            "struct Inner { x: i64 }\n\
+             struct Outer { inner: Inner }\n\
+             fn bump(o: mut ref Outer) {\n\
+                 o.inner.x = 99;\n\
+             }\n\
+             fn main() {\n\
+                 let mut o = Outer { inner: Inner { x: 1 } };\n\
+                 bump(mut o);\n\
+                 println(o.inner.x);\n\
+             }",
+        ) {
+            assert_eq!(out, "99\n");
+        }
+    }
+
+    #[test]
+    fn e2e_nested_store_through_mut_ref_self() {
+        if let Some(out) = run_program(
+            "struct Inner { x: i64 }\n\
+             struct Outer { inner: Inner }\n\
+             impl Outer {\n\
+                 fn bump(mut ref self) {\n\
+                     self.inner.x = 42;\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut o = Outer { inner: Inner { x: 1 } };\n\
+                 o.bump();\n\
+                 println(o.inner.x);\n\
+             }",
+        ) {
+            assert_eq!(out, "42\n");
+        }
+    }
+
+    #[test]
+    fn e2e_compound_nested_store_through_mut_ref_self() {
+        if let Some(out) = run_program(
+            "struct Inner { x: i64 }\n\
+             struct Outer { inner: Inner }\n\
+             impl Outer {\n\
+                 fn bump(mut ref self) {\n\
+                     self.inner.x += 100;\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut o = Outer { inner: Inner { x: 5 } };\n\
+                 o.bump();\n\
+                 println(o.inner.x);\n\
+             }",
+        ) {
+            assert_eq!(out, "105\n");
+        }
+    }
+
     // ── String-literal `match` dispatch (selfhost-lexer-profile.md #1 lever) ──
 
     /// A `match` over ≥4 string literals lowers to the switch tree
