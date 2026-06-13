@@ -26537,3 +26537,50 @@ fn test_try_push_question_ok_unit_tail() {
          fn main() { let _ = build(); }",
     );
 }
+
+// ── Wrapping integer arithmetic (wrapping_add/sub/mul) ───────────────────
+// Scoped to the 64-bit widths (i64/u64/usize) in this slice; narrow widths
+// and i128/u128 are a tracked follow-on, so they must NOT type-check yet.
+
+#[test]
+fn wrapping_arith_ok_on_64bit_widths() {
+    typecheck_ok(
+        "fn main() {\n\
+         let a: i64 = 1; let _ = a.wrapping_add(2);\n\
+         let u: u64 = 3; let _ = u.wrapping_sub(1);\n\
+         let z: usize = 4; let _ = z.wrapping_mul(2);\n\
+         }",
+    );
+}
+
+#[test]
+fn wrapping_arith_arg_literal_promotes() {
+    // A suffix-free integer literal argument promotes to the receiver type,
+    // mirroring the `+` operator's Q4 literal promotion.
+    typecheck_ok("fn main() { let u: u64 = 5; let _ = u.wrapping_add(2); }");
+}
+
+#[test]
+fn wrapping_arith_rejects_mismatched_arg_type() {
+    // A non-literal argument of a different integer type is rejected (same
+    // strict same-type rule the operators enforce).
+    let errs = typecheck_errors(
+        "fn main() { let a: i64 = 1; let b: u64 = 2; let _ = a.wrapping_add(b); }",
+    );
+    assert!(
+        errs.iter().any(|e| e.to_string().contains("wrapping_add")),
+        "expected a wrapping_add arg-type error, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn wrapping_arith_rejects_narrow_width() {
+    // Narrow widths are out of scope this slice → NoMethodFound, not silently
+    // accepted (would miscompile without width-masking).
+    let errs = typecheck_errors("fn main() { let a: i32 = 1; let _ = a.wrapping_add(2); }");
+    assert!(
+        !errs.is_empty(),
+        "i32.wrapping_add must not type-check yet (narrow widths deferred)"
+    );
+}

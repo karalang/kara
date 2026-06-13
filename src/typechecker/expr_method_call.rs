@@ -19,7 +19,8 @@ use super::env::{FunctionSig, ImplInfo};
 use super::inference::{resolve_type_var_top, substitute_type_params, unify_types};
 use super::types::{
     clone_self_type_for, iterator_item_type_for, method_callee_type_name,
-    receiver_for_method_lookup, type_display, ConstArg, IntSize, SubstValue, Type, VariantTypeInfo,
+    receiver_for_method_lookup, type_display, ConstArg, IntSize, SubstValue, Type, UIntSize,
+    VariantTypeInfo,
 };
 use super::TypeErrorKind;
 
@@ -2167,6 +2168,63 @@ impl<'a> super::TypeChecker<'a> {
             )
         {
             return Type::Bool;
+        }
+        // Wrapping integer arithmetic — `wrapping_add` / `wrapping_sub` /
+        // `wrapping_mul` (design.md § Arithmetic Overflow, the `wrapping_*`
+        // family): two's-complement wraparound with NO overflow trap, the
+        // non-trapping sibling of the checked `+`/`-`/`*` path
+        // (`emit_checked_int_arith`). Both operands and the result are the
+        // receiver's type. **Scoped to the 64-bit widths** (`i64` / `u64` /
+        // `usize`) in this slice: those are i64-backed end-to-end (interpreter
+        // `Value::Int(i64)`, codegen i64), so a bare wrap is exact. The narrow
+        // widths (`i8`..`i32` / `u8`..`u32`) need width-masking in both
+        // backends, and `i128`/`u128` are not yet i64-representable in the
+        // interpreter — both are a tracked follow-on (`NoMethodFound` fires for
+        // them until then). Backends: codegen `method_call.rs`
+        // (`build_int_{add,sub,mul}`), interpreter `method_call.rs` (Rust
+        // `i64::wrapping_*`). Primary motivation: a wrapping kernel body is
+        // straight-line (no per-element overflow-trap branch), which is what
+        // lets LLVM auto-vectorize integer slice kernels — see
+        // `roadmap.md` § Codegen Optimization.
+        if matches!(method, "wrapping_add" | "wrapping_sub" | "wrapping_mul")
+            && matches!(
+                &receiver_for_lookup,
+                Type::Int(IntSize::I64) | Type::UInt(UIntSize::U64) | Type::UInt(UIntSize::Usize)
+            )
+        {
+            if args.len() != 1 {
+                self.type_error(
+                    format!("{method} expects 1 argument, got {}", args.len()),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+                return Type::Error;
+            }
+            // Q4 literal promotion (mirrors `infer_binary` in expr_ops.rs): a
+            // suffix-free integer literal argument is promoted to the receiver
+            // type, so `x.wrapping_add(1)` type-checks. Otherwise the argument
+            // must match the receiver type exactly — the same strict same-type
+            // rule the `+`/`-`/`*` operators enforce (mixed concrete integer
+            // types are a hard error; cast with `as`).
+            let arg = &args[0].value;
+            let arg_ty = self.infer_expr(arg);
+            if matches!(&arg.kind, ExprKind::Integer(_, None)) {
+                self.record_expr_type(&arg.span, &receiver_for_lookup);
+                return receiver_for_lookup.clone();
+            }
+            if arg_ty != Type::Error && arg_ty != receiver_for_lookup {
+                self.type_error(
+                    format!(
+                        "{method} expects an argument of type `{}`, got `{}`",
+                        type_display(&receiver_for_lookup),
+                        type_display(&arg_ty)
+                    ),
+                    arg.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+            return receiver_for_lookup.clone();
         }
         // Built-in `clone` / `to_string` on the scalar numeric + bool + char
         // primitives (all `Copy`). `clone` is identity → `Self`; `to_string`

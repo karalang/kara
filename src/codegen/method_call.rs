@@ -1317,6 +1317,30 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Wrapping integer arithmetic (typed in expr_method_call.rs):
+        // `wrapping_add` / `wrapping_sub` / `wrapping_mul`, the non-trapping
+        // sibling of the checked `+`/`-`/`*` path. Lowers to a bare
+        // `build_int_{add,sub,mul}` — silent two's-complement wraparound, no
+        // `with.overflow` intrinsic and no trap branch (cf.
+        // `emit_checked_int_arith` in expr_ops.rs). A straight-line loop body
+        // with no per-element overflow-trap side-exit is precisely what lets
+        // LLVM auto-vectorize integer slice kernels (the trap branch is the
+        // proven vectorization blocker — roadmap.md § Codegen Optimization).
+        // Typecheck restricts the receiver + arg to the 64-bit widths
+        // (i64/u64/usize), so the i64-backed operands wrap at the right width.
+        if matches!(method, "wrapping_add" | "wrapping_sub" | "wrapping_mul") && args.len() == 1 {
+            let lv = self.compile_expr(object)?.into_int_value();
+            let rv = self.compile_expr(&args[0].value)?.into_int_value();
+            let r = match method {
+                "wrapping_add" => self.builder.build_int_add(lv, rv, "wadd"),
+                "wrapping_sub" => self.builder.build_int_sub(lv, rv, "wsub"),
+                "wrapping_mul" => self.builder.build_int_mul(lv, rv, "wmul"),
+                _ => unreachable!(),
+            }
+            .unwrap();
+            return Ok(r.into());
+        }
+
         // ASCII byte-classification predicates on integer scalars (the `u8`
         // bytes from `String.bytes()`): `is_ascii_digit` / `is_ascii_alphabetic`
         // / `is_ascii_hexdigit` → bool (i1). Phase-8 floor for the self-hosting

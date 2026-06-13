@@ -43227,4 +43227,57 @@ fn main() {
             define_line(&ir, "@Counter.peek(")
         );
     }
+
+    // ── Wrapping integer arithmetic (wrapping_add/sub/mul) ───────────────
+    //
+    // The non-trapping sibling of `+`/`-`/`*`: lowers to a bare add/sub/mul
+    // with NO `with.overflow` intrinsic and no per-element trap branch. The
+    // straight-line loop body is what lets LLVM auto-vectorize integer slice
+    // kernels (the trap branch is the proven vectorization blocker).
+    #[test]
+    fn wrapping_arith_lowers_without_overflow_trap() {
+        let wrapping = ir_for(
+            r#"
+fn wadd(a: i64, b: i64) -> i64 { return a.wrapping_add(b); }
+fn wsub(a: i64, b: i64) -> i64 { return a.wrapping_sub(b); }
+fn wmul(a: i64, b: i64) -> i64 { return a.wrapping_mul(b); }
+fn main() { print(3.wrapping_add(4)); }
+"#,
+        );
+        assert!(
+            !wrapping.contains("with.overflow"),
+            "wrapping_* must not emit the checked-overflow intrinsic:\n{wrapping}"
+        );
+        // Sanity: the trapping `+` DOES emit the intrinsic, so the absence
+        // above is a meaningful signal (not just an unsupported method).
+        let trapping = ir_for(
+            r#"fn add2(a: i64, b: i64) -> i64 { return a + b; }
+fn main() { print(1); }"#,
+        );
+        assert!(
+            trapping.contains("sadd.with.overflow"),
+            "trapping `+` should still emit the checked-overflow intrinsic:\n{trapping}"
+        );
+    }
+
+    #[test]
+    fn e2e_wrapping_arithmetic_semantics() {
+        // Two's-complement wraparound, no trap, on the 64-bit widths.
+        let out = run_program_capturing(
+            r#"
+fn main() {
+    let big: i64 = 9223372036854775807;   // i64::MAX
+    println(big.wrapping_add(1));          // wraps to i64::MIN
+    let a: i64 = 100;
+    println(a.wrapping_sub(250));          // -150
+    println(a.wrapping_mul(3));            // 300
+    let u: u64 = 5;
+    println(u.wrapping_add(2));            // 7 (literal arg promotes to u64)
+}
+"#,
+        );
+        if let Some(c) = out {
+            assert_eq!(c.stdout.trim(), "-9223372036854775808\n-150\n300\n7");
+        }
+    }
 }

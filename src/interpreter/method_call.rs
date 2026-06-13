@@ -949,6 +949,29 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Wrapping integer arithmetic (typed in expr_method_call.rs): the
+        // non-trapping sibling of `+`/`-`/`*` — two's-complement wraparound,
+        // never `record_integer_overflow`. The typechecker restricts the
+        // receiver + arg to the 64-bit widths (i64/u64/usize), all i64-backed
+        // as `Value::Int(i64)`, so Rust's `i64::wrapping_*` is exact. (Gated on
+        // the method name first so the argument is not evaluated for any other
+        // 1-arg method on an integer receiver — `eval_expr_inner` is not
+        // re-entrant-safe against double side effects.) Narrow-width masking
+        // and i128/u128 are a tracked follow-on.
+        if matches!(method, "wrapping_add" | "wrapping_sub" | "wrapping_mul") && args.len() == 1 {
+            if let Value::Int(a) = &obj {
+                let a = *a;
+                if let Value::Int(b) = self.eval_expr_inner(&args[0].value) {
+                    return Value::Int(match method {
+                        "wrapping_add" => a.wrapping_add(b),
+                        "wrapping_sub" => a.wrapping_sub(b),
+                        "wrapping_mul" => a.wrapping_mul(b),
+                        _ => unreachable!(),
+                    });
+                }
+            }
+        }
+
         // ASCII byte-classification predicates on integer scalars (the `u8`
         // bytes from `String.bytes()`): `is_ascii_digit` / `is_ascii_alphabetic`
         // / `is_ascii_hexdigit` → bool. Phase-8 floor for the self-hosting lexer
