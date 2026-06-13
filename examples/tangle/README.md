@@ -110,7 +110,8 @@ both are declared `shared` with no `Box`, no `RefCell`, no `'a`.
 interpreter and codegen (it compiles and runs as a native binary).
 
 > **Findings from this structure** (the recursive interpreter exercised more cold
-> surface than any other Tangle program — two fixed, three tracked):
+> surface than any other Tangle program — three fixed, two tracked, plus one
+> tracked codegen follow-on):
 >
 > 1. **`Vec.new()` + `push` + return inference gap** — *fixed* (see the
 >    doubly-linked note above; same fix, surfaced again here in `scope_get`).
@@ -118,16 +119,21 @@ interpreter and codegen (it compiles and runs as a native binary).
 >    rejected (`E_ENUM_NESTED_ENUM_PAYLOAD`); `shared enum` makes the recursive
 >    payload an RC pointer. The diagnostic names this remedy directly — working
 >    as designed.
-> 3. **Shared-type cycle check rejects a *direct* recursive `shared enum`**
->    *(tracked)*. Even as `shared enum`, a *direct* `Add(Expr, Expr)` is rejected
->    at `karac build` (`shared-type cycle detected: Expr → Expr … will leak`) —
->    although the enum has a non-recursive base variant (`Num`), so expression
->    *trees* are acyclic and free fine. Worse, the same recursion *through*
->    `Vec[Expr]` / `Option[Expr]` passes — even though those indirected forms are
->    the ones that form *real* runtime cycles (parent_tree's `parent ↔ child`).
->    The check rejects the acyclic tree and waves through the genuine cycles. The
->    example routes the AST recursion through `Vec[Expr]` (the accepted form).
->    Tracked in
+> 3. **Direct recursive `shared enum`: misleading diagnostic *(FIXED)* over a
+>    codegen feature *(tracked)*.** A *direct* `Add(Expr, Expr)` is rejected at
+>    `karac build`. The rejection is *correct* — but the old message
+>    (`shared-type cycle detected … a cycle without a 'weak' edge will leak`) was
+>    wrong: the enum has a base variant (`Num`), so expression *trees* are acyclic
+>    and don't leak — `weak` fixes a non-existent leak. (The check was also
+>    inconsistent: the `Vec[Expr]`/`Option[Expr]`-mediated forms, which *do* form
+>    real runtime cycles like parent_tree's `parent ↔ child`, pass silently.) The
+>    diagnostic is now fixed — a base-case recursive shared enum gets an accurate
+>    *"not yet supported directly by the backend … route through `Vec[T]`/
+>    `Option[T]`"* message; genuine mutual cycles keep the `weak` advice. The
+>    underlying *feature* — codegen lays a direct recursive shared enum out **by
+>    value**, not as an RC handle, so it ICEs in `pattern_binding` — is a tracked
+>    codegen item; the interpreter handles direct recursion, so the example routes
+>    the AST through `Vec[Expr]` (the form codegen supports). Both in
 >    [`phase-7-codegen.md`](../../implementation_checklist/phase-7-codegen.md).
 > 4. **`self.field[i]` on a *shared* struct miscompiled** *(FIXED)*. A `ref
 >    self` shared receiver indexed into a `Vec` field (`self.values[i]`, read or

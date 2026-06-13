@@ -24,10 +24,14 @@
 // inferred-as-fallback.
 //
 // Recursive payloads go through `Vec[Expr]` rather than a *direct* `Add(Expr,
-// Expr)` because the ownership checker rejects a direct recursive `shared enum`
-// edge (`shared-type cycle detected: Expr → Expr`), while the `Vec`-mediated
-// form compiles — the same indirection the other Tangle structures use. See the
-// README "findings" note; the direct-edge rejection is a tracked compiler issue.
+// Expr)`. The `Vec`-mediated form gets the RC-handle representation and compiles
+// (the same indirection every other Tangle structure uses); a *direct* recursive
+// `shared enum` is laid out by value by the codegen backend, not as an RC handle,
+// so it can't yet be built — `karac` rejects it with an accurate diagnostic
+// pointing here (`recursive shared type not yet supported directly by the backend
+// … route through Vec[T]/Option[T]`). The interpreter handles direct recursion;
+// only codegen is missing the representation. See the README "findings" note; the
+// direct-recursion codegen feature is tracked in phase-7-codegen.md.
 
 shared enum Expr {
     Num(i64),

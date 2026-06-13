@@ -575,6 +575,42 @@ fn test_shared_struct_cycle_distinct_diagnostic() {
 }
 
 #[test]
+fn test_recursive_shared_enum_with_base_case_distinct_diagnostic() {
+    // A direct recursive `shared enum` WITH a base variant (`Num`) builds
+    // finite acyclic trees — it does NOT leak, so the generic "add 'weak'"
+    // advice is wrong for it. It is still rejected (the backend lays direct
+    // recursive shared enums out by value, not as an RC handle — a tracked
+    // codegen feature), but with an accurate diagnostic steering toward the
+    // supported `Vec`/`Option` indirection, NOT the leak/weak message.
+    let errors = ownership_errors(
+        "shared enum Expr {\n\
+            Num(i64),\n\
+            Add(Expr, Expr),\n\
+         }",
+    );
+    let err = errors
+        .iter()
+        .find(|e| e.kind == OwnershipErrorKind::OwnershipCycle)
+        .expect("recursive shared enum should still be rejected (codegen limitation)");
+    assert!(
+        !err.message.contains("will leak"),
+        "breakable recursive shared enum must NOT claim a leak: {}",
+        err.message
+    );
+    let suggestion = err.suggestion.as_ref().expect("expected suggestion");
+    assert!(
+        !suggestion.contains("weak"),
+        "breakable recursive shared enum must NOT advise 'weak': {}",
+        suggestion
+    );
+    assert!(
+        suggestion.contains("Vec") || suggestion.contains("Option"),
+        "breakable recursive shared enum should steer toward Vec/Option indirection: {}",
+        suggestion
+    );
+}
+
+#[test]
 fn test_shared_typed_param_reports_as_shared_rc() {
     // A parameter whose type is declared `shared` should be reported as
     // `shared (Rc)` in the representation map, not as `owned (stack)` —

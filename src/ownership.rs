@@ -1256,7 +1256,36 @@ impl<'a> OwnershipChecker<'a> {
                     // Find span for the type that starts the cycle
                     let span = self.find_type_span(node);
                     let all_shared = cycle.iter().all(|n| self.is_shared_type(n));
-                    let (message, suggestion) = if all_shared {
+                    // A shared-type cycle whose participants include an enum with a
+                    // *base* variant — one that introduces no edge back into the
+                    // cycle (`Num(i64)` in `shared enum Expr { Num(i64), Add(Expr,
+                    // Expr) }`) — is *breakable*: it builds finite, acyclic trees,
+                    // each `shared` child being an RC handle (fixed size). It does
+                    // NOT leak, so the generic "add 'weak'" advice is wrong for it.
+                    // It still can't be *compiled directly* today: the codegen
+                    // backend lays a direct recursive shared enum out **by value**
+                    // (`{ tag, word… }`) rather than as an RC heap handle, so its
+                    // construction, match scrutinee, and payload extraction all
+                    // break (ICE in `pattern_binding`). The supported form is the
+                    // same indirection the rest of the language uses — route the
+                    // recursive payload through `Vec[T]` / `Option[T]`. So this is
+                    // a distinct, accurate diagnostic, not the leak one. (Enabling
+                    // direct recursion is a tracked codegen feature — see
+                    // phase-7-codegen.md.) A pure `shared struct` cycle
+                    // (`A { b: B }`, `B { a: A }`) has no base escape — every
+                    // instance is forced to form a runtime reference cycle that
+                    // leaks — so it keeps the `weak` advice.
+                    let breakable_shared = all_shared && self.cycle_has_base_escape(&cycle);
+                    let (message, suggestion) = if breakable_shared {
+                        (
+                            format!(
+                                "recursive `shared` type not yet supported directly by the backend: {} → {}. It is acyclic via its base case and does NOT leak — this is a codegen limitation, not an ownership cycle.",
+                                cycle.join(" → "),
+                                neighbor,
+                            ),
+                            Some("route the recursive payload through `Vec[T]` or `Option[T]` (e.g. `Add(Vec[Expr])` instead of `Add(Expr, Expr)`)".to_string()),
+                        )
+                    } else if all_shared {
                         (
                             format!(
                                 "shared-type cycle detected: {} → {}. Shared types use reference counting — a cycle without a 'weak' edge will leak.",
@@ -1289,6 +1318,46 @@ impl<'a> OwnershipChecker<'a> {
 
         in_stack.remove(node);
         path.pop();
+    }
+
+    /// Whether an all-shared type cycle is *breakable*: some enum in the cycle
+    /// has a base variant that introduces no direct edge back into the cycle
+    /// (e.g. `Num(i64)` / a `Unit` variant in
+    /// `shared enum Expr { Num(i64), Add(Expr, Expr) }`). A breakable cycle can
+    /// be constructed as a finite, acyclic tree, so the shared (RC) recursion is
+    /// size-bounded and leak-free — it does NOT leak. It still can't compile
+    /// *directly* (the backend lays it out by value, not as an RC handle — a
+    /// tracked codegen feature), so it is still an error, but with an accurate
+    /// "use `Vec`/`Option` indirection" diagnostic instead of the misleading
+    /// "add `weak`" leak advice. A cycle with no base escape (a mutual
+    /// `shared struct` cycle, or an enum whose every variant recurses) forces a
+    /// runtime reference cycle that genuinely leaks and keeps the `weak` advice.
+    /// `owned_type_name` captures only direct (non-`Option`/`Vec`-wrapped) edges,
+    /// matching exactly the edges `check_cycles` used to build the graph.
+    fn cycle_has_base_escape(&self, cycle: &[&str]) -> bool {
+        let cycle_set: HashSet<&str> = cycle.iter().copied().collect();
+        let leads_into_cycle =
+            |ty: &Type| owned_type_name(ty).is_some_and(|t| cycle_set.contains(t.as_str()));
+        for &name in cycle {
+            let Some(info) = self.typecheck_result.enum_info.get(name) else {
+                continue;
+            };
+            for (_, variant) in &info.variants {
+                let recurses = match variant {
+                    crate::typechecker::VariantTypeInfo::Tuple(types) => {
+                        types.iter().any(&leads_into_cycle)
+                    }
+                    crate::typechecker::VariantTypeInfo::Struct(fields) => {
+                        fields.iter().any(|(_, ty)| leads_into_cycle(ty))
+                    }
+                    crate::typechecker::VariantTypeInfo::Unit => false,
+                };
+                if !recurses {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Look up whether a named struct/enum is declared as `shared`.
