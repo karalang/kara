@@ -127,10 +127,14 @@ Follow-ons from this work:
    interpreter — a broad pre-existing miscompile, not Tangle-specific. Fixed in
    `src/interpreter.rs` (`assign_to_place` write-back), commit `62a92b39`;
    regression tests in `tests/interpreter.rs`.
-2. **Tracked.** The same miscompile exists in **codegen** — an open entry in
-   [`phase-7-codegen.md`](../../implementation_checklist/phase-7-codegen.md)
-   ("Codegen: nested-place + compound-field assignment write-back"), to be done
-   as a separate slice and verified under ASAN once the leak cluster settles.
+2. **Fixed.** The same miscompile in **codegen** is now fixed too (`47c0dff5`):
+   `compile_field_store` GEPs to the nested place in-place, and `CompoundAssign`
+   routes field/index targets through the place-store path. E2E regressions in
+   `tests/codegen.rs`; verified under ASAN (codegen 1547 / memory_sanitizer 220
+   green). One narrow sub-case remains tracked in
+   [`phase-7-codegen.md`](../../implementation_checklist/phase-7-codegen.md):
+   a `ref`/`mut ref`-param-rooted nested store (`p.inner.x = v`) still no-ops in
+   codegen (the interpreter handles it).
 
 **Tooling gap surfaced *and fixed* by Tangle dogfooding.** The per-function
 query kinds (`ownership` / `effects` / `concurrency`) split their target with a
