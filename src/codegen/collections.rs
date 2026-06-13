@@ -2163,6 +2163,23 @@ impl<'ctx> super::Codegen<'ctx> {
             field,
         } = &object.kind
         {
+            // `self.field[i] = v` — `self` parses as `SelfValue`, which
+            // `lower_field_access_ptr` deliberately returns `Ok(None)` for
+            // (so `self.field.method()` dispatch keeps falling through). Mirror
+            // `compile_index`'s read-side normalisation: rewrite the receiver
+            // to a synthetic `Identifier("self")` so the Identifier arm
+            // resolves it. Without this the store dies on the "must be a
+            // variable" gate below for every `self.field[i] = v`.
+            let self_ident;
+            let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
+                self_ident = Expr {
+                    kind: ExprKind::Identifier("self".to_string()),
+                    span: inner.span.clone(),
+                };
+                &self_ident
+            } else {
+                inner
+            };
             if let Some((field_ptr, field_ll_ty, field_te)) =
                 self.lower_field_access_ptr(inner, field, "index-store expression")?
             {

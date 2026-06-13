@@ -228,15 +228,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Json kata gap surfaced 2026-05-22.
                 let is_shared = self.shared_types.contains_key(&type_name);
                 let is_ref_param = self.ref_params.contains_key(outer_name.as_str());
-                let recv_ptr = if is_shared || is_ref_param {
+                let recv_ptr = if is_shared {
+                    // Shared receiver: the heap pointer is whatever
+                    // `load_variable` yields — a single load for an owned
+                    // binding (slot holds the handle), a *double* load for a
+                    // `ref self` / `ref` binding (slot holds a pointer to the
+                    // handle slot, so one load yields `&self`, not the heap
+                    // struct). `compile_expr` walks that exact chain via
+                    // `load_variable`'s `ref_params` deref, so it returns the
+                    // heap struct pointer in both cases. A bare single
+                    // `build_load` here lands one indirection short for a
+                    // `ref self` shared receiver — the field GEP then reads a
+                    // garbage `{ptr,len,cap}` (indexed access traps / OOBs).
+                    // Mirrors `compile_field_store`'s shared branch, which
+                    // resolves `self.field = v` the same way.
+                    self.compile_expr(inner)?.into_pointer_value()
+                } else if is_ref_param {
+                    // Plain (non-shared) `ref T` receiver: slot holds a
+                    // pointer-to-struct (the caller's struct); a single deref
+                    // yields the struct address. Without it the GEP indexes
+                    // into the alloca's first 8 bytes (the pointer value) and
+                    // reads junk past it — a silent segfault when the field's
+                    // read kernel touches the resulting garbage. (Helper-fn
+                    // Json kata gap, 2026-05-22.)
                     let ptr_ty = self.context.ptr_type(AddressSpace::default());
-                    let load_name = if is_shared {
-                        "fr.shared.handle"
-                    } else {
-                        "fr.ref.deref"
-                    };
                     self.builder
-                        .build_load(ptr_ty, slot.ptr, load_name)
+                        .build_load(ptr_ty, slot.ptr, "fr.ref.deref")
                         .unwrap()
                         .into_pointer_value()
                 } else {

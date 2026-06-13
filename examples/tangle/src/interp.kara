@@ -41,48 +41,46 @@ shared enum Expr {
 // A flat name → value store. `shared` so every holder of the handle — `main`
 // and every `eval` frame — sees the same cells; `mut` fields so the setter
 // mutates them in place.
-//
-// `get` / `set` are *free functions* over a named `Scope` handle rather than
-// `impl Scope` methods. That is a deliberate dodge of a codegen bug surfaced
-// here: a `ref self` / `mut ref self` field-index on a *shared* struct
-// (`self.values[i]`) miscompiles (the shared receiver needs a double-load the
-// index path skips), while the same access through a *named* handle
-// (`s.values[i]`) compiles correctly. Tracked in phase-7-codegen.md; see the
-// README "findings" note. Functionally identical — the scope is the same
-// shared, mutable thing whether reached through `self` or a named parameter.
 
 shared struct Scope {
     mut names: Vec[String],
     mut values: Vec[i64],
 }
 
-// Look up a name; undefined variables read as 0.
-fn scope_get(s: Scope, name: String) -> i64 {
-    let mut i = 0;
-    loop {
-        if i >= s.names.len() { break; }
-        if s.names[i as u64] == name {
-            return s.values[i as u64];
+impl Scope {
+    // Look up a name; undefined variables read as 0. The `self.values[i]` read
+    // is a field-index through a `shared` receiver — exactly the access pattern
+    // that once forced a free-function workaround here (the shared receiver
+    // needs a double-load the index path used to skip); fixed in codegen, so
+    // the idiomatic method form is what this demonstrates now.
+    fn get(self, name: String) -> i64 {
+        let mut i = 0;
+        loop {
+            if i >= self.names.len() { break; }
+            if self.names[i as u64] == name {
+                return self.values[i as u64];
+            }
+            i = i + 1;
         }
-        i = i + 1;
+        0
     }
-    0
-}
 
-// Bind or update a name. Updating an existing binding is an index-store through
-// a `mut` Vec field — the write persists for every handle to this scope.
-fn scope_set(s: Scope, name: String, val: i64) {
-    let mut i = 0;
-    loop {
-        if i >= s.names.len() { break; }
-        if s.names[i as u64] == name {
-            s.values[i as u64] = val;
-            return;
+    // Bind or update a name. Updating an existing binding is an index-store
+    // through a `mut` Vec field on a `shared` receiver — the write persists for
+    // every handle to this scope.
+    fn set(self, name: String, val: i64) {
+        let mut i = 0;
+        loop {
+            if i >= self.names.len() { break; }
+            if self.names[i as u64] == name {
+                self.values[i as u64] = val;
+                return;
+            }
+            i = i + 1;
         }
-        i = i + 1;
+        self.names.push(name);
+        self.values.push(val);
     }
-    s.names.push(name);
-    s.values.push(val);
 }
 
 // Walk the AST. `scope` is the shared handle, threaded unchanged into every
@@ -90,7 +88,7 @@ fn scope_set(s: Scope, name: String, val: i64) {
 fn eval(e: Expr, scope: Scope) -> i64 {
     match e {
         Num(n) => n,
-        Var(name) => scope_get(scope, name),
+        Var(name) => scope.get(name),
         Add(items) => {
             let mut total = 0;
             let mut i = 0;
@@ -119,7 +117,7 @@ fn eval(e: Expr, scope: Scope) -> i64 {
                 v = eval(body[i as u64], scope);
                 i = i + 1;
             }
-            scope_set(scope, name, v);
+            scope.set(name, v);
             v
         }
         Seq(items) => {
@@ -153,8 +151,8 @@ fn main() {
 
     // The scope handle main still holds sees every assignment eval made — proof
     // the environment is one shared, mutable thing, not a copy per frame.
-    let x_val = scope_get(scope, "x");
-    let y_val = scope_get(scope, "y");
+    let x_val = scope.get("x");
+    let y_val = scope.get("y");
     println(f"scope x:  {x_val}");  // 10
     println(f"scope y:  {y_val}");  // 30
 }

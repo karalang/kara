@@ -1060,6 +1060,87 @@ fn main() {
         }
     }
 
+    /// `self.field[i] = v` (and the `self.field[i]` read) on a **plain** struct
+    /// receiver. The store path used to fall to the "Index assignment target
+    /// must be a variable" gate because `compile_index_store`'s FieldAccess arm
+    /// did not normalise `SelfValue → Identifier("self")` the way the read path
+    /// does. Regression-guards the store reaching the field-index helper.
+    #[test]
+    fn e2e_self_field_index_store_plain_struct() {
+        if let Some(out) = run_program(
+            "struct Bag { mut items: Vec[i64] }\n\
+             impl Bag {\n\
+                 fn push(mut ref self, v: i64) { self.items.push(v); }\n\
+                 fn get(ref self, i: u64) -> i64 { self.items[i] }\n\
+                 fn set(mut ref self, i: u64, v: i64) { self.items[i] = v; }\n\
+             }\n\
+             fn main() {\n\
+                 let mut b = Bag { items: Vec.new() };\n\
+                 b.push(1); b.push(2);\n\
+                 b.set(0, 7);\n\
+                 println(b.get(0));\n\
+                 println(b.get(1));\n\
+             }",
+        ) {
+            assert_eq!(out, "7\n2\n");
+        }
+    }
+
+    /// `self.field[i]` read + store on a **shared** struct with an **owned**
+    /// `self` receiver. The handle is a single heap pointer; the field-index
+    /// helper resolves it via `compile_expr`, which loads once for an owned
+    /// binding.
+    #[test]
+    fn e2e_self_field_index_shared_struct_owned_self() {
+        if let Some(out) = run_program(
+            "shared struct Bag { mut items: Vec[i64] }\n\
+             impl Bag {\n\
+                 fn push(self, v: i64) { self.items.push(v); }\n\
+                 fn get(self, i: u64) -> i64 { self.items[i] }\n\
+                 fn set(self, i: u64, v: i64) { self.items[i] = v; }\n\
+             }\n\
+             fn main() {\n\
+                 let b = Bag { items: Vec.new() };\n\
+                 b.push(100); b.push(200);\n\
+                 b.set(1, 222);\n\
+                 println(b.get(0));\n\
+                 println(b.get(1));\n\
+             }",
+        ) {
+            assert_eq!(out, "100\n222\n");
+        }
+    }
+
+    /// `self.field[i]` read + store on a **shared** struct with a `mut ref self`
+    /// receiver — the case that segfaulted (exit 133) before the fix. A shared
+    /// `ref self` slot holds a *pointer to* the handle, so the receiver needs a
+    /// **double-load** (deref the ref-param slot → handle, then handle → heap
+    /// struct). A single load lands one indirection short and the field GEP
+    /// reads a garbage `{ptr,len,cap}`. The field-index helper now resolves the
+    /// shared receiver via `compile_expr` (mirroring `compile_field_store`),
+    /// which walks the correct load chain for both owned and ref bindings.
+    #[test]
+    fn e2e_self_field_index_shared_struct_mut_ref_self() {
+        if let Some(out) = run_program(
+            "shared struct Bag { mut items: Vec[i64] }\n\
+             impl Bag {\n\
+                 fn push(mut ref self, v: i64) { self.items.push(v); }\n\
+                 fn get(mut ref self, i: u64) -> i64 { self.items[i] }\n\
+                 fn set(mut ref self, i: u64, v: i64) { self.items[i] = v; }\n\
+             }\n\
+             fn main() {\n\
+                 let b = Bag { items: Vec.new() };\n\
+                 b.push(10); b.push(20); b.push(30);\n\
+                 b.set(1, 99);\n\
+                 println(b.get(0));\n\
+                 println(b.get(1));\n\
+                 println(b.get(2));\n\
+             }",
+        ) {
+            assert_eq!(out, "10\n99\n30\n");
+        }
+    }
+
     // ── String-literal `match` dispatch (selfhost-lexer-profile.md #1 lever) ──
 
     /// A `match` over ≥4 string literals lowers to the switch tree

@@ -110,7 +110,7 @@ both are declared `shared` with no `Box`, no `RefCell`, no `'a`.
 interpreter and codegen (it compiles and runs as a native binary).
 
 > **Findings from this structure** (the recursive interpreter exercised more cold
-> surface than any other Tangle program — one fix, four tracked):
+> surface than any other Tangle program — two fixed, three tracked):
 >
 > 1. **`Vec.new()` + `push` + return inference gap** — *fixed* (see the
 >    doubly-linked note above; same fix, surfaced again here in `scope_get`).
@@ -129,14 +129,16 @@ interpreter and codegen (it compiles and runs as a native binary).
 >    example routes the AST recursion through `Vec[Expr]` (the accepted form).
 >    Tracked in
 >    [`phase-7-codegen.md`](../../implementation_checklist/phase-7-codegen.md).
-> 4. **`self.field[i]` on a *shared* struct miscompiles** *(tracked)*. A `ref
+> 4. **`self.field[i]` on a *shared* struct miscompiled** *(FIXED)*. A `ref
 >    self` shared receiver indexed into a `Vec` field (`self.values[i]`, read or
->    store) reads the wrong buffer — it needs a double-load the index path skips;
->    a *named* handle (`s.values[i]`) and a *plain* struct both work. This is why
->    `scope_get` / `scope_set` are free functions over a named `Scope` parameter
->    rather than `impl Scope` methods. Tracked in
->    [`phase-7-codegen.md`](../../implementation_checklist/phase-7-codegen.md);
->    the fix mirrors `compile_field_store`'s existing shared double-load.
+>    store) read the wrong buffer — it needs a double-load the index path skipped
+>    (and the *store* path didn't even reach the field-index helper from `self`).
+>    Originally worked around here by writing `get` / `set` as free functions
+>    over a named `Scope` parameter. **Now fixed in codegen** (the index-store
+>    path normalises `self`, and the field-index helper resolves a shared
+>    receiver via `compile_expr`, mirroring `compile_field_store`'s double-load),
+>    so this example uses the idiomatic `impl Scope { get/set }` method form.
+>    See [`phase-7-codegen.md`](../../implementation_checklist/phase-7-codegen.md).
 > 5. **f-string interpolation isn't string-aware** *(tracked)*. The natural
 >    `f"{ get("x") }"` (plain nested quotes) works, but an **escaped** quote
 >    `f"{ get(\"x\") }"` is silently emitted as literal text instead of
