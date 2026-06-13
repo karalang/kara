@@ -1,0 +1,165 @@
+// Tangle — tree-walking interpreter with a shared environment.
+//
+// The most "real program" of the Tangle set: a tiny expression language with
+// variables, evaluated by walking a recursive AST while threading a mutable
+// environment through every recursive call. Two borrow-hostile shapes at once:
+//
+//   1. The AST is a *recursive* type — an `Expr` holds more `Expr`s. In Rust
+//      that needs `Box<Expr>` (or an arena) to give the recursive variant a
+//      known size. In Kāra it is a `shared enum` whose recursive payloads go
+//      through `Vec[Expr]`: the children are RC pointers, so the tree builds
+//      with no `Box`, no `'a`.
+//
+//   2. The environment is *shared mutable state* threaded through recursion.
+//      `eval` both reads it (a `Var` lookup) and writes it (an `Assign`), and
+//      the same scope flows into every sub-evaluation. In Rust, a mutable env
+//      threaded through a recursive evaluator is the textbook reason to reach
+//      for `Rc<RefCell<Env>>` (or to fight `&mut` aliasing). In Kāra it is a
+//      `shared struct` with `mut` fields: an assignment made deep inside the
+//      tree is visible through every handle, including the one `main` still
+//      holds after `eval` returns.
+//
+// `karac query ownership .../interp.kara.eval` shows both the `e` (AST node) and
+// `scope` parameters as `shared (Rc)` — declared sharing, surfaced, not
+// inferred-as-fallback.
+//
+// Recursive payloads go through `Vec[Expr]` rather than a *direct* `Add(Expr,
+// Expr)` because the ownership checker rejects a direct recursive `shared enum`
+// edge (`shared-type cycle detected: Expr → Expr`), while the `Vec`-mediated
+// form compiles — the same indirection the other Tangle structures use. See the
+// README "findings" note; the direct-edge rejection is a tracked compiler issue.
+
+shared enum Expr {
+    Num(i64),
+    Var(String),
+    Add(Vec[Expr]),            // sum of the operand list
+    Mul(Vec[Expr]),            // product of the operand list
+    Assign(String, Vec[Expr]), // evaluate the body in order, bind name to the last value
+    Seq(Vec[Expr]),            // evaluate each in order; result is the last
+}
+
+// A flat name → value store. `shared` so every holder of the handle — `main`
+// and every `eval` frame — sees the same cells; `mut` fields so the setter
+// mutates them in place.
+//
+// `get` / `set` are *free functions* over a named `Scope` handle rather than
+// `impl Scope` methods. That is a deliberate dodge of a codegen bug surfaced
+// here: a `ref self` / `mut ref self` field-index on a *shared* struct
+// (`self.values[i]`) miscompiles (the shared receiver needs a double-load the
+// index path skips), while the same access through a *named* handle
+// (`s.values[i]`) compiles correctly. Tracked in phase-7-codegen.md; see the
+// README "findings" note. Functionally identical — the scope is the same
+// shared, mutable thing whether reached through `self` or a named parameter.
+
+shared struct Scope {
+    mut names: Vec[String],
+    mut values: Vec[i64],
+}
+
+// Look up a name; undefined variables read as 0.
+fn scope_get(s: Scope, name: String) -> i64 {
+    let mut i = 0;
+    loop {
+        if i >= s.names.len() { break; }
+        if s.names[i as u64] == name {
+            return s.values[i as u64];
+        }
+        i = i + 1;
+    }
+    0
+}
+
+// Bind or update a name. Updating an existing binding is an index-store through
+// a `mut` Vec field — the write persists for every handle to this scope.
+fn scope_set(s: Scope, name: String, val: i64) {
+    let mut i = 0;
+    loop {
+        if i >= s.names.len() { break; }
+        if s.names[i as u64] == name {
+            s.values[i as u64] = val;
+            return;
+        }
+        i = i + 1;
+    }
+    s.names.push(name);
+    s.values.push(val);
+}
+
+// Walk the AST. `scope` is the shared handle, threaded unchanged into every
+// sub-evaluation — so an `Assign` anywhere in the tree mutates the one scope.
+fn eval(e: Expr, scope: Scope) -> i64 {
+    match e {
+        Num(n) => n,
+        Var(name) => scope_get(scope, name),
+        Add(items) => {
+            let mut total = 0;
+            let mut i = 0;
+            loop {
+                if i >= items.len() { break; }
+                total = total + eval(items[i as u64], scope);
+                i = i + 1;
+            }
+            total
+        }
+        Mul(items) => {
+            let mut prod = 1;
+            let mut i = 0;
+            loop {
+                if i >= items.len() { break; }
+                prod = prod * eval(items[i as u64], scope);
+                i = i + 1;
+            }
+            prod
+        }
+        Assign(name, body) => {
+            let mut v = 0;
+            let mut i = 0;
+            loop {
+                if i >= body.len() { break; }
+                v = eval(body[i as u64], scope);
+                i = i + 1;
+            }
+            scope_set(scope, name, v);
+            v
+        }
+        Seq(items) => {
+            let mut result = 0;
+            let mut i = 0;
+            loop {
+                if i >= items.len() { break; }
+                result = eval(items[i as u64], scope);
+                i = i + 1;
+            }
+            result
+        }
+    }
+}
+
+fn main() {
+    // Program:
+    //   x = 10;
+    //   y = (x + 5) * 2;
+    //   x + y
+    let program = Seq([
+        Assign("x", [Num(10)]),
+        Assign("y", [Mul([Add([Var("x"), Num(5)]), Num(2)])]),
+        Add([Var("x"), Var("y")]),
+    ]);
+
+    let scope = Scope { names: Vec.new(), values: Vec.new() };
+    let result = eval(program, scope);
+
+    println(f"result: {result}");        // 40
+
+    // The scope handle main still holds sees every assignment eval made — proof
+    // the environment is one shared, mutable thing, not a copy per frame.
+    let x_val = scope_get(scope, "x");
+    let y_val = scope_get(scope, "y");
+    println(f"scope x:  {x_val}");  // 10
+    println(f"scope y:  {y_val}");  // 30
+}
+
+// Expected output:
+// result: 40
+// scope x:  10
+// scope y:  30

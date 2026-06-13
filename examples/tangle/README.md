@@ -26,7 +26,7 @@ model is most likely to get wrong). The *organic at-scale* leg is **Chronicle**
 | Cross-edge graph (diamond) | `src/cross_graph.kara` | shared descendant the checker can't linearize | `rc_values` + trigger line (RC fallback) |
 | Doubly-linked list | `src/doubly_linked.kara` | both-way links + neighbor-relink splice, no `Weak` | `representation:"shared (Rc)"` (declared RC) |
 | Undo/redo over shared state | `src/undo_redo.kara` | shared **mutable** state, undo writes back through the shared handle | `representation:"shared (Rc)"` (declared RC) |
-| Tree-walking interpreter (shared env) | _planned_ | shared mutable environment | TBD |
+| Tree-walking interpreter (shared scope) | `src/interp.kara` | recursive `shared enum` AST + shared mutable scope threaded through `eval` | `representation:"shared (Rc)"` (declared RC) |
 
 ## Running
 
@@ -43,6 +43,9 @@ karac query ownership examples/tangle/src/undo_redo.kara.Editor.set   # impl met
 
 karac run   examples/tangle/src/doubly_linked.kara
 karac query ownership examples/tangle/src/doubly_linked.kara.link   # shared(Rc) node params
+
+karac run   examples/tangle/src/interp.kara
+karac query ownership examples/tangle/src/interp.kara.eval   # scope param: shared(Rc)
 ```
 
 `parent_tree.kara` prints:
@@ -92,6 +95,67 @@ of thing Tangle exists to surface rather than hide.
 > never over-resolves); regression tests in `tests/typechecker.rs`. This was a
 > general inference gap, not list-specific — any `Vec.new(); …push…; return v`
 > hit it.
+
+`interp.kara` prints `result: 40` then `scope x: 10` / `scope y: 30`. It
+evaluates the program `x = 10; y = (x + 5) * 2; x + y` over a recursive
+`shared enum Expr` AST (children carried through `Vec[Expr]`), threading a
+`shared struct Scope` through `eval`. The last two lines are the proof: the scope
+handle `main` still holds after `eval` returns sees every assignment made *deep
+inside the recursion* — one shared, mutable environment, not a copy per frame. In
+Rust the recursive AST needs `Box<Expr>` (sized recursion) and the
+mutable-environment-through-recursion is the textbook `Rc<RefCell<Env>>`; in Kāra
+both are declared `shared` with no `Box`, no `RefCell`, no `'a`.
+`karac query ownership .../interp.kara.eval` shows both the `e` (AST node) and
+`scope` parameters as `representation:"shared (Rc)"`. Verified through **both** the
+interpreter and codegen (it compiles and runs as a native binary).
+
+> **Findings from this structure** (the recursive interpreter exercised more cold
+> surface than any other Tangle program — one fix, four tracked):
+>
+> 1. **`Vec.new()` + `push` + return inference gap** — *fixed* (see the
+>    doubly-linked note above; same fix, surfaced again here in `scope_get`).
+> 2. **Recursive enums need `shared`** — `enum Expr { Add(Expr, Expr) }` is
+>    rejected (`E_ENUM_NESTED_ENUM_PAYLOAD`); `shared enum` makes the recursive
+>    payload an RC pointer. The diagnostic names this remedy directly — working
+>    as designed.
+> 3. **Shared-type cycle check rejects a *direct* recursive `shared enum`**
+>    *(tracked)*. Even as `shared enum`, a *direct* `Add(Expr, Expr)` is rejected
+>    at `karac build` (`shared-type cycle detected: Expr → Expr … will leak`) —
+>    although the enum has a non-recursive base variant (`Num`), so expression
+>    *trees* are acyclic and free fine. Worse, the same recursion *through*
+>    `Vec[Expr]` / `Option[Expr]` passes — even though those indirected forms are
+>    the ones that form *real* runtime cycles (parent_tree's `parent ↔ child`).
+>    The check rejects the acyclic tree and waves through the genuine cycles. The
+>    example routes the AST recursion through `Vec[Expr]` (the accepted form).
+>    Tracked in
+>    [`phase-7-codegen.md`](../../implementation_checklist/phase-7-codegen.md).
+> 4. **`self.field[i]` on a *shared* struct miscompiles** *(tracked)*. A `ref
+>    self` shared receiver indexed into a `Vec` field (`self.values[i]`, read or
+>    store) reads the wrong buffer — it needs a double-load the index path skips;
+>    a *named* handle (`s.values[i]`) and a *plain* struct both work. This is why
+>    `scope_get` / `scope_set` are free functions over a named `Scope` parameter
+>    rather than `impl Scope` methods. Tracked in
+>    [`phase-7-codegen.md`](../../implementation_checklist/phase-7-codegen.md);
+>    the fix mirrors `compile_field_store`'s existing shared double-load.
+> 5. **f-string interpolation isn't string-aware** *(tracked)*. The natural
+>    `f"{ get("x") }"` (plain nested quotes) works, but an **escaped** quote
+>    `f"{ get(\"x\") }"` is silently emitted as literal text instead of
+>    evaluating — the `{…}` extractor balances braces only. Worked around by
+>    binding the lookup to a local first. Tracked in
+>    [`phase-1-lexer.md`](../../implementation_checklist/phase-1-lexer.md).
+> 6. **RC-fallback false positive on sibling match arms** *(tracked)*. A pattern
+>    binding reused under the same name in two `match` arms (the `Var`/`Assign`
+>    arms of `eval` both bind `name`) is given one binding identity, so a consume
+>    in one arm and a use in the sibling arm pair as dominance-incomparable and
+>    spuriously fire the RC predicate — even though the arms never both execute.
+>    Soundness-safe (conservative over-escalation), but it RC-boxes a movable
+>    value and makes `karac query` report a cross-arm `direct_reuse_after_consume`.
+>    Tracked in
+>    [`phase-7-codegen.md`](../../implementation_checklist/phase-7-codegen.md)
+>    with a minimal repro; the fix mirrors the existing per-site alpha-rename
+>    used for defer-body inner locals. (A user `shared struct Env` also collides
+>    with the built-in ambient `Env` resource — renamed to `Scope` here; a
+>    clearer "reserved resource name" diagnostic would help but isn't blocking.)
 
 ## Reading `karac query ownership` (the demo's core artifact)
 
