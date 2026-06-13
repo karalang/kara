@@ -24,6 +24,7 @@ Legend: ✅ done · 🟡 partial · ⬜ open
 | spike | status |
 |---|---|
 | [general-owned-temp-tracking.md](general-owned-temp-tracking.md) | Slices 1–3 + 5 landed (2026-06-06/07). **Slice 4** (scrutinee sub-frame leak) open — deferred to [phase-12](../implementation_checklist/phase-12-self-hosting.md); memory pressure, not corruption. |
+| [ci-test-coverage.md](ci-test-coverage.md) | **Tier 1 landed + required** (2026-06-12) — `--features llvm` codegen E2E + self-host oracle + wasm clippy/archive gates in CI. **Tier 2** (memory_sanitizer / LSan) + **Tier 3** (wasm E2E, needs node + wasm-tools) open. |
 
 ## ✅ Done
 
