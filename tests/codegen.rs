@@ -1253,6 +1253,34 @@ fn main() {
         }
     }
 
+    #[test]
+    fn e2e_recursive_shared_enum_recursive_variant_declared_first() {
+        // B-2026-06-13-10: a recursive `shared enum` whose RECURSIVE variant is
+        // declared before the base case must typecheck + run. The match
+        // exhaustiveness check (`src/exhaustive.rs`) overflowed the compiler
+        // stack here: `unreachable_arms` specializing the `Add` arm emptied the
+        // pattern matrix, and — missing the Maranget `U(∅, q)` base case — the
+        // wildcard columns over the recursive `Expr` enumerated constructors and
+        // descended into `Add` forever. Order-dependent only by accident
+        // (base-case-first short-circuited on the terminating constructor); the
+        // `…_two_field` test above puts `Num` first, which masked it.
+        if let Some(out) = run_program(
+            "shared enum Expr { Add(Expr, Expr), Num(i64) }\n\
+             fn eval(e: Expr) -> i64 {\n\
+                 match e {\n\
+                     Num(n) => n,\n\
+                     Add(a, b) => eval(a) + eval(b),\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let e = Add(Num(3), Add(Num(4), Num(5)));\n\
+                 println(eval(e));\n\
+             }",
+        ) {
+            assert_eq!(out, "12\n");
+        }
+    }
+
     /// Single recursive field (`Box(Wrap)`) — the minimal direct-recursion
     /// shape; the recursive payload binding `inner` must extract as a pointer.
     #[test]

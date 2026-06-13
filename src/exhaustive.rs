@@ -663,6 +663,22 @@ fn usefulness(matrix: &Matrix, q: &[Pat], head_types: &[Type], env: &TypeEnv) ->
         return matrix.rows.is_empty().then(Vec::new);
     }
 
+    // Maranget base case `U(∅, q)`: an empty matrix covers nothing, so every
+    // value of the remaining columns is uncovered — the query is useful with an
+    // all-wildcard witness. Without this, a wildcard column over a *recursive*
+    // enum reached after specialization empties the matrix (e.g. the
+    // `unreachable_arms` check on the `Add` arm of `match e { Num(n) => …,
+    // Add(a, b) => … }` over `shared enum Expr { Add(Expr, Expr), Num(i64) }`,
+    // where specializing on `Add` drops the `Num` row) falls into the wildcard
+    // arm below, enumerates `Expr`'s constructors, and descends into the
+    // recursive `Add` forever — a compiler stack overflow (B-2026-06-13-10).
+    // The bug was order-dependent only by accident: a base-case-first enum
+    // happened to short-circuit the constructor loop on the terminating
+    // constructor before reaching the recursive one.
+    if matrix.rows.is_empty() {
+        return Some(vec![Pat::Wildcard; q.len()]);
+    }
+
     let q_head = &q[0];
     let q_rest = &q[1..];
     let head_ty = &head_types[0];
