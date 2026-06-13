@@ -14,11 +14,12 @@
 
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
+use inkwell::types::StructType;
 use inkwell::values::{FunctionValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
-use crate::ast::TypeKind;
+use crate::ast::{Item, TypeExpr, TypeKind, VariantKind};
 
 use super::state::EnumDropKind;
 
@@ -809,12 +810,13 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let info = self.shared_types.get(struct_name)?.clone();
         if info.is_enum {
-            // Shared enums aren't handled here in v1 — the kata
-            // bench shape is shared structs only. Caching `None`
-            // tells `emit_rc_dec` to use plain free for shared
-            // enums (matching the pre-fix behavior).
-            self.rc_drop_fns.insert(struct_name.to_string(), None);
-            return None;
+            // Shared enum: route to the tag-switched enum drop fn, which
+            // walks each variant's heap-owning payload (recursive shared
+            // children, Option[shared], Vec/String, Map/Set) before the box
+            // free. Without it a recursive shared enum (`shared enum Expr {
+            // Num(i64), Bin(Expr, Expr) }`) leaked its child boxes — only the
+            // outer box was freed (B-2026-06-13-11).
+            return self.emit_shared_enum_rc_drop_fn(struct_name);
         }
         let heap_type = info.heap_type;
         let field_type_exprs = self
@@ -1309,6 +1311,444 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         self.current_fn = saved_fn;
 
+        Some(drop_fn)
+    }
+
+    /// Load the i64 payload word at heap index `word_idx`, reinterpret it as a
+    /// pointer, null-check, and rc-dec it as `child_heap`. The shared-child dec
+    /// primitive for shared-enum payloads (the payload word holds the child RC
+    /// box pointer reinterpreted as i64 by `coerce_to_payload_words` at
+    /// construction). Builder is left positioned at the post-dec join block.
+    fn emit_enum_word_shared_dec(
+        &mut self,
+        enum_heap: StructType<'ctx>,
+        p_arg: PointerValue<'ctx>,
+        word_idx: usize,
+        child_heap: StructType<'ctx>,
+        label: &str,
+    ) {
+        let drop_fn = self.current_fn.unwrap();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let wp = self
+            .builder
+            .build_struct_gep(enum_heap, p_arg, word_idx as u32, &format!("{label}.wp"))
+            .unwrap();
+        let w = self
+            .builder
+            .build_load(i64_t, wp, &format!("{label}.w"))
+            .unwrap()
+            .into_int_value();
+        let child = self
+            .builder
+            .build_int_to_ptr(w, ptr_ty, &format!("{label}.child"))
+            .unwrap();
+        let is_null = self
+            .builder
+            .build_is_null(child, &format!("{label}.isnull"))
+            .unwrap();
+        let do_bb = self
+            .context
+            .append_basic_block(drop_fn, &format!("{label}.do"));
+        let skip_bb = self
+            .context
+            .append_basic_block(drop_fn, &format!("{label}.skip"));
+        self.builder
+            .build_conditional_branch(is_null, skip_bb, do_bb)
+            .unwrap();
+        self.builder.position_at_end(do_bb);
+        self.emit_refcount_dec_by_type(child_heap, child);
+        self.builder.build_unconditional_branch(skip_bb).unwrap();
+        self.builder.position_at_end(skip_bb);
+    }
+
+    /// Emit the drop for one heap-owning payload field of a shared-enum variant
+    /// whose words begin at heap index `word_idx` (= the field's `start_word` +
+    /// 2 for the `{rc, tag}` prefix). Classifies `te` like
+    /// `emit_shared_struct_rc_drop_fn`'s field classifier — recursive shared
+    /// child / `Option[shared]` (niche single-word or full 4-word) / Vec /
+    /// String / Map / Set — and mirrors its per-kind emission against the enum
+    /// heap type. Returns true if it emitted a drop (caller tracks walkability).
+    fn emit_shared_enum_field_drop(
+        &mut self,
+        enum_heap: StructType<'ctx>,
+        p_arg: PointerValue<'ctx>,
+        word_idx: usize,
+        num_words: usize,
+        te: &TypeExpr,
+        label: &str,
+    ) -> bool {
+        let drop_fn = self.current_fn.unwrap();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let vec_ty = self.vec_struct_type();
+
+        // Option[shared T].
+        if let Some((_, inner_info)) = self.option_inner_shared_type_for_type_expr(te) {
+            let child_heap = inner_info.heap_type;
+            if num_words <= 1 {
+                // Niche layout: single nullable ptr word — same as a bare
+                // shared child.
+                self.emit_enum_word_shared_dec(enum_heap, p_arg, word_idx, child_heap, label);
+            } else {
+                // Full `Option { tag, w0, … }` packed into consecutive payload
+                // words: branch on `tag == Some`, then dec the inner at w0.
+                let tag_ptr = self
+                    .builder
+                    .build_struct_gep(enum_heap, p_arg, word_idx as u32, &format!("{label}.tag.p"))
+                    .unwrap();
+                let tag = self
+                    .builder
+                    .build_load(i64_t, tag_ptr, &format!("{label}.tag"))
+                    .unwrap()
+                    .into_int_value();
+                let some_tag = self
+                    .enum_layouts
+                    .get("Option")
+                    .and_then(|l| l.tags.get("Some").copied())
+                    .unwrap_or(1);
+                let is_some = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        tag,
+                        i64_t.const_int(some_tag, false),
+                        &format!("{label}.is_some"),
+                    )
+                    .unwrap();
+                let do_bb = self
+                    .context
+                    .append_basic_block(drop_fn, &format!("{label}.do"));
+                let skip_bb = self
+                    .context
+                    .append_basic_block(drop_fn, &format!("{label}.skip"));
+                self.builder
+                    .build_conditional_branch(is_some, do_bb, skip_bb)
+                    .unwrap();
+                self.builder.position_at_end(do_bb);
+                self.emit_enum_word_shared_dec(
+                    enum_heap,
+                    p_arg,
+                    word_idx + 1,
+                    child_heap,
+                    &format!("{label}.inner"),
+                );
+                self.builder.build_unconditional_branch(skip_bb).unwrap();
+                self.builder.position_at_end(skip_bb);
+            }
+            return true;
+        }
+
+        // Plain shared `T` (including the enum's own type — direct recursion).
+        if let TypeKind::Path(p) = &te.kind {
+            if let Some(seg) = p.segments.last() {
+                if let Some(inner) = self.shared_types.get(seg.as_str()).cloned() {
+                    self.emit_enum_word_shared_dec(
+                        enum_heap,
+                        p_arg,
+                        word_idx,
+                        inner.heap_type,
+                        label,
+                    );
+                    return true;
+                }
+            }
+        }
+
+        // Vec / String (3 payload words `{data, len, cap}`): free data when
+        // cap > 0. The payload words reinterpret as the `{ptr,i64,i64}` vec
+        // struct (ptr and i64 are both 8 bytes), as the struct drop does.
+        let head = if let TypeKind::Path(p) = &te.kind {
+            p.segments.last().map(|s| s.as_str())
+        } else {
+            None
+        };
+        match head {
+            Some("Vec") | Some("VecDeque") | Some("String") => {
+                let field_ptr = self
+                    .builder
+                    .build_struct_gep(enum_heap, p_arg, word_idx as u32, &format!("{label}.vec.p"))
+                    .unwrap();
+                let cap_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, field_ptr, 2, &format!("{label}.cap.p"))
+                    .unwrap();
+                let cap = self
+                    .builder
+                    .build_load(i64_t, cap_ptr, &format!("{label}.cap"))
+                    .unwrap()
+                    .into_int_value();
+                let is_heap = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::UGT,
+                        cap,
+                        i64_t.const_zero(),
+                        &format!("{label}.is_heap"),
+                    )
+                    .unwrap();
+                let free_bb = self
+                    .context
+                    .append_basic_block(drop_fn, &format!("{label}.free"));
+                let skip_bb = self
+                    .context
+                    .append_basic_block(drop_fn, &format!("{label}.skip"));
+                self.builder
+                    .build_conditional_branch(is_heap, free_bb, skip_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                let data_pp = self
+                    .builder
+                    .build_struct_gep(vec_ty, field_ptr, 0, &format!("{label}.data.p"))
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_pp, &format!("{label}.data"))
+                    .unwrap()
+                    .into_pointer_value();
+                self.builder
+                    .build_call(self.free_fn, &[data.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(skip_bb).unwrap();
+                self.builder.position_at_end(skip_bb);
+                true
+            }
+            Some("Map") | Some("HashMap") | Some("Set") | Some("HashSet") => {
+                let wp = self
+                    .builder
+                    .build_struct_gep(enum_heap, p_arg, word_idx as u32, &format!("{label}.map.p"))
+                    .unwrap();
+                let w = self
+                    .builder
+                    .build_load(i64_t, wp, &format!("{label}.map.w"))
+                    .unwrap()
+                    .into_int_value();
+                let handle = self
+                    .builder
+                    .build_int_to_ptr(w, ptr_ty, &format!("{label}.map.handle"))
+                    .unwrap();
+                let one = self.context.i32_type().const_int(1, false);
+                self.builder
+                    .build_call(
+                        self.karac_map_free_with_drop_vec_fn,
+                        &[handle.into(), one.into(), one.into()],
+                        "",
+                    )
+                    .unwrap();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// `__karac_rc_drop_<Enum>(ptr)` for a **shared enum** — the tag-switched
+    /// sibling of `emit_shared_struct_rc_drop_fn`. Loads the tag (heap index 1),
+    /// switches to a per-variant block that walks that variant's heap-owning
+    /// payload fields (`emit_shared_enum_field_drop`), then frees the box.
+    /// Without it `emit_rc_dec` plain-`free`d a shared enum box and stranded its
+    /// recursive children / heap payload (B-2026-06-13-11). Memoized in
+    /// `rc_drop_fns`; the cache insert precedes the body so direct recursion
+    /// (`shared enum Expr { Bin(Expr, Expr) }`) resolves to the in-progress fn.
+    /// Returns `None` (and caches it) when no variant owns heap and there's no
+    /// user `impl Drop` — `emit_rc_dec` then uses plain `free`.
+    pub(super) fn emit_shared_enum_rc_drop_fn(
+        &mut self,
+        enum_name: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        if let Some(slot) = self.rc_drop_fns.get(enum_name) {
+            return *slot;
+        }
+        let info = self.shared_types.get(enum_name)?.clone();
+        let heap_type = info.heap_type;
+        let layout = self.enum_layouts.get(enum_name)?.clone();
+
+        // Per-variant field TypeExprs from the source AST. Each entry pairs the
+        // variant name with its field TypeExprs in declaration order.
+        let prog = self.program_snapshot.clone()?;
+        let variants: Vec<(String, Vec<TypeExpr>)> = prog
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Item::EnumDef(e) if e.name == enum_name => Some(&e.variants),
+                _ => None,
+            })?
+            .iter()
+            .map(|v| {
+                let tys: Vec<TypeExpr> = match &v.kind {
+                    VariantKind::Unit => Vec::new(),
+                    VariantKind::Tuple(tys) => tys.clone(),
+                    VariantKind::Struct(fields) => fields.iter().map(|f| f.ty.clone()).collect(),
+                };
+                (v.name.clone(), tys)
+            })
+            .collect();
+
+        // Does any field of any variant own heap (so the box free needs a
+        // pre-walk)? A field is walkable iff it is a shared child, an
+        // `Option[shared]`, or a Vec/String/Map/Set.
+        let field_is_walkable = |slf: &Self, te: &TypeExpr| -> bool {
+            if slf.option_inner_shared_type_for_type_expr(te).is_some() {
+                return true;
+            }
+            if let TypeKind::Path(p) = &te.kind {
+                if let Some(seg) = p.segments.last() {
+                    if slf.shared_types.contains_key(seg.as_str()) {
+                        return true;
+                    }
+                    return matches!(
+                        seg.as_str(),
+                        "Vec" | "VecDeque" | "String" | "Map" | "HashMap" | "Set" | "HashSet"
+                    );
+                }
+            }
+            false
+        };
+        let any_walkable = variants
+            .iter()
+            .any(|(_, tys)| tys.iter().any(|te| field_is_walkable(self, te)));
+        let has_user_drop = self
+            .program_snapshot
+            .as_ref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(enum_name));
+        if !any_walkable && !has_user_drop {
+            self.rc_drop_fns.insert(enum_name.to_string(), None);
+            return None;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let void_ty = self.context.void_type();
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+
+        let fn_name = format!("__karac_rc_drop_{enum_name}");
+        let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self
+            .module
+            .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
+        // Cache BEFORE the body so a self-recursive payload (`Bin(Expr, Expr)`)
+        // resolves through `emit_rc_dec`'s `rc_drop_fns` lookup to this fn.
+        self.rc_drop_fns
+            .insert(enum_name.to_string(), Some(drop_fn));
+        self.current_fn = Some(drop_fn);
+
+        // Pre-pass: ensure sibling shared types referenced in payloads have
+        // their drop fns synthesized (self-reference is already cached above).
+        let sibling_names: Vec<String> = variants
+            .iter()
+            .flat_map(|(_, tys)| tys.iter())
+            .filter_map(|te| {
+                self.option_inner_shared_type_for_type_expr(te)
+                    .map(|(_, i)| i.heap_type)
+                    .or_else(|| {
+                        if let TypeKind::Path(p) = &te.kind {
+                            p.segments
+                                .last()
+                                .and_then(|s| self.shared_types.get(s.as_str()))
+                                .map(|i| i.heap_type)
+                        } else {
+                            None
+                        }
+                    })
+            })
+            .filter_map(|ht| self.struct_name_for_heap_type(ht))
+            .filter(|n| n != enum_name && !self.rc_drop_fns.contains_key(n))
+            .collect();
+        for n in sibling_names {
+            let is_enum = self
+                .shared_types
+                .get(&n)
+                .map(|i| i.is_enum)
+                .unwrap_or(false);
+            if is_enum {
+                let _ = self.emit_shared_enum_rc_drop_fn(&n);
+            } else {
+                let _ = self.emit_shared_struct_rc_drop_fn(&n);
+            }
+        }
+
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let p_arg = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        // User `impl Drop` body runs first (refcount already 0 here), mirroring
+        // the struct path's self-slot ABI.
+        if has_user_drop {
+            if let Some(user_drop_fn) = self.module.get_function(&format!("{enum_name}.drop")) {
+                let self_slot =
+                    self.create_entry_alloca(drop_fn, "rcedrop.self.slot", ptr_ty.into());
+                self.builder.build_store(self_slot, p_arg).unwrap();
+                self.builder
+                    .build_call(user_drop_fn, &[self_slot.into()], "")
+                    .unwrap();
+            }
+        }
+
+        let free_bb = self.context.append_basic_block(drop_fn, "rcedrop.free");
+
+        // Variants with no walkable payload fall to the switch default (the
+        // free block); each walkable variant gets a dedicated block.
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(heap_type, p_arg, 1, "rcedrop.tag.p")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "rcedrop.tag")
+            .unwrap()
+            .into_int_value();
+        let mut cases: Vec<(
+            inkwell::values::IntValue<'ctx>,
+            inkwell::basic_block::BasicBlock<'ctx>,
+        )> = Vec::new();
+        for (vname, tys) in &variants {
+            if !tys.iter().any(|te| field_is_walkable(self, te)) {
+                continue;
+            }
+            let Some(&tagv) = layout.tags.get(vname) else {
+                continue;
+            };
+            let offsets = layout
+                .field_word_offsets
+                .get(vname)
+                .cloned()
+                .unwrap_or_default();
+            let vbb = self
+                .context
+                .append_basic_block(drop_fn, &format!("rcedrop.v.{vname}"));
+            self.builder.position_at_end(vbb);
+            for (i, te) in tys.iter().enumerate() {
+                let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
+                // +2: skip the `{rc, tag}` prefix in the heap box.
+                self.emit_shared_enum_field_drop(
+                    heap_type,
+                    p_arg,
+                    start_word + 2,
+                    num_words,
+                    te,
+                    &format!("rcedrop.{vname}.f{i}"),
+                );
+            }
+            self.builder.build_unconditional_branch(free_bb).unwrap();
+            cases.push((i64_t.const_int(tagv, false), vbb));
+        }
+
+        // The tag load is the last instruction in `entry_bb` (no terminator
+        // yet); append the switch there as its terminator.
+        self.builder.position_at_end(entry_bb);
+        self.builder.build_switch(tag, free_bb, &cases).unwrap();
+
+        self.builder.position_at_end(free_bb);
+        self.builder
+            .build_call(self.free_fn, &[p_arg.into()], "")
+            .unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.current_fn = saved_fn;
         Some(drop_fn)
     }
 

@@ -344,6 +344,43 @@ fn main() {
     }
 
     #[test]
+    fn asan_recursive_shared_enum_children_freed_no_leak() {
+        // B-2026-06-13-11: a recursive `shared enum` (AST/tree shape) must
+        // recursively rc-dec its child boxes when the parent box's refcount
+        // hits zero. Pre-fix `emit_rc_dec` plain-`free`d a shared enum box with
+        // NO payload walk (shared enums cached `None` in `rc_drop_fns`), so
+        // every child `Bin`/`Num` box leaked (~96 B / iter over the loop). The
+        // new `emit_shared_enum_rc_drop_fn` tag-switches and walks each
+        // variant's shared children. Looping makes the per-iteration leak
+        // visible to the Linux-CI LSan gate; mac checks no double-free / UAF on
+        // the recursive free. (Base-case-first variant order — recursive-first
+        // is the separate B-2026-06-13-10 layout overflow.)
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Bin(Expr, Expr) }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Bin(l, r) => eval(l) + eval(r),
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 40 {
+        let t: Expr = Bin(Num(i), Bin(Num(i), Num(2)));
+        total = total + eval(t);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["1640"],
+            "recursive_shared_enum_children_freed",
+        );
+    }
+
+    #[test]
     fn asan_shared_enum_struct_variant_no_leak_no_double_free() {
         // B-2026-06-13-8: a shared enum struct-variant with a heap (String)
         // payload field — construct the RC box, match-bind the field, drop. The
