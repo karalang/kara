@@ -3573,11 +3573,91 @@ impl<'ctx> super::Codegen<'ctx> {
                             .build_extract_value(sv, idx as u32, "elem")
                             .unwrap();
                         self.bind_pattern(pat, elem)?;
+                        // B-2026-06-12-3: register method-dispatch side-tables
+                        // for each Binding leaf of the tuple. `bind_pattern`
+                        // only allocated the slot, so a String/Vec/Slice element
+                        // (`let (inner, after) = decode_at(...)`) had no
+                        // `string_vars` / `vec_elem_types` entry and
+                        // `inner.repeat(k)` failed codegen with "no handler for
+                        // method 'repeat' on variable 'inner'" — while the
+                        // interpreter handled it. This is the tuple counterpart
+                        // of `finish_owned_struct_destructure` (which already
+                        // registers struct-destructure fields). Scoped to the
+                        // destructure leaf — NOT the top-level single `let x`,
+                        // which the main let handler registers — so it can't
+                        // clobber an already-correct registration. Nested tuples
+                        // recurse through this same arm. Dispatch-only: no
+                        // cleanup tracking (the destructure's heap ownership is
+                        // handled elsewhere), so it never double-frees.
+                        if let PatternKind::Binding(name) = &pat.kind {
+                            self.register_pattern_leaf_dispatch(name, &pat.span);
+                        }
                     }
                 }
                 Ok(())
             }
             _ => Ok(()),
+        }
+    }
+
+    /// Register method-dispatch side-tables for one `let`-destructure leaf
+    /// binding, keyed off the typechecker's span-stable `pattern_binding_types`
+    /// (surface name) + `pattern_binding_inner_types` (inner element `TypeExpr`
+    /// for `Vec`/`Slice`). This is the `bind_pattern` (let path) counterpart of
+    /// the registration the match/if-let binder `bind_pattern_values` already
+    /// performs — without it, `let (a, _) = pair(); a.repeat(2)` (and any
+    /// String/Vec/Slice method on a tuple/struct-destructured element) fails
+    /// codegen with "no handler for method …" (B-2026-06-12-3).
+    ///
+    /// **Dispatch-only.** It populates type registries (`string_vars`,
+    /// `vec_elem_types`, `slice_elem_types`, Map/Set tables via
+    /// `register_var_from_type_expr`, else `var_type_names`) but queues NO
+    /// scope-exit cleanup — the destructure's heap ownership is handled by its
+    /// own path, so adding a per-leaf free here would double-free. All inserts
+    /// are idempotent, so the single-`let x = …` path (which also reaches this
+    /// arm and is already registered by the main handler) is unaffected.
+    fn register_pattern_leaf_dispatch(&mut self, name: &str, span: &crate::token::Span) {
+        let key = (span.offset, span.length);
+        let Some(type_name) = self.pattern_binding_types.get(&key).cloned() else {
+            return;
+        };
+        match type_name.as_str() {
+            // String layout matches `Vec[u8]` (`{ptr,len,cap}`); register both
+            // the element type and the `string_vars` flag the String method
+            // arms gate on — mirrors the single-`let` String registration.
+            "String" => {
+                self.vec_elem_types
+                    .insert(name.to_string(), self.context.i8_type().into());
+                self.string_vars.insert(name.to_string());
+            }
+            // `VecDeque[T]` shares `Vec[T]`'s storage + dispatch.
+            "Vec" | "VecDeque" => {
+                if let Some(inner_te) = self.pattern_binding_inner_types.get(&key).cloned() {
+                    let elem_llvm = self.llvm_type_for_type_expr(&inner_te);
+                    self.vec_elem_types.insert(name.to_string(), elem_llvm);
+                    self.var_elem_type_exprs.insert(name.to_string(), inner_te);
+                }
+            }
+            "Slice" => {
+                if let Some(inner_te) = self.pattern_binding_inner_types.get(&key).cloned() {
+                    let elem_llvm = self.llvm_type_for_type_expr(&inner_te);
+                    self.slice_elem_types.insert(name.to_string(), elem_llvm);
+                    self.var_elem_type_exprs.insert(name.to_string(), inner_te);
+                }
+            }
+            // Map/Set: when the full collection `TypeExpr` is available, route
+            // through the shared registrar (extracts K/V/elem). No-op when the
+            // inner-types table doesn't carry it (the let path may not).
+            "Map" | "Set" => {
+                if let Some(full_te) = self.pattern_binding_inner_types.get(&key).cloned() {
+                    self.register_var_from_type_expr(name, &full_te);
+                }
+            }
+            // User struct / shared handle / other: record the surface name so
+            // field access + method dispatch resolve the right shape.
+            _ => {
+                self.record_var_type_name(name.to_string(), type_name);
+            }
         }
     }
 

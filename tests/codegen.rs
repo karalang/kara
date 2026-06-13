@@ -1803,6 +1803,38 @@ fn main() {
     }
 
     #[test]
+    fn e2e_string_method_on_tuple_destructured_binding_codegen() {
+        // B-2026-06-12-3: a String/Vec/Slice bound via tuple destructure
+        // (`let (a, b) = pair()`) must route method calls through the
+        // collection dispatch surface. Before the fix, `bind_pattern` (the
+        // let-destructure binder) allocated the leaf slot but never registered
+        // `string_vars` / `vec_elem_types`, so `a.repeat(2)` / `a.substring(..)`
+        // / `nums.len()` failed codegen with "no handler for method '…' on
+        // variable 'a'" — while the interpreter handled them. Covers the
+        // String element (repeat + substring), a Vec element (len + index),
+        // and a wildcard-discard element. Output must match the interpreter.
+        if let Some(out) = run_program(
+            "fn mk() -> (Vec[i64], String) {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(10);\n\
+                 v.push(20);\n\
+                 (v, \"hi\")\n\
+             }\n\
+             fn main() {\n\
+                 let (nums, s) = mk();\n\
+                 println(nums.len());\n\
+                 println(nums[0] + nums[1]);\n\
+                 println(s.repeat(2));\n\
+                 println(s.substring(0, 1));\n\
+                 let (a, _) = (\"x\", \"y\");\n\
+                 println(a.repeat(3));\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n30\nhihi\nh\nxxx\n");
+        }
+    }
+
+    #[test]
     fn e2e_u8_ascii_predicates_codegen() {
         // ASCII byte-classification on `u8` (inline range checks): must match
         // the interpreter (test_u8_ascii_predicates_interpreter). The
