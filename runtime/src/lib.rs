@@ -5929,17 +5929,121 @@ async fn serve_request(
     Ok(response)
 }
 
+/// Panic-free in-place stable merge sort for a fixed element width `W`, merging
+/// the elements directly (no `usize`-index indirection). With `W` a const, each
+/// element move is an inlined register copy — *not* a `memcpy` call — which is
+/// the speed win over the index-permutation path for the hot 8/16-byte widths
+/// (a runtime-`sz` `copy_nonoverlapping` would emit a `memcpy` call per move).
+/// An insertion-sort base case sorts short runs before the bottom-up merge,
+/// mirroring what `slice::sort_by` does internally. Same no-reachable-panic
+/// discipline as `karac_vec_sort_by`'s generic path (raw null-checked `alloc`,
+/// unchecked pointer arithmetic, no `slice::sort_by`/`unwrap`/`assert`), so the
+/// DWARF backtrace symbolizer still dead-strips. Stable: insertion shifts only
+/// on a strict `>`; the merge takes the left run on a tie.
+///
+/// # Safety
+///
+/// `data` points to `total_bytes == n * W` initialized, contiguous bytes the
+/// caller exclusively owns for the call; `cmp`/`ctx` are a valid comparator
+/// over the `W`-byte elements (same contract as `karac_vec_sort_by`).
+unsafe fn sort_fixed_width<const W: usize>(
+    data: *mut u8,
+    n: usize,
+    total_bytes: usize,
+    cmp: extern "C" fn(*mut u8, *const u8, *const u8) -> i64,
+    ctx: *mut u8,
+) {
+    const RUN: usize = 32; // insertion-sort base run length
+    let layout = match std::alloc::Layout::from_size_align(total_bytes, 8) {
+        Ok(l) => l,
+        Err(_) => return,
+    };
+    let scratch = std::alloc::alloc(layout) as *mut [u8; W];
+    if scratch.is_null() {
+        return;
+    }
+    let base = data as *mut [u8; W];
+
+    // Phase 1 — insertion-sort each RUN-sized run in place.
+    let mut start = 0usize;
+    while start < n {
+        let end = (start + RUN).min(n);
+        let mut i = start + 1;
+        while i < end {
+            let hold: [u8; W] = *base.add(i);
+            let mut j = i;
+            while j > start && cmp(ctx, base.add(j - 1) as *const u8, hold.as_ptr()) > 0 {
+                *base.add(j) = *base.add(j - 1);
+                j -= 1;
+            }
+            *base.add(j) = hold;
+            i += 1;
+        }
+        start = end;
+    }
+
+    // Phase 2 — bottom-up merge of adjacent runs, ping-ponging base <-> scratch.
+    let mut src = base;
+    let mut dst = scratch;
+    let mut width = RUN;
+    while width < n {
+        let mut lo = 0usize;
+        while lo < n {
+            let mid = (lo + width).min(n);
+            let hi = (lo + 2 * width).min(n);
+            let mut a = lo;
+            let mut b = mid;
+            let mut k = lo;
+            while a < mid && b < hi {
+                // `<= 0` keeps the left (earlier) run first on a tie.
+                if cmp(ctx, src.add(a) as *const u8, src.add(b) as *const u8) <= 0 {
+                    *dst.add(k) = *src.add(a);
+                    a += 1;
+                } else {
+                    *dst.add(k) = *src.add(b);
+                    b += 1;
+                }
+                k += 1;
+            }
+            while a < mid {
+                *dst.add(k) = *src.add(a);
+                a += 1;
+                k += 1;
+            }
+            while b < hi {
+                *dst.add(k) = *src.add(b);
+                b += 1;
+                k += 1;
+            }
+            lo += 2 * width;
+        }
+        std::mem::swap(&mut src, &mut dst);
+        width *= 2;
+    }
+
+    // If an odd number of merge passes left the live buffer in `scratch`,
+    // copy it back into `data`.
+    if src != base {
+        ptr::copy_nonoverlapping(src as *const u8, data, total_bytes);
+    }
+    std::alloc::dealloc(scratch as *mut u8, layout);
+}
+
 /// In-place sort of a raw byte buffer (`len` elements of `elem_size` bytes).
 /// The compiler emits a per-call-site bridge thunk that loads two elements
 /// through their pointers, invokes the user closure, and reports the
 /// resulting `Ordering` tag as `-1` / `0` / `+1`.
 ///
-/// Fast paths for `elem_size == 8` and `elem_size == 16` reinterpret the
-/// buffer as `&mut [[u8; N]]` and call Rust's `sort_by` directly — the most
-/// common element layouts (`Vec[i64]`, `Vec[(i64, i64)]`) skip the indirect
-/// permute. The general fallback sorts a Vec of indices and permutes through
-/// a single uninitialised scratch buffer; this stays correct for any element
-/// size without needing a typed Rust view.
+/// Fast paths for `elem_size == 8` and `elem_size == 16` (the dominant
+/// `Vec[i64]` / `Vec[(i64, i64)]` layouts) merge the *elements* directly via
+/// `sort_fixed_width::<W>` — `W` is a const, so the moves are inlined register
+/// copies with no index indirection and no `memcpy` call, and an insertion-sort
+/// base case cuts the small-run comparisons. The general fallback sorts a Vec
+/// of indices and permutes through a single uninitialised scratch buffer; this
+/// stays correct for any element size without needing a typed Rust view, and
+/// for large elements the cheap index moves beat copying whole elements each
+/// merge pass. Both paths are panic-free so the ~262 KiB DWARF symbolizer
+/// dead-strips (see the body and `sort_fixed_width`).
 ///
 /// Backs `Vec.sort_by` codegen. See `src/codegen.rs` `compile_vec_method`
 /// `"sort_by"` arm and the matching interpreter arm in `src/interpreter.rs`.
@@ -5969,12 +6073,45 @@ pub unsafe extern "C" fn karac_vec_sort_by(
     let n = len as usize;
     let sz = elem_size as usize;
 
-    // Stable bottom-up merge sort over an index permutation, built from raw
-    // `std::alloc` and pointer arithmetic. The element representation is
-    // opaque bytes, so we sort `usize` indices (comparing the elements they
-    // point at via `cmp`) and permute the buffer once at the end — cheap
-    // index moves, one element pass, stable on equal keys (the merge takes
-    // the left run on a tie).
+    // `karac_vec_sort_by` has two panic-free strategies — both keep the
+    // ~262 KiB DWARF backtrace-symbolizer dead-strippable (rationale on the
+    // generic path below): a direct-element fast path for small element
+    // widths, and a `usize`-index-permutation generic path for large ones.
+
+    // Total element-buffer size, guarded against usize overflow.
+    let total_bytes = match n.checked_mul(sz) {
+        Some(v) => v,
+        None => return,
+    };
+
+    // ── Fast path: direct-element stable merge sort for the hot small widths.
+    // 8-byte (`i64`) and 16-byte (`(i64, i64)` / two-field structs) elements are
+    // the overwhelming majority of real sorts. `sort_fixed_width::<W>` merges the
+    // elements directly with `W` monomorphized, so every move is an inlined
+    // register copy (no `memcpy` call, no index indirection) and an insertion-sort
+    // base case cuts the small-run comparisons — recovering the speed the old
+    // typed-slice `slice::sort_by` path had, but panic-free so the ~262 KiB
+    // symbolizer still dead-strips. Other widths fall through to the
+    // index-permutation generic path below (cheap index moves for big elements).
+    match sz {
+        8 => {
+            sort_fixed_width::<8>(data, n, total_bytes, cmp, ctx);
+            return;
+        }
+        16 => {
+            sort_fixed_width::<16>(data, n, total_bytes, cmp, ctx);
+            return;
+        }
+        _ => {}
+    }
+
+    // ── Generic path: stable bottom-up merge sort over a `usize` index ──────
+    // permutation, built from raw `std::alloc` and pointer arithmetic. The
+    // element representation is opaque bytes, so we sort `usize` indices
+    // (comparing the elements they point at via `cmp`) and permute the buffer
+    // once at the end — cheap index moves, one element pass, stable on equal
+    // keys (the merge takes the left run on a tie). For large elements moving
+    // small indices each pass beats copying elements every merge pass.
     //
     // Why hand-rolled rather than `slice::sort_by` / `Vec`: the whole point
     // of this entry is to keep a lean seq binary that *sorts* from paying
@@ -5989,12 +6126,6 @@ pub unsafe extern "C" fn karac_vec_sort_by(
     // floor. See docs/implementation_checklist/phase-7-codegen.md
     // "Lean large-N sort entry". Stability is required by design.md
     // ("In-place stable sort"), which also rules out heapsort/introsort.
-
-    // Total permute-buffer size, guarded against usize overflow.
-    let total_bytes = match n.checked_mul(sz) {
-        Some(v) => v,
-        None => return,
-    };
     let idx_layout = match std::alloc::Layout::array::<usize>(n) {
         Ok(l) => l,
         Err(_) => return,
@@ -6329,8 +6460,9 @@ mod tests {
     // phase-7-codegen.md "Lean large-N sort entry"). These pin the two
     // properties that matter and that the E2E codegen tests can't isolate
     // from the comparator-thunk layer: stability, and correctness across
-    // element sizes (the 8/16-byte special-cases were removed, so every
-    // size now flows through the one merge path).
+    // element sizes through BOTH dispatch paths — the direct-element fast
+    // path (sz <= 32) and the `usize`-index-permutation generic path
+    // (sz > 32).
 
     /// Comparator over the first `i64` of each element (the sort key);
     /// ignores trailing bytes, so equal-key records exercise stability.
@@ -6378,9 +6510,11 @@ mod tests {
 
     #[test]
     fn karac_vec_sort_by_sorts_various_elem_sizes() {
-        // Correctness across 8 / 24 / 12-byte elements (the last is a
-        // non-word-multiple, exercising the generic byte permute). Each
-        // record's key is the first i64; trailing bytes are padding.
+        // Correctness across 8 / 24 / 12-byte elements (all <= 32 → the
+        // direct-element fast path; 12 is a non-word-multiple, exercising
+        // unaligned element moves). Each record's key is the first i64;
+        // trailing bytes are padding. The generic path (sz > 32) has its
+        // own test below.
         for &words in &[1usize, 3, 2] {
             let elem_size = if words == 2 {
                 12i64
@@ -6414,6 +6548,49 @@ mod tests {
                 let k = i64::from_ne_bytes(k8);
                 assert!(k >= prev, "elem_size {elem_size}: unsorted at {i}");
                 prev = k;
+            }
+        }
+    }
+
+    #[test]
+    fn karac_vec_sort_by_large_elems_generic_path() {
+        // sz > 32 routes to the `usize`-index-permutation generic path. Use
+        // 40- and 64-byte records with DUPLICATE keys (`i % 8`) and a strictly
+        // increasing `ord` in bytes 8..16, so this checks both correctness and
+        // stability on the path the small-element fast path doesn't cover.
+        for &elem_size in &[40usize, 64] {
+            let n = 200usize;
+            let mut buf = vec![0u8; n * elem_size];
+            for i in 0..n {
+                let key = (i % 8) as i64;
+                let ord = i as i64;
+                let off = i * elem_size;
+                buf[off..off + 8].copy_from_slice(&key.to_ne_bytes());
+                buf[off + 8..off + 16].copy_from_slice(&ord.to_ne_bytes());
+            }
+            unsafe {
+                karac_vec_sort_by(
+                    buf.as_mut_ptr(),
+                    n as i64,
+                    elem_size as i64,
+                    cmp_first_i64,
+                    std::ptr::null_mut(),
+                );
+            }
+            let (mut pk, mut po) = (i64::MIN, i64::MIN);
+            for r in 0..n {
+                let off = r * elem_size;
+                let mut k8 = [0u8; 8];
+                let mut o8 = [0u8; 8];
+                k8.copy_from_slice(&buf[off..off + 8]);
+                o8.copy_from_slice(&buf[off + 8..off + 16]);
+                let (k, o) = (i64::from_ne_bytes(k8), i64::from_ne_bytes(o8));
+                assert!(k >= pk, "elem_size {elem_size}: not sorted by key at {r}");
+                if k == pk {
+                    assert!(o > po, "elem_size {elem_size}: stability violated at {r}");
+                }
+                pk = k;
+                po = o;
             }
         }
     }
