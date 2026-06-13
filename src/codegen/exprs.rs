@@ -537,32 +537,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 // return in a non-Result/Option-returning function.
                 let is_error_exit = val.as_deref().is_some_and(Self::is_error_exit_value);
                 if let Some(e) = val {
-                    self.suppress_source_vec_cleanup_for_arg(e);
-                    // Sub-slice (3) of move-suppression — when the
-                    // return value is an Identifier whose binding has
-                    // a user `impl Drop`, the source's value is moved
-                    // out as the return; suppress its UserDrop so the
-                    // user-body (close fd, etc.) doesn't fire here.
-                    // The caller will fire it when its own binding
-                    // for the returned value goes out of scope.
-                    // Mirrors the tail-expression suppression in
-                    // `suppress_cleanup_for_tail_return`.
-                    if let ExprKind::Identifier(name) = &e.kind {
-                        self.suppress_user_drop_for_var(name);
-                        // Map/Set tail-return suppression at an explicit
-                        // `return m;`: mirror the tail-expression path in
-                        // `suppress_cleanup_for_tail_return`. The binding's
-                        // `FreeMapHandle` (queued at `let m = Map.new()`) must
-                        // be dropped from the cleanup queue here, or the drain
-                        // below frees the handle the caller is about to receive,
-                        // leaving a dangling pointer (double-free under AOT —
-                        // surfaced by the slice-2 `make_map(); ` discard, where
-                        // both callee and caller then free the same handle).
-                        // The Vec/String sibling above (`suppress_source_vec_
-                        // cleanup_for_arg`) flips an in-slot `cap = 0` sentinel;
-                        // Map's cleanup is queue-driven, so we retain it out.
-                        self.suppress_map_cleanup_for_tail_identifier(name);
-                    }
+                    // Move-out cleanup suppression (Vec/String `cap = 0`,
+                    // Map/Set FreeMapHandle queue retract, user-`impl Drop`
+                    // skip) is applied AFTER the return value is compiled —
+                    // see the `suppress_*` calls following
+                    // `maybe_defensive_copy_param_arg` below. The ordering is
+                    // load-deferred on purpose: zeroing the source binding's
+                    // `cap` slot BEFORE the value load corrupted the RETURNED
+                    // header to `cap = 0`, so the caller's `cap > 0`-guarded
+                    // free skipped and the moved-out buffer leaked once per
+                    // call — every `return <vec/string>;` helper (B-2026-06-12-6,
+                    // surfaced by the Linux LSan gate; macOS LSan-blind, and
+                    // doing nothing produces no double-free, so it passed
+                    // vacuously). The tail-expression sibling
+                    // (`suppress_cleanup_for_tail_return`) already orders it
+                    // load-then-suppress (compile body → load result →
+                    // suppress); this matches it.
                     // `Option[shared T]` return compensation at an explicit
                     // `return expr;` — mirrors the per-branch TAIL machinery
                     // (`compile_tail_final_expr`): a bare tracked binding
@@ -610,6 +600,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     // deep copy, not the alias. No-op for every other
                     // return shape. See `emit_vecstr_defensive_copy`.
                     let v = self.maybe_defensive_copy_param_arg(e, v);
+                    // Move-aware move-out suppression, applied post-compile (and
+                    // post-defensive-copy) so the already-loaded `v` retains the
+                    // source binding's real `cap` — the caller now owns and frees
+                    // that buffer — while the source's own scope-exit
+                    // `FreeVecBuffer` cap-guard reads the zeroed slot and skips.
+                    // Mirrors `suppress_cleanup_for_tail_return`'s load-then-
+                    // suppress order for the tail-expression case (which loads
+                    // `result` first, then zeroes the source cap). The
+                    // Vec/String arm flips an in-slot `cap = 0` sentinel; the
+                    // Map/Set + user-`impl Drop` arms (Identifier source only)
+                    // retract a queued `FreeMapHandle` / skip the UserDrop so the
+                    // moved-out handle / drop-side-effect doesn't fire here — the
+                    // caller fires it when its own binding goes out of scope.
+                    self.suppress_source_vec_cleanup_for_arg(e);
+                    if let ExprKind::Identifier(name) = &e.kind {
+                        self.suppress_user_drop_for_var(name);
+                        self.suppress_map_cleanup_for_tail_identifier(name);
+                    }
                     // Move-aware suppression for a DIRECT `return f"..."`: the
                     // returned String buffer IS the f-string accumulator, now
                     // owned by the caller. The `suppress_source_vec_cleanup_for_arg`
