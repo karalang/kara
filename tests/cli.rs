@@ -1571,6 +1571,56 @@ fn test_link_directive_resolves_real_library_e2e() {
 // All four tests below are gated `#[cfg(feature = "llvm")]` because the
 // codegen output they verify only exists when llvm is built in.
 
+#[test]
+fn test_run_project_multi_module_loads_siblings() {
+    // GAP-W3: `karac run <entry>` in a multi-module project must load sibling
+    // modules into the interpreter — both a cross-module free function AND a
+    // cross-module associated function. Before this, only the entry file's
+    // items were registered, so these failed at runtime ("variable not found" /
+    // "no interpreter evaluation rule") even though resolve + typecheck passed.
+    // Interpreter path — no `llvm` feature needed.
+    let tmp = scratch_project("run-multi-module");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"mm_run\"\n");
+    write(
+        &tmp.join("src/util.kara"),
+        "pub struct Rates { rate: f64 }\n\
+         impl Rates {\n\
+             pub fn new(r: f64) -> Rates { Rates { rate: r } }\n\
+             pub fn get(ref self) -> f64 { self.rate }\n\
+         }\n\
+         pub fn greet(n: String) -> String { f\"hi {n}\" }\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "import util.{Rates, greet};\n\
+         fn main() {\n\
+             println(greet(\"world\"));\n\
+             let r = Rates.new(2.5);\n\
+             println(f\"r={r.get()}\");\n\
+         }\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "src/main.kara"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "run failed: stdout={stdout} stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        stdout.contains("hi world"),
+        "cross-module free fn not loaded: {stdout}",
+    );
+    assert!(
+        stdout.contains("r=2.5"),
+        "cross-module associated fn not loaded: {stdout}",
+    );
+}
+
 #[cfg(feature = "llvm")]
 #[test]
 fn test_build_project_codegen_two_files_runs() {

@@ -3771,6 +3771,106 @@ fn main_return_is_exitcode(program: &Program) -> bool {
     })
 }
 
+/// Merge a multi-module project's `ProgramTree` into a single `Program` for
+/// the interpreter — the `run`-side analog of `run_multi_file_codegen`'s
+/// super-program build: items concatenated in topological (dependency-first)
+/// order, dropping `import` declarations (resolved upstream) and synthetic
+/// modules, plus gated-stdlib import expansions. No `ModuleSpanTable` — that is
+/// a codegen late-phase-diagnostic concern; the lenient `run` path doesn't need
+/// it. Kept separate from `run_multi_file_codegen` so the codegen path is
+/// untouched.
+fn build_super_program_for_run(tree: &ProgramTree) -> Program {
+    let order = module::emission_order(tree);
+    let mut items: Vec<Item> = Vec::new();
+    for &id in &order {
+        let m = &tree.modules[id];
+        if m.is_synthetic {
+            continue;
+        }
+        for item in &m.items {
+            if matches!(item, Item::Import(_)) {
+                continue;
+            }
+            items.push(item.clone());
+        }
+    }
+    // Gated baked-stdlib modules are synthetic, so the loop above skips them;
+    // append the expansion of every gated import (deduped on the bound name),
+    // mirroring `run_multi_file_codegen`.
+    {
+        let mut seen: std::collections::HashSet<(Vec<String>, String)> =
+            std::collections::HashSet::new();
+        for m in &tree.modules {
+            if m.is_synthetic {
+                continue;
+            }
+            for imp in &m.imports {
+                let deduped: Vec<crate::ast::ImportItem> = imp
+                    .items
+                    .iter()
+                    .filter(|ii| {
+                        let bound = ii.alias.as_ref().unwrap_or(&ii.name);
+                        seen.insert((imp.path.clone(), bound.clone()))
+                    })
+                    .cloned()
+                    .collect();
+                if let Some(expansion) = crate::prelude::gated_items_for_import(&imp.path, &deduped)
+                {
+                    items.extend(expansion);
+                }
+            }
+        }
+    }
+    Program {
+        items,
+        ..Program::default()
+    }
+}
+
+/// If `filename` is the entry of a multi-module project, build the merged
+/// super-program so `karac run` sees every sibling module's items (GAP-W3 —
+/// previously the interpreter only registered the entry file's items, so
+/// cross-module calls failed at runtime despite resolving + typechecking).
+/// Returns `None` for a single-file script or a one-module project (the caller
+/// keeps the single-file fast path), so behavior is unchanged outside real
+/// multi-module projects. Canonicalizes the entry first so the canonical
+/// invocation `karac run src/main.kara` (relative path) discovers the root —
+/// `discover_project_root` can't walk up a bare relative `src`.
+fn try_build_run_super_program(filename: &str, no_manifest: bool) -> Option<Program> {
+    if no_manifest {
+        return None; // operator opted out of project/manifest discovery
+    }
+    let entry = std::fs::canonicalize(filename).ok()?;
+    let root = manifest::discover_project_root(entry.parent()?)?;
+    // A `walk_project` error here (e.g. mixed `main.kara` + `lib.kara` entry
+    // files) is not ours to report on the run path — fall back to single-file
+    // and let the normal flow surface any diagnostic.
+    let walked = walker::walk_project(&root, WalkerOpts::default()).ok()?;
+    let built = module::build_program_tree(&walked).ok()?;
+    // A clean tree is required — fall back to the single-file path (which will
+    // surface the parse error against the entry file) if any module failed to
+    // parse.
+    if !built.parse_errors.is_empty() {
+        return None;
+    }
+    let tree = built.tree;
+    let non_synthetic = tree.modules.iter().filter(|m| !m.is_synthetic).count();
+    if non_synthetic <= 1 {
+        return None; // single-module project — single-file path is equivalent
+    }
+    // Only merge when the entry file is actually part of this project's tree;
+    // otherwise the super-program could be missing the entry's `main`.
+    let entry_in_tree = tree.modules.iter().filter(|m| !m.is_synthetic).any(|m| {
+        std::fs::canonicalize(&m.file)
+            .map(|p| p == entry)
+            .unwrap_or(false)
+    });
+    if !entry_in_tree {
+        return None;
+    }
+    Some(build_super_program_for_run(&tree))
+}
+
 fn cmd_run(
     filename: &str,
     output: OutputMode,
@@ -3860,6 +3960,17 @@ fn cmd_run(
     if let Some(ref m) = discovered_manifest {
         pipeline.profile = m.profile;
         pipeline.profile_config = m.profile_config.clone();
+    }
+    // Multi-module project support (GAP-W3, examples/db_pipeline shape): when
+    // the entry file belongs to a discoverable project that has sibling
+    // modules, replace the single-file program with the merged super-program
+    // so the resolver / typechecker / interpreter see every module's items.
+    // Before this, `karac run src/main.kara` registered only the entry file's
+    // items, so cross-module free *and* associated calls failed at runtime
+    // even though they resolved + typechecked. No-op for single-file scripts
+    // and one-module projects (`try_build_run_super_program` returns `None`).
+    if let Some(super_program) = try_build_run_super_program(filename, no_manifest) {
+        pipeline.parsed.program = super_program;
     }
     pipeline.resolve();
 

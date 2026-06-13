@@ -421,9 +421,11 @@ fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
 > types render via a real `impl Display { fn to_string }` (`ParseError` in this
 > example now uses one; `f"{err}"` dispatches to it across interpreter +
 > codegen). That fix surfaced and fixed a deeper pre-existing interpreter bug
-> (a constructor-pattern binding shadowed by an in-scope unit-variant local).
-> **Tracked open gaps** (each its own entry below): codegen `String.split`;
-> multi-module `karac run`.
+> (a constructor-pattern binding shadowed by an in-scope unit-variant local);
+> and (2026-06-13 follow-up) **multi-module `karac run`** — `cmd_run` now merges
+> a project's sibling modules into a super-program before interpreting, so
+> cross-module calls work via `karac run`. **Tracked open gap** (entry below):
+> codegen `String.split`.
 >
 > Open follow-ons, tracked here as the design record:
 > - [ ] **Codegen `String.split`** — interpreter + typechecker landed; the
@@ -432,13 +434,15 @@ fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
 >   E2E + any AOT-built program that splits strings. → tracked in
 >   [`phase-7-codegen.md`](implementation_checklist/phase-7-codegen.md)
 >   ("Codegen `String.split`").
-> - [ ] **Multi-module `karac run`** — the interpreter only registers the entry
->   file's items; sibling `src/*.kara` modules resolve + typecheck but their
->   functions/impls are absent at runtime (cross-module free *and* associated
->   calls fail). Forces single-file examples for interpreter runs. Blocks the
->   db_pipeline-shaped multi-module Weave service cut from running via `run`. →
->   tracked in [`phase-4-interpreter.md`](implementation_checklist/phase-4-interpreter.md)
->   ("CR-24 follow-up: multi-module `karac run`").
+> - [x] **Multi-module `karac run` — ✓ RESOLVED 2026-06-13.** `cmd_run` now
+>   detects when the entry file belongs to a multi-module project, builds the
+>   module tree, and merges every module's items into a super-program (the
+>   `run`-side analog of the codegen super-module) before interpreting — so
+>   cross-module free functions AND associated functions work via `karac run`.
+>   No-op for single-file scripts / one-module projects. → closed in
+>   [`phase-4-interpreter.md`](implementation_checklist/phase-4-interpreter.md)
+>   ("CR-24 follow-up: multi-module `karac run`"); regression
+>   `tests/cli.rs::test_run_project_multi_module_loads_siblings`.
 > - [x] **User `impl Display` — ✓ RESOLVED 2026-06-13.** Design decision: v1
 >   admits user `impl Display`. The operator-trait resolver gate now carves out
 >   `Display` (alongside `Eq`/`Ord`); dispatch wired in the interpreter (`to_string`
