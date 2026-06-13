@@ -25,7 +25,7 @@ model is most likely to get wrong). The *organic at-scale* leg is **Chronicle**
 | Parent-pointer tree | `src/parent_tree.kara` | up/down cycle without `Rc<RefCell>`+`Weak` | `representation:"shared (Rc)"` (declared RC) |
 | Cross-edge graph (diamond) | `src/cross_graph.kara` | shared descendant the checker can't linearize | `rc_values` + trigger line (RC fallback) |
 | Doubly-linked list | _planned_ | the classic `Rc<RefCell>` shape | TBD |
-| Undo/redo over shared state | _planned_ | back-references to shared history | `rc_values` (RC fallback) |
+| Undo/redo over shared state | `src/undo_redo.kara` | shared **mutable** state, undo writes back through the shared handle | `representation:"shared (Rc)"` (declared RC) |
 | Tree-walking interpreter (shared env) | _planned_ | shared mutable environment | TBD |
 
 ## Running
@@ -37,6 +37,9 @@ karac query ownership examples/tangle/src/parent_tree.kara.<fn>   # per-fn owner
 
 karac run   examples/tangle/src/cross_graph.kara
 karac query ownership examples/tangle/src/cross_graph.kara.build_diamond
+
+karac run   examples/tangle/src/undo_redo.kara
+karac query ownership examples/tangle/src/undo_redo.kara.Editor.set   # impl method
 ```
 
 `parent_tree.kara` prints:
@@ -50,6 +53,20 @@ depth of root:        0
 `cross_graph.kara` prints `diamond reachable-sum (d counted twice): 14` — the
 shared node `d` is visited on both paths (1 + (2+4) + (3+4)), which is the
 observable proof the cross-edge is one shared node, not two copies.
+
+`undo_redo.kara` prints `30 / 20 / 10 / 20` — two edits, two undos, one redo,
+each restoring the value by writing *through the shared cell handle* held by the
+history command. In Rust this is `Rc<RefCell<Cell>>` (shared ownership +
+interior mutability); in Kāra it is a `shared struct` with a `mut` field — and
+`karac query ownership .../undo_redo.kara.Editor.set` shows the `cell` parameter
+as `mut_ref` + `representation:"shared (Rc)"`.
+
+> **Bug found *and fixed* by this structure.** undo/redo first read stale
+> values: a write to a `shared struct` field through a projection receiver
+> (`cmd.cell.value = …`, `v[i].value = …`) was silently dropped — the
+> interpreter's `set_field` only handled bare-identifier / `self` receivers.
+> Fixed in `src/interpreter.rs` (write through the projected Arc); regression
+> tests in `tests/interpreter.rs`. Dogfooding working as intended.
 
 ## Reading `karac query ownership` (the demo's core artifact)
 
@@ -98,7 +115,15 @@ Front-end legs (typecheck · `karac query ownership` · interpret) are the curre
 focus. Tangle's leg #4 — "runs leak-/use-after-free–clean under ASAN (codegen
 path)" — is deferred until the active codegen leak cluster
 (`bugs.md` B-2026-06-12-6 / -10) settles, so the clean ASAN run is a meaningful
-verification pass rather than a re-hit of in-flight leaks.
+verification pass rather than a re-hit of in-flight leaks. When that leg is
+picked up, **verify codegen has the projection-write fix too** — the
+shared-struct field-write bug below was fixed in the interpreter; the codegen
+path needs the same check.
+
+Two follow-ons tracked from this work: (1) writing through a *plain* value-type
+struct projection (`a.b.field = x` where `b` is a non-shared struct) still needs
+nested-place write-back — out of scope for the shared-struct fix; (2) the
+codegen counterpart of the projection-write fix (see above).
 
 **Tooling gap surfaced *and fixed* by Tangle dogfooding.** The per-function
 query kinds (`ownership` / `effects` / `concurrency`) split their target with a

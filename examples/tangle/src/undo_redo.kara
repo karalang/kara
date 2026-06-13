@@ -1,0 +1,108 @@
+// Tangle — undo/redo over shared mutable state.
+//
+// A document is a list of Cells. Every edit is recorded as a `Command` that
+// back-references the very Cell it changed — so `undo` restores the old value
+// by writing *through that shared handle*, and the change is visible everywhere
+// the cell is held (the live document, the local handle, the history).
+//
+// In Rust this is the textbook `Rc<RefCell<Cell>>`: shared ownership (the
+// document and the history both hold the cell) plus interior mutability (undo
+// mutates it). The borrow checker forces both the `Rc` and the `RefCell`, and
+// a misuse is a runtime `BorrowMutError`.
+//
+// In Kāra it is a `shared struct` with a `mut` field — no `Rc`, no `RefCell`,
+// no `'a`. `karac query ownership` shows the cell as `shared (Rc)` at every
+// site it flows through. This is the *declared-shared, mutable* facet of the
+// ownership story, distinct from `parent_tree` (declared-shared, cyclic, not
+// mutated) and `cross_graph` (RC *inferred* as a fallback).
+
+shared struct Cell {
+    mut value: i64,
+}
+
+// A recorded edit: the shared cell, plus the values before/after. Holding the
+// cell here is the back-reference into shared state that makes undo possible.
+struct Command {
+    cell: Cell,
+    old_value: i64,
+    new_value: i64,
+}
+
+struct Editor {
+    cells: Vec[Cell],
+    undo_stack: Vec[Command],
+    redo_stack: Vec[Command],
+}
+
+impl Editor {
+    // Register a fresh cell in the document and hand back the shared handle so
+    // the caller can edit it. The cell now lives in both `self.cells` and the
+    // returned handle — same RC cell.
+    fn add_cell(mut ref self, initial: i64) -> Cell {
+        let c = Cell { value: initial };
+        self.cells.push(c);
+        c
+    }
+
+    // Edit a cell: record the command (capturing the shared cell), write the
+    // new value through the shared handle, and clear the redo stack — a fresh
+    // edit invalidates any redo future.
+    fn set(mut ref self, cell: Cell, new_value: i64) {
+        let cmd = Command { cell: cell, old_value: cell.value, new_value: new_value };
+        cell.value = new_value;
+        self.undo_stack.push(cmd);
+        self.redo_stack = Vec.new();
+    }
+
+    // Undo the most recent edit: write the old value back through the shared
+    // cell, and move the command onto the redo stack.
+    fn undo(mut ref self) {
+        match self.undo_stack.pop() {
+            None => {}
+            Some(cmd) => {
+                cmd.cell.value = cmd.old_value;
+                self.redo_stack.push(cmd);
+            }
+        }
+    }
+
+    // Redo the most recently undone edit: re-apply the new value, move the
+    // command back onto the undo stack.
+    fn redo(mut ref self) {
+        match self.redo_stack.pop() {
+            None => {}
+            Some(cmd) => {
+                cmd.cell.value = cmd.new_value;
+                self.undo_stack.push(cmd);
+            }
+        }
+    }
+}
+
+fn main() {
+    let mut ed = Editor {
+        cells: Vec.new(),
+        undo_stack: Vec.new(),
+        redo_stack: Vec.new(),
+    };
+
+    let c = ed.add_cell(10);
+
+    ed.set(c, 20);
+    ed.set(c, 30);
+    println(f"value:        {c.value}");   // 30
+
+    ed.undo();
+    println(f"after undo:   {c.value}");   // 20
+    ed.undo();
+    println(f"after undo:   {c.value}");   // 10
+
+    ed.redo();
+    println(f"after redo:   {c.value}");   // 20
+}
+
+// Expected output:
+// value:        30
+// after undo:   20
+// after undo:   10
+// after redo:   20
