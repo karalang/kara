@@ -928,6 +928,14 @@ pub struct OwnershipChecker<'a> {
     /// `Own`. Drives `Call`-arg consume-vs-read classification per
     /// design.md § Consume Predicate step 2.
     pub(crate) callee_param_modes: HashMap<String, Vec<OwnershipMode>>,
+    /// Instance-method key (`"Type.method"`) → per-position NON-self
+    /// parameter ownership modes. Companion to `callee_param_modes` (which
+    /// is static-only): instance methods dispatch as `MethodCall`, so their
+    /// arg classification reads modes here. Position `i` maps 1:1 to call-arg
+    /// `i` (the receiver is `method_self_modes`). Lets a `ref`/`mut ref`/
+    /// `mut Slice` method arg be a borrow (read), not a consume — without it
+    /// a borrowed struct arg was spuriously RC-promoted (B-2026-06-12-8).
+    pub(crate) method_param_modes: HashMap<String, Vec<OwnershipMode>>,
     /// Callee name → per-position "is the formal a slice?" flag. `Some(true)`
     /// for `mut Slice[T]`, `Some(false)` for `Slice[T]`, `None` for
     /// non-slice formals. Drives the Slice 1 call-arg coercion site
@@ -1038,6 +1046,7 @@ impl<'a> OwnershipChecker<'a> {
             binding_types: HashMap::new(),
             method_self_modes: collect_method_self_modes(program),
             callee_param_modes: collect_callee_param_modes(program),
+            method_param_modes: collect_method_param_modes(program),
             callee_param_slice_kind: collect_callee_param_slice_kind(program),
             callee_existential_capture_indices: collect_callee_existential_capture_indices(
                 program,
@@ -1804,6 +1813,55 @@ pub(crate) fn collect_callee_param_modes(program: &Program) -> HashMap<String, V
                             map.insert(
                                 format!("{target_name}.{}", method.name),
                                 param_modes_from_signature(&method.params),
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    map
+}
+
+/// Collect per-position parameter ownership modes for every *instance*
+/// (`self`-taking) impl method and trait method, keyed by `"Type.method"`.
+/// Covers only the method's NON-self positional params — the receiver is
+/// tracked separately via `method_self_modes` — so position `i` here maps
+/// 1:1 to call-arg `i` at a `MethodCall` site. Instance methods are
+/// deliberately EXCLUDED from `collect_callee_param_modes` (static-only,
+/// since instance calls dispatch as `MethodCall`), so this is their
+/// companion: it lets `MethodCall`-arg classification treat `ref T` /
+/// `mut ref T` / `mut Slice[T]` slots as borrow positions (read, not
+/// consumed) — the same rule `collect_callee_param_modes` gives the `Call`
+/// path. Without it, every non-`mut`-marked method arg was classified as a
+/// consume, spuriously RC-promoting a borrowed struct arg (B-2026-06-12-8).
+pub(crate) fn collect_method_param_modes(program: &Program) -> HashMap<String, Vec<OwnershipMode>> {
+    let mut map = HashMap::new();
+    for item in &program.items {
+        match item {
+            Item::ImplBlock(impl_block) => {
+                let Some(target_name) = impl_target_name(&impl_block.target_type) else {
+                    continue;
+                };
+                for impl_item in &impl_block.items {
+                    if let ImplItem::Method(method) = impl_item {
+                        if method.self_param.is_some() {
+                            map.insert(
+                                format!("{target_name}.{}", method.name),
+                                param_modes_from_signature(&method.params),
+                            );
+                        }
+                    }
+                }
+            }
+            Item::TraitDef(trait_def) => {
+                for trait_item in &trait_def.items {
+                    if let TraitItem::Method(tm) = trait_item {
+                        if tm.self_param.is_some() {
+                            map.insert(
+                                format!("{}.{}", trait_def.name, tm.name),
+                                param_modes_from_signature(&tm.params),
                             );
                         }
                     }

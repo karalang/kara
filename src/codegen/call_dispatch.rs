@@ -1778,7 +1778,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// RC-box rvalue args (`ref shared T`) are deferred — the `ref shared T`
     /// argument ABI needs separate handling and the prior code didn't cover
     /// them either, so leaving them out is not a regression.
-    fn queue_ref_rvalue_arg_cleanup(
+    pub(super) fn queue_ref_rvalue_arg_cleanup(
         &mut self,
         slot: PointerValue<'ctx>,
         val: BasicValueEnum<'ctx>,

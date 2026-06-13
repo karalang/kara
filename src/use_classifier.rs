@@ -43,7 +43,8 @@ use crate::ast::{
 };
 use crate::cfg::{Classification, ConsumeOrigin, UseKind};
 use crate::ownership::{
-    collect_callee_param_modes, collect_method_self_modes, is_copy_type, OwnershipMode,
+    collect_callee_param_modes, collect_method_param_modes, collect_method_self_modes,
+    is_copy_type, OwnershipMode,
 };
 use crate::resolver::SpanKey;
 use crate::typechecker::{Type, TypeCheckResult};
@@ -62,6 +63,7 @@ use std::collections::{HashMap, HashSet};
 pub struct ClassifierPrelude {
     method_self_modes: HashMap<String, SelfParam>,
     callee_param_modes: HashMap<String, Vec<OwnershipMode>>,
+    method_param_modes: HashMap<String, Vec<OwnershipMode>>,
     unit_variant_names: HashSet<String>,
 }
 
@@ -73,6 +75,7 @@ impl ClassifierPrelude {
         ClassifierPrelude {
             method_self_modes: collect_method_self_modes(program),
             callee_param_modes: collect_callee_param_modes(program),
+            method_param_modes: collect_method_param_modes(program),
             unit_variant_names: collect_unit_variant_names(tc),
         }
     }
@@ -114,6 +117,7 @@ pub fn classify_function_body_with(
         tc,
         method_self_modes: &prelude.method_self_modes,
         callee_param_modes: &prelude.callee_param_modes,
+        method_param_modes: &prelude.method_param_modes,
         unit_variant_names: &prelude.unit_variant_names,
         param_types,
         local_types: HashMap::new(),
@@ -136,6 +140,7 @@ struct UseClassifier<'a> {
     tc: &'a TypeCheckResult,
     method_self_modes: &'a HashMap<String, SelfParam>,
     callee_param_modes: &'a HashMap<String, Vec<OwnershipMode>>,
+    method_param_modes: &'a HashMap<String, Vec<OwnershipMode>>,
     unit_variant_names: &'a HashSet<String>,
     param_types: HashMap<String, Type>,
     /// Round 12.18: name-keyed types for `let`-bound locals,
@@ -449,8 +454,16 @@ impl<'a> UseClassifier<'a> {
                     self.walk_expr(object, Mode::Reading);
                 }
                 let receiver_is_mut_ref = self.method_receiver_is_mut_ref(expr);
-                for arg in args {
-                    let arg_mode = if arg.mut_marker {
+                for (i, arg) in args.iter().enumerate() {
+                    // A `ref`/`mut ref`/`mut Slice` method param is a borrow
+                    // position — read, not consume — even though method calls
+                    // never carry a call-site `mut` marker (Part 1½: only
+                    // free-fn args mark). Without consulting the param mode, a
+                    // borrowed struct arg was tagged `ContainerStore` and the
+                    // binding spuriously RC-promoted (B-2026-06-12-8). Mirrors
+                    // the `Call` arm's `callee_modes_for_call` borrow check.
+                    let is_borrow = arg.mut_marker || self.method_arg_is_borrow_position(expr, i);
+                    let arg_mode = if is_borrow {
                         Mode::Reading
                     } else {
                         Mode::Consuming
@@ -460,7 +473,7 @@ impl<'a> UseClassifier<'a> {
                     // Mark the arg's value-expression for sibling-sink
                     // lowering in the CFG so the consume site becomes
                     // dominance-incomparable with subsequent outer uses.
-                    let is_sink_arg = receiver_is_mut_ref && !arg.mut_marker;
+                    let is_sink_arg = receiver_is_mut_ref && !is_borrow;
                     if is_sink_arg {
                         self.mark_sink_arg(&arg.value.span);
                     }
@@ -766,6 +779,29 @@ impl<'a> UseClassifier<'a> {
             None => return false,
         };
         matches!(self.method_self_modes.get(key), Some(SelfParam::MutRef))
+    }
+
+    /// Whether call-arg `arg_index` of `method_call` lands in a borrow
+    /// position — the resolved method's NON-self param `arg_index` is
+    /// `ref`/`mut ref`/`mut Slice`. Arg indices map 1:1 to
+    /// `method_param_modes` (the receiver is `method_self_modes`). `false`
+    /// for unresolved methods (stdlib / typecheck errors). The `MethodCall`
+    /// analogue of the `Call` arm's `callee_modes_for_call` borrow check;
+    /// without it a borrowed struct arg was treated as a container-store
+    /// consume and the binding spuriously RC-promoted (B-2026-06-12-8).
+    fn method_arg_is_borrow_position(&self, method_call: &Expr, arg_index: usize) -> bool {
+        let key = match self
+            .tc
+            .method_callee_types
+            .get(&SpanKey::from_span(&method_call.span))
+        {
+            Some(k) => k,
+            None => return false,
+        };
+        self.method_param_modes
+            .get(key)
+            .and_then(|modes| modes.get(arg_index))
+            .is_some_and(|m| matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef))
     }
 
     fn expr_is_copy(&self, expr: &Expr) -> bool {

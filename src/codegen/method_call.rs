@@ -1973,8 +1973,87 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     self.compile_expr(object)?.into()
                 };
+                // Positional-arg ref/slice lowering — mirrors the free-fn
+                // path in `compile_call` (call_dispatch.rs). Before this, the
+                // method path compiled every non-receiver arg by *value* and
+                // pushed it, so a `ref`/`mut ref` struct param (declared `ptr`)
+                // received a `{ ... }` struct value and module verification
+                // rejected the call (B-2026-06-12-8). The receiver occupies
+                // param slot 0 (`self`), so source arg `i` maps to declared
+                // param slot `i + 1` in `fn_param_ref` / `fn_param_slice_elem`
+                // (both keyed by the qualified `Type.method` name and built
+                // from `func.params`, whose element 0 is the receiver).
+                let ref_flags = self
+                    .fn_param_ref
+                    .get(&qualified)
+                    .cloned()
+                    .unwrap_or_default();
+                let slice_elems = self
+                    .fn_param_slice_elem
+                    .get(&qualified)
+                    .cloned()
+                    .unwrap_or_default();
                 let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![receiver_arg];
-                for a in args {
+                for (i, a) in args.iter().enumerate() {
+                    let pidx = i + 1;
+                    let is_ref = ref_flags.get(pidx).copied().unwrap_or(false);
+                    if is_ref {
+                        // Identifier place — pass its data pointer.
+                        if let ExprKind::Identifier(var_name) = &a.value.kind {
+                            if let Some(ptr) = self.get_data_ptr(var_name) {
+                                compiled_args.push(ptr.into());
+                                continue;
+                            }
+                        }
+                        // `vec[idx]` borrow — pass the element pointer in place
+                        // (no shallow-copy + drop double-free).
+                        if let Some(elem_ptr) = self.ref_arg_index_borrow_ptr(&a.value)? {
+                            compiled_args.push(elem_ptr.into());
+                            continue;
+                        }
+                        // Borrow-returning call in ref-arg position — forward
+                        // the raw `-> ref T` borrow pointer (bypass the
+                        // direct-use intercept that would load the pointee).
+                        if self.is_borrow_returning_call_expr(&a.value) {
+                            let prev = self.compiling_ref_return_let_rhs;
+                            self.compiling_ref_return_let_rhs = true;
+                            let ptr = self.compile_expr(&a.value);
+                            self.compiling_ref_return_let_rhs = prev;
+                            compiled_args.push(ptr?.into());
+                            continue;
+                        }
+                    }
+                    // `Slice[T]` / `mut Slice[T]` param: synthesize the
+                    // `{ ptr, i64 }` header from an Array/Vec/slice arg.
+                    if let Some(Some(elem_ty)) = slice_elems.get(pidx).cloned() {
+                        if let Some(slice_val) = self.coerce_to_slice(&a.value, elem_ty)? {
+                            compiled_args.push(slice_val.into());
+                            continue;
+                        }
+                    }
+                    if is_ref {
+                        // Rvalue ref path: a non-place arg (literal, call
+                        // return, arithmetic) bound to a `ref T` param.
+                        // Materialize into a stack temp so the callee receives
+                        // the `ptr` ABI its signature declares; queue the
+                        // temp's cleanup (the callee only borrows). Mirrors the
+                        // free-fn rvalue-ref arm in `compile_call`.
+                        let val = self.compile_expr(&a.value)?;
+                        let cur_fn = self
+                            .builder
+                            .get_insert_block()
+                            .and_then(|bb| bb.get_parent())
+                            .expect("compile_method_call inside a function context");
+                        let temp = self.create_entry_alloca(
+                            cur_fn,
+                            &format!("ref_rvalue_marg{i}"),
+                            val.get_type(),
+                        );
+                        self.builder.build_store(temp, val).unwrap();
+                        self.queue_ref_rvalue_arg_cleanup(temp, val, &a.value);
+                        compiled_args.push(temp.into());
+                        continue;
+                    }
                     let val = self.compile_expr(&a.value)?;
                     // `Option[shared T]` arg-share discipline — mirrors
                     // the free-fn call path in `compile_call`: a tracked

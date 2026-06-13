@@ -55,6 +55,34 @@ impl<'a> super::OwnershipChecker<'a> {
             .is_some_and(|m| matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef))
     }
 
+    /// `MethodCall` analogue of `arg_is_borrow_position`: whether call-arg
+    /// `arg_index` of a method call lands in a borrow position (the resolved
+    /// method's NON-self param `arg_index` is `ref`/`mut ref`/`mut Slice`).
+    /// Arg indices map 1:1 to `method_param_modes` positions (the receiver
+    /// is tracked separately via `method_self_modes`). Returns `false` for
+    /// methods that don't resolve — stdlib methods without user impls,
+    /// upstream typecheck errors — the conservative consume default that
+    /// matches the prior behavior. Without this, a `ref`/`mut ref` struct
+    /// arg of a `mut ref self` method was classified as a consume and the
+    /// borrowed binding spuriously RC-promoted (B-2026-06-12-8).
+    pub(crate) fn method_arg_is_borrow_position(
+        &self,
+        method_call: &Expr,
+        arg_index: usize,
+    ) -> bool {
+        let Some(key) = self
+            .typecheck_result
+            .method_callee_types
+            .get(&SpanKey::from_span(&method_call.span))
+        else {
+            return false;
+        };
+        self.method_param_modes
+            .get(key)
+            .and_then(|modes| modes.get(arg_index))
+            .is_some_and(|m| matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef))
+    }
+
     /// Returns `Some(mutable)` if the formal at `arg_index` of `callee` is a
     /// slice type (`Slice[T]` or `mut Slice[T]`); `None` for non-slice
     /// formals or unresolvable callees. Drives Slice 1's call-arg coercion

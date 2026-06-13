@@ -641,8 +641,14 @@ impl<'a> super::OwnershipChecker<'a> {
                 // `populate_predicate_outputs` emits the flavor-correct
                 // `RcEntry` directly. The call-arg consume walk below
                 // is now the only ownership-side action.
-                for arg in args {
-                    if arg.mut_marker {
+                for (i, arg) in args.iter().enumerate() {
+                    // A `ref`/`mut ref`/`mut Slice` method param is a borrow
+                    // position — read, not consume — even though method calls
+                    // never carry a call-site `mut` marker (Part 1½: only
+                    // free-fn args mark). Mirrors the `Call` arm's
+                    // `arg_is_borrow_position` check; without it a borrowed
+                    // struct arg was consumed and RC-promoted (B-2026-06-12-8).
+                    if arg.mut_marker || self.method_arg_is_borrow_position(expr, i) {
                         self.check_expr_reading(&arg.value, states, param_types, param_usage);
                     } else {
                         self.check_expr_consuming(&arg.value, states, param_types, param_usage);

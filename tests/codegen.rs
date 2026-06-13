@@ -2481,6 +2481,44 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_method_ref_struct_arg() {
+        // B-2026-06-12-8: a struct-typed `ref`/`mut ref` NON-receiver arg in a
+        // METHOD call must be passed by address, not by value. The method-call
+        // arg-lowering path used to emit the struct by value into a `ptr` param
+        // slot (invalid IR / module-verify failure). Two halves to the fix:
+        //   (1) ownership no longer classifies a `ref`/`mut ref` method arg as a
+        //       container-store consume, so the borrowed binding is NOT spuriously
+        //       RC-promoted (which boxed it on the heap and segfaulted at use);
+        //   (2) codegen passes the arg's address for a `ref`/`mut ref` struct param.
+        // Covers a `ref` arg (read), a `mut ref` arg (write-through, observed
+        // back in the caller), and an accumulating loop reusing the borrow.
+        let out = run_program(
+            "struct Acc { total: i64 }\n\
+             struct Src { val: i64 }\n\
+             impl Acc {\n\
+             \x20   fn add(mut ref self, s: ref Src) { self.total = self.total + s.val; }\n\
+             \x20   fn drain(mut ref self, s: mut ref Src) { self.total = self.total + s.val; s.val = 0; }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut a: Acc = Acc { total: 0 };\n\
+             \x20   let mut s: Src = Src { val: 5 };\n\
+             \x20   let mut i: i64 = 0;\n\
+             \x20   while i < 4 { a.add(s); i = i + 1; }\n\
+             \x20   println(f\"{a.total}\");\n\
+             \x20   a.drain(s);\n\
+             \x20   println(f\"{a.total}\");\n\
+             \x20   println(f\"{s.val}\");\n\
+             \x20   a.add(Src { val: 7 });\n\
+             \x20   println(f\"{a.total}\");\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            // 4*5=20; +5=25, s.val zeroed; +7=32.
+            assert_eq!(out.trim(), "20\n25\n0\n32");
+        }
+    }
+
+    #[test]
     fn test_e2e_borrow_return_match_multi_source() {
         // Tier sibling of the `if` arm (B-2026-06-07-5): a `match` over a
         // scalar selector returns a borrow from whichever arm runs — per-arm
