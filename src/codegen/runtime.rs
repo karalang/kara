@@ -1123,20 +1123,25 @@ impl<'ctx> super::Codegen<'ctx> {
     /// post-use merge block so every read of the buffer dominates the free.
     ///
     /// Gated on `expr_yields_fresh_owned_temp` (Call / MethodCall, not
-    /// borrow-returning) so a string literal, a `ref String` identifier, a
-    /// place expression (`out[k]`), or a borrow-returning call is never freed —
-    /// those are owned elsewhere and a free here would double-free. The
-    /// `cap > 0` guard is a second backstop: a static-literal String has
-    /// `cap == 0` and owns no heap. A `String` buffer is flat bytes, so a
-    /// single `free` is the complete drop. Surfaced by kata-katas #722
-    /// remove-comments — the self-hosted lexer's `token_text` extraction and
-    /// keyword-membership surface.
+    /// borrow-returning) **or** `expr_is_fresh_owned_string_slice` (a
+    /// `String[a..b]` range-index slice, which `compile_string_slice` allocates
+    /// fresh just like `.substring`) so a string literal, a `ref String`
+    /// identifier, a place expression (`out[k]`), or a borrow-returning call is
+    /// never freed — those are owned elsewhere and a free here would
+    /// double-free. The `cap > 0` guard is a second backstop: a static-literal
+    /// String and a borrowed (cap == 0) view own no heap. A `String` buffer is
+    /// flat bytes, so a single `free` is the complete drop. Surfaced by
+    /// kata-katas #722 remove-comments — the self-hosted lexer's `token_text`
+    /// extraction and keyword-membership surface; the range-slice arm closes
+    /// B-2026-06-12-5 (`buffer.push_str(src[a..b])` leaked the slice temp).
     pub(super) fn free_fresh_owned_str_arg(
         &mut self,
         arg: &crate::ast::Expr,
         val: BasicValueEnum<'ctx>,
     ) {
-        if !self.expr_yields_fresh_owned_temp(arg) || !self.llvm_ty_is_vec_struct(val.get_type()) {
+        if (!self.expr_yields_fresh_owned_temp(arg) && !self.expr_is_fresh_owned_string_slice(arg))
+            || !self.llvm_ty_is_vec_struct(val.get_type())
+        {
             return;
         }
         let Some(fn_val) = self.current_fn else {

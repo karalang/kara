@@ -4199,6 +4199,31 @@ impl<'ctx> super::Codegen<'ctx> {
         ) && !self.is_borrow_returning_call_expr(expr)
     }
 
+    /// True if `expr` is a `String[a..b]` / `String[a..=b]` range-index slice
+    /// over a string-typed object — which `compile_index` → `compile_string_slice`
+    /// lowers to a *freshly* `karac_string_slice`-allocated owned `{ptr,len,cap=N}`
+    /// temp (cap > 0), exactly like a `s.substring(a, b)` call. A range slice is
+    /// not a `Call`/`MethodCall`, so `expr_yields_fresh_owned_temp` misses it; but
+    /// in the same copy-consuming borrow contexts (`push_str`, `contains`,
+    /// `starts_with`) the freshly-allocated slice buffer is the caller's to free,
+    /// and without it leaks once per call — unbounded in a loop (B-2026-06-12-5:
+    /// `buffer.push_str(src[a..b])`, the lexer's zero-copy token-text shape passed
+    /// to a copying sink). `string_typed_exprs` membership of the *object* is the
+    /// same gate `try_compile_borrowed_string_key` / `compile_index` use to route
+    /// String slicing, so a `Vec[T]` index (`v[i]`, a place/element copy) is never
+    /// matched here. The `cap > 0` guard at the free site is the backstop: were
+    /// this ever lowered to the borrowed (cap == 0) view, the free no-ops.
+    pub(super) fn expr_is_fresh_owned_string_slice(&self, expr: &Expr) -> bool {
+        if let ExprKind::Index { object, index } = &expr.kind {
+            if matches!(&index.kind, ExprKind::Range { .. }) {
+                return self
+                    .string_typed_exprs
+                    .contains(&(object.span.offset, object.span.length));
+            }
+        }
+        false
+    }
+
     /// General owned-temp tracking, slice 5 (see
     /// `docs/spikes/general-owned-temp-tracking.md`): peel single-tail block
     /// wrappers (`{ … make() }`, `unsafe { … }`, a labeled block) down to the

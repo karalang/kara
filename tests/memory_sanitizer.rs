@@ -440,6 +440,47 @@ fn main() {
         );
     }
 
+    // ── B-2026-06-12-5: push_str of a fresh-owned String RANGE-SLICE temp ──
+    //
+    // `buffer.push_str(src[a..b])` — the lexer's idiomatic zero-copy token-text
+    // shape — passes a `String[a..b]` range-index slice, which `compile_index`
+    // → `compile_string_slice` lowers to a *freshly* `karac_string_slice`-
+    // allocated owned `{ptr,len,cap}` (cap > 0), exactly like `.substring(a,b)`.
+    // But a range slice is an `Index`, not a `Call`/`MethodCall`, so the pre-fix
+    // `expr_yields_fresh_owned_temp` gate missed it and `free_fresh_owned_str_arg`
+    // never fired — the slice buffer leaked once per call (measured 34 MiB at 2M
+    // iters vs 2.5 MiB clean). The fix broadens the gate with
+    // `expr_is_fresh_owned_string_slice`; this run guards that free against
+    // double-free / UAF (the `cap > 0` guard + place-safe gate keep a borrowed
+    // view or a `ref String` identifier untouched).
+
+    #[test]
+    fn asan_push_str_range_slice_temp_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn make(s: ref String) -> String {
+    let mut o: String = "";
+    o.push_str(s[0..5]);
+    o
+}
+
+fn main() {
+    let src: String = "alpha beta gamma delta";
+    let mut acc: String = "";
+    let mut k = 0i64;
+    while k < 4i64 {
+        let d = make(src);
+        acc.push_str(d[0..3]);
+        k = k + 1i64;
+    }
+    println(acc);
+}
+"#,
+            &["alpalpalpalp"],
+            "push_str_range_slice_temp",
+        );
+    }
+
     // ── #20: call / method result as an inline argument ──────────
     //
     // A heap String produced by a `Call` (`sink(mk(i))`) or `MethodCall`
