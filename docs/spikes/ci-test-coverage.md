@@ -6,9 +6,14 @@
 > and the `wasm` job runs both wasm clippy arms + both wasm staticlib builds.
 > Both are **required status checks** on `main` (admin-bypassable, so
 > direct-push-to-main still works). **Tier 2 landed (NON-required) — and its
-> first run found 11 real Linux-LSan leaks** the mac suite can't see (tracked
-> `bugs.md` B-2026-06-12-6; flip to required once green). **Tier 3** (wasm E2E
-> + component) open. Supersedes the local `bugs.md` B-2026-06-12-2 follow-on.
+> first run found 11 (→13 as more `return`-helper tests accreted) real
+> Linux-LSan leaks** the mac suite can't see. **All 13 now fixed — leak gate
+> CLOSED, CI-verified** (run 27457502042: `memory_sanitizer` 220/0, all 14 jobs
+> green); the durable record is the regression tests in
+> `tests/memory_sanitizer.rs` plus phase-12 #14–#20 (the fixes) and #21/#22 +
+> `oversized-enum-payload.md` (two deferred non-gated residuals). **Flip to
+> required** now that it is green. **Tier 3** (wasm E2E + component) open.
+> Supersedes the local `bugs.md` B-2026-06-12-2 follow-on.
 
 ## Why this exists
 
@@ -80,14 +85,16 @@ codegen-ownership class, strictly better than the manual one-at-a-time mac
 **First run earned its keep (the same way Tier 1 did):** 206 passed, **11
 failed — all `LeakSanitizer` leaks**, zero new UAF/double-free. They are real,
 mac-invisible leaks in diverse drop paths (discarded temps, match-arm values,
-chain intermediates, ref-arg elements) — the **same class as the in-flight leak
-work** (`bugs.md` B-2026-06-12-5, phase-12 #15/#18). Full list + fix surface in
-`bugs.md` B-2026-06-12-6. Kept **non-required** so a Linux-only leak (the whole
-point) never blocks the required gates; **flip to required once the 11 are
-green** — best absorbed by the leak work using this suite as the gate, not
-fixed in isolation (it edits the same `synth_drop.rs` / `control_flow_match.rs`
-drop paths). It self-skips if the runner lacks an ASAN-capable `cc`
-(ubuntu-latest's gcc has one).
+chain intermediates, ref-arg elements) — the **same class as the codegen leak
+work** in phase-12 #14–#20. **All 13 fixed and CI-verified (run 27457502042:
+220/0, all 14 jobs green) — leak gate CLOSED.** The durable record is the
+regression tests in `tests/memory_sanitizer.rs` (the per-fix detail folded into
+phase-12 #14–#20); two non-gated residuals remain tracked as phase-12 #21 (tuple
+enum-leaf drop) / #22 (fresh-temp ctor-arg entry-copy orphan) +
+`oversized-enum-payload.md` (`Some(_)` unbound wildcard). The fixes edited the
+`synth_drop.rs` / `control_flow_match.rs` / `param_own.rs` drop paths. **Flip to
+required** now that it is green. It self-skips if the runner lacks an
+ASAN-capable `cc` (ubuntu-latest's gcc has one).
 
 ### Tier 3 — wasm E2E + component ⬜ (the heavy leg)
 
