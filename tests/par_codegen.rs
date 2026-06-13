@@ -3676,6 +3676,147 @@ fn main() {
         assert_eq!(out.trim(), "3675000");
     }
 
+    // ── Runtime-loop trip-count calibration (RUNTIME_NESTED_LOOP_MULTIPLIER) ──
+    // The flat `NESTED_LOOP_MULTIPLIER = 16` underestimated runtime-bounded
+    // (non-const-range) loops by orders of magnitude, so a `for _ in 0..K`
+    // reduction over a callee whose hot path is a *doubly-nested* runtime
+    // scan (kata-28 `str_str`: `while i { while j { s[i+j] == n[j] } }`) scored
+    // ≈30k cost units (16² × body × K=10) and fell under the 80k dispatch
+    // threshold — declining a real ~11× parallel win to a serial run. The
+    // calibration (`RUNTIME_NESTED_LOOP_MULTIPLIER = 64`, src/codegen/reduce.rs)
+    // makes a doubly-nested runtime callee cross the gate at small K while a
+    // single runtime loop at small K stays conservatively serial. Surfaced by
+    // the 2026-06-13 `for _` auto-par re-bench sweep (phase-7-codegen.md).
+    // Both callees use pure-compute while-loops (no `Index`) so the separate
+    // memory-bound gate doesn't confound the cost-gate outcome under test.
+
+    #[test]
+    fn test_ir_cost_gate_doubly_nested_runtime_callee_fires_at_small_k() {
+        // K=10 outer; callee has a doubly-nested runtime `while` (≈64² × body
+        // per call ≫ 80k/K). Pins the calibration fix: this would NOT have
+        // emitted par_reduce under the old flat-16 multiplier (16² × body × 10
+        // ≈ 30k < 80k). Mirrors kata-28's str_str shape.
+        let src = r#"
+fn scan2(a: i64, b: i64) -> i64 {
+    let mut i: i64 = 0i64;
+    let mut acc: i64 = 0i64;
+    while i < a {
+        let mut j: i64 = 0i64;
+        while j < b {
+            acc = acc + i * j;
+            j = j + 1i64;
+        }
+        i = i + 1i64;
+    }
+    acc
+}
+fn main() {
+    let mut sum: i64 = 0i64;
+    for _ in 0i64..10i64 {
+        sum = sum + scan2(40i64, 40i64);
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "K=10 outer over a doubly-nested runtime-loop callee should cross the \
+             cost gate under RUNTIME_NESTED_LOOP_MULTIPLIER; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_cost_gate_single_runtime_loop_callee_blocks_at_small_k() {
+        // Over-fire guard / calibration ceiling: K=10 outer; callee has a
+        // SINGLE runtime `while` (≈64 × body × K=10 ≈ 4.5k < 80k). Stays
+        // serial — raising the multiplier must not make every runtime loop
+        // fire at small K (the kata-1 hash_map case: lone `for i in 0..n`).
+        let src = r#"
+fn scan1(a: i64) -> i64 {
+    let mut i: i64 = 0i64;
+    let mut acc: i64 = 0i64;
+    while i < a {
+        acc = acc + i * 2i64;
+        i = i + 1i64;
+    }
+    acc
+}
+fn main() {
+    let mut sum: i64 = 0i64;
+    for _ in 0i64..10i64 {
+        sum = sum + scan1(40i64);
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            !ir.contains("call void @karac_par_reduce"),
+            "K=10 over a single runtime-loop callee is below the cost gate; \
+             should stay serial (no over-fire); got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_doubly_nested_runtime_callee_par_matches_serial() {
+        // Sink-correctness for the calibration fire path above.
+        let src = r#"
+fn scan2(a: i64, b: i64) -> i64 {
+    let mut i: i64 = 0i64;
+    let mut acc: i64 = 0i64;
+    while i < a {
+        let mut j: i64 = 0i64;
+        while j < b {
+            acc = acc + i * j;
+            j = j + 1i64;
+        }
+        i = i + 1i64;
+    }
+    acc
+}
+fn main() {
+    let mut sum: i64 = 0i64;
+    for _ in 0i64..10i64 {
+        sum = sum + scan2(40i64, 40i64);
+    }
+    println(sum);
+}
+"#;
+        // Σ_{i<40} Σ_{j<40} i*j = (Σi)² for i,j in [0,40) = (780)² = 608400
+        // per call; × K=10 = 6_084_000.
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "6084000");
+    }
+
     #[test]
     fn test_ir_memory_bound_body_skips_par_reduce() {
         // kata-153's find_min shape — body has an Index (nums[i]) and

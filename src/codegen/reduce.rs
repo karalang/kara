@@ -2587,8 +2587,10 @@ fn const_eval_int_literal(expr: &Expr) -> Option<i64> {
 /// the callee's body when it's a known free function in this program
 /// (up to `INLINE_DEPTH_CAP` levels deep). Control-flow takes the
 /// max-arm path (conservative for cost, so the gate over-counts and
-/// thus over-parallelizes — acceptable bias for v1). Nested loops use a
-/// fixed multiplier (`NESTED_LOOP_MULTIPLIER`) since the inner-trip
+/// thus over-parallelizes — acceptable bias for v1). A nested loop with a
+/// compile-time-evaluable range (`for i in 0..16`) uses its exact trip
+/// count; a runtime-bounded loop (`while`, `for x in v.iter()`, runtime
+/// range, `loop`) uses `RUNTIME_NESTED_LOOP_MULTIPLIER` since the trip
 /// count is unknown at codegen time.
 ///
 /// The inlining-aware path (slice: cost-gate fn-call body cost,
@@ -2814,26 +2816,44 @@ impl<'a> CostEstimator<'a> {
                 s.saturating_add(arm_max)
             }
 
-            // Inner loops: multiply by a fixed assumed trip-count.
+            // Inner loops: trip count drives the cost. A compile-time-
+            // evaluable `for i in lo..hi` uses its EXACT count (no over- or
+            // under-estimate); every runtime-bounded loop (while, while-let,
+            // `for x in v.iter()`, runtime/step_by ranges, bare loop) uses
+            // `RUNTIME_NESTED_LOOP_MULTIPLIER` — the flat-16 it replaces was
+            // orders of magnitude low for real scans (see the const's doc).
             ExprKind::While {
                 condition, body, ..
             } => {
                 let c = self.estimate_expr(condition);
                 let b = self.estimate_body(body);
-                NESTED_LOOP_MULTIPLIER.saturating_mul(c.saturating_add(b))
+                RUNTIME_NESTED_LOOP_MULTIPLIER.saturating_mul(c.saturating_add(b))
             }
             ExprKind::WhileLet { value, body, .. } => {
                 let v = self.estimate_expr(value);
                 let b = self.estimate_body(body);
-                NESTED_LOOP_MULTIPLIER.saturating_mul(v.saturating_add(b))
+                RUNTIME_NESTED_LOOP_MULTIPLIER.saturating_mul(v.saturating_add(b))
             }
             ExprKind::For { iterable, body, .. } => {
                 let it = self.estimate_expr(iterable);
                 let b = self.estimate_body(body);
-                NESTED_LOOP_MULTIPLIER.saturating_mul(it.saturating_add(b))
+                // `for i in lo..hi` with literal bounds → exact trip count.
+                // (Half-open only; an inclusive `..=` const range is rare in
+                // a hot inner loop and falls through to the runtime path.)
+                if let ExprKind::Range {
+                    start,
+                    end: Some(end),
+                    inclusive: false,
+                } = &iterable.kind
+                {
+                    if let Some(count) = const_eval_iter_count(end, start.as_deref()) {
+                        return count.saturating_mul(b.max(1)).saturating_add(it);
+                    }
+                }
+                RUNTIME_NESTED_LOOP_MULTIPLIER.saturating_mul(it.saturating_add(b))
             }
             ExprKind::Loop { body, .. } => {
-                NESTED_LOOP_MULTIPLIER.saturating_mul(self.estimate_body(body))
+                RUNTIME_NESTED_LOOP_MULTIPLIER.saturating_mul(self.estimate_body(body))
             }
 
             // Blocks and other shape-passthrough nodes: cost of the contained block.
@@ -2942,13 +2962,27 @@ fn estimate_body_cost_units(body: &Block) -> u64 {
 /// constant — see `CostEstimator::call_body_cost`.
 const CALL_COST_UNITS: u64 = 10;
 
-/// Nested-loop multiplier — `for i in body { for j in inner_body { ... } }`
-/// inflates inner_body's cost by this factor under the assumption that
-/// the inner loop iterates a non-trivial number of times. Real inner-
-/// trip counts vary wildly; 16 picks a middle-ground that doesn't tank
-/// the gate on small nested loops while still flagging genuinely
-/// expensive bodies. Could be tuned per-bench later.
-const NESTED_LOOP_MULTIPLIER: u64 = 16;
+/// Trip-count multiplier for a loop whose bound is *runtime* (not a
+/// compile-time-evaluable range): `while i < s.len()`, `for x in v.iter()`,
+/// `for j in (a..=b).step_by(k)`, `loop { ... }`. The flat
+/// `NESTED_LOOP_MULTIPLIER = 16` underestimated these by orders of
+/// magnitude — a `while i < hn` over a 2M-element slice runs millions of
+/// times, not 16 — so a doubly-nested runtime scan (`str_str`'s
+/// `while i { while j { s[i+j] == n[j] } }`, kata-28) scored ≈30k cost
+/// units (`16² × body × K=10`) and fell under the 80k dispatch threshold,
+/// declining a real ~11× parallel win to a serial run. 64 is calibrated
+/// so a doubly-nested runtime loop crosses the gate (`64² × body × K`)
+/// while a *single* runtime loop at small K stays conservatively serial
+/// (kata-1 hash_map's lone `for i in 0..n` at K=10 ≈ 64 × body × 10 stays
+/// well under threshold) — over-firing genuinely light bodies is the cost
+/// we keep bounded, since the existing gate philosophy already biases
+/// toward over-counting (control-flow takes the max arm). Compile-time-
+/// evaluable ranges (`for i in 0..16`) bypass this entirely and use their
+/// exact count (see the `For`/`While`/`Loop` arms in `estimate_expr`).
+/// Surfaced + calibrated by the 2026-06-13 `for _` auto-par re-bench sweep
+/// (phase-7-codegen.md); the calibration follow-up the closed
+/// "function-call body-cost estimation" slice deferred "when needed".
+const RUNTIME_NESTED_LOOP_MULTIPLIER: u64 = 64;
 
 /// Canonical shape of a recognized reduction loop. Built by
 /// `extract_loop_shape` from either the `for k in lo..hi` shape
