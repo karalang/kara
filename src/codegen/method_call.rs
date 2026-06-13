@@ -1187,7 +1187,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // `myStruct.to_string()` for a `#[derive(Display)]` / `impl Display`
         // struct → render to an owning `String` in declaration order (matches
         // the interpreter). See `synth_display.rs`.
-        if method == "to_string" && args.is_empty() {
+        //
+        // A user `impl Display` (a compiled `<Type>.to_string`) wins: skip the
+        // built-in renderers below so the call falls through to the generic
+        // user-method dispatch, which invokes the user body. GAP-W4.
+        if method == "to_string" && args.is_empty() && self.user_display_impl_type(object).is_none()
+        {
             if let Some(sname) = self.expr_user_struct_name(object) {
                 return self.compile_struct_display_string(object, &sname);
             }

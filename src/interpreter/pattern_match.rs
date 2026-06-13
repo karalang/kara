@@ -67,14 +67,32 @@ impl<'a> super::Interpreter<'a> {
                 // silent wrong-arm-selection bug for any enum with >1 unit
                 // variant matched by dotted name).
                 let variant_name = name.rsplit('.').next().unwrap_or(name);
+                // A bare name is a unit-variant pattern only when it is
+                // PascalCase — Kāra's case-class invariant (design.md) makes
+                // Type/variant identifiers PascalCase and value bindings
+                // snake_case, so a lowercase name is ALWAYS a fresh binding,
+                // never a variant. Gating on this is load-bearing: the prior
+                // heuristic checked only `env.get(name)`, which also matches an
+                // ordinary local that happens to hold a unit-variant *value*
+                // (e.g. `let c = Color.Green` shadowing the binding `c` inside
+                // `match m { Info(c) => … }`) — that made the constructor's
+                // sub-binding misfire as a unit-variant test, so the arm failed
+                // to match/bind and surfaced as a spurious runtime
+                // "non-exhaustive match". A dotted name (`Side.Left`) is
+                // unambiguously a variant.
+                let bare_could_be_variant = variant_name
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| ch.is_uppercase());
                 let is_unit_variant = name.contains('.')
-                    || matches!(
-                        self.env.get(variant_name),
-                        Some(Value::EnumVariant {
-                            data: EnumData::Unit,
-                            ..
-                        })
-                    );
+                    || (bare_could_be_variant
+                        && matches!(
+                            self.env.get(variant_name),
+                            Some(Value::EnumVariant {
+                                data: EnumData::Unit,
+                                ..
+                            })
+                        ));
                 if is_unit_variant {
                     if let Value::EnumVariant { variant: v2, .. } = value {
                         return variant_name == v2.as_str();
@@ -210,14 +228,32 @@ impl<'a> super::Interpreter<'a> {
                 // dotted case previously fell through and defined a spurious
                 // `"Side.Left"` binding.
                 let variant_name = name.rsplit('.').next().unwrap_or(name);
+                // A bare name is a unit-variant pattern only when it is
+                // PascalCase — Kāra's case-class invariant (design.md) makes
+                // Type/variant identifiers PascalCase and value bindings
+                // snake_case, so a lowercase name is ALWAYS a fresh binding,
+                // never a variant. Gating on this is load-bearing: the prior
+                // heuristic checked only `env.get(name)`, which also matches an
+                // ordinary local that happens to hold a unit-variant *value*
+                // (e.g. `let c = Color.Green` shadowing the binding `c` inside
+                // `match m { Info(c) => … }`) — that made the constructor's
+                // sub-binding misfire as a unit-variant test, so the arm failed
+                // to match/bind and surfaced as a spurious runtime
+                // "non-exhaustive match". A dotted name (`Side.Left`) is
+                // unambiguously a variant.
+                let bare_could_be_variant = variant_name
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| ch.is_uppercase());
                 let is_unit_variant = name.contains('.')
-                    || matches!(
-                        self.env.get(variant_name),
-                        Some(Value::EnumVariant {
-                            data: EnumData::Unit,
-                            ..
-                        })
-                    );
+                    || (bare_could_be_variant
+                        && matches!(
+                            self.env.get(variant_name),
+                            Some(Value::EnumVariant {
+                                data: EnumData::Unit,
+                                ..
+                            })
+                        ));
                 if is_unit_variant {
                     return;
                 }

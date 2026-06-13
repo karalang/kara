@@ -55,12 +55,16 @@ the header of [`src/main.kara`](src/main.kara); summary:
 | GAP-W1 | The canonical `ValidEmail = String where self.contains("@")` is **inexpressible** in v1 — the refinement constraint language admits only pure *zero-arg* methods; `contains` takes an argument. Structural "@"-check moved into `parse_row`'s body. | By design; roster sketch corrected |
 | GAP-W2 | `String.split` was unimplemented (`word_count.kara` assumed it). | **Fixed** (interpreter + typechecker); codegen arm pending |
 | GAP-W3 | `karac run <file>` is single-file only — it never loads sibling `src/*.kara` modules into the interpreter, so a multi-module layout fails at runtime despite resolving + typechecking. | Tracked; example kept single-file |
-| GAP-W4 | User types cannot `impl Display` in v1 (operator traits are stdlib-only). Error printing uses a hand-written formatter. | Known v1 limitation; tracked |
+| GAP-W4 | User types could not `impl Display` in v1 (operator traits were stdlib-only). | **Fixed** — gate lifted; `ParseError` now has a real `impl Display { fn to_string }` and `f"{err}"` dispatches to it (interpreter + codegen). Surfaced + fixed a pre-existing pattern-binding shadowing bug |
 | GAP-W5 | The roster sketch labels `parse_row` "pure", but effect inference shows it carries `panics` (from indexing). Honest signature: `with panics`. | By design; roster note added |
 | GAP-W6 | The missing-effect diagnostic suggested an **un-parseable** fix (`Add: allocates(Heap), panics()` — comma-separated + empty-parens + undeclarable `Heap`), and `allocates(Heap)` was a three-way knot (required-when-undeclared vs default-permitted vs unwritable). | **Fixed** — fix-it now emits a valid `with` clause, and the substrate `allocates(Heap)` is exempt from the must-declare set per design.md § Effect Substrate (an allocating pub fn needs no `with` clause) |
 
-GAP-W2 and GAP-W6 fixes ship with regression tests
-(`tests/interpreter.rs::test_string_split_interpreter`,
+GAP-W2/W4/W6 fixes ship with regression tests:
+`tests/interpreter.rs::{test_string_split_interpreter,
+test_user_impl_display_dispatches_through_to_string,
+test_tuple_variant_binding_shadows_unit_variant_local}`,
+`tests/codegen.rs::e2e_user_impl_display_dispatches_to_to_string`,
+`tests/resolver.rs::test_user_impl_display_for_struct_and_enum_allowed`,
 `tests/effectchecker.rs::{test_missing_effect_fixit_*,
 test_pub_fn_allocating_only_needs_no_declaration,
-test_*_companion_infers_allocates_but_does_not_require_declaration}`).
+test_*_companion_infers_allocates_but_does_not_require_declaration}`.

@@ -4675,6 +4675,36 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         e: &Expr,
     ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        // A user `impl Display` (a compiled `<Type>.to_string`) wins over the
+        // built-in renderers below: render via the user method through the
+        // unified method-call path (the `to_string` arm there falls through to
+        // the user fn). Store the owned result in a scope-tracked alloca so its
+        // heap buffer survives the outer f-string's memcpy and is freed once at
+        // scope exit (mirrors the payload-enum / collection arms). GAP-W4.
+        if self.user_display_impl_type(e).is_some() {
+            let sval = self
+                .compile_method_call(e, "to_string", &[], &e.span)?
+                .into_struct_value();
+            let acc = self.create_entry_alloca(
+                self.current_fn.unwrap(),
+                "fstr.ud.acc",
+                sval.get_type().into(),
+            );
+            self.builder.build_store(acc, sval).unwrap();
+            let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
+            self.track_vec_var(acc, Some(u8_ty));
+            let data = self
+                .builder
+                .build_extract_value(sval, 0, "fstr.ud.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(sval, 1, "fstr.ud.len")
+                .unwrap()
+                .into_int_value();
+            return Ok((data, len));
+        }
         if let Some(sname) = self.expr_user_struct_name(e) {
             let s = self
                 .compile_struct_display_string(e, &sname)?

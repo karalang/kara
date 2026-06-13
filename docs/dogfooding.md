@@ -416,9 +416,14 @@ fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
 > empty-parens, undeclarable `Heap`); and (2026-06-13 follow-up) the
 > `allocates(Heap)` declarability knot — resolved spec-conformantly by
 > exempting the substrate effect from the must-declare set, so an allocating
-> pub fn needs no `with` clause (design.md § Effect Substrate). **Tracked open
-> gaps** (each its own entry below): codegen `String.split`; multi-module
-> `karac run`; user `impl Display`.
+> pub fn needs no `with` clause (design.md § Effect Substrate); and (2026-06-13
+> follow-up) **user `impl Display`** — the operator-trait gate is lifted so user
+> types render via a real `impl Display { fn to_string }` (`ParseError` in this
+> example now uses one; `f"{err}"` dispatches to it across interpreter +
+> codegen). That fix surfaced and fixed a deeper pre-existing interpreter bug
+> (a constructor-pattern binding shadowed by an in-scope unit-variant local).
+> **Tracked open gaps** (each its own entry below): codegen `String.split`;
+> multi-module `karac run`.
 >
 > Open follow-ons, tracked here as the design record:
 > - [ ] **Codegen `String.split`** — interpreter + typechecker landed; the
@@ -434,11 +439,18 @@ fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
 >   db_pipeline-shaped multi-module Weave service cut from running via `run`. →
 >   tracked in [`phase-4-interpreter.md`](implementation_checklist/phase-4-interpreter.md)
 >   ("CR-24 follow-up: multi-module `karac run`").
-> - [ ] **User `impl Display`** — operator traits are stdlib-only in v1, so user
->   error enums can't implement `Display`; programs hand-write a formatter.
->   Decide whether v1 admits user `Display`/`Debug` impls or documents the
->   limitation as intended. (Design question — left here as the design record;
->   no phase-tracker impl entry until the decision is made.)
+> - [x] **User `impl Display` — ✓ RESOLVED 2026-06-13.** Design decision: v1
+>   admits user `impl Display`. The operator-trait resolver gate now carves out
+>   `Display` (alongside `Eq`/`Ord`); dispatch wired in the interpreter (`to_string`
+>   / f-string / `println`) and codegen (the `to_string` arm, `fstr_render_part`,
+>   `compile_print` all defer to a compiled `<Type>.to_string`). Kāra's `Display`
+>   stays `fn to_string(ref self) -> String` (no Rust `Formatter`). Fixed two
+>   pre-existing bugs en route: a pattern-binding/unit-variant shadowing bug in
+>   the interpreter (case-class rule), and a literal-backed-String double-free in
+>   `println` codegen (`cap > 0` free guard). Codegen note: a user `impl Display`
+>   on a **struct-variant** enum (`V { field }`) is additionally gated on the
+>   separate pre-existing struct-variant-field-binding codegen bug (bugs.md);
+>   tuple-variant + unit enums + structs all work in codegen today.
 > - [x] **`allocates(Heap)` declarability knot — ✓ RESOLVED 2026-06-13.**
 >   design.md § Effect Substrate was decisive (heap is substrate; declaring it
 >   would be noise; absence ≠ denial), so the spec-conformant fix was to exempt

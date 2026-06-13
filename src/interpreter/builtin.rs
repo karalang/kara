@@ -173,6 +173,21 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// Return the impl-method key (`<TypeName>.to_string`) when `v` is a
+    /// user-declared nominal type (struct / enum) carrying a user
+    /// `impl Display` — i.e. a registered `to_string` method, as opposed to the
+    /// built-in `display_render` renderer or a `#[derive(Display)]`. Used to let
+    /// a user `impl Display` win over the built-in `to_string` path so it takes
+    /// effect for `x.to_string()`, `f"{x}"`, and `println(x)`. GAP-W4.
+    pub(crate) fn user_display_impl_to_string_key(&self, v: &Value) -> Option<String> {
+        match v {
+            Value::Struct { .. } | Value::EnumVariant { .. } => {}
+            _ => return None,
+        }
+        let key = format!("{}.to_string", self.value_type_name(v));
+        self.env.get(&key).is_some().then_some(key)
+    }
+
     pub(crate) fn eval_builtin_print(
         &mut self,
         name: &str,
@@ -186,8 +201,13 @@ impl<'a> super::Interpreter<'a> {
         // the BuiltinDefault arm writes through `write_stdout` /
         // `write_stderr` (honoring `captured_output` for the test harness).
         let val = if let Some(arg) = args.first() {
-            let v = self.eval_expr_inner(&arg.value);
-            self.display_render(&v)
+            // Render through the unified `to_string` dispatch so `println(x)`
+            // honors a user `impl Display` (built-in types fall through to
+            // `display_render` inside that dispatch). GAP-W4.
+            match self.eval_method_call(&arg.value, "to_string", &[], span) {
+                Value::String(s) => s,
+                other => self.display_render(&other),
+            }
         } else {
             String::new()
         };

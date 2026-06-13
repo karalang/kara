@@ -361,13 +361,20 @@ impl<'a> super::Resolver<'a> {
             return;
         }
 
-        // Carve-out: relational operator traits (`Eq`, `Ord`) may be implemented
-        // on user-defined types. User types routinely need custom equality and
-        // ordering (map keys, domain-model invariants); the general stdlib-only
-        // restriction is too strict. Arithmetic, bitwise, and indexing traits
-        // stay restricted until the "heterogeneous Rhs / Output" design lands.
-        const RELATIONAL_TRAITS: &[&str] = &["Eq", "Ord"];
-        if RELATIONAL_TRAITS.contains(&trait_name) {
+        // Carve-out: relational operator traits (`Eq`, `Ord`) and `Display` may
+        // be implemented on user-defined types. User types routinely need custom
+        // equality and ordering (map keys, domain-model invariants), and custom
+        // string rendering for error enums / domain values; the general
+        // stdlib-only restriction is too strict for these. `Display` is the
+        // simplest case — Kāra's `Display` is a single `fn to_string(ref self)
+        // -> String` (NOT the Rust `fmt(&self, Formatter)` model), so a user
+        // impl is an ordinary method that `f"{x}"` / `x.to_string()` dispatch
+        // through via the existing `has_impl("Display", …)` satisfaction path
+        // (typechecker `type_supports_display`). Arithmetic, bitwise, and
+        // indexing traits stay restricted until the "heterogeneous Rhs / Output"
+        // design lands. See examples/weave GAP-W4.
+        const USER_IMPLEMENTABLE_TRAITS: &[&str] = &["Eq", "Ord", "Display"];
+        if USER_IMPLEMENTABLE_TRAITS.contains(&trait_name) {
             return;
         }
 

@@ -45,8 +45,17 @@ impl<'a> super::Interpreter<'a> {
                     match part {
                         crate::ast::ParsedInterpolationPart::Text(t) => result.push_str(t),
                         crate::ast::ParsedInterpolationPart::Expr(e) => {
-                            let val = self.eval_expr_inner(e);
-                            result.push_str(&self.display_render(&val));
+                            // Render each interpolation through the unified
+                            // `to_string` dispatch (one evaluation of `e`,
+                            // matching codegen's `f"{e}"` → `e.to_string()`
+                            // desugar) so a user `impl Display` takes effect
+                            // exactly as an explicit `.to_string()` would;
+                            // built-in types fall through to `display_render`
+                            // inside that dispatch. GAP-W4.
+                            match self.eval_method_call(e, "to_string", &[], &expr.span) {
+                                Value::String(s) => result.push_str(&s),
+                                other => result.push_str(&self.display_render(&other)),
+                            }
                         }
                     }
                 }

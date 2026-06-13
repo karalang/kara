@@ -767,8 +767,16 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
-        // `#[derive(Display)]` — `to_string()` on a unit enum variant.
-        if method == "to_string" {
+        // `to_string()` dispatch order: a user `impl Display` (a registered
+        // `<Type>.to_string` method) wins — fall through to the generic
+        // impl-method dispatch below, which invokes the user body (with its
+        // contracts). Only when NO user impl exists do we render via the
+        // built-in `#[derive(Display)]` / `display_render` path. This is what
+        // makes user `impl Display for MyEnum { fn to_string(...) }` actually
+        // take effect for `x.to_string()` and (via the unified dispatch) for
+        // `f"{x}"` / `println(x)`. See examples/weave GAP-W4.
+        if method == "to_string" && self.user_display_impl_to_string_key(&obj).is_none() {
+            // `#[derive(Display)]` — `to_string()` on a unit enum variant.
             if let Value::EnumVariant {
                 enum_name,
                 variant,

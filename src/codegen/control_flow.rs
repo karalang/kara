@@ -454,9 +454,40 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
         self.emit_nul_safe_write(data, len, nl, to_stderr);
+        // Free only an OWNING String. The invariant (mirrored by the f-string
+        // accumulator's scope-exit cleanup) is `cap == 0 ⇔ non-owning` — a
+        // literal-backed String points its `data` at a read-only global and
+        // carries `cap == 0`. Built-in display renderers always return an owned
+        // (`cap > 0`) String, so this guard is a no-op for them; it is
+        // load-bearing for a user `impl Display` whose `to_string` returns a
+        // string literal (e.g. `match self { Red => "red", … }`), where an
+        // unconditional `free` of the global aborts (SIGABRT). GAP-W4.
+        let cap = self
+            .builder
+            .build_extract_value(sv, 2, "ps.cap")
+            .unwrap()
+            .into_int_value();
+        let fn_val = self.current_fn.unwrap();
+        let do_free = self.context.append_basic_block(fn_val, "ps.free");
+        let after = self.context.append_basic_block(fn_val, "ps.after");
+        let owns = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::UGT,
+                cap,
+                self.context.i64_type().const_zero(),
+                "ps.owns",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(owns, do_free, after)
+            .unwrap();
+        self.builder.position_at_end(do_free);
         self.builder
             .build_call(self.free_fn, &[data.into()], "")
             .unwrap();
+        self.builder.build_unconditional_branch(after).unwrap();
+        self.builder.position_at_end(after);
     }
 
     pub(super) fn compile_print(
@@ -537,6 +568,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.emit_print_and_free_string(sval, nl);
                 return Ok(zero.into());
             }
+        }
+
+        // User `impl Display` (a compiled `<Type>.to_string`) wins over every
+        // built-in renderer below — render `println(x)` via the user method,
+        // matching `f"{x}"` / `x.to_string()` and the interpreter. The owning
+        // String it returns is printed + freed. GAP-W4.
+        if self.user_display_impl_type(&args[0].value).is_some() {
+            let sval =
+                self.compile_method_call(&args[0].value, "to_string", &[], &args[0].value.span)?;
+            self.emit_print_and_free_string(sval, nl);
+            return Ok(zero.into());
         }
 
         // All-unit enum arm — render the bare variant name (selected on the

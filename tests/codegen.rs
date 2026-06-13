@@ -919,6 +919,36 @@ fn main() {
         }
     }
 
+    // ── User `impl Display` dispatch (codegen) ──
+
+    #[test]
+    fn e2e_user_impl_display_dispatches_to_to_string() {
+        // A user `impl Display { fn to_string }` must win over the built-in
+        // renderer in every Display position — `.to_string()`, `f"{x}"`, and
+        // `println(x)` — for unit enums, tuple-variant enums, and structs. The
+        // unit-enum case returns a string LITERAL (non-owning, cap==0), which
+        // exercises the `cap > 0` free guard in `emit_write_and_free_string`
+        // (an unconditional free of the literal aborts). GAP-W4.
+        if let Some(out) = run_program(
+            "enum Color { Red, Green, Blue }\n\
+             impl Display for Color { fn to_string(ref self) -> String { match self { Red => \"red\", Green => \"green\", Blue => \"blue\" } } }\n\
+             enum Msg { Info(i64), Quit }\n\
+             impl Display for Msg { fn to_string(ref self) -> String { match self { Info(c) => f\"info#{c}\", Quit => \"quit\" } } }\n\
+             struct Point { x: i64, y: i64 }\n\
+             impl Display for Point { fn to_string(ref self) -> String { f\"({self.x}, {self.y})\" } }\n\
+             fn main() {\n\
+                 let c = Color.Green; println(c.to_string()); println(f\"c={c}\"); println(c);\n\
+                 let m = Msg.Info(7); println(f\"m={m}\"); println(m);\n\
+                 let p = Point { x: 3, y: 4 }; println(f\"p={p}\"); println(p);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "green\nc=green\ngreen\nm=info#7\ninfo#7\np=(3, 4)\n(3, 4)\n"
+            );
+        }
+    }
+
     // ── Nested-place + compound-field assignment write-back (codegen) ──
     //
     // Regression: assignment to a value-type struct field through a projection

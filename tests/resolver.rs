@@ -1570,6 +1570,27 @@ fn test_user_impl_eq_ord_for_struct_allowed() {
 }
 
 #[test]
+fn test_user_impl_display_for_struct_and_enum_allowed() {
+    // `Display` is carved out of the operator-trait restriction — user types
+    // routinely need custom string rendering (error enums, domain values).
+    // Kāra's `Display` is a single `fn to_string(ref self) -> String`, so a
+    // user impl is an ordinary method that `f"{x}"` / `x.to_string()` /
+    // `println(x)` dispatch through. GAP-W4 (examples/weave).
+    resolve_ok(
+        "struct Point { x: i64, y: i64 }\n\
+         impl Display for Point {\n\
+             fn to_string(ref self) -> String { f\"({self.x}, {self.y})\" }\n\
+         }\n\
+         enum Status { Ok, Failed(i64) }\n\
+         impl Display for Status {\n\
+             fn to_string(ref self) -> String {\n\
+                 match self { Ok => \"ok\", Failed(code) => f\"failed#{code}\" }\n\
+             }\n\
+         }",
+    );
+}
+
+#[test]
 fn test_user_impl_arithmetic_still_rejected_after_relational_carveout() {
     // The relational-trait carve-out is surgical: Add/Sub/etc. on user types
     // stay rejected until the heterogeneous `Rhs`/`Output` design lands.

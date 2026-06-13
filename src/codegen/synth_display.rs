@@ -1204,6 +1204,29 @@ impl<'ctx> super::Codegen<'ctx> {
     /// If `expr` statically denotes a value of a known user struct type,
     /// return that struct's name. Covers the identifier and field-access
     /// receiver forms used at the `to_string` / f-string / println sites.
+    /// If `expr`'s static type is a user struct/enum carrying a user
+    /// `impl Display` — i.e. a compiled `<Type>.to_string` method, as opposed
+    /// to the built-in `display_render` renderer or a `#[derive(Display)]` —
+    /// return that type name. Used to route Display positions (`x.to_string()`,
+    /// `f"{x}"`, `println(x)`) to the user method instead of the synthesized
+    /// built-in. The discriminator is the function name: only a user impl
+    /// produces a `<Type>.to_string` LLVM function (built-ins are
+    /// `karac_display_<T>`). GAP-W4.
+    pub(super) fn user_display_impl_type(&self, expr: &Expr) -> Option<String> {
+        let tn = self
+            .expr_user_struct_name(expr)
+            .or_else(|| self.expr_user_enum_name_any(expr))?;
+        if self
+            .module
+            .get_function(&format!("{tn}.to_string"))
+            .is_some()
+        {
+            Some(tn)
+        } else {
+            None
+        }
+    }
+
     pub(super) fn expr_user_struct_name(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
             ExprKind::Identifier(n) => self

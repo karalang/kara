@@ -79,6 +79,52 @@ fn test_enum_display_unit_variants() {
 }
 
 #[test]
+fn test_user_impl_display_dispatches_through_to_string() {
+    // A user `impl Display { fn to_string(ref self) -> String }` must win over
+    // the built-in renderer across all three Display positions — `.to_string()`,
+    // f-string interpolation, and `println(x)` — for both enums (incl. payload
+    // variants) and structs. GAP-W4 (operator-trait gate lifted for Display).
+    let src = "enum Color { Red, Green, Blue }
+        impl Display for Color {
+            fn to_string(ref self) -> String {
+                match self { Red => \"red\", Green => \"green\", Blue => \"blue\" }
+            }
+        }
+        enum Msg { Info(i64), Quit }
+        impl Display for Msg {
+            fn to_string(ref self) -> String {
+                match self { Info(c) => f\"info#{c}\", Quit => \"quit\" }
+            }
+        }
+        struct Point { x: i64, y: i64 }
+        impl Display for Point {
+            fn to_string(ref self) -> String { f\"({self.x}, {self.y})\" }
+        }
+        fn main() {
+            let c = Color.Green;
+            println(c.to_string());      // green
+            println(f\"c={c}\");           // c=green
+            println(c);                  // green
+            let m = Msg.Info(7);
+            let q = Msg.Quit;
+            println(f\"{m} {q}\");          // info#7 quit
+            let p = Point { x: 3, y: 4 };
+            println(f\"p={p}\");            // p=(3, 4)
+        }";
+    let out = run_no_errors(src);
+    assert!(out.contains("green\n"), "to_string user impl: {out}");
+    assert!(out.contains("c=green\n"), "f-string user impl: {out}");
+    assert!(
+        out.contains("info#7 quit\n"),
+        "payload-enum + unit-variant user impl: {out}"
+    );
+    assert!(out.contains("p=(3, 4)\n"), "struct user impl: {out}");
+    // No built-in variant names leak through.
+    assert!(!out.contains("Green"), "built-in must not leak: {out}");
+    assert!(!out.contains("Info"), "built-in must not leak: {out}");
+}
+
+#[test]
 fn test_struct_display_nested_in_container() {
     // A struct nested in a Vec still renders in declaration order (the
     // renderer recurses through containers).
@@ -1453,6 +1499,27 @@ fn test_enum_match_tuple_variant() {
              fn main() { println(area(Rect(3, 4))); }"),
         "12\n"
     );
+}
+
+#[test]
+fn test_tuple_variant_binding_shadows_unit_variant_local() {
+    // Regression: a tuple/struct-variant pattern binding whose name collides
+    // with an in-scope local that holds a UNIT enum variant must still bind the
+    // payload, not misfire as a unit-variant test. The matcher's
+    // bare-name→unit-variant heuristic previously consulted `env.get(name)` and
+    // a local `c = Color.Green` (a unit variant value) made `Info(c)`'s binding
+    // `c` look like a unit-variant pattern, so the arm failed and surfaced as a
+    // spurious runtime "non-exhaustive match". Case-class (lowercase = binding)
+    // disambiguates. (Pre-existing bug surfaced by user `impl Display`, GAP-W4.)
+    let out = run("enum Color { Red, Green, Blue }\n\
+         enum Msg { Info(i64), Quit }\n\
+         fn main() {\n\
+             let c = Color.Green;\n\
+             let m = Msg.Info(7);\n\
+             match m { Info(c) => println(f\"got {c}\"), Quit => println(\"quit\") }\n\
+             match c { Green => println(\"green\"), _ => println(\"other\") }\n\
+         }");
+    assert_eq!(out, "got 7\ngreen\n");
 }
 
 #[test]

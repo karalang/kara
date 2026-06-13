@@ -40,10 +40,14 @@
 //           self-contained file. Multi-module interpreter execution is a
 //           separate tracked gap.
 //
-//   GAP-W4  User types cannot `impl Display` in v1 — operator traits are
-//           stdlib-only (resolver rejects `impl Display for ParseError`). A
-//           program that prints its own error enum hand-writes a formatter
-//           (`parse_error_msg` below) instead. Friction, not a blocker.
+//   GAP-W4  FIXED. User types could not `impl Display` in v1 (resolver gated it
+//           with the operator traits). The gate is lifted — `ParseError` below
+//           now has a real `impl Display`, and `f"{err}"` dispatches to it.
+//           Kāra's `Display` is `fn to_string(ref self) -> String` (no Rust
+//           `Formatter`/`write`). Surfaced a deeper pre-existing interpreter
+//           bug (a tuple/struct-variant pattern binding shadowed by an in-scope
+//           local holding a unit variant misfired as a unit-variant test) which
+//           was also fixed via the case-class rule.
 //
 //   GAP-W5  The roster sketch labels parse "pure", but effect inference shows
 //           `parse_row` carries `panics` (from `fields[i]` indexing). Public
@@ -144,21 +148,26 @@ pub enum ParseError {
     NonPositiveQty { value: i64 },
 }
 
-// GAP-W4: user types cannot `impl Display` in v1 — operator traits are
-// stdlib-only (resolver: "user-defined `impl Display for T` is not supported
-// in v1"). A real program that wants to print its own error enum therefore
-// hand-writes a formatter function instead of deriving/implementing Display.
-// Tracked as a friction point; not the feature under test.
-pub fn parse_error_msg(err: ref ParseError) -> String {
-    match err {
-        WrongFieldCount { got }    => f"expected 3 fields, got {got}",
-        EmptyEmail                 => "email is empty",
-        NoAtSign { value }         => f"email '{value}' has no '@'",
-        EmailTooLong { len }       => f"email too long ({len} bytes)",
-        BadPrice { value }         => f"price '{value}' is not a number",
-        NonPositivePrice { value } => f"price {value} is not > 0",
-        BadQty { value }           => f"qty '{value}' is not an integer",
-        NonPositiveQty { value }   => f"qty {value} is not > 0",
+// GAP-W4 (RESOLVED 2026-06-13): user types CAN now `impl Display`. Kāra's
+// `Display` is a single `fn to_string(ref self) -> String` (NOT the Rust
+// `fmt(&self, Formatter)` model — there is no `Formatter`/`write`), so a custom
+// error rendering is an ordinary method that `f"{err}"` dispatches through. The
+// earlier `parse_error_msg` free-function workaround was replaced with this
+// real impl once the resolver gate was lifted. (Runs via `karac run`; a codegen
+// build is additionally gated on the pre-existing struct-variant-binding codegen
+// bug, since these variants bind fields like `{ got }` / `{ value }`.)
+impl Display for ParseError {
+    fn to_string(ref self) -> String {
+        match self {
+            WrongFieldCount { got }    => f"expected 3 fields, got {got}",
+            EmptyEmail                 => "email is empty",
+            NoAtSign { value }         => f"email '{value}' has no '@'",
+            EmailTooLong { len }       => f"email too long ({len} bytes)",
+            BadPrice { value }         => f"price '{value}' is not a number",
+            NonPositivePrice { value } => f"price {value} is not > 0",
+            BadQty { value }           => f"qty '{value}' is not an integer",
+            NonPositiveQty { value }   => f"qty {value} is not > 0",
+        }
     }
 }
 
@@ -282,7 +291,7 @@ dave@example.com,-2.0,4";
                     enriched.push(e);
                 },
                 Err(err) => {
-                    println(f"  skip  {parse_error_msg(ref err)}");
+                    println(f"  skip  {err}");
                 },
             }
         }
