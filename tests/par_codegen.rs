@@ -5126,6 +5126,41 @@ fn main() {
         }
     }
 
+    /// Regression (B-2026-06-13-6): a tuple-destructure `let (a, b) = pair()`
+    /// whose bindings are read *outside* the auto-par group it lands in. The
+    /// return-slot machinery materializes one slot per single-`Binding` `let`,
+    /// keyed by `infer_let_binding_llvm_type` (one type per stmt) — it had no
+    /// handling for a multi-binding destructure, so `a`/`b` got NO slot, the
+    /// destructure was still lifted into a branch fn, and the parent body faulted
+    /// with "codegen failed: Undefined variable 'a'" (the panic path in
+    /// `run_program`). Fix: `compute_return_slots_checked` now bails the group to
+    /// sequential when a destructure-let binding escapes (correctness over a
+    /// marginal parallelization — slotting destructure bindings is a future
+    /// slice). The annotated `let mut v: Vec[String]` is what forms the group;
+    /// `v.push(a)` is the escaping read. A clean run (output matches the
+    /// sequential semantics) means codegen no longer aborts.
+    #[test]
+    fn test_auto_par_tuple_destructure_binding_escapes_group_e2e() {
+        let out = run_program(
+            r#"
+fn pair() -> (String, String) { (f"L", f"R") }
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    let (a, b) = pair();
+    v.push(a);
+    println(b);
+    println(v[0]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "R\nL\n",
+                "tuple-destructure binding escaping an auto-par group must stay defined"
+            );
+        }
+    }
+
     /// Regression: an auto-par branch statement that reads an outer local
     /// *inside an `unsafe { }` block* must include that local in the branch's
     /// capture set. The capture-set collector (`refs_in_expr`) previously had

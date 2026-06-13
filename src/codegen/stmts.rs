@@ -715,6 +715,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // Per-binding metadata: which branch defines it, and what's the
         // statement reference for type inference.
         let mut defined: HashMap<String, (usize, &Stmt)> = HashMap::new();
+        // Names bound by a NON-`Binding` let pattern in this group — tuple /
+        // struct / slice destructure (`let (a, b) = pair()`). The return-slot
+        // mechanism below is built around one-name-one-type-per-stmt
+        // (`infer_let_binding_llvm_type` infers a single type per `let`), which
+        // a multi-binding destructure breaks. So these names get NO return slot;
+        // if any escapes the group it would be lifted into a branch fn and left
+        // undefined in the parent body ("Undefined variable 'a'",
+        // B-2026-06-13-6). Collect them and bail to sequential below if any is
+        // read outside the group — correctness over a marginal parallelization
+        // (slotting destructure bindings across the join is a future slice).
+        let mut destructure_bound: HashSet<String> = HashSet::new();
         for (branch_idx, &stmt_idx) in sorted_indices.iter().enumerate() {
             if stmt_idx >= body.stmts.len() {
                 continue;
@@ -724,6 +735,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
                     if let PatternKind::Binding(name) = &pattern.kind {
                         defined.insert(name.clone(), (branch_idx, stmt));
+                    } else {
+                        for name in pattern.binding_names() {
+                            destructure_bound.insert(name);
+                        }
                     }
                 }
                 StmtKind::LetUninit { name: _, .. } => {
@@ -803,6 +818,17 @@ impl<'ctx> super::Codegen<'ctx> {
         //      ordering, the early return would emit a par-run that
         //      silently drops the mutations.
         if !group.captured_mutations.is_disjoint(&refs) {
+            return None;
+        }
+
+        // 2.6. Reject groups that destructure-bind a name read outside the
+        //      group. A tuple/struct/slice `let` pattern produces several names
+        //      of differing types from one statement, which the single-type-
+        //      per-`let` return-slot path (step 3) can't materialize — so such
+        //      a binding would be lifted into a branch fn with no slot and left
+        //      undefined in the parent body (B-2026-06-13-6). Fall back to
+        //      sequential, exactly as the captured-mutation check above does.
+        if !destructure_bound.is_disjoint(&refs) {
             return None;
         }
 
