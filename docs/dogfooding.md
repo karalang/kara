@@ -421,23 +421,31 @@ fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
 > - [ ] **Codegen `String.split`** — interpreter + typechecker landed; the
 >   `vec_method.rs` arm (returning a `Vec[String]` of `{ptr,len,cap}` structs)
 >   is pending. Until then Weave runs interpreter-only. Blocks a Weave codegen
->   E2E + any AOT-built program that splits strings.
+>   E2E + any AOT-built program that splits strings. → tracked in
+>   [`phase-7-codegen.md`](implementation_checklist/phase-7-codegen.md)
+>   ("Codegen `String.split`").
 > - [ ] **Multi-module `karac run`** — the interpreter only registers the entry
 >   file's items; sibling `src/*.kara` modules resolve + typecheck but their
 >   functions/impls are absent at runtime (cross-module free *and* associated
 >   calls fail). Forces single-file examples for interpreter runs. Blocks the
->   db_pipeline-shaped multi-module Weave service cut from running via `run`.
+>   db_pipeline-shaped multi-module Weave service cut from running via `run`. →
+>   tracked in [`phase-4-interpreter.md`](implementation_checklist/phase-4-interpreter.md)
+>   ("CR-24 follow-up: multi-module `karac run`").
 > - [ ] **User `impl Display`** — operator traits are stdlib-only in v1, so user
 >   error enums can't implement `Display`; programs hand-write a formatter.
 >   Decide whether v1 admits user `Display`/`Debug` impls or documents the
->   limitation as intended.
+>   limitation as intended. (Design question — left here as the design record;
+>   no phase-tracker impl entry until the decision is made.)
 > - [ ] **`allocates(Heap)` declarability knot** — three components disagree:
 >   the effectchecker *requires* it declared on an undeclared pub fn (tests
 >   `test_try_push_companion_requires_allocates_declaration`), `design.md`
 >   says it is default-permitted and *need not* be declared, and the resolver
 >   *rejects* writing it (`undefined effect resource 'Heap'`). Pick one model
 >   (add a `Heap` resolver symbol, OR fully exempt it from the must-declare
->   set + update the try_* tests) — a designer decision, not a mechanical fix.
+>   set + update the try_* tests) — a designer decision, not a mechanical fix. →
+>   tracked in [`phase-3-effect-checker.md`](implementation_checklist/phase-3-effect-checker.md)
+>   ("Resolve the `allocates(Heap)` declarability inconsistency") + defect
+>   triage `bugs.md` B-2026-06-13-4.
 
 **What the demo shows:**
 1. Run the pipeline on a dataset with intentionally bad rows. Show parse errors
