@@ -1,0 +1,72 @@
+// Tangle — parent-pointer tree (first borrow-hostile structure).
+//
+// A tree where every node knows its parent *and* its children. That up/down
+// cycle is the canonical shape that forces `Rc<RefCell<Node>>` for the children
+// and `Weak<RefCell<Node>>` for the parent in Rust — the textbook "you can't
+// have a tree with parent pointers in safe Rust without Rc/RefCell/Weak" case.
+//
+// In Kāra it is a plain `shared struct`: reference semantics via RC, no `'a`
+// lifetimes, no `Weak`, no `RefCell`. The one real cost — the cycle is
+// RC-managed — is not hidden: `karac query ownership` surfaces exactly where
+// the model escalates to RC. That visibility is the whole point of Tangle.
+
+shared struct TreeNode {
+    val: i64,
+    mut parent: Option[TreeNode],
+    mut children: Vec[TreeNode],
+}
+
+fn new_node(val: i64) -> TreeNode {
+    TreeNode { val: val, parent: None, children: Vec.new() }
+}
+
+// Link `child` under `parent`. This is the line that creates the up/down
+// cycle: parent.children points down at child, child.parent points back up
+// at parent. Both handles refer to the same RC-managed nodes.
+fn add_child(parent: TreeNode, child: TreeNode) {
+    child.parent = Some(parent);
+    parent.children.push(child);
+}
+
+// Walk UP the parent chain to the root, counting edges. This traversal is
+// impossible without the back-pointer — it is the reason the shape exists.
+fn depth_from_root(node: TreeNode) -> i64 {
+    let mut depth = 0;
+    let mut cur = node;
+    loop {
+        match cur.parent {
+            None => break,
+            Some(p) => {
+                depth = depth + 1;
+                cur = p;
+            }
+        }
+    }
+    depth
+}
+
+fn main() {
+    //        root(1)
+    //        /     \
+    //      a(2)    c(4)
+    //       |
+    //      b(3)
+    let root = new_node(1);
+    let a = new_node(2);
+    let b = new_node(3);
+    let c = new_node(4);
+
+    add_child(root, a);
+    add_child(a, b);
+    add_child(root, c);
+
+    // Walk up via parent pointers — depth = #edges to the root.
+    println(f"depth of b from root: {depth_from_root(b)}");      // expect 2
+    println(f"depth of c from root: {depth_from_root(c)}");      // expect 1
+    println(f"depth of root:        {depth_from_root(root)}");   // expect 0
+}
+
+// Expected output:
+// depth of b from root: 2
+// depth of c from root: 1
+// depth of root:        0
