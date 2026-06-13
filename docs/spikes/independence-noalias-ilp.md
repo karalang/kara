@@ -1,10 +1,44 @@
 # Spike: independence → backend alias metadata (Tier-0 ILP / autovectorization)
 
-**Status:** scoped, not yet run. Filed 2026-06-09.
+**Status:** ✅ **RAN — resolved 2026-06-12. Decision: Tier-0 *aliasing* is v1.x, not P0.**
+Filed 2026-06-09.
 **Decision this spike gates:** whether "independence feeds the backend" (Tier 0 in
 design.md § Feature 5) is **P0** (ships at v1, becomes the launch headline) or stays
 **v1.x**. See `implementation_checklist/phase-6-runtime.md` (cost-model + Tier-0
 entries) and `phase-7-codegen.md` (Tier-0 lowering mechanism).
+
+## Resolution (2026-06-12)
+
+Ran the measure-first probe (the A-vs-B method below), plus a correction to its
+premise. Full detail recorded in `roadmap.md` § Codegen Optimization:
+
+- **The premise was incomplete.** This spike assumed "BCE already removes the
+  per-iteration exits that block the autovectorizer, so the open question is the
+  *marginal* win of the aliasing half." But BCE removes the **bounds-check** exit, not
+  the **overflow-trap** exit — every checked `+`/`-`/`*` emits a `b.vs → panic`
+  side-exit (`emit_checked_int_arith`) that blocks vectorization *before aliasing is
+  ever considered*. Proven: a pure-copy kernel (no arithmetic) vectorizes; the `+`
+  kernel stays fully scalar; no runtime alias-check is even emitted for it.
+- **The actual autovec enabler is non-trapping arithmetic, not alias info.**
+  `wrapping_add`/`sub`/`mul` (landed 2026-06-12) make the kernel body straight-line, so
+  it auto-vectorizes (NEON `add.2d`) — **1.25× over the scalar trap version**.
+- **The aliasing half (this spike's subject) adds ≈ 0.** Rust oracle, indexed
+  (runtime alias-check) vs `zip` (disjointness conveyed → no check): 184.7 vs 184.4 ms
+  on a memory-bound add kernel — identical. Kāra already matches Rust 1.00× at the
+  ~130 GB/s memory wall; removing a *compute* branch can't beat a *memory* limit.
+- **Param-level `noalias` is inert on its own** (shipped as groundwork, commit
+  `397e4d7b`): inlining exposes the caller's allocas, so alias analysis needs no help
+  in the common single-TU case.
+
+**Decision:** Tier-0 *aliasing → backend metadata* is **v1.x / deferred**, NOT the P0
+launch headline. The launch-worthy autovec story is `wrapping_*` (shipped) + the
+hand-vectorized `Vector[T,N]` spine. Alias-scope metadata is filed deferred in
+`roadmap.md` with a concrete build-when trigger (auto-vec-heavy non-hand-vectorized
+code, or a compute-bound / many-slice kernel where the check bites — e.g. latency-bound
+small-tensor inference). The open follow-on — *what the real-world codegen lever
+actually is* — moves to [selfhost-lexer-profile.md](selfhost-lexer-profile.md).
+
+The original scoping below is kept for the record.
 
 ## The one question
 How much performance does Kāra's effect/ownership-derived no-alias information add

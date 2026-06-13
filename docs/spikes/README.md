@@ -16,7 +16,7 @@ Legend: ✅ done · 🟡 partial · ⬜ open
 
 | spike | status |
 |---|---|
-| [independence-noalias-ilp.md](independence-noalias-ilp.md) | Scoped, **not yet run** (filed 2026-06-09). Measure-first gate deciding whether Tier-0 noalias→autovectorization is P0 (launch headline) or v1.x. |
+| [selfhost-lexer-profile.md](selfhost-lexer-profile.md) | Scoped, **not yet run** (filed 2026-06-12). Profile the self-hosted lexer (real Kāra systems code we already have) to find where real-world codegen perf goes — hypothesis: allocation/String-build bound, not compute. Replaces the leetcode corpus as the perf oracle; follow-on to the resolved noalias/autovec spike. |
 | [windows-iocp-eventloop.md](windows-iocp-eventloop.md) | Groundwork / scoping done on macOS (2026-06-07). Runtime impl + validation need a Windows box — tracks phase-6 Slice 10 (IOCP integration) + cancel-sweep. |
 
 ## 🟡 Partial
@@ -36,3 +36,4 @@ Legend: ✅ done · 🟡 partial · ⬜ open
 | [self-hosting-llvm-c-ffi.md](self-hosting-llvm-c-ffi.md) | ✅ Resolved (2026-06-11). LLVM-C binding approach validated end-to-end; minimal proof runs green (`exit=42`). Unblocks the codegen leg of Phase 12. |
 | [self-hosting-llvm-c-proof.md](self-hosting-llvm-c-proof.md) | ✅ Runs green — `exit=42` (2026-06-11). A Kāra program drives `libLLVM-18` to build/verify/emit a working Mach-O object under the stage-0 Rust `karac`. |
 | [self-hosting-llvm-c-surface.md](self-hosting-llvm-c-surface.md) | Done — initial pass (2026-06-10). Resolves sub-question 1 (surface scope) of the FFI spike. |
+| [independence-noalias-ilp.md](independence-noalias-ilp.md) | ✅ **RAN — resolved 2026-06-12. Tier-0 *aliasing* = v1.x, not P0.** The autovec enabler was non-trapping arithmetic (`wrapping_*`, shipped), not alias info; the aliasing half measured ≈0 (Kāra at Rust parity, memory-bound). Alias-scope metadata filed deferred in `roadmap.md`; real-world-lever follow-on → [selfhost-lexer-profile.md](selfhost-lexer-profile.md). |
