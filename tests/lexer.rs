@@ -692,6 +692,84 @@ fn test_interpolated_string_no_exprs() {
     }
 }
 
+#[test]
+fn test_interpolated_string_brace_inside_nested_string() {
+    // A `}` inside a string literal inside the interpolation must NOT close the
+    // hole — the brace matcher is string-aware. The captured `raw` is the full
+    // verbatim slice (incl. the nested `"a}b"`), not truncated at the inner `}`.
+    let tokens = tokens_only(r#"f"{ "a}b" }""#);
+    assert!(matches!(&tokens[0], Token::InterpolatedStringLiteral(_)));
+    if let Token::InterpolatedStringLiteral(parts) = &tokens[0] {
+        assert_eq!(parts.len(), 1, "expected one Expr part, got: {:?}", parts);
+        assert!(
+            matches!(&parts[0], InterpolationPart::Expr { raw, .. } if raw == r#" "a}b" "#),
+            "raw should be the verbatim slice including the nested string: {:?}",
+            parts[0]
+        );
+    }
+}
+
+#[test]
+fn test_interpolated_string_open_brace_inside_nested_string() {
+    // The open-brace twin: a `{` inside a nested string must not inflate depth.
+    let tokens = tokens_only(r#"f"{ "x{y" }""#);
+    if let Token::InterpolatedStringLiteral(parts) = &tokens[0] {
+        assert_eq!(parts.len(), 1);
+        assert!(
+            matches!(&parts[0], InterpolationPart::Expr { raw, .. } if raw == r#" "x{y" "#),
+            "raw should include the nested string verbatim: {:?}",
+            parts[0]
+        );
+    }
+}
+
+#[test]
+fn test_interpolated_string_brace_inside_nested_char() {
+    // Same for a char literal: `'}'` is a brace-bearing char, not a hole close.
+    let tokens = tokens_only(r#"f"{ '}' }""#);
+    if let Token::InterpolatedStringLiteral(parts) = &tokens[0] {
+        assert_eq!(parts.len(), 1);
+        assert!(
+            matches!(&parts[0], InterpolationPart::Expr { raw, .. } if raw == " '}' "),
+            "raw should include the char literal verbatim: {:?}",
+            parts[0]
+        );
+    }
+}
+
+#[test]
+fn test_interpolated_string_verbatim_offset_preserved_with_nested_string() {
+    // The B-2026-06-09-1 invariant must survive string-awareness: `raw`'s bytes
+    // map 1:1 onto the source, so `offset` still points at `raw`'s first byte.
+    // `f"{ "a}b" }"` — `f"{` is 3 bytes, so the expr (a leading space) starts at
+    // offset 3.
+    let tokens = tokens_only(r#"f"{ "a}b" }""#);
+    if let Token::InterpolatedStringLiteral(parts) = &tokens[0] {
+        assert!(matches!(
+            &parts[0],
+            InterpolationPart::Expr { offset, line, column, .. }
+                if *offset == 3 && *line == 1 && *column == 4
+        ));
+    }
+}
+
+#[test]
+fn test_interpolated_string_escaped_quote_is_clear_error() {
+    // An escaped quote in *expression* position is invalid input (expression
+    // context wants plain quotes). It used to be copied verbatim and silently
+    // emitted as literal text; now it is a clear lex error, not silent wrong
+    // output.
+    let tokens = tokens_only(r#"f"{ id(\"hi\") }""#);
+    assert!(
+        tokens.iter().any(|t| matches!(
+            t,
+            Token::Error(msg) if msg.contains("f-string interpolation")
+        )),
+        "escaped quote in interpolation should emit a clear lex error, got: {:?}",
+        tokens
+    );
+}
+
 // ── Multi-line strings ───────────────────────────────────────────
 
 #[test]

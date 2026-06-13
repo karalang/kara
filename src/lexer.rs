@@ -1081,9 +1081,38 @@ impl<'a> Lexer<'a> {
                 let expr_column = self.column;
                 let mut expr_text = String::new();
                 let mut brace_depth = 1;
+                // String-aware brace matching: a `{` / `}` inside a string or char
+                // literal nested in the interpolation must NOT change the brace
+                // depth — `f"{ m["a}b"] }"`'s `}` in `"a}b"` closes nothing, and a
+                // brace-only counter truncates the expression there. `in_lit` holds
+                // the open delimiter (`"` or `'`) while inside such a literal.
+                // `expr_text` stays a byte-for-byte verbatim copy of the source
+                // slice — the B-2026-06-09-1 span rebasing relies on
+                // `byte i of expr_text == source offset expr_start + i` — so every
+                // branch still copies the raw bytes; string-awareness only gates the
+                // brace counting and the nested-quote handling.
+                let mut in_lit: Option<u8> = None;
                 while brace_depth > 0 && !self.is_at_end() {
                     let c = self.peek();
-                    if c == b'{' {
+                    if let Some(q) = in_lit {
+                        if c == b'\\' {
+                            // Copy the backslash and its escaped char as a pair so a
+                            // `\"` / `\'` inside the literal does not close it. Both
+                            // bytes are copied verbatim; nothing is interpreted here.
+                            expr_text.push(self.consume_codepoint());
+                            if !self.is_at_end() {
+                                if self.peek() == b'\n' {
+                                    self.line += 1;
+                                    self.column = 0;
+                                }
+                                expr_text.push(self.consume_codepoint());
+                            }
+                            continue;
+                        }
+                        if c == q {
+                            in_lit = None;
+                        }
+                    } else if c == b'{' {
                         brace_depth += 1;
                     } else if c == b'}' {
                         brace_depth -= 1;
@@ -1091,6 +1120,21 @@ impl<'a> Lexer<'a> {
                             self.advance(); // consume '}'
                             break;
                         }
+                    } else if c == b'"' || c == b'\'' {
+                        in_lit = Some(c);
+                    } else if c == b'\\' {
+                        // A backslash in *expression* position (outside any nested
+                        // literal) is the invalid escaped-quote case
+                        // (`f"{ id(\"hi\") }"`): expression context wants plain
+                        // quotes. Previously copied verbatim, then silently emitted
+                        // as literal text (the `\` fails to re-parse) — wrong output,
+                        // no error. Emit a clear diagnostic instead.
+                        return self.make_spanned(Token::Error(
+                            "unexpected '\\' in f-string interpolation `{…}`; string \
+                             literals inside an interpolation use plain quotes — write \
+                             `{f(\"x\")}`, not escaped quotes"
+                                .to_string(),
+                        ));
                     }
                     if c == b'\n' {
                         self.line += 1;

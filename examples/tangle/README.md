@@ -110,7 +110,7 @@ both are declared `shared` with no `Box`, no `RefCell`, no `'a`.
 interpreter and codegen (it compiles and runs as a native binary).
 
 > **Findings from this structure** (the recursive interpreter exercised more cold
-> surface than any other Tangle program — three fixed, two tracked, plus one
+> surface than any other Tangle program — four fixed, one tracked, plus one
 > tracked codegen follow-on):
 >
 > 1. **`Vec.new()` + `push` + return inference gap** — *fixed* (see the
@@ -145,12 +145,15 @@ interpreter and codegen (it compiles and runs as a native binary).
 >    receiver via `compile_expr`, mirroring `compile_field_store`'s double-load),
 >    so this example uses the idiomatic `impl Scope { get/set }` method form.
 >    See [`phase-7-codegen.md`](../../implementation_checklist/phase-7-codegen.md).
-> 5. **f-string interpolation isn't string-aware** *(tracked)*. The natural
->    `f"{ get("x") }"` (plain nested quotes) works, but an **escaped** quote
->    `f"{ get(\"x\") }"` is silently emitted as literal text instead of
->    evaluating — the `{…}` extractor balances braces only. Worked around by
->    binding the lookup to a local first. Tracked in
->    [`phase-1-lexer.md`](../../implementation_checklist/phase-1-lexer.md).
+> 5. **f-string interpolation wasn't string-aware** *(FIXED)*. The `{…}`
+>    extractor balanced braces only, so a brace inside a nested string/char
+>    literal (`f"{ "a}b" }"`, `f"{ '}' }"`) miscounted and truncated the hole,
+>    and an **escaped** quote (`f"{ get(\"x\") }"`) was silently emitted as
+>    literal text. Now fixed: the extractor tracks nested string/char literals
+>    when counting braces (`expr_text` stays byte-verbatim for span rebasing),
+>    and the invalid escaped-quote case gets a clear lex error instead of silent
+>    wrong output. The plain-quote form (`f"{ get("x") }"`) still works.
+>    See [`phase-1-lexer.md`](../../implementation_checklist/phase-1-lexer.md).
 > 6. **RC-fallback false positive on sibling match arms** *(tracked)*. A pattern
 >    binding reused under the same name in two `match` arms (the `Var`/`Assign`
 >    arms of `eval` both bind `name`) is given one binding identity, so a consume
