@@ -437,6 +437,42 @@ fn main() {
         );
     }
 
+    // ── tuple-destructure leaf cleanup (B-2026-06-13-5) ───────────
+    //
+    // `let (a, b) = pair()` extracts each element into a fresh leaf alloca.
+    // Pre-fix the leaves got NO scope-exit free, so a String/Vec element's
+    // heap buffer leaked once per destructure (2000 leaks / 46 KB over a
+    // 1000-iter loop). `finish_owned_tuple_destructure` now frees each
+    // heap-owning leaf. The Linux-CI LSan job is the leak gate; this run also
+    // guards against the move-out double-free risk the fix introduces — a leaf
+    // RETURNED from a fn (`first`, moved out of the destructure) and a leaf
+    // produced by a NON-fresh destructure (`let (c, d) = t`, a move of an
+    // existing tuple binding the source frees) must each be freed exactly once.
+    // Looping a few hundred times makes any double-free / UAF trip ASAN.
+    #[test]
+    fn asan_tuple_destructure_leaf_cleanup_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn pair(n: i64) -> (String, String) { (f"L{n}", f"R{n}") }
+fn first(n: i64) -> String { let (a, _) = pair(n); a }
+fn main() {
+    let (a, b) = pair(1);     // both leaves owned + freed (the reported leak)
+    println(a);
+    println(b);
+    println(first(2));        // returned leaf — moved out, must not double-free
+    let t = pair(3);
+    let (c, d) = t;           // non-fresh destructure — source frees, not c/d
+    println(c);
+    println(d);
+    let (e, _) = pair(4);     // wildcard-discarded element also freed
+    println(e);
+}
+"#,
+            &["L1", "R1", "L2", "L3", "R3", "L4"],
+            "tuple_destructure_leaf_cleanup",
+        );
+    }
+
     // ── push_str of a fresh-owned String temp (lexer token-text shape) ──
     //
     // `buffer.push_str(s.substring(a, b))` passes a freshly-malloc'd String

@@ -2208,6 +2208,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     if matches!(&pattern.kind, PatternKind::Struct { .. }) {
                         self.finish_owned_struct_destructure(pattern, value, val)?;
                     }
+                    // B-2026-06-13-5: `let (a, b) = pair()` — `bind_pattern`'s
+                    // Tuple arm extracts each element into a fresh leaf alloca
+                    // but registers no scope-exit free, so a String/Vec element's
+                    // heap buffer leaked (2000 leaks / 46 KB over a 1000-iter
+                    // destructure loop). Tuple counterpart of the struct call
+                    // above; dispatch was already wired in `bind_pattern` (B-12-3).
+                    if matches!(&pattern.kind, PatternKind::Tuple(_)) {
+                        self.finish_owned_tuple_destructure(pattern, value, val)?;
+                    }
                 }
                 // For shared-struct lets that may not execute at runtime
                 // (nested inside a loop body or conditional branch),
@@ -3767,6 +3776,137 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         Ok(())
+    }
+
+    /// Finish an owned `let (a, b) = <expr>` tuple destructure: queue scope-exit
+    /// cleanup for each heap-owning leaf. `bind_pattern` only allocates the leaf
+    /// slots (and B-12-3 registers their dispatch side-tables) — without this,
+    /// a `String`/`Vec` element's heap buffer leaks once per destructure
+    /// (B-2026-06-13-5). The tuple sibling of `finish_owned_struct_destructure`.
+    ///
+    /// Gated on `expr_yields_fresh_owned_temp(value)`: only a fresh owned temp
+    /// (call/method result, not a borrow) hands its element buffers to the
+    /// leaves. A move/alias of an existing tuple binding (`let (a, b) = t`) is
+    /// freed by its source, so tracking here would double-free. The general
+    /// move-out suppression keys on the leaf slot, so a leaf later returned or
+    /// moved into a sink is suppressed exactly like a simple `let` binding.
+    fn finish_owned_tuple_destructure(
+        &mut self,
+        pattern: &Pattern,
+        value: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        let PatternKind::Tuple(pats) = &pattern.kind else {
+            return Ok(());
+        };
+        let BasicValueEnum::StructValue(sv) = val else {
+            return Ok(());
+        };
+        if !self.expr_yields_fresh_owned_temp(value) {
+            return Ok(());
+        }
+        self.track_tuple_destructure_leaf_cleanups(pats, sv);
+        Ok(())
+    }
+
+    /// Per-element cleanup for an owned (already-fresh-checked) tuple
+    /// destructure. Split out so nested tuples (`let (a, (b, c)) = …`) recurse.
+    fn track_tuple_destructure_leaf_cleanups(
+        &mut self,
+        pats: &[Pattern],
+        sv: inkwell::values::StructValue<'ctx>,
+    ) {
+        for (idx, pat) in pats.iter().enumerate() {
+            match &pat.kind {
+                PatternKind::Binding(name) => {
+                    if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                        self.track_destructure_leaf_cleanup(name, slot.ptr);
+                    }
+                }
+                // `let (a, _) = pair()` — the discarded element still owns its
+                // buffer. A wildcard has no binding / type-table entry, so detect
+                // the String/Vec shape by LLVM layout (the `{ptr,len,cap}` vec
+                // struct) and free it through a synthetic slot. (A discarded
+                // `Vec[String]` frees its outer buffer here; per-element inner
+                // frees of a discarded nested-heap collection are a narrow
+                // residual, as in the struct path.)
+                PatternKind::Wildcard => {
+                    let elem = self
+                        .builder
+                        .build_extract_value(sv, idx as u32, "tuple.discard")
+                        .unwrap();
+                    if elem.get_type() == self.vec_struct_type().into() {
+                        let fn_val = self.current_fn.unwrap();
+                        let synth = format!("__tuple_discard_{}", self.indexed_elem_counter);
+                        self.indexed_elem_counter += 1;
+                        let alloca = self.create_entry_alloca(fn_val, &synth, elem.get_type());
+                        self.builder.build_store(alloca, elem).unwrap();
+                        let i8t = self.context.i8_type().into();
+                        self.track_vec_var(alloca, Some(i8t));
+                    }
+                }
+                // Nested tuple: recurse (the whole aggregate was already proven
+                // fresh by the caller, so each nested element is fresh too).
+                PatternKind::Tuple(inner) => {
+                    let elem = self
+                        .builder
+                        .build_extract_value(sv, idx as u32, "tuple.nested")
+                        .unwrap();
+                    if let BasicValueEnum::StructValue(inner_sv) = elem {
+                        self.track_tuple_destructure_leaf_cleanups(inner, inner_sv);
+                    }
+                }
+                // Nested struct pattern inside a tuple (`let (a, Foo { x }) = …`):
+                // dispatch was registered by `bind_pattern`, but per-field cleanup
+                // there is not wired (a narrow residual; the reported tuple-of-
+                // String/Vec leak is fully covered).
+                _ => {}
+            }
+        }
+    }
+
+    /// Queue scope-exit cleanup for a heap-owning destructure leaf, keyed off
+    /// the dispatch side-tables `register_pattern_leaf_dispatch` already
+    /// populated: String/Vec → `{ptr,len,cap}` buffer free; Map/Set → handle
+    /// free; owned (non-shared) struct → its drop fn. `Slice` leaves are borrows
+    /// (registered in `slice_elem_types`, not `vec_elem_types`) so they queue
+    /// nothing. This is the registry-keyed analogue of
+    /// `track_owned_destructure_field_cleanup` (which keys off a `TypeExpr` the
+    /// tuple path doesn't have without an annotation).
+    fn track_destructure_leaf_cleanup(&mut self, name: &str, alloca: PointerValue<'ctx>) {
+        // String + Vec both register `vec_elem_types` (the buffer shape).
+        if let Some(&elem) = self.vec_elem_types.get(name) {
+            self.track_vec_var(alloca, Some(elem));
+            return;
+        }
+        if self.map_key_types.contains_key(name) || self.set_elem_types.contains_key(name) {
+            let key_is_vec = self
+                .map_key_types
+                .get(name)
+                .or_else(|| self.set_elem_types.get(name))
+                .copied()
+                .is_some_and(|t| self.llvm_ty_is_vec_struct(t));
+            let val_is_vec = self
+                .map_val_types
+                .get(name)
+                .copied()
+                .is_some_and(|t| self.llvm_ty_is_vec_struct(t));
+            let val_shared_heap = self.map_val_shared_heap_type_for(name);
+            let key_shared_heap = self.map_key_shared_heap_type_for(name);
+            self.track_map_var(
+                alloca,
+                key_is_vec,
+                val_is_vec,
+                val_shared_heap,
+                key_shared_heap,
+            );
+            return;
+        }
+        if let Some(tn) = self.var_type_names.get(name).cloned() {
+            if self.struct_types.contains_key(&tn) && !self.shared_types.contains_key(&tn) {
+                self.track_struct_var(&tn, alloca);
+            }
+        }
     }
 
     /// Recursively register method-dispatch side-tables for the leaf bindings
