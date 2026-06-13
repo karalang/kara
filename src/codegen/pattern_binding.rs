@@ -574,8 +574,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // below misses and the fields stay unbound → "Undefined
                 // variable".)
                 let variant_name = path.last().cloned().unwrap_or_default();
-                if path.len() >= 2 {
-                    let enum_name = path[path.len() - 2].clone();
+                // Resolve the enum this struct-variant belongs to. A qualified
+                // `Enum.Variant { .. }` names it directly; an UNQUALIFIED
+                // `Variant { .. }` (B-2026-06-13-7) resolves it from the variant
+                // name via the same user-vs-seed fallback the match-condition
+                // and tuple-variant paths use (`variant_pattern_enum_name`).
+                // Before this, the binding only ran for `path.len() >= 2`, so an
+                // unqualified struct-variant fell through to the plain-struct
+                // lookup below — which misses (the name is a variant, not a
+                // struct) and left the fields unbound → "Undefined variable".
+                if let Some(enum_name) = self.variant_pattern_enum_name(pattern) {
                     if let Some(decl_field_names) =
                         self.enum_variant_struct_field_names(&enum_name, &variant_name)
                     {

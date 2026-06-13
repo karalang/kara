@@ -919,6 +919,62 @@ fn main() {
         }
     }
 
+    #[test]
+    fn e2e_unqualified_struct_variant_pattern_binds_fields() {
+        // B-2026-06-13-7: an UNQUALIFIED struct-variant pattern (`A { n }`, no
+        // `E.` qualifier) must bind its fields. Pre-fix the binding path only
+        // ran for a qualified `Enum.Variant { .. }` (path.len() >= 2), so an
+        // unqualified `A { n }` fell through to the plain-struct lookup (which
+        // misses — the name is a variant, not a struct) and `n` stayed unbound:
+        // "codegen failed: Undefined variable 'n'". The sibling test above only
+        // ever uses the qualified `Shape.Circle { r }` form, which masked it.
+        // Covers single + multi-field variants and a mix of struct/unit arms.
+        if let Some(out) = run_program(
+            "enum E { A { n: i64 }, C { x: i64, y: i64 }, B }\n\
+             fn f(e: E) -> i64 {\n\
+                 match e {\n\
+                     A { n } => n,\n\
+                     C { x, y } => x + y,\n\
+                     B => 0,\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 println(f\"{f(E.A { n: 5 })}\");\n\
+                 println(f\"{f(E.C { x: 3, y: 4 })}\");\n\
+                 println(f\"{f(E.B)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n7\n0\n");
+        }
+    }
+
+    #[test]
+    fn e2e_unqualified_struct_variant_impl_display_round_trip() {
+        // B-2026-06-13-7 (the GAP-W4 origin): a user `impl Display` whose
+        // `to_string` matches struct variants with UNQUALIFIED patterns —
+        // exactly `examples/weave`'s `ParseError` shape — must `karac build`
+        // (it already worked under `karac run`).
+        if let Some(out) = run_program(
+            "enum ParseError { Unexpected { got: String }, OutOfRange { value: i64 } }\n\
+             impl Display for ParseError {\n\
+                 fn to_string(ref self) -> String {\n\
+                     match self {\n\
+                         Unexpected { got } => f\"unexpected: {got}\",\n\
+                         OutOfRange { value } => f\"out of range: {value}\",\n\
+                     }\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let e1: ParseError = ParseError.Unexpected { got: \"tok\" };\n\
+                 let e2: ParseError = ParseError.OutOfRange { value: 9 };\n\
+                 println(f\"{e1}\");\n\
+                 println(f\"{e2}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "unexpected: tok\nout of range: 9\n");
+        }
+    }
+
     // ── User `impl Display` dispatch (codegen) ──
 
     #[test]
