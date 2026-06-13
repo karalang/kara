@@ -56,6 +56,23 @@ pub enum UseKind {
     /// emit this kind — those are partial mutations of the root, not
     /// rebindings of the binding.
     Reassign,
+    /// Marker site for a `let name = expr;` binding introduction
+    /// (B-2026-06-12-6 cluster 2). Like `Reassign`, it rebinds `name`
+    /// to a fresh value — but for a `let` (a NEW binding / shadow),
+    /// not an assignment. The predicate ignores it everywhere EXCEPT
+    /// `loop_of_consume_candidates`, where a `Define` of the binding
+    /// inside a natural loop suppresses the loop-of-consume rule: each
+    /// iteration defines a fresh value, so consuming it is not a
+    /// next-iteration use-after-move (the false positive that
+    /// RC-fallback-boxed a loop-local `let a = Enum(..); consume(a)`
+    /// and leaked its enum payload). Recorded AFTER the RHS uses, so a
+    /// shadowing `let a = f(a)` still orders the old `a`'s consume
+    /// before the new binding's `Define`. Skipped as a (C, U) partner
+    /// in `first_witness` / `first_uam_witness`, and NOT treated as a
+    /// `reassign_kills` kill, so the formal-RC / UAM outputs are
+    /// unchanged — the only behavioral change is the loop-of-consume
+    /// suppression.
+    Define,
 }
 
 /// Why a Consume use-site was emitted. Defaulted to `Direct`; set to
@@ -530,8 +547,25 @@ impl<'a> CfgBuilder<'a> {
                 // cleanup-rename frame (if any). The function body's
                 // own introductions are no-ops; only defer/errdefer
                 // body lowerings push a cleanup frame.
+                //
+                // Record a `Define` marker (after the RHS uses, in the
+                // post-RHS block `after`) for each introduced name so
+                // `loop_of_consume_candidates` can tell a loop-LOCAL
+                // `let a = …` (fresh each iteration → consuming it is
+                // safe) from a value defined OUTSIDE the loop and moved
+                // inside (the genuine next-iteration use-after-move the
+                // rule targets). B-2026-06-12-6 cluster 2.
                 for name in pattern_bindings(pattern) {
                     self.note_local_introduced(&name);
+                    self.record_use(
+                        after,
+                        UseSite {
+                            binding: name.clone(),
+                            kind: UseKind::Define,
+                            span: pattern.span.clone(),
+                            consume_origin: ConsumeOrigin::Direct,
+                        },
+                    );
                 }
                 after
             }
@@ -1170,12 +1204,14 @@ mod tests {
     fn linear_program_records_reads_in_order() {
         let cfg = cfg_of("fn main() { let x = 1; let y = x + x; let _z = y; }");
         let entry = cfg.block(cfg.entry);
-        let names: Vec<&str> = entry.uses.iter().map(|u| u.binding.as_str()).collect();
-        // We expect at least the two reads of `x` followed by one of `y`,
-        // in source order. Other helper symbols may appear if any.
-        let user_names: Vec<&str> = names
+        // Filter to READ sites: `let`-introductions now also record a
+        // `Define` rebind marker (B-2026-06-12-6 cluster 2), which is
+        // not a read and would otherwise interleave here.
+        let user_names: Vec<&str> = entry
+            .uses
             .iter()
-            .copied()
+            .filter(|u| u.kind == UseKind::Read)
+            .map(|u| u.binding.as_str())
             .filter(|n| matches!(*n, "x" | "y"))
             .collect();
         assert_eq!(user_names, vec!["x", "x", "y"]);
@@ -1576,7 +1612,11 @@ mod tests {
             .block(cfg.entry)
             .uses
             .iter()
-            .filter(|u| u.binding == "x")
+            // Exclude the `let x = …` introduction's `Define` marker
+            // (B-2026-06-12-6 cluster 2) — it legitimately lives in the
+            // declaration block; this test is about the DEFER body's
+            // read of `x` not being walked inline.
+            .filter(|u| u.binding == "x" && u.kind != UseKind::Define)
             .count();
         assert_eq!(
             entry_x_uses, 0,
@@ -1725,6 +1765,13 @@ mod tests {
         let mut b_block: Option<BlockId> = None;
         for blk in &cfg.blocks {
             for u in &blk.uses {
+                // Skip the `let a`/`let b` introduction `Define` markers
+                // (B-2026-06-12-6 cluster 2) — they sit in the declaration
+                // block; this test tracks the DEFER-body reads, whose LIFO
+                // ordering across cleanup blocks is the property under test.
+                if u.kind == UseKind::Define {
+                    continue;
+                }
                 if u.binding == "a" && a_block.is_none() {
                     a_block = Some(blk.id);
                     if b_block.is_none() {

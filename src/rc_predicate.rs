@@ -144,8 +144,9 @@ fn first_witness(
             if i == j {
                 continue;
             }
-            // Reassign markers are kill signals — never the U partner.
-            if u.kind == UseKind::Reassign {
+            // Reassign / Define markers are rebind signals — never the
+            // U partner (a `let`/assign introduction is not a use).
+            if matches!(u.kind, UseKind::Reassign | UseKind::Define) {
                 continue;
             }
             if dom.dominates(*cb, *ub) || dom.dominates(*ub, *cb) {
@@ -356,8 +357,10 @@ fn first_uam_witness(
             if i == j {
                 continue;
             }
-            // Reassign markers are kill signals — never the U partner.
-            if u.kind == UseKind::Reassign {
+            // Reassign / Define markers are rebind signals — never the U
+            // partner (a `let`/assign introduction is not a use, so it
+            // must not be reported as a "used again" UAM site).
+            if matches!(u.kind, UseKind::Reassign | UseKind::Define) {
                 continue;
             }
             if !precedes(*cb, *ci, *ub, *ui, dom) {
@@ -489,9 +492,18 @@ pub fn loop_of_consume_candidates(cfg: &Cfg, dom: &DominatorTree) -> HashMap<Str
                 if !nloop.contains(cb) {
                     return false;
                 }
-                let has_rebind = uses
-                    .iter()
-                    .any(|(rb, _, u)| u.kind == UseKind::Reassign && nloop.contains(rb));
+                // A rebind of the binding INSIDE the same natural loop
+                // suppresses the rule: either a `name = …` reassignment
+                // (`Reassign`) or a loop-local `let name = …` binding
+                // (`Define`, B-2026-06-12-6 cluster 2). Both give the
+                // consume a fresh value each iteration, so it is not a
+                // next-iteration use-after-move. A `Define` OUTSIDE the
+                // loop (`let v = make(); loop { consume(v) }`) is not in
+                // `nloop`, so the rule still fires there — the genuine RC
+                // case is preserved.
+                let has_rebind = uses.iter().any(|(rb, _, u)| {
+                    matches!(u.kind, UseKind::Reassign | UseKind::Define) && nloop.contains(rb)
+                });
                 !has_rebind
             });
             if !fires {

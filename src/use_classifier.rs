@@ -918,7 +918,9 @@ mod tests {
             match k {
                 UseKind::Consume => consumes += 1,
                 UseKind::Read => reads += 1,
-                UseKind::Reassign => {}
+                // `Reassign` / `Define` are CFG-only rebind markers (the
+                // classifier's `class` map never holds them); count neither.
+                UseKind::Reassign | UseKind::Define => {}
             }
         }
         (consumes, reads)
