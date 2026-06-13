@@ -1831,6 +1831,9 @@ impl<'a> Interpreter<'a> {
     }
 
     fn set_field(&mut self, object: &Expr, field: &str, val: Value) {
+        // A bare-identifier (or `self`) receiver is mutated in its env slot.
+        // Plain structs are value types, so the modified struct must be
+        // re-inserted; shared structs are Arc-backed and mutate in place.
         let target_name: Option<&str> = match &object.kind {
             ExprKind::Identifier(name) => Some(name.as_str()),
             ExprKind::SelfValue => Some("self"),
@@ -1844,87 +1847,105 @@ impl<'a> Interpreter<'a> {
                     self.env.set(name, Value::Struct { name: sn, fields });
                 }
                 Some(Value::SharedStruct(inner)) => {
-                    // Aliasing: `inner` is a clone of the Arc held by `name`'s
-                    // slot. Both point to the same allocation; mutating
-                    // through `inner` is visible to every other holder.
-                    if inner.immutable_fields.contains_key(field)
-                        || inner.weak_immutable_fields.contains_key(field)
-                    {
-                        // Defense-in-depth: typechecker already rejects
-                        // writes to non-`mut` fields. If we reach here,
-                        // the static check missed.
-                        self.record_runtime_error(
-                            format!(
-                                "shared struct field '{}.{}' is not declared mut",
-                                inner.name, field
-                            ),
-                            &object.span,
-                        );
-                        return;
-                    }
-                    if let Some(cell) = inner.mut_fields.get(field) {
-                        // Spec: writes are exclusive — panic if any other
-                        // borrow (read or write) of the same field is
-                        // active when a write begins.
-                        match cell.value.try_write() {
-                            Ok(mut guard) => {
-                                *guard = val;
-                            }
-                            Err(_) => {
-                                self.record_runtime_error(
-                                    format!(
-                                        "shared struct field '{}.{}' write while another borrow is active",
-                                        inner.name, field
-                                    ),
-                                    &object.span,
-                                );
-                            }
-                        }
-                    } else if let Some(slot) = inner.weak_mut_fields.get(field) {
-                        // Spec § Shared Types: assignment to a weak
-                        // field accepts a strong reference and
-                        // downgrades it. `Weak::new()` (an empty weak)
-                        // is the safe fallback for a non-shared rhs;
-                        // typechecker should reject that case but
-                        // record a runtime error as defense-in-depth.
-                        let weak = match &val {
-                            Value::SharedStruct(arc) => Arc::downgrade(arc),
-                            _ => {
-                                self.record_runtime_error(
-                                    format!(
-                                        "weak field '{}.{}' assigned a non-shared value",
-                                        inner.name, field
-                                    ),
-                                    &object.span,
-                                );
-                                std::sync::Weak::new()
-                            }
-                        };
-                        match slot.try_write() {
-                            Ok(mut guard) => {
-                                *guard = weak;
-                            }
-                            Err(_) => {
-                                self.record_runtime_error(
-                                    format!(
-                                        "shared struct field '{}.{}' write while another borrow is active",
-                                        inner.name, field
-                                    ),
-                                    &object.span,
-                                );
-                            }
-                        }
-                    } else {
-                        unreachable!(
-                            "shared struct field '{}.{}' not found at {}:{}; \
-                             either an interpreter codepath constructed the SharedStruct without this field \
-                             or the typechecker accepted assignment to a missing field",
-                            inner.name, field, object.span.line, object.span.column
-                        );
-                    }
+                    self.write_shared_struct_field(&inner, field, val, &object.span);
                 }
                 _ => {}
             }
+            return;
+        }
+        // Projection receiver (`a.b.field = x`, `v[i].field = x`). A shared
+        // struct reached through a projection is a clone of the same Arc, so
+        // writing through it lands on the shared allocation regardless of how
+        // the place was reached. (A projection that yields a *plain* value-type
+        // struct cannot be written through here — that nested place needs
+        // write-back up the chain, tracked separately; shared structs are the
+        // reference-semantics case the spec guarantees aliasing for.)
+        if let Value::SharedStruct(inner) = self.eval_expr_inner(object) {
+            self.write_shared_struct_field(&inner, field, val, &object.span);
+        }
+    }
+
+    /// Write `val` into shared-struct field `field` through the Arc-backed
+    /// `inner`. The mutation is visible to every holder of the same Arc,
+    /// independent of how the receiver place was reached (bare binding, field
+    /// projection, or container element).
+    fn write_shared_struct_field(
+        &mut self,
+        inner: &SharedStructInner,
+        field: &str,
+        val: Value,
+        span: &crate::token::Span,
+    ) {
+        if inner.immutable_fields.contains_key(field)
+            || inner.weak_immutable_fields.contains_key(field)
+        {
+            // Defense-in-depth: typechecker already rejects writes to non-`mut`
+            // fields. If we reach here, the static check missed.
+            self.record_runtime_error(
+                format!(
+                    "shared struct field '{}.{}' is not declared mut",
+                    inner.name, field
+                ),
+                span,
+            );
+            return;
+        }
+        if let Some(cell) = inner.mut_fields.get(field) {
+            // Spec: writes are exclusive — panic if any other borrow (read or
+            // write) of the same field is active when a write begins.
+            match cell.value.try_write() {
+                Ok(mut guard) => {
+                    *guard = val;
+                }
+                Err(_) => {
+                    self.record_runtime_error(
+                        format!(
+                            "shared struct field '{}.{}' write while another borrow is active",
+                            inner.name, field
+                        ),
+                        span,
+                    );
+                }
+            }
+        } else if let Some(slot) = inner.weak_mut_fields.get(field) {
+            // Spec § Shared Types: assignment to a weak field accepts a strong
+            // reference and downgrades it. `Weak::new()` (an empty weak) is the
+            // safe fallback for a non-shared rhs; typechecker should reject that
+            // case but record a runtime error as defense-in-depth.
+            let weak = match &val {
+                Value::SharedStruct(arc) => Arc::downgrade(arc),
+                _ => {
+                    self.record_runtime_error(
+                        format!(
+                            "weak field '{}.{}' assigned a non-shared value",
+                            inner.name, field
+                        ),
+                        span,
+                    );
+                    std::sync::Weak::new()
+                }
+            };
+            match slot.try_write() {
+                Ok(mut guard) => {
+                    *guard = weak;
+                }
+                Err(_) => {
+                    self.record_runtime_error(
+                        format!(
+                            "shared struct field '{}.{}' write while another borrow is active",
+                            inner.name, field
+                        ),
+                        span,
+                    );
+                }
+            }
+        } else {
+            unreachable!(
+                "shared struct field '{}.{}' not found at {}:{}; \
+                 either an interpreter codepath constructed the SharedStruct without this field \
+                 or the typechecker accepted assignment to a missing field",
+                inner.name, field, span.line, span.column
+            );
         }
     }
 

@@ -2470,6 +2470,44 @@ fn test_shared_struct_aliasing_propagates_mutation() {
 }
 
 #[test]
+fn test_shared_struct_field_write_through_struct_field_projection() {
+    // Regression (Tangle dogfooding, undo/redo): a `shared struct` reached
+    // through a *plain struct field* projection (`holder.cell.value = x`) must
+    // write through the shared Arc. `set_field` previously bailed for any
+    // receiver that was not a bare identifier / `self`, silently dropping the
+    // write — undo/redo over shared state read stale values.
+    assert_eq!(
+        run("shared struct Cell { mut value: i64 }\n\
+             struct Holder { cell: Cell }\n\
+             fn main() {\n\
+                 let c = Cell { value: 1 };\n\
+                 let h = Holder { cell: c };\n\
+                 h.cell.value = 99;\n\
+                 println(c.value);\n\
+             }"),
+        "99\n"
+    );
+}
+
+#[test]
+fn test_shared_struct_field_write_through_index_projection() {
+    // Same regression via a *container element* projection (`v[0].value = x`):
+    // the Vec element is a clone of the same Arc, so the write is visible at
+    // the original handle.
+    assert_eq!(
+        run("shared struct Cell { mut value: i64 }\n\
+             fn main() {\n\
+                 let c = Cell { value: 1 };\n\
+                 let mut v = Vec.new();\n\
+                 v.push(c);\n\
+                 v[0].value = 42;\n\
+                 println(c.value);\n\
+             }"),
+        "42\n"
+    );
+}
+
+#[test]
 fn test_shared_struct_per_field_independence() {
     // Per design.md § Part 5: \"mutating `node.left` does not conflict
     // with reading `node.right`\". Per-field tracking is the entire
