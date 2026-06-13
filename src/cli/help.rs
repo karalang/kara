@@ -405,9 +405,10 @@ karac query - Query compiler analysis
 
 USAGE:
     karac query <kind> [flags] <target>
-        <target> = <file.kara>.<function>   for per-function kinds
-                 = <file.kara>              for cost-summary, attributes, queries,
-                                            monomorphization
+        <target> = <file.kara>.<function>      for per-function kinds
+                 = <file.kara>.<Type>.<method> for an impl method
+                 = <file.kara>                 for cost-summary, attributes,
+                                               queries, monomorphization
 
 KINDS:
     effects            Inferred and declared effects

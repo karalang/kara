@@ -1579,26 +1579,50 @@ fn parse_query_command(args: &[String]) -> Command {
     };
     let target = &args[target_idx];
     // cost-summary, attributes, and queries take a bare file path. The
-    // other kinds parse `file.function` via rsplit (multi-dot file
-    // paths are fine since Kāra identifiers cannot contain `.`).
+    // other kinds parse `file.function`.
     let (file, function) = match &kind {
         QueryKind::CostSummary
         | QueryKind::Attributes { .. }
         | QueryKind::Queries
         | QueryKind::Monomorphization => (target.clone(), String::new()),
         QueryKind::AffectedBy { .. } => unreachable!("affected-by returned via dedicated branch"),
-        _ => match target.rsplit_once('.') {
-            Some((f, func)) => (f.to_string(), func.to_string()),
-            None => {
-                eprintln!("error: query target must be <file>.<function>, got '{target}'");
-                process::exit(1);
-            }
-        },
+        _ => split_query_function_target(target),
     };
     Command::Query {
         kind,
         file,
         function,
+    }
+}
+
+/// Split a per-function query target `<file>.<function>` into its file path
+/// and function key.
+///
+/// A function key may itself contain a dot: impl methods are keyed
+/// `Type.method` (mirroring `OwnershipChecker::check_function` /
+/// `query_ownership`'s `param_modes` keys). A naive last-dot `rsplit_once('.')`
+/// therefore mis-splits `foo.kara.Type.method` into file `foo.kara.Type` —
+/// methods become unreachable. Since query targets are `.kara` source files,
+/// split at the `.kara.` extension boundary instead, which keeps the whole
+/// `Type.method` qualifier intact. Targets without the extension (legacy /
+/// extensionless) fall back to the last-dot split.
+fn split_query_function_target(target: &str) -> (String, String) {
+    const EXT: &str = ".kara.";
+    if let Some(idx) = target.find(EXT) {
+        let file = target[..idx + ".kara".len()].to_string();
+        let function = target[idx + EXT.len()..].to_string();
+        if function.is_empty() {
+            eprintln!("error: query target must be <file>.<function>, got '{target}'");
+            process::exit(1);
+        }
+        return (file, function);
+    }
+    match target.rsplit_once('.') {
+        Some((f, func)) if !func.is_empty() => (f.to_string(), func.to_string()),
+        _ => {
+            eprintln!("error: query target must be <file>.<function>, got '{target}'");
+            process::exit(1);
+        }
     }
 }
 
@@ -1683,7 +1707,36 @@ fn parse_affected_by_target(raw: &str) -> (String, crate::call_graph::TargetSpec
 #[cfg(test)]
 mod tests {
     use super::parse_affected_by_target;
+    use super::split_query_function_target;
     use crate::call_graph::TargetSpec;
+
+    /// Per-function query targets (`ownership` / `effects` / `concurrency`).
+    /// The `Type.method` case is the regression: a last-dot split mis-routed
+    /// `foo.kara.Type.method` to file `foo.kara.Type`, making impl methods
+    /// unreachable (surfaced by the Tangle dogfooding project).
+    #[test]
+    fn query_function_target_split_matrix() {
+        // Free function — split at the `.kara.` boundary.
+        assert_eq!(
+            split_query_function_target("src/foo.kara.my_fn"),
+            ("src/foo.kara".to_string(), "my_fn".to_string())
+        );
+        // Impl method — the qualifier dot is preserved.
+        assert_eq!(
+            split_query_function_target("src/foo.kara.GraphNode.add_edge"),
+            ("src/foo.kara".to_string(), "GraphNode.add_edge".to_string())
+        );
+        // Multi-segment directory path with its own dots stays intact.
+        assert_eq!(
+            split_query_function_target("a.b/foo.kara.Type.method"),
+            ("a.b/foo.kara".to_string(), "Type.method".to_string())
+        );
+        // Extensionless target falls back to the last-dot split.
+        assert_eq!(
+            split_query_function_target("foo.my_fn"),
+            ("foo".to_string(), "my_fn".to_string())
+        );
+    }
 
     /// Pure string parsing — the Windows drive-prefix cases run (and
     /// regress) on every host, not just windows CI.
