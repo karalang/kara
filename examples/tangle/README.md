@@ -100,12 +100,18 @@ path)" — is deferred until the active codegen leak cluster
 (`bugs.md` B-2026-06-12-6 / -10) settles, so the clean ASAN run is a meaningful
 verification pass rather than a re-hit of in-flight leaks.
 
-**Surfaced tooling gap (Tangle dogfooding find).** The per-function query kinds
-(`ownership` / `effects` / `concurrency`) parse their target with
-`rsplit_once('.')` on `<file>.<function>` (`src/cli/args.rs:1590`), so they
-**cannot address an impl method** — `…kara.add_edge` resolves the method's bare
-name (not found, methods are keyed `Type.method`) and `…kara.GraphNode.add_edge`
-is misread as a filename. The sibling `karac query affected-by` already supports
-the qualified `file.kara:Type.method` form (`args.rs:1611`); the per-function
-kinds should accept the same. Free functions (e.g. `build_diamond`) query fine,
-so this doesn't block the demo — but a Tangle demo over methods needs it fixed.
+**Tooling gap surfaced *and fixed* by Tangle dogfooding.** The per-function
+query kinds (`ownership` / `effects` / `concurrency`) split their target with a
+last-dot `rsplit_once('.')`, so an impl method (keyed `Type.method`) was
+unreachable — `…kara.GraphNode.add_edge` mis-split into file
+`…kara.GraphNode`. Fixed: the target now splits at the `.kara.` extension
+boundary, keeping the `Type.method` qualifier intact. Both forms work:
+
+```bash
+karac query ownership examples/tangle/src/cross_graph.kara.GraphNode.add_edge
+karac query effects   examples/tangle/src/cross_graph.kara.GraphNode.add_edge
+```
+
+This is the dogfooding loop working as intended — the demo exercised a real
+slice of the tooling hard enough that the gap fell out, and the fix is in the
+compiler, not worked around.
