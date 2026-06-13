@@ -346,6 +346,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let fn_val = self.module.add_function(&func.name, fn_type, linkage);
         self.apply_linker_attrs(fn_val, &func.attributes);
+        self.emit_param_alias_attrs(fn_val, func);
 
         // Phase-7 line 5 sub-item 1 — hot-swap slot registration.
         // When `--enable-hot-swap` is active, every user-defined `pub fn`
@@ -362,6 +363,78 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         Ok(fn_val)
+    }
+
+    /// Emit ownership-derived LLVM pointer-aliasing attributes on parameters
+    /// (noalias-ref-params slice 1). Today this emits `noalias` on every
+    /// `mut ref T` parameter, lowering the language's exclusive-borrow
+    /// guarantee into the attribute LLVM's alias analysis and loop vectorizer
+    /// want but could never prove on their own.
+    ///
+    /// **Why `mut ref T` → `noalias` is sound.** A `mut ref T` is an
+    /// *exclusive* borrow: while it is live, no other reference — shared or
+    /// mutable — to the same object may be used. That is precisely LLVM's
+    /// `noalias` contract (memory reached through this pointer is reached
+    /// through no pointer not derived from it). The guarantee is pinned by
+    /// the type system (design.md § Variance — "`mut ref T` is invariant in
+    /// `T` — load-bearing soundness pin") and enforced by the borrow checker
+    /// and RC-fallback pass (design.md § Part 4 — "RC and mutation are mutually
+    /// exclusive": a value with two un-ordered live uses is demoted to RC and
+    /// can then never be mutably borrowed, so an RC-aliased value never
+    /// reaches a `mut ref` position). Exclusivity *subsumes* interior
+    /// mutability, so — unlike the `ref T` read-borrow case — no "Freeze"
+    /// predicate is needed: even if `T` carries `Atomic[_]` / `Mutex[_]`
+    /// fields, a `mut ref` to it is still the unique live path.
+    ///
+    /// **The one carve-out: shared types.** A `shared struct` / `shared enum`
+    /// uses RC reference semantics with *per-field runtime borrow flags*
+    /// (design.md § Part 5), so its exclusivity is a dynamic check, not a
+    /// static one — exactly the assumption `noalias` must not rest on. The
+    /// type system already forbids `mut ref self` on a shared type (a `mut
+    /// ref` needs exclusive ownership, impossible under multiple RC holders),
+    /// so in principle none reach here; we nonetheless skip any `mut ref`
+    /// whose referent is a known shared type, closing the danger zone even if
+    /// a checker hole ever lets one through.
+    ///
+    /// **What is NOT a target.** `ref T` (shared read borrow) is deferred: it
+    /// needs `readonly` gated on a transitive Freeze predicate because
+    /// `Atomic[_]`/`Mutex[_]` fields mutate through a shared `ref self`
+    /// (design.md § Part 5 — Kāra's `UnsafeCell` analogue). `mut Slice[T]`
+    /// (`TypeKind::MutSlice`) is a by-value `{ptr,len}` fat struct — its
+    /// pointer is a field, not the parameter — so slice-kernel disjointness
+    /// needs `!alias.scope`/`!noalias` metadata on the loads/stores
+    /// (design.md:§ proven disjointness lowering), a separate slice.
+    /// Monomorphized generics are declared in `declare_mono_function`, not
+    /// here, so they are a follow-on for the same treatment.
+    ///
+    /// **Index correspondence.** Kāra param `i` is LLVM param `i`: the niche
+    /// ABI rewrites param *types* but never reorders, and the coroutine ramp
+    /// appends its hidden completion slot *after* all Kāra params, so
+    /// `AttributeLoc::Param(i)` is correct on both paths. (`mut ref self`
+    /// receivers are desugared into `params[0]` upstream by
+    /// `make_impl_method_function`, so they are covered.)
+    fn emit_param_alias_attrs(&self, fn_val: FunctionValue<'ctx>, func: &Function) {
+        let noalias_kind = inkwell::attributes::Attribute::get_named_enum_kind_id("noalias");
+        debug_assert!(noalias_kind != 0, "noalias attribute kind-id must resolve");
+        for (i, param) in func.params.iter().enumerate() {
+            let TypeKind::MutRef(inner) = &param.ty.kind else {
+                continue;
+            };
+            // Skip the shared-type carve-out (see doc comment): a `mut ref`
+            // to a `shared struct`/`shared enum` rests on runtime borrow
+            // flags, not static exclusivity.
+            if let TypeKind::Path(p) = &inner.kind {
+                if let Some(name) = p.segments.last() {
+                    if self.shared_types.contains_key(name.as_str()) {
+                        continue;
+                    }
+                }
+            }
+            fn_val.add_attribute(
+                inkwell::attributes::AttributeLoc::Param(i as u32),
+                self.context.create_enum_attribute(noalias_kind, 0),
+            );
+        }
     }
 
     pub(super) fn compile_function(&mut self, func: &Function) -> Result<(), String> {

@@ -43094,4 +43094,78 @@ fn main() {
             "expected the substrate-gate message, got: {err}"
         );
     }
+
+    // ── Ownership-derived parameter alias attributes (noalias-ref-params) ──
+    //
+    // A `mut ref T` parameter is an exclusive borrow, which is exactly LLVM's
+    // `noalias` contract, so codegen stamps `noalias` on its (ptr-shaped)
+    // parameter. A `ref T` (shared read borrow) does NOT get it yet — that
+    // case needs `readonly` gated on a Freeze predicate and is a follow-on
+    // slice. See `emit_param_alias_attrs` in src/codegen/functions.rs.
+    fn define_line<'a>(ir: &'a str, sym: &str) -> &'a str {
+        ir.lines()
+            .find(|l| l.contains("define") && l.contains(sym))
+            .unwrap_or_else(|| panic!("no `define` line for {sym} in IR"))
+    }
+
+    #[test]
+    fn mut_ref_param_emits_noalias() {
+        let ir = ir_for(
+            r#"
+fn bump(x: mut ref i64) { x = x + 1; }
+fn read_only(y: ref i64) -> i64 { return y; }
+fn two(a: mut ref i64, b: mut ref i64) { a = a + b; }
+fn main() { let mut n: i64 = 41; bump(mut n); print(n); }
+"#,
+        );
+        // `mut ref` → noalias.
+        assert!(
+            define_line(&ir, "@bump(").contains("noalias"),
+            "mut ref param should carry noalias: {}",
+            define_line(&ir, "@bump(")
+        );
+        // `ref` (shared read borrow) → NOT noalias yet (deferred follow-on).
+        assert!(
+            !define_line(&ir, "@read_only(").contains("noalias"),
+            "ref param must not carry noalias yet: {}",
+            define_line(&ir, "@read_only(")
+        );
+        // Every `mut ref` parameter is marked independently.
+        assert_eq!(
+            define_line(&ir, "@two(").matches("noalias").count(),
+            2,
+            "both mut ref params should be noalias: {}",
+            define_line(&ir, "@two(")
+        );
+    }
+
+    #[test]
+    fn mut_ref_self_receiver_emits_noalias() {
+        // The `mut ref self` receiver is desugared into params[0] upstream, so
+        // the exclusive-borrow attribute reaches method receivers too.
+        let ir = ir_for(
+            r#"
+struct Counter { n: i64 }
+impl Counter {
+    fn bump(mut ref self) { self.n = self.n + 1; }
+    fn peek(ref self) -> i64 { return self.n; }
+}
+fn main() {
+    let mut c: Counter = Counter { n: 0 };
+    c.bump();
+    print(c.peek());
+}
+"#,
+        );
+        assert!(
+            define_line(&ir, "@Counter.bump(").contains("noalias"),
+            "mut ref self receiver should carry noalias: {}",
+            define_line(&ir, "@Counter.bump(")
+        );
+        assert!(
+            !define_line(&ir, "@Counter.peek(").contains("noalias"),
+            "ref self receiver must not carry noalias yet: {}",
+            define_line(&ir, "@Counter.peek(")
+        );
+    }
 }
