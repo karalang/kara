@@ -372,6 +372,27 @@ pub(crate) enum CleanupAction<'ctx> {
         /// (Cluster 1): a Map moved into a Vec transfers ownership to the
         /// Vec, which must free the handle on drop.
         elem_map_drop: Option<MapElemDrop<'ctx>>,
+        /// `Some` when the elements are a *named user struct or enum* whose
+        /// own synthesized `__karac_drop_<T>` must run per element. The
+        /// type-driven inline paths above (`llvm_ty_is_vec_struct`,
+        /// `struct_owned_vec_field_indices`) are blind to a struct's enum
+        /// field (an enum's LLVM layout is all-i64 payload words) and to a
+        /// user enum element entirely, so a `Vec[Span]` (`Span` holds a
+        /// `Tok` enum) leaked each element's enum payload on the outer
+        /// buffer's drop (B-2026-06-12-6 cluster 2 gap 2). The drop fn
+        /// (`emit_struct_drop_synthesis` / `emit_enum_drop_switch`, the same
+        /// synthesizers the `StructDrop` / `EnumDrop` actions use) frees
+        /// *every* heap-bearing field cap-guarded, so it is strictly more
+        /// complete than — and **mutually exclusive with** — the inline
+        /// `elem_ty` paths: when set, the drain runs only the per-element
+        /// drop-fn loop, never the inline struct/vec-struct walk (running
+        /// both would double-free the direct Vec/String fields). The element
+        /// LLVM type still rides in `elem_ty` for the per-element GEP stride.
+        /// Threaded from the dispatch sites (which hold the element
+        /// `TypeExpr`) via `track_vec_of_aggs_var` — reverse-lookup by LLVM
+        /// type is unsafe, since user structs use anonymous by-shape
+        /// `context.struct_type`, so two distinct same-shaped types collide.
+        elem_agg_drop: Option<FunctionValue<'ctx>>,
     },
     /// Free an owned `Tensor[T, Shape]`'s single heap block at scope
     /// exit. The binding's slot holds one pointer to the

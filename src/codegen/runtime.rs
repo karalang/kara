@@ -995,6 +995,40 @@ impl<'ctx> super::Codegen<'ctx> {
                 elem_ty,
                 elem_is_tensor: false,
                 elem_map_drop: None,
+                elem_agg_drop: None,
+            });
+        }
+    }
+
+    /// Track a `Vec[<user struct/enum>]` alloca for scope-exit cleanup:
+    /// run each live element's synthesized `__karac_drop_<T>` (which frees
+    /// every heap-bearing field — Vec/String, Map/Set, **and** enum payloads
+    /// — cap-guarded) before releasing the outer buffer. The inline
+    /// type-driven recursion in the `FreeVecBuffer` drain only reaches
+    /// elements that are *themselves* Vec/String or that have a *direct*
+    /// Vec/String field; a `Vec[Span]` where `Span` carries a `Tok` enum
+    /// leaked the enum payload of every element (B-2026-06-12-6 cluster 2
+    /// gap 2). Routing through the struct's own drop fn is strictly more
+    /// complete, so it **supersedes** the inline paths (the drain treats
+    /// `elem_agg_drop` as exclusive — running both would double-free the
+    /// direct heap fields). `elem_ty` is the element's LLVM struct/enum type,
+    /// carried for the per-element GEP stride. The drop fn must be threaded
+    /// from a dispatch site holding the element `TypeExpr`
+    /// (`vec_elem_agg_drop_for_type_expr`) — reverse-lookup by LLVM type is
+    /// unsafe (anonymous by-shape struct types collide).
+    pub(super) fn track_vec_of_aggs_var(
+        &mut self,
+        vec_alloca: PointerValue<'ctx>,
+        elem_ty: BasicTypeEnum<'ctx>,
+        agg_drop: inkwell::values::FunctionValue<'ctx>,
+    ) {
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeVecBuffer {
+                vec_alloca,
+                elem_ty: Some(elem_ty),
+                elem_is_tensor: false,
+                elem_map_drop: None,
+                elem_agg_drop: Some(agg_drop),
             });
         }
     }
@@ -1020,6 +1054,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 elem_ty: Some(self.context.ptr_type(AddressSpace::default()).into()),
                 elem_is_tensor: false,
                 elem_map_drop: Some(map_elem_drop),
+                elem_agg_drop: None,
             });
         }
     }
@@ -1039,6 +1074,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 elem_ty: Some(self.context.ptr_type(AddressSpace::default()).into()),
                 elem_is_tensor: true,
                 elem_map_drop: None,
+                elem_agg_drop: None,
             });
         }
     }
@@ -1276,6 +1312,44 @@ impl<'ctx> super::Codegen<'ctx> {
             val_shared_heap_type,
             key_shared_heap_type,
         })
+    }
+
+    /// When `elem_te` is a *named user struct or enum* (the element type of an
+    /// enclosing `Vec`), synthesize (or reuse) that type's `__karac_drop_<T>`
+    /// so the Vec's scope-exit cleanup runs it per element
+    /// (`track_vec_of_aggs_var`). This closes B-2026-06-12-6 cluster 2 gap 2:
+    /// a `Vec[Span]` where `Span` holds a `Tok` enum field leaked each
+    /// element's enum payload — the inline `FreeVecBuffer` recursion only
+    /// reaches Vec/String elements or *direct* Vec/String fields, both blind
+    /// to the all-i64 enum payload words. The struct/enum drop synthesizers
+    /// are the same ones the `StructDrop` / `EnumDrop` actions use, and free
+    /// every heap-bearing field cap-guarded.
+    ///
+    /// Returns `None` for anything that isn't a heap-bearing, non-shared user
+    /// struct/enum — builtins (`Vec`/`Map`/`Set`/`String`), `Option`/`Result`
+    /// (inline payloads dropped by the let-binding inline-drop machinery, not
+    /// a drop switch — routing them here risks a double-free), shared/RC
+    /// types (their own synthesizer returns `None`; RC dec is separate), and
+    /// no-heap aggregates (the synthesizer returns `None`). Callers fall back
+    /// to the plain `track_vec_var` path on `None`.
+    pub(super) fn vec_elem_agg_drop_for_type_expr(
+        &mut self,
+        elem_te: &TypeExpr,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let name = match &elem_te.kind {
+            TypeKind::Path(p) => p.segments.first()?.clone(),
+            _ => return None,
+        };
+        if matches!(name.as_str(), "Option" | "Result") {
+            return None;
+        }
+        if self.struct_types.contains_key(&name) {
+            return self.emit_struct_drop_synthesis(&name);
+        }
+        if self.enum_layouts.contains_key(&name) {
+            return self.emit_enum_drop_switch(&name);
+        }
+        None
     }
 
     /// Derive the four `track_map_var` classification args for a `Map[K, V]`
@@ -3081,6 +3155,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 elem_ty,
                 elem_is_tensor,
                 elem_map_drop,
+                elem_agg_drop,
             } => {
                 let cap_ptr = self
                     .builder
@@ -3128,7 +3203,74 @@ impl<'ctx> super::Codegen<'ctx> {
                 // § *Recursive Drop for Heap-Owned Collection
                 // Elements > deeper-nesting limitation*.
                 if let Some(et) = elem_ty {
-                    if self.llvm_ty_is_vec_struct(*et) {
+                    if let Some(agg_drop) = elem_agg_drop {
+                        // Named user struct/enum elements: run each live
+                        // element's own `__karac_drop_<T>`, which frees every
+                        // heap-bearing field cap-guarded — Vec/String, Map/Set,
+                        // AND enum payloads (the all-i64 enum words the inline
+                        // paths below are blind to). Strictly more complete than
+                        // the vec-struct / struct-field walks, so it SUPERSEDES
+                        // them (this is the `if`, they are `else if`): running
+                        // both would double-free the direct heap fields.
+                        // Closes B-2026-06-12-6 cluster 2 gap 2 (`Vec[Span]`,
+                        // `Span` holds a `Tok` enum). Guarded by the same
+                        // `cap > 0` branch, so a moved-out Vec skips per-element
+                        // drops too; every slot in `[0, len)` is a live element.
+                        let agg_drop = *agg_drop;
+                        let elem_struct = *et;
+                        let len_ptr = self
+                            .builder
+                            .build_struct_gep(vec_ty, *vec_alloca, 1, "cleanup.adrop.len.ptr")
+                            .unwrap();
+                        let len = self
+                            .builder
+                            .build_load(i64_t, len_ptr, "cleanup.adrop.len")
+                            .unwrap()
+                            .into_int_value();
+                        let counter =
+                            self.create_entry_alloca(fn_val, "cleanup.adrop.i", i64_t.into());
+                        self.builder.build_store(counter, zero).unwrap();
+                        let acond_bb = self
+                            .context
+                            .append_basic_block(fn_val, "cleanup.adrop.cond");
+                        let abody_bb = self
+                            .context
+                            .append_basic_block(fn_val, "cleanup.adrop.body");
+                        let aafter_bb = self
+                            .context
+                            .append_basic_block(fn_val, "cleanup.adrop.after");
+                        self.builder.build_unconditional_branch(acond_bb).unwrap();
+                        self.builder.position_at_end(acond_bb);
+                        let cur = self
+                            .builder
+                            .build_load(i64_t, counter, "cleanup.adrop.cur")
+                            .unwrap()
+                            .into_int_value();
+                        let lt = self
+                            .builder
+                            .build_int_compare(IntPredicate::ULT, cur, len, "cleanup.adrop.lt")
+                            .unwrap();
+                        self.builder
+                            .build_conditional_branch(lt, abody_bb, aafter_bb)
+                            .unwrap();
+                        self.builder.position_at_end(abody_bb);
+                        let elem_ptr = unsafe {
+                            self.builder
+                                .build_gep(elem_struct, data, &[cur], "cleanup.adrop.elem")
+                                .unwrap()
+                        };
+                        self.builder
+                            .build_call(agg_drop, &[elem_ptr.into()], "")
+                            .unwrap();
+                        let one = i64_t.const_int(1, false);
+                        let next = self
+                            .builder
+                            .build_int_add(cur, one, "cleanup.adrop.next")
+                            .unwrap();
+                        self.builder.build_store(counter, next).unwrap();
+                        self.builder.build_unconditional_branch(acond_bb).unwrap();
+                        self.builder.position_at_end(aafter_bb);
+                    } else if self.llvm_ty_is_vec_struct(*et) {
                         let len_ptr = self
                             .builder
                             .build_struct_gep(vec_ty, *vec_alloca, 1, "cleanup.len.ptr")

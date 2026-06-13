@@ -2414,7 +2414,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                         }
-                        if let Some(slot) = self.variables.get(var_name.as_str()) {
+                        if let Some((slot_ptr, slot_ty)) =
+                            self.variables.get(var_name.as_str()).map(|s| (s.ptr, s.ty))
+                        {
+                            // Copy the slot's `{ptr, ty}` out of `self.variables`
+                            // up front so the immutable borrow ends before the
+                            // `&mut self` drop-fn synthesis below
+                            // (`vec_elem_agg_drop_for_type_expr`).
                             // Defensive guard against stale `vec_elem_types`
                             // entries for non-Vec slots — specifically, Array
                             // bindings (`let a = [1, 2, 3]` → `alloca [N x T]`).
@@ -2434,7 +2440,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // W3.3 routing of `test_e2e_array_for_loop`. Skip
                             // the registration when the slot's LLVM type is
                             // anything but the Vec / String aggregate.
-                            if !matches!(slot.ty, BasicTypeEnum::ArrayType(_)) {
+                            if !matches!(slot_ty, BasicTypeEnum::ArrayType(_)) {
                                 // `Vec[Tensor]` (the `iter_axis` result):
                                 // elements are `ptr`s to tensor blocks that
                                 // each need a `free`. The generic
@@ -2450,16 +2456,25 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let map_elem_drop = elem_te
                                     .as_ref()
                                     .and_then(|te| self.vec_elem_map_drop_for_type_expr(te));
+                                let agg_elem_drop = elem_te
+                                    .as_ref()
+                                    .and_then(|te| self.vec_elem_agg_drop_for_type_expr(te));
                                 if is_tensor_elem {
-                                    self.track_vec_of_tensors_var(slot.ptr);
+                                    self.track_vec_of_tensors_var(slot_ptr);
                                 } else if let Some(map_drop) = map_elem_drop {
                                     // `Vec[Map]` / `Vec[Set]`: elements are
                                     // opaque handles the Vec now owns (the
                                     // move-into-Vec push transferred ownership);
                                     // free each on drop (Cluster 1).
-                                    self.track_vec_of_maps_var(slot.ptr, map_drop);
+                                    self.track_vec_of_maps_var(slot_ptr, map_drop);
+                                } else if let Some(agg_drop) = agg_elem_drop {
+                                    // `Vec[<user struct/enum>]`: run each
+                                    // element's own drop fn so enum/heap fields
+                                    // the inline recursion can't see are freed
+                                    // (B-2026-06-12-6 cluster 2 gap 2).
+                                    self.track_vec_of_aggs_var(slot_ptr, elem_ty, agg_drop);
                                 } else {
-                                    self.track_vec_var(slot.ptr, Some(elem_ty));
+                                    self.track_vec_var(slot_ptr, Some(elem_ty));
                                 }
                             }
                         }

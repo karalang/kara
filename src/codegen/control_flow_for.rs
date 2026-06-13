@@ -354,12 +354,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(synth.as_str())
             .cloned()
             .and_then(|et| self.vec_elem_map_drop_for_type_expr(&et));
+        let agg_elem_drop = self
+            .var_elem_type_exprs
+            .get(synth.as_str())
+            .cloned()
+            .and_then(|et| self.vec_elem_agg_drop_for_type_expr(&et));
         if is_tensor_elem {
             self.track_vec_of_tensors_var(alloca);
         } else if let Some(map_drop) = map_elem_drop {
             // `Vec[Map]` / `Vec[Set]` iterable temp: the Vec owns its map
             // elements (Cluster 1) — free each handle on drop.
             self.track_vec_of_maps_var(alloca, map_drop);
+        } else if let (Some(agg_drop), Some(&elem_ty)) =
+            (agg_elem_drop, self.vec_elem_types.get(synth.as_str()))
+        {
+            // `Vec[<user struct/enum>]` iterable temp: run each element's own
+            // drop fn so enum/heap fields the inline recursion misses are
+            // freed (B-2026-06-12-6 cluster 2 gap 2).
+            self.track_vec_of_aggs_var(alloca, elem_ty, agg_drop);
         } else if let Some(&elem_ty) = self.vec_elem_types.get(synth.as_str()) {
             self.track_vec_var(alloca, Some(elem_ty));
         }

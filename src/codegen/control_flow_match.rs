@@ -1869,7 +1869,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// non-struct hop (mid-chain tuple index, call-rooted base, unresolved type)
     /// no-ops to the status quo.
     pub(super) fn suppress_destructured_struct_field_enum_cleanup(
-        &self,
+        &mut self,
         scrutinee: &Expr,
         pattern: &Pattern,
     ) {
@@ -1878,7 +1878,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // The leaf field's declared type must be a (non-shared) user enum — the
         // only kind `emit_struct_drop_synthesis` frees as a struct field.
-        let Some(enum_name) = self.type_name_of_expr(scrutinee) else {
+        // `place_chain_type_name` (not the shared `type_name_of_expr`) so a
+        // `vec[i]`-rooted chain (`toks[j].tok`) resolves to the element's enum.
+        let Some(enum_name) = self.place_chain_type_name(scrutinee) else {
             return;
         };
         if !self.enum_layouts.contains_key(&enum_name) {
@@ -1890,27 +1892,95 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_destructured_enum_payload_cleanup_at(field_ptr, &enum_name, pattern);
     }
 
-    /// Compute the in-place pointer to a field-access place expression rooted at
-    /// a local binding (`ident`, `ident.f`, `ident.f.g`, …) or `self`, GEP'ing
-    /// through each intermediate struct. Returns `None` for any non-struct hop
-    /// (a tuple index in the middle, a call-rooted base, an unresolved type) so
-    /// callers no-op to the status quo. The leaf pointer addresses the field IN
-    /// PLACE within its owning slot — used by the #18 struct-field-enum match
-    /// suppression to reach a (possibly deeply nested) enum field in its source.
-    fn field_chain_place_ptr(&self, expr: &Expr) -> Option<PointerValue<'ctx>> {
+    /// Compute the in-place pointer to a place expression rooted at a local
+    /// binding (`ident`, `ident.f`, `ident.f.g`, …), `self`, or a `vec[i]`
+    /// element (`toks[j].tok` — B-2026-06-12-6 gap 2), GEP'ing through each
+    /// intermediate struct. Returns `None` for any non-struct hop (a tuple index
+    /// in the middle, a call-rooted base, an unresolved type) so callers no-op to
+    /// the status quo. The leaf pointer addresses the field IN PLACE within its
+    /// owning slot — used by the #18 struct-field-enum match suppression to reach
+    /// a (possibly deeply nested) enum field in its source, including an enum
+    /// field of a Vec element whose buffer the Vec's own drop now frees.
+    fn field_chain_place_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
         match &expr.kind {
             ExprKind::Identifier(name) => self.variables.get(name.as_str()).map(|s| s.ptr),
             ExprKind::SelfValue => self.variables.get("self").map(|s| s.ptr),
+            // `vec[i]` root — the in-place element slot inside the Vec buffer, so
+            // the suppression reaches an enum field of a Vec ELEMENT, not just a
+            // local struct's field. Restricted to a plain (non-array-slot) Vec
+            // variable indexed by a side-effect-free index (identifier / int
+            // literal): `vec_index_elem_ptr` re-evaluates the index to recompute
+            // the element pointer, and a pure index makes that re-eval a no-op —
+            // the scrutinee's own `compile_expr` already emitted the
+            // authoritative bounds check for the very same index value.
+            ExprKind::Index { object, index } => {
+                let ExprKind::Identifier(vec_var) = &object.kind else {
+                    return None;
+                };
+                if !self.vec_elem_types.contains_key(vec_var.as_str())
+                    || !matches!(index.kind, ExprKind::Identifier(_) | ExprKind::Integer(..))
+                {
+                    return None;
+                }
+                // Array-slot Vec bindings have a distinct representation —
+                // mirror the bypass in `ref_arg_index_borrow_ptr`.
+                let slot_is_array = self
+                    .variables
+                    .get(vec_var.as_str())
+                    .is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)));
+                if slot_is_array {
+                    return None;
+                }
+                let vec_var = vec_var.clone();
+                self.vec_index_elem_ptr(&vec_var, index).ok()
+            }
             ExprKind::FieldAccess { object, field } => {
                 let base_ptr = self.field_chain_place_ptr(object)?;
-                let obj_ty = self.type_name_of_expr(object)?;
+                let obj_ty = self.place_chain_type_name(object)?;
                 let st = *self.struct_types.get(obj_ty.as_str())?;
-                let idx = self.field_index_for(object, field)?;
+                let idx = self
+                    .struct_field_names
+                    .get(obj_ty.as_str())?
+                    .iter()
+                    .position(|n| n == field)? as u32;
                 self.builder
                     .build_struct_gep(st, base_ptr, idx, "match.chain.enum.p")
                     .ok()
             }
             _ => None,
+        }
+    }
+
+    /// Type name of a place-expression root for [`Self::field_chain_place_ptr`]'s
+    /// field GEP and the #18 leaf-enum lookup. Identical to
+    /// [`Self::type_name_of_expr`] except it also resolves a `vec[i]` index to the
+    /// Vec's element type, recursing through it for a `vec[i].f` chain. The shared
+    /// resolver deliberately returns `None` for `Index` (12 callers rely on that),
+    /// so this generalization stays local to the match-suppression path.
+    fn place_chain_type_name(&self, expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Index { object, .. } => {
+                let ExprKind::Identifier(v) = &object.kind else {
+                    return None;
+                };
+                match self.var_elem_type_exprs.get(v.as_str()).map(|te| &te.kind) {
+                    Some(TypeKind::Path(p)) => p.segments.last().cloned(),
+                    _ => None,
+                }
+            }
+            ExprKind::FieldAccess { object, field } => {
+                let obj_ty = self.place_chain_type_name(object)?;
+                let idx = self
+                    .struct_field_names
+                    .get(obj_ty.as_str())?
+                    .iter()
+                    .position(|n| n == field)?;
+                self.struct_field_type_names
+                    .get(obj_ty.as_str())?
+                    .get(idx)?
+                    .clone()
+            }
+            _ => self.type_name_of_expr(expr),
         }
     }
 
