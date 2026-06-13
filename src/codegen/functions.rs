@@ -9,7 +9,7 @@ use crate::ast::*;
 
 use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
-use inkwell::values::FunctionValue;
+use inkwell::values::{BasicValueEnum, FunctionValue};
 use inkwell::AddressSpace;
 
 use super::state::VarSlot;
@@ -547,6 +547,32 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => None,
         });
+
+        // B-2026-06-12-9: `main() -> Result[(), E]` adaptation. `main` lowers
+        // to the C entry `i32 main()`, so a Result-returning body cannot `ret`
+        // its `{tag, …}` aggregate (verify failure). Capture E's `TypeExpr`
+        // here; the tail / explicit-`return` / `?`-error sites consult it to
+        // emit the design.md § Entry Point exit-code adaptation (`Ok(())` → 0,
+        // `Err(e)` → `Error: {e}` to stderr + 1) instead of an aggregate `ret`.
+        self.main_result_err_te = if func.name == "main" {
+            func.return_type
+                .as_ref()
+                .and_then(|ret_ty| match &ret_ty.kind {
+                    TypeKind::Path(path)
+                        if path.segments.len() == 1 && path.segments[0] == "Result" =>
+                    {
+                        path.generic_args
+                            .as_ref()
+                            .and_then(|args| match args.get(1) {
+                                Some(GenericArg::Type(e_te)) => Some(e_te.clone()),
+                                _ => None,
+                            })
+                    }
+                    _ => None,
+                })
+        } else {
+            None
+        };
 
         // Borrow-returning function (`-> ref T` / `-> mut ref T`): the
         // tail / explicit-`return` sites emit the borrow's ADDRESS via
@@ -1108,8 +1134,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_unconditional_branch(ctx.coro_return_bb)
                     .unwrap();
             } else if func.name == "main" {
-                let zero = self.context.i32_type().const_int(0, false);
-                self.builder.build_return(Some(&zero)).unwrap();
+                // `main() -> Result[(), E]`: adapt the tail Result value to a
+                // process exit code (Ok→0, Err→print+1) rather than discarding
+                // it and returning 0 — B-2026-06-12-9. A plain `fn main()`
+                // (no Result return) keeps the unconditional `ret i32 0`.
+                if self.main_result_err_te.is_some() {
+                    if let Some(val) = result {
+                        self.emit_main_result_return(val);
+                    } else {
+                        let zero = self.context.i32_type().const_int(0, false);
+                        self.builder.build_return(Some(&zero)).unwrap();
+                    }
+                } else {
+                    let zero = self.context.i32_type().const_int(0, false);
+                    self.builder.build_return(Some(&zero)).unwrap();
+                }
             } else if let Some(val) = result {
                 // Void-return functions whose body's final expression
                 // happens to produce an SSA value (e.g. `fn f() {
@@ -1219,5 +1258,162 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_method_invariants.clear();
         self.constructor_invariant_self_type = None;
         Ok(())
+    }
+
+    /// `main() -> Result[(), E]` value-return adaptation (B-2026-06-12-9).
+    /// `result_val` is the Result `{tag, …}` aggregate produced by the tail
+    /// expression or an explicit `return`. `main`'s LLVM signature is the C
+    /// entry `i32`, so we branch on the tag rather than `ret`-ing the
+    /// aggregate: `Ok` (tag 1) exits 0; `Err` (tag 0) reconstructs E from the
+    /// payload words and routes to `emit_main_result_err_exit` (prints
+    /// `Error: {e}\n` to stderr, exits 1). Per design.md § Entry Point.
+    /// Terminates the current block (both arms `ret`).
+    pub(super) fn emit_main_result_return(&mut self, result_val: BasicValueEnum<'ctx>) {
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+        let sv = result_val.into_struct_value();
+        let st = sv.get_type();
+        let tag = self
+            .builder
+            .build_extract_value(sv, 0, "main_res_tag")
+            .unwrap()
+            .into_int_value();
+        let fn_val = self.current_fn.unwrap();
+        let ok_bb = self.context.append_basic_block(fn_val, "main_res_ok");
+        let err_bb = self.context.append_basic_block(fn_val, "main_res_err");
+        // Ok tag == 1 (Err == 0); see `declarations.rs` Result tag assignment.
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                tag,
+                i64_t.const_int(1, false),
+                "main_is_ok",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_ok, ok_bb, err_bb)
+            .unwrap();
+
+        // Ok → exit 0.
+        self.builder.position_at_end(ok_bb);
+        self.builder
+            .build_return(Some(&i32_t.const_int(0, false)))
+            .unwrap();
+
+        // Err → reconstruct the source-typed error value from the aggregate's
+        // payload words (w0/w1/w2 at fields 1/2/3, synthesizing 0 past the
+        // struct's field count) and exit 1 after printing it.
+        self.builder.position_at_end(err_bb);
+        let n = st.count_fields();
+        let zero = i64_t.const_int(0, false);
+        let extract_word = |s: &Self, idx: u32, name: &str| {
+            s.builder
+                .build_extract_value(sv, idx, name)
+                .unwrap()
+                .into_int_value()
+        };
+        let w0 = if n >= 2 {
+            extract_word(self, 1, "main_res_w0")
+        } else {
+            zero
+        };
+        let w1 = if n >= 3 {
+            extract_word(self, 2, "main_res_w1")
+        } else {
+            zero
+        };
+        let w2 = if n >= 4 {
+            extract_word(self, 3, "main_res_w2")
+        } else {
+            zero
+        };
+        let err_val = match self.main_result_err_te.clone() {
+            Some(te) => {
+                let e_ty = self.llvm_type_for_type_expr(&te);
+                self.rebuild_value_from_payload_words(e_ty, w0, w1, w2)
+                    .unwrap_or_else(|_| w0.into())
+            }
+            None => w0.into(),
+        };
+        self.emit_main_result_err_exit(err_val);
+    }
+
+    /// Emit the `main() -> Result` error exit: print `Error: {e}\n` to stderr
+    /// (E rendered via its `Display`) then `ret i32 1` (B-2026-06-12-9,
+    /// design.md § Entry Point error display format). `err_val` is the
+    /// already-reconstructed source-typed error. Terminates the current block.
+    ///
+    /// Rendering reuses the *expression-driven* f-string Display path: the
+    /// reconstructed error is spilled to a stack slot, registered as a private
+    /// synthetic local via `register_var_from_type_expr` (so the side-tables
+    /// the f-string renderer consults — `var_type_names`, the collection/String
+    /// elem maps — see it), then `f"Error: {e}\n"` is compiled. That path
+    /// already handles primitives, `String`, collections, user structs, and
+    /// all-unit enums; the value-driven `emit_display_fn_for_type_expr` does
+    /// NOT cover user struct/enum types yet (Display-floor subtask 5), so the
+    /// bridge is what makes a user error type render here.
+    pub(super) fn emit_main_result_err_exit(&mut self, err_val: BasicValueEnum<'ctx>) {
+        use crate::ast::ParsedInterpolationPart as P;
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+
+        // Spill + register the error as a synthetic local. The name is private
+        // (never user-visible) and the per-function side-table clear at the
+        // next `compile_function` entry removes it.
+        let synth = "__kara_main_err";
+        let fn_val = self.current_fn.unwrap();
+        let slot = self.create_entry_alloca(fn_val, synth, err_val.get_type());
+        self.builder.build_store(slot, err_val).unwrap();
+        self.variables.insert(
+            synth.to_string(),
+            VarSlot {
+                ptr: slot,
+                ty: err_val.get_type(),
+            },
+        );
+        if let Some(te) = self.main_result_err_te.clone() {
+            self.register_var_from_type_expr(synth, &te);
+        }
+
+        // Compile `f"Error: {e}\n"` → owning String, write to stderr, free it.
+        // The f-string registers a scope-exit free for its buffer, but the
+        // function's cleanup drain has already run on this error path (the `?`
+        // / tail / explicit-return sites cleaned up before dispatching here)
+        // and we `ret` immediately below, so that registration never fires —
+        // the manual free here is the sole, correct release.
+        let id_expr = Expr {
+            kind: ExprKind::Identifier(synth.to_string()),
+            span: crate::token::Span::default(),
+        };
+        let lit = Expr {
+            kind: ExprKind::InterpolatedStringLit(vec![
+                P::Text("Error: ".to_string()),
+                P::Expr(Box::new(id_expr)),
+                P::Text("\n".to_string()),
+            ]),
+            span: crate::token::Span::default(),
+        };
+        match self.compile_expr(&lit) {
+            Ok(sval) => self.emit_write_and_free_string(sval, "", true),
+            Err(_) => {
+                // Display unsupported for this E (e.g. a data-carrying enum,
+                // still subtask-5 territory): emit the bare prefix + newline so
+                // the exit is still observable and well-formed.
+                let prefix = self
+                    .builder
+                    .build_global_string_ptr("Error: \n", "main_err_prefix")
+                    .unwrap();
+                self.emit_nul_safe_write(
+                    prefix.as_pointer_value(),
+                    i64_t.const_int(8, false),
+                    "",
+                    true,
+                );
+            }
+        }
+        self.builder
+            .build_return(Some(&i32_t.const_int(1, false)))
+            .unwrap();
     }
 }

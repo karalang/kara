@@ -3107,6 +3107,125 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_main_result_question_and_returns() {
+        // B-2026-06-12-9: `main() -> Result[(), E]` used to fail module
+        // verification — a `?` early-return (and explicit `return Ok/Err`)
+        // emitted the `{tag, …}` Result aggregate against `main`'s `i32` C
+        // signature. The fix adapts every Result-returning site in `main` to a
+        // process exit code per design.md § Entry Point: `Ok` exits 0, `Err(e)`
+        // prints `Error: {e}\n` to stderr (via E's Display) and exits 1.
+
+        // (a) `?` success path — body continues, `Ok(())` tail exits 0.
+        let ok = run_program_capturing(
+            r#"
+enum MyErr { Bad }
+fn helper(x: i64) -> Result[i64, MyErr] {
+    if x < 0 { return Err(MyErr.Bad); }
+    Ok(x + 1)
+}
+fn main() -> Result[(), MyErr] {
+    let v = helper(5)?;
+    println(v);
+    Ok(())
+}
+"#,
+        );
+        if let Some(cap) = ok {
+            assert_eq!(cap.stdout.trim(), "6");
+            assert_eq!(
+                cap.status.code(),
+                Some(0),
+                "Ok path must exit 0; stderr={:?}",
+                cap.stderr
+            );
+        }
+
+        // (b) `?` error-propagation path — Err exits 1 with `Error: <Display>`
+        // on stderr (a unit enum renders as its bare variant name).
+        let q_err = run_program_capturing(
+            r#"
+enum MyErr { Bad }
+fn helper(x: i64) -> Result[i64, MyErr] {
+    if x < 0 { return Err(MyErr.Bad); }
+    Ok(x + 1)
+}
+fn main() -> Result[(), MyErr] {
+    let v = helper(0 - 5)?;
+    println(v);
+    Ok(())
+}
+"#,
+        );
+        if let Some(cap) = q_err {
+            assert_eq!(
+                cap.status.code(),
+                Some(1),
+                "Err path must exit 1; stdout={:?} stderr={:?}",
+                cap.stdout,
+                cap.stderr
+            );
+            assert!(
+                cap.stderr.contains("Error: Bad"),
+                "expected 'Error: Bad' on stderr, got: {:?}",
+                cap.stderr
+            );
+            assert!(
+                cap.stdout.trim().is_empty(),
+                "Err path must not print the unwrapped value to stdout: {:?}",
+                cap.stdout
+            );
+        }
+
+        // (c) explicit `return Err(struct)` — struct Display, stderr/stdout
+        // split, exit 1. Prior stdout work (`println` before the return) is
+        // still observable.
+        let ret_err = run_program_capturing(
+            r#"
+struct IoError { code: i64 }
+fn main() -> Result[(), IoError] {
+    println("before");
+    return Err(IoError { code: 42 });
+}
+"#,
+        );
+        if let Some(cap) = ret_err {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.stdout.trim(), "before");
+            assert!(
+                cap.stderr.contains("Error: IoError { code: 42 }"),
+                "expected struct Display on stderr, got: {:?}",
+                cap.stderr
+            );
+            assert!(
+                !cap.stdout.contains("Error:"),
+                "error line leaked onto stdout: {:?}",
+                cap.stdout
+            );
+        }
+
+        // (d) tail `Err` with a scalar error type — exits 1, `Error: 99`.
+        let tail_err = run_program_capturing(
+            r#"
+fn pick(x: i64) -> Result[(), i64] {
+    if x > 0 { return Ok(()); }
+    Err(99)
+}
+fn main() -> Result[(), i64] {
+    pick(0 - 1)
+}
+"#,
+        );
+        if let Some(cap) = tail_err {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                cap.stderr.contains("Error: 99"),
+                "expected 'Error: 99' on stderr, got: {:?}",
+                cap.stderr
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_stdout_print_and_flush() {
         // `Stdout.print` (no newline) + `Stdout.flush()` + `Stdout.println`.
         // flush lowers to `fflush(NULL)` and must run without crashing; the

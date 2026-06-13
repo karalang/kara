@@ -4149,12 +4149,35 @@ fn cmd_run(
     if let Some(d) = timeout {
         interp.set_test_deadline(Some(std::time::Instant::now() + d));
     }
-    interp.run();
+    let main_result = interp.run();
     if interp.timed_out {
         if let Some(d) = timeout {
             eprintln!("karac: timed out after {}s", d.as_secs());
         }
         process::exit(124);
+    }
+
+    // design.md § Entry Point: a `main() -> Result[(), E]` returning `Err(e)`
+    // prints `Error: {e}` to stderr (Display) and exits 1; `Ok(())` exits 0.
+    // This mirrors the AOT codegen adaptation (B-2026-06-12-9) so `karac run`
+    // and a built binary agree on entry-point semantics. Computed here, before
+    // the error-return-trace block, so the `Error:` line precedes the trace —
+    // the same order the compiled binary emits. A plain `fn main()` returns
+    // `Unit`, so `as_result_err_payload` is `None` and this is a no-op.
+    let main_err_exit = main_result.as_result_err_payload().is_some();
+    if let Some(e) = main_result.as_result_err_payload() {
+        match output {
+            OutputMode::Text => eprintln!("Error: {e}"),
+            OutputMode::Json => {
+                println!("{{\"error\":{}}}", json_string(&e.to_string()));
+            }
+            OutputMode::Jsonl => {
+                emit_jsonl_event(
+                    "error",
+                    &format!("\"message\":{}", json_string(&e.to_string())),
+                );
+            }
+        }
     }
 
     // Surface runtime faults. The interpreter records every fault — contract
@@ -4244,8 +4267,10 @@ fn cmd_run(
 
     // A faulting program exits nonzero (previously always 0 — scripts couldn't
     // detect interpreter-level failures). Gated on `runtime_errors` so a clean
-    // run still exits 0.
-    if !runtime_errors.is_empty() {
+    // run still exits 0. `main_err_exit` adds the design.md § Entry Point case:
+    // a `main() -> Result` that returned `Err(e)` exits 1 (the `Error:` line
+    // was already printed above).
+    if !runtime_errors.is_empty() || main_err_exit {
         process::exit(1);
     }
 }

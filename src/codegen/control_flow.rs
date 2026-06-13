@@ -428,6 +428,20 @@ impl<'ctx> super::Codegen<'ctx> {
     /// which render into a throwaway accumulator and must release it inline
     /// (no scope-tracking — avoids per-call buffer accumulation in loops).
     fn emit_print_and_free_string(&mut self, sval: BasicValueEnum<'ctx>, nl: &str) {
+        self.emit_write_and_free_string(sval, nl, false);
+    }
+
+    /// `emit_print_and_free_string` with an explicit stream selector: write the
+    /// owning String value to stdout (`to_stderr == false`) or stderr
+    /// (`true`), append `nl`, then free its heap buffer. The stderr arm backs
+    /// the `main() -> Result` `Err(e)` exit, whose `Error: {e}\n` rendering
+    /// must land on stderr per design.md § Entry Point (B-2026-06-12-9).
+    pub(super) fn emit_write_and_free_string(
+        &mut self,
+        sval: BasicValueEnum<'ctx>,
+        nl: &str,
+        to_stderr: bool,
+    ) {
         let sv = sval.into_struct_value();
         let data = self
             .builder
@@ -439,7 +453,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_extract_value(sv, 1, "ps.len")
             .unwrap()
             .into_int_value();
-        self.emit_nul_safe_write(data, len, nl, false);
+        self.emit_nul_safe_write(data, len, nl, to_stderr);
         self.builder
             .build_call(self.free_fn, &[data.into()], "")
             .unwrap();

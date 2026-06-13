@@ -733,6 +733,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             .unwrap();
                     } else if let Some(ptr) = ref_ret_ptr {
                         self.builder.build_return(Some(&ptr)).unwrap();
+                    } else if self.current_fn_name == "main" && self.main_result_err_te.is_some() {
+                        // `return Ok(())` / `return Err(e)` inside
+                        // `main() -> Result[(), E]`: adapt to a process exit
+                        // code rather than `ret`-ing the `{tag, …}` aggregate
+                        // against `main`'s `i32` signature (B-2026-06-12-9).
+                        self.emit_main_result_return(v);
                     } else if self.current_fn_ret_is_niche() {
                         // Niche-ABI return (`Option[shared T]` →
                         // nullable ptr): pack the conventional 4-i64
@@ -1244,7 +1250,26 @@ impl<'ctx> super::Codegen<'ctx> {
         // their inner field.
         let propagated_word = self.coerce_to_i64(propagated_payload)?;
 
-        if self.current_fn_ret_is_niche() {
+        if self.current_fn_name == "main" && self.main_result_err_te.is_some() {
+            // `?` error propagation inside `main() -> Result[(), E]`: `main`'s
+            // LLVM signature is the C entry `i32`, so we cannot `ret` the
+            // `{tag, …}` Err aggregate (verify failure — B-2026-06-12-9).
+            // Instead reconstruct the source-typed error from the propagated
+            // payload word and emit the design.md § Entry Point error exit
+            // (`Error: {e}\n` to stderr, exit 1). Single-word E reconstructs
+            // exactly; a multi-word E sees only w0 here — the same documented
+            // limitation as the wider-E `?` Err-binding path above.
+            let err_val = match self.main_result_err_te.clone() {
+                Some(te) => {
+                    let e_ty = self.llvm_type_for_type_expr(&te);
+                    let zero = i64_t.const_int(0, false);
+                    self.rebuild_value_from_payload_words(e_ty, propagated_word, zero, zero)
+                        .unwrap_or_else(|_| propagated_word.into())
+                }
+                None => propagated_word.into(),
+            };
+            self.emit_main_result_err_exit(err_val);
+        } else if self.current_fn_ret_is_niche() {
             // Niche-ABI enclosing fn (`-> Option[shared T]` declared as
             // a nullable ptr): the `?` failure path early-returns None,
             // which is null under the niche. No struct to build.

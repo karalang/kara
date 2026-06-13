@@ -976,6 +976,23 @@ impl Value {
         Value::Array(Arc::new(RwLock::new(items)))
     }
 
+    /// If this value is `Result::Err(e)`, return `e` (the single payload).
+    /// Used by the `karac run` entry-point handler to implement design.md
+    /// § Entry Point: a `main() -> Result[(), E]` that returns `Err(e)` prints
+    /// `Error: {e}` to stderr and exits 1 — matching the AOT codegen
+    /// adaptation (B-2026-06-12-9). `None` for `Ok`, any other variant, or a
+    /// non-enum value (so a plain `fn main()` returning `Unit` is unaffected).
+    pub fn as_result_err_payload(&self) -> Option<&Value> {
+        match self {
+            Value::EnumVariant {
+                enum_name,
+                variant,
+                data: EnumData::Tuple(vs),
+            } if enum_name == "Result" && variant == "Err" => vs.first(),
+            _ => None,
+        }
+    }
+
     /// Slice 3 helper — borrow the inner `Vec<Value>` for read-only access.
     /// Returns `None` for non-array values so callers can fall through to
     /// other arms cleanly. The guard is held for the lifetime of the

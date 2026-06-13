@@ -1566,6 +1566,19 @@ pub(super) struct Codegen<'ctx> {
     /// doesn't return `Result[T, E]` (or doesn't return at all) — the
     /// `?` site falls back to staging bare `w0` as i64 in that case.
     pub(crate) current_fn_err_payload_ty: Option<inkwell::types::BasicTypeEnum<'ctx>>,
+    /// Set while compiling `main` when its declared return type is
+    /// `Result[(), E]` — holds E's source `TypeExpr` (the error type). The
+    /// LLVM `main` is the C entry (`i32`), so every Result-returning site —
+    /// the tail, an explicit `return Ok/Err`, and a `?` early-return on the
+    /// error path — must adapt the Result to a process exit code rather than
+    /// `ret` the `{tag, ...}` aggregate (which fails module verification
+    /// against the `i32` signature, B-2026-06-12-9). Per design.md § Entry
+    /// Point, `Ok(())` exits 0 and `Err(e)` prints `Error: {e}\n` to stderr
+    /// (via E's `Display`) then exits 1. The `TypeExpr` (not just an LLVM
+    /// type) is needed so `emit_display_fn_for_type_expr` can synthesize the
+    /// error's Display rendering. `None` for `fn main()` / `fn main() ->
+    /// ExitCode` / any non-`main` function.
+    pub(crate) main_result_err_te: Option<crate::ast::TypeExpr>,
     /// True while compiling a function whose declared return type is a
     /// borrow (`-> ref T` / `-> mut ref T`). The LLVM signature returns a
     /// thin `ptr`, so the tail / explicit-`return` sites must emit the
@@ -4606,6 +4619,7 @@ impl<'ctx> Codegen<'ctx> {
             scope_cleanup_actions: Vec::new(),
             pending_errdefer_payload: None,
             current_fn_err_payload_ty: None,
+            main_result_err_te: None,
             current_fn_returns_ref: false,
             compiling_ref_return_let_rhs: false,
             pattern_binding_is_borrow: false,
