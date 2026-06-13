@@ -340,6 +340,21 @@ impl<'a> super::TypeChecker<'a> {
             let type_name = &segments[0];
             let member = &segments[1];
 
+            // `ExitCode.SUCCESS` / `ExitCode.FAILURE` — paren-free
+            // associated constants of the `ExitCode` distinct type
+            // (Phase-8 entry-point contract Slice B). Parsed as a
+            // 2-segment `Path` (not a `FieldAccess`, since `ExitCode` is
+            // a known type name). Resolve to the `ExitCode` type itself
+            // — NOT the bare `i32` base — so `main() -> ExitCode {
+            // ExitCode.SUCCESS }` type-checks. The interpreter / codegen
+            // sibling intercepts yield the matching `0` / `1`.
+            if crate::prelude::lookup_exitcode_const(type_name, member).is_some() {
+                return Type::Named {
+                    name: type_name.clone(),
+                    args: Vec::new(),
+                };
+            }
+
             // Check for enum variant. Generic enums thread their declared
             // type parameters through the return type's `args` so call-site
             // inference can solve them (see `infer_call`).

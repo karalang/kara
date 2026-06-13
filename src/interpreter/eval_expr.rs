@@ -97,6 +97,18 @@ impl<'a> super::Interpreter<'a> {
                 if let Some(v) = self.env.get(&full) {
                     return v;
                 }
+                // `ExitCode.SUCCESS` / `ExitCode.FAILURE` (Phase-8
+                // entry-point contract Slice B). `ExitCode` is a
+                // zero-cost `distinct type = i32`, so the constant is a
+                // plain `Value::Int(0 / 1)`. Parsed as a 2-segment Path
+                // (sibling to the typechecker / codegen intercepts).
+                if segments.len() == 2 {
+                    if let Some(code) =
+                        crate::prelude::lookup_exitcode_const(&segments[0], &segments[1])
+                    {
+                        return Value::Int(code as i64);
+                    }
+                }
                 // Type-parameter dispatch: `T.method` where `T` is bound to a
                 // concrete type at the current call frame's substitution
                 // stack. Look up `<concrete>.method` instead.
@@ -201,6 +213,15 @@ impl<'a> super::Interpreter<'a> {
                 if let ExprKind::Identifier(name) = &object.kind {
                     if let Some(cv) = crate::prelude::lookup_primitive_const(name, field) {
                         return primitive_const_to_value(cv);
+                    }
+                    // `ExitCode.SUCCESS` / `ExitCode.FAILURE` (Phase-8
+                    // entry-point contract Slice B). The `ExitCode`
+                    // distinct type is zero-cost — its runtime value IS
+                    // the underlying `i32` — so the constant is a plain
+                    // `Value::Int(0 / 1)`. Mirrors the typechecker /
+                    // codegen sibling intercepts.
+                    if let Some(code) = crate::prelude::lookup_exitcode_const(name, field) {
+                        return Value::Int(code as i64);
                     }
                 }
                 let obj = self.eval_expr_inner(object);

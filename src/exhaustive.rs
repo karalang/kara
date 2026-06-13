@@ -577,22 +577,78 @@ fn lower_struct_fields(
 
 fn variant_payload_types(parent_ty: &Type, variant_name: &str, env: &TypeEnv) -> Vec<Type> {
     if let Type::Named {
-        name: enum_name, ..
+        name: enum_name,
+        args,
     } = parent_ty
     {
         if let Some(info) = env.enums.get(enum_name) {
             if let Some((_, vinfo)) = info.variants.iter().find(|(v, _)| v == variant_name) {
-                return match vinfo {
+                let raw: Vec<Type> = match vinfo {
                     VariantTypeInfo::Unit => vec![],
                     VariantTypeInfo::Tuple(types) => types.clone(),
                     VariantTypeInfo::Struct(fields) => {
                         fields.iter().map(|(_, t)| t.clone()).collect()
                     }
                 };
+                // Substitute the enum's generic params with the
+                // instantiated args so a payload declared in terms of a
+                // type parameter (`Result`'s `Ok(T)`) resolves to its
+                // concrete type — `Ok(())` over `Result[(), E]` becomes a
+                // `Unit` column rather than an open `TypeParam("T")` one.
+                // Without this, `enumerate_ctors` treats the payload as an
+                // open domain and the match reads as non-exhaustive (the
+                // `Ok(())` / unit single-inhabitant case especially), and
+                // codegen inherits the same mis-analysis. design.md
+                // § Pattern Exhaustiveness.
+                if info.generic_params.is_empty() || args.is_empty() {
+                    return raw;
+                }
+                let subs: std::collections::HashMap<String, Type> = info
+                    .generic_params
+                    .iter()
+                    .cloned()
+                    .zip(args.iter().cloned())
+                    .collect();
+                return raw.iter().map(|t| subst_type_params(t, &subs)).collect();
             }
         }
     }
     vec![]
+}
+
+/// Substitute `Type::TypeParam(name)` occurrences with their mapped
+/// concrete types, recursing into the param-bearing `Type` variants.
+/// Param-free / exotic variants pass through unchanged. Local to the
+/// exhaustiveness module so it stays free of the typechecker's
+/// `SubstValue`-keyed inference substitution.
+fn subst_type_params(ty: &Type, subs: &std::collections::HashMap<String, Type>) -> Type {
+    match ty {
+        Type::TypeParam(name) => subs.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        Type::Named { name, args } => Type::Named {
+            name: name.clone(),
+            args: args.iter().map(|a| subst_type_params(a, subs)).collect(),
+        },
+        Type::Tuple(elems) => {
+            Type::Tuple(elems.iter().map(|e| subst_type_params(e, subs)).collect())
+        }
+        Type::Rc(inner) => Type::Rc(Box::new(subst_type_params(inner, subs))),
+        Type::Arc(inner) => Type::Arc(Box::new(subst_type_params(inner, subs))),
+        Type::Ref(inner) => Type::Ref(Box::new(subst_type_params(inner, subs))),
+        Type::MutRef(inner) => Type::MutRef(Box::new(subst_type_params(inner, subs))),
+        Type::Slice { element, mutable } => Type::Slice {
+            element: Box::new(subst_type_params(element, subs)),
+            mutable: *mutable,
+        },
+        Type::Array { element, size } => Type::Array {
+            element: Box::new(subst_type_params(element, subs)),
+            size: size.clone(),
+        },
+        Type::Vector { element, lanes } => Type::Vector {
+            element: Box::new(subst_type_params(element, subs)),
+            lanes: lanes.clone(),
+        },
+        _ => ty.clone(),
+    }
 }
 
 /// Maranget's `U(P, q)`, witness-producing variant. Returns `None` if `q`
@@ -919,6 +975,15 @@ fn enumerate_ctors(ty: &Type, env: &TypeEnv) -> Option<Vec<PatCtor>> {
     match ty {
         Type::Bool => Some(vec![PatCtor::Bool(true), PatCtor::Bool(false)]),
         Type::Tuple(_) => Some(vec![PatCtor::Tuple]),
+        // Unit `()` is a single-inhabitant type — its sole constructor is
+        // the empty tuple. Without this arm Unit fell into the open-domain
+        // `_ => None` below, so a `()`-typed column carrying the empty-tuple
+        // pattern (e.g. the `Ok(())` payload of `Result[(), E]`) was treated
+        // as never fully covered: the default matrix drops the `()` ctor row
+        // and a wildcard query falsely reports `Ok(_)` uncovered. The
+        // `PatCtor::Tuple` ctor is arity-0 against a Unit parent
+        // (`ctor_field_types`), so it matches the empty-tuple pattern exactly.
+        Type::Unit => Some(vec![PatCtor::Tuple]),
         // Never has no inhabitants — empty constructor list. Any match
         // (including the empty match) is vacuously exhaustive.
         Type::Never => Some(Vec::new()),
@@ -960,25 +1025,14 @@ fn ctor_arity(ctor: &PatCtor, parent_ty: &Type, env: &TypeEnv) -> usize {
 fn ctor_field_types(ctor: &PatCtor, parent_ty: &Type, env: &TypeEnv) -> Vec<Type> {
     match ctor {
         PatCtor::Bool(_) | PatCtor::Lit(_) | PatCtor::IntRange { .. } => vec![],
-        PatCtor::Variant(name) => {
-            if let Type::Named {
-                name: enum_name, ..
-            } = parent_ty
-            {
-                if let Some(info) = env.enums.get(enum_name) {
-                    if let Some((_, vinfo)) = info.variants.iter().find(|(v, _)| v == name) {
-                        return match vinfo {
-                            VariantTypeInfo::Unit => vec![],
-                            VariantTypeInfo::Tuple(types) => types.clone(),
-                            VariantTypeInfo::Struct(fields) => {
-                                fields.iter().map(|(_, t)| t.clone()).collect()
-                            }
-                        };
-                    }
-                }
-            }
-            vec![]
-        }
+        // Route through `variant_payload_types` so the enum's generic
+        // params are substituted with `parent_ty`'s instantiated args
+        // (`Ok`'s `T` → `()` for `Result[(), E]`). This is the column
+        // head-type the usefulness recursion feeds to `enumerate_ctors`;
+        // returning the raw `TypeParam` here (the prior duplicate logic)
+        // made every generic-payload column an open domain and broke
+        // exhaustiveness for `Ok(())` / finite generic payloads.
+        PatCtor::Variant(name) => variant_payload_types(parent_ty, name, env),
         PatCtor::Tuple => match parent_ty {
             Type::Tuple(elems) => elems.clone(),
             _ => vec![],

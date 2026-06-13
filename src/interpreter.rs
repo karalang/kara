@@ -119,6 +119,14 @@ pub struct Interpreter<'a> {
     /// a value binding — and dispatch via the provider stack instead of
     /// normal method lookup.
     pub(crate) effect_resources: HashSet<String>,
+    /// Names of `distinct type` declarations defined in the baked stdlib
+    /// (e.g. `ExitCode`). `is_distinct_type` scans the user program's
+    /// `items` directly, but baked-stdlib sources are not merged into
+    /// `program.items`, so their distinct-type constructors
+    /// (`ExitCode(code)` inside `ExitCode.from`) would otherwise be
+    /// unrecognized. Populated once in `register_items` from
+    /// `STDLIB_PROGRAMS`. Phase-8 entry-point contract Slice B.
+    pub(crate) stdlib_distinct_types: HashSet<String>,
     /// Xorshift64 state backing the default `RandomSource` provider.
     /// Seeded once per [`Interpreter::new`] from the system clock's
     /// sub-second nanoseconds so repeated `cargo test` runs see fresh
@@ -485,6 +493,7 @@ impl<'a> Interpreter<'a> {
             tracing_min_level: 0,
             tracing_exporter: None,
             effect_resources: HashSet::new(),
+            stdlib_distinct_types: HashSet::new(),
             rand_state: seed_rand_state(),
             type_subs_stack: Vec::new(),
             cancel_flag: None,
@@ -570,10 +579,12 @@ impl<'a> Interpreter<'a> {
     /// this lookup only gates the constructor-call interception in
     /// `eval_call`. design.md § Distinct Types (Newtypes).
     pub(crate) fn is_distinct_type(&self, name: &str) -> bool {
-        self.program
-            .items
-            .iter()
-            .any(|item| matches!(item, Item::DistinctType(d) if d.name == name))
+        self.stdlib_distinct_types.contains(name)
+            || self
+                .program
+                .items
+                .iter()
+                .any(|item| matches!(item, Item::DistinctType(d) if d.name == name))
     }
 
     /// The `requires` / `ensures` contract clauses of the top-level free
@@ -1204,6 +1215,13 @@ impl<'a> Interpreter<'a> {
                             );
                         }
                     }
+                }
+                // Record baked-stdlib `distinct type`s (e.g. `ExitCode`)
+                // so `is_distinct_type` recognizes their constructors —
+                // `program.items` carries only the user program, not the
+                // baked sources. Slice B.
+                Item::DistinctType(d) => {
+                    self.stdlib_distinct_types.insert(d.name.clone());
                 }
                 _ => {}
             }

@@ -989,6 +989,18 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         segments: &[String],
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // `ExitCode.SUCCESS` / `ExitCode.FAILURE` (Phase-8 entry-point
+        // contract Slice B). Parsed as a 2-segment `Path` (leading
+        // segment is a known type name). `ExitCode` is `distinct type =
+        // i32`, so the constant lowers to a bare `i32`. Mirrors the
+        // typechecker / interpreter sibling Path intercepts; without
+        // this the access falls through to the `i64 0` placeholder
+        // below and `main() -> ExitCode { ExitCode.FAILURE }` exits 0.
+        if segments.len() == 2 {
+            if let Some(code) = crate::prelude::lookup_exitcode_const(&segments[0], &segments[1]) {
+                return Ok(self.context.i32_type().const_int(code as u64, false).into());
+            }
+        }
         // Module-binding field access (slice 10) — `let CFG: Foo = Foo {…};`
         // followed by `CFG.field` parses as `Path(["CFG", "field"])`
         // because the leading segment is Const-class. Load the binding

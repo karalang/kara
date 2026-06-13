@@ -990,6 +990,80 @@ fn test_binding_makes_exhaustive() {
     );
 }
 
+// ── Unit-payload / generic-payload pattern exhaustiveness ──────
+//
+// `Ok(())` over `Result[(), E]`: the `()` empty-tuple pattern is the
+// sole inhabitant of the unit-typed payload, so `Ok(())` + `Err(_)` is
+// exhaustive. Before the fix, the variant payload column carried the
+// raw generic param `T` (treated as an open domain by `enumerate_ctors`)
+// rather than the substituted `()`, so this read as non-exhaustive
+// (`Ok(_)` not covered).
+
+#[test]
+fn test_match_ok_unit_payload_exhaustive() {
+    typecheck_ok(
+        "fn classify(r: Result[(), String]) -> i64 {\n\
+             match r {\n\
+                 Ok(()) => 10,\n\
+                 Err(e) => 20,\n\
+             }\n\
+         }",
+    );
+}
+
+#[test]
+fn test_match_generic_finite_payload_exhaustive_without_wildcard() {
+    // After generic substitution the `Some` payload of `Option[bool]` is
+    // the finite `bool` domain, so covering both `Some(true)` / `Some(false)`
+    // plus `None` is exhaustive with no wildcard arm.
+    typecheck_ok(
+        "fn f(o: Option[bool]) -> i64 {\n\
+             match o {\n\
+                 Some(true) => 1,\n\
+                 Some(false) => 0,\n\
+                 None => -1,\n\
+             }\n\
+         }",
+    );
+}
+
+#[test]
+fn test_match_generic_finite_payload_missing_value_non_exhaustive() {
+    // The dual: omitting `Some(false)` (and any wildcard) is non-exhaustive
+    // now that the payload resolves to the finite `bool` domain.
+    let errors = typecheck_errors(
+        "fn f(o: Option[bool]) -> i64 {\n\
+             match o {\n\
+                 Some(true) => 1,\n\
+                 None => -1,\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NonExhaustiveMatch),
+        "expected non-exhaustive (Some(false) uncovered), got: {errors:?}"
+    );
+}
+
+// ── ExitCode associated constants type as ExitCode (Slice B) ───
+
+#[test]
+fn test_exitcode_constants_type_as_exitcode() {
+    // `ExitCode.SUCCESS` / `.FAILURE` resolve to the `ExitCode` type
+    // itself (not the bare `i32` base), so a `main() -> ExitCode` body and
+    // an annotated `let` both type-check.
+    typecheck_ok(
+        "fn main() -> ExitCode {\n\
+             let c: ExitCode = ExitCode.SUCCESS;\n\
+             c\n\
+         }",
+    );
+    typecheck_ok("fn main() -> ExitCode { ExitCode.FAILURE }");
+    typecheck_ok("fn main() -> ExitCode { ExitCode.from(42) }");
+}
+
 // ── Range-pattern exhaustiveness (Maranget interval splitting, slice 6) ──
 //
 // Before this slice, range patterns lowered to `Pat::Wildcard`, so a lone

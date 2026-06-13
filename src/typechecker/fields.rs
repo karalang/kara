@@ -28,6 +28,19 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(cv) = crate::prelude::lookup_primitive_const(name, field) {
                 return primitive_const_type(cv);
             }
+            // `ExitCode.SUCCESS` / `ExitCode.FAILURE` — paren-free
+            // associated constants of the `ExitCode` distinct type
+            // (Phase-8 entry-point contract Slice B). These resolve to
+            // the `ExitCode` type itself (NOT the bare `i32` base) so
+            // `main() -> ExitCode { ExitCode.SUCCESS }` type-checks; the
+            // interpreter / codegen sibling intercepts yield the matching
+            // `0` / `1` value / constant.
+            if crate::prelude::lookup_exitcode_const(name, field).is_some() {
+                return Type::Named {
+                    name: name.clone(),
+                    args: Vec::new(),
+                };
+            }
         }
         let obj_ty = self.infer_expr(object);
         if obj_ty == Type::Error {

@@ -3749,6 +3749,22 @@ fn list_available_examples() {
     }
 }
 
+/// Whether the program's `fn main` declares a `-> ExitCode` return type
+/// (Phase-8 entry-point contract Slice B). The interpreter is
+/// type-erased — a returned `ExitCode` is an ordinary `Value::Int` —
+/// so `cmd_run` consults the AST signature to decide whether `main`'s
+/// returned integer is a process exit code. Per design.md § Entry Point.
+fn main_return_is_exitcode(program: &Program) -> bool {
+    program.items.iter().any(|item| match item {
+        Item::Function(f) if f.name == "main" => matches!(
+            f.return_type.as_ref().map(|t| &t.kind),
+            Some(crate::ast::TypeKind::Path(p))
+                if p.segments.len() == 1 && p.segments[0] == "ExitCode"
+        ),
+        _ => false,
+    })
+}
+
 fn cmd_run(
     filename: &str,
     output: OutputMode,
@@ -4269,9 +4285,24 @@ fn cmd_run(
     // detect interpreter-level failures). Gated on `runtime_errors` so a clean
     // run still exits 0. `main_err_exit` adds the design.md § Entry Point case:
     // a `main() -> Result` that returned `Err(e)` exits 1 (the `Error:` line
-    // was already printed above).
+    // was already printed above). Faults take precedence over an `ExitCode`
+    // return — a runtime error unwinds before `main` produces a clean value, so
+    // `main_result` is `Unit`, not the intended code, in that case anyway.
     if !runtime_errors.is_empty() || main_err_exit {
         process::exit(1);
+    }
+
+    // design.md § Entry Point: `fn main() -> ExitCode` exits with the
+    // returned code (Slice B). The interpreter is type-erased, so the
+    // `ExitCode` arrives as a plain `Value::Int`; the AST signature
+    // (`main_return_is_exitcode`) is what tells us to treat it as an exit
+    // code. Mirrors the AOT codegen `ret i32 <code>` arm so `karac run`
+    // and a built binary agree. `0` falls through to the normal clean
+    // exit; any nonzero code exits explicitly.
+    if main_return_is_exitcode(&pipeline.parsed.program) {
+        if let crate::interpreter::Value::Int(code) = main_result {
+            process::exit(code as i32);
+        }
     }
 }
 

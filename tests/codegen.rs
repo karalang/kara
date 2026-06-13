@@ -37484,6 +37484,128 @@ fn main() {
         }
     }
 
+    // ── ExitCode entry-point return type (Phase-8 Slice B) ─────────
+
+    #[test]
+    fn test_e2e_main_exitcode_success() {
+        // `main() -> ExitCode { ... ExitCode.SUCCESS }` exits 0.
+        let cap = run_program_capturing(
+            r#"
+fn main() -> ExitCode {
+    println("ran");
+    ExitCode.SUCCESS
+}
+"#,
+        );
+        if let Some(cap) = cap {
+            assert_eq!(cap.status.code(), Some(0), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.stdout.trim(), "ran");
+        }
+    }
+
+    #[test]
+    fn test_e2e_main_exitcode_failure() {
+        // `ExitCode.FAILURE` exits 1 (the literal `1`, not EXIT_FAILURE).
+        let cap = run_program_capturing(
+            r#"
+fn main() -> ExitCode {
+    ExitCode.FAILURE
+}
+"#,
+        );
+        if let Some(cap) = cap {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+        }
+    }
+
+    #[test]
+    fn test_e2e_main_exitcode_from_arbitrary() {
+        // `ExitCode.from(code)` returns an arbitrary process exit code.
+        let cap = run_program_capturing(
+            r#"
+fn main() -> ExitCode {
+    ExitCode.from(42)
+}
+"#,
+        );
+        if let Some(cap) = cap {
+            assert_eq!(cap.status.code(), Some(42), "stderr={:?}", cap.stderr);
+        }
+    }
+
+    #[test]
+    fn test_e2e_main_exitcode_direct_constructor_narrows_to_i32() {
+        // `ExitCode(7)` — the bare distinct constructor over an `i32` base.
+        // The default-`i64` literal must narrow to the `i32` base width so
+        // it round-trips through the C-entry `i32 main()` signature.
+        let cap = run_program_capturing(
+            r#"
+fn main() -> ExitCode {
+    ExitCode(7)
+}
+"#,
+        );
+        if let Some(cap) = cap {
+            assert_eq!(cap.status.code(), Some(7), "stderr={:?}", cap.stderr);
+        }
+    }
+
+    #[test]
+    fn test_e2e_main_exitcode_canonical_match_ok_unit() {
+        // The canonical design.md § Entry Point shape: match a fallible
+        // result, `Ok(())` → SUCCESS, `Err(e)` → a custom code. Exercises
+        // the `Ok(())` unit-payload pattern (exhaustiveness + match codegen)
+        // together with the `ExitCode` arms — both must agree on `i32` width
+        // so the match phi merges.
+        let cap = run_program_capturing(
+            r#"
+fn run(ok: bool) -> Result[(), String] {
+    if ok { Ok(()) } else { Err("boom") }
+}
+fn main() -> ExitCode {
+    match run(false) {
+        Ok(()) => ExitCode.SUCCESS,
+        Err(e) => {
+            eprintln("Error: {e}");
+            ExitCode.from(3)
+        }
+    }
+}
+"#,
+        );
+        if let Some(cap) = cap {
+            assert_eq!(cap.status.code(), Some(3), "stderr={:?}", cap.stderr);
+        }
+    }
+
+    #[test]
+    fn test_e2e_match_ok_unit_payload_is_exhaustive_and_selects_correct_arm() {
+        // Regression: matching `Result[(), E]` with `Ok(())` / `Err(_)` is
+        // exhaustive (the `()` empty-tuple pattern covers the unit payload)
+        // and selects the right arm at runtime. Before the
+        // `enumerate_ctors(Unit)` + variant-payload generic-substitution fix
+        // this was wrongly flagged non-exhaustive and miscompiled (the Err
+        // value fell through to a placeholder). Observed via stdout, not an
+        // exit code, to keep the assertion ExitCode-independent.
+        let out = run_program(
+            r#"
+fn classify(r: Result[(), String]) -> i64 {
+    match r {
+        Ok(()) => 10,
+        Err(e) => 20,
+    }
+}
+fn main() {
+    println(classify(Err("x")));
+    println(classify(Ok(())));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "20\n10");
+        }
+    }
+
     // ── Contracts — requires preconditions (codegen / AOT) ─────────
 
     #[test]

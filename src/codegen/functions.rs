@@ -574,6 +574,20 @@ impl<'ctx> super::Codegen<'ctx> {
             None
         };
 
+        // Phase-8 entry-point contract Slice B: `fn main() -> ExitCode`.
+        // `ExitCode` is `distinct type = i32` and `main` lowers to the C
+        // entry `i32`, so the tail-return site `ret`s the body's value
+        // (the exit code) coerced to i32 rather than the plain-`fn main()`
+        // `ret i32 0`. Recognised by the bare `Path("ExitCode")` return
+        // annotation. Distinct from — and mutually exclusive with —
+        // `main_result_err_te` (the `Result[(), E]` adaptation).
+        self.main_returns_exitcode = func.name == "main"
+            && matches!(
+                func.return_type.as_ref().map(|t| &t.kind),
+                Some(TypeKind::Path(path))
+                    if path.segments.len() == 1 && path.segments[0] == "ExitCode"
+            );
+
         // Borrow-returning function (`-> ref T` / `-> mut ref T`): the
         // tail / explicit-`return` sites emit the borrow's ADDRESS via
         // `compile_ref_return_ptr` rather than its materialized value
@@ -1141,6 +1155,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.main_result_err_te.is_some() {
                     if let Some(val) = result {
                         self.emit_main_result_return(val);
+                    } else {
+                        let zero = self.context.i32_type().const_int(0, false);
+                        self.builder.build_return(Some(&zero)).unwrap();
+                    }
+                } else if self.main_returns_exitcode {
+                    // `fn main() -> ExitCode`: the tail value IS the exit
+                    // code (ExitCode is transparently i32). Coerce to the
+                    // `i32` C-entry signature and `ret` it — Slice B. A
+                    // bodiless tail (every path interior-`return`s) keeps
+                    // the safety `ret i32 0`.
+                    if let Some(val) = result {
+                        let val = self.coerce_to_current_ret_type(val);
+                        self.builder.build_return(Some(&val)).unwrap();
                     } else {
                         let zero = self.context.i32_type().const_int(0, false);
                         self.builder.build_return(Some(&zero)).unwrap();

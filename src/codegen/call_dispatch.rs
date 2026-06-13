@@ -151,6 +151,30 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `ExitCode.from(code)` — the stdlib `from` constructor on the
+        // `ExitCode` distinct type (Phase-8 entry-point contract Slice B).
+        // Its Kāra body is the zero-cost wrap `{ ExitCode(code) }`, so the
+        // codegen lowering is identical to the distinct constructor:
+        // compile the argument (an `i32`), emit any refinement assert
+        // (none for `ExitCode`), and return it. Gated on `distinct_bases`
+        // so it fires only for distinct types — `from` on any other type
+        // dispatches normally. Mirrors how the distinct `T(value)`
+        // constructor and `try_from` are call-site-lowered rather than
+        // compiled from a baked body.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && segments[1] == "from"
+                && self.distinct_bases.contains_key(&segments[0])
+            {
+                if let Some(arg) = args.first() {
+                    let value = self.compile_expr(&arg.value)?;
+                    let value = self.coerce_to_distinct_base(&segments[0], value);
+                    self.emit_refinement_assert(&segments[0], value)?;
+                    return Ok(value);
+                }
+            }
+        }
+
         // Theme 6 sub-step 3: `with_provider[R](provider, ||body)`.
         // Recognize the call shape before the generic dispatch below — the
         // callee is an `Index` expression which would otherwise fall through
@@ -454,6 +478,11 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.distinct_bases.contains_key(&name) {
             if let Some(arg) = args.first() {
                 let value = self.compile_expr(&arg.value)?;
+                // Coerce to the base width so a bare literal arg
+                // (`ExitCode(3)` — default `i64`) lands at the base type
+                // (`i32`), keeping all values of a narrow-based distinct
+                // type the same LLVM width (Slice B).
+                let value = self.coerce_to_distinct_base(&name, value);
                 self.emit_refinement_assert(&name, value)?;
                 return Ok(value);
             }

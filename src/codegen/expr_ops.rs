@@ -336,6 +336,14 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(cv) = crate::prelude::lookup_primitive_const(name, field) {
                 return Ok(self.compile_primitive_const(cv));
             }
+            // `ExitCode.SUCCESS` / `ExitCode.FAILURE` (Phase-8 entry-point
+            // contract Slice B). `ExitCode` is `distinct type = i32`, so
+            // the constant lowers to a bare `i32` value — exactly what a
+            // `main() -> ExitCode` tail / `ExitCode.from` argument expects.
+            // Mirrors the typechecker / interpreter sibling intercepts.
+            if let Some(code) = crate::prelude::lookup_exitcode_const(name, field) {
+                return Ok(self.context.i32_type().const_int(code as u64, false).into());
+            }
             // Unit-variant enum access via `EnumName.Variant` (e.g.
             // `Json.Null`, `Ordering.Equal`). Parser turns this into a
             // FieldAccess with the enum name as the object — without an
@@ -3766,6 +3774,31 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into()
             }
             _ => val,
+        }
+    }
+
+    /// Coerce a value to a `distinct type`'s base LLVM width before it
+    /// becomes that distinct value (`UserId(x)` / `ExitCode.from(c)`).
+    /// The distinct wrapper is zero-cost — the runtime value IS the base
+    /// value — but a bare integer literal compiles to the default `i64`,
+    /// so wrapping it into a narrower-based distinct type (e.g.
+    /// `ExitCode = i32`) would leave an `i64` where an `i32` is expected.
+    /// Same-width and equal-width-base distinct types (`UserId = i64`)
+    /// no-op. Phase-8 entry-point contract Slice B surfaced this: a
+    /// `match` whose arms mix `ExitCode.SUCCESS` (`i32`) with
+    /// `ExitCode.from(3)` (an `i64` literal) produced incompatible phi
+    /// inputs and bailed to a `0` placeholder.
+    pub(super) fn coerce_to_distinct_base(
+        &self,
+        name: &str,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        match self.distinct_bases.get(name).cloned() {
+            Some(base_te) => {
+                let target = self.llvm_type_for_type_expr(&base_te);
+                self.coerce_scalar_to_type(val, target)
+            }
+            None => val,
         }
     }
 

@@ -6506,6 +6506,50 @@ fn test_distinct_where_constructor_runtime_fails() {
     );
 }
 
+// ── ExitCode (Phase-8 entry-point contract Slice B) ────────────
+
+#[test]
+fn test_exitcode_success_failure_values() {
+    // `ExitCode.SUCCESS` / `ExitCode.FAILURE` evaluate to 0 / 1. The
+    // interpreter can't observe the process exit (that happens in
+    // `cmd_run`), so the value is checked through `.raw()`.
+    let output = run_no_errors(
+        "fn main() {\n\
+             let ok = ExitCode.SUCCESS;\n\
+             let bad = ExitCode.FAILURE;\n\
+             println(ok.raw());\n\
+             println(bad.raw());\n\
+         }",
+    );
+    assert_eq!(output, "0\n1\n");
+}
+
+#[test]
+fn test_exitcode_from_arbitrary_code() {
+    // `ExitCode.from(code)` wraps an arbitrary code (the stdlib
+    // identity-wrap body `{ ExitCode(code) }`).
+    let output = run_no_errors("fn main() { println(ExitCode.from(42).raw()); }");
+    assert_eq!(output, "42\n");
+}
+
+#[test]
+fn test_match_ok_unit_payload_selects_correct_arm() {
+    // `match Result[(), E] { Ok(()) => .., Err(_) => .. }` — the `Ok(())`
+    // unit-payload pattern matches `Ok` and the `Err` value routes to the
+    // Err arm. Parity peer to the codegen E2E regression for the
+    // exhaustiveness / unit-tuple-pattern fix.
+    let output = run_no_errors(
+        "fn classify(r: Result[(), String]) -> i64 {\n\
+             match r { Ok(()) => 10, Err(e) => 20 }\n\
+         }\n\
+         fn main() {\n\
+             println(classify(Err(\"x\")));\n\
+             println(classify(Ok(())));\n\
+         }",
+    );
+    assert_eq!(output, "20\n10\n");
+}
+
 #[test]
 fn test_distinct_derived_comparison_runs() {
     // With `#[derive(Eq, Ord)]` the comparison operators are admitted and

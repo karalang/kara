@@ -1,0 +1,38 @@
+// runtime/stdlib/exitcode.kara
+//
+// Phase-8 entry-point contract, Slice B. `ExitCode` is the stdlib
+// newtype wrapping an OS process exit code — one of the three legal
+// `main()` return types (design.md § Entry Point):
+//
+//     fn main() -> ExitCode {
+//         match run() {
+//             Ok(())  => ExitCode.SUCCESS,
+//             Err(e)  => { eprintln("Error: {e}"); ExitCode.FAILURE }
+//         }
+//     }
+//
+// Transparent over `i32`: `distinct type ExitCode = i32` lowers to a
+// bare `i32` in codegen (`distinct_bases`) and to the underlying base
+// value in the interpreter, so returning `ExitCode` from `main` costs
+// nothing over returning a raw status code.
+//
+// `ExitCode.SUCCESS` / `ExitCode.FAILURE` are paren-free associated
+// constants intercepted directly in the field-access paths of the
+// typechecker (`fields.rs`), interpreter (`eval_expr.rs`), and codegen
+// (`expr_ops.rs`) — the same `i64.MAX`-style intercept — each yielding
+// an `ExitCode`-typed `0` / `1`. They are intentionally NOT declared
+// here: the distinct type carries no fields, and routing them through
+// the primitive-const table would type them as bare `i32` rather than
+// `ExitCode`, mistyping `main() -> ExitCode { ExitCode.SUCCESS }`.
+//
+// `ExitCode.from(code)` is the constructor for an arbitrary code; it is
+// an ordinary Kāra body (the zero-cost `distinct type` wrap), not a
+// `#[compiler_builtin]`.
+
+distinct type ExitCode = i32;
+
+impl ExitCode {
+    fn from(code: i32) -> ExitCode {
+        ExitCode(code)
+    }
+}

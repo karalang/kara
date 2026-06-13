@@ -1579,6 +1579,14 @@ pub(super) struct Codegen<'ctx> {
     /// error's Display rendering. `None` for `fn main()` / `fn main() ->
     /// ExitCode` / any non-`main` function.
     pub(crate) main_result_err_te: Option<crate::ast::TypeExpr>,
+    /// True while compiling `fn main() -> ExitCode` (Phase-8 entry-point
+    /// contract Slice B). `main`'s LLVM signature is the C entry `i32`,
+    /// and `ExitCode` is `distinct type = i32`, so the body's tail value
+    /// IS the i32 exit code — the tail-return site `ret`s it (coerced to
+    /// i32) rather than discarding it and returning `0` (the plain
+    /// `fn main()` posture). Mutually exclusive with `main_result_err_te`.
+    /// `false` for `fn main()` / `fn main() -> Result[(), E]` / non-`main`.
+    pub(crate) main_returns_exitcode: bool,
     /// True while compiling a function whose declared return type is a
     /// borrow (`-> ref T` / `-> mut ref T`). The LLVM signature returns a
     /// thin `ptr`, so the tail / explicit-`return` sites must emit the
@@ -4620,6 +4628,7 @@ impl<'ctx> Codegen<'ctx> {
             pending_errdefer_payload: None,
             current_fn_err_payload_ty: None,
             main_result_err_te: None,
+            main_returns_exitcode: false,
             current_fn_returns_ref: false,
             compiling_ref_return_let_rhs: false,
             pattern_binding_is_borrow: false,
@@ -5531,6 +5540,26 @@ impl<'ctx> Codegen<'ctx> {
                 if let Some(pred) = &d.refinement {
                     self.refinement_predicates
                         .insert(d.name.clone(), pred.clone());
+                }
+            }
+        }
+        // Baked-stdlib `distinct type`s (e.g. `ExitCode` — Phase-8
+        // entry-point contract Slice B). The user `program` carries only
+        // user items, so a stdlib distinct type's `T(value)` constructor
+        // (`ExitCode(code)`) and its bare-name layout (`-> ExitCode`
+        // lowering to its i32 base) would otherwise be unrecognized. User
+        // entries win on collision (registered first; `entry().or_insert`).
+        for (_, sp) in crate::prelude::STDLIB_PROGRAMS.iter() {
+            for item in &sp.items {
+                if let Item::DistinctType(d) = item {
+                    self.distinct_bases
+                        .entry(d.name.clone())
+                        .or_insert_with(|| d.base_type.clone());
+                    if let Some(pred) = &d.refinement {
+                        self.refinement_predicates
+                            .entry(d.name.clone())
+                            .or_insert_with(|| pred.clone());
+                    }
                 }
             }
         }

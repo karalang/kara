@@ -90,6 +90,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "VarError",
     "AllocError",
     "Utf8Error",
+    // Phase-8 entry-point contract Slice B (2026-06-13): `ExitCode`
+    // newtype — `distinct type ExitCode = i32`, one of the three legal
+    // `main()` return types (design.md § Entry Point). Scope-0 so
+    // `main() -> ExitCode` / `ExitCode.SUCCESS` / `ExitCode.from(c)`
+    // resolve without an import. See `runtime/stdlib/exitcode.kara`.
+    "ExitCode",
     "SortedSet",
     "Channel",
     "Sender",
@@ -550,6 +556,29 @@ pub fn lookup_primitive_const(type_name: &str, const_name: &str) -> Option<&'sta
         .map(|(_, _, v)| v)
 }
 
+/// `ExitCode.SUCCESS` / `ExitCode.FAILURE` paren-free associated
+/// constants (Phase-8 entry-point contract Slice B). Returns the raw
+/// `i32` exit code — `0` for `SUCCESS`, `1` for `FAILURE` — or `None`
+/// for any other field. Deliberately separate from `PRIMITIVE_CONSTS`:
+/// these resolve to the `ExitCode` *distinct type*, not a bare `i32`,
+/// so they cannot flow through `primitive_const_type` (which would
+/// mistype `main() -> ExitCode { ExitCode.SUCCESS }`). The field-access
+/// intercepts in the typechecker / interpreter / codegen each consult
+/// this and then wrap the result in the type / value / LLVM constant
+/// appropriate to that phase. The literal `1` (not the platform
+/// `EXIT_FAILURE`) matches the `Err`-exit code in design.md § Entry
+/// Point for byte-reproducible behavior across platforms.
+pub fn lookup_exitcode_const(type_name: &str, const_name: &str) -> Option<i32> {
+    if type_name != "ExitCode" {
+        return None;
+    }
+    match const_name {
+        "SUCCESS" => Some(0),
+        "FAILURE" => Some(1),
+        _ => None,
+    }
+}
+
 /// Embedded stdlib sources, keyed by their on-disk basename (relative to
 /// `runtime/stdlib/`). Sources are baked at compile time via `include_str!`
 /// so the resulting binary is self-contained.
@@ -634,6 +663,14 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     (
         "utf8_error.kara",
         include_str!("../runtime/stdlib/utf8_error.kara"),
+    ),
+    // Phase-8 entry-point contract Slice B: `ExitCode` newtype, one of
+    // the three legal `main()` return types. `distinct type = i32`;
+    // `SUCCESS` / `FAILURE` are intercepted associated constants (see
+    // `lookup_exitcode_const`). No deps — order-independent.
+    (
+        "exitcode.kara",
+        include_str!("../runtime/stdlib/exitcode.kara"),
     ),
     ("index.kara", include_str!("../runtime/stdlib/index.kara")),
     ("from.kara", include_str!("../runtime/stdlib/from.kara")),
