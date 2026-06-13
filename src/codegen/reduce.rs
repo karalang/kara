@@ -302,8 +302,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 body,
                 ..
             } => {
-                let PatternKind::Binding(loop_var) = &pattern.kind else {
-                    return None;
+                // `for k in ..` binds `k`; `for _ in ..` discards it. The
+                // wildcard case is just as parallelizable — the body never
+                // reads the loop variable, so the reduction is independent
+                // of iteration order. Synthesize a sentinel name (with
+                // chars illegal in a source identifier, so it can never
+                // collide with a captured outer variable) for the unused
+                // per-worker loop-index alloca. Other pattern kinds (tuple,
+                // struct destructure, etc.) aren't loop-counter shapes and
+                // fall through to sequential codegen.
+                let loop_var = match &pattern.kind {
+                    PatternKind::Binding(name) => name.clone(),
+                    PatternKind::Wildcard => "<reduce-wildcard-idx>".to_string(),
+                    _ => return None,
                 };
                 let ExprKind::Range {
                     start,
@@ -325,7 +336,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some(s) => Some(s.clone()),
                 };
                 Some(LoopShape {
-                    loop_var: loop_var.clone(),
+                    loop_var,
                     end_expr: (**end_expr).clone(),
                     body: body.clone(),
                     lo_expr,

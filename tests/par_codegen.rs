@@ -3485,6 +3485,71 @@ fn main() {
         assert_eq!(out.trim(), "166668");
     }
 
+    // ── Bug B-2026-06-12-7: `for _` (wildcard) reduction lowering ────
+    //
+    // `extract_loop_shape` matched only `PatternKind::Binding` for the
+    // for-form, so `for _ in 0..N { ...reduction... }` fell back to
+    // sequential while the *identical* body under `for i in 0..N` (or the
+    // while-form) parallelized. The loop variable is unused under a
+    // wildcard, so the reduction is just as order-independent — the
+    // discriminator was the loop-pattern, NOT the indexed body the
+    // original triage suspected (the memory-bound gate never fires here;
+    // the `work` call is substantial). Fix: synthesize a sentinel loop-var
+    // name for the wildcard so the same fan-out path runs.
+
+    #[test]
+    fn test_ir_reduction_for_wildcard_emits_par_reduce() {
+        // `for _ in 0..N` with a compute-heavy callee + indexed body must
+        // emit the par_reduce fan-out, matching the `for i` / while forms.
+        let ir = ir_for_with_concurrency(
+            r#"
+fn work(seed: i64) -> Array[i64, 2] {
+    let mut a: i64 = 0i64;
+    for j in 0i64..64i64 {
+        a = a + (seed + j) * (seed - j);
+    }
+    Array[a, a + seed]
+}
+fn main() {
+    let mut sum: i64 = 0i64;
+    for _ in 0i64..5000i64 {
+        let r = work(7i64);
+        sum = sum + r[0] + r[1];
+    }
+    println(sum);
+}
+"#,
+        );
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "for _ wildcard reduction should parallelize like for i / while. Got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_reduction_for_wildcard_indexed_matches_serial() {
+        // The parallelized `for _` sink must equal the serial value.
+        let src = r#"
+fn work(seed: i64) -> Array[i64, 2] {
+    let mut a: i64 = 0i64;
+    for j in 0i64..64i64 {
+        a = a + (seed + j) * (seed - j);
+    }
+    Array[a, a + seed]
+}
+fn main() {
+    let mut sum: i64 = 0i64;
+    for _ in 0i64..5000i64 {
+        let r = work(7i64);
+        sum = sum + r[0] + r[1];
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "-822045000");
+    }
+
     // ── Slice: cost-gate function-call body cost (2026-05-20) ────────
     //
     // Codegen's cost-model gate used to treat every function/method call
