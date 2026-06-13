@@ -23,7 +23,7 @@ model is most likely to get wrong). The *organic at-scale* leg is **Chronicle**
 | Structure | File | Proves | Ownership signal |
 |---|---|---|---|
 | Parent-pointer tree | `src/parent_tree.kara` | up/down cycle without `Rc<RefCell>`+`Weak` | `representation:"shared (Rc)"` (declared RC) |
-| Mutable graph w/ cross-edges | _planned_ | aliasing the checker can't prove safe | `rc_values` + trigger line (RC fallback) |
+| Cross-edge graph (diamond) | `src/cross_graph.kara` | shared descendant the checker can't linearize | `rc_values` + trigger line (RC fallback) |
 | Doubly-linked list | _planned_ | the classic `Rc<RefCell>` shape | TBD |
 | Undo/redo over shared state | _planned_ | back-references to shared history | `rc_values` (RC fallback) |
 | Tree-walking interpreter (shared env) | _planned_ | shared mutable environment | TBD |
@@ -34,6 +34,9 @@ model is most likely to get wrong). The *organic at-scale* leg is **Chronicle**
 karac run   examples/tangle/src/parent_tree.kara     # interpret
 karac check examples/tangle/src/parent_tree.kara     # typecheck only
 karac query ownership examples/tangle/src/parent_tree.kara.<fn>   # per-fn ownership
+
+karac run   examples/tangle/src/cross_graph.kara
+karac query ownership examples/tangle/src/cross_graph.kara.build_diamond
 ```
 
 `parent_tree.kara` prints:
@@ -43,6 +46,10 @@ depth of b from root: 2
 depth of c from root: 1
 depth of root:        0
 ```
+
+`cross_graph.kara` prints `diamond reachable-sum (d counted twice): 14` — the
+shared node `d` is visited on both paths (1 + (2+4) + (3+4)), which is the
+observable proof the cross-edge is one shared node, not two copies.
 
 ## Reading `karac query ownership` (the demo's core artifact)
 
@@ -64,9 +71,22 @@ There are **two distinct RC signals**, and Tangle is designed to show both:
 - **`rc_values`** (with the trigger) — an *owned* (non-`shared`) value the
   compiler was **forced to escalate to RC** because it couldn't prove the
   aliasing safe (RC fallback). This is leg #2's real payload — "exactly where it
-  escalated, with the trigger line." It is exercised by the *planned* structures
-  built from plain owned structs that alias (the cross-edge graph, undo/redo),
-  **not** by the `shared struct` tree.
+  escalated, with the trigger line." The cross-edge graph exercises it: the
+  diamond's shared node `d` is stored into one parent's edge list, then used
+  again to link the second parent, which the checker can't linearize.
+
+  ```jsonc
+  // karac query ownership .../cross_graph.kara.build_diamond
+  {"function":"build_diamond","parameters":[],
+   "rc_values":[{"binding":"d","kind":"Rc",
+                 "trigger":"container_store_with_subsequent_use",
+                 "consume_line":43,"other_use_line":44}],
+   "closures":[]}
+  ```
+
+  The node is plain `struct` — nothing in the source says `shared`, `Rc`, or
+  `'a`. The compiler took the one RC it needed and pointed at both lines: where
+  `d` was stored (43) and where it was used again (44).
 
 So: the parent-pointer tree proves "the cyclic shape works, and its RC is
 declared and visible"; the owned-aliasing structures will prove "and where the
@@ -79,3 +99,13 @@ focus. Tangle's leg #4 — "runs leak-/use-after-free–clean under ASAN (codege
 path)" — is deferred until the active codegen leak cluster
 (`bugs.md` B-2026-06-12-6 / -10) settles, so the clean ASAN run is a meaningful
 verification pass rather than a re-hit of in-flight leaks.
+
+**Surfaced tooling gap (Tangle dogfooding find).** The per-function query kinds
+(`ownership` / `effects` / `concurrency`) parse their target with
+`rsplit_once('.')` on `<file>.<function>` (`src/cli/args.rs:1590`), so they
+**cannot address an impl method** — `…kara.add_edge` resolves the method's bare
+name (not found, methods are keyed `Type.method`) and `…kara.GraphNode.add_edge`
+is misread as a filename. The sibling `karac query affected-by` already supports
+the qualified `file.kara:Type.method` form (`args.rs:1611`); the per-function
+kinds should accept the same. Free functions (e.g. `build_diamond`) query fine,
+so this doesn't block the demo — but a Tangle demo over methods needs it fixed.

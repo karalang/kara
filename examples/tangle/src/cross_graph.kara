@@ -1,0 +1,69 @@
+// Tangle — cross-edge graph (RC-fallback structure).
+//
+// Unlike `parent_tree.kara`, the nodes here are a PLAIN `struct` — not
+// `shared`. Nothing in the source declares reference semantics. But the graph
+// has a *cross-edge*: one node is reachable from two parents (a diamond). That
+// single node cannot be linearly owned — it is moved into one parent's edge
+// list and then used again to link the second parent. The compiler can't prove
+// that aliasing safe, so it **escalates the node to RC on its own**.
+//
+// The whole point of Tangle: that escalation is not silent. `karac query
+// ownership .../cross_graph.kara.build_diamond` reports the escalated binding in
+// `rc_values` with the trigger — "container store with subsequent use" — and the
+// line. The honest-conservatism story, made concrete: you wrote no `shared`, no
+// `Rc`, no lifetime; the compiler took the one RC it needed and told you where.
+
+struct GraphNode {
+    val: i64,
+    mut edges: Vec[GraphNode],
+}
+
+impl GraphNode {
+    // Owned `target` moved into self's edge list (the container store).
+    fn add_edge(mut ref self, target: GraphNode) {
+        self.edges.push(target);
+    }
+}
+
+// Build a diamond:
+//        a(1)
+//        /  \
+//      b(2)  c(3)
+//        \  /
+//        d(4)        <- d is reachable from BOTH b and c: the cross-edge.
+//
+// `d` is stored into `b.edges`, then used again to store into `c.edges`.
+// That second use after the container store is what forces RC on `d`.
+fn build_diamond() -> GraphNode {
+    let mut a = GraphNode { val: 1, edges: Vec.new() };
+    let mut b = GraphNode { val: 2, edges: Vec.new() };
+    let mut c = GraphNode { val: 3, edges: Vec.new() };
+    let d = GraphNode { val: 4, edges: Vec.new() };
+
+    b.add_edge(d);   // d moved into b.edges     (container store)
+    c.add_edge(d);   // d used again here        -> RC fallback on `d`
+    a.add_edge(b);
+    a.add_edge(c);
+    a
+}
+
+// Sum every reachable node's value. Because `d` is shared by two parents, a
+// plain reachability walk visits it twice — so the diamond's sum is
+// 1 + (2 + 4) + (3 + 4) = 14, with d's 4 counted on both paths. That
+// double-count is the observable proof the cross-edge is real (one shared d,
+// not two copies).
+fn sum_vals(node: ref GraphNode) -> i64 {
+    let mut total = node.val;
+    for child in node.edges {
+        total = total + sum_vals(child);
+    }
+    total
+}
+
+fn main() {
+    let g = build_diamond();
+    println(f"diamond reachable-sum (d counted twice): {sum_vals(g)}");  // expect 14
+}
+
+// Expected output:
+// diamond reachable-sum (d counted twice): 14
