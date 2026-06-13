@@ -4,8 +4,6 @@ Kāra is one language with two everyday surfaces. You can save your code in a `.
 
 This chapter walks one example — a binary search over a sorted vector — through both surfaces side by side, so you can feel where each one shines.
 
-> **Try without installing.** A browser playground at <https://play.kara-lang.org> runs the same compiler in your browser. If you'd rather read along than install, paste any example from this chapter there and the diagnostics will match what you'd see locally.
-
 ## The same program, on disk
 
 Save this to `search.kara`:
@@ -29,7 +27,7 @@ fn binary_search(haystack: ref Vec[i32], needle: i32) -> Option[usize] {
 }
 
 fn main() {
-    let nums = vec![1, 3, 5, 7, 9, 11, 13];
+    let nums = [1, 3, 5, 7, 9, 11, 13];
     match binary_search(nums, 7) {
         Some(i) => println(f"found at index {i}"),
         None => println("not found"),
@@ -75,7 +73,7 @@ karac> fn binary_search(haystack: ref Vec[i32], needle: i32) -> Option[usize] {
     ...     }
     ...     None
     ... }
-karac> let nums = vec![1, 3, 5, 7, 9, 11, 13];
+karac> let nums = [1, 3, 5, 7, 9, 11, 13];
 karac> binary_search(nums, 7)
 Some(3)
 ```
@@ -100,7 +98,7 @@ Some(2)
 You don't have to invent new names for retries:
 
 ```text
-karac> let nums = vec![10, 20, 30, 40, 50];
+karac> let nums = [10, 20, 30, 40, 50];
 karac> binary_search(nums, 30)
 Some(2)
 ```
@@ -112,7 +110,7 @@ The second `let nums` *shadows* the first — same name, fresh binding. The old 
 This is the part most REPLs cheat on. They evaluate each cell in isolation and pretend ownership doesn't exist. Kāra doesn't pretend.
 
 ```text
-karac> let owned = vec![1, 2, 3];
+karac> let owned = [1, 2, 3];
 karac> let sum: i32 = owned.iter().sum();
 karac> println(f"sum={sum}, owned still here: {owned.len()}");
 sum=6, owned still here: 3
@@ -145,11 +143,11 @@ The REPL ships with a handful of `:command` helpers. Two are worth knowing right
 
 ```text
 karac> fn read_config() -> String {
-    ...     std::fs::read_to_string("config.toml").unwrap()
+    ...     read_file("config.toml").unwrap()
     ... }
 karac> :effects
-session effects: reads(Files), panics
-  read_config: reads(Files), panics
+session effects: reads(FileSystem), panics
+  read_config: reads(FileSystem), panics
 ```
 
 Every function the session knows about, every effect it carries. This is the same effect analysis that the compiler runs on `.kara` files — you're just getting a live readout instead of waiting for a diagnostic to fire. We'll cover the effect system properly in [chapter 11](./ch11-effects.md); for now, treat `:effects` as a "what would I have to declare if this were a public API" lens.

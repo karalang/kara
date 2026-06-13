@@ -12,14 +12,11 @@
 
 All arithmetic operators lower to trait-method calls after type checking. Writing `a + b` where `A` does not implement `Add` is a type error that names the missing trait, not the operator.
 
-Integer arithmetic uses trap-on-overflow semantics in `app` and `lib` profiles. Use named methods for explicit control:
+Integer arithmetic uses trap-on-overflow semantics in `app` and `lib` profiles. For explicit two's-complement wraparound, use the named `wrapping_*` methods (`wrapping_add`, `wrapping_sub`, `wrapping_mul`):
 
 | Method | Behavior |
 |--------|----------|
-| `a.checked_add(b)` → `Option[T]` | Returns `None` on overflow |
-| `a.saturating_add(b)` | Clamps to `T::MAX` / `T::MIN` |
 | `a.wrapping_add(b)` | Two's-complement wraparound |
-| `a.overflowing_add(b)` → `(T, bool)` | Wraparound + overflow flag |
 
 ## Bitwise operators
 
@@ -46,9 +43,11 @@ Integer arithmetic uses trap-on-overflow semantics in `app` and `lib` profiles. 
 
 | Operator | Meaning |
 |----------|---------|
-| `a && b` | Short-circuit logical AND |
-| `a \|\| b` | Short-circuit logical OR |
-| `!a` | Logical NOT |
+| `a and b` | Short-circuit logical AND |
+| `a or b` | Short-circuit logical OR |
+| `not a` | Logical NOT |
+
+Kāra spells these as words. The symbolic forms `&&` / `\|\|` / `!` are rejected with a diagnostic that points you to `and` / `or` / `not`.
 
 ## Assignment operators
 
@@ -85,7 +84,6 @@ Integer arithmetic uses trap-on-overflow semantics in `app` and `lib` profiles. 
 | `a ?? b` | Nil-coalesce: return `a` if it is `Some`, else `b` |
 | `a?.b` | Optional chaining: access `.b` only if `a` is `Some` |
 | `a as T` | Cast `a` to type `T` |
-| `*` | Prefix dereference (planned — `*r` where `r: ref T` yields `T`) |
 | `_` | Wildcard pattern or unnamed placeholder |
 | `..` | Struct-update spread in struct literals |
 | `->` | Return-type annotation in function signatures |
@@ -120,5 +118,3 @@ Unsuffixed integer literals default to `i64`; unsuffixed float literals default 
 | `"..."` | Plain string literal |
 | `f"..."` | Interpolated string — `{expr}` inserts the `Display` value of `expr` |
 | `f"...{expr:?}..."` | Interpolated with `Debug` formatting |
-| `b"..."` | Byte string (future) |
-| `r"..."` | Raw string — no escape processing (reserved, not yet implemented) |

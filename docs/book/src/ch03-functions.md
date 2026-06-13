@@ -58,18 +58,18 @@ This means you rarely need temporary variables — you can use control flow inli
 Here's a function that reads a string but doesn't consume it:
 
 ```kara
-fn count_words(text: String) -> u64 {
-    text.split(' ').len()
+fn char_count(text: String) -> usize {
+    text.len()
 }
 ```
 
-You wrote `text: String`, but the compiler notices that `text` is only read, never moved or mutated. It automatically infers that `text` should be passed by reference. The caller doesn't make a copy; `count_words` borrows the string.
+You wrote `text: String`, but the compiler notices that `text` is only read, never moved or mutated. It automatically infers that `text` should be passed by reference. The caller doesn't make a copy; `char_count` borrows the string.
 
 You can also be explicit:
 
 ```kara
-fn count_words(text: ref String) -> u64 {
-    text.split(' ').len()
+fn char_count(text: ref String) -> usize {
+    text.len()
 }
 ```
 

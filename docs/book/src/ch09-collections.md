@@ -1,7 +1,5 @@
 # Collections
 
-> *This chapter is a work in progress.*
-
 ## Sequence literals
 
 The bare form `[1, 2, 3]` creates a `Vec` — growable, heap-allocated, pushed into, returned from functions:

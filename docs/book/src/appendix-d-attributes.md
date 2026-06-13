@@ -50,7 +50,6 @@ Promote a lint to a hard error within the annotated item.
 | `module_mut_binding` | warning (`lib` profile) | `let mut` at module scope |
 | `layout_unassigned_fields` | warning | Fields not assigned to a `group` in a `layout` block |
 | `repr_c_layout_ignored` | warning | `layout` block on a private struct (has no FFI effect) |
-| `float_in_serialized_type` | warning | `f32`/`f64` field in a `#[derive(Serialize, Deserialize)]` type |
 | `rc_fallback` | note | Compiler chose RC tier to satisfy ownership analysis |
 
 ---
@@ -117,33 +116,6 @@ extern type GLXFBConfig;
 
 ---
 
-## Embedded targets
-
-### `#[interrupt]`
-
-Mark a function as an interrupt service routine (ISR) entry point. The compiler emits `extern "interrupt"` ABI, sets up the ISR stack frame, and places the handler in the `.vectors` linker section. Valid on `embedded` profile builds only.
-
-```kara
-#[interrupt]
-fn TIM2() {
-    // handle timer interrupt
-}
-```
-
-ISRs may not call `panic!`, allocate heap memory, or block. The effect checker enforces this at compile time. For an ISR that writes to a shared resource, wrap the resource in `Atomic[T]` or use a lock-free flag.
-
-### `#[max_stack(N)]`  *(embedded profile)*
-
-Assert that the annotated function's maximum stack depth (including all transitive callees) does not exceed `N` bytes. The compiler verifies this statically for `embedded` profile builds and emits an error if the bound cannot be guaranteed. Useful for ISR handlers, which run on a fixed-size interrupt stack.
-
-```kara
-#[interrupt]
-#[max_stack(512)]
-fn CAN1_RX0() { ... }
-```
-
----
-
 ## Module-level bindings
 
 ### `#[thread_local]`
@@ -188,37 +160,6 @@ struct Connection { ... }
 
 ---
 
-## GPU compute
-
-### `#[gpu]`
-
-Declare that a function uses only the GPU-safe subset of Kāra and may be called from a GPU kernel. The compiler validates the full call graph from each `#[gpu]` root: forbidden effects (`panics`, `allocates(Heap)`, I/O) are caught by the effect checker; forbidden structural features (heap types, recursion, dynamic dispatch, host-capturing closures) are caught during type checking. Dispatch to the GPU is always explicit via `gpu.dispatch` — `#[gpu]` is a constraint declaration, not a routing instruction.
-
-```kara
-#[gpu]
-fn dot_product(a: Slice[f32], b: Slice[f32]) -> f32 { ... }
-```
-
-A generic function must be explicitly annotated with `#[gpu]` to be callable from a GPU kernel — GPU-callability is never inferred from the concrete type parameters.
-
----
-
-## Shared types and RC
-
-### `#[cyclic]`
-
-On a `trait`: declare that the trait participates in ownership cycles. Any `shared struct` that holds a field of type `dyn Trait` (or a container of `dyn Trait`) for a `#[cyclic]` trait must use `weak` on that field. Without `#[cyclic]`, `dyn Trait` fields in `shared struct` are allowed without `weak`. In debug builds, a leak detector catches missed cycle annotations at program exit (compiled out in release).
-
-```kara
-#[cyclic]
-trait Node {
-    fn children(ref self) -> Slice[dyn Node];
-    fn parent(ref self) -> weak dyn Node;
-}
-```
-
----
-
 ## Testing
 
 ### `#[test]`
@@ -228,14 +169,6 @@ Mark a `test_`-prefixed function as a test case.
 ### `#[test(requires = [resource, ...])]`
 
 Mark a test that needs a live external resource. When the resource is unavailable, the test is skipped (or fails with `reason: "unsatisfied_requires"` when `karac test --all` is used).
-
-### `#[property]`
-
-Mark a `test_`-prefixed function as a property test. The framework generates random inputs via `Arbitrary` and runs the body for each, shrinking on failure.
-
-### `#[snapshot]`
-
-Mark a `test_`-prefixed function as a snapshot test. First run saves output; subsequent runs compare against the saved snapshot.
 
 ### `#[with_provider(resource_path, constructor_fn)]`
 
@@ -298,34 +231,3 @@ Tools consume tool-namespaced attributes via one of three paths:
 - **Language Server Protocol** (post-v1) — the IDE-facing surface exposes the same data through workspace-symbol and document-symbol responses.
 - **Direct AST access** — tools written in Kāra and using the compiler-as-library API read the same `Attribute { path, args, span }` structures the typechecker stores.
 
----
-
-## Post-v1 / reserved
-
-### `#[generational_fallback]`  *(post-v1)*
-
-On a `struct`: opt into generational reference semantics for values of this type instead of RC. A generational handle holds an index into a `Pool[T]`; the pool validates liveness before each access. When a value outlives all its borrows, the pool slot is reclaimed and the generation counter is incremented, making stale handles detectable. This is a future opt-in for graph workloads where RC overhead is measurable — `Pool[T]` with explicit handles is the v1 alternative.
-
----
-
-## Serialization (post-v1)
-
-### `#[serde(rename = "name")]`
-
-On a field in a `#[derive(Serialize, Deserialize)]` type: use `"name"` as the serialized key instead of the field name.
-
-### `#[serde(skip)]`
-
-On a field: skip during both serialization and deserialization.
-
-### `#[serde(skip_serializing)]`  /  `#[serde(skip_deserializing)]`
-
-On a field: skip during one direction only.
-
-### `#[serde(default)]`
-
-On a field: use the field's `Default` value when the key is absent during deserialization.
-
-### `#[serde(tag = "type")]`  /  `#[serde(untagged)]`
-
-On an `enum`: use internally-tagged or untagged representation instead of the default externally-tagged form.

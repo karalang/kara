@@ -1,7 +1,5 @@
 # Data Layout
 
-> *This chapter is a work in progress.*
-
 Most languages give you no control over how data is arranged in memory. Kāra lets you separate *what* your data is from *how* it's stored — without changing the logical API.
 
 ## Why layout matters

@@ -14,7 +14,7 @@ The following words are reserved by the Kāra language. You cannot use them as i
 | `type` | Declare a type alias |
 | `distinct` | Declare a distinct (newtype) alias |
 | `const` | Declare a compile-time constant |
-| `mod` | Declare a module |
+| `mod` | Reserved — modules come from the directory tree; a `mod` declaration is a compile error |
 | `use` | Bring a name into scope |
 | `import` | Import an external package |
 | `extern` | Declare a foreign function or type |
@@ -95,7 +95,7 @@ The following words are reserved by the Kāra language. You cannot use them as i
 |---------|---------|
 | `as` | Type cast or trait disambiguation |
 | `where` | Introduce generic bounds or refinement-type predicates |
-| `dyn` | Dynamic dispatch through a trait object |
+| `dyn` | Dynamic dispatch through a trait object (reserved; not yet implemented in v1) |
 | `Self` | The type of the current `impl` block or trait |
 | `self` | The receiver value within a method |
 
@@ -106,6 +106,8 @@ The following words are reserved by the Kāra language. You cannot use them as i
 | `requires` | Precondition contract on a function |
 | `ensures` | Postcondition contract on a function |
 | `invariant` | Invariant check at the end of every method in an `impl` block |
+
+*These contract keywords are reserved and parsed, but contract checking is not yet enforced in v1 — runtime/compile-time verification is planned.*
 
 ## Safety keywords
 

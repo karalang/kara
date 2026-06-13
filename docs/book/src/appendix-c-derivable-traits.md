@@ -132,35 +132,6 @@ distinct type Metres = f64;   // now Metres + Metres → Metres
 
 ---
 
-## Serialization (post-v1)
-
-### `Serialize`
-
-Generates a `serialize` method that visits each field in declaration order via a `Serializer`. Format backends (`Json`, `Toml`, `MessagePack`, etc.) implement `Serializer` — the derived code is format-agnostic.
-
-### `Deserialize`
-
-Generates a `deserialize` static method that reconstructs the type field-by-field from a `Deserializer`.
-
-Field-level attributes control serialization behavior:
-
-```kara
-#[derive(Serialize, Deserialize)]
-struct Config {
-    host: String,
-    #[serde(rename = "port_number")]
-    port: u16,
-    #[serde(skip)]
-    internal_flag: bool,
-}
-```
-
-Supported field attributes: `rename`, `skip`, `skip_serializing`, `skip_deserializing`, `default`.
-
-**Note:** `Serialize` and `Deserialize` are post-v1. The derive syntax and field attributes are reserved now.
-
----
-
 ## Dependency summary
 
 | Trait | Auto-derives | Requires |
@@ -176,5 +147,3 @@ Supported field attributes: `rename`, `skip`, `skip_serializing`, `skip_deserial
 | `Copy` | `Clone` | every field is `Copy` |
 | `Default` | — | every field is `Default` |
 | `Arithmetic` | — | type must be `distinct` |
-| `Serialize` | — | — |
-| `Deserialize` | — | — |

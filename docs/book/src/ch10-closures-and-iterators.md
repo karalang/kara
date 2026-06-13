@@ -1,7 +1,5 @@
 # Closures and Iterators
 
-> *This chapter is a work in progress.*
-
 ## Closures
 
 Anonymous functions that can capture variables from their environment:
@@ -50,7 +48,7 @@ let doubled = numbers
 // doubled = [6, 8, 10]
 ```
 
-Iterators work the same over effectful sources. `io.lines()`, `fs.read_lines(path)`, and future channel/consumer adaptors return `impl Iterator` too — the source's effects (`reads(Stdin)`, `blocks`, `receives(Kafka)`, …) flow through `map` / `filter` / `take` into the enclosing function's effect row. One trait, one combinator library; no separate `Stream` type.
+Because closures carry the effects of their bodies (see above), iterator chains stay honest about effects too: a `map` whose closure writes to stdout contributes `writes(Stdout)` to the enclosing function's effect row. The same `map` / `filter` / `take` combinators apply whether the elements come from an in-memory `Vec` or an effectful source — one combinator library, no separate `Stream` type.
 
 ### Common iterator methods
 

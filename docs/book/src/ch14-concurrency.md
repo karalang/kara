@@ -1,7 +1,5 @@
 # Concurrency
 
-> *This chapter is a work in progress.*
-
 Kāra's concurrency story is built on a simple idea: **if the compiler can prove two operations don't interfere, it can run them in parallel.** The effect system makes this possible.
 
 ## Automatic parallelization

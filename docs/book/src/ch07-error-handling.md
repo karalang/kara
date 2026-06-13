@@ -31,10 +31,10 @@ Without `?`, you'd need a `match` at every step. `?` keeps the happy path clean.
 `?` also works with `Option`:
 
 ```kara
-fn first_word(text: Option[String]) -> Option[String] {
-    let t = text?;                     // if None, return None
-    let words = t.split(' ');
-    words.first()
+fn first_letter(text: Option[String]) -> Option[String] {
+    let t = text?;                     // if None, return None early
+    if t.len() == 0 { return None; }
+    Some(t.substring(0, 1))
 }
 ```
 
@@ -56,22 +56,6 @@ let port = parse_port(input) ?? 8080;
 ```
 
 `??` provides a fallback when the left side is `None` or `Err`. The fallback is evaluated lazily — only when needed.
-
-## Adding context to errors
-
-The `?` operator records *where* an error traveled. `.context()` adds *why*:
-
-```kara
-fn process_user(id: u64) -> Result[Report, Contextual[AppError]] {
-    let user = db.find(id)
-        .context(f"while loading user {id}")?;
-    let orders = db.orders_for(user.id)
-        .context(f"while fetching orders for user {id}")?;
-    build_report(user, orders)
-}
-```
-
-This builds a chain of context that helps debugging: you see both the original error and the high-level operation that failed.
 
 ## unwrap — the escape hatch
 

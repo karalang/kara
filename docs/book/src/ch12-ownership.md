@@ -27,8 +27,8 @@ fn take_name(name: String) -> String {
     name    // consumed — owned parameter, moves out
 }
 
-fn uppercase(name: mut ref String) {
-    name.make_uppercase();    // exclusive borrow — mutates in place
+fn add_suffix(name: mut ref String) {
+    name.push_str("!");    // exclusive borrow — mutates in place
 }
 ```
 
@@ -146,38 +146,6 @@ sort_in_place(mut v[1..4]);    // or just a sub-range
 ### Why slices matter
 
 Without slices, a function that operates on a sequence has to choose between being too restrictive (`ref Vec[i64]` — rejects arrays) and too generic (a trait bound — loses O(1) indexed access). Slices give you the middle ground: one signature that works over any contiguous sequence, with full random access.
-
-### StringSlice
-
-`StringSlice` is the string counterpart to `Slice[T]` — a borrowed view into a `String`. The shape is a pointer, an offset, and a length.
-
-```kara
-fn first_word(s: ref String) -> StringSlice {
-    let end = s.find(' ').unwrap_or(s.len());
-    s.slice(0, end)          // no allocation — points into s's buffer
-}
-
-let line: String = "hello world".to_string();
-let head = first_word(line);     // "hello", zero-copy view into `line`
-```
-
-The reason `StringSlice` exists alongside `ref String` is the same reason `Slice[T]` exists alongside `ref Vec[T]`: `ref String` can only point at a *whole* `String`, but most string operations want a **sub-range**. Splitting is the clearest case:
-
-```kara
-let csv: String = "alice,30,engineer".to_string();
-let fields: Vec[StringSlice] = csv.split(',');
-// three views into csv — "alice", "30", "engineer" — no bytes copied
-```
-
-There is no separate `String` for `"alice"` anywhere in memory. If `split` returned `Vec[ref String]`, it would have to allocate a new `String` for each piece just so there was something for the `ref`s to point at. `StringSlice`'s offset field lets it name a range without needing a standalone `String` to exist.
-
-When you need to keep a view beyond the borrow, call `.to_string()` to copy it into a new owned `String`:
-
-```kara
-let owned: String = fields[0].to_string();
-```
-
-Two notes for later: `StringSlice` is implicitly `Copy`, so passing it by value never invalidates the caller's binding. And a `StringSlice` is **not** `Slice[u8]` — the UTF-8 invariant is carried by the type itself, so byte indexing and character indexing stay distinct operations.
 
 ## shared types
 

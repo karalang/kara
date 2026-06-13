@@ -132,19 +132,3 @@ fn main() {
 ```
 
 The compiler infers `T = String` from the arguments. No annotation needed at the call site.
-
-## Trait objects: `dyn Trait`
-
-Generics specialize at compile time — one copy of the function per concrete `T`. Sometimes you want a single collection or parameter that can hold *different* types sharing a trait. That's dynamic dispatch, written `dyn Trait`:
-
-```kara
-let pets: Vec[dyn Animal] = [cat, dog];
-
-fn render(shape: ref dyn Shape) -> String {
-    shape.describe()
-}
-```
-
-The `dyn` keyword is required — writing `Vec[Animal]` is a compile error. Keeping the keyword visible means the choice between static and dynamic dispatch is legible at the type itself.
-
-Owned `dyn Trait` (`Vec[dyn Animal]`, `Box[dyn Animal]`) requires a heap allocation; `ref dyn Trait` borrows a value that already lives somewhere else and doesn't.
