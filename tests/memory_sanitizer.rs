@@ -285,6 +285,64 @@ fn main() {
         );
     }
 
+    // ── Direct recursive shared enum (RC tree) ────────────────────
+    //
+    // `shared enum Expr { Num(i64), Add(Expr, Expr) }` builds an RC tree whose
+    // children are RC handles. `eval` recursively consumes each child (passing
+    // it by value moves the handle). ASAN guards that the tree is freed exactly
+    // once — no leak (every node reclaimed) and no double-free (a moved child is
+    // not freed again at the parent's scope exit). This is the allocation
+    // correctness check for the direct-recursion feature; the by-value layout
+    // bug that preceded it would have ICE'd before reaching a binary at all.
+
+    #[test]
+    fn asan_direct_recursive_shared_enum_tree_freed_once() {
+        assert_clean_asan_run(
+            r#"
+shared enum Expr {
+    Num(i64),
+    Add(Expr, Expr),
+}
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(a, b) => eval(a) + eval(b),
+    }
+}
+fn main() {
+    let e = Add(Num(3), Add(Num(4), Num(5)));
+    println(eval(e));
+}
+"#,
+            &["12"],
+            "direct_recursive_shared_enum_tree",
+        );
+    }
+
+    #[test]
+    fn asan_direct_recursive_shared_enum_single_field_no_leak() {
+        assert_clean_asan_run(
+            r#"
+shared enum Wrap {
+    Leaf(i64),
+    Box(Wrap),
+}
+fn depth(w: Wrap) -> i64 {
+    match w {
+        Leaf(n) => 0,
+        Box(inner) => 1 + depth(inner),
+    }
+}
+fn main() {
+    let w = Box(Box(Box(Leaf(7))));
+    println(depth(w));
+}
+"#,
+            &["3"],
+            "direct_recursive_shared_enum_single_field",
+        );
+    }
+
     // ── L5: NUL-safe print over heap + literal storage ────────────
     //
     // The print path uses `fwrite(data, 1, len, stdout)` so interior NUL

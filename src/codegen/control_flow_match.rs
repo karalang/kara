@@ -1319,6 +1319,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // got the 1-word default → malformed value, crash on use.
                     Some("Vec") | Some("VecDeque") | Some("String") => 3,
                     Some("Slice") => 2,
+                    // Shared type (struct OR enum): RC heap pointer = exactly one
+                    // word. Must precede the struct/enum arms (see the twin note
+                    // in `pattern_payload_llvm_type`) — a direct recursive shared
+                    // enum field is one pointer word, not the inline tagged-union
+                    // size.
+                    Some(name) if self.shared_types.contains_key(name) => 1,
                     Some(name) => self
                         .struct_types
                         .get(name)
@@ -1379,6 +1385,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.vec_struct_type().into()
                     }
                     Some("Slice") => self.slice_struct_type().into(),
+                    // Shared type (struct OR enum): the value is an RC heap
+                    // pointer — a single `ptr`, not the inline tagged-union /
+                    // struct aggregate. Must precede the struct/enum arms: a
+                    // direct recursive shared enum (`shared enum Wrap { Leaf,
+                    // Box(Wrap) }`) binding `Box(inner)` would otherwise return
+                    // the by-value `{tag,w0}` and `reconstruct_payload_value`
+                    // would `want` 2 words against the 1 stored, take the debox
+                    // path, and load a `{i64,i64}` from the pointer — an ICE in
+                    // the leaf binder (it expected a pointer).
+                    Some(name) if self.shared_types.contains_key(name) => {
+                        self.context.ptr_type(AddressSpace::default()).into()
+                    }
                     Some(name) => self
                         .struct_types
                         .get(name)

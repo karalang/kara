@@ -575,38 +575,25 @@ fn test_shared_struct_cycle_distinct_diagnostic() {
 }
 
 #[test]
-fn test_recursive_shared_enum_with_base_case_distinct_diagnostic() {
+fn test_recursive_shared_enum_with_base_case_compiles() {
     // A direct recursive `shared enum` WITH a base variant (`Num`) builds
-    // finite acyclic trees — it does NOT leak, so the generic "add 'weak'"
-    // advice is wrong for it. It is still rejected (the backend lays direct
-    // recursive shared enums out by value, not as an RC handle — a tracked
-    // codegen feature), but with an accurate diagnostic steering toward the
-    // supported `Vec`/`Option` indirection, NOT the leak/weak message.
-    let errors = ownership_errors(
+    // finite, acyclic trees — each `shared` child is an RC handle, so it is
+    // size-bounded and leak-free. It is the designed mechanism for recursive
+    // shared types and is fully supported end-to-end (codegen lays it out as an
+    // RC handle; pattern binding extracts the recursive field as a pointer), so
+    // the ownership checker must NOT flag it as a cycle.
+    // `ownership_ok` asserts the program produces no ownership errors.
+    let _ = ownership_ok(
         "shared enum Expr {\n\
             Num(i64),\n\
             Add(Expr, Expr),\n\
+         }\n\
+         fn eval(e: Expr) -> i64 {\n\
+            match e {\n\
+                Num(n) => n,\n\
+                Add(a, b) => eval(a) + eval(b),\n\
+            }\n\
          }",
-    );
-    let err = errors
-        .iter()
-        .find(|e| e.kind == OwnershipErrorKind::OwnershipCycle)
-        .expect("recursive shared enum should still be rejected (codegen limitation)");
-    assert!(
-        !err.message.contains("will leak"),
-        "breakable recursive shared enum must NOT claim a leak: {}",
-        err.message
-    );
-    let suggestion = err.suggestion.as_ref().expect("expected suggestion");
-    assert!(
-        !suggestion.contains("weak"),
-        "breakable recursive shared enum must NOT advise 'weak': {}",
-        suggestion
-    );
-    assert!(
-        suggestion.contains("Vec") || suggestion.contains("Option"),
-        "breakable recursive shared enum should steer toward Vec/Option indirection: {}",
-        suggestion
     );
 }
 

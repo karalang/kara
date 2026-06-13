@@ -23,15 +23,13 @@
 // `scope` parameters as `shared (Rc)` — declared sharing, surfaced, not
 // inferred-as-fallback.
 //
-// Recursive payloads go through `Vec[Expr]` rather than a *direct* `Add(Expr,
-// Expr)`. The `Vec`-mediated form gets the RC-handle representation and compiles
-// (the same indirection every other Tangle structure uses); a *direct* recursive
-// `shared enum` is laid out by value by the codegen backend, not as an RC handle,
-// so it can't yet be built — `karac` rejects it with an accurate diagnostic
-// pointing here (`recursive shared type not yet supported directly by the backend
-// … route through Vec[T]/Option[T]`). The interpreter handles direct recursion;
-// only codegen is missing the representation. See the README "findings" note; the
-// direct-recursion codegen feature is tracked in phase-7-codegen.md.
+// Recursive payloads go through `Vec[Expr]` because `Add` / `Mul` take an operand
+// *list* (variadic sum/product) — a `Vec` is the right model here, not a recursion
+// workaround. Direct recursion is also fully supported: a `shared enum Expr {
+// Num(i64), Add(Expr, Expr) }` (each `shared` child an RC handle) compiles and runs
+// end-to-end — the children build with no `Box`, no `'a`. (A *non*-breakable shared
+// cycle — a mutual `shared struct` with no base case — is still rejected as a
+// genuine RC leak. See the README "findings" note and phase-7-codegen.md.)
 
 shared enum Expr {
     Num(i64),

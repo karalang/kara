@@ -1141,6 +1141,53 @@ fn main() {
         }
     }
 
+    /// Direct recursive `shared enum` — `Add(Expr, Expr)` (two recursive
+    /// fields) built as an RC tree and folded by a recursive `eval`. Before the
+    /// fix the value was laid out by value (`{tag, w0}`) instead of an RC heap
+    /// handle, so the match scrutinee/payload extraction ICE'd in
+    /// `pattern_binding`. The fix routes shared-typed pattern bindings through
+    /// the pointer path (`pattern_payload_{llvm_type,word_count}` shared arms)
+    /// and the ownership checker accepts the breakable shared cycle.
+    #[test]
+    fn e2e_direct_recursive_shared_enum_two_field() {
+        if let Some(out) = run_program(
+            "shared enum Expr { Num(i64), Add(Expr, Expr) }\n\
+             fn eval(e: Expr) -> i64 {\n\
+                 match e {\n\
+                     Num(n) => n,\n\
+                     Add(a, b) => eval(a) + eval(b),\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let e = Add(Num(3), Add(Num(4), Num(5)));\n\
+                 println(eval(e));\n\
+             }",
+        ) {
+            assert_eq!(out, "12\n");
+        }
+    }
+
+    /// Single recursive field (`Box(Wrap)`) — the minimal direct-recursion
+    /// shape; the recursive payload binding `inner` must extract as a pointer.
+    #[test]
+    fn e2e_direct_recursive_shared_enum_single_field() {
+        if let Some(out) = run_program(
+            "shared enum Wrap { Leaf(i64), Box(Wrap) }\n\
+             fn depth(w: Wrap) -> i64 {\n\
+                 match w {\n\
+                     Leaf(n) => 0,\n\
+                     Box(inner) => 1 + depth(inner),\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let w = Box(Box(Leaf(7)));\n\
+                 println(depth(w));\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n");
+        }
+    }
+
     // ── String-literal `match` dispatch (selfhost-lexer-profile.md #1 lever) ──
 
     /// A `match` over ≥4 string literals lowers to the switch tree
