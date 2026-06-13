@@ -49,10 +49,15 @@
 //!
 //! Any aggregate whose drop frees buffers this routine can't soundly duplicate
 //! is left untouched (returns `false`): Map/Set handles, HTTP side-table
-//! handles (`Response`/`RequestBuilder`), shared (RC) types, and enum-typed /
-//! `Option` / `Result` fields (whose heap the struct drop already IGNORES — a
-//! separate pre-existing gap, tracked as #15). Bailing preserves today's exact
-//! behavior for those shapes.
+//! handles (`Response`/`RequestBuilder`), shared (RC) types, and `Option` /
+//! `Result` fields (type-erased payloads with no static `VecOrString` field
+//! kind, so `deep_copy_enum_heap_payload_in_place` can't duplicate them — and
+//! the struct drop deliberately ignores them, so there's no double-free to
+//! guard). A non-shared user-ENUM field IS now supported (#19, 2026-06-12): the
+//! struct drop frees its live-variant `VecOrString` payload (post-#15/#18) and
+//! `deep_copy_one_aggregate_field` duplicates exactly that via
+//! `deep_copy_enum_heap_payload_in_place`, keeping copy and drop symmetric.
+//! Bailing on the rest preserves today's exact behavior for those shapes.
 
 use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::PointerValue;
@@ -166,16 +171,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     _ if self.struct_types.contains_key(head) => {
                         self.aggregate_param_copy_supported_struct(head, stack)
                     }
-                    // User enum field → bail to caller-retains (#19 OPEN). The
-                    // struct drop frees enum fields (post-#15), so entry-copy
-                    // would need `deep_copy_enum_heap_payload_in_place` to
-                    // duplicate the payload — but that path double-frees in the
-                    // bootstrap lexer's token flow (Vec[SpannedToken] iterate +
-                    // `render(t)` by-value), so enum-field structs stay on
-                    // caller-retains for now (their transfer+borrow double-free is
-                    // tracked as #19). The bootstrap's `SpannedToken { tok: Token }`
-                    // works on caller-retains.
-                    _ if self.enum_layouts.contains_key(head) => false,
+                    // User enum field (#19 FIXED 2026-06-12). Without entry-copy,
+                    // a by-value transfer of an enum-field struct (`let b =
+                    // wrap(a)`, `wrap(s: Span) -> Span { s }`) leaves `b` shallow-
+                    // aliasing the source's enum buffer; post-#15 BOTH struct drops
+                    // free it → double-free (#19). `EnumDropKind` only ever frees a
+                    // `VecOrString` payload — exactly what
+                    // `deep_copy_enum_heap_payload_in_place` duplicates (wired into
+                    // `deep_copy_one_aggregate_field`) — so entry-copy is symmetric
+                    // with the struct drop's enum-field free: whatever the drop
+                    // frees, the copy copies; carved-out nested-aggregate payloads
+                    // are `EnumDropKind::None`, freed by neither. Shared enums bail
+                    // at the `shared_types` arm above; Option/Result bail above too,
+                    // so any enum reaching here is a non-shared user enum.
+                    _ if self.enum_layouts.contains_key(head) => !self.enum_layouts[head].is_shared,
                     // Generic type param / unknown → conservative bail.
                     _ => false,
                 }
@@ -252,11 +261,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
-        // (Nested user-ENUM field deep-copy intentionally NOT handled here — #19
-        // is OPEN: enabling enum-field entry-copy double-frees in the bootstrap
-        // lexer's token flow. Enum-field structs stay caller-retains; their drop
-        // still frees the enum field, and move-out sites cap-zero it via
-        // `zero_struct_move_caps` / `zero_enum_payload_caps`.)
+        // Nested user-ENUM field (#19 FIXED) → deep-copy its live-variant
+        // Vec/String payload in place, mirroring the struct drop's per-field enum
+        // free (`emit_struct_drop_synthesis`'s `EnumField` arm → `__karac_drop_<E>`).
+        // `deep_copy_enum_heap_payload_in_place` duplicates exactly the
+        // `VecOrString` payloads `EnumDropKind` frees, so the entry-copy stays
+        // symmetric with the drop. Shared enums / Option / Result never reach here
+        // — `field_copy_supported` bails on them, so the struct is caller-retains.
+        if let TypeKind::Path(p) = &fte.kind {
+            if let Some(head) = p.segments.first() {
+                if let Some(layout) = self.enum_layouts.get(head.as_str()).cloned() {
+                    if !layout.is_shared && head != "Option" && head != "Result" {
+                        if let Ok(field_ptr) = self
+                            .builder
+                            .build_struct_gep(agg_ty, base_ptr, idx, "p14.ef")
+                        {
+                            let name = head.clone();
+                            self.deep_copy_enum_heap_payload_in_place(&name, field_ptr, &layout);
+                        }
+                        return;
+                    }
+                }
+            }
+        }
         // Tuple field → recurse into each element.
         if let TypeKind::Tuple(elems) = &fte.kind {
             if !elems.is_empty() {
@@ -501,6 +528,34 @@ impl<'ctx> super::Codegen<'ctx> {
             // Nested aggregate field → recursively zero its Vec/String caps.
             Some(BasicTypeEnum::StructType(fst)) if self.aggregate_has_heap_field(fst) => {
                 self.zero_aggregate_field_caps(field_ptr, fst);
+            }
+            // Enum field (#19) → cap-zero its `VecOrString` payload words so the
+            // owning struct's drop skips the buffer the moved-out binding now owns
+            // (`let tk = t.token` of an entry-copied SpannedToken — the bootstrap
+            // lexer's `render()` shape). The enum's LLVM type is all-i64 words, so
+            // it matches neither the Vec arm (`== vec_ty`) nor
+            // `aggregate_has_heap_field` (no `vec_struct` field) — it would
+            // otherwise fall through unsuppressed. Resolve the enum by the field's
+            // declared type; shared enums carry RC (no `VecOrString` kind) and
+            // self-skip, Option/Result have no static kind and `zero_enum_payload_caps`
+            // no-ops for them.
+            Some(BasicTypeEnum::StructType(_)) => {
+                if let Some(ename) = self
+                    .struct_field_type_exprs
+                    .get(sname.as_str())
+                    .and_then(|ftes| ftes.get(idx))
+                    .and_then(|fte| match &fte.kind {
+                        TypeKind::Path(p) => p.segments.first().cloned(),
+                        _ => None,
+                    })
+                {
+                    if let Some(layout) = self.enum_layouts.get(ename.as_str()) {
+                        if !layout.is_shared {
+                            let layout = layout.clone();
+                            self.zero_enum_payload_caps(field_ptr, &layout);
+                        }
+                    }
+                }
             }
             _ => {}
         }

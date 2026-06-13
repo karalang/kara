@@ -2526,6 +2526,28 @@ impl<'ctx> super::Codegen<'ctx> {
                         if matches!(&value.kind, ExprKind::Identifier(_)) {
                             self.suppress_source_vec_cleanup_for_arg(value);
                         }
+                        // #19: an ENUM field moved OUT of an owned (entry-copied
+                        // or local) struct (`let tk = t.token` — the bootstrap
+                        // lexer's `render()`). The moved-out binding `tk` (tracked
+                        // just above) now owns the enum buffer, so cap-zero the
+                        // source enum field in the owning struct's slot; without it
+                        // BOTH the owning struct's drop and `tk`'s drop free the
+                        // same buffer (double-free). Mirrors the Vec/String
+                        // field-move-out suppression below (#17 gap 2). Skip a
+                        // caller-retains `owned_struct_params` source — it has no
+                        // struct drop to suppress (the deep-copy path owns that).
+                        if let ExprKind::FieldAccess { object, .. } = &value.kind {
+                            let obj_name = match &object.kind {
+                                ExprKind::Identifier(o) => Some(o.as_str()),
+                                ExprKind::SelfValue => Some("self"),
+                                _ => None,
+                            };
+                            if let Some(obj) = obj_name {
+                                if !self.owned_struct_params.contains(obj) {
+                                    self.suppress_struct_field_move_into_literal(value);
+                                }
+                            }
+                        }
                     }
                 }
                 // B-2026-06-11-4 part a: a let-bound TUPLE with heap fields

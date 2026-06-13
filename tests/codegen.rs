@@ -11745,24 +11745,25 @@ fn main() {
         // round-tripped String payloads; the leak itself is covered by the
         // ASAN test on Linux.
         //
-        // NOTE (#19, OPEN) — the transfer leg is exercised UNDESTRUCTURED here
-        // (`let b = wrap(a); println(b.off…)`), and the destructure leg only on
-        // DIRECT (non-transferred) values (`c`/`d`). Transfer-out FOLLOWED BY a
-        // destructure that *uses* the bound enum payload (`let b = wrap(a);
-        // match b.tok { Id(s) => println(s) }`) still double-frees under
-        // guardmalloc: the transferred result and its source alias the one enum
-        // buffer (the enum field is caller-retained, not deep-copied — entry-copy
-        // double-freed the bootstrap and was reverted), so both struct drops
-        // target it. That shape passed on normal malloc only by allocation luck;
-        // #20's inline-temp free shifted the layout and unmasked it (guardmalloc
-        // was already red on it pre-#20). Excised here for the same reason the
-        // #18 E2E excises its nested-transfer S1 case — tracked as the #19
-        // transfer+destructure residual, not regressed by #20.
+        // #19 FIXED 2026-06-12 — transfer-out of an enum-field struct followed by
+        // a destructure that *uses* the bound payload is now sound. The fix is
+        // entry-copy for enum-field structs (`field_copy_supported` user-enum arm
+        // → true; `deep_copy_one_aggregate_field` deep-copies the enum payload via
+        // `deep_copy_enum_heap_payload_in_place`): the callee owns a copy
+        // independent of the caller's retained original, so `let b = wrap(a)` no
+        // longer aliases `a`'s enum buffer and the two struct drops free distinct
+        // buffers. `e1`/`e2` below exercise the previously-excised shape — a
+        // transfer-out then a BORROW arm (`match b.tok { Id(s) => println(s) }`)
+        // and a CONSUME arm — both guardmalloc-clean at O0 and O2. Earlier this
+        // double-freed (the source and the transferred result aliased one enum
+        // buffer); it passed on normal malloc only by allocation luck, which #20's
+        // layout shift removed.
         if let Some(out) = run_program(
             r#"
 enum Tok { Id(String), Int(i64) }
 struct Span { tok: Tok, off: i64 }
 fn wrap(s: Span) -> Span { s }
+fn sink(x: String) { if x.len() > 9000 { println(x) } }
 fn main() {
     let a = Span { tok: Tok.Id("hello".to_string()), off: 1 };
     let b = wrap(a);
@@ -11771,11 +11772,18 @@ fn main() {
     match c.tok { Id(s) => println(s), Int(n) => println(n.to_string()) }
     let d = Span { tok: Tok.Id("world".to_string()), off: 3 };
     match d.tok { Id(s) => println(s), Int(n) => println(n.to_string()) }
+    // #19: transfer-out then destructure-and-USE the bound payload.
+    let e1 = Span { tok: Tok.Id("xfer".to_string()), off: 4 };
+    let f1 = wrap(e1);
+    match f1.tok { Id(s) => println(s), Int(n) => println(n.to_string()) }
+    let e2 = Span { tok: Tok.Id("cons".to_string()), off: 5 };
+    let f2 = wrap(e2);
+    match f2.tok { Id(s) => sink(s), Int(n) => println(n.to_string()) }
     println("ok");
 }
 "#,
         ) {
-            assert_eq!(out, "1\n42\nworld\nok\n");
+            assert_eq!(out, "1\n42\nworld\nxfer\nok\n");
         }
     }
 
@@ -11792,12 +11800,12 @@ fn main() {
         // Tok`) undestructured drop, and a two-level Int-variant match. The leak
         // is covered by `asan_struct_nested_enum_leaf_no_leak_no_double_free`.
         //
-        // NOTE: the nested-struct TRANSFER-out-of-a-fn then two-level match-BORROW
-        // (`let b = fwd(a); match b.sp.tok { Id(s) => println(s) }`) is
-        // deliberately NOT exercised — it still double-frees (guardmalloc) on the
-        // caller-retains path (the one-level analog IS clean). Tracked as the
-        // #19 nested-transfer residual; the bootstrap reconstructs tokens rather
-        // than identity-transferring them, so it is unaffected.
+        // #19 FIXED 2026-06-12 — the nested-struct TRANSFER-out then two-level
+        // match-BORROW (`let b = fwd(a); match b.sp.tok { Id(s) => println(s) }`)
+        // is now sound (entry-copy for enum-field structs recurses through the
+        // nested `Wrap { sp: Span { tok } }`, so `fwd`'s result owns a copy
+        // independent of the source). Exercised by `t1` below; guardmalloc-clean
+        // at O0 and O2. Previously double-freed on the caller-retains path.
         if let Some(out) = run_program(
             r#"
 enum Tok { Id(String), Int(i64) }
@@ -11805,6 +11813,7 @@ struct Span { tok: Tok, off: i64 }
 struct Wrap { sp: Span, hi: i64 }
 struct Deep { w: Wrap, tag: i64 }
 fn mk(n: i64, s: String) -> Wrap { Wrap { sp: Span { tok: Tok.Id(s), off: n }, hi: n } }
+fn fwd(w: Wrap) -> Wrap { w }
 fn main() {
     let span = Span { tok: Tok.Id("beta".to_string()), off: 2 };
     let w = Wrap { sp: span, hi: 2 };
@@ -11815,11 +11824,61 @@ fn main() {
 
     let c = Wrap { sp: Span { tok: Tok.Int(42_i64), off: 4 }, hi: 4 };
     match c.sp.tok { Id(s) => println(s), Int(n) => println(n.to_string()) }
+    // #19: nested transfer-out then two-level match-BORROW of the payload.
+    let a1 = Wrap { sp: Span { tok: Tok.Id("xfer".to_string()), off: 5 }, hi: 5 };
+    let t1 = fwd(a1);
+    match t1.sp.tok { Id(s) => println(s), Int(n) => println(n.to_string()) }
     println("ok");
 }
 "#,
         ) {
-            assert_eq!(out, "beta\n7\n42\nok\n");
+            assert_eq!(out, "beta\n7\n42\nxfer\nok\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_enum_field_struct_field_move_out_loop() {
+        // #19 FIXED 2026-06-12 — the bootstrap lexer's `render()` shape: iterate a
+        // `Vec[SpannedToken]` and pass each element BY VALUE to a fn that moves the
+        // enum field OUT of its (now entry-copied) param into a local
+        // (`let tk = t.token; match tk { … }`). Entry-copy makes the param
+        // callee-owned, and the enum-field move-out cap-zeros the source field in
+        // the owning struct's slot (`suppress_struct_field_move_into_literal`'s
+        // enum arm, wired from the enum let-binding site) so the param's struct
+        // drop and the moved-out local's drop free distinct buffers. Without the
+        // cap-zero this double-freed (exit 133); the leak/double-free is covered by
+        // `asan_enum_field_struct_field_move_out_no_double_free`.
+        if let Some(out) = run_program(
+            r#"
+enum Tok { Id(String), Eof }
+struct Span2 { offset: i64, length: i64 }
+struct Span { token: Tok, span: Span2 }
+fn render(t: Span) -> String {
+    let off = t.span.offset;
+    let mut line = f"{off} ";
+    let tk = t.token;
+    match tk {
+        Id(s) => line.push_str(s),
+        Eof => line.push_str("eof"),
+    }
+    line
+}
+fn build() -> Vec[Span] {
+    let mut out: Vec[Span] = Vec.new();
+    out.push(Span { token: Tok.Id("alpha".to_string()), span: Span2 { offset: 1, length: 5 } });
+    out.push(Span { token: Tok.Id("beta".to_string()), span: Span2 { offset: 7, length: 4 } });
+    out.push(Span { token: Tok.Eof, span: Span2 { offset: 11, length: 0 } });
+    out
+}
+fn main() {
+    let toks = build();
+    for t in toks {
+        println(render(t));
+    }
+}
+"#,
+        ) {
+            assert_eq!(out, "1 alpha\n7 beta\n11 eof\n");
         }
     }
 

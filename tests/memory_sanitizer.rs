@@ -3100,6 +3100,106 @@ fn main() {
     }
 
     #[test]
+    fn asan_enum_field_struct_transfer_destructure_no_double_free() {
+        // #19 (phase-12 self-hosting): a by-value TRANSFER of an enum-field struct
+        // (`let b = wrap(a)`, `wrap(s: Span) -> Span { s }`) followed by a
+        // destructure that USES the bound payload double-freed on the old
+        // caller-retains path — the transferred result aliased the source's enum
+        // buffer, and both struct drops freed it. Entry-copy for enum-field structs
+        // (`field_copy_supported` user-enum arm) gives the callee an independent
+        // copy, so source and result own distinct buffers. Exercised in a loop with
+        // a BORROW arm (`println(s)` keeps the binding's cleanup) and a CONSUME arm
+        // (`sink(s)` moves it), one-level and nested two-level (`b.sp.tok`). The
+        // `Int` arms are guarded behind an impossible `> 99999` so no `to_string`
+        // temp materializes (Linux `detect_leaks=1` stays green vs the separate
+        // baseline temp leak).
+        assert_clean_asan_run(
+            r#"
+enum Tok { Id(String), Int(i64) }
+struct Span { tok: Tok, off: i64 }
+struct Wrap { sp: Span, hi: i64 }
+fn wrap(s: Span) -> Span { s }
+fn fwd(w: Wrap) -> Wrap { w }
+fn sink(s: String) -> i64 { s.len() }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 4 {
+        // One-level transfer + BORROW arm.
+        let a = Span { tok: Tok.Id(f"a-{i}"), off: i };
+        let b = wrap(a);
+        match b.tok { Id(s) => println(s), Int(n) => { if n > 99999 { println("never"); } } }
+        // One-level transfer + CONSUME arm.
+        let c = Span { tok: Tok.Id(f"c-{i}"), off: i };
+        let d = wrap(c);
+        match d.tok { Id(s) => { acc = acc + sink(s); } Int(n) => { if n > 99999 { println("never"); } } }
+        // Nested two-level transfer + BORROW arm.
+        let e = Wrap { sp: Span { tok: Tok.Id(f"e-{i}"), off: i }, hi: i };
+        let g = fwd(e);
+        match g.sp.tok { Id(s) => println(s), Int(n) => { if n > 99999 { println("never"); } } }
+        i = i + 1;
+    }
+    if acc > 99999 { println("never"); }
+    println("done");
+}
+"#,
+            &[
+                "a-0", "e-0", "a-1", "e-1", "a-2", "e-2", "a-3", "e-3", "done",
+            ],
+            "enum_field_struct_transfer_destructure_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_enum_field_struct_field_move_out_no_double_free() {
+        // #19 (phase-12 self-hosting): the bootstrap lexer's `render()` shape —
+        // iterate a `Vec[SpannedToken]` and pass each element BY VALUE to a fn that
+        // moves the enum field OUT of its (now entry-copied) param into a local
+        // (`let tk = t.token; match tk { … }`). The enum-field move-out cap-zeros
+        // the source field in the owning struct's slot
+        // (`suppress_struct_field_move_into_literal`'s enum arm) so the param's
+        // struct drop and the moved-out local's drop free distinct buffers; without
+        // it this double-freed (exit 133). All taken arms are `Id(String)` so no
+        // `to_string` temp materializes.
+        assert_clean_asan_run(
+            r#"
+enum Tok { Id(String), Eof }
+struct Span2 { offset: i64, length: i64 }
+struct Span { token: Tok, span: Span2 }
+fn render(t: Span) -> String {
+    let off = t.span.offset;
+    let mut line = f"{off}:";
+    let tk = t.token;
+    match tk {
+        Id(s) => line.push_str(s),
+        Eof => line.push_str("eof"),
+    }
+    line
+}
+fn build(n: i64) -> Vec[Span] {
+    let mut out: Vec[Span] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        out.push(Span { token: Tok.Id(f"t{i}"), span: Span2 { offset: i, length: 1 } });
+        i = i + 1;
+    }
+    out.push(Span { token: Tok.Eof, span: Span2 { offset: n, length: 0 } });
+    out
+}
+fn main() {
+    let toks = build(3_i64);
+    for t in toks {
+        println(render(t));
+    }
+    println("done");
+}
+"#,
+            &["0:t0", "1:t1", "2:t2", "3:eof", "done"],
+            "enum_field_struct_field_move_out_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_vec_clone_repeat_stresses_scope_cleanup() {
         // Clone in a fresh scope across multiple loop iterations —
         // verifies the scope-exit free fires for each loop-local clone
